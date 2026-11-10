@@ -15,7 +15,8 @@ that a blocked scene leaves its neighbour free to finish, and that queued and
 active calls respect caller abort signals. It also checks that the scrubbed worker
 global has no storage API, `XMLHttpRequest`, `EventSource` or `importScripts`, that a
 scene fetch sends and stores no cookies and bypasses the HTTP cache while the page's own
-fetch does not, and that the timers are on the scene global allowlist. Install Chromium with `pnpm exec playwright install chromium`
+fetch does not, and that scene code can call the timers as bare names or as methods of its
+`globalThis`. Install Chromium with `pnpm exec playwright install chromium`
 or set `CHROME_BIN` to an installed Chromium executable.
 
 The scene request routing test runs with `node --test react-web/e2e/scene-routes.test.mjs`
