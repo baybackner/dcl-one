@@ -50,15 +50,19 @@ in shell mode; HUD preferences go through `library/explorer-core/lib/prefs.ts` (
 (each host's shell, such as `react-web/src/shell/main.ts`, and the sign-in code it owns) may read it. The same reasoning applies to
 anything secret: it must not be in the app process at all.
 
-**Scenes never get persistent storage**, on native or web, system scenes included: no
-`localStorage`, `sessionStorage`, IndexedDB, Cache Storage, OPFS or file system. Only the
-sites' own pages use `localStorage`. On web, `sandbox_worker.js` deletes the storage APIs,
-`XMLHttpRequest`, `EventSource` and `importScripts` before scene code runs, and
-`createSceneFetch` sends every request with `credentials: "omit"` and `cache: "no-store"`.
-A `WebSocket` handshake, `WebTransport` and a dynamic `import()` do not go through
-`createSceneFetch`: the handshake carries the target host's cookies and a same-origin
-`import()` the origin's. On native the runtime registers no storage extension. State a scene
-must keep goes through an engine API that scopes it, not a browser store.
+**Scenes reach no origin storage**, on native or web, system scenes included: no
+`sessionStorage`, IndexedDB, Cache Storage, OPFS or file system. A scene's `localStorage` is the
+engine's, kept apart for each scene, not the browser's. On web, before scene code runs,
+`sandbox_worker.js` removes the native `fetch`, `WebTransport` and `FontFace` from the whole
+prototype chain, and `scene_global.js` deletes the storage APIs, `XMLHttpRequest`, `EventSource`,
+`importScripts` and the granted-device APIs (`navigator.usb`, `hid`, `serial`).
+`createSceneFetch` sends every request with `credentials: "omit"` and `cache: "no-store"`, drops
+the `X-IPFS` header the service worker's content cache answers, and keeps its five-send limit on
+functions it captured at load. `WebSocket` and `WebSocketStream` stay outside it, and their
+handshake carries the target host's cookies. A dynamic `import()` does not go through it
+either, and a same-origin one carries the origin's cookies. On native the runtime registers no
+storage extension besides that `localStorage`. Any other state a scene must keep goes through
+an engine API that scopes it, not a browser store.
 
 **On native, never `Path::join` or `PathBuf::push` with a component from outside.** Content
 hashes, content-map keys, entity ids, scene file names, URLs, RPC arguments: anything that
