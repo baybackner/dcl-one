@@ -7,6 +7,7 @@ import type {
   Ref
 } from 'react'
 import styles from './Button.module.css'
+import { secureRel } from '../../link.helpers'
 
 type AccessibleName = { 'aria-label': string } | { 'aria-labelledby': string }
 type NamedContent = Exclude<ReactNode, null | undefined | boolean>
@@ -48,13 +49,6 @@ export type ButtonProps = NativeProps &
     forceState?: 'hover' | 'pressed' | 'focus'
   } & ({ iconOnly?: false } | ({ iconOnly: true } & AccessibleName)) &
   ({ variant?: Exclude<Variant, 'iconOnly'> } | ({ variant: 'iconOnly' } & AccessibleName))
-
-function secureRel(target: string | undefined, rel: string | undefined): string | undefined {
-  if (!target || ['_self', '_parent', '_top'].includes(target.toLowerCase())) return rel
-  return [...new Set([...(rel ?? '').split(/\s+/).filter(Boolean), 'noopener', 'noreferrer'])].join(
-    ' '
-  )
-}
 
 export function Button({
   children,

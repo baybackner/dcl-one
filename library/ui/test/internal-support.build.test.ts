@@ -9,6 +9,8 @@ import * as publicUi from '../index'
 it('should keep support modules internal and server-render their browser-only dependency graph', async () => {
   expect(publicUi).not.toHaveProperty('CardImage')
   expect(publicUi).not.toHaveProperty('hasRenderableContent')
+  expect(publicUi).not.toHaveProperty('linkHref')
+  expect(publicUi).not.toHaveProperty('contentLabel')
   const root = path.resolve(import.meta.dirname, '..')
   const directory = await mkdtemp(path.join(root, '.internal-support-'))
   try {
@@ -17,7 +19,9 @@ it('should keep support modules internal and server-render their browser-only de
       entry,
       `import {renderToString} from 'react-dom/server';
 import {CardImage} from '../components/CardImage/CardImage';
-import {hasRenderableContent} from '../content.helpers';
+import {hasRenderableContent,contentFallback,contentLabel} from '../content.helpers';
+import {linkHref,secureRel} from '../link.helpers';
+export const policy={unsafe:linkHref('javascript:bad'),launch:linkHref('decentraland://realm',true),ordinary:linkHref('decentraland://realm'),rel:secureRel('preview','author'),label:contentLabel(null,'Action'),zero:contentFallback(0,'Action')};
 export const missing=renderToString(<CardImage src={null} alt="Artwork"/>);
 export const unsafe=renderToString(<CardImage src="javascript:alert(1)" alt=""/>);
 export const valid=renderToString(<CardImage src="/poster.webp" alt="Poster"/>);
@@ -27,8 +31,9 @@ export const zero=hasRenderableContent([null,[false,0]]);`
     await writeFile(
       browserEntry,
       `import {CardImage} from '../components/CardImage/CardImage';
-import {hasRenderableContent} from '../content.helpers';
-export function View(){return hasRenderableContent(0)?<CardImage src="/poster.webp" alt="Poster"/>:null}`
+import {hasRenderableContent,contentFallback} from '../content.helpers';
+import {linkHref} from '../link.helpers';
+export function View(){return hasRenderableContent(contentFallback(0,'Action'))&&linkHref('/poster.webp')?<CardImage src="/poster.webp" alt="Poster"/>:null}`
     )
     const modules: string[] = []
     await build({
@@ -67,7 +72,8 @@ export function View(){return hasRenderableContent(0)?<CardImage src="/poster.we
     await writeFile(
       check,
       `import assert from 'node:assert/strict';
-import {missing,unsafe,valid,zero} from ${JSON.stringify(pathToFileURL(path.join(directory, 'dist/entry.mjs')).href)};
+import {missing,unsafe,valid,zero,policy} from ${JSON.stringify(pathToFileURL(path.join(directory, 'dist/entry.mjs')).href)};
+assert.deepEqual(policy,{unsafe:undefined,launch:'decentraland://realm',ordinary:undefined,rel:'author noopener noreferrer',label:'Action',zero:0});
 assert.match(missing,/role="img"/);assert.match(missing,/aria-label="Artwork"/);
 assert.doesNotMatch(unsafe,/<img/);assert.ok(valid.includes('src="/poster.webp"'));assert.equal(zero,true);`
     )
