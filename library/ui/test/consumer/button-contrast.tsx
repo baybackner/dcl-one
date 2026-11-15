@@ -1,8 +1,15 @@
+import { buttonMetrics, type TouchFeedback } from './button-metrics'
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Button } from '@dcl/one-ui'
 import '@dcl/one-ui/foundations.css'
 import styles from './button-contrast.module.css'
+const probe = {
+  pointerType: '',
+  touchFeedback: null as TouchFeedback | null,
+  metrics: () => buttonMetrics(document.querySelector<HTMLButtonElement>('#target')!)
+}
+Object.assign(window, { buttonProbe: probe })
 function Fixture() {
   const q = new URLSearchParams(location.search),
     size = (q.get('size') ?? 'md') as 'xl' | 'lg' | 'md' | 'sm',
@@ -17,6 +24,21 @@ function Fixture() {
       </button>
       <Button
         id="target"
+        onPointerDown={(event) => {
+          probe.pointerType = event.pointerType
+        }}
+        onMouseDown={(event) => {
+          const native = event.nativeEvent as MouseEvent & {
+            sourceCapabilities?: { firesTouchEvents?: boolean }
+          }
+          if (native.sourceCapabilities?.firesTouchEvents)
+            probe.touchFeedback = {
+              metrics: buttonMetrics(event.currentTarget),
+              trusted: event.isTrusted,
+              fromTouch: true,
+              pointerType: probe.pointerType
+            }
+        }}
         size={size}
         viewport={viewport}
         variant={variant}
@@ -37,4 +59,12 @@ function Fixture() {
     </main>
   )
 }
-createRoot(document.getElementById('root')!).render(<Fixture />)
+const failure = new URLSearchParams(location.search).get('failure')
+const mount = () => {
+  if (failure === 'render') throw new Error('Button fixture render rejected')
+  createRoot(document.getElementById('root')!).render(
+    failure === 'missing' ? <main>Missing target</main> : <Fixture />
+  )
+}
+if (failure === 'delayed') requestAnimationFrame(() => requestAnimationFrame(mount))
+else mount()
