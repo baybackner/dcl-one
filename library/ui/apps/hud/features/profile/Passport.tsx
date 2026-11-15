@@ -8,6 +8,7 @@ import { openPopup, showConfirm } from '../../design'
 import { useSession } from '../session/SessionContext'
 import { requestPassport, useProfile } from '../session/profileStore'
 import { relationshipOf } from '@explorer-core/lib/relationship'
+import { track } from '@explorer-core/lib/analytics'
 import { openNameEdit } from './NameEditModal'
 import { ProfilePassport } from './ProfilePassport'
 import type { Profile } from '@explorer-core/engine/protocol'
@@ -61,6 +62,10 @@ export function Passport({
   // Still this account's own passport: a colour picked before an account switch is not the next one's.
   const ownRef = useRef(isSelf)
   ownRef.current = isSelf
+  // Social butterfly counts other players' passports; one's own is `profile_opened`.
+  useEffect(() => {
+    track(ownRef.current ? 'profile_opened' : 'passport_opened', { receiver_id: userId })
+  }, [userId])
   useEffect(
     () => () => {
       const picked = pickedRef.current

@@ -8,6 +8,7 @@ import { receiveProfile, seedProfiles, setProfileRequester } from '../../feature
 import { PopupHost, closeTopPopup, resetPopups } from '../../design'
 import type { EngineSession } from '../../features/session/useEngineSession'
 import type { Profile } from '@explorer-core/engine/protocol'
+import { pending } from '@explorer-core/lib/analytics'
 
 // COMPONENT: the smart <Passport userId> fetches the rich profile on open, renders identity-only from
 // the profile store until it lands, and shows the presentational ProfilePassport; openPassport mounts it.
@@ -59,6 +60,32 @@ describe('Passport container', () => {
       openPassport('0xabc')
     })
     expect(screen.getByText('gm from the plaza')).toBeTruthy()
+  })
+})
+
+// The node's social butterfly badge counts the other players' passports opened; one's own is
+// reported apart.
+describe('Passport analytics', () => {
+  const opened = (from: number): unknown[] =>
+    pending()
+      .slice(from)
+      .filter((e) => e.event === 'passport_opened' || e.event === 'profile_opened')
+      .map((e) => [e.event, e.properties.receiver_id])
+
+  it('reports passport_opened with the receiver for another player', async () => {
+    receiveProfile('0xabc', RICH)
+    const from = pending().length
+    await renderWithSession(<Passport userId="0xabc" onClose={vi.fn()} />)
+    expect(opened(from)).toEqual([['passport_opened', '0xabc']])
+  })
+
+  it('reports profile_opened, not passport_opened, for your own', async () => {
+    receiveProfile('0xme', { ...RICH, address: '0xme', name: 'Me' })
+    const from = pending().length
+    await renderWithSession(<Passport userId="0xme" onClose={vi.fn()} />, (s) => {
+      s.profile = fakeProfileState({ data: { ...RICH, address: '0xme', name: 'Me' } })
+    })
+    expect(opened(from)).toEqual([['profile_opened', '0xme']])
   })
 })
 
