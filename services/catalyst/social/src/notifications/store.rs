@@ -106,6 +106,33 @@ fn list_sql(with_from: bool, only_unread: bool, touch: bool) -> String {
     )
 }
 
+/// The subquery, for `EXISTS`, of an opt-out row `o` of `address` from the
+/// community whose id is the uuid expression `community`. Stored ids are
+/// compared as uuids: `create_opt_out` keeps the canonical spelling, so a
+/// producer's or a legacy row's other spelling of the same id still matches;
+/// a stored id that is not a uuid matches no community.
+pub(super) fn community_opt_out(address: &str, community: &str) -> String {
+    format!(
+        "SELECT 1 FROM social.subscription_opt_outs o \
+         WHERE o.address = {address} AND {}",
+        community_opt_out_row(community)
+    )
+}
+
+/// Whether the opt-out row `o` is a community opt-out from the community whose
+/// id is the uuid expression `community`, compared as uuids.
+fn community_opt_out_row(community: &str) -> String {
+    format!(
+        "o.scope = 'community' AND {} = {community}",
+        uuid_or_null("o.scope_id")
+    )
+}
+
+/// The uuid the text expression `text` spells, else NULL.
+pub(super) fn uuid_or_null(text: &str) -> String {
+    format!("CASE WHEN pg_input_is_valid({text}, 'uuid') THEN ({text})::uuid END")
+}
+
 /// The `details` flag at `path` (a `->` chain on `s.details`) when it is a JSON
 /// boolean, else `default`: a malformed flag never fails the statement.
 pub(crate) fn details_flag(path: &str, default: bool) -> String {
@@ -756,16 +783,16 @@ impl NotificationsStore {
         scope: &str,
         scope_id: &str,
     ) -> Result<bool, ApiError> {
-        let exists = sqlx::query_scalar::<_, bool>(
+        let exists = sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
             r#"
             SELECT EXISTS (
-              SELECT 1 FROM social.subscription_opt_outs
-              WHERE address = $1 AND scope = $2 AND (scope_id = $3
-                OR ($2='community' AND CASE WHEN pg_input_is_valid(scope_id,'uuid')
-                    THEN scope_id::uuid END = $4))
+              SELECT 1 FROM social.subscription_opt_outs o
+              WHERE o.address = $1 AND o.scope = $2
+                AND (o.scope_id = $3 OR ({matches}))
             )
             "#,
-        )
+            matches = community_opt_out_row("$4::uuid"),
+        )))
         .bind(address)
         .bind(scope)
         .bind(scope_id)
@@ -809,14 +836,14 @@ impl NotificationsStore {
         scope: &str,
         scope_id: &str,
     ) -> Result<bool, ApiError> {
-        let res = sqlx::query(
+        let res = sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
-            DELETE FROM social.subscription_opt_outs
-            WHERE address = $1 AND scope = $2 AND (scope_id = $3
-                OR ($2='community' AND CASE WHEN pg_input_is_valid(scope_id,'uuid')
-                    THEN scope_id::uuid END = $4))
+            DELETE FROM social.subscription_opt_outs o
+            WHERE o.address = $1 AND o.scope = $2
+              AND (o.scope_id = $3 OR ({matches}))
             "#,
-        )
+            matches = community_opt_out_row("$4::uuid"),
+        )))
         .bind(address)
         .bind(scope)
         .bind(scope_id)
