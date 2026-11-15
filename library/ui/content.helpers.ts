@@ -13,6 +13,7 @@ function hasMeaningfulContent(content: ReactNode): boolean {
     return hasMeaningfulContent(content.props.children)
   return true
 }
+/** Accessible labels use authored strings; numeric content belongs to contentFallback. */
 export function contentLabel(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
 }

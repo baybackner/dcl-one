@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { linkHref, secureRel, isPlainLinkClick } from '../link.helpers'
+import { linkHref, secureRel, isPlainLinkClick, hasUnsafeURLCharacters } from '../link.helpers'
 
 describe('when resolving shared native link destinations', () => {
   it.each([undefined, null, false, true, 0, 1, {}, [], { trim: 'invalid' }])(
@@ -79,5 +79,18 @@ describe('when observing native primary link selection', () => {
     { shiftKey: true }
   ])('should preserve native or claimed activation %j', (change) => {
     expect(isPlainLinkClick({ ...plain, ...change })).toBe(false)
+  })
+})
+
+describe('when shared URL syntax is checked before browser parsing', () => {
+  it.each([...Array.from({ length: 32 }, (_, index) => index), 127])(
+    'should reject raw ASCII control %s',
+    (code) => {
+      expect(hasUnsafeURLCharacters('/path' + String.fromCharCode(code) + 'name')).toBe(true)
+    }
+  )
+  it('should reject backslashes while preserving ordinary and encoded URL characters', () => {
+    expect(hasUnsafeURLCharacters('/path\\name')).toBe(true)
+    expect(hasUnsafeURLCharacters('/path%20name?q=é')).toBe(false)
   })
 })

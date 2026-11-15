@@ -1,4 +1,12 @@
-import { hasUnsafeURLCharacters } from './components/CardImage/card.helpers'
+export function hasUnsafeURLCharacters(value: string): boolean {
+  return (
+    value.includes('\\') ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || code === 127
+    })
+  )
+}
 
 export function secureRel(target: string | undefined, rel: string | undefined): string | undefined {
   if (!target || ['_self', '_parent', '_top'].includes(target.toLowerCase())) return rel
@@ -23,6 +31,7 @@ export function isPlainLinkClick(
   )
 }
 
+/** Launch protocols are only for trusted, application-built destinations. */
 export function linkHref(value: unknown, allowLaunch = false): string | undefined {
   if (typeof value !== 'string') return undefined
   const href = value.trim()
