@@ -172,6 +172,14 @@ class NativeCacheKeyTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r'bevy-target-cache\.py" key --lane \w+\n', ci)), 3)
         self.assertLessEqual(set(cache.VENDORED), set(target_cache.VENDORED))
 
+    def test_the_scenes_cache_names_the_system_release(self):
+        # A cache from Ubuntu 22.04 held FFmpeg bindings that did not link on Ubuntu 24.04.
+        scenes = (ROOT / '.github/workflows/bevy-explorer-scenes.yml').read_text()
+        before, step = scenes.split('- uses: Swatinem/rust-cache@')
+        self.assertIn('echo "NATIVE_CACHE_SYSTEM=$ID-$VERSION_ID" >> "$GITHUB_ENV"\n', before)
+        cache_step = step.split('\n      - ', 1)[0]
+        self.assertTrue(cache_step.endswith('key: bevy-explorer-native-${{ env.NATIVE_CACHE_SYSTEM }}'))
+
 
 if __name__ == '__main__':
     unittest.main()
