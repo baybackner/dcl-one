@@ -393,9 +393,16 @@ impl SegmentConfig {
         self.common.realm = realm;
     }
 
-    pub fn update_identity(&mut self, dcl_eth_address: String, dcl_is_guest: bool) {
+    /// `auth_chain`: the login's delegation as JSON ([`login_auth_chain`]), `None` for a guest.
+    pub fn update_identity(
+        &mut self,
+        dcl_eth_address: String,
+        dcl_is_guest: bool,
+        auth_chain: Option<String>,
+    ) {
         self.common.dcl_eth_address = dcl_eth_address;
         self.common.dcl_is_guest = dcl_is_guest;
+        self.common.auth_chain = auth_chain;
     }
 
     /// Signed out: what comes next is nobody's, as before the sign-in.
@@ -406,6 +413,15 @@ impl SegmentConfig {
     pub fn update_position(&mut self, position: String) {
         self.common.position = position;
     }
+}
+
+/// The wallet's `[SIGNER, ECDSA_EPHEMERAL]` chain as the JSON array the node verifies in
+/// `context.auth_chain`; no key, only the public delegation. `None` without a delegation (a guest).
+pub fn login_auth_chain(wallet: &wallet::Wallet) -> Option<String> {
+    if wallet.address().is_none() || wallet.is_guest() {
+        return None;
+    }
+    serde_json::to_string(&wallet.auth_chain().ok()?).ok()
 }
 
 /// A scene being developed: the sdk's or an editor's preview (`preview=true`, `--preview`), or a
@@ -630,7 +646,7 @@ mod tests {
     fn the_signed_out_wallet_is_not_on_later_events() {
         let mut config = SegmentConfig::new("user".into(), "s".into(), "1.0".into(), None, false);
         let mut metrics = SegmentMetricsEvents::default();
-        config.update_identity("0xabc".into(), false);
+        config.update_identity("0xabc".into(), false, None);
         first_move(&mut metrics, config.common());
         config.reset_identity();
         first_move(&mut metrics, config.common());

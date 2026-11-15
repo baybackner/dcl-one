@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use alloy_core::primitives::{Address, B256};
 use alloy_signer_local::PrivateKeySigner;
-use analytics::segment_system::SegmentConfig;
+use analytics::segment_system::{login_auth_chain, SegmentConfig};
 use bevy::{
     app::AppExit,
     prelude::*,
@@ -820,7 +820,11 @@ fn process_login_bridge(
                 *login_task = None;
                 login_events.pause();
                 wallet.finalize_as_guest();
-                segment_config.update_identity(format!("{:#x}", wallet.address().unwrap()), true);
+                segment_config.update_identity(
+                    format!("{:#x}", wallet.address().unwrap()),
+                    true,
+                    None,
+                );
                 current_profile.profile = Some(UserProfile {
                     version: 0,
                     content: SerializedProfile {
@@ -885,8 +889,11 @@ fn process_login_bridge(
                     }
                 }
                 login_events.completed(&wallet);
-                segment_config
-                    .update_identity(format!("{:#x}", wallet.address().unwrap()), guest_account);
+                segment_config.update_identity(
+                    format!("{:#x}", wallet.address().unwrap()),
+                    guest_account,
+                    login_auth_chain(&wallet),
+                );
                 let (profile, deployed) = match profile {
                     LoginProfile::Deployed(profile) => (profile, true),
                     LoginProfile::New(profile) => (profile, false),

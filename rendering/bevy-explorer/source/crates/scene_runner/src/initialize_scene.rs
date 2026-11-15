@@ -1,6 +1,9 @@
 use std::{borrow::Borrow, collections::VecDeque, num::ParseIntError, str::FromStr};
 
-use analytics::segment_system::SegmentConfig;
+use analytics::{
+    data_definition::{SegmentEvent, SegmentEventMoveToParcel},
+    segment_system::{SegmentConfig, SegmentMetricsEvents},
+};
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
     diagnostic::FrameCount,
@@ -111,6 +114,8 @@ impl Plugin for SceneLifecyclePlugin {
             )
                 .in_set(SceneSets::Init),
         );
+
+        app.add_systems(Update, report_move_to_parcel);
 
         app.add_systems(
             PostUpdate,
@@ -1250,6 +1255,32 @@ pub fn process_realm_change(
             segment_config.update_realm(realm.to_owned());
         }
     }
+}
+
+/// `move_to_parcel` for the node's badges: every parcel change of the player, with the scene the
+/// realm lists there.
+fn report_move_to_parcel(
+    player: Query<&GlobalTransform, With<PrimaryUser>>,
+    pointers: Res<ScenePointers>,
+    config: Option<Res<SegmentConfig>>,
+    metrics: Option<ResMut<SegmentMetricsEvents>>,
+    mut last: Local<Option<IVec2>>,
+) {
+    let (Some(config), Some(mut metrics), Ok(player)) = (config, metrics, player.single()) else {
+        return;
+    };
+    let parcel = vec3_to_parcel(player.translation());
+    if *last == Some(parcel) {
+        return;
+    }
+    let scene = pointers
+        .get(parcel)
+        .map(|pointer| pointer.hash_and_urn().map(|(hash, _)| hash));
+    metrics.add_event(
+        SegmentEvent::MoveToParcel(SegmentEventMoveToParcel::new(*last, parcel, scene)),
+        config.common(),
+    );
+    *last = Some(parcel);
 }
 
 #[allow(clippy::type_complexity)]

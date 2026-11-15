@@ -268,6 +268,14 @@ pub struct EmoteCommand {
     pub mask: EmoteMask,
 }
 
+/// The local player triggered an emote: `source` is `self` (the HUD, the console) or `scene`,
+/// the `used_emote` source values.
+#[derive(Event, Clone, Debug)]
+pub struct PlayerEmoteTriggered {
+    pub urn: String,
+    pub source: &'static str,
+}
+
 /// A transition in an avatar's triggered-emote playback, reported to scenes as an
 /// `AvatarEmoteCommand` entry by `avatar::emote_report`. Raised by `comms` from the wire (in wire
 /// order, so client and server report the same sequence) and by the avatar animator from
