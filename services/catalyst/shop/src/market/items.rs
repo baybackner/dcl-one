@@ -868,12 +868,11 @@ pub async fn mana_usd_rate(state: &MarketplaceState) -> Result<ManaUsdRate, Resp
         });
     }
     let v = cached(state, Ttl::S60, "economy:mana_usd".into(), || async {
-        let row: Option<(String, chrono::NaiveDateTime)> = sqlx::query_as("SELECT mana_usd::text, LEAST(taken_at, COALESCE(source_updated_at, taken_at)) FROM economy.price_snapshots ORDER BY taken_at DESC LIMIT 1")
-            .fetch_optional(&state.pool)
+        let row = crate::mana::quote::newest_spot(&state.pool)
             .await
             .map_err(|e| e.to_string())?;
         Ok(match row {
-            Some((rate, taken_at)) => json!({ "rate": rate.trim(), "taken_at": taken_at.and_utc().timestamp() }),
+            Some((rate, taken_at)) => json!({ "rate": rate, "taken_at": taken_at }),
             None => json!({}),
         })
     })
@@ -887,7 +886,11 @@ pub async fn mana_usd_rate(state: &MarketplaceState) -> Result<ManaUsdRate, Resp
         v["rate"].as_str().and_then(ManaUsdRate::parse_usd_per_mana),
         v["taken_at"].as_i64(),
     ) {
-        (Some(rate), Some(taken_at)) if Utc::now().timestamp() - taken_at <= budget => Ok(rate),
+        (Some(rate), Some(taken_at))
+            if crate::mana::quote::spot_is_fresh(taken_at, Utc::now().timestamp()) =>
+        {
+            Ok(rate)
+        }
         (Some(_), Some(taken_at)) => Err(crate::price::unavailable(&format!(
             "the newest MANA spot on this node is {} s old, past the {budget} s freshness budget (the mana-price-poll job is off or failing); credit prices need a live spot",
             Utc::now().timestamp() - taken_at
