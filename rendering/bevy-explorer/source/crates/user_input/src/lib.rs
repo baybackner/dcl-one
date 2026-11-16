@@ -1,7 +1,7 @@
 pub mod avatar_movement;
 pub mod camera;
-pub mod movement_trace;
 mod debug_panel;
+pub mod movement_trace;
 pub mod point_at;
 
 use bevy::{app::Propagate, ecs::query::Has, prelude::*, render::view::RenderLayers};

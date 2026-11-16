@@ -234,16 +234,16 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   to the engine through `engine_console_command` and write Bevy input events, unlike `/press_key`
   and `/click_at`, which need a DevTools client for real input. `docs/guidelines/interaction.md`
   has the options, replies and diagnoses.
-- Movement: `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>]
-  [--repeat <n>] [--input keys|external] <scenario JSON>` places the player in the scene it
-  stands in, waits until it has stood still for the scenario's `settle`, then presses the
-  scenario's keys by frame time, as window keyboard events ahead of the input systems, and
-  records each frame (position, velocity, input, yaw); `/movement_trace status` reports the run,
+- Movement: `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat
+  <n>] [--input keys|external] <scenario JSON>` places the player in the scene it stands in, waits
+  until it has stood still for the scenario's `settle`, then presses the scenario's movement and
+  jump keys by frame time, as window keyboard events ahead of the input systems, and records each
+  frame (position, velocity, input, yaw); `/movement_trace status` reports the run,
   `/movement_trace fetch` returns the trace as JSON Lines and `/movement_trace stop` abandons the
-  run. `--input external` presses nothing and starts on the first movement input, for a driver's
-  real keys. `/avatar_animations [on|off]` holds the player's own avatar pose while off.
-  `/movement_state` reports the last movement step's velocities. `docs/guidelines/running.md`
-  has the scenario and trace formats.
+  run. `--input external` presses nothing and starts on the first movement or jump input, for a
+  driver's real keys. `/avatar_animations [on|off]` holds the player's own avatar pose while off.
+  `/movement_state` reports the last movement step's velocities. `docs/guidelines/running.md` has
+  the scenario and trace formats.
 - The preview-only commands (`/jump`, `/speed`, `/move_player_to`, the debug dumps) stay preview-only.
 
 **The loopback console.** Every native build, the headless client mode included, carries a JSON-RPC

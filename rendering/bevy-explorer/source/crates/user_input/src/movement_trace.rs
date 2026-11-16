@@ -144,16 +144,19 @@ pub struct ScenarioEvent {
     pub walk: bool,
     #[serde(default)]
     pub sprint: bool,
+    #[serde(default)]
+    pub jump: bool,
 }
 
-/// The keys held at a moment: `fwd` W (1) or S (-1), `right` D (1) or A (-1), and the walk and
-/// sprint modifiers.
+/// The keys held at a moment: `fwd` W (1) or S (-1), `right` D (1) or A (-1), the walk and
+/// sprint modifiers and the jump key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct InputStep {
     pub fwd: i8,
     pub right: i8,
     pub walk: bool,
     pub sprint: bool,
+    pub jump: bool,
 }
 
 impl InputStep {
@@ -170,6 +173,7 @@ impl From<&ScenarioEvent> for InputStep {
             right: event.right,
             walk: event.walk,
             sprint: event.sprint,
+            jump: event.jump,
         }
     }
 }
@@ -267,6 +271,12 @@ impl Scenario {
             .unwrap_or_default()
     }
 
+    /// Whether any event holds the jump key. Only such a scenario presses it, compares it and
+    /// writes it in a frame's input, so a trace without jumps keeps its earlier form.
+    pub fn uses_jump(&self) -> bool {
+        self.events.iter().any(|event| event.jump)
+    }
+
     /// Whether the frame at `t` is the last one recorded.
     pub fn ends_at(&self, t: f64) -> bool {
         t >= self.duration - EVENT_EPSILON
@@ -277,11 +287,13 @@ impl Scenario {
 
 /// The movement input the scenes were given this frame, as the movement code reads it: a
 /// diagonal is normalised, and the walk and sprint modifiers count only with a direction held.
+/// The jump key counts with or without a direction.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ConsumedInput {
     pub fwd: f32,
     pub right: f32,
     pub gait: Gait,
+    pub jump: bool,
 }
 
 impl ConsumedInput {
@@ -304,7 +316,12 @@ impl ConsumedInput {
             fwd: fwd as f32 * scale,
             right: side as f32 * scale,
             gait: Gait::of(fwd != 0 || side != 0, walk, sprint),
+            jump: false,
         }
+    }
+
+    pub fn with_jump(self, jump: bool) -> Self {
+        Self { jump, ..self }
     }
 
     pub fn matches(&self, expected: &InputStep) -> bool {
@@ -312,10 +329,28 @@ impl ConsumedInput {
         sign(self.fwd) == expected.fwd
             && sign(self.right) == expected.right
             && self.gait == expected.gait()
+            && self.jump == expected.jump
+    }
+
+    /// The frame's `in`: `fwd`, `right`, `walk` and `sprint`, and `jump` when the scenario jumps.
+    pub fn to_json(&self, with_jump: bool) -> String {
+        let jump = match (with_jump, self.jump) {
+            (false, _) => "",
+            (true, false) => ",\"jump\":false",
+            (true, true) => ",\"jump\":true",
+        };
+        format!(
+            "{{\"fwd\":{},\"right\":{},\"walk\":{},\"sprint\":{}{jump}}}",
+            num(self.fwd as f64),
+            num(self.right as f64),
+            self.gait == Gait::Walk,
+            self.gait == Gait::Run,
+        )
     }
 }
 
-/// The keys bound to the movement actions, first keyboard binding of each.
+/// The keys bound to the movement actions, first keyboard binding of each. Only a scenario that
+/// jumps needs a key bound to jump.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MovementKeys {
     forward: KeyCode,
@@ -324,20 +359,21 @@ pub struct MovementKeys {
     right: KeyCode,
     walk: KeyCode,
     sprint: KeyCode,
+    jump: Option<KeyCode>,
 }
 
 impl MovementKeys {
     pub fn from_map(map: &InputMap) -> Result<Self, String> {
-        let key = |action: CommonInputAction| {
-            map.inputs
-                .get(&Action::Scene(action))
-                .and_then(|ids| {
-                    ids.iter().find_map(|id| match id {
-                        InputIdentifier::Key(k) => Some(*k),
-                        _ => None,
-                    })
+        let bound = |action: CommonInputAction| {
+            map.inputs.get(&Action::Scene(action)).and_then(|ids| {
+                ids.iter().find_map(|id| match id {
+                    InputIdentifier::Key(k) => Some(*k),
+                    _ => None,
                 })
-                .ok_or_else(|| format!("no key is bound to {action:?}"))
+            })
+        };
+        let key = |action: CommonInputAction| {
+            bound(action).ok_or_else(|| format!("no key is bound to {action:?}"))
         };
         Ok(Self {
             forward: key(CommonInputAction::IaForward)?,
@@ -346,7 +382,19 @@ impl MovementKeys {
             right: key(CommonInputAction::IaRight)?,
             walk: key(CommonInputAction::IaWalk)?,
             sprint: key(CommonInputAction::IaModifier)?,
+            jump: bound(CommonInputAction::IaJump),
         })
+    }
+
+    /// These keys, refused when the scenario jumps and no key is bound to jump.
+    pub fn for_scenario(self, scenario: &Scenario) -> Result<Self, String> {
+        if scenario.uses_jump() && self.jump.is_none() {
+            return Err(format!(
+                "no key is bound to {:?}",
+                CommonInputAction::IaJump
+            ));
+        }
+        Ok(self)
     }
 
     pub fn pressed(&self, step: &InputStep) -> Vec<KeyCode> {
@@ -367,6 +415,9 @@ impl MovementKeys {
         if step.sprint {
             keys.push(self.sprint);
         }
+        if let (true, Some(jump)) = (step.jump, self.jump) {
+            keys.push(jump);
+        }
         keys
     }
 }
@@ -385,6 +436,7 @@ fn logical_key(code: KeyCode) -> Key {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Shift,
         KeyCode::ControlLeft | KeyCode::ControlRight => Key::Control,
         KeyCode::AltLeft | KeyCode::AltRight => Key::Alt,
+        KeyCode::Space => Key::Space,
         KeyCode::ArrowUp => Key::ArrowUp,
         KeyCode::ArrowDown => Key::ArrowDown,
         KeyCode::ArrowLeft => Key::ArrowLeft,
@@ -581,7 +633,8 @@ impl Run {
     ///   1/fps), `camera_mode`, `scene_base_parcel`, `spawn`, `spawn_yaw` and `start_pos` (where
     ///   the player stood, settled, before t = 0).
     /// - frame: `i`, `t` and `dt` (s, the frame clock), `in` (the movement input given this
-    ///   frame: `fwd` and `right`, normalised on a diagonal, `walk` and `sprint` from the gait),
+    ///   frame: `fwd` and `right`, normalised on a diagonal, `walk` and `sprint` from the gait,
+    ///   and `jump` when the scenario has a jump),
     ///   `pos` (after this frame's movement), `vel` (this frame's displacement over its delta),
     ///   `grounded`, `yaw_avatar`, `yaw_camera`, and `extra`: the `kind` (gait), `vel_requested`
     ///   (by the movement scene), `vel_external` (SDK forces and impulses) and `scene_tick` (1
@@ -841,7 +894,9 @@ fn movement_trace_command(
                     Some(other) => return Err(format!("dt `{other}`: use real or fixed")),
                 };
                 let input = match command.input.as_deref() {
-                    None | Some("keys") => InputSource::Keys(MovementKeys::from_map(&map)?),
+                    None | Some("keys") => {
+                        InputSource::Keys(MovementKeys::from_map(&map)?.for_scenario(&scenario)?)
+                    }
                     Some("external") => InputSource::External,
                     Some(other) => return Err(format!("input `{other}`: use keys or external")),
                 };
@@ -1021,14 +1076,17 @@ fn read_consumed_input(mut trace: ResMut<MovementTrace>, input: InputManager) {
         return;
     };
     let down = |action| input.is_down(action, InputPriority::Scene);
-    run.consumed = Some(ConsumedInput::from_actions(
-        down(CommonInputAction::IaForward),
-        down(CommonInputAction::IaBackward),
-        down(CommonInputAction::IaLeft),
-        down(CommonInputAction::IaRight),
-        down(CommonInputAction::IaWalk),
-        down(CommonInputAction::IaModifier),
-    ));
+    run.consumed = Some(
+        ConsumedInput::from_actions(
+            down(CommonInputAction::IaForward),
+            down(CommonInputAction::IaBackward),
+            down(CommonInputAction::IaLeft),
+            down(CommonInputAction::IaRight),
+            down(CommonInputAction::IaWalk),
+            down(CommonInputAction::IaModifier),
+        )
+        .with_jump(down(CommonInputAction::IaJump)),
+    );
 }
 
 /// Holds the camera at the scenario's yaw for the whole run, settling included.
@@ -1081,7 +1139,10 @@ fn record_frame(
     let position = scene_position(transform.translation, run.base);
     let yaw_avatar = sdk_yaw(transform.rotation);
     let grounded = dynamics.ground_height <= common::dynamics::PLAYER_GROUND_THRESHOLD;
+    let uses_jump = run.scenario.uses_jump();
+    // a scenario without jumps neither compares nor writes the jump key
     let consumed = run.consumed.take().unwrap_or_default();
+    let consumed = consumed.with_jump(uses_jump && consumed.jump);
 
     let mut outcome = None;
     match run.phase {
@@ -1127,7 +1188,7 @@ fn record_frame(
             }
         }
         Phase::Armed { since } => {
-            if consumed.gait != Gait::Idle {
+            if consumed.gait != Gait::Idle || consumed.jump {
                 run.phase = Phase::Running { t0: now };
                 run.started_utc = utc_now();
             } else if now - since > WAIT_LIMIT {
@@ -1158,18 +1219,15 @@ fn record_frame(
             .unwrap_or(f64::NAN);
         run.frames.push(format!(
             concat!(
-                "{{\"type\":\"frame\",\"i\":{},\"t\":{},\"dt\":{},\"in\":{{\"fwd\":{},\"right\":{},",
-                "\"walk\":{},\"sprint\":{}}},\"pos\":{},\"vel\":{},\"grounded\":{},",
+                "{{\"type\":\"frame\",\"i\":{},\"t\":{},\"dt\":{},\"in\":{},",
+                "\"pos\":{},\"vel\":{},\"grounded\":{},",
                 "\"yaw_avatar\":{},\"yaw_camera\":{},\"extra\":{{\"kind\":\"{}\",",
                 "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{}}}}}"
             ),
             i,
             num(t),
             num(dt),
-            num(consumed.fwd as f64),
-            num(consumed.right as f64),
-            consumed.gait == Gait::Walk,
-            consumed.gait == Gait::Run,
+            consumed.to_json(uses_jump),
             vector(position),
             sdk_vector(step.actual_velocity),
             grounded,
@@ -1269,7 +1327,8 @@ mod tests {
             fwd: 1,
             right: 1,
             walk: false,
-            sprint: true
+            sprint: true,
+            jump: false
         }));
         // a modifier alone moves nothing
         let walk_only = ConsumedInput::from_actions(false, false, false, false, true, false);
@@ -1289,23 +1348,87 @@ mod tests {
     }
 
     #[test]
-    fn the_default_bindings_give_wasd_ctrl_and_shift() {
+    fn the_default_bindings_give_wasd_ctrl_shift_and_space() {
         let keys = MovementKeys::from_map(&InputMap::default()).unwrap();
         assert_eq!(
             keys.pressed(&InputStep {
                 fwd: -1,
                 right: 1,
                 walk: true,
-                sprint: true
+                sprint: true,
+                jump: true
             }),
             vec![
                 KeyCode::KeyS,
                 KeyCode::KeyD,
                 KeyCode::ControlLeft,
-                KeyCode::ShiftLeft
+                KeyCode::ShiftLeft,
+                KeyCode::Space
             ]
         );
         assert_eq!(logical_key(KeyCode::KeyW), Key::Character("w".into()));
+        assert_eq!(logical_key(KeyCode::Space), Key::Space);
+    }
+
+    #[test]
+    fn jump_is_a_held_key_off_by_default() {
+        let scenario = Scenario::parse(
+            r#"{"format":1,"id":"j","fps":60,"duration":2,
+                "events":[{"t":0,"fwd":1},{"t":0.5,"fwd":1,"jump":true},{"t":0.6,"fwd":1,"jump":false}]}"#,
+        )
+        .unwrap();
+        assert!(scenario.uses_jump());
+        assert!(!Scenario::parse(JOG).unwrap().uses_jump());
+        assert!(!scenario.input_at(0.4).jump);
+        assert!(scenario.input_at(0.55).jump);
+        assert!(!scenario.input_at(0.6).jump);
+        let mut json: serde_json::Value = serde_json::from_str(JOG).unwrap();
+        json["events"][0]["jump"] = "yes".into();
+        assert!(Scenario::parse(&json.to_string()).is_err());
+    }
+
+    #[test]
+    fn a_scenario_that_jumps_needs_a_jump_key() {
+        let jumping = Scenario::parse(
+            r#"{"format":1,"id":"j","fps":60,"duration":1,"events":[{"t":0,"jump":true}]}"#,
+        )
+        .unwrap();
+        let mut map = InputMap::default();
+        map.inputs.remove(&Action::Scene(CommonInputAction::IaJump));
+        let unbound = MovementKeys::from_map(&map).unwrap();
+        assert!(unbound.for_scenario(&jumping).is_err());
+        assert!(unbound.for_scenario(&Scenario::parse(JOG).unwrap()).is_ok());
+        let keys = MovementKeys::from_map(&InputMap::default()).unwrap();
+        assert!(keys.for_scenario(&jumping).is_ok());
+    }
+
+    #[test]
+    fn the_jump_key_counts_in_the_input_only_when_the_scenario_jumps() {
+        let still = ConsumedInput::default();
+        let jumping = still.with_jump(true);
+        assert!(jumping.matches(&InputStep {
+            jump: true,
+            ..default()
+        }));
+        assert!(!jumping.matches(&InputStep::default()));
+        assert!(!still.matches(&InputStep {
+            jump: true,
+            ..default()
+        }));
+        // without jumps, `in` keeps its earlier form
+        let jog = ConsumedInput::from_actions(true, false, false, false, false, false);
+        assert_eq!(
+            jog.to_json(false),
+            r#"{"fwd":1.0,"right":0.0,"walk":false,"sprint":false}"#
+        );
+        assert_eq!(
+            jog.with_jump(true).to_json(true),
+            r#"{"fwd":1.0,"right":0.0,"walk":false,"sprint":false,"jump":true}"#
+        );
+        assert_eq!(
+            jog.to_json(true),
+            r#"{"fwd":1.0,"right":0.0,"walk":false,"sprint":false,"jump":false}"#
+        );
     }
 
     #[test]
@@ -1344,6 +1467,12 @@ mod tests {
     /// Runs `frames` frames 1/60 s apart with a run already at t = 0 on the first, and returns
     /// whether W was down in each.
     fn w_by_frame(scenario: &str, frames: usize) -> Vec<bool> {
+        key_by_frame(scenario, frames, KeyCode::KeyW)
+    }
+
+    /// Runs `frames` frames 1/60 s apart with a run already at t = 0 on the first, and returns
+    /// whether `key` was down in each.
+    fn key_by_frame(scenario: &str, frames: usize, key: KeyCode) -> Vec<bool> {
         let mut app = App::new();
         app.add_plugins((bevy::time::TimePlugin, InputPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -1359,9 +1488,7 @@ mod tests {
         (0..frames)
             .map(|_| {
                 app.update();
-                app.world()
-                    .resource::<ButtonInput<KeyCode>>()
-                    .pressed(KeyCode::KeyW)
+                app.world().resource::<ButtonInput<KeyCode>>().pressed(key)
             })
             .collect()
     }
@@ -1406,6 +1533,27 @@ mod tests {
         assert_eq!(
             w,
             vec![true, true, true, true, true, true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn the_jump_key_follows_the_scenario_by_frame_time() {
+        // jump held from t = 0.05 (frame 3) to t = 0.1 (frame 6), while W stays down
+        let tap = r#"{"format":1,"id":"jump-tap","fps":60,"duration":0.5,
+            "events":[{"t":0,"fwd":1},{"t":0.05,"fwd":1,"jump":true},{"t":0.1,"fwd":1}]}"#;
+        assert_eq!(
+            key_by_frame(tap, 9, KeyCode::Space),
+            vec![false, false, false, true, true, true, false, false, false]
+        );
+        assert_eq!(w_by_frame(tap, 9), vec![true; 9]);
+        // a scenario without jumps never presses the jump key
+        assert_eq!(
+            key_by_frame(
+                r#"{"format":1,"id":"w","fps":60,"duration":0.5,"events":[{"t":0,"fwd":1}]}"#,
+                4,
+                KeyCode::Space
+            ),
+            vec![false; 4]
         );
     }
 
