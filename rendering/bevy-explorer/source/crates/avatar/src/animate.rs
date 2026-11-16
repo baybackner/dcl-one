@@ -289,7 +289,7 @@ fn handle_trigger_emotes(
                         timestamp,
                         mask: *mask,
                     },
-                    source(&**hash),
+                    source(hash),
                 ),
             ),
             (
@@ -307,7 +307,7 @@ fn handle_trigger_emotes(
                         timestamp,
                         mask: EmoteMask::FullBody,
                     },
-                    source(&**hash),
+                    source(hash),
                 ),
             ),
             _ => continue,
