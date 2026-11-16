@@ -393,16 +393,25 @@ impl SegmentConfig {
         self.common.realm = realm;
     }
 
-    /// `auth_chain`: the login's delegation as JSON ([`login_auth_chain`]), `None` for a guest.
-    pub fn update_identity(
-        &mut self,
-        dcl_eth_address: String,
-        dcl_is_guest: bool,
-        auth_chain: Option<String>,
-    ) {
+    pub fn update_identity(&mut self, dcl_eth_address: String, dcl_is_guest: bool) {
         self.common.dcl_eth_address = dcl_eth_address;
         self.common.dcl_is_guest = dcl_is_guest;
-        self.common.auth_chain = auth_chain;
+    }
+
+    /// The fields a client event goes out with: these, plus the wallet's chain read now. `None`
+    /// when the node would refuse the event: no usable chain (a guest, before login, an expired
+    /// delegation) or a wallet that is not the identity these fields name.
+    pub fn client_event_common(
+        &self,
+        wallet: &wallet::Wallet,
+    ) -> Option<SegmentEventCommonExplorerFields> {
+        let address = format!("{:#x}", wallet.address()?);
+        if !address.eq_ignore_ascii_case(&self.common.dcl_eth_address) {
+            return None;
+        }
+        let mut common = self.common.clone();
+        common.auth_chain = Some(login_auth_chain(wallet, Utc::now())?);
+        Some(common)
     }
 
     /// Signed out: what comes next is nobody's, as before the sign-in.
@@ -416,12 +425,29 @@ impl SegmentConfig {
 }
 
 /// The wallet's `[SIGNER, ECDSA_EPHEMERAL]` chain as the JSON array the node verifies in
-/// `context.auth_chain`; no key, only the public delegation. `None` without a delegation (a guest).
-pub fn login_auth_chain(wallet: &wallet::Wallet) -> Option<String> {
-    if wallet.address().is_none() || wallet.is_guest() {
+/// `context.auth_chain`; no key, only the public delegation. `None` for a guest (no delegation)
+/// or a guest account (no wallet of its own), and once the delegation has expired.
+fn login_auth_chain(wallet: &wallet::Wallet, now: DateTime<Utc>) -> Option<String> {
+    if wallet.address().is_none() || wallet.is_guest() || wallet.is_guest_account() {
         return None;
     }
-    serde_json::to_string(&wallet.auth_chain().ok()?).ok()
+    let chain = serde_json::to_string(&wallet.auth_chain().ok()?).ok()?;
+    (!chain_expired(&chain, now)).then_some(chain)
+}
+
+/// The ephemeral link's `Expiration:` is past; an unreadable one is left to the node.
+fn chain_expired(chain: &str, now: DateTime<Utc>) -> bool {
+    let Ok(serde_json::Value::Array(links)) = serde_json::from_str(chain) else {
+        return false;
+    };
+    links
+        .iter()
+        .filter(|link| link["type"] == "ECDSA_EPHEMERAL")
+        .filter_map(|link| link["payload"].as_str())
+        .flat_map(str::lines)
+        .filter_map(|line| line.strip_prefix("Expiration:"))
+        .filter_map(|at| DateTime::parse_from_rfc3339(at.trim()).ok())
+        .any(|at| at.to_utc() <= now)
 }
 
 /// A scene being developed: the sdk's or an editor's preview (`preview=true`, `--preview`), or a
@@ -646,7 +672,7 @@ mod tests {
     fn the_signed_out_wallet_is_not_on_later_events() {
         let mut config = SegmentConfig::new("user".into(), "s".into(), "1.0".into(), None, false);
         let mut metrics = SegmentMetricsEvents::default();
-        config.update_identity("0xabc".into(), false, None);
+        config.update_identity("0xabc".into(), false);
         first_move(&mut metrics, config.common());
         config.reset_identity();
         first_move(&mut metrics, config.common());
@@ -655,6 +681,52 @@ mod tests {
         assert_eq!(batch[0]["properties"]["dcl_eth_address"], "0xabc");
         assert_eq!(batch[1]["properties"]["dcl_eth_address"], "unauthenticated");
         assert_eq!(batch[1]["properties"]["dcl_is_guest"], false);
+    }
+
+    // A wallet signed in with its own delegation, valid from `now_millis` for thirty days.
+    fn signed_in(now_millis: i64, guest_account: bool) -> (wallet::Wallet, SegmentConfig) {
+        let mut root = wallet::Wallet::default();
+        root.finalize_as_guest();
+        let address = root.address().unwrap();
+        let (ephemeral, delegates) =
+            wallet::local_guest::sign_identity(&wallet::local_guest::new_root_key(), now_millis)
+                .unwrap();
+        let mut wallet = wallet::Wallet::default();
+        wallet.finalize(address, ephemeral, delegates, guest_account);
+        let mut config = SegmentConfig::new("user".into(), "s".into(), "1.0".into(), None, false);
+        config.update_identity(format!("{address:#x}"), guest_account);
+        (wallet, config)
+    }
+
+    // A client event goes with the chain read now; without one the node would refuse it, so
+    // there are no fields to send it with: before login, a guest, a guest account, an expired
+    // delegation, or a wallet that is not the identity being reported.
+    #[test]
+    fn client_events_need_the_wallets_own_live_chain() {
+        let (wallet, config) = signed_in(Utc::now().timestamp_millis(), false);
+        let common = config.client_event_common(&wallet).unwrap();
+        let chain: serde_json::Value =
+            serde_json::from_str(common.auth_chain.as_deref().unwrap()).unwrap();
+        assert_eq!(chain[0]["type"], "SIGNER");
+        assert_eq!(chain[0]["payload"], common.dcl_eth_address.as_str());
+        assert_eq!(chain[1]["type"], "ECDSA_EPHEMERAL");
+        assert_eq!(chain.as_array().unwrap().len(), 2);
+        assert!(config.common().auth_chain.is_none());
+
+        let (wallet, config) = signed_in(Utc::now().timestamp_millis(), true);
+        assert!(config.client_event_common(&wallet).is_none());
+        let (wallet, config) = signed_in(0, false);
+        assert!(config.client_event_common(&wallet).is_none());
+
+        let (wallet, mut config) = signed_in(Utc::now().timestamp_millis(), false);
+        config.reset_identity();
+        assert!(config.client_event_common(&wallet).is_none());
+
+        let mut guest = wallet::Wallet::default();
+        assert!(config.client_event_common(&guest).is_none());
+        guest.finalize_as_guest();
+        config.update_identity(format!("{:#x}", guest.address().unwrap()), true);
+        assert!(config.client_event_common(&guest).is_none());
     }
 
     // A boot asked for a scene being developed says so before the realm resolves (the realm

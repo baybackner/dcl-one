@@ -51,7 +51,7 @@ pub const CLIENT_EVENTS: [&str; 5] = [
     "vertical_height_reached",
 ];
 
-fn is_client_event(name: &str) -> bool {
+pub fn is_client_event(name: &str) -> bool {
     CLIENT_EVENTS.iter().any(|e| e.eq_ignore_ascii_case(name))
 }
 

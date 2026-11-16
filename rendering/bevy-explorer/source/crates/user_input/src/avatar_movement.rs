@@ -8,6 +8,7 @@ use bevy::{
 };
 use common::{
     dynamics::{PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD},
+    inputs::MOVE_SET,
     sets::{PostUpdateSets, SceneSets},
     structs::{
         avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, PrimaryPlayerRes,
@@ -26,6 +27,7 @@ use dcl_component::{
     DclReader, DclWriter, SceneComponentId, SceneEntityId,
 };
 use dcl_types::interface::{ComponentPosition, CrdtType};
+use input_manager::{InputManager, InputPriority};
 use ipfs::{
     ipfs_path::{IpfsPath, IpfsType},
     IpfsAssetServer,
@@ -98,6 +100,7 @@ impl Plugin for AvatarMovementPlugin {
                 resolve_collisions,
                 apply_impulses,
                 apply_movement,
+                record_own_movement,
                 record_ground_collider,
                 accumulate_movement_periods,
             )
@@ -706,6 +709,34 @@ pub fn apply_movement(
                 )
             });
     dynamic_state.ground_height = ground_height;
+}
+
+// The player's own walking, for analytics: a parcel scene's movement override, a suppression,
+// an impulse or force this frame, or no movement input held leaves none.
+fn record_own_movement(
+    mut player: Query<
+        (
+            &mut AvatarDynamicState,
+            &ActivePlayerComponent<AvatarMovement>,
+        ),
+        With<PrimaryUser>,
+    >,
+    info: Res<AvatarMovementInfo>,
+    movement_control: Res<EngineMovementControl>,
+    input_manager: InputManager,
+) {
+    let Ok((mut dynamic_state, movement)) = player.single_mut() else {
+        return;
+    };
+    let own = movement.scene_is_portable
+        && !movement_suppressed(&movement_control, movement)
+        && info.0.external_velocity.is_none()
+        && input_manager.get_analog(MOVE_SET, InputPriority::Scene) != Vec2::ZERO;
+    dynamic_state.own_velocity = if own {
+        movement.component.velocity
+    } else {
+        Vec3::ZERO
+    };
 }
 
 // (scene entity, collider id) of collider player is standing on

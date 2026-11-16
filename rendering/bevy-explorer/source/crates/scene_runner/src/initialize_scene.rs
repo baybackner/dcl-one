@@ -1,6 +1,7 @@
 use std::{borrow::Borrow, collections::VecDeque, num::ParseIntError, str::FromStr};
 
 use analytics::{
+    badges::ParcelTracker,
     data_definition::{SegmentEvent, SegmentEventMoveToParcel},
     segment_system::{SegmentConfig, SegmentMetricsEvents},
 };
@@ -44,6 +45,7 @@ use ipfs::{
 };
 use scene_material::{BoundRegion, SceneBounds};
 use system_bridge::{LiveSceneInfo, SystemApi, SystemBridge};
+use wallet::Wallet;
 
 use super::{update_world::CrdtExtractors, LoadSceneEvent, PrimaryUser, SceneSets, SceneUpdates};
 use crate::{
@@ -1258,29 +1260,33 @@ pub fn process_realm_change(
 }
 
 /// `move_to_parcel` for the node's badges: every parcel change of the player, with the scene the
-/// realm lists there.
+/// realm lists there, and the current parcel again after a login or realm change.
 fn report_move_to_parcel(
     player: Query<&GlobalTransform, With<PrimaryUser>>,
     pointers: Res<ScenePointers>,
     config: Option<Res<SegmentConfig>>,
     metrics: Option<ResMut<SegmentMetricsEvents>>,
-    mut last: Local<Option<IVec2>>,
+    wallet: Option<Res<Wallet>>,
+    mut tracker: Local<ParcelTracker>,
 ) {
     let (Some(config), Some(mut metrics), Ok(player)) = (config, metrics, player.single()) else {
         return;
     };
     let parcel = vec3_to_parcel(player.translation());
-    if *last == Some(parcel) {
+    let common = config.common();
+    let Some(old) = tracker.moved(&common.dcl_eth_address, &common.realm, parcel) else {
         return;
-    }
+    };
+    let Some(common) = wallet.and_then(|wallet| config.client_event_common(&wallet)) else {
+        return;
+    };
     let scene = pointers
         .get(parcel)
         .map(|pointer| pointer.hash_and_urn().map(|(hash, _)| hash));
     metrics.add_event(
-        SegmentEvent::MoveToParcel(SegmentEventMoveToParcel::new(*last, parcel, scene)),
-        config.common(),
+        SegmentEvent::MoveToParcel(SegmentEventMoveToParcel::new(old, parcel, scene)),
+        &common,
     );
-    *last = Some(parcel);
 }
 
 #[allow(clippy::type_complexity)]
