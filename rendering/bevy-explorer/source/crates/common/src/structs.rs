@@ -51,11 +51,11 @@ pub struct PrimaryUser {
 impl Default for PrimaryUser {
     fn default() -> Self {
         Self {
-            walk_speed: 2.5,
-            jog_speed: 8.18,
-            run_speed: 11.0,
-            jump_height: 1.9,
-            run_jump_height: 2.95,
+            walk_speed: 1.5,
+            jog_speed: 8.0,
+            run_speed: 10.0,
+            jump_height: 1.0,
+            run_jump_height: 1.5,
             block_all: false,
             block_run: false,
             block_walk: false,
@@ -616,7 +616,7 @@ pub struct AppConfig {
 
 /// bump to run one-time migrations of the preset-managed settings in existing configs
 /// (see [`AppConfig::reset_outdated_settings`])
-pub const SETTINGS_GENERATION: u32 = 3;
+pub const SETTINGS_GENERATION: u32 = 4;
 
 /// bump to run one-time migrations of saved input binding tables
 /// (see [`AppConfig::migrate_inputs`])
@@ -709,6 +709,9 @@ impl AppConfig {
     /// else. gen 1: reinitialize the preset-managed settings to the current defaults.
     /// gen 2: default bloom dropped High -> Low; move configs still on the old default.
     /// gen 3: native gpu uploads became capped by default; move configs still uncapped (0).
+    /// gen 4: player speeds moved from walk 2.5 / jog 8.18 / run 11 m/s to 1.5 / 8 / 10, and
+    /// jump heights from 1.9 / 2.95 m (held apex) to 1 / 1.5 m (tapped apex); move each value
+    /// still on its old default.
     pub fn reset_outdated_settings(&mut self) {
         if self.settings_generation >= SETTINGS_GENERATION {
             return;
@@ -722,6 +725,24 @@ impl AppConfig {
         }
         if self.settings_generation < 3 && self.graphics.gpu_bytes_per_frame == 0 {
             self.graphics.gpu_bytes_per_frame = default.graphics.gpu_bytes_per_frame;
+        }
+        if self.settings_generation < 4 {
+            let (saved, default) = (&mut self.player_settings, &default.player_settings);
+            if saved.walk_speed == 2.5 {
+                saved.walk_speed = default.walk_speed;
+            }
+            if saved.jog_speed == 8.18 {
+                saved.jog_speed = default.jog_speed;
+            }
+            if saved.run_speed == 11.0 {
+                saved.run_speed = default.run_speed;
+            }
+            if saved.jump_height == 1.9 {
+                saved.jump_height = default.jump_height;
+            }
+            if saved.run_jump_height == 2.95 {
+                saved.run_jump_height = default.run_jump_height;
+            }
         }
         self.settings_generation = SETTINGS_GENERATION;
     }
@@ -1967,6 +1988,38 @@ mod tests {
         assert_eq!(uncapped.graphics.gpu_bytes_per_frame, 10_000_000);
         assert_eq!(uncapped.settings_generation, SETTINGS_GENERATION);
         assert_eq!(saved(500_000).graphics.gpu_bytes_per_frame, 500_000);
+    }
+
+    #[test]
+    fn reset_outdated_settings_moves_old_default_speeds_and_jumps() {
+        let mut config = AppConfig {
+            settings_generation: 3,
+            ..Default::default()
+        };
+        config.player_settings.walk_speed = 2.5;
+        config.player_settings.jog_speed = 8.18;
+        config.player_settings.run_speed = 14.0;
+        config.player_settings.jump_height = 1.9;
+        config.player_settings.run_jump_height = 4.0;
+        config.reset_outdated_settings();
+        assert_eq!(config.player_settings.walk_speed, 1.5);
+        assert_eq!(config.player_settings.jog_speed, 8.0);
+        assert_eq!(config.player_settings.jump_height, 1.0);
+        // values the user changed stay
+        assert_eq!(config.player_settings.run_speed, 14.0);
+        assert_eq!(config.player_settings.run_jump_height, 4.0);
+
+        // a config saved with the old defaults round-trips through json before it migrates
+        let mut saved = AppConfig::from_json(
+            br#"{"user_id":"u","settings_generation":3,"player_settings":{"walk_speed":2.5,"jog_speed":8.18,"run_speed":11.0,"jump_height":1.9,"run_jump_height":2.95}}"#,
+        );
+        saved.reset_outdated_settings();
+        assert_eq!(saved.player_settings.walk_speed, 1.5);
+        assert_eq!(saved.player_settings.jog_speed, 8.0);
+        assert_eq!(saved.player_settings.run_speed, 10.0);
+        assert_eq!(saved.player_settings.jump_height, 1.0);
+        assert_eq!(saved.player_settings.run_jump_height, 1.5);
+        assert_eq!(saved.settings_generation, SETTINGS_GENERATION);
     }
 
     #[test]

@@ -64,7 +64,8 @@ export function initParamters(
     sprintJumpHeight = jumpEnabled ? baseSprintJumpHeight : 0;
 
     maxGroundJumps = jumpEnabled ? 1 : 0;
-    maxAirJumps = doubleJumpEnabled ? 1 : 0;
+    // No in-air jump: a fresh airborne press goes to the glide instead.
+    maxAirJumps = 0;
 
     disableOrientation = !anyEnabled;
 }

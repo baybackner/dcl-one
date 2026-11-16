@@ -2,12 +2,13 @@ import { AssetLoad, AvatarAnimationState, AvatarMovement, AvatarMovementInfo, en
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
-import { dampVelocity, movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
+import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
 import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, snapSpeed, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
-import { MAX_SPEED, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_FORWARD, VEC3_ZERO } from './constants';
+import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_FORWARD, VEC3_ZERO } from './constants';
 import { settings } from './settings';
+import { beginTick } from './clock';
 // Debug/tuning infrastructure — kept in the tree but disconnected so it has no
 // effect on a production deployment. Re-enable the import + the call in main()
 // when you want to live-tune feel or test long glides.
@@ -152,7 +153,6 @@ export var stepTime = 0;
 // frame's scene-loop deadline), so rate-based state integrates over everything applied since
 // the previous tick (previousStepTime) rather than a single stepTime.
 export var tickTime = 0;
-const MAX_TICK_TIME = 0.25;
 export var prevStepTime = 0;
 export var playerPosition: Vector3 = Vector3.Zero();
 export var prevPlayerPosition: Vector3 = Vector3.Zero();
@@ -169,6 +169,8 @@ export var velocityLength = 0;
 export var prevRequestedVelocity = Vector3.Zero();
 export var prevActualVelocity = Vector3.Zero();
 export var prevExternalVelocity = Vector3.Zero();
+// True when the engine applied a velocity other than the one we published last tick.
+export var horizontalResync = false;
 
 // What we published last frame. Compared against prevRequestedVelocity in
 // initFrame to detect engine takeover (resync to prevActual when they differ).
@@ -196,6 +198,7 @@ function initFrame() {
     prevStepTime = movementInfo.previousStepTime;
   }
   tickTime = Math.min(prevStepTime > 0 ? prevStepTime : stepTime, MAX_TICK_TIME);
+  beginTick(tickTime, stepTime, prevStepTime);
   time += tickTime;
 
   initParameters(movementInfo?.activeAvatarLocomotionSettings, movementInfo?.activeInputModifier);
@@ -203,7 +206,10 @@ function initFrame() {
 
   // If we are not in control (engine consumed a different velocity than we
   // published), resync velocity to prevActual.
-  const notInControl = Vector3.distance(lastPublished, prevRequestedVelocity) > 0.1 || movementInfo?.requestedVelocity === undefined;
+  // A missing requestedVelocity also means the engine applied zero, which is not a takeover
+  // when we published zero ourselves; the horizontal model only resyncs on a real mismatch.
+  horizontalResync = Vector3.distance(lastPublished, prevRequestedVelocity) > 0.1;
+  const notInControl = horizontalResync || movementInfo?.requestedVelocity === undefined;
   if (notInControl) {
     Vector3.copyFrom(prevActualVelocity, velocity);
     Vector3.copyFrom(prevActualVelocity, prevRequestedVelocity);
@@ -750,7 +756,6 @@ function writeMovement() {
 }
 
 function applyMovement() {
-  dampVelocity();
   updateVerticalVelocity();
   updateHorizontalVelocity();
 
@@ -773,12 +778,7 @@ function applyMovement() {
   const tiltAlpha = 1 - Math.exp(-tickTime / GLIDE_TILT_DAMP_TIME);
   glideTilt += (tiltTarget - glideTilt) * tiltAlpha;
 
-  // External forces are added last so damping and horizontal stop-decel
-  // can't zero small impulses before they have any visible effect. Damping
-  // on subsequent frames still decays the persisted external contribution.
-  velocity.x += prevExternalVelocity.x;
-  velocity.y += prevExternalVelocity.y;
-  velocity.z += prevExternalVelocity.z;
+  // External velocity is integrated by the horizontal and vertical models.
 
   // The speed cap applies to movement, not to the ground-snap correction: a probe-approved
   // snap can be large, and capping it would scale down the horizontal speed with it.

@@ -1,14 +1,18 @@
 import { ColliderLayer, engine, Entity, InputAction, inputSystem, RaycastQueryType, RaycastShape, raycastSystem, RaycastSystemCallback, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math';
 import { groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded } from './ground';
-import { JUMP_DECEL_TIME, GRAVITY, GROUND_SNAP_HEIGHT, JUMP_COYOTE_TIME, JUMP_SPEED, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT, PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, JUMP_SPEED_SPRINT, STEP_CLEARANCE_EXCESS, VEC3_ZERO, DOUBLE_JUMP_HANG_TIME, DOUBLE_JUMP_SPEED, GLIDE_DAMP_TIME } from './constants';
-import { engineDriven, playerPosition, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, prevStepTime, stepTime, tickTime, time, velocity } from '.';
+import {
+  EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL, FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
+  GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
+  LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, STEP_CLEARANCE_EXCESS, VEC3_ZERO,
+} from './constants';
+import { engineDriven, horizontalResync, playerPosition, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
-import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jogSpeed, jumpHeight, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
+import { glideEnabled, glidingFallingSpeed, jumpHeight, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
+import { frameTime, replyDelay, tickAdvance } from './clock';
 
-const JUMP_DECEL = JUMP_SPEED / JUMP_DECEL_TIME;
-
-const GRAVITY_DIR = Vector3.normalize(GRAVITY);
+const G = -GRAVITY.y;
 
 export function updateVerticalVelocity() {
   if (engineDriven) {
@@ -18,185 +22,221 @@ export function updateVerticalVelocity() {
     // ... unless an upward push launches us off it
     setGrounded(isLaunched() ? false : prevGrounded);
     unrequestedLift = 0;
-    applyJump();
+    applyJumpAndGravity(true);
     return;
   }
   stepUp();
-  applyGravity();
-  applyJump();
+  applyJumpAndGravity(false);
   snapToGround();
 }
 
-var tmp = Vector3.Zero();
-function applyGravity() {
-  if (!stepping) {
-    Vector3.scaleToRef(GRAVITY, tickTime, tmp);
-    Vector3.addToRef(velocity, tmp, velocity);
-    if (grounded) {
-      Vector3.scaleToRef(GRAVITY_DIR, Math.min(0.0, -Vector3.dot(velocity, GRAVITY_DIR)), tmp);
-      Vector3.addToRef(velocity, tmp, velocity);
-    }
-  }
-}
+// ---------------------------------------------------------------- jump and gravity
+// Integrated in fixed steps on the same clock as the horizontal model (see clock.ts).
 
-export var jumpStartHeight: number | undefined = undefined;
-// The jump height applicable to the current (or next) jump — for a first
-// jump, blended between walk-jump and sprint-jump based on horizontal speed;
-// for an in-air jump, the fixed DOUBLE_JUMP_HEIGHT. Exported so the animation
-// selector can size the jump clip's playback speed to match the ascent
-// duration.
+// Height the current (or next) jump was launched for (a tapped jump's apex).
 export var currentJumpHeight = 0;
-var jumpWasPressed = false;
-var jumpReleased = false;
-// Slots consumed since the last grounded frame. Reset to 0 on landing.
-// Tracked separately so an unused ground slot doesn't carry over: once past
-// coyote a press goes to the air-jump branch (or glide) regardless of whether
-// a ground jump was ever fired.
-var groundJumpsUsed = 0;
-var airJumpsUsed = 0;
-// True while the current (or next) jump is fired from the air — adds the
-// extra height, drives the air-jump animation. Cleared on landing or when
-// gliding ends mid-air.
+// Feet height at launch while the jump is rising; undefined otherwise.
+export var jumpStartHeight: number | undefined = undefined;
+// In-air jumps are not supported; kept for the animation selector.
 export var isDoubleJump = false;
-// Absolute time at which the hang phase ends. While set and in the future,
-// vertical velocity is pinned to zero; on elapse, the in-air jump launches.
-var doubleJumpHangEnd: number | undefined = undefined;
-// True while the player is gliding — damps vertical velocity toward
-// -gliding_falling_speed and (via horizontal.ts) drives horizontal speed to
-// gliding_speed. Triggered by a fresh jump press once the air-jump
-// slot has been consumed; ends on release or landing; re-triggerable mid-air.
 export var isGliding = false;
 
-function applyJump() {
-  const jumpIsPressed = inputSystem.isPressed(InputAction.IA_JUMP);
+type VState = {
+  vy: number; // vertical velocity from gravity and jumps
+  step: number; // steps run so far
+  lastGroundedStep: number;
+  triggerStep: number; // step the latest press is due on
+  consumedStep: number; // step the latest jump launched on
+  jumpCount: number; // jumps since the ground (falling past the grace window counts as one)
+  glideWanted: boolean;
+  gliding: boolean;
+  glideEndStep: number;
+  launched: boolean; // a jump launched during the last advance
+};
+const NEVER = -1e9;
+const vstate: VState = { vy: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false, gliding: false, glideEndStep: NEVER, launched: false };
+const vprobe: VState = { ...vstate };
+var vpending = 0;
+// Vertical velocity from external impulses and forces, kept apart from vy.
+var externalY = 0;
+var jumpWasPressed = false;
+var prevJumpPressed = false;
+var prevRunning = false;
+// The published reply includes a launch that the committed steps have not reached yet.
+var launchPending = false;
+// Frames from this tick's dispatch frame to the frame the avatar is predicted to touch the
+// ground (0 = during this frame), within the frames this reply is held; -1 otherwise.
+export var predictedLandFrame = -1;
 
-  // Track release so a re-press mid-jump doesn't re-engage the continuing-jump
-  // branch with stale state — that branch sets velocity.y = min(requiredSpeed,
-  // jumpSpeedCap), and jumpSpeedCap derives from the decayed prev velocity so
-  // it collapses to a negative, driving velocity.y deeply negative while
-  // jumpStartHeight stays defined (keeping the avatar in jump animation).
-  if (!jumpIsPressed && jumpStartHeight !== undefined) {
-    jumpReleased = true;
+function copyVState(from: VState, to: VState) {
+  to.vy = from.vy; to.step = from.step; to.lastGroundedStep = from.lastGroundedStep; to.triggerStep = from.triggerStep;
+  to.consumedStep = from.consumedStep; to.jumpCount = from.jumpCount; to.glideWanted = from.glideWanted;
+  to.gliding = from.gliding; to.glideEndStep = from.glideEndStep; to.launched = from.launched;
+}
+
+function launchSpeed(running: boolean): number {
+  // Use the more conservative of prev requested vs prev actual so external forces (impulses,
+  // moving platforms) don't inflate the running jump.
+  const req = Math.sqrt(prevRequestedVelocity.x * prevRequestedVelocity.x + prevRequestedVelocity.z * prevRequestedVelocity.z);
+  const act = Math.sqrt(prevActualVelocity.x * prevActualVelocity.x + prevActualVelocity.z * prevActualVelocity.z);
+  const maxHeight = running ? sprintJumpHeight : jumpHeight;
+  const k = sprintSpeed > 0 ? Math.min(1, Math.max(0, Math.min(req, act) / sprintSpeed)) : 0;
+  currentJumpHeight = jumpHeight + (maxHeight - jumpHeight) * k;
+  return Math.sqrt(2 * Math.max(0, currentJumpHeight) * G * GRAVITY_RISE_FACTOR);
+}
+
+function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: boolean, noGravity: boolean, h: number) {
+  s.step++;
+  let justJumped = false;
+  const onGround = onGroundTick && s.vy <= 0;
+  if (onGround) {
+    s.lastGroundedStep = s.step;
+    s.jumpCount = 0;
   }
 
-  if (grounded) {
-    groundJumpsUsed = 0;
-    airJumpsUsed = 0;
-    isDoubleJump = false;
-    isGliding = false;
+  // the grace window both buffers an early press and allows a late jump off an edge
+  const grace = s.vy > 0 || s.step < JUMP_GRACE_STEPS ? 0 : JUMP_GRACE_STEPS;
+  const coyote = s.step - s.lastGroundedStep < grace;
+  if (!onGround && !coyote) s.jumpCount = Math.max(s.jumpCount, 1);
+  const canJump = s.jumpCount === 0 && (onGround || coyote) && maxGroundJumps > 0 && jumpHeight > 0;
+  const wants = s.step === s.triggerStep || s.step <= s.triggerStep + grace;
+  if (canJump && wants) {
+    s.vy = launchSpeed(running);
+    justJumped = true;
+    s.launched = true;
+    s.jumpCount++;
+    s.triggerStep = NEVER;
+    s.consumedStep = s.step;
   }
 
-  if (isGliding && !jumpIsPressed) {
-    isGliding = false;
-    // Drop the air-jump flag and any lingering jump start so the post-glide
-    // fall routes through the passive-fall (apex-frozen) animation branch
-    // instead of snapping back to the jump or DoubleJump clip.
-    isDoubleJump = false;
-    jumpStartHeight = undefined;
-  }
-
-  // Use the more conservative of prev requested vs prev actual so external
-  // forces (impulses, moving platforms) don't inflate sprint jump height/speed.
-  const prevReqHorizLen = Math.sqrt(prevRequestedVelocity.x * prevRequestedVelocity.x + prevRequestedVelocity.z * prevRequestedVelocity.z);
-  const prevActHorizLen = Math.sqrt(prevActualVelocity.x * prevActualVelocity.x + prevActualVelocity.z * prevActualVelocity.z);
-  const naturalHorizSpeed = Math.min(prevReqHorizLen, prevActHorizLen);
-  // When walk/jog/run are all disabled, parameters.ts collapses jogSpeed and
-  // sprintSpeed to 0; without this guard the ratio is NaN and propagates into
-  // currentJumpHeight / currentJumpSpeed, killing the jump entirely.
-  const sprintRatio = sprintSpeed > jogSpeed
-    ? Math.min(1, Math.max(0, (naturalHorizSpeed - jogSpeed) / (sprintSpeed - jogSpeed)))
-    : 0;
-  const baseJumpHeight = jumpHeight + (sprintJumpHeight - jumpHeight) * sprintRatio;
-  currentJumpHeight = isDoubleJump ? doubleJumpHeight : baseJumpHeight;
-  const currentJumpSpeed = isDoubleJump ? DOUBLE_JUMP_SPEED : JUMP_SPEED + (JUMP_SPEED_SPRINT - JUMP_SPEED) * sprintRatio;
-
-  // Same rationale for the vertical cap: don't let external vertical forces
-  // boost the jump.
-  var jumpSpeedCap = Math.min(prevRequestedVelocity.y, prevActualVelocity.y);
-
-  if (doubleJumpHangEnd !== undefined) {
-    if (time < doubleJumpHangEnd) {
-      velocity.y = 0;
-      jumpWasPressed = jumpIsPressed;
-      return;
+  if (!onGround || justJumped) {
+    if (!noGravity || s.vy > 0) {
+      let g = G;
+      if (pressed && (s.step - s.consumedStep) * h < LONG_JUMP_TIME) g *= LONG_JUMP_GRAVITY_SCALE;
+      if (s.vy > 0) g *= GRAVITY_RISE_FACTOR;
+      s.vy -= g * h;
+      if (noGravity) s.vy = Math.max(0, s.vy);
     }
-    // Hang complete: launch the in-air jump from the current position. Seeding
-    // velocity.y ensures a minimum jump even if the player released during hang.
-    doubleJumpHangEnd = undefined;
-    jumpStartHeight = playerPosition.y;
-    jumpSpeedCap = currentJumpSpeed;
-    jumpReleased = !jumpIsPressed;
-    velocity.y = currentJumpSpeed;
-  } else if (jumpStartHeight === undefined
-    && jumpIsPressed
-    && !jumpWasPressed
-    && (grounded || lastGroundTime > time - JUMP_COYOTE_TIME)
-    && groundJumpsUsed < maxGroundJumps)
-  {
-    // ground jump (or coyote). Only fires while grounded or in coyote, and
-    // only if a ground slot is still available.
-    jumpStartHeight = playerPosition.y;
-    jumpSpeedCap = currentJumpSpeed;
-    jumpReleased = false;
-    groundJumpsUsed += 1;
-    isDoubleJump = false;
-  } else if (jumpIsPressed
-    && !jumpWasPressed
-    && !grounded
-    && airJumpsUsed < maxAirJumps)
-  {
-    // air jump: zero vertical velocity now and hang briefly; the launch runs
-    // when the hang elapses. Cancels any first-jump ascent still in progress.
-    // Counted separately from ground slots so an unused ground slot doesn't
-    // bleed into the air-jump count.
-    airJumpsUsed += 1;
-    isDoubleJump = true;
-    jumpStartHeight = undefined;
-    jumpReleased = false;
-    velocity.y = 0;
-    doubleJumpHangEnd = time + DOUBLE_JUMP_HANG_TIME;
-    jumpWasPressed = jumpIsPressed;
-    return;
-  } else if (jumpIsPressed
-    && !jumpWasPressed
-    && !grounded
-    && airJumpsUsed >= maxAirJumps
-    && !isGliding
-    && glideEnabled)
-  {
-    // No air slot remaining (which may be zero with disableDoubleJump): a
-    // fresh airborne press starts a glide. Independent of any unused ground
-    // slot — once past coyote that slot is forfeit, so the press transitions
-    // straight to glide.
-    isGliding = true;
-    jumpStartHeight = undefined;
-    jumpReleased = false;
+  } else {
+    s.vy = 0;
   }
 
-  if (isGliding) {
-    const alpha = 1 - Math.exp(-tickTime / GLIDE_DAMP_TIME);
-    velocity.y += (-glidingFallingSpeed - velocity.y) * alpha;
-    jumpWasPressed = jumpIsPressed;
-    return;
+  // glide: a fresh press in the air once the ground jump is spent, held to keep gliding
+  const canGlide = glideEnabled && s.jumpCount > maxAirJumps && !onGround && groundDistance > GLIDE_MIN_GROUND_DISTANCE;
+  s.glideWanted = (s.glideWanted || (canGlide && s.step === s.triggerStep)) && pressed;
+  const ready = (s.step - s.consumedStep) * h >= JUMP_TO_GLIDE_TIME && (s.step - s.glideEndStep) * h >= GLIDE_COOLDOWN;
+  if (!s.gliding && s.glideWanted && canGlide && ready) {
+    s.gliding = true;
+  } else if (s.gliding && (!pressed || !canGlide)) {
+    s.gliding = false;
+    s.glideEndStep = s.step;
+  }
+  if (s.gliding) s.vy = Math.max(s.vy, -glidingFallingSpeed);
+}
+
+function vadvance(s: VState, pressed: boolean, running: boolean, onGround: boolean, noGravity: boolean, t: number): number {
+  let n = 0;
+  while (t >= FIXED_STEP - 1e-9 && n < MAX_FIXED_STEPS) {
+    vstep(s, pressed, running, onGround, noGravity, FIXED_STEP);
+    t -= FIXED_STEP;
+    n++;
+    // after a launch the ground is left behind for the rest of the tick
+    if (s.launched) onGround = false;
+  }
+  return n === MAX_FIXED_STEPS ? 0 : t;
+}
+
+function applyJumpAndGravity(noGravity: boolean) {
+  const pressed = inputSystem.isPressed(InputAction.IA_JUMP);
+  // a running jump: sprint held with a movement key down
+  const running = inputSystem.isPressed(InputAction.IA_MODIFIER) && (
+    inputSystem.isPressed(InputAction.IA_FORWARD) || inputSystem.isPressed(InputAction.IA_BACKWARD)
+    || inputSystem.isPressed(InputAction.IA_LEFT) || inputSystem.isPressed(InputAction.IA_RIGHT)
+    || Vector3.lengthSquared(movementAxis) > 0);
+
+  if (horizontalResync) {
+    // the engine moved us at another velocity: continue from what it applied
+    vstate.vy = prevActualVelocity.y;
+    externalY = 0;
   }
 
-  if (jumpStartHeight !== undefined) {
-    if (jumpIsPressed && !jumpReleased && playerPosition.y + 1e-3 < jumpStartHeight + currentJumpHeight && jumpSpeedCap > 0) {
-      // continuing jump
-      const jumpHeightRemaining = (jumpStartHeight + currentJumpHeight - playerPosition.y);
-      const requiredJumpTime = Math.sqrt(jumpHeightRemaining * 2 / JUMP_DECEL);
-      const requiredSpeed = requiredJumpTime * JUMP_DECEL * Math.min(1, requiredJumpTime / tickTime);
-      velocity.y = Math.min(requiredSpeed, jumpSpeedCap);
-    } else if (velocity.y > 0) {
-      // still moving up, jump not pressed -> slow down
-      velocity.y -= Math.min(velocity.y, tickTime * currentJumpSpeed / JUMP_DECEL_TIME);
+  // external vertical velocity: upward fades, downward is stopped by the ground
+  externalY += prevExternalVelocity.y;
+  if (externalY > 0) {
+    externalY *= Math.exp(-tickTime / EXTERNAL_UP_DAMP_TIME);
+    externalY = Math.max(0, externalY - EXTERNAL_UP_DECEL * tickTime);
+  } else if (grounded) {
+    externalY = 0;
+  }
+
+  const onGround = grounded && !isLaunched();
+  const stepPressed = INPUT_DELAY_TICKS > 0 ? prevJumpPressed : pressed;
+  const stepRunning = INPUT_DELAY_TICKS > 0 ? prevRunning : running;
+  vstate.launched = false;
+  vpending = vadvance(vstate, stepPressed, stepRunning, onGround, noGravity, vpending + tickAdvance);
+  if (vstate.launched) {
+    jumpStartHeight = playerPosition.y;
+    stepping = false;
+    setGrounded(false);
+  }
+
+  // a press is due on the first step after this frame
+  if (pressed && !jumpWasPressed) vstate.triggerStep = vstate.step + 1;
+  jumpWasPressed = pressed;
+  prevJumpPressed = pressed;
+  prevRunning = running;
+  if (vstate.launched || vstate.triggerStep === NEVER) launchPending = false;
+
+  // The reply is held from the frame it lands on (replyDelay frames after this one) until the
+  // next reply lands (2 * replyDelay frames after this one). Answer with the mean of the
+  // predicted per-frame velocities over those frames, so the height the engine integrates
+  // over them is the height the model reaches (a rise or fall is not cut short).
+  // A launch the prediction has already published but the committed steps have not reached
+  // yet (launchPending) is kept: the prediction then covers at least the next step.
+  let vy = vstate.vy;
+  const frames = frameTime > 0 ? 2 * replyDelay : 0;
+  if (frames > 0 || launchPending) {
+    copyVState(vstate, vprobe);
+    vprobe.launched = false;
+    let ground = onGround && !vstate.launched;
+    if (frames > 0) {
+      let acc = vpending, sum = 0, n = 0;
+      for (let f = 1; f <= frames; f++) {
+        acc = vadvance(vprobe, pressed, running, ground, noGravity, acc + frameTime);
+        if (vprobe.launched) ground = false;
+        if (f >= replyDelay) { sum += vprobe.vy; n++; }
+      }
+      vy = sum / n;
     } else {
-      // end jump
-      jumpStartHeight = undefined;
+      vadvance(vprobe, pressed, running, ground, noGravity, Math.max(vpending, FIXED_STEP));
+      vy = vprobe.vy;
+    }
+    if (vprobe.launched && !vstate.launched) launchPending = true;
+  }
+  if (launchPending && jumpStartHeight === undefined) {
+    // published launch: no snap or step-up pulls the avatar back. The grounded state stays, so
+    // the launch step's horizontal move is still a ground move.
+    jumpStartHeight = playerPosition.y;
+    stepping = false;
+  }
+
+  // Predicted landing: frames from this one until the engine puts the avatar on the ground,
+  // with the previous reply held for the frames before this one's lands (-1: not in the window).
+  predictedLandFrame = -1;
+  if (!grounded && frameTime > 0 && !vstate.gliding && groundDistance < Infinity) {
+    let h = groundDistance;
+    for (let k = 0; k <= frames; k++) {
+      h += (k < replyDelay ? prevActualVelocity.y : vy + externalY) * frameTime;
+      if (h <= 0) { predictedLandFrame = k; break; }
     }
   }
 
-  jumpWasPressed = jumpIsPressed;
+  isGliding = vstate.gliding;
+  if ((vstate.vy <= 0 && !launchPending) || isGliding) jumpStartHeight = undefined;
+
+  // a step-up owns the vertical velocity while it climbs
+  if (stepping) return;
+  velocity.y = vy + externalY;
 }
 
 // An upward push stronger than gravity is meant to lift the avatar, so like a jump it leaves
@@ -212,10 +252,6 @@ export var snapSpeed = 0;
 // avatar past GROUND_SNAP_HEIGHT; it widens the snap range so the avatar is pulled back down.
 var unrequestedLift = 0;
 function snapToGround() {
-  if (velocity.y <= -snapSpeed) {
-    velocity.y += snapSpeed;
-  }
-
   if (groundDistance < 1e-3 || jumpStartHeight !== undefined) {
     unrequestedLift = 0;
   } else {

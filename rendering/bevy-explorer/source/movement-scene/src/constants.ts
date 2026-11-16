@@ -2,47 +2,71 @@ import { Vector3 } from "@dcl/sdk/math";
 
 export const GRAVITY = Vector3.scale(Vector3.Down(), 10.0);
 
-export const WALK_SPEED = 2.5; // max walk speed
-export const JOG_SPEED = 8.18; // max run speed
-export const SPRINT_SPEED = 11; // max sprint speed
-// Horizontal damping time constants (e-folding). All horizontal velocity
-// (player input + impulses) decays toward zero with these time constants;
-// input-axis acceleration counteracts the decay to maintain target speed.
-// Grounded value is small for snappy stop on input release.
-export const HORIZONTAL_DAMP_TIME_GROUND = 0.75;
-export const HORIZONTAL_DAMP_TIME_AIR = 0.75;
-// Constant horizontal deceleration — independent of current speed, so it
-// dominates at walk speeds (snappy stop) and is relatively small for
-// impulses (preserves push distance). Air value is usually small/zero so
-// horizontal impulses can carry through air freely.
-export const HORIZONTAL_STOP_DECEL_GROUND = 30;
-export const HORIZONTAL_STOP_DECEL_AIR = 0;
-// Constant upward-Y deceleration — stacks on top of gravity for upward
-// motion only, giving impulses a more predictable (shorter) apex without
-// affecting falling. Held jumps are unaffected (jump overrides velocity.y).
-export const VERTICAL_STOP_DECEL = 5;
-// Time to reach target horizontal speed from rest (input acceleration).
-// Independent of damp τ so accel feel doesn't change when tuning impulse decay.
-export const HORIZONTAL_ACCEL_TIME_GROUND = 0.25;
-export const HORIZONTAL_ACCEL_TIME_AIR = 0.75;
+export const WALK_SPEED = 1.5; // max walk speed
+export const JOG_SPEED = 8; // max run speed
+export const SPRINT_SPEED = 10; // max sprint speed
+
+// Horizontal input model. It is integrated in fixed steps inside each scene tick, so the result
+// does not depend on the frame rate or on how often the scene gets to answer.
+export const FIXED_STEP = 0.02; // s, length of one integration step (50 Hz)
+export const MAX_FIXED_STEPS = 13; // integration steps per tick at most (bounds a hitch)
+// Per input axis: a held key moves the axis speed toward its target at this acceleration (m/s^2).
+// The acceleration blends from the low to the high value as the input-hold weight goes from
+// ACCEL_CURVE_START to ACCEL_CURVE_END (smoothstep); the weight ramps over the accel time.
+export const GROUND_ACCEL = 20;
+export const GROUND_MAX_ACCEL = 25;
+export const AIR_ACCEL = 15;
+export const AIR_MAX_ACCEL = 20;
+export const ACCEL_CURVE_START = 0.1;
+export const ACCEL_CURVE_END = 0.9;
+export const HORIZONTAL_ACCEL_TIME_GROUND = 0.5; // s for the input-hold weight to go 0 -> 1
+// Smoothing time (s) of an axis whose key is released. 0 stops the axis within one step.
+export const HORIZONTAL_DAMP_TIME_GROUND = 0;
+// Quadratic horizontal drag while airborne (1/m): dv/dt = -AIR_DRAG * |v| * v.
+export const AIR_DRAG = 0.2;
+// Linear damping of external (impulse/force) horizontal velocity (1/s): always, plus on ground.
+export const EXTERNAL_ENV_DRAG = 1.5;
+export const EXTERNAL_GROUND_FRICTION = 4;
+export const MAX_EXTERNAL_SPEED = 50;
+// Steps up to the current frame use the input of the previous tick (1) or of this tick (0).
+export const INPUT_DELAY_TICKS = 1;
+// Reply prediction: the engine applies a reply from the frame it lands on until the next one.
+// 0 = reply with the state at the dispatch frame; 1 = estimate the reply delay in frames from
+// previousStepTime / stepTime and reply with the state predicted for the last frame it is held;
+// 2 = as 1, with the ratio smoothed over ticks.
+export const PREDICT_MODE: number = 1;
+export const FRAME_TIME_SMOOTHING = 0.1; // weight of the newest sample in the frame-time average
+export const DELAY_ROUNDING = 0; // subtracted from the frame ratio before rounding
+export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
+// Upward external velocity (impulses) fades with this time constant plus a constant
+// deceleration; downward external velocity is kept until the ground stops it.
+export const EXTERNAL_UP_DAMP_TIME = 0.75;
+export const EXTERNAL_UP_DECEL = 5;
 
 // Hard cap on total velocity magnitude — applied after external velocity is
 // added each frame, so runaway accumulation from repeated external impulses
 // can't produce absurd speeds.
 export const MAX_SPEED = 30;
 
-export const JUMP_SPEED = 7; // max jump vertical velocity
-export const JUMP_HEIGHT = 1.9; // max jump vertical height
-export const JUMP_SPEED_SPRINT = 11; // max jump vertical velocity 
-export const JUMP_HEIGHT_SPRINT = 2.95; // max jump vertical height while sprinting
-export const JUMP_DECEL_TIME = 0.125; // time to lose all vertical velocity after releasing jump
-export const JUMP_COYOTE_TIME = 0.125; // time after leaving ground while can still jump
-export const DOUBLE_JUMP_HEIGHT = 3.15; // rise of the in-air jump from its launch point, independent of the base jump height
-export const DOUBLE_JUMP_SPEED = 12; // initial vertical velocity cap for the in-air jump; higher than JUMP_SPEED to shorten ascent time
-export const DOUBLE_JUMP_HANG_TIME = 0.1; // duration of the zero-vertical-velocity pause before the double jump launches
-export const GLIDE_FALL_SPEED = 0.75; // downward speed target while gliding (m/s)
-export const GLIDE_HORIZONTAL_SPEED = 6; // horizontal speed clamp while gliding (m/s)
-export const GLIDE_DAMP_TIME = 0.1; // time constant for vertical velocity to converge toward -GLIDE_FALL_SPEED
+// Jump. Heights are those of a tapped jump; holding the key lowers gravity (below) and
+// reaches about twice the height. A running jump blends toward JUMP_HEIGHT_SPRINT with speed.
+export const JUMP_HEIGHT = 1;
+export const JUMP_HEIGHT_SPRINT = 1.5;
+export const GRAVITY_RISE_FACTOR = 4; // gravity multiplier while moving up (also sizes the launch speed)
+export const LONG_JUMP_TIME = 0.5; // s after the launch during which a held key scales gravity
+export const LONG_JUMP_GRAVITY_SCALE = 0.5;
+// Steps a press is buffered before landing, and steps after leaving the ground that a jump
+// is still allowed (one window for both; off while moving up).
+export const JUMP_GRACE_STEPS = 8;
+export const JUMP_COYOTE_TIME = 0.16; // s, the same window for the step-up check
+export const DOUBLE_JUMP_HEIGHT = 2; // in-air jump height (in-air jumps are disabled)
+// Glide: a fresh press in the air after the jump (or after the grace window when falling)
+// opens the glider while held, once long enough after the launch and above the ground.
+export const GLIDE_FALL_SPEED = 1; // max fall speed while gliding (m/s)
+export const GLIDE_HORIZONTAL_SPEED = 6; // horizontal speed limit while gliding (m/s)
+export const GLIDE_MIN_GROUND_DISTANCE = 0.2;
+export const JUMP_TO_GLIDE_TIME = 0.5;
+export const GLIDE_COOLDOWN = 0.2;
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
 
