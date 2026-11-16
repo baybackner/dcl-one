@@ -73,6 +73,7 @@ second one on its own realm.
 | `DCL_E2E_NATIVE_BIN`, `DCL_E2E_NATIVE_ARGS` | A standalone to start with its loopback console on (`--realm`, `--position`, `--automation-token` and `--automation-port` are added) | unset |
 | `DCL_E2E_NATIVE_PORT`, `DCL_E2E_NATIVE_TOKEN` | A running standalone's loopback console and the token it was started with | `15702`, unset |
 | `DCL_E2E_SMART_WEARABLE_URN` | A smart wearable on the configured backend for `specs/smart-wearables.test.ts` to run with no prompt | unset: that scenario is skipped |
+| `DCL_E2E_GENESIS_REALM` | The catalyst `sdk-scenes` and `scene-media` boot their own client into: the checklist's Genesis City scenes exist on mainnet only (zone has Genesis Plaza alone) | `https://peer.decentraland.org` |
 
 A development binary started by `DCL_E2E_NATIVE_BIN` reads its assets next to the executable: set `BEVY_ASSET_ROOT` to `rendering/bevy-explorer/source` so the bundled HUD loads, and pass `DCL_E2E_NATIVE_ARGS=--guest` on a machine whose install never accepted the terms, or the welcome page holds the world and no scenario arrives.
 
@@ -263,6 +264,40 @@ The world the Teleport cases visit is `DCL_E2E_WORLD`, `33.dcl.eth` by default: 
 `olavra` is not a world on decentraland.zone. The Gaps that need a second user in the world (DMs,
 mentions, another user seeing a new look) wait for a second client in a run.
 
+### The checklist's other tabs
+
+The cases of the checklist's other tabs that the HUD and the console can already drive have specs
+of their own; the checklist's Automation Suite tab lists them too. Each file's header classes its
+cases as above.
+
+| Tab | Case | Spec | Class |
+| --- | --- | --- | --- |
+| High End: Lobby | Open Lobby in world, Notifications from Lobby, Lobby on startup | `lobby` | Port |
+| High End: Lobby | Travel from in-world Lobby, Jump in to Home, Customize avatar, Profile menu, Recommended Places, Live Now | `lobby` | Partial |
+| High End: Lobby | Jump Back In (the places service's `/destinations` refuses the loopback origin by CORS), Failed travel (no Lobby control takes an unreachable destination) | `lobby` | Gap |
+| Auth | Sign Out (the startup Lobby's chip) | `auth` | Partial |
+| Auth | Login (auto login), Guest login persists (the web driver neither reloads a page nor keeps a browser profile) | `auth` | Gap |
+| General: Settings | Sound, Translate Option | `settings` | Port |
+| General: Settings | Graphics, Controls, Chat | `settings` | Partial |
+| Bevy Only | Untrusted link parameters, Permissions popover, Open Create, Cel shading / Avatar outline, Avatar ghosts, Imposters, Parcel grass, Crash modal (an unreachable world) | `bevy-only` | Partial |
+| Bevy Only | FPS meter (`aria-hidden`) | `bevy-only` | Gap |
+| High End: Communities | Join a community | `communities-membership` | Port |
+| High End: Communities | Create a Community (the form, never submitted), Private community, Join a Private Community, Community interaction | `communities-membership` | Partial |
+| High End: Friends | Open Friends Panel | `friends` | Port |
+| High End: Friends | Friends Panel Content | `friends` | Partial |
+| High End: Chat | Connected users around, Nearby | `nearby-users` | Partial |
+| High End: Camera | Publish Photos | `gallery-photos` | Port |
+| High End: Camera | Camera Shortcuts, Photo Properties | `gallery-photos` | Partial |
+| SDK7/6/Minigames | the 30 scenes: each loads, runs and logs no system error (gameplay is not covered) | `sdk-scenes` | Partial |
+| Video Streaming | Looping NFTs, Static NFTs | `scene-media` | Partial |
+| General: Genesis Plaza | Theatre (the video is requested and scheduled) | `scene-media` | Partial |
+
+`sdk-scenes` and `scene-media` boot a client of their own on `DCL_E2E_GENESIS_REALM`, with the
+run's account, and the last scene closes it. A catalyst that rate-limits the machine (HTTP 429,
+which the browser reports as `error sending request`) leaves a scene `Failed` with no retry: run
+them apart from other clients on the same address. `lobby` and `auth` boot an unsigned guest for
+the startup Lobby; `bevy-only` opens a second client on a link with an unrecognised parameter.
+
 Specs with no explorer-automation counterpart, outside the counts above:
 
 | Spec | Scenarios | Needs |
@@ -276,7 +311,7 @@ under `male/` and `female/`, as the creator preview serves a wearable. The third
 serves the same project as the parcel scene at `0,0`, its `scene.json` rewritten (`buildScene`'s
 `rewrite`) to disable portable experiences.
 
-What the HUD would need for more Ports, found while porting: roles or labels on the minimap's
+What the HUD would need for more Ports, found while porting: roles on the Lobby's cards (title, creator, counters) and on its sections; a label per slider arrow in Settings; the FPS meter not `aria-hidden`; roles on the Create page; the photo options button reachable without hovering; roles or labels on the minimap's
 name and coordinates, the chat message text, the communities titles and counts, the passport
 header and bio, the skybox slider and switch, the Backpack's detail panel; `aria-selected` and
 `aria-pressed` readable through `/hud_read`; implicit roles for `section` and `header` in
