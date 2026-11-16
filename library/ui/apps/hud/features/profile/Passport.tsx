@@ -62,10 +62,15 @@ export function Passport({
   // Still this account's own passport: a colour picked before an account switch is not the next one's.
   const ownRef = useRef(isSelf)
   ownRef.current = isSelf
-  // Social butterfly counts other players' passports; one's own is `profile_opened`.
+  // Social butterfly counts other players' passports; one's own is `profile_opened`. Reported
+  // once your profile is known, so your own passport is never taken for someone else's.
+  const meKnown = session.profile.data != null
+  const reported = useRef<string | null>(null)
   useEffect(() => {
-    track(ownRef.current ? 'profile_opened' : 'passport_opened', { receiver_id: userId })
-  }, [userId])
+    if (!meKnown || reported.current === userId) return
+    reported.current = userId
+    track(isSelf ? 'profile_opened' : 'passport_opened', { receiver_id: userId })
+  }, [userId, isSelf, meKnown])
   useEffect(
     () => () => {
       const picked = pickedRef.current

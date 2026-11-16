@@ -66,24 +66,47 @@ describe('Passport container', () => {
 // The node's social butterfly badge counts the other players' passports opened; one's own is
 // reported apart.
 describe('Passport analytics', () => {
+  const ME: Profile = { ...RICH, address: '0xme', name: 'Me' }
   const opened = (from: number): unknown[] =>
     pending()
       .slice(from)
       .filter((e) => e.event === 'passport_opened' || e.event === 'profile_opened')
       .map((e) => [e.event, e.properties.receiver_id])
+  const signedIn = (s: EngineSession): void => {
+    s.profile = fakeProfileState({ data: ME })
+  }
 
   it('reports passport_opened with the receiver for another player', async () => {
     receiveProfile('0xabc', RICH)
     const from = pending().length
-    await renderWithSession(<Passport userId="0xabc" onClose={vi.fn()} />)
+    await renderWithSession(<Passport userId="0xabc" onClose={vi.fn()} />, signedIn)
     expect(opened(from)).toEqual([['passport_opened', '0xabc']])
   })
 
   it('reports profile_opened, not passport_opened, for your own', async () => {
-    receiveProfile('0xme', { ...RICH, address: '0xme', name: 'Me' })
+    receiveProfile('0xme', ME)
     const from = pending().length
-    await renderWithSession(<Passport userId="0xme" onClose={vi.fn()} />, (s) => {
-      s.profile = fakeProfileState({ data: { ...RICH, address: '0xme', name: 'Me' } })
+    await renderWithSession(<Passport userId="0xme" onClose={vi.fn()} />, signedIn)
+    expect(opened(from)).toEqual([['profile_opened', '0xme']])
+  })
+
+  it('waits for your own profile, so your own passport opened early is still profile_opened', async () => {
+    receiveProfile('0xme', ME)
+    const from = pending().length
+    const s = fakeSession()
+    const view = await renderSettled(
+      <SessionProvider value={s}>
+        <Passport userId="0xme" onClose={vi.fn()} />
+      </SessionProvider>
+    )
+    expect(opened(from)).toEqual([])
+    const loaded = { ...s, profile: fakeProfileState({ data: ME }) }
+    await act(async () => {
+      view.rerender(
+        <SessionProvider value={loaded}>
+          <Passport userId="0xme" onClose={vi.fn()} />
+        </SessionProvider>
+      )
     })
     expect(opened(from)).toEqual([['profile_opened', '0xme']])
   })

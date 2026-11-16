@@ -7304,7 +7304,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/profile/Passport.tsx",
-      "sha256": "b1adfe87ae600ec8837bacc8bbbadbe6378554c203871746eaf3997a84dc870a"
+      "sha256": "85c5f76b9a78426506360051321962ce93347301909d1069efdbe72246eb34aa"
     },
     {
       "path": "library/ui/apps/hud/features/profile/ProfileEditForm.module.css",
@@ -7788,7 +7788,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
-      "sha256": "69d045a225c636cfe482b17f633bb6478ee4a66dbee9375532354f161fa32f49"
+      "sha256": "148049c23b46abd79a682cb1252783c0d98f0dd9caa41c905ced9ffb80db4db3"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
