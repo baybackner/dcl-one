@@ -5,7 +5,7 @@ import {
   EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL, FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
   LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
-  PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, STEP_CLEARANCE_EXCESS, VEC3_ZERO,
+  PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, RAMP_GUARD, STEP_CLEARANCE_EXCESS, VEC3_ZERO,
 } from './constants';
 import { engineDriven, horizontalResync, playerPosition, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
@@ -234,10 +234,23 @@ function applyJumpAndGravity(noGravity: boolean) {
   isGliding = vstate.gliding;
   if ((vstate.vy <= 0 && !launchPending) || isGliding) jumpStartHeight = undefined;
 
+  // Vertical ramp guard: in the air gravity only lowers vy, but the switching delay estimate
+  // makes consecutive replies alternate between the committed and the predicted state. Between
+  // two airborne replies without a launch, glide, landing or push, a reply never rises above
+  // the last one.
+  const air = !grounded && !vstate.launched && !launchPending && !isGliding && externalY === 0
+    && !horizontalResync && !stepping && predictedLandFrame < 0;
+  if ((RAMP_GUARD & 2) && air && lastReplyAir) vy = Math.min(vy, lastReplyVy);
+  lastReplyVy = vy;
+  lastReplyAir = air;
+
   // a step-up owns the vertical velocity while it climbs
   if (stepping) return;
   velocity.y = vy + externalY;
 }
+// Vertical velocity of the last reply and whether it was airborne (ramp guard).
+var lastReplyVy = 0;
+var lastReplyAir = false;
 
 // An upward push stronger than gravity is meant to lift the avatar, so like a jump it leaves
 // the ground rather than being snapped back down. A weaker one (externalVelocity is summed

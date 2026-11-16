@@ -38,6 +38,11 @@ export const PREDICT_MODE: number = 1;
 export const FRAME_TIME_SMOOTHING = 0.1; // weight of the newest sample in the frame-time average
 export const DELAY_ROUNDING = 0; // subtracted from the frame ratio before rounding
 export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
+// Ramp guard (bit flags), against the prediction switching between ticks:
+// 1 = while the same input is held on the ground and the model accelerates, a reply never
+//     slows below the previous one;
+// 2 = between two airborne replies (no launch, glide, landing or push), vy never rises.
+export const RAMP_GUARD: number = 3;
 // Upward external velocity (impulses) fades with this time constant plus a constant
 // deceleration; downward external velocity is kept until the ground stops it.
 export const EXTERNAL_UP_DAMP_TIME = 0.75;

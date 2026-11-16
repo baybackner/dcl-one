@@ -3,7 +3,7 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
   ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
   FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, MAX_EXTERNAL_SPEED,
-  MAX_FIXED_STEPS, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
+  MAX_FIXED_STEPS, RAMP_GUARD, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
 import { horizontalResync, landRecoverUntil, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, time, velocity } from '.';
@@ -81,6 +81,8 @@ const state: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex
 const probe: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex: 0, ez: 0 };
 // Time not yet covered by a step.
 var pending = 0;
+// Horizontal velocity of the last reply (ramp guard).
+var lastReplyX = 0, lastReplyZ = 0;
 
 function copyState(from: State, to: State) {
   to.ax = from.ax; to.az = from.az; to.adx = from.adx; to.adz = from.adz; to.weight = from.weight;
@@ -218,6 +220,31 @@ export function updateHorizontalVelocity() {
     }
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
   }
+
+  // Ramp guard. The delay estimate follows the previous reply's delay, which does not predict
+  // this one, so consecutive replies alternate between the predicted and the committed state.
+  // During a ground acceleration that reads as a speed dip of up to one prediction horizon
+  // (0.5-0.9 m/s), which the rigidly attached camera shows as a jerk. While the same input is
+  // held on the ground and the model is still accelerating, a reply never slows below the last
+  // one; the committed state catches up within a tick or two.
+  if ((RAMP_GUARD & 1) && !horizontalResync && (input.x !== 0 || input.z !== 0) && input.grounded && prevInput.grounded
+    && input.x === prevInput.x && input.z === prevInput.z && input.limit === prevInput.limit
+    && state.ex === 0 && state.ez === 0) {
+    const committed = Math.sqrt(state.vx * state.vx + state.vz * state.vz);
+    const out = Math.sqrt(ox * ox + oz * oz);
+    const last = Math.sqrt(lastReplyX * lastReplyX + lastReplyZ * lastReplyZ);
+    if (committed < input.limit - 1e-3 && out < last) {
+      if (out < 1e-6) {
+        // the committed steps have not started yet: keep the last reply
+        const f = Math.min(1, input.limit / last);
+        ox = lastReplyX * f; oz = lastReplyZ * f;
+      } else if (ox * lastReplyX + oz * lastReplyZ > 0) {
+        const f = Math.min(last, input.limit) / out;
+        ox *= f; oz *= f;
+      }
+    }
+  }
+  lastReplyX = ox; lastReplyZ = oz;
   copyInput(input, prevInput);
 
   velocity.x = ox;
