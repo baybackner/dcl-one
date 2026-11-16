@@ -9,7 +9,7 @@ import {
 import { horizontalResync, landRecoverUntil, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, time, velocity } from '.';
 import { grounded } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { isGliding, predictedLandFrame } from './vertical';
+import { isGliding, launchAhead, predictedLandFrame } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -218,6 +218,12 @@ export function updateHorizontalVelocity() {
     } else {
       advance(probe, input, pending + frames * frameTime);
     }
+    ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
+  } else if (launchAhead) {
+    // the vertical reply already carries a launch the committed steps reach after this frame: so does this one,
+    // with this tick's input for the launch step (a ground move), so a jump with the keys released goes straight up
+    copyState(state, probe);
+    advance(probe, input, Math.max(pending, FIXED_STEP));
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
   }
 

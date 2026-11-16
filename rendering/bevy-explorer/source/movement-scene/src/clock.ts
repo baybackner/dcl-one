@@ -10,6 +10,8 @@ export var tickAdvance = 0;
 export var frameTime = 0;
 // Frames the reply is expected to wait before the engine applies it (0..2).
 export var replyDelay = 0;
+// The same delay, smoothed over ticks (0..2, fractional): consecutive per-tick delays are not correlated.
+export var replyDelaySmooth = 0;
 
 var lastFrameTime = 0;
 var meanFrameTime = 0;
@@ -32,4 +34,5 @@ export function beginTick(tickTime: number, stepTime: number, previousStepTime: 
   meanRatio += (ratio - meanRatio) * FRAME_TIME_SMOOTHING;
   const r = PREDICT_MODE === 2 ? meanRatio : ratio;
   replyDelay = Math.max(0, Math.min(2, Math.round(r - DELAY_ROUNDING) - 1));
+  replyDelaySmooth = Math.max(0, Math.min(2, meanRatio - 1));
 }

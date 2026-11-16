@@ -42,7 +42,20 @@ export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
 // 1 = while the same input is held on the ground and the model accelerates, a reply never
 //     slows below the previous one;
 // 2 = between two airborne replies (no launch, glide, landing or push), vy never rises.
+// Bit 2 applies after the height tracking below: a correction can slow the fall but never make vy rise in the air.
 export const RAMP_GUARD: number = 3;
+// Vertical reply in the air: 1 = the mean predicted velocity over the frames the reply is held, from the per-tick
+// delay estimate; 2 = the velocity predicted 1.5 x the smoothed delay ahead (replyDelaySmooth), which only falls
+// between replies. A launch from the ground always uses the per-tick estimate.
+export const VERTICAL_PREDICT: number = 2;
+// Height tracking during a jump: the engine integrates whatever velocity it is sent, so a reply that lands earlier
+// or later than estimated leaves a height error that adds up over the jump. Each reply adds the error between the
+// model's height and the avatar's, divided by VERTICAL_TRACK_TIME (s), at most VERTICAL_TRACK_MAX (m/s). 0 = off.
+export const VERTICAL_TRACK_TIME: number = 0.15;
+export const VERTICAL_TRACK_MAX: number = 2;
+// Height tracking stops for the rest of the jump when the applied vertical velocity differs from the requested one by
+// more than this (m/s): the avatar hit something.
+export const VERTICAL_TRACK_BLOCK: number = 0.5;
 // Upward external velocity (impulses) fades with this time constant plus a constant
 // deceleration; downward external velocity is kept until the ground stops it.
 export const EXTERNAL_UP_DAMP_TIME = 0.75;
