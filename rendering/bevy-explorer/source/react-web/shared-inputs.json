@@ -7304,7 +7304,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/profile/Passport.tsx",
-      "sha256": "ab503bf5f1f7b690a15a540792f86108441b0376e2c19a36a0a4ee3c0a4a5085"
+      "sha256": "b1adfe87ae600ec8837bacc8bbbadbe6378554c203871746eaf3997a84dc870a"
     },
     {
       "path": "library/ui/apps/hud/features/profile/ProfileEditForm.module.css",
@@ -7788,7 +7788,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
-      "sha256": "342f66ff9c6c1757e2fe10c01a5f0e420f0450699fc9e76c7894ee03f4364b72"
+      "sha256": "69d045a225c636cfe482b17f633bb6478ee4a66dbee9375532354f161fa32f49"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
@@ -22182,6 +22182,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
       "to": "library/explorer-core/lib/color.ts",
       "kind": "native:runtime"
     },
@@ -28553,6 +28568,21 @@
     {
       "from": "library/ui/apps/hud/test/hosted/notifications.toast.test.tsx",
       "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
       "kind": "test:runtime"
     },
     {
