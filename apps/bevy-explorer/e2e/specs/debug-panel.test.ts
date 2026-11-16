@@ -26,9 +26,16 @@ scenario('every registered debug reading resolves or explains what it is waiting
 
 scenario('the debug panel shows live plugin data and can play an avatar emote', async ({ explorer }) => {
   const filter = { name: 'Find debug controls' }
+  // The open panel sits beside the rail, which keeps its own buttons (a "Skybox" one among them);
+  // the panel comes after the rail in document order, so its control is the last match.
+  const panelButton = async (name: string) => {
+    const count = await until(async () => (await explorer.hud.list('button')).filter((entry) => entry.name === name).length,
+      (n) => n > 0, { timeoutMs: 10_000, what: `a "${name}" button in the debug panel` })
+    return { ...button(name), index: count - 1 }
+  }
   const expand = async (title: string) => {
     await explorer.hud.fill(filter, title)
-    await explorer.hud.click(button(title))
+    await explorer.hud.click(await panelButton(title))
   }
   const before = await explorer.json<{ overrideFps: number | null }>('/performance_state')
   const cloudBefore = await explorer.json<{ enabled: boolean }>('/cloud_motion')
@@ -132,7 +139,9 @@ scenario('the debug panel shows live plugin data and can play an avatar emote', 
     const restoredClouds = await explorer.json<{ enabled: boolean }>(`/cloud_motion ${cloudBefore.enabled}`)
     assert.equal(restoredClouds.enabled, cloudBefore.enabled)
     await explorer.run(before.overrideFps == null ? '/session_graphics fps' : '/session_graphics fps ' + before.overrideFps)
-    if (await explorer.hud.isVisible(panel)) await explorer.escape()
+    // The panel's Close button, not Escape: with the filter field focused the HUD leaves Cancel to
+    // the field, and a panel left open would stay over every later scenario.
+    if (await explorer.hud.isVisible(panel)) await explorer.hud.click(await panelButton('Close'))
     await explorer.hud.waitHidden(panel)
   }
   assert.equal(await explorer.hud.isVisible(button('Play wave')), false)
