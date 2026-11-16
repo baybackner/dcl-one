@@ -12,8 +12,23 @@ it('should keep support modules internal and server-render their browser-only de
   expect(publicUi).not.toHaveProperty('linkHref')
   expect(publicUi).not.toHaveProperty('contentLabel')
   const root = path.resolve(import.meta.dirname, '..')
-  const directory = await mkdtemp(path.join(root, '.internal-support-'))
+  const directory = await mkdtemp(path.join(root, '.consumer-ssr-'))
   try {
+    const repository = path.resolve(root, '..', '..')
+    const namespaceChecker = pathToFileURL(
+      path.join(repository, 'rendering/bevy-explorer/source/react-web/scripts/shared-inputs.mjs')
+    ).href
+    expect(
+      execFileSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import {readSharedPaths} from ${JSON.stringify(namespaceChecker)};readSharedPaths(${JSON.stringify(repository)});`
+        ],
+        { encoding: 'utf8' }
+      )
+    ).toBe('')
     const entry = path.join(directory, 'entry.tsx')
     await writeFile(
       entry,
