@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { PolymorphicLinkProps } from '../link.helpers'
 import { linkHref, secureRel, isPlainLinkClick, hasUnsafeURLCharacters } from '../link.helpers'
 
 describe('when resolving shared native link destinations', () => {
@@ -92,5 +93,16 @@ describe('when shared URL syntax is checked before browser parsing', () => {
   it('should reject backslashes while preserving ordinary and encoded URL characters', () => {
     expect(hasUnsafeURLCharacters('/path\\name')).toBe(true)
     expect(hasUnsafeURLCharacters('/path%20name?q=é')).toBe(false)
+  })
+})
+
+describe('when native navigation shares the link policy module', () => {
+  it('should retain polymorphic native anchor attributes alongside runtime helpers', () => {
+    type MenuLink = PolymorphicLinkProps<'a', { label: string }>
+    expectTypeOf<MenuLink['href']>().toEqualTypeOf<string | undefined>()
+    expectTypeOf<MenuLink['label']>().toEqualTypeOf<string>()
+    expectTypeOf<'children' extends keyof MenuLink ? true : false>().toEqualTypeOf<false>()
+    expect(linkHref('/places')).toBe('/places')
+    expect(secureRel('_blank', undefined)).toBe('noopener noreferrer')
   })
 })
