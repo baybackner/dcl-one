@@ -25,7 +25,7 @@ mod states;
 #[cfg(test)]
 use lifecycle::register_metrics;
 pub(crate) use lifecycle::shutdown_signal;
-use lifecycle::{install_metrics, install_restore_stamps, run_http};
+use lifecycle::{install_metrics, run_http};
 #[cfg(test)]
 pub(crate) use routes::live_presence_routes;
 #[cfg(test)]
@@ -147,7 +147,6 @@ pub async fn serve(
     tracing::info!("{}", catalyst_config::posture::startup_line(&config));
     config.resolve_secret_files()?;
     config.content.eth_rpc_url()?;
-    install_restore_stamps(&config)?;
     let sync_settings = SyncSettings::from_config(&config)?;
     let pool = db::connect_pool(
         &config.node.database_url,
@@ -181,6 +180,7 @@ pub async fn serve(
         storage.clone(),
         sync_status.clone(),
     ));
+    prepared.settings.commit_hash = Some(config.commit_hash().unwrap_or_default());
     prepared.settings.content_url = stats_content_url(
         config.node.content_url.as_deref(),
         &content.settings.content_public_url,
@@ -195,25 +195,13 @@ pub async fn serve(
 
     // Fleet-wide jobs run in one process at a time through leases in the
     // database; an API replica (FLEET_JOBS_ENABLED=false) stands them down.
-    let jobs = if config.node.job_leases_enabled {
-        jobs::Jobs::with_leases(
-            pool.clone(),
-            jobs::LeaseSettings {
-                namespace: config.node.job_lease_namespace.clone(),
-                ..jobs::LeaseSettings::default()
-            },
-        )
-    } else {
+    if !config.node.job_leases_enabled {
         tracing::info!("JOB_LEASES_ENABLED=false: fleet jobs run unconditionally in this process");
-        jobs::Jobs::new()
-    };
+    }
     if !config.node.fleet_jobs_enabled {
         tracing::info!("FLEET_JOBS_ENABLED=false: fleet jobs stand down in this process");
     }
-    let jobs = Arc::new(
-        jobs.with_fleet_jobs(config.node.fleet_jobs_enabled)
-            .with_first_pass_now(config.node.jobs_first_pass_now),
-    );
+    let jobs = Arc::new(crate::settings::jobs_from_config(&config, &pool));
     // Every process mirrors the sync leader's state from the database into its
     // own SyncStatus; the leader (the process holding the `sync` lease) writes it.
     content::sync::status_mirror::spawn_mirror(&jobs, pool.clone(), sync_status.clone());
@@ -635,8 +623,7 @@ pub async fn serve(
         );
     }
     // The content history prune (src/content/history_prune.rs): behind
-    // CONTENT_HISTORY_PRUNE_ENABLED, and off beside the writes switch (an
-    // authoritative node keeps its history); it logs once why it is not running.
+    // CONTENT_HISTORY_PRUNE_ENABLED; it logs once why it is not running.
     content::history_prune::spawn(
         &jobs,
         pool.clone(),
@@ -1088,6 +1075,9 @@ pub async fn serve(
         .communities
         .set_voice_eviction(comms_stage.gatekeeper.clone());
     social.communities.set_chain_index(market.index.clone());
+    social
+        .communities
+        .set_explorer_flags(explorer_api.flags.clone());
     social.communities.load_flags().await?;
     if let Err(error) = social.communities.refresh_flags(&explorer_api).await {
         tracing::warn!(%error,"initial DAPPS flags refresh failed; retaining the stored document");
@@ -1384,6 +1374,10 @@ pub async fn serve(
             social: &social,
             builder,
             camera_reel,
+            scene_proxy: Arc::new(crate::scene_proxy::SceneProxy::new(
+                config.node.scene_proxy_hosts.clone(),
+                http_client.clone(),
+            )),
             ops_admin,
             snapshot_gen,
         },

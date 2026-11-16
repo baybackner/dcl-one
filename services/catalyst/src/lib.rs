@@ -8,6 +8,7 @@ pub use catalyst_jobs as jobs;
 pub use dcl_http as http;
 pub mod ops;
 pub mod presence;
+pub mod scene_proxy;
 pub use catalyst_db::schema_migrate;
 pub mod index;
 pub mod metrics_matcher;
@@ -30,3 +31,5 @@ pub use catalyst_storage as storage;
 pub use catalyst_worlds as worlds;
 /// The EVM relay layer the shop drives (SHOP.md): the old `src/economy`.
 pub use shop::evm as economy;
+
+pub mod pulse_generation;

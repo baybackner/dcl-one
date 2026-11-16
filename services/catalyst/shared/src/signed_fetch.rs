@@ -97,6 +97,21 @@ impl SignedFetchError {
             Self::CatalystUnavailable(d) => (503, format!("Catalyst unavailable: {d}")),
         }
     }
+
+    /// Whether the chain was refused for its metadata before any signature
+    /// check: a scene-signed request where the route refuses one, or a legacy
+    /// payload whose `signer` key is not canonical. Routes that answer these
+    /// differently from an authentication failure ask here instead of
+    /// matching the detail text.
+    pub fn is_metadata_refusal(&self) -> bool {
+        match self {
+            Self::MalformedChain { detail } => {
+                detail.starts_with("invalid metadata content")
+                    || detail.contains("non-canonical metadata")
+            }
+            _ => false,
+        }
+    }
 }
 
 impl From<ChainShapeError> for SignedFetchError {
@@ -232,8 +247,9 @@ enum TimestampWindow {
     /// MAX_FUTURE_SKEW_SECS)` ahead; an absent or empty header reads as 0 and
     /// expires ([`check_timestamp_window`]).
     AroundNow { secs: i64 },
-    /// Required, an unsigned integer, and no more than this many milliseconds
-    /// old; any future timestamp is fresh ([`crate::auth::signed_fetch::check_past_window`]).
+    /// Required, an unsigned integer, no more than this many milliseconds old
+    /// and at most `MAX_FUTURE_SKEW_SECS` ahead
+    /// ([`crate::auth::signed_fetch::check_past_window`]).
     PastOnly { max_age_ms: u64 },
 }
 
@@ -308,7 +324,7 @@ impl VerificationProfile {
 
     /// camera-reel-service's dcl-crypto-middleware-rs 0.3.0
     /// (`VerificationOptions::default().accept_legacy_payload(&[])`) for its
-    /// reads: a signature at most 60 s old and never too new, the metadata
+    /// reads: a signature at most 60 s old and at most 60 s ahead, the metadata
     /// header required but unread, the legacy payload unguarded, and a
     /// scene's request served as its signer, as upstream serves it.
     pub const fn camera_reel_read() -> Self {
@@ -604,6 +620,7 @@ mod tests {
                         .await
                         .expect_err("a scene-signed request must not be served");
                 assert_eq!(err.http_status_and_message().0, 400, "v6={v6}: {err}");
+                assert!(err.is_metadata_refusal(), "v6={v6}: {err}");
                 assert!(
                     optional_signer(&headers, "patch", PATH, PayloadPolicy::V6ThenLegacy, None)
                         .await
@@ -620,6 +637,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.http_status_and_message().0, 401);
+        assert!(!err.is_metadata_refusal());
         let err = require_signer(
             &headers,
             "get",
@@ -848,10 +866,9 @@ mod tests {
                 r#"{"type":"ECDSA_SIGNED_ENTITY","payload":"x","signature":"0x00"}"#,
             ),
         );
-        assert!(matches!(
-            extract_auth_chain(&headers).unwrap_err(),
-            SignedFetchError::MalformedChain { .. }
-        ));
+        let err = extract_auth_chain(&headers).unwrap_err();
+        assert!(matches!(err, SignedFetchError::MalformedChain { .. }));
+        assert!(!err.is_metadata_refusal(), "{err}");
     }
 
     fn ms_from_now(offset_ms: i64) -> String {
@@ -874,7 +891,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_camera_reel_window_bounds_only_the_age() {
+    async fn the_camera_reel_window_bounds_the_age_and_caps_the_future() {
         let at = |offset_ms| async move {
             let headers = signed_headers_at("get", PATH, "{}", true, &ms_from_now(offset_ms)).await;
             (
@@ -890,8 +907,13 @@ mod tests {
             "{reel:?}"
         );
         assert!(node.is_ok(), "the node window is still five minutes");
+        let (reel, _) = at(30_000).await;
+        assert!(reel.is_ok(), "within the future skew: {reel:?}");
         let (reel, node) = at(3_600_000).await;
-        assert!(reel.is_ok(), "a future signature is fresh: {reel:?}");
+        assert!(
+            matches!(reel, Err(SignedFetchError::Expired { .. })),
+            "an hour ahead is past the future skew: {reel:?}"
+        );
         assert!(
             matches!(node, Err(SignedFetchError::Expired { .. })),
             "the node window still bounds the future: {node:?}"
@@ -949,12 +971,11 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert!(matches!(
-            require_signer(&headers, "post", PATH, PayloadPolicy::V6ThenLegacy, None)
-                .await
-                .unwrap_err(),
-            SignedFetchError::MalformedChain { .. }
-        ));
+        let err = require_signer(&headers, "post", PATH, PayloadPolicy::V6ThenLegacy, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SignedFetchError::MalformedChain { .. }));
+        assert!(err.is_metadata_refusal(), "{err}");
     }
 
     #[tokio::test]

@@ -1,7 +1,28 @@
 //! Settings shared by the HTTP server and the indexing worker.
-use crate::{config::Config, land_authz, shop};
+use crate::{config::Config, jobs, land_authz, shop};
 use anyhow::Context;
 use std::time::Duration;
+
+/// The job runner `serve` and `index` both build: leased in
+/// `JOB_LEASE_NAMESPACE` unless `JOB_LEASES_ENABLED=false`, standing fleet
+/// jobs down on an API replica (`FLEET_JOBS_ENABLED=false`). One builder
+/// keeps the two processes, which contend for the same leases, on the same
+/// lease settings.
+pub(crate) fn jobs_from_config(config: &Config, pool: &sqlx::PgPool) -> jobs::Jobs {
+    let jobs = if config.node.job_leases_enabled {
+        jobs::Jobs::with_leases(
+            pool.clone(),
+            jobs::LeaseSettings {
+                namespace: config.node.job_lease_namespace.clone(),
+                ..jobs::LeaseSettings::default()
+            },
+        )
+    } else {
+        jobs::Jobs::new()
+    };
+    jobs.with_fleet_jobs(config.node.fleet_jobs_enabled)
+        .with_first_pass_now(config.node.jobs_first_pass_now)
+}
 
 pub(crate) fn market_settings(
     config: &Config,
@@ -102,6 +123,7 @@ pub(crate) fn land_settings(config: &Config) -> anyhow::Result<land_authz::Setti
     land_settings.requests_per_pass = config.land_authz.land_authz_index_requests_per_pass.max(1);
     land_settings.replay_from_block = config.land_authz.land_authz_replay_from_block;
     land_settings.stop_block = config.land_authz.land_authz_stop_block;
+    land_settings.confirmations = config.land_authz.land_authz_confirmations;
     Ok(land_settings)
 }
 
@@ -117,11 +139,13 @@ mod tests {
         config.land_authz.land_authz_index_requests_per_pass = 0;
         config.land_authz.land_authz_replay_from_block = Some(42);
         config.land_authz.land_authz_stop_block = Some(99);
+        config.land_authz.land_authz_confirmations = 3;
         let settings = land_settings(&config).unwrap();
         assert_eq!(settings.interval, Duration::from_secs(30));
         assert_eq!(settings.requests_per_pass, 1);
         assert_eq!(settings.replay_from_block, Some(42));
         assert_eq!(settings.stop_block, Some(99));
+        assert_eq!(settings.confirmations, 3);
     }
 
     #[test]
