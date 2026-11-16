@@ -248,6 +248,50 @@ State, in every build:
   they stand in their rest pose, so two frames of them agree whenever they were taken; the visual
   scenarios hold them still for their frames.
 
+Movement measurement (`crates/user_input/src/movement_trace.rs`):
+
+- `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat <n>]
+  [--input keys|external] <scenario JSON>`: plays a keyboard scenario on the player and records
+  every frame. The scenario is `{"format": 1, "id", "seed", "fps", "camera_yaw", "settle",
+  "duration", "events"}`; each event `{"t", "fwd", "right", "walk", "sprint"}` holds its keys
+  (`fwd` W 1 or S -1, `right` D 1 or A -1, the walk and sprint modifiers) until the next event's
+  `t`. The run places the player at `--spawn`, relative to the base parcel of the scene it stands
+  in and facing `yaw` (the camera yaw by default), as `movePlayerTo` does, and waits until it has
+  stood still, grounded and in place for `settle` seconds; the next frame is t = 0. The camera's
+  yaw is held at `camera_yaw`. Each frame from t = 0 the keys bound to the movement actions are
+  pressed or released to match the event reached (a frame within 0.1 ms of an event's `t` reaches
+  it), as window keyboard events ahead of Bevy's input systems, so bindings, input priorities,
+  the scenes' input events and the movement scene take them as a keyboard's; recording stops at
+  the first frame with t at least `duration`. `--fps` replaces the scenario's frame rate for the
+  run (the session rate is restored after it); `--dt fixed` advances the clock by exactly 1/fps
+  each frame, whatever the frame took; `--input external` presses nothing and starts at the first
+  frame with movement input, so a driver's real keys are recorded on the same timeline. The reply
+  is the base parcel, scene and spawn the run uses.
+- `/movement_trace status`: `phase` (`spawning`, `settling`, `starting`, `armed`, `running`,
+  `done`, `failed`, `idle`), `error`, and the run's `frames`, `t`, `dropped`,
+  `inputMismatchFrames`, `sceneTickFrames`, the horizontal `distance` from t = 0 and the `file`
+  name a driver gives the trace (`<id>__fps<fps>__r<repeat>.jsonl`). `/movement_trace fetch`
+  returns the last finished trace; `/movement_trace stop` abandons the run and releases its keys.
+  The debug panel's "Movement trace" section shows the status.
+- The trace is JSON Lines. The header holds `format`, `client` (`bevy`), `client_version`,
+  `scenario`, `seed`, `fps_target`, `animations`, `position` (realm, scene, base parcel, spawn)
+  and `started_utc`, with the repeat, scenario timings, `input_seam`, `dt_mode`, `camera_mode`,
+  `scene_base_parcel`, `spawn` and `spawn_yaw` under `extra`. Each frame holds `i`, `t`, `dt`,
+  `in` (the movement input given to the scenes: `fwd` and `right`, normalised on a diagonal, and
+  `walk` and `sprint`, false without a direction), `pos` (after the frame's movement, in SDK axes
+  relative to the base parcel), `vel` (the frame's displacement over its delta), `grounded`,
+  `yaw_avatar` and `yaw_camera` (degrees clockwise from north, in (-180, 180]), and under
+  `extra` the gait, the movement scene's requested velocity, the SDK external velocity and
+  `scene_tick` (1 when the movement scene's reply landed in the frame). The footer holds
+  `frames`, `dropped` (frames after the first longer than 1.5 target intervals) and, under
+  `extra`, `input_mismatch_frames` (frames whose input differs from the scenario's) and
+  `scene_tick_frames`.
+- `/avatar_animations [on|off]`: whether the player's own avatar animates; off holds its current
+  pose for measurements, while clip selection and the movement scene's animation feedback go on.
+  The reply is `enabled` and the count of `clips` still playing. Foot IK (`/footik`) is separate.
+- `/movement_state`: the active locomotion settings and the last completed movement step's
+  `requested`, `actual` and `external` velocities, in SDK axes.
+
 The HUD and input:
 
 - `/hud_list [role]`, `/hud_read`, `/hud_click`, `/hud_fill`, `/hud_wait`: a HUD control by role

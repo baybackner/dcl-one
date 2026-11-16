@@ -66,6 +66,7 @@ impl Plugin for AvatarMovementPlugin {
         );
 
         app.init_resource::<AvatarMovementInfo>();
+        app.init_resource::<LastMovementStep>();
         app.register_required_components::<RendererSceneContext, MovementPeriod>();
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
@@ -307,6 +308,19 @@ impl<C: Component> ActivePlayerComponent<C> {
     }
 }
 
+/// What the last completed movement step applied, in SDK world axes. [`AvatarMovementInfo`] holds
+/// the same velocities only from the step until the next frame's broadcast to the scenes clears
+/// them, which is before any console command or `Update` system can read them.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct LastMovementStep {
+    /// The velocity the controlling scene asked for
+    pub requested_velocity: Option<Vector3>,
+    /// The displacement over the step's delta, after collisions; zero when the step did not move
+    pub actual_velocity: Option<Vector3>,
+    /// The SDK forces and impulses applied in the step
+    pub external_velocity: Option<Vector3>,
+}
+
 impl<C: Component + FromConfig> FromConfig for ActivePlayerComponent<C> {
     fn from_config(config: &AppConfig) -> Self {
         Self {
@@ -356,7 +370,7 @@ pub struct AvatarMovementInfo(pub PbAvatarMovementInfo);
 // engine frames (its reply lands after the frame's scene-loop deadline), so each scene is
 // told about the whole period since it last looked rather than the last frame only.
 #[derive(Component, Default)]
-struct MovementPeriod {
+pub(crate) struct MovementPeriod {
     time: f64,
     // requested and actual velocity are the latest frame's, not a total: scenes use them to
     // tell whether their own output is what was applied
@@ -575,6 +589,7 @@ pub fn apply_rotation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_movement(
     mut player: Query<
         (
@@ -587,6 +602,7 @@ pub fn apply_movement(
     mut scenes: Query<(Entity, &mut SceneColliderData)>,
     time_res: Res<Time>,
     mut info: ResMut<AvatarMovementInfo>,
+    mut last_step: ResMut<LastMovementStep>,
     mut jumping: Local<bool>,
     movement_control: Res<EngineMovementControl>,
     central: Res<CentralCollisions>,
@@ -615,6 +631,11 @@ pub fn apply_movement(
                     )
                 });
         dynamic_state.ground_height = ground_height;
+        *last_step = LastMovementStep {
+            requested_velocity: Some(Vector3::world_vec_from_vec3(&movement.component.velocity)),
+            actual_velocity: Some(Vector3::world_vec_from_vec3(&Vec3::ZERO)),
+            external_velocity: info.0.external_velocity,
+        };
         return;
     };
 
@@ -678,6 +699,11 @@ pub fn apply_movement(
     info.0.actual_velocity = Some(Vector3::world_vec_from_vec3(
         &((position - transform.translation.as_dvec3()) / time_res.delta_secs_f64()).as_vec3(),
     ));
+    *last_step = LastMovementStep {
+        requested_velocity: info.0.requested_velocity,
+        actual_velocity: info.0.actual_velocity,
+        external_velocity: info.0.external_velocity,
+    };
 
     let position = position.as_vec3();
     let velocity = velocity.as_vec3();
@@ -941,7 +967,7 @@ fn resolve_collisions(
 }
 
 #[allow(clippy::type_complexity)]
-fn broadcast_movement_info(
+pub(crate) fn broadcast_movement_info(
     mut info: ResMut<AvatarMovementInfo>,
     active_components: Query<
         (
