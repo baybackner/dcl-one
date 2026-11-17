@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, test } from 'node:test'
 import { FakeConsole } from '../driver/console.ts'
@@ -67,6 +69,18 @@ describe('drive stdin protocol', () => {
     assert.equal(results[2]!.reply, 'logs for /scene_logs 20')
     assert.ok(results.every((result) => Number.isInteger(result.ms) && result.ms >= 0))
     assert.deepEqual(seen, results)
+  })
+
+  test('saves an in-memory capture sequence into the captures folder', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'drive-captures-'))
+    const sequence = { directory: 'capture://3', stored: 'memory', frames: [{ index: 0, path: 'capture://3/frame-000.png' }] }
+    const console_ = new FakeConsole({ capture_sequence: JSON.stringify(sequence), capture_frame: Buffer.from('png').toString('base64') })
+    const results = await runLines(from(['/capture_sequence --count 1']), new Explorer(console_), () => {}, dir)
+    const saved = path.join(dir, 'sequence-3', 'frame-000.png')
+    assert.equal((JSON.parse(results[0]!.reply) as { frames: { savedTo: string }[] }).frames[0]!.savedTo, saved)
+    assert.equal(await readFile(saved, 'utf8'), 'png')
+    assert.deepEqual(console_.lines, ['/capture_sequence --count 1', '/capture_frame capture://3/frame-000.png'])
+    await rm(dir, { recursive: true })
   })
 
   test('reports a transport error as a failed result', async () => {

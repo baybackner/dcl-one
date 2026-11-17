@@ -6,12 +6,14 @@
 // Every line runs in turn; blank lines and `#` lines are skipped. stdout carries one JSON line
 // per command, `{line, ok, reply, ms}`; stderr carries the boot and a short log. When stdin
 // closes, the frame is kept as `final.png` and the replies as `replies.jsonl` in the report
-// folder (`report/drive` by default), and the client and the servers are closed.
+// folder (`report/drive` by default), and the client and the servers are closed. A
+// `/capture_sequence` whose frames stay in the engine's memory (the web client) has them written
+// under `captures/` there, each frame's `savedTo` naming its file.
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { ConsoleError } from '../driver/console.ts'
-import type { Explorer } from '../driver/explorer.ts'
+import { type CaptureSequence, type Explorer, saveCaptureFrames } from '../driver/explorer.ts'
 import { PACKAGE_ROOT, REPORT_DIR } from '../driver/paths.ts'
 import { buildScene, serveRealm } from '../driver/realm.ts'
 import { closeSessions, openSession, parsePosition } from '../driver/session.ts'
@@ -61,8 +63,14 @@ export function commandLine(text: string): string | undefined {
 }
 
 /** Run each command line in turn, handing every result to `out`; a failed command is a result
- *  with `ok:false` and the run goes on. */
-export async function runLines(lines: AsyncIterable<string>, explorer: Pick<Explorer, 'run'>, out: (result: Result) => void): Promise<Result[]> {
+ *  with `ok:false` and the run goes on. With `capturesDir`, an in-memory capture sequence's frames
+ *  are saved there, one folder per sequence. */
+export async function runLines(
+  lines: AsyncIterable<string>,
+  explorer: Pick<Explorer, 'run'>,
+  out: (result: Result) => void,
+  capturesDir?: string
+): Promise<Result[]> {
   const results: Result[] = []
   for await (const text of lines) {
     const line = commandLine(text)
@@ -71,6 +79,11 @@ export async function runLines(lines: AsyncIterable<string>, explorer: Pick<Expl
     let result: Result
     try {
       result = { line, ok: true, reply: await explorer.run(line), ms: 0 }
+      if (capturesDir && line.startsWith('/capture_sequence')) {
+        const sequence = JSON.parse(result.reply) as CaptureSequence
+        const folder = path.join(capturesDir, sequence.directory.replace(/^capture:\/\//, 'sequence-'))
+        result.reply = JSON.stringify(await saveCaptureFrames(explorer, sequence, folder))
+      }
     } catch (error) {
       const reply = error instanceof ConsoleError ? error.output : error instanceof Error ? error.message : String(error)
       result = { line, ok: false, reply, ms: 0 }
@@ -100,10 +113,15 @@ async function main(): Promise<void> {
     const scene = await explorer.sceneState()
     const ready = scene.isReady ? 'ready' : `not ready (${scene.loadingStage})`
     console.error(`[drive] in world at ${position}, scene ${scene.sceneId ?? 'none'} ${ready}; reading commands from stdin`)
-    const results = await runLines(createInterface({ input: process.stdin, crlfDelay: Infinity }), explorer, (result) => {
-      process.stdout.write(`${JSON.stringify(result)}\n`)
-      console.error(`[drive] ${result.ok ? 'ok' : 'FAILED'} ${result.ms}ms ${result.line}: ${short(result.reply)}`)
-    })
+    const results = await runLines(
+      createInterface({ input: process.stdin, crlfDelay: Infinity }),
+      explorer,
+      (result) => {
+        process.stdout.write(`${JSON.stringify(result)}\n`)
+        console.error(`[drive] ${result.ok ? 'ok' : 'FAILED'} ${result.ms}ms ${result.line}: ${short(result.reply)}`)
+      },
+      path.join(options.report, 'captures')
+    )
     await mkdir(options.report, { recursive: true })
     await writeFile(path.join(options.report, 'replies.jsonl'), results.map((result) => JSON.stringify(result)).join('\n') + '\n')
     await writeFile(path.join(options.report, 'final.png'), await explorer.screenshot())

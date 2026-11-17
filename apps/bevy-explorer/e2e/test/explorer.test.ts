@@ -111,6 +111,22 @@ describe('Explorer', () => {
     ])
   })
 
+  test('screenshot with options reads the caption; captureSequence passes its flags', async () => {
+    const shot = { caption: '640x325 (screen 1600x813, frame 3200x1626) full-view capture', format: 'jpg', width: 640, image: Buffer.from('jpg').toString('base64') }
+    const fake = new FakeConsole({ screenshot: JSON.stringify(shot), capture_sequence: '{"stored":"disk","frames":[]}' })
+    const explorer = new Explorer(fake)
+    const read = await explorer.screenshot({ maxWidth: 640, jpg: true })
+    assert.equal(read.caption, shot.caption)
+    assert.equal(read.image.toString(), 'jpg')
+    await explorer.screenshot({ worldOnly: true })
+    await explorer.captureSequence({ count: 3, intervalSeconds: 0.1, maxWidth: 320, dir: '/tmp/a b' })
+    assert.deepEqual(fake.lines, [
+      '/screenshot --max-width 640 --jpg',
+      '/screenshot --world-only',
+      '/capture_sequence --count 3 --interval-seconds 0.1 --max-width 320 --dir "/tmp/a b"'
+    ])
+  })
+
   test('sceneLogRead passes the cursor and parses the header', async () => {
     const fake = new FakeConsole({ scene_logs: 'latestSeq=42 dropped=3 source=scene+client omitted=1\n40 [scene] error boom\n    at line 2\n41 [client:comms] warn w' })
     const explorer = new Explorer(fake)

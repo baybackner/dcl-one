@@ -352,6 +352,14 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   `/scene_logs [count] [--since seq] [--severity level] [--client]` reads the scene's log lines
   after a header `latestSeq=N dropped=N source=scene`: pass the last `latestSeq` as `--since` to
   get only newer lines, `--client` adds the engine's warnings and errors as `[client:<target>]`.
+- Frames: `/screenshot` alone replies the frame as raw base64 PNG at full size; with
+  `--max-width N` (64 to 1920), `--jpg` or `--world-only` (no HUD or scene window UI) it replies
+  JSON with the base64 `image` and a `caption` naming the size, the `screen` and frame it was
+  scaled from, the parcel and any wait for a camera transition. `/capture_sequence --count N
+  --interval-seconds S [--max-width N] [--jpg] [--world-only] [--dir <path>]` captures frames
+  at a true interval and replies their paths, scene ticks and `late` frames, never images: files
+  natively, memory on the web (`/capture_frame <path>` reads one). Both wait for a camera
+  transition and refuse while another capture runs, naming it.
 - Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
   `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` and `/ui_at
@@ -430,7 +438,9 @@ documents that runner (Node 24 and Chrome, no dependency), and the end-to-end su
 < commands.txt` in `apps/bevy-explorer/e2e` serves the web app and a loopback realm holding the
 built scene folders, boots a guest at the parcel (the first scene's base parcel by default), runs
 each console line read from stdin and prints one `{line, ok, reply, ms}` JSON line per command;
-it keeps the last frame as `final.png` when stdin closes. The e2e README's "Run it" has the flags.
+it keeps the last frame as `final.png` when stdin closes, and writes the frames of an in-memory
+`/capture_sequence` under `captures/` in its report folder. The e2e README's "Run it" has the
+flags.
 
 ## CI and release channels
 

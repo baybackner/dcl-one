@@ -59,6 +59,11 @@ Every automation command follows these rules. `crates/console/src/reply.rs` and
    beside `SyntheticAim` in `crates/scene_runner/src/update_scene/synthetic_pointer.rs`, consumed
    by the systems real input feeds. The commands in `src/automation/` are thin wrappers: none
    writes the player transform or casts a ray of its own.
+9. **Gates, not queues.** A command that holds a shared resource refuses a second caller while it
+   runs and names the holder (`"cause": {"holder": "capture_sequence"}`). `/screenshot` and
+   `/capture_sequence` share one capture gate. Frames a command produces in bulk are returned as
+   paths, never inline: files natively, and on the web, which cannot write the host's disk, a
+   memory store read one frame at a time.
 
 ## Consequences
 
@@ -68,6 +73,9 @@ Every automation command follows these rules. `crates/console/src/reply.rs` and
 - `/click_at` replies JSON (`x`, `y`, `normalized`, `button`, `screen`; on the web also `input`)
   instead of a sentence.
 - A value holding a lone `"` must now be quoted or escaped on non-JSON commands.
+- `/screenshot` with no option still replies raw base64 PNG at full size, which the scene
+  editor's thumbnail reads; any option (`--max-width`, `--jpg`, `--world-only`) makes it JSON with
+  a `caption` naming the screen and frame the image was scaled from.
 
 ## Alternatives considered
 

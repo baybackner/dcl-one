@@ -115,7 +115,10 @@ and the lines run one after the other. stdout gets one JSON line per command, `{
 "reply", "ms"}` (`ok:false` carries the command's error, and the run goes on); stderr gets the
 boot and a one-line summary of each reply. When stdin closes, `final.png` (the engine's frame)
 and `replies.jsonl` go to the report folder (`report/drive` by default), and the client and both
-servers close. The other variables of the table above apply as for a run.
+servers close. A `/capture_sequence` whose frames stay in the engine's memory (the web client's)
+has them written to `captures/sequence-<n>/` in the report folder as it runs, and its reply line
+names each file in the frame's `savedTo`. The other variables of the table above apply as for a
+run.
 
 ## How a spec is written
 
@@ -375,6 +378,7 @@ change on the left updates what is on the right in the same change, then runs th
 | `--automation-token`, `--automation-port`, their environment fallbacks, the `dcl/console` methods, or the `__dclTrustedInput` contract | `driver/native.ts`, `driver/web.ts`, `local-harness/web-driver` and its README; the readme section | `pnpm test`; the web driver's tests |
 | The smart-wearable fixture (`scenes/smart-wearable`: its title, name, log line or label), `/preview-wearables` or `buildScene` in `driver/realm.ts`, the `/smart_wearable*`, `/portables` or `/stop_portable` commands, or the HUD's `Portable experiences` button, popover or its `Stop`/`Restart` rows | `specs/smart-wearables.test.ts`, `test/realm.test.ts`, `scenes/README.md` | `pnpm test`; the scenario in CI |
 | A scene under `scenes/`, its parcels or spawn, `specs/visual/scenes.ts`, the 960x540 window or the tolerance | The references, re-recorded in CI (`record`) and committed in a PR; `scenes/README.md` | the visual scenarios in CI |
+| `/screenshot` (bare reply or options), `/capture_sequence` or `/capture_frame` | `screenshot`, `captureSequence`, `captureFrame` and `saveCaptureFrames` in `driver/explorer.ts`, `test/explorer.test.ts`; `runLines` in `scripts/drive.ts` and `test/drive.test.ts`; the Creator Hub's `BevyRenderer.ts` and the editor host read the bare reply | `pnpm test`; a Visual scenario for the bare frame, e.g. `pnpm run e2e --visual --filter 'core matches its reference'` (it writes `frame.png`; the comparison needs the CI references) |
 | `scripts/drive.ts`: its flags, its stdin lines or its JSON lines | "Drive a scene by hand or by agent" above, the Explorer readme's "Agents and tests", `test/drive.test.ts` | `pnpm test` |
 | A path moved under `apps/bevy-explorer/e2e`, `tooling/bevy-e2e-*.py` or the workflow | The workflow's `paths` filters, `tooling/bevy-ci.py` and `tooling/tests/test_bevy_ci.py`, the LFS patterns in `.gitattributes`, the links in this README | the tooling tests |
 | The CI workflow's name, its job names, the `bevy-explorer-web-<sha>` artifact or the status comment's sections | `tooling/bevy-e2e-inputs.py`, `tooling/bevy-e2e-report.py` and their tests; the e2e workflow's `workflow_run` | the tooling tests |

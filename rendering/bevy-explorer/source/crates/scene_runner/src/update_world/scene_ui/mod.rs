@@ -635,6 +635,13 @@ pub struct SceneUiRoot {
     canvas: Entity,
 }
 
+impl SceneUiRoot {
+    /// The root of a scene's window UI, not of a UI drawn to a texture.
+    pub fn is_window(&self) -> bool {
+        self.scene == self.canvas
+    }
+}
+
 /// The scenes whose UI shows: those the player is in, less every listed portable while the
 /// parcel scene the player stands in sets `portableExperiences` to `hideUi` or `disabled`.
 fn ui_scenes(
