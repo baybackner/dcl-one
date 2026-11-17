@@ -268,7 +268,10 @@ State, in every build:
   written: the press went elsewhere) or `not_drained`, an `info` when only the press or only the
   release had a handler, the click's `hit`, `events` and `rootBroadcast`, and the element's
   `crdtId`, `kind`, `screenRect`, `center`, `coveredBy` and `screen`, on refusals too. A click the
-  scene consumed neither the press nor the release of fails with that reply and a `reason`.
+  scene consumed neither the press nor the release of fails with that reply and a `reason`. The
+  aim stays on the element until the scene has read the release (two ticks), so the leave its end
+  writes comes after the up: the scene runs one tick's handlers in the element's registration
+  order, so a leave sharing the up's tick would read `leave > up`.
 - `/ui_set_text <crdtId> [--text "<text>"] [--submit] [--option-index N] [--timeout-seconds S]`:
   writes a scene-UI element `/ui_list` lists through the widget's own paths. An input's text is
   replaced as typing would replace it (the scene gets a change); `--submit` then sends it as
@@ -306,6 +309,23 @@ State, in every build:
   `screen` and an `info` line naming both ends. It fails with a `reason` when the scene did not
   consume a declared press or release, or neither end declares one; a drag with both ends over the
   world is `ok` and says no UI element received it.
+- `/ui_hover <crdtId> [--force]`, `/ui_hover --leave`: parks the pointer on a scene-UI element (an
+  open aim at it, as `/ui_click`'s), so only that element is entered, not its ancestors as a real
+  cursor's would be, and it stays hovered across commands. It waits for the scene to be sent the
+  enter and replies `ok`, `hovering` (`sdk crdtId N`), `delivered.enter` (`consumed`,
+  `not_declared`: parked with an `info`, `not_sent` or `not_drained`: fails with a `reason`,
+  nothing parked) and the element's fields; `info` also names a cover `--force` went through. A
+  hover parked before is ended first and named in `hoverEnded`, also when the new one is then
+  refused (a cover without `--force`, an element not shown). `--leave` ends the parked hover and
+  replies `left` (`sdk crdtId N`, with `(the element is gone; no leave was sent)` when the
+  element was removed under it), or `left: null` with `info` `no hover was parked, so nothing was
+  left`. Refused without ending anything: `--device` (the real mouse shares the pointer and would
+  end a device hover at once), `--leave` with a crdtId or `--stack`, a `--stack` other than `sdk`,
+  another pointer command running. Every other gesture (`/ui_click`, `/ui_drag`, `/ui_set_text`,
+  `/ui_scroll`, `/click_entity`, `/hover_entity`, `/press_input`, `/sweep_pointer`) waits until
+  the parked hover's leave has been drained, then runs, and its reply carries `hoverEnded` (a
+  text reply gets a last line `hoverEnded: ...`); the hover's leave and the gesture's own enter
+  so reach the scene in separate ticks.
 - `/avatar_state [all|<address>]`: avatars as selected (body shape, wearables, emotes, forced
   slots), as rendered (built or not, wearables by category, hidden categories) and the emote
   each plays (with `idle`: whether a triggered emote may take over, which a scene's non-idle

@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use super::{
     binding_error, timeout_frames, Answer, ButtonNames, ClickKind, PointerControl, Request,
 };
-use crate::automation::input::Step;
+use crate::automation::{input::Step, ui_hover::with_hover_ended};
 
 /// Frames to wait for the scene to drain the click's events after the click is done.
 const DRAIN_FRAMES: u32 = 180;
@@ -89,9 +89,13 @@ pub fn ui_click_cmd(
     input_map: Res<InputMap>,
     input_manager: InputManager,
 ) {
+    if control.handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = control.handover.claim();
     match ui_click(
         &command,
         &mut control,
@@ -101,10 +105,14 @@ pub fn ui_click_cmd(
         &input_map,
         &input_manager,
     ) {
-        Ok(rx) => control
-            .pending
-            .push_receiver(rx, |r| r, input.take_responder()),
-        Err(e) => input.reply_failed(e),
+        Ok(rx) => control.pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
+        Err(e) => match with_hover_ended(Err(e), ended.as_deref()) {
+            Ok(e) | Err(e) => input.reply_failed(e),
+        },
     }
 }
 

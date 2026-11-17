@@ -366,7 +366,10 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   y --to x y [--duration-frames N] [--path auto|sdk|device]` presses at one normalized point,
   moves to the other and releases there, holding the pointer on the scene's UI (`sdk`) or moving
   the real cursor (`device`); it replies `pointerOver` {start, end}, `delivered` {down, up},
-  `entered` and `left`, and fails when the scene did not consume the release.
+  `entered` and `left`, and fails when the scene did not consume the release. `/ui_hover
+  <crdtId> [--force]` parks the pointer on one element: only it is entered, and it stays hovered
+  across commands until `/ui_hover --leave` (`left`), the next `/ui_hover` or another gesture,
+  whose reply then carries `hoverEnded`; a cover refuses it unless `--force`.
 - Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and

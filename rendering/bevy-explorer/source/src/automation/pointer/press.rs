@@ -127,12 +127,16 @@ pub(super) fn press_input_cmd(
     input_map: Res<InputMap>,
     input_manager: InputManager,
 ) {
+    if control.handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = control.handover.claim();
     let result = press_request(&command, &mut control, &input_map, &input_manager)
         .unwrap_or_else(Answer::Failed);
-    answer(&mut input, &mut control.pending, result);
+    answer(&mut input, &mut control.pending, result, ended);
 }
 
 fn press_request(

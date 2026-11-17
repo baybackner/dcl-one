@@ -177,6 +177,15 @@ release is played on the aimed entity first: the reply, and the end of the aim, 
 been played and the pointer pipeline has run after it, and other pointer commands are refused
 until then.
 
+### A parked UI hover
+
+`/ui_hover <crdtId>` keeps an open aim on a scene-UI element across commands. A pointer command
+sent meanwhile (`/hover_entity`, `/click_entity`, `/press_input`, `/sweep_pointer`, and the `/ui_`
+gestures) waits until that hover has ended: the aim is dropped, the element's leave is sent to
+the scene and drained (two scene ticks), then the command runs and its reply carries
+`hoverEnded` (`sdk crdtId N`). `/click_at` is real input: while a hover is parked the pointer
+ray follows the aim, so end it with `/ui_hover --leave` before clicking.
+
 ### Pressing an input action
 
 `/press_input <action> [--hold S] [--entity <id>] [--at x y z] [--timeout-frames N |

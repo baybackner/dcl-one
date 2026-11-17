@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 use super::{
     input::{InputScript, Step},
     pointer::{binding_error, binding_step, PointerJob},
+    ui_hover::{with_hover_ended, HoverHandover},
 };
 
 /// Frames the path takes without --duration-frames.
@@ -94,6 +95,12 @@ enum Stage {
 /// The drag in flight.
 #[derive(Resource, Default)]
 pub struct UiDragJob(Option<UiDrag>);
+
+impl UiDragJob {
+    pub(crate) fn busy(&self) -> bool {
+        self.0.is_some()
+    }
+}
 
 pub struct UiDrag {
     path: Path,
@@ -163,10 +170,15 @@ pub fn ui_drag_cmd(
     frame: Res<FrameCount>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut pending: ResMut<PendingConsoleResponses>,
+    mut handover: HoverHandover,
 ) {
+    if handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = handover.claim();
     let started = (|| {
         if job.0.is_some() {
             return Err(reply::refusal("a /ui_drag is still running", None));
@@ -289,8 +301,14 @@ pub fn ui_drag_cmd(
         Ok(rx)
     })();
     match started {
-        Ok(rx) => pending.push_receiver(rx, |r| r, input.take_responder()),
-        Err(e) => input.reply_failed(e),
+        Ok(rx) => pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
+        Err(e) => match with_hover_ended(Err(e), ended.as_deref()) {
+            Ok(e) | Err(e) => input.reply_failed(e),
+        },
     }
 }
 

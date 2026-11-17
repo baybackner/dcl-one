@@ -28,7 +28,10 @@ use ui_core::{
     ui_actions::DataChanged,
 };
 
-use super::pointer::ui::{element_fields, merge};
+use super::{
+    pointer::ui::{element_fields, merge},
+    ui_hover::{with_hover_ended, HoverHandover},
+};
 
 /// Seconds a write may take to reach the widget, by default.
 const DEFAULT_TIMEOUT_SECONDS: f32 = 10.0;
@@ -198,10 +201,15 @@ pub fn ui_set_text_cmd(
     windows: Query<&Window, With<PrimaryWindow>>,
     rate: Res<FrameRate>,
     mut pending: ResMut<PendingConsoleResponses>,
+    mut handover: HoverHandover,
 ) {
+    if handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = handover.claim();
     let started = (|| {
         let (scene, found) = find(
             command.crdt_id,
@@ -318,8 +326,14 @@ pub fn ui_set_text_cmd(
         Ok(start(&mut job, scene, found.node, steps, timeout, reply))
     })();
     match started {
-        Ok(rx) => pending.push_receiver(rx, |r| r, input.take_responder()),
-        Err(e) => input.reply_failed(e),
+        Ok(rx) => pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
+        Err(e) => match with_hover_ended(Err(e), ended.as_deref()) {
+            Ok(e) | Err(e) => input.reply_failed(e),
+        },
     }
 }
 
@@ -334,10 +348,15 @@ pub fn ui_scroll_cmd(
     windows: Query<&Window, With<PrimaryWindow>>,
     rate: Res<FrameRate>,
     mut pending: ResMut<PendingConsoleResponses>,
+    mut handover: HoverHandover,
 ) {
+    if handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = handover.claim();
     let started = (|| {
         let (scene, found) = find(
             command.crdt_id,
@@ -423,8 +442,14 @@ pub fn ui_scroll_cmd(
         ))
     })();
     match started {
-        Ok(rx) => pending.push_receiver(rx, |r| r, input.take_responder()),
-        Err(e) => input.reply_failed(e),
+        Ok(rx) => pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
+        Err(e) => match with_hover_ended(Err(e), ended.as_deref()) {
+            Ok(e) | Err(e) => input.reply_failed(e),
+        },
     }
 }
 

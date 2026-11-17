@@ -104,6 +104,7 @@ impl Plugin for AutomationPlugin {
             sweep::AutomationSweepPlugin,
             ui_write::AutomationUiWritePlugin,
             ui_drag::AutomationUiDragPlugin,
+            ui_hover::AutomationUiHoverPlugin,
         ));
     }
 }
@@ -113,6 +114,7 @@ pub(crate) mod pointer;
 pub(crate) mod reticle;
 pub(crate) mod sweep;
 pub(crate) mod ui_drag;
+pub(crate) mod ui_hover;
 pub(crate) mod ui_write;
 pub(crate) mod walk;
 

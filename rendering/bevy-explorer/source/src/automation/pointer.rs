@@ -59,7 +59,10 @@ use scene_runner::{
 };
 use serde::Serialize;
 
-use super::input::{key_from_code, InputScript, Step};
+use super::{
+    input::{key_from_code, InputScript, Step},
+    ui_hover::{with_hover_ended, HoverHandover},
+};
 
 /// Frames a hover lasts without `--frames`.
 const DEFAULT_HOVER_FRAMES: u32 = 30;
@@ -297,8 +300,23 @@ struct Releasing {
     target: Option<AimAt>,
     /// the input script step number of the release
     step: u64,
+    /// a scene-UI aim stays until the scene has read the click's last event: the leave its end
+    /// writes would otherwise share the release's tick, and the scene runs one tick's handlers in
+    /// the element's own order, not in the order they were written
+    drain: Option<Drain>,
     replies: Vec<PendingAnswer>,
 }
+
+/// The scene, the tick it must reach, and the frame it stops being waited for.
+#[derive(Clone, Copy)]
+struct Drain {
+    scene: Entity,
+    tick: u32,
+    until_frame: u32,
+}
+
+/// Frames a scene-UI aim waits for the scene to read its click before it ends anyway.
+const UI_DRAIN_FRAMES: u32 = 180;
 
 /// A press left held by `--event down`, with the aim kept open on its entity or point.
 struct Held {
@@ -384,17 +402,21 @@ fn wind_down(
     release: Option<InputIdentifier>,
     what: String,
     target: Option<AimAt>,
+    drain: Option<Drain>,
     answer: PendingAnswer,
 ) {
     let step = release
         .and_then(|binding| binding_step(&binding, ButtonState::Released))
-        .map(|step| script.push(step));
+        .map(|step| script.push(step))
+        // nothing to release: wait for the drain alone
+        .or(drain.map(|_| script.played()));
     match (step, jobs.releasing.as_mut()) {
         (step, Some(releasing)) => {
             // a release is already pending: this answer waits for it too
             if let Some(step) = step {
                 releasing.step = releasing.step.max(step);
             }
+            releasing.drain = releasing.drain.or(drain);
             releasing.replies.push(answer);
         }
         (Some(step), None) => {
@@ -402,6 +424,7 @@ fn wind_down(
                 what,
                 target,
                 step,
+                drain,
                 replies: vec![answer],
             });
         }
@@ -458,6 +481,7 @@ fn clear_pointer(
         release,
         what,
         None,
+        None,
         (reply, Ok("cleared".to_owned())),
     );
 }
@@ -469,11 +493,18 @@ fn settle_release(
     script: Res<InputScript>,
     mut synthetic: ResMut<SyntheticPointer>,
     mut log: ResMut<PointerEventLog>,
+    scenes: Query<&RendererSceneContext>,
+    frame: Res<FrameCount>,
 ) {
-    let landed = jobs
-        .releasing
-        .as_ref()
-        .is_some_and(|releasing| script.played() >= releasing.step);
+    let drained = |drain: &Drain| {
+        frame.0 >= drain.until_frame
+            || scenes
+                .get(drain.scene)
+                .map_or(true, |ctx| ctx.tick_number >= drain.tick)
+    };
+    let landed = jobs.releasing.as_ref().is_some_and(|releasing| {
+        script.played() >= releasing.step && releasing.drain.as_ref().is_none_or(drained)
+    });
     let Some(releasing) = jobs.releasing.take_if(|_| landed) else {
         return;
     };
@@ -558,15 +589,26 @@ enum Answer {
     Pending(RpcResultReceiver<Result<String, String>>),
 }
 
+/// Sends the answer, with `hoverEnded` when the command ended a parked `/ui_hover`.
 fn answer<T: bevy_console::Command>(
     input: &mut ConsoleCommand<T>,
     pending: &mut PendingConsoleResponses,
     answer: Answer,
+    ended: Option<String>,
 ) {
+    let done = |reply| with_hover_ended(reply, ended.as_deref());
     match answer {
-        Answer::Failed(message) => input.reply_failed(message),
-        Answer::Json(json) => input.reply_ok(json),
-        Answer::Pending(rx) => pending.push_receiver(rx, |r| r, input.take_responder()),
+        Answer::Failed(message) => match done(Err(message)) {
+            Ok(message) | Err(message) => input.reply_failed(message),
+        },
+        Answer::Json(json) => match done(Ok(json)) {
+            Ok(json) | Err(json) => input.reply_ok(json),
+        },
+        Answer::Pending(rx) => pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
     }
 }
 
@@ -616,6 +658,8 @@ pub(crate) struct PointerControl<'w, 's> {
     frame: Res<'w, FrameCount>,
     rate: Res<'w, FrameRate>,
     pending: ResMut<'w, PendingConsoleResponses>,
+    /// a parked `/ui_hover` ends before a pointer command starts
+    pub(crate) handover: HoverHandover<'w>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
     meshes: Query<
         'w,
@@ -820,15 +864,19 @@ impl PointerControl<'_, '_> {
 }
 
 fn hover_entity_cmd(mut input: ConsoleCommand<HoverEntityCommand>, mut control: PointerControl) {
+    if control.handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = control.handover.claim();
     let result = if command.clear {
         control.clear()
     } else {
         hover_request(&command, &mut control).unwrap_or_else(Answer::Failed)
     };
-    answer(&mut input, &mut control.pending, result);
+    answer(&mut input, &mut control.pending, result, ended);
 }
 
 fn hover_request(
@@ -868,12 +916,16 @@ fn click_entity_cmd(
     input_map: Res<InputMap>,
     input_manager: InputManager,
 ) {
+    if control.handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = control.handover.claim();
     let result = click_request(&command, &mut control, &input_map, &input_manager)
         .unwrap_or_else(Answer::Failed);
-    answer(&mut input, &mut control.pending, result);
+    answer(&mut input, &mut control.pending, result, ended);
 }
 
 fn click_request(
@@ -1231,6 +1283,16 @@ fn drive_pointer_job(
         // anything else ends its aim, releasing a press it still holds first
         _ => {
             let release = job.release_binding();
+            let drain = match job.at {
+                Some(AimAt::Ui { .. }) => {
+                    job.events.iter().map(|e| e.tick).max().map(|tick| Drain {
+                        scene: job.scene,
+                        tick: tick + 2,
+                        until_frame: frame + UI_DRAIN_FRAMES,
+                    })
+                }
+                _ => None,
+            };
             wind_down(
                 &mut jobs,
                 &mut synthetic,
@@ -1239,6 +1301,7 @@ fn drive_pointer_job(
                 release,
                 job.what,
                 job.at,
+                drain,
                 (job.reply, reply),
             );
         }

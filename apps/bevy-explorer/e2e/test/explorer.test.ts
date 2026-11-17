@@ -111,6 +111,19 @@ describe('Explorer', () => {
     ])
   })
 
+  test('uiHover parks by id and uiLeave ends it', async () => {
+    const fake = new FakeConsole({
+      ui_hover: JSON.stringify({ ok: true, hovering: 'sdk crdtId 562', delivered: { enter: 'consumed' }, hoverEnded: 'sdk crdtId 561' }),
+    })
+    const explorer = new Explorer(fake)
+    const hovered = await explorer.uiHover(562)
+    assert.equal(hovered.hovering, 'sdk crdtId 562')
+    assert.equal(hovered.hoverEnded, 'sdk crdtId 561')
+    await explorer.uiHover(566, { force: true })
+    await explorer.uiLeave()
+    assert.deepEqual(fake.lines, ['/ui_hover 562', '/ui_hover 566 --force', '/ui_hover --leave'])
+  })
+
   test('uiDrag composes the points and flags', async () => {
     const fake = new FakeConsole({ ui_drag: JSON.stringify({ ok: true, path: 'sdk', delivered: { down: 'consumed', up: 'consumed' } }) })
     const explorer = new Explorer(fake)

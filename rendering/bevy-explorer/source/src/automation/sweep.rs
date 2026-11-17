@@ -39,6 +39,7 @@ use super::{
     camera::{aim_angles, aim_error_degrees, dcl_euler, wrap, CameraJob},
     input::{InputScript, Step},
     pointer::{binding_error, binding_step, hit_ids, Point},
+    ui_hover::{with_hover_ended, HoverHandover},
 };
 
 /// The longest sweep.
@@ -130,6 +131,12 @@ struct Sweep {
 #[derive(Resource, Default)]
 pub struct SweepJob(Option<Sweep>);
 
+impl SweepJob {
+    pub(crate) fn busy(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sweep_pointer_cmd(
     mut input: ConsoleCommand<SweepPointerCommand>,
@@ -148,10 +155,15 @@ fn sweep_pointer_cmd(
         &InheritedVisibility,
     )>,
     children: Query<&Children>,
+    mut handover: HoverHandover,
 ) {
+    if handover.defers() {
+        return;
+    }
     let Some(Ok(command)) = input.take() else {
         return;
     };
+    let ended = handover.claim();
     let result = (|| {
         if job.0.is_some() || camera_job.busy() {
             return Err(refusal(
@@ -249,8 +261,14 @@ fn sweep_pointer_cmd(
         Ok(rx)
     })();
     match result {
-        Ok(rx) => pending.push_receiver(rx, |r| r, input.take_responder()),
-        Err(e) => input.reply_failed(e),
+        Ok(rx) => pending.push_receiver(
+            rx,
+            move |r| with_hover_ended(r, ended.as_deref()),
+            input.take_responder(),
+        ),
+        Err(e) => match with_hover_ended(Err(e), ended.as_deref()) {
+            Ok(e) | Err(e) => input.reply_failed(e),
+        },
     }
 }
 

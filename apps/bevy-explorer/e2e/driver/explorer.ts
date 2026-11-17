@@ -655,6 +655,8 @@ export interface UiClickReply {
   reason?: string
   warning?: string
   rootBroadcast?: boolean
+  /** the parked `/ui_hover` this click ended first (`sdk crdtId N`) */
+  hoverEnded?: string
 }
 
 /** What `/ui_set_text` and `/ui_scroll` share: the element's fields and what reached the scene. */
@@ -667,6 +669,8 @@ interface UiWriteReply {
   coveredBy: UiElement['coveredBy']
   screen: Screen
   reason?: string
+  /** the parked `/ui_hover` this write ended first */
+  hoverEnded?: string
 }
 
 export interface UiSetTextReply extends UiWriteReply {
@@ -707,6 +711,34 @@ export interface UiDragReply {
   screen: Screen
   info?: string
   reason?: string
+  /** the parked `/ui_hover` this drag ended first */
+  hoverEnded?: string
+}
+
+/** `/ui_hover`'s reply. A hover whose enter was not sent fails, with this as its JSON. */
+export interface UiHoverReply {
+  ok: boolean
+  /** the parked element (`sdk crdtId N`); null when nothing parked */
+  hovering: string | null
+  crdtId: number
+  kind: UiElement['kind']
+  screenRect: UiElement['screenRect']
+  center: UiElement['center']
+  coveredBy: UiElement['coveredBy']
+  screen: Screen
+  delivered: { enter: UiVerdict }
+  /** the hover parked before, ended first */
+  hoverEnded?: string
+  info?: string
+  reason?: string
+}
+
+/** `/ui_hover --leave`'s reply: the hover it ended, null with an `info` when none was parked. */
+export interface UiLeaveReply {
+  ok: true
+  /** `sdk crdtId N`, with `(the element is gone; no leave was sent)` when it was removed */
+  left: string | null
+  info?: string
 }
 
 export interface UiList {
@@ -1080,6 +1112,18 @@ export class Explorer {
   uiDrag(from: { x: number; y: number }, to: { x: number; y: number }, options: { durationFrames?: number; path?: 'auto' | 'sdk' | 'device' } = {}): Promise<UiDragReply> {
     const flags = `${options.durationFrames === undefined ? '' : ` --duration-frames ${options.durationFrames}`}${options.path ? ` --path ${options.path}` : ''}`
     return this.json<UiDragReply>(`/ui_drag --from ${from.x} ${from.y} --to ${to.x} ${to.y}${flags}`)
+  }
+
+  /** Park the pointer on a scene-UI element by its `crdtId` (`/ui_hover`): only it is entered,
+   *  and it stays hovered across calls until `uiLeave`, the next `uiHover` or another gesture
+   *  (whose reply carries `hoverEnded`). A covered element is refused unless `force`. */
+  uiHover(crdtId: number, options: { force?: boolean } = {}): Promise<UiHoverReply> {
+    return this.json<UiHoverReply>(`/ui_hover ${crdtId}${options.force ? ' --force' : ''}`)
+  }
+
+  /** End the parked `/ui_hover` (`/ui_hover --leave`); `left` is null when none was parked. */
+  uiLeave(): Promise<UiLeaveReply> {
+    return this.json<UiLeaveReply>('/ui_hover --leave')
   }
 
   /** The parcel scene's UI elements on screen (`/ui_list`); labels only with `kind: 'text'`. */
