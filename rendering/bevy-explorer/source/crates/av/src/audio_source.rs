@@ -18,8 +18,34 @@ use scene_runner::{
     renderer_context::RendererSceneContext, update_world::AddCrdtInterfaceExt, SceneEntity,
 };
 
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Deref)]
 pub struct AudioSource(PbAudioSource);
+
+/// What the backend is doing with a sounding emitter, written each frame it plays and removed
+/// when it stops, so `/audio_state` reads the same state on native and on the web.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct EmitterPlayback {
+    /// Seconds into the clip.
+    pub position: f64,
+    /// The gain sent to the backend: the emitter's volume, the scene volume setting, zero while
+    /// its scene is not current, and the distance falloff of a spatial emitter.
+    pub gain: f32,
+}
+
+impl EmitterPlayback {
+    pub(crate) fn write(
+        self,
+        commands: &mut Commands,
+        entity: Entity,
+        existing: Option<Mut<EmitterPlayback>>,
+    ) {
+        if let Some(mut existing) = existing {
+            existing.set_if_neq(self);
+        } else {
+            commands.entity(entity).try_insert(self);
+        }
+    }
+}
 
 impl From<PbAudioSource> for AudioSource {
     fn from(value: PbAudioSource) -> Self {

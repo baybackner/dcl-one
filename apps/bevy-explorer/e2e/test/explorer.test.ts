@@ -139,6 +139,14 @@ describe('Explorer', () => {
     assert.deepEqual(fake.lines, ['/scene_entities --name "mesh box"', '/scene_entities MeshRenderer --labels', '/visible_entities --limit 10 --min-coverage 0.01'])
   })
 
+  test('audioState passes its filter', async () => {
+    const fake = new FakeConsole({ audio_state: '{"summary":{"total":3,"playing":1},"returned":1,"entries":[]}' })
+    const explorer = new Explorer(fake)
+    assert.equal((await explorer.audioState()).summary.total, 3)
+    await explorer.audioState({ onlyPlaying: true })
+    assert.deepEqual(fake.lines, ['/audio_state', '/audio_state --only-playing'])
+  })
+
   test('sceneLogRead passes the cursor and parses the header', async () => {
     const fake = new FakeConsole({ scene_logs: 'latestSeq=42 dropped=3 source=scene+client omitted=1\n40 [scene] error boom\n    at line 2\n41 [client:comms] warn w' })
     const explorer = new Explorer(fake)

@@ -844,6 +844,40 @@ export interface VisibleEntities {
   entities: VisibleEntity[]
 }
 
+/** One emitter, stream or video `/audio_state` lists. */
+export interface AudioEntry {
+  kind: 'audio_source' | 'audio_stream' | 'video_player'
+  crdtEntityId: number
+  source: string
+  /** `playing`, `ready`, `loading`, `ended`, `error`, `none`; a stream or video: its player's last state */
+  state: string
+  /** sounding now */
+  playing: boolean
+  /** the scene's `playing` */
+  requested: boolean
+  loop: boolean
+  spatial: boolean
+  volume: { authored: number; live: number | null }
+  pitch?: number
+  currentTime?: number | null
+  duration?: number | null
+  scheduled?: boolean
+  distance: number | null
+  position: { x: number; y: number; z: number } | null
+}
+
+/** `/audio_state`: the sound of the scene under the player, nearest first. */
+export interface AudioState {
+  scene: { hash: string; title: string; parcel: { x: number; y: number } }
+  sceneIsCurrent: boolean
+  note: string | null
+  listener: { x: number; y: number; z: number }
+  summary: { total: number; playing: number; audioSources: number; streams: number; videos: number }
+  onlyPlaying: boolean
+  returned: number
+  entries: AudioEntry[]
+}
+
 /** A read of the log ring: the header's fields and the lines after it (a continuation line stays
  *  its own entry, indented). */
 export interface SceneLogPage {
@@ -1615,6 +1649,11 @@ export class Explorer {
   /** The scene's mesh and glTF entities in the camera's view, largest coverage first. */
   visibleEntities(options: { limit?: number; minCoverage?: number } = {}): Promise<VisibleEntities> {
     return this.json<VisibleEntities>(`/visible_entities${options.limit === undefined ? '' : ` --limit ${options.limit}`}${options.minCoverage === undefined ? '' : ` --min-coverage ${options.minCoverage}`}`)
+  }
+
+  /** The emitters, streams and videos of the scene under the player, nearest first. */
+  audioState(options: { onlyPlaying?: boolean } = {}): Promise<AudioState> {
+    return this.json<AudioState>(options.onlyPlaying ? '/audio_state --only-playing' : '/audio_state')
   }
 
   /** Point the scene commands (`/scene_entities`, `/inspect_component`, `/scene_logs`) at a scene

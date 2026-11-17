@@ -112,7 +112,7 @@ fn media_state(
 
 // Stream paths and queries can contain credentials. A remote origin or a local content key
 // identifies the source without exposing playback credentials in the panel or console logs.
-fn source_label(source: &str) -> String {
+pub(crate) fn source_label(source: &str) -> String {
     let source = source.trim();
     if source.starts_with("//") {
         return String::from("remote media");

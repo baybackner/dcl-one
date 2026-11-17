@@ -365,6 +365,10 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   normalized `center`, `coverage`, distances and `screen` (frustum and bounds only: occlusion is
   not evaluated). `/scene_entities --labels` and `--name <text>` reply JSON with what each entity
   shows: `gltf <src>`, `mesh Box`, `text "<excerpt>"`, `hidden`, `parent <id>`.
+- Sound: `/audio_state [--only-playing]` lists the `AudioSource` emitters, audio streams and
+  video players of the scene under the player, nearest first: what the scene asked for
+  (`requested`, `volume.authored`, `loop`, `spatial`) beside what the engine plays (`playing`,
+  `state`, `volume.live`, `currentTime`, `duration`), with a `summary` of the whole scene.
 - Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
   `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` and `/ui_at

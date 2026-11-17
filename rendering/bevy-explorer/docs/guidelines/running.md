@@ -455,6 +455,24 @@ State, in every build:
   With `scene`, `screen`, `cameraPosition` (Decentraland coordinates), `candidates` (entities
   that draw), `inFrustum`, `returned`, `truncated` and `occlusion`: it is not evaluated, so an
   entity behind a wall is still listed; a screenshot shows what is visible.
+- `/audio_state [--only-playing]`: JSON of the sound of the scene under the player (an error
+  `No scene world found at the current parcel.` off every scene): `scene` (`hash`, `title`,
+  base `parcel`), `sceneIsCurrent` and `note` (why its emitters are muted, else `null`),
+  `listener` (the player, Decentraland coordinates), `summary` (`total`, `playing`,
+  `audioSources`, `streams`, `videos`: the whole scene, whatever the filter), `onlyPlaying`,
+  `returned`, and `entries` nearest first (no transform last): `kind` (`audio_source`,
+  `audio_stream`, `video_player`), `crdtEntityId`, `source` (the clip path; a stream's origin
+  only), `state`, `playing` (sounding now), `requested` (the scene's `playing`), `loop`,
+  `spatial`, `volume` (`authored`, the component's; `live`, the gain the engine sends: the
+  volume setting, 0 while the scene is not current, a spatial emitter's distance falloff),
+  `distance` (from the player), `position`. An emitter adds `pitch`, `currentTime` and
+  `duration` (seconds); `state` is `playing`, `ready` (loaded, not asked to play), `loading`,
+  `ended` (a clip that is not looped played to its end: the engine stops it but does not write
+  `playing: false` back to the scene, nor an `AudioEvent` for an emitter), `error` or `none` (no
+  clip). A stream or video adds `scheduled` (chosen to play: one per scene, nearest) and its
+  player's last reported state (`playing`, `loading`, `paused`, `error`, ...) with `currentTime`
+  and `duration` for a video; without a playback backend it stays `none`. `--only-playing`
+  keeps the sounding ones.
 - `/photo_mode [on|off] [button|shortcut|console]`: the camera reel's in-world camera as JSON:
   `active`, the primary camera's `position`, `storage` (`[current, max]` photos kept, meaningful
   once `storageLoaded`), `phase` (`idle`, `capturing`, `encoding` or `uploading`), this session's

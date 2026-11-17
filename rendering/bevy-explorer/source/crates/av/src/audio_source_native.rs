@@ -11,6 +11,8 @@ use common::{
 use ipfs::IpfsAssetServer;
 use scene_runner::{ContainingScene, SceneEntity};
 
+use crate::audio_source::EmitterPlayback;
+
 pub struct AudioSourcePluginImpl;
 
 impl Plugin for AudioSourcePluginImpl {
@@ -37,7 +39,7 @@ pub struct RetryEmitter;
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn manage_audio_sources(
     mut commands: Commands,
-    query: Query<
+    mut query: Query<
         (
             Entity,
             Ref<AudioEmitter>,
@@ -45,6 +47,7 @@ fn manage_audio_sources(
             Option<&SceneEntity>,
             Option<&RenderLayers>,
             Option<&RetryEmitter>,
+            Option<&mut EmitterPlayback>,
         ),
         Or<(Changed<AudioEmitter>, With<Playing>)>,
     >,
@@ -66,7 +69,9 @@ fn manage_audio_sources(
 
     let mut prev_instances = std::mem::take(&mut *instances);
 
-    for (ent, emitter, maybe_gt, maybe_scene_ent, maybe_layers, maybe_retry) in query.iter() {
+    for (ent, emitter, maybe_gt, maybe_scene_ent, maybe_layers, maybe_retry, maybe_playback) in
+        query.iter_mut()
+    {
         commands.entity(ent).try_remove::<RetryEmitter>();
 
         if !emitter.playing {
@@ -76,7 +81,9 @@ fn manage_audio_sources(
                 }
             }
 
-            commands.entity(ent).try_remove::<Playing>();
+            commands
+                .entity(ent)
+                .try_remove::<(Playing, EmitterPlayback)>();
             continue;
         }
 
@@ -111,7 +118,9 @@ fn manage_audio_sources(
         };
 
         if existing.is_none() && !emitter.is_changed() && maybe_retry.is_none() {
-            commands.entity(ent).try_remove::<Playing>();
+            commands
+                .entity(ent)
+                .try_remove::<(Playing, EmitterPlayback)>();
             continue;
         }
 
@@ -133,13 +142,14 @@ fn manage_audio_sources(
             _ => (1.0, 0.5),
         };
 
-        match existing {
+        let gain = source_volume * emitter_volume;
+        let position = match existing {
             None => {
                 commands.entity(ent).try_insert(Playing);
                 let mut new_instance = audio.play(emitter.handle.clone());
 
                 new_instance
-                    .with_volume((source_volume * emitter_volume) as f64)
+                    .with_volume(gain as f64)
                     .with_panning(panning as f64)
                     .with_playback_rate(emitter.playback_speed as f64);
 
@@ -152,6 +162,7 @@ fn manage_audio_sources(
                 }
 
                 instances.insert(ent, (emitter.handle.id(), new_instance.handle()));
+                emitter.seek_time.map_or(0.0, f64::from)
             }
             Some(instance) => {
                 if emitter.is_changed() {
@@ -163,19 +174,19 @@ fn manage_audio_sources(
                     }
                 }
 
-                instance.set_volume(
-                    (source_volume * emitter_volume) as f64,
-                    AudioTween::default(),
-                );
+                instance.set_volume(gain as f64, AudioTween::default());
                 instance.set_panning(panning as f64, AudioTween::default());
+                instance.state().position().unwrap_or_default()
             }
         };
+        EmitterPlayback { position, gain }.write(&mut commands, ent, maybe_playback);
     }
 
-    for (_, (_, h_instance)) in prev_instances.drain() {
+    for (ent, (_, h_instance)) in prev_instances.drain() {
         if let Some(mut instance) = instance_assets.remove(h_instance.id()) {
             instance.stop(AudioTween::default());
         }
+        commands.entity(ent).try_remove::<EmitterPlayback>();
     }
 }
 
