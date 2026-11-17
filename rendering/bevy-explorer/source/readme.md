@@ -331,10 +331,13 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   pointer events, whether the scene root got a result (`rootBroadcast`), a diagnosis and a
   `warning` for a button the entity does not listen for (`docs/guidelines/interaction.md`). Nothing
   at an `--at` point refuses without pressing. A hover lasts at most 1800 frames (`--frames` or
-  `--seconds`) and is never cut short by its timeout.
+  `--seconds`) and is never cut short by its timeout. `/press_input <action>` presses a scene input
+  action by its lowercase SDK name (`primary`, `jump`, `action_3`, ...) through its binding, held
+  `--hold` seconds, aimed by `--entity` or `--at` or landing wherever the cursor is, and adds
+  `action`, `entityBound` and the scene root's `rootEvents` to the click's reply.
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the
-  capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the two pointer commands go
+  capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the pointer commands go
   to the engine through `engine_console_command` and write Bevy input events, unlike `/press_key`
   and `/click_at`, which need a DevTools client for real input. `docs/guidelines/interaction.md`
   has the options, replies and diagnoses.

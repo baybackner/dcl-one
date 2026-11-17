@@ -72,6 +72,38 @@ export interface PointerReport {
   warning?: string
 }
 
+/** The scene input actions `/press_input` takes, by their SDK names. */
+export type InputActionName =
+  | 'pointer'
+  | 'primary'
+  | 'secondary'
+  | 'jump'
+  | 'forward'
+  | 'backward'
+  | 'right'
+  | 'left'
+  | 'action_3'
+  | 'action_4'
+  | 'action_5'
+  | 'action_6'
+  | 'walk'
+  | 'modifier'
+
+/** What `/press_input` reports: the pointer report (without `button`) plus the press's own fields. */
+export interface PressReport extends Omit<PointerReport, 'button'> {
+  action: InputActionName
+  /** an entity's entry took the press (its `PetDown` is in `events`) */
+  entityBound: boolean
+  /** the press was aimed (`entity` or `at`), rather than landing wherever the cursor was */
+  aimed: boolean
+  holdSeconds: number
+  holdFrames: number
+  /** the pointer results the scene root got, with their scene ticks */
+  rootEvents: { event: string; button: string; tick: number }[]
+  /** why the scene root got the press, when it did */
+  hint?: string
+}
+
 /** Where a pointer command aims, beyond the entity: a world point (`--at`), and how long it may take. */
 export interface AimOptions {
   /** aim through this world point; with an entity too, that entity must be at the point */
@@ -1045,6 +1077,20 @@ export class Explorer {
     if (options.button) line += ` --button ${options.button}`
     if (options.event) line += ` --event ${options.event}`
     return this.json<PointerReport>(line)
+  }
+
+  /** Presses a scene input action through its binding: aimed at `entity` or `at` as `clickEntity`
+   *  aims, or, with neither, wherever the cursor is (an entity under it, else the scene root);
+   *  `hold` keeps it down that many seconds. A refusal rejects. */
+  pressInput(
+    action: InputActionName,
+    options: Omit<AimOptions, 'bounds'> & { entity?: string | number; hold?: number } = {}
+  ): Promise<PressReport> {
+    let line = `/press_input ${action}`
+    if (options.hold !== undefined) line += ` --hold ${options.hold}`
+    if (options.entity !== undefined) line += ` --entity ${options.entity}`
+    line += aimFlags(options)
+    return this.json<PressReport>(line)
   }
 
   raycastStats(): Promise<RaycastStats> {

@@ -366,6 +366,16 @@ The HUD and input:
   shorter than its frames plus 3, whatever `--timeout-frames` says.
   A blocked outcome is a resolved reply with `diagnosis` set, not a failure.
   [Interaction](interaction.md) has every option and reply field.
+- `/press_input <action> [--hold S] [--entity <id>] [--at x y z] [--timeout-frames N |
+  --timeout-seconds S]`: press a scene input action by its lowercase SDK name (`pointer`,
+  `primary`, `secondary`, `jump`, `forward`, `backward`, `right`, `left`, `action_3` to
+  `action_6`, `walk`, `modifier`) through its binding, held `--hold` seconds, as a pointer job
+  (`src/automation/pointer/press.rs`). Aimed with `--entity` or `--at` as `/click_entity` aims;
+  without either it lands wherever the cursor is: on an entity under it that takes the action,
+  else on the scene root. The reply is the click's without `button`, plus `action`,
+  `entityBound`, `aimed`, `holdSeconds`, `holdFrames`, `rootEvents` (the root's results with
+  their ticks) and a `hint` when the root got the press
+  ([Interaction](interaction.md#pressing-an-input-action)).
 - `/raycast_stats` (JSON: the capped tier's `budgetMs`, `ran`, `deferred` and `spentMs`, and the
   uncapped tier's `uncappedRan` and `uncappedSpentMs`, each for its last frame with raycasts to
   cast) and `/raycast_budget [ms|auto]` (show the capped budget, a tenth of the target frame, or
@@ -387,7 +397,7 @@ collapse to one. The [conventions ADR](../../../../docs/adr/2026-11-17-console-c
 has the rules every automation command follows. The preview-only
 commands (`/jump`, `/speed`, `/move_player_to`, the debug dumps) stay preview-only.
 
-On the web, `/hover_entity`, `/click_entity`, `/raycast_stats` and `/raycast_budget` go to the engine
+On the web, `/hover_entity`, `/click_entity`, `/press_input`, `/raycast_stats` and `/raycast_budget` go to the engine
 through `engine_console_command` and write Bevy input events, unlike `/press_key` and `/click_at`,
 which go through the page's trusted input; they need no DevTools client.
 

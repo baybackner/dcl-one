@@ -1236,8 +1236,8 @@ fn write_pointer_result(
     frame: u32,
 ) {
     let tick_number = context.tick_number;
-    if synthetic.0.is_some() {
-        log.0.push(LoggedPointerEvent {
+    if log.records(synthetic) {
+        log.events.push(LoggedPointerEvent {
             container: info.container,
             entity: scene_entity_id,
             event: ev_type,
@@ -1834,9 +1834,9 @@ fn send_action_events(
             if maybe_consumer == Some(entity) {
                 continue;
             }
-            // a synthetic aim's caller reads the broadcast from the log (`rootBroadcast`)
-            if synthetic.0.is_some() {
-                log.0.push(LoggedPointerEvent {
+            // a synthetic aim's or press's caller reads the broadcast from the log (`rootBroadcast`)
+            if log.records(&synthetic) {
+                log.events.push(LoggedPointerEvent {
                     container: entity,
                     entity: SceneEntityId::ROOT,
                     event: pet,

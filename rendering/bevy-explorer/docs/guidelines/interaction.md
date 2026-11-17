@@ -176,3 +176,47 @@ When a press is still held at the end (`--clear`, or a click that failed after p
 release is played on the aimed entity first: the reply, and the end of the aim, wait until it has
 been played and the pointer pipeline has run after it, and other pointer commands are refused
 until then.
+
+### Pressing an input action
+
+`/press_input <action> [--hold S] [--entity <id>] [--at x y z] [--timeout-frames N |
+--timeout-seconds S]` (`src/automation/pointer/press.rs`) presses a scene input action by its SDK
+name, through the key or mouse button bound to it, as a pointer job: it shares the click's
+machine, refusals, diagnoses and reply.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `<action>` | Lowercase: `pointer`, `primary`, `secondary`, `jump`, `forward`, `backward`, `right`, `left`, `action_3` to `action_6`, `walk`, `modifier`. Any other name, `PRIMARY` included, is refused with the list | required |
+| `--hold` | Seconds to keep the press down, counted in frames at the measured frame rate (at most 1800 frames); the release still waits for a later scene tick than the press | a click |
+| `--entity`, `--at` | Aim as `/click_entity` aims (by id, through a world point, or both). Nothing at the point refuses without pressing; an entry out of reach is the `out of reach` diagnosis | no aim |
+| `--timeout-frames`, `--timeout-seconds` | How long the press may take to land and release, on top of the hold | 600 frames |
+
+Without `--entity` or `--at` the press has no aim: the pointer ray stays the cursor's (the screen
+centre while the cursor is locked) and the press lands as a person's would. An entity under the
+ray that takes the action in reach gets it (or one whose proximity entry wins the press); otherwise the pipeline writes it to the scene root's
+`PointerEventsResult` (entity 0, no hit) of every scene the player is in. An entity that takes the
+press suppresses the root write for its scene that tick. This holds for every action, movement
+and jump included: an unaimed `forward` over an entity with an `IaForward` entry is entity-bound,
+and the key still moves the avatar. An unaimed press is refused while an aim is active. The
+pipeline logs its results while the press runs (`PointerEventLog::unaimed`), so the reply says
+where it went.
+
+The reply is the [click's](#the-reply), without `button`, plus:
+
+```json
+{"action": "primary", "entityBound": false, "aimed": false, "holdSeconds": 0.0, "holdFrames": 0,
+ "rootEvents": [{"event": "PetDown", "button": "IaPrimary", "tick": 412}, {"event": "PetUp", "button": "IaPrimary", "tick": 413}],
+ "hint": "no entity of the scene was under the ray, so the scene root got the press (rootEvents); ..."}
+```
+
+- `entityBound`: an entity took the press: its `PetDown` for the action is in `events`. False when
+  the root got it, or nothing did (then `diagnosis` says why).
+- `aimed`: the press was aimed (`--entity`, `--at`).
+- `holdSeconds`, `holdFrames`: the hold asked for, and the frames it was counted in.
+- `rootEvents`: the results the scene root got while the press ran, with their ticks;
+  `rootBroadcast` is whether there are any.
+- `hint` (only when the root got the press): why, naming the entity under the ray when there was
+  one. An aimed press whose entity declares no entry for the action also carries the click's
+  `warning`; an unaimed one that another entity took than the one under the ray (its proximity
+  entry won) carries a `warning` naming both, and `events` holds that entity's results.
+

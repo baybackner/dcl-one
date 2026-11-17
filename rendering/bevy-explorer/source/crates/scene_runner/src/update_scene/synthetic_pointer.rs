@@ -87,10 +87,22 @@ pub enum Hold {
     Open,
 }
 
-/// The pointer results written while an aim is active, oldest first. A result broadcast to a
-/// scene root is logged with `entity` `ROOT` and `container` the scene's entity
+/// The pointer results written while an aim is active, or while a console press with no aim
+/// watches where it lands, oldest first. A result broadcast to a scene root is logged with
+/// `entity` `ROOT` and `container` the scene's entity
 #[derive(Resource, Default)]
-pub struct PointerEventLog(pub Vec<LoggedPointerEvent>);
+pub struct PointerEventLog {
+    pub events: Vec<LoggedPointerEvent>,
+    /// a press with no aim is running: the ray follows the cursor, and its results are logged
+    pub unaimed: bool,
+}
+
+impl PointerEventLog {
+    /// Whether results are logged now: an aim is active, or an unaimed press watches
+    pub fn records(&self, synthetic: &SyntheticPointer) -> bool {
+        synthetic.0.is_some() || self.unaimed
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct LoggedPointerEvent {
@@ -235,7 +247,7 @@ pub fn expire_synthetic_aim(
     );
     if expired {
         synthetic.0 = None;
-        log.0.clear();
+        log.events.clear();
     }
 }
 
@@ -347,7 +359,7 @@ mod tests {
             .add_systems(Update, expire_synthetic_aim);
         app.world_mut()
             .resource_mut::<PointerEventLog>()
-            .0
+            .events
             .push(LoggedPointerEvent {
                 container: Entity::from_raw(2),
                 entity: SceneEntityId::from_proto_u32(512),
@@ -362,9 +374,9 @@ mod tests {
             app.world().resource::<SyntheticPointer>().0.is_some()
         };
         assert!(run_at(&mut app, 11));
-        assert_eq!(app.world().resource::<PointerEventLog>().0.len(), 1);
+        assert_eq!(app.world().resource::<PointerEventLog>().events.len(), 1);
         assert!(!run_at(&mut app, 12));
-        assert!(app.world().resource::<PointerEventLog>().0.is_empty());
+        assert!(app.world().resource::<PointerEventLog>().events.is_empty());
 
         // an open aim stays
         app.world_mut().resource_mut::<SyntheticPointer>().0 = Some(aim(Hold::Open, 0));

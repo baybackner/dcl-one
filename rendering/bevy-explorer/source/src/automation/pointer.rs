@@ -69,6 +69,7 @@ const DEFAULT_TIMEOUT_FRAMES: u32 = 600;
 const BOUNDS_MARGIN: f32 = 0.05;
 
 mod machine;
+mod press;
 pub use machine::{
     binding_error, check_hover_frames, classify_point, press_out_of_reach, refuse_while_held,
     undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
@@ -82,6 +83,7 @@ impl Plugin for AutomationPointerPlugin {
         app.init_resource::<PointerJob>()
             .add_console_command::<HoverEntityCommand, _>(hover_entity_cmd)
             .add_console_command::<ClickEntityCommand, _>(click_entity_cmd)
+            .add_console_command::<press::PressInputCommand, _>(press::press_input_cmd)
             .add_systems(
                 Update,
                 (settle_release, drive_pointer_job)
@@ -128,7 +130,7 @@ struct HitReport {
     point: Option<Vec3>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 struct EventReport {
     event: String,
     button: String,
@@ -181,6 +183,26 @@ struct Reply<'a> {
     diagnosis: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+    #[serde(flatten)]
+    press: Option<PressReport<'a>>,
+}
+
+/// What a `/press_input` reply adds: the action, whether an entity took the press, the hold and
+/// the events the scene root got.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PressReport<'a> {
+    action: &'a str,
+    /// an entity's entry took the press (its `PetDown` is in `events`); false when the scene root
+    /// got it instead, or nothing did
+    entity_bound: bool,
+    /// whether the job aimed (`--entity`, `--at`) or pressed wherever the cursor was
+    aimed: bool,
+    hold_seconds: f32,
+    hold_frames: u32,
+    root_events: &'a [EventReport],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
 }
 
 /// What a reply says beyond the hit, the entries, the events and the diagnosis.
@@ -189,6 +211,7 @@ struct ReplyExtra<'a> {
     button: Option<&'a str>,
     root_broadcast: bool,
     warning: Option<String>,
+    press: Option<PressReport<'a>>,
 }
 
 fn reply_json(
@@ -216,6 +239,7 @@ fn reply_json(
         events,
         diagnosis,
         warning: extra.warning,
+        press: extra.press,
     })
     .unwrap_or_default()
 }
@@ -285,6 +309,13 @@ struct Held {
     binding: InputIdentifier,
 }
 
+/// What a `/press_input` job reports beyond a click's reply.
+#[derive(Debug, Clone, Copy)]
+struct PressInput {
+    hold_seconds: f32,
+    hold_frames: u32,
+}
+
 /// The pressed button as the command names it and as the scene's entries name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ButtonNames {
@@ -303,14 +334,17 @@ pub struct Job {
     entity: Option<SceneEntityId>,
     /// its bevy entity, while the scene maps it
     target: Option<Entity>,
-    at: AimAt,
+    /// the aim; `None` for a press with no aim, which follows the cursor
+    at: Option<AimAt>,
     /// what a refusal names: `entity 512`, `the point (x, y, z)`
     what: String,
     started: u32,
     /// the scene root got a pointer result while the job ran
     root_broadcast: bool,
     /// the events the scene root got while the job ran
-    root_events: HashSet<PointerEventType>,
+    root_events: Vec<EventReport>,
+    /// a `/press_input`: its action and hold, for the reply
+    press: Option<PressInput>,
     // what the frames since the start saw, so an aim that expires loses nothing
     hit: Option<HitReport>,
     entries: Vec<HoverEntryReport>,
@@ -318,6 +352,8 @@ pub struct Job {
     seen_events: HashSet<(i32, i32, u32)>,
     /// the hit entity of the latest target, whose events count with the asked entity's
     hit_entity: Option<u32>,
+    /// the entity whose `PetDown` the job saw first
+    took: Option<u32>,
     /// the input script step number of the release the machine asked for
     release_step: Option<u64>,
 }
@@ -381,7 +417,11 @@ fn end_aim(synthetic: &mut SyntheticPointer, log: &mut PointerEventLog, target: 
         .is_some_and(|aim| target.is_none_or(|target| aim.at == target));
     if ours {
         synthetic.0 = None;
-        log.0.clear();
+        log.events.clear();
+    }
+    if log.unaimed {
+        log.unaimed = false;
+        log.events.clear();
     }
 }
 
@@ -599,6 +639,10 @@ struct Request<'a> {
     button: Option<ButtonNames>,
     /// the HUD holds the binding's input
     hud_holds: bool,
+    /// press wherever the cursor is, with no aim (`/press_input` without `--entity` or `--at`)
+    unaimed: bool,
+    /// a `/press_input`: its hold
+    press: Option<PressInput>,
 }
 
 impl PointerControl<'_, '_> {
@@ -607,7 +651,7 @@ impl PointerControl<'_, '_> {
             Ok(id) => id,
             Err(e) => return Answer::Failed(e),
         };
-        if id.is_none() && request.at.is_none() {
+        if id.is_none() && request.at.is_none() && !request.unaimed {
             return Answer::Failed("expected an entity id, or --at x y z".to_owned());
         }
         let requested = id.map(|id| id.as_proto_u32().unwrap_or_default());
@@ -636,9 +680,25 @@ impl PointerControl<'_, '_> {
                 held.scene,
                 held.entity,
                 held.target,
-                held.at,
+                Some(held.at),
                 Some(held.binding),
             )
+        } else if request.unaimed {
+            // the ray stays the cursor's; only the log watches where the press lands
+            if self.synthetic.0.is_some() {
+                return Answer::Failed(
+                    "an aim is active; wait for it to end or send /hover_entity --clear".to_owned(),
+                );
+            }
+            let (scene, _) = match self.resolver.resolve() {
+                Ok(resolved) => resolved,
+                Err(e) => return Answer::Failed(e),
+            };
+            if request.hud_holds {
+                return diagnosed(HUD_HOLDS_INPUT);
+            }
+            self.log.unaimed = true;
+            (scene, None, None, None, request.binding)
         } else {
             let (scene, ctx) = match self.resolver.resolve() {
                 Ok(resolved) => resolved,
@@ -691,23 +751,31 @@ impl PointerControl<'_, '_> {
                 hold,
                 started_frame: frame,
             });
-            (scene, id, target, at, request.binding)
+            (scene, id, target, Some(at), request.binding)
         };
-        self.log.0.clear();
+        self.log.events.clear();
 
         let what = match (entity, request.at) {
             (Some(entity), _) => format!("entity {}", entity.as_proto_u32().unwrap_or_default()),
             (None, Some(p)) => format!("the point ({}, {}, {})", p.x, p.y, p.z),
+            (None, None) if request.unaimed => "an unaimed press".to_owned(),
             (None, None) => "the held press".to_owned(),
         };
+        let mut machine = ClickMachine::new(
+            request.kind,
+            entity.map(|id| id.as_proto_u32().unwrap_or_default()),
+            request.timeout,
+            frame,
+        );
+        if let Some(press) = request.press {
+            machine = machine.holding(press.hold_frames);
+        }
+        if request.unaimed {
+            machine = machine.unaimed();
+        }
         let (reply, rx) = RpcResultSender::channel();
         self.jobs.job = Some(Job {
-            machine: ClickMachine::new(
-                request.kind,
-                entity.map(|id| id.as_proto_u32().unwrap_or_default()),
-                request.timeout,
-                frame,
-            ),
+            machine,
             reply,
             binding,
             button: request.button,
@@ -718,12 +786,14 @@ impl PointerControl<'_, '_> {
             what,
             started: frame,
             root_broadcast: false,
-            root_events: HashSet::new(),
+            root_events: Vec::new(),
+            press: request.press,
             hit: None,
             entries: Vec::new(),
             events: Vec::new(),
             seen_events: HashSet::new(),
             hit_entity: None,
+            took: None,
             release_step: None,
         });
         Answer::Pending(rx)
@@ -780,6 +850,8 @@ fn hover_request(
         binding: None,
         button: None,
         hud_holds: false,
+        unaimed: false,
+        press: None,
     }))
 }
 
@@ -850,6 +922,8 @@ fn click_request(
             action: button.1,
         }),
         hud_holds,
+        unaimed: false,
+        press: None,
     }))
 }
 
@@ -933,8 +1007,17 @@ fn drive_pointer_job(
         return;
     };
 
-    // the target counts only while this job's aim drives the pointer
-    let aimed = frame > job.started && synthetic.0.as_ref().is_some_and(|aim| aim.at == job.at);
+    // the target counts only while this job's aim drives the pointer; with no aim, the cursor's
+    // target counts until the press has landed, so the reply names what it landed on
+    let aimed = frame > job.started
+        && match job.at {
+            Some(at) => synthetic.0.as_ref().is_some_and(|aim| aim.at == at),
+            None => !job
+                .events
+                .iter()
+                .chain(&job.root_events)
+                .any(|e| e.event == "PetDown"),
+        };
     let seen = pointer
         .0
         .as_ref()
@@ -966,7 +1049,7 @@ fn drive_pointer_job(
     }
     // an aim at a world point: where the hit is against the point
     let point = match job.at {
-        AimAt::Point(point) if aimed => camera.single().ok().map(|camera| {
+        Some(AimAt::Point(point)) if aimed => camera.single().ok().map(|camera| {
             let hit = seen.as_ref().map(|(info, _)| info);
             let inside = hit
                 .and_then(|info| world_bounds(info.container, &meshes, &children))
@@ -984,35 +1067,45 @@ fn drive_pointer_job(
     };
 
     let requested = job.requested();
-    for logged in &log.0 {
+    for logged in &log.events {
         let id = logged.entity.as_proto_u32().unwrap_or_default();
-        if logged.entity == SceneEntityId::ROOT
-            && logged.container == job.scene
-            && requested != Some(id)
-        {
-            job.root_broadcast = true;
-            job.root_events.insert(logged.event);
+        let event = EventReport {
+            event: format!("{:?}", logged.event),
+            button: format!("{:?}", logged.button),
+            tick: logged.tick,
+        };
+        if logged.entity == SceneEntityId::ROOT && requested != Some(id) {
+            // another scene's root is no entity of this one
+            if logged.container == job.scene {
+                job.root_broadcast = true;
+                if !job.root_events.contains(&event) {
+                    job.root_events.push(event);
+                }
+            }
             continue;
         }
-        if Some(id) != requested && Some(id) != job.hit_entity {
+        // a press with no aim counts any entity's events: a proximity entry may take it
+        if job.at.is_some() && Some(id) != requested && Some(id) != job.hit_entity {
             continue;
+        }
+        if logged.event == PointerEventType::PetDown && job.took.is_none() {
+            job.took = Some(id);
         }
         if job
             .seen_events
             .insert((logged.event as i32, logged.button as i32, logged.tick))
         {
-            job.events.push(EventReport {
-                event: format!("{:?}", logged.event),
-                button: format!("{:?}", logged.button),
-                tick: logged.tick,
-            });
+            job.events.push(event);
         }
     }
     // a press no entity took reaches the scene root: it landed all the same, so the job goes on
     // to its release rather than wait for the entity
     let logged = |event: PointerEventType| {
         let name = format!("{event:?}");
-        job.events.iter().any(|e| e.event == name) || job.root_events.contains(&event)
+        job.events
+            .iter()
+            .chain(&job.root_events)
+            .any(|e| e.event == name)
     };
     let ctx = scenes.get(job.scene).ok();
     let target = seen.map(|(_, seen)| seen);
@@ -1068,29 +1161,50 @@ fn drive_pointer_job(
         ),
         Outcome::Done(result) => {
             let diagnosis = result.err();
-            let warning = job
-                .button
-                .filter(|_| diagnosis.is_none() && job.hit.is_some())
-                .and_then(|button| {
-                    undeclared_warning(job.machine.kind(), button.action, &job.entries)
-                });
+            let warning = match job.at {
+                Some(_) => job
+                    .button
+                    .filter(|_| diagnosis.is_none() && job.hit.is_some())
+                    .and_then(|button| {
+                        undeclared_warning(job.machine.kind(), button.action, &job.entries)
+                    }),
+                None => press::proximity_warning(job.took, job.hit.as_ref().map(|hit| hit.entity)),
+            };
+            let press = job.press.zip(job.button).map(|(press, button)| {
+                let entity_bound = job.events.iter().any(|e| e.event == "PetDown");
+                PressReport {
+                    action: button.arg,
+                    entity_bound,
+                    aimed: job.at.is_some(),
+                    hold_seconds: press.hold_seconds,
+                    hold_frames: press.hold_frames,
+                    root_events: &job.root_events,
+                    hint: press::press_hint(
+                        entity_bound,
+                        job.root_broadcast,
+                        job.hit.as_ref().map(|hit| hit.entity),
+                        button.action,
+                    ),
+                }
+            });
             let reply = reply_json(
                 job.hit.as_ref(),
                 &job.entries,
                 &job.events,
                 diagnosis.clone(),
                 ReplyExtra {
-                    button: job.button.map(|button| button.arg),
+                    button: job.button.filter(|_| job.press.is_none()).map(|b| b.arg),
                     root_broadcast: job.root_broadcast,
                     warning,
+                    press,
                 },
             );
             (Ok(reply), diagnosis)
         }
     };
-    match job.binding {
+    match (job.binding, job.at) {
         // a down that landed keeps its press and its open aim
-        Some(binding)
+        (Some(binding), Some(at))
             if diagnosis.is_none()
                 && reply.is_ok()
                 && job.machine.kind() == ClickKind::Down
@@ -1101,7 +1215,7 @@ fn drive_pointer_job(
                 entity: job.entity,
                 pressed: job.requested().or(job.hit_entity).unwrap_or_default(),
                 target: job.target,
-                at: job.at,
+                at,
                 binding,
             });
             job.reply.send(reply);
@@ -1116,7 +1230,7 @@ fn drive_pointer_job(
                 &mut script,
                 release,
                 job.what,
-                Some(job.at),
+                job.at,
                 (job.reply, reply),
             );
         }

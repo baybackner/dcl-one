@@ -173,6 +173,12 @@ pub struct ClickMachine {
     pressed: bool,
     /// the scene tick the down was first seen at
     down_tick: Option<u32>,
+    /// whether the job aims; one that does not presses at once, wherever the cursor is
+    aimed: bool,
+    /// frames a click keeps its press down from the frame it pressed
+    hold: u32,
+    /// the frame the press was played on
+    pressed_frame: Option<u32>,
 }
 
 impl ClickMachine {
@@ -190,7 +196,23 @@ impl ClickMachine {
             stage: Stage::Target,
             pressed: kind == ClickKind::Up,
             down_tick: None,
+            aimed: true,
+            hold: 0,
+            pressed_frame: None,
         }
+    }
+
+    /// A job with no aim: it presses on its first step, and the pointer target is the cursor's.
+    pub fn unaimed(mut self) -> Self {
+        self.aimed = false;
+        self
+    }
+
+    /// A click that keeps its press down for at least `frames` frames; its timeout grows by them.
+    pub fn holding(mut self, frames: u32) -> Self {
+        self.hold = frames;
+        self.timeout = self.timeout.saturating_add(frames);
+        self
     }
 
     pub fn kind(&self) -> ClickKind {
@@ -219,6 +241,7 @@ impl ClickMachine {
                 self.stage = Stage::Release;
                 vec![Effect::Release]
             }
+            Stage::Target if !self.aimed => self.press(frame),
             Stage::Target => match (observed.point, observed.target) {
                 (Some(PointHit::Nothing | PointHit::Beyond), _) => {
                     if frame >= self.started.saturating_add(2 + MISS_FRAMES) {
@@ -244,11 +267,7 @@ impl ClickMachine {
                 }
                 // the press would go past the entity to the scene root: none is sent
                 (_, Some(_)) if observed.out_of_reach => self.finish(Err(OUT_OF_REACH.to_owned())),
-                (_, Some(_)) => {
-                    self.pressed = true;
-                    self.stage = Stage::Tick;
-                    vec![Effect::Press]
-                }
+                (_, Some(_)) => self.press(frame),
             },
             Stage::Hovering => self.hover(frame),
             Stage::Tick => {
@@ -261,8 +280,12 @@ impl ClickMachine {
                 let Some(tick) = observed.scene_tick else {
                     return Vec::new();
                 };
-                // the up goes on a later tick than the down, so the scene sees both
-                if tick > *self.down_tick.get_or_insert(tick) {
+                // the up goes on a later tick than the down, so the scene sees both, and not
+                // before the hold has passed
+                let held = self
+                    .pressed_frame
+                    .is_some_and(|pressed| frame >= pressed.saturating_add(self.hold));
+                if tick > *self.down_tick.get_or_insert(tick) && held {
                     self.pressed = false;
                     self.stage = Stage::Release;
                     vec![Effect::Release]
@@ -273,6 +296,13 @@ impl ClickMachine {
             Stage::Release if observed.up_logged || observed.release_played => self.finish(Ok(())),
             Stage::Release | Stage::Done => Vec::new(),
         }
+    }
+
+    fn press(&mut self, frame: u32) -> Vec<Effect> {
+        self.pressed = true;
+        self.pressed_frame = Some(frame);
+        self.stage = Stage::Tick;
+        vec![Effect::Press]
     }
 
     fn hover(&mut self, frame: u32) -> Vec<Effect> {
@@ -452,6 +482,53 @@ mod tests {
                 }
             ),
             vec![Effect::Finish(Ok(()))]
+        );
+    }
+
+    #[test]
+    fn an_unaimed_press_presses_at_once_whatever_the_target() {
+        let mut m = ClickMachine::new(ClickKind::Click, None, 600, 0).unaimed();
+        assert_eq!(m.step(2, Observed::default()), vec![Effect::Press]);
+        assert!(m.holds_press());
+        // the scene root took it: the down is logged, the release follows on a later tick
+        let down = |tick| Observed {
+            scene_tick: Some(tick),
+            down_logged: true,
+            ..Default::default()
+        };
+        assert!(m.step(3, down(5)).is_empty());
+        assert_eq!(m.step(4, down(6)), vec![Effect::Release]);
+    }
+
+    #[test]
+    fn a_held_click_releases_once_its_frames_have_passed() {
+        let mut m = ClickMachine::new(ClickKind::Click, Some(7), 10, 0).holding(30);
+        let at = |tick| Observed {
+            target: seen(7),
+            scene_tick: Some(tick),
+            down_logged: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            m.step(
+                2,
+                Observed {
+                    target: seen(7),
+                    ..Default::default()
+                }
+            ),
+            vec![Effect::Press]
+        );
+        // later ticks, but the hold (pressed at frame 2) lasts until frame 32
+        assert!(m.step(3, at(1)).is_empty());
+        assert!(m.step(31, at(9)).is_empty());
+        assert_eq!(m.step(32, at(10)), vec![Effect::Release]);
+        // the timeout grew by the hold: 10 + 30 frames
+        let mut m = ClickMachine::new(ClickKind::Click, Some(7), 10, 0).holding(30);
+        assert!(m.step(39, Observed::default()).is_empty());
+        assert_eq!(
+            m.step(40, Observed::default()),
+            vec![Effect::Finish(Err("timed out waiting for target".into()))]
         );
     }
 
