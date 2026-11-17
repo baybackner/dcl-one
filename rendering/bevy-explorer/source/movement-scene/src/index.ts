@@ -95,12 +95,18 @@ const CLIP_HARD_LANDING = ANIM + 'Hard_Landing.glb';
 const CLIP_GLIDE_LANDING = ANIM + 'Hard_Landing_GliderRig.glb';
 const CLIP_JOG_STOP = ANIM + 'Jog_Stop.glb';
 
-// Double-jump avatar clips, per take-off locomotion variation.
-const DOUBLE_JUMP: Record<JumpVariation, string> = {
-  idle: ANIM + 'DoubleJump_Base2.glb',
-  jog: ANIM + 'DoubleJump_Jog2.glb',
-  run: ANIM + 'DoubleJump_Run2.glb',
+// Double-jump avatar clips, per take-off locomotion variation: each air jump picks the plain or the right variant at
+// random, half each. The clips play at DOUBLE_JUMP_SPEED, blended in over DOUBLE_JUMP_BLEND; once the clip reaches
+// DOUBLE_JUMP_EXIT of its length the fall loop takes over (blended over transAir). The engine's network state reads
+// the second jump from the `DoubleJump` file name prefix.
+const DOUBLE_JUMP: Record<JumpVariation, { plain: string; right: string }> = {
+  idle: { plain: ANIM + 'DoubleJump_Base.glb', right: ANIM + 'DoubleJump_Base_Right.glb' },
+  jog: { plain: ANIM + 'DoubleJump_Jog.glb', right: ANIM + 'DoubleJump_Jog_Right.glb' },
+  run: { plain: ANIM + 'DoubleJump_Run.glb', right: ANIM + 'DoubleJump_Run_Right.glb' },
 };
+const DOUBLE_JUMP_SPEED = 0.7;
+const DOUBLE_JUMP_BLEND = 0.05; // s
+const DOUBLE_JUMP_EXIT = 0.778; // fraction of the clip
 // Directional glide avatar poses (the glider model itself is a separate prop
 // entity — see src/glider.ts).
 // The glider model is embedded in these clips (source/merge-glider-into-avatar.mjs),
@@ -121,7 +127,7 @@ const PRELOAD_CLIPS: string[] = [
   CLIP_IDLE, CLIP_WALK, CLIP_JOG, CLIP_RUN,
   ...Object.values(JUMP_SETS).flatMap((s) => [s.start, s.rise, s.mid, s.fall, s.end]),
   CLIP_LONG_FALL, CLIP_HARD_LANDING, CLIP_GLIDE_LANDING, CLIP_JOG_STOP,
-  ...Object.values(DOUBLE_JUMP),
+  ...Object.values(DOUBLE_JUMP).flatMap((d) => [d.plain, d.right]),
   ...Object.values(GLIDE_AVATAR),
 ];
 
@@ -267,6 +273,12 @@ var landingSpeed = 1;
 // True when the current landing is a small-drop bob (sliced, see softLandTime).
 var landingSoft = false;
 
+// --- Double jump ---
+// Clip of the current air jump (undefined: none), picked on its first frame.
+var doubleJumpClip: string | undefined = undefined;
+// True once that clip reached DOUBLE_JUMP_EXIT: the fall loop plays for the rest of the airtime.
+var doubleJumpFalling = false;
+
 // --- Glide turn rate ---
 // Smoothed avatar turn rate (deg/s), used to pick the left/right glide lean.
 // Computed each frame in applyMovement from the change in facing.
@@ -317,6 +329,12 @@ function clipFinished(src: string): boolean {
   const s = activeAnimationState;
   return s !== undefined && s.src === src && !s.loop
     && (s.loopCount >= 1 || s.playbackTime >= s.duration - 1e-3);
+}
+
+// True once the engine reports the clip has played the given fraction of its length.
+function clipReached(src: string, fraction: number): boolean {
+  const s = activeAnimationState;
+  return s !== undefined && s.src === src && (s.loopCount >= 1 || s.playbackTime >= fraction * s.duration);
 }
 
 // Pick the jump clip set from take-off horizontal speed, reusing the locomotion
@@ -509,6 +527,10 @@ function selectAnimation(): MovementAnimation {
     }
     prevGlideSrc = undefined;
   }
+  if (!isDoubleJump) {
+    doubleJumpClip = undefined;
+    doubleJumpFalling = false;
+  }
   const jumpingOrFalling = jumpStartHeight !== undefined || !grounded;
   const newJump = jumpStartHeight !== undefined && prevJumpStartHeight === undefined;
   prevJumpStartHeight = jumpStartHeight;
@@ -600,21 +622,34 @@ function selectAnimation(): MovementAnimation {
       glidePhase = 'none';
     }
 
-    if (isDoubleJump) {
-      jumpPhase = 'none';
+    if (isDoubleJump && !doubleJumpFalling) {
       // Use the variation captured by the first jump (persisted in jumpVariation).
-      return {
-        src: DOUBLE_JUMP[jumpVariation],
-        speed: 1,
-        loop: false,
-        idle: false,
-        transitionSeconds: settings.transAir,
-        sounds: newJump ? [pickRandom(JUMP_SOUNDS)] : [],
-      };
+      const fresh = doubleJumpClip === undefined;
+      if (fresh) {
+        const clips = DOUBLE_JUMP[jumpVariation];
+        doubleJumpClip = Math.random() < 0.5 ? clips.plain : clips.right;
+      }
+      if (!clipReached(doubleJumpClip!, DOUBLE_JUMP_EXIT)) {
+        jumpPhase = 'none';
+        return {
+          src: doubleJumpClip!,
+          speed: DOUBLE_JUMP_SPEED,
+          loop: false,
+          idle: false,
+          transitionSeconds: DOUBLE_JUMP_BLEND,
+          playbackTime: fresh ? 0 : undefined,
+          sounds: newJump ? [pickRandom(JUMP_SOUNDS)] : [],
+        };
+      }
+      // the rest of the airtime falls: the fall loop of the same variation, from its start
+      doubleJumpFalling = true;
+      jumpPhase = 'fall';
+      prevJumpPhase = 'none';
     }
 
-    // Phased jump/fall: Start -> Rise -> Mid -> Fall (-> End on landing below).
-    return jumpPhaseAnimation(newJump, horizontalSpeed);
+    // Phased jump/fall: Start -> Rise -> Mid -> Fall (-> End on landing below); the launch of an air jump is no new
+    // jump here.
+    return jumpPhaseAnimation(newJump && !isDoubleJump, horizontalSpeed);
   }
 
   // Touchdown: play the End / Hard_Landing clip once, then fall through.
