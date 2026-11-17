@@ -9,6 +9,8 @@ pub(super) const ENTITY_NOT_LIVE: &str = "entity not live";
 pub(super) const HUD_HOLDS_INPUT: &str = "input held by the HUD";
 pub(super) const OUT_OF_REACH: &str =
     "out of reach: the entity's entry for the button is past its distance limit";
+pub(super) const HOVER_OUT_OF_REACH: &str =
+    "out of reach: the entity's hover entries are past their distance limit";
 pub(super) const NOTHING_AT_POINT: &str =
     "nothing at the point: the ray from the camera through it reaches no collider there";
 /// The id a hit reports when it is no entity of the job's scene (an avatar, another scene).
@@ -100,7 +102,8 @@ pub struct Observed {
     pub entity_live: bool,
     /// for an aim at a world point, where the hit is against it; `None` for an entity aim
     pub point: Option<PointHit>,
-    /// the hit declares an entry for the press but none in reach ([`press_out_of_reach`])
+    /// the hit declares an entry for the press (the hover) but none in reach
+    /// ([`press_out_of_reach`], [`hover_out_of_reach`])
     pub out_of_reach: bool,
 }
 
@@ -261,12 +264,19 @@ impl ClickMachine {
                         )),
                     _ => self.finish(Err(blocked_by(&target))),
                 },
+                // a hover would enter nothing, a press would go past the entity to the scene
+                // root: neither is held or sent
+                (_, Some(_)) if observed.out_of_reach => {
+                    let diagnosis = match self.kind {
+                        ClickKind::Hover(_) => HOVER_OUT_OF_REACH,
+                        _ => OUT_OF_REACH,
+                    };
+                    self.finish(Err(diagnosis.to_owned()))
+                }
                 (_, Some(_)) if matches!(self.kind, ClickKind::Hover(_)) => {
                     self.stage = Stage::Hovering;
                     self.hover(frame)
                 }
-                // the press would go past the entity to the scene root: none is sent
-                (_, Some(_)) if observed.out_of_reach => self.finish(Err(OUT_OF_REACH.to_owned())),
                 (_, Some(_)) => self.press(frame),
             },
             Stage::Hovering => self.hover(frame),
@@ -380,6 +390,16 @@ pub fn press_out_of_reach(button: &str, entries: &[HoverEntryReport]) -> bool {
         .filter(|entry| {
             entry.event == "PetDown" && (entry.button == button || entry.button == "IaAny")
         })
+        .peekable();
+    declared.peek().is_some() && declared.all(|entry| !entry.enabled)
+}
+
+/// Whether a hover would enter nothing: the entity declares a `PetHoverEnter` entry, and none is in
+/// reach.
+pub fn hover_out_of_reach(entries: &[HoverEntryReport]) -> bool {
+    let mut declared = entries
+        .iter()
+        .filter(|entry| entry.event == "PetHoverEnter")
         .peekable();
     declared.peek().is_some() && declared.all(|entry| !entry.enabled)
 }
@@ -1034,5 +1054,36 @@ mod tests {
         );
         assert_eq!(fx, vec![Effect::Finish(Err(OUT_OF_REACH.into()))]);
         assert!(!m.holds_press());
+    }
+
+    #[test]
+    fn a_hover_whose_enter_entries_are_all_too_far_is_out_of_reach() {
+        let far = HoverEntryReport {
+            enabled: false,
+            too_far: true,
+            ..entry("PetHoverEnter", "IaAny")
+        };
+        assert!(hover_out_of_reach(std::slice::from_ref(&far)));
+        assert!(!hover_out_of_reach(&[
+            far.clone(),
+            entry("PetHoverEnter", "IaAny")
+        ]));
+        // no enter entry: the hover is not gated by distance
+        assert!(!hover_out_of_reach(&[entry("PetDown", "IaPointer")]));
+        assert!(!hover_out_of_reach(&[]));
+    }
+
+    #[test]
+    fn a_hover_out_of_reach_ends_without_hovering() {
+        let mut m = ClickMachine::new(ClickKind::Hover(30), Some(7), 600, 0);
+        let fx = m.step(
+            2,
+            Observed {
+                target: seen(7),
+                out_of_reach: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(fx, vec![Effect::Finish(Err(HOVER_OUT_OF_REACH.into()))]);
     }
 }

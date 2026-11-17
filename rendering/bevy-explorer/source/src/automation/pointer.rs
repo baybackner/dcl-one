@@ -75,8 +75,8 @@ mod machine;
 mod press;
 pub(crate) mod ui;
 pub use machine::{
-    binding_error, check_hover_frames, classify_point, press_out_of_reach, refuse_while_held,
-    undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
+    binding_error, check_hover_frames, classify_point, hover_out_of_reach, press_out_of_reach,
+    refuse_while_held, undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
 };
 use machine::{ENTITY_NOT_LIVE, FOREIGN_HIT, HUD_HOLDS_INPUT};
 
@@ -1179,9 +1179,10 @@ fn drive_pointer_job(
             .entity
             .is_none_or(|entity| ctx.and_then(|ctx| ctx.bevy_entity(entity)) == job.target),
         point,
-        out_of_reach: job
-            .button
-            .is_some_and(|button| press_out_of_reach(button.action, &job.entries)),
+        out_of_reach: match job.button {
+            Some(button) => press_out_of_reach(button.action, &job.entries),
+            None => hover_out_of_reach(&job.entries),
+        },
     };
 
     let mut finished = None;

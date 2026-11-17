@@ -937,6 +937,16 @@ fn resolve_pointer_target(
                     ty: PointerTargetType::Ui,
                 });
             }
+            // an aim set this frame came after the world target was cast: that target is the
+            // cursor's or the previous aim's, at its distance, so nothing is under the aim yet
+            UiPointerTargetValue::None
+                if synthetic
+                    .0
+                    .as_ref()
+                    .is_some_and(|aim| aim.started_frame == tick.0) =>
+            {
+                target.0 = None
+            }
             UiPointerTargetValue::None => target.0.clone_from(&world_target.0),
         }
     }

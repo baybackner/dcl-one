@@ -147,6 +147,7 @@ A diagnosis is a resolved reply with `diagnosis` set, not a failure: read it fro
 | `blocked by entity <id>` | The ray hit another entity's collider first, or, with `--at`, one in front of the point; `<id>` is that container |
 | `blocked by an avatar or another scene's entity` | The same, for a collider that is no entity of the scene |
 | `out of reach: the entity's entry for the button is past its distance limit` | `/click_entity`: the hit entity declares an entry for the button, and none is in reach. Nothing is pressed: the press would go past the entity to the scene root |
+| `out of reach: the entity's hover entries are past their distance limit` | `/hover_entity`: the hit entity declares a `PetHoverEnter` entry, and none is in reach. The aim ends at once and nothing is entered |
 | `entity not live` | The scene has no live entity for the id, or it was replaced while the job ran |
 | `input held by the HUD` | The HUD holds the bound input, so the press would not reach the scene |
 | `timed out waiting for <stage>` | The job passed its deadline; `<stage>` is `target` (the ray hit nothing before the deadline: no collider, or one still loading), `hover` (a hover did not finish), `tick` (neither the entity nor the scene root got the press) or `release` (the release was never played) |
