@@ -185,7 +185,10 @@ pub fn init_runtime() -> anyhow::Result<()> {
         let _ = init_sx.send(Ok(()));
 
         let _ = rt.block_on(async move { tokio::join!(f_out, f_in) });
-        let _ = child.wait();
+        match child.wait() {
+            Ok(status) => log_sidecar_exit(status),
+            Err(e) => error!("failed to reap the JS sidecar: {e}"),
+        }
 
         // Orchestrated headless server only (EXIT_ON_SIDECAR_LOSS): the IPC loops ended,
         // so the JS sidecar is gone and the engine can run no scene code. Nothing here
@@ -200,6 +203,23 @@ pub fn init_runtime() -> anyhow::Result<()> {
     });
 
     init_rx.blocking_recv()?
+}
+
+/// A kernel OOM kill shows as signal 9 here.
+fn log_sidecar_exit(status: std::process::ExitStatus) {
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    if status.success() {
+        debug!("JS sidecar exited: {status}");
+    } else {
+        error!(
+            "JS sidecar exited: {status} (code {:?}, signal {:?})",
+            status.code(),
+            signal
+        );
+    }
 }
 
 #[cfg(test)]
