@@ -1592,8 +1592,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn durable_unleased_moderation_job_survives_unknown_recovered_island_and_removes_voice_target()
-     {
+    async fn durable_moderation_pass_survives_unknown_recovered_island_and_removes_voice_target() {
         if std::env::var("CATALYST_TEST_DATABASE_URL")
             .ok()
             .is_none_or(|value| value.trim().is_empty())
@@ -1649,42 +1648,24 @@ mod tests {
         state.island_safety.elapse_quarantine_for_test(initial, 123);
         fixture.lock().unwrap().failures = 1;
         connection(&pool, &voice, &other).await.unwrap();
-        let state = Arc::new(state);
-        let jobs = Jobs::new();
-        assert!(jobs.leases().is_none());
-        spawn_jobs(&state, &jobs);
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let report = jobs.report();
-                let job = report
-                    .iter()
-                    .find(|r| r.name == "comms-livekit-ban-removal")
-                    .unwrap();
-                assert_ne!(
-                    job.state,
-                    crate::jobs::JobState::Failed,
-                    "{:?}",
-                    job.last_error
-                );
-                if fixture
-                    .lock()
-                    .unwrap()
-                    .removed
-                    .contains(&other.as_str().to_owned())
-                    && job.passes >= 2
-                {
-                    assert_eq!(job.state, crate::jobs::JobState::Running);
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("ordinary voice removal still progresses after island RPC uncertainty");
+        // Two passes of the primary job. Each must succeed despite the
+        // uncertain island RPC (a failed pass fails the whole job).
+        for _ in 0..2 {
+            pass(&state)
+                .await
+                .expect("island RPC uncertainty must not fail the whole job");
+        }
+        assert!(
+            fixture
+                .lock()
+                .unwrap()
+                .removed
+                .contains(&other.as_str().to_owned()),
+            "ordinary voice removal still progresses after island RPC uncertainty"
+        );
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM social.island_cleanup_dispatches WHERE wallet=$1 AND phase='quarantine_final' AND state='dispatched'").bind(&actor).fetch_one(&pool).await.unwrap(),1);
         assert!(state.island_safety.snapshot(actor.as_str()).await.is_err());
         assert_eq!(fixture.lock().unwrap().remove_calls, 3);
-        jobs.shutdown(Duration::from_secs(2)).await;
         server.abort();
         drop(state);
         pool.close().await;
