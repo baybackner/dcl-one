@@ -5042,7 +5042,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/engine.js",
-      "sha256": "25d9ae1992bcaa15d3a01ca12b77731cf5553b54422c9e3d272051604e0b7578"
+      "sha256": "27ee1f1c8c18454b160bd4ff0b9ea6bff792250b7201ddc096382d1043764713"
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/perf_stream.js",
@@ -5928,7 +5928,7 @@
     },
     {
       "path": "library/explorer-core/lib/hudAutomation.ts",
-      "sha256": "d74fca9c9c8b36bac1bfcf512b65724749b8690df5d03e2357bf58214723ebbd"
+      "sha256": "1dc4dcaecfff43c14a30ae656943f09827301b6126e57491f151c9975a352c59"
     },
     {
       "path": "library/explorer-core/lib/hudScale.ts",
@@ -6068,7 +6068,7 @@
     },
     {
       "path": "library/explorer-core/test/hudAutomation.test.ts",
-      "sha256": "b93bbc6f16817f308e3f5430c62c1fc9ad1cac5e2a43bb20a9bf6dbbc0843770"
+      "sha256": "63f5d2a63a8f2c6a235b9c4f47392331bb90646dfc0843585e9b6fe780c92bdd"
     },
     {
       "path": "library/explorer-core/test/hudScale.test.ts",
