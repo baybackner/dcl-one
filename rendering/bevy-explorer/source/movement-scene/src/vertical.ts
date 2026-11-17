@@ -6,7 +6,7 @@ import {
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS, EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL,
   FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
-  LANDING_STUN_DROP, LANDING_STUN_TIME, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  LANDING_STUN_DROP, LANDING_STUN_TIME, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
   GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, VEC3_ZERO,
   VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
@@ -26,9 +26,11 @@ export function updateVerticalVelocity() {
     // ... unless an upward push launches us off it
     setGrounded(isLaunched() ? false : prevGrounded);
     unrequestedLift = 0;
+    const top = vstate.topY;
     applyJumpAndGravity(true);
-    // a fall from where the engine put us counts from there
-    vstate.topY = playerPosition.y;
+    // a fall from where the engine put us counts from there, or (LANDING_STUN_TOP_KEPT_ON_PLACEMENT) from the top
+    // before, raised only by heights above the placement
+    if (LANDING_STUN_TOP_KEPT_ON_PLACEMENT) { vstate.topY = top; placedY = playerPosition.y; } else vstate.topY = playerPosition.y;
     return;
   }
   stepUp();
@@ -294,8 +296,10 @@ function applyJumpAndGravity(noGravity: boolean) {
   // on the ground the model stands where the avatar stands (a published late jump off an edge launches from where the
   // model is, not from the ground below the avatar)
   if (onGround && vstate.vy <= 0 && (grounded || vstate.lastGroundedStep === vstate.step)) vstate.y = playerPosition.y - Math.max(0, groundDistance);
-  // in the air the stun's top is the avatar's highest point since the ground, or its height while gliding
-  if (!onGround) vstate.topY = vstate.gliding ? playerPosition.y : Math.max(vstate.topY, playerPosition.y);
+  // in the air the stun's top is the avatar's highest point since the ground (above where the engine placed it), or its
+  // height while gliding
+  if (onGround && !noGravity) placedY = -Infinity;
+  else if (!onGround) vstate.topY = vstate.gliding ? playerPosition.y : playerPosition.y > placedY ? Math.max(vstate.topY, playerPosition.y) : vstate.topY;
   const stepPressed = INPUT_DELAY_TICKS > 0 ? prevJumpPressed : pressed;
   const stepRunning = INPUT_DELAY_TICKS > 0 ? prevRunning : running;
   vstate.launched = false;
@@ -458,6 +462,8 @@ export function stunned(): boolean { return vstate.step < vstate.stunEndStep; }
 export function landingStuns(): boolean { return vstate.topY - groundY > LANDING_STUN_DROP; }
 // The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
 var landedNow = false;
+// Height the engine last placed the avatar at, while it has not touched the ground since (LANDING_STUN_TOP_KEPT_ON_PLACEMENT).
+var placedY = -Infinity;
 // Vertical velocity of the last reply and whether it was airborne (ramp guard).
 var lastReplyVy = 0;
 var lastReplyAir = false;
