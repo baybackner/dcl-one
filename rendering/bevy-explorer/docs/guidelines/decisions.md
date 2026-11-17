@@ -367,6 +367,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   what both servers allow for them, and keeps only the latest teleport and the latest emote command
   while that is spent. Overrunning the servers' budget ends the session for good, and a scene that
   repositions the player every frame would do it; unity-explorer has no limiter (`pacing.rs`).
+  The native driver also holds teleports and emotes once 8 are unacknowledged, and holds inputs
+  while the uplink has been unacknowledged for 600 ms, probing it with a ping every 250 ms, so
+  what a stall delivers at once stays within the servers' bursts. WebTransport exposes no
+  acknowledgements, so the web build has no such gate (`native.rs`).
 - **The client never sends what the Pulse server refuses for good.** A one-shot emote longer than
   60 s goes out without a duration and ends with an explicit stop, and inputs and teleports from
   outside the parcel grid are not sent (`lib.rs`, `pulse/mod.rs`).

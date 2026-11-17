@@ -302,6 +302,19 @@ impl<S: Socket> Peer<S> {
         Duration::from_millis(u64::from(unsafe { (*self.0).round_trip_time_variance }))
     }
 
+    /// Whether a reliable command (including a ping) has been sent and not yet acknowledged, or
+    /// waits for room in the reliable window.
+    #[must_use]
+    pub fn has_unacknowledged_reliable(&self) -> bool {
+        unsafe {
+            let peer = self.0;
+            (*peer).sent_reliable_commands.sentinel.next
+                != core::ptr::addr_of_mut!((*peer).sent_reliable_commands.sentinel)
+                || (*peer).outgoing_send_reliable_commands.sentinel.next
+                    != core::ptr::addr_of_mut!((*peer).outgoing_send_reliable_commands.sentinel)
+        }
+    }
+
     /// Address of the remote peer, or [`None`] if this peer has never been connected.
     ///
     /// If the peer has disconnected, the previously connected peer's address will be returned.

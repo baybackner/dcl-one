@@ -4,6 +4,8 @@ use common::util::AsH160;
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use serde_json::json;
 
+use crate::pulse::transport::UplinkSnapshot;
+
 pub(super) struct PulseDebugPlugin;
 
 impl Plugin for PulseDebugPlugin {
@@ -47,6 +49,12 @@ impl Plugin for PulseDebugPlugin {
                     ("Resync requests (last 60s)", "resyncs"),
                     ("Subjects awaiting resync", "pendingResyncs"),
                     ("Emote for selected peer", "emote"),
+                    ("Uplink stalled", "uplink.stalled"),
+                    (
+                        "Unacknowledged teleports and emotes",
+                        "uplink.unconfirmedDiscrete",
+                    ),
+                    ("Held (teleport / emote / input)", "uplink.held"),
                 ],
                 actions: &[],
                 inputs: &inputs,
@@ -130,15 +138,43 @@ fn pulse_state(
         if let Err(reason) = connection {
             unavailable["connectionEnabled"] = json!(reason);
         }
+        let (uplink, uplink_unavailable) = uplink_json(link.map(|link| link.uplink()));
+        if let Some(reason) = uplink_unavailable {
+            unavailable["uplink"] = json!(reason);
+        }
         input.reply_ok(json!({
             "connectionEnabled": connection.ok(),
             "state": state, "authenticated": matches!(session.as_deref().map(|s| &s.state), Some(Connection::Established)),
             "sentBytes": traffic.sent.bytes, "sentPackets": traffic.sent.packets, "receivedBytes": traffic.received.bytes,
             "receivedPackets": traffic.received.packets, "resyncs": resyncs,
             "pendingResyncs": session.as_ref().map_or(0, |s| s.decoder.pending_resync.len()),
-            "wallet": lookup.0.map(|wallet| format!("{wallet:#x}")), "emote": emote,
+            "wallet": lookup.0.map(|wallet| format!("{wallet:#x}")), "emote": emote, "uplink": uplink,
             "unavailable": unavailable,
         }).to_string());
+    }
+}
+
+/// The uplink gate's readout: `link` is `None` without a connection, `Some(None)` from a driver
+/// without a gate. Null with the reason when there is nothing to show.
+fn uplink_json(link: Option<Option<UplinkSnapshot>>) -> (serde_json::Value, Option<&'static str>) {
+    match link {
+        None => (serde_json::Value::Null, Some("No Pulse connection")),
+        Some(None) if cfg!(target_arch = "wasm32") => (
+            serde_json::Value::Null,
+            Some("WebTransport exposes no acknowledgements: the web build has no uplink gate"),
+        ),
+        Some(None) => (
+            serde_json::Value::Null,
+            Some("The driver has not reported yet"),
+        ),
+        Some(Some(snapshot)) => (
+            json!({
+                "stalled": snapshot.stalled,
+                "unconfirmedDiscrete": snapshot.unconfirmed_discrete,
+                "held": [snapshot.held_teleport, snapshot.held_emote, snapshot.held_input],
+            }),
+            None,
+        ),
     }
 }
 
@@ -173,5 +209,38 @@ fn pulse_connection(
         Ok(()) if enabled => input.reply_ok("Pulse connection enabled"),
         Ok(()) => input.reply_ok("Pulse paused"),
         Err(reason) => input.reply_failed(reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_uplink_readout_shows_what_the_gate_holds() {
+        let (value, unavailable) = uplink_json(Some(Some(UplinkSnapshot {
+            stalled: true,
+            unconfirmed_discrete: 8,
+            held_teleport: true,
+            held_emote: false,
+            held_input: true,
+        })));
+
+        assert_eq!(
+            value,
+            json!({"stalled": true, "unconfirmedDiscrete": 8, "held": [true, false, true]})
+        );
+        assert_eq!(unavailable, None);
+    }
+
+    #[test]
+    fn the_uplink_readout_says_why_it_is_empty() {
+        assert_eq!(
+            uplink_json(None),
+            (serde_json::Value::Null, Some("No Pulse connection"))
+        );
+        let (value, reason) = uplink_json(Some(None));
+        assert_eq!(value, serde_json::Value::Null);
+        assert!(reason.is_some());
     }
 }

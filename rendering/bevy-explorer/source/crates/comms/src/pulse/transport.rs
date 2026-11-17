@@ -9,7 +9,7 @@
 //! is the native ENet thread or the wasm WebTransport task.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
@@ -180,11 +180,27 @@ pub struct PulseTransportConfig {
     pub cert_hash: Option<Vec<u8>>,
 }
 
+/// What the native driver's uplink gate holds back, as of its last pass, for the debug panel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UplinkSnapshot {
+    /// Reliable traffic has gone unacknowledged long enough that inputs are held.
+    pub stalled: bool,
+    /// Teleports and emotes let out since everything was last acknowledged.
+    pub unconfirmed_discrete: usize,
+    pub held_teleport: bool,
+    pub held_emote: bool,
+    pub held_input: bool,
+}
+
+/// The driver's latest [`UplinkSnapshot`]; `None` from a driver without a gate (WebTransport).
+pub type UplinkReport = Arc<Mutex<Option<UplinkSnapshot>>>;
+
 /// Protocol-layer end of the boundary (held by the Bevy plugin). `Send + Sync`, so it lives in a
 /// resource.
 pub struct PulseLink {
     outbound: mpsc::Sender<PulseFrame>,
     pub(super) traffic: crate::traffic::PayloadTraffic,
+    pub(super) uplink: UplinkReport,
     pub inbound: mpsc::Receiver<Vec<u8>>,
     pub status: mpsc::Receiver<PulseStatus>,
 }
@@ -204,6 +220,10 @@ impl PulseLink {
         self.traffic.record_received(bytes.len());
         Some(bytes)
     }
+
+    pub(crate) fn uplink(&self) -> Option<UplinkSnapshot> {
+        self.uplink.lock().ok().and_then(|report| *report)
+    }
 }
 
 /// Driver end of the boundary (moved into the native thread / wasm task).
@@ -211,6 +231,7 @@ pub struct PulseDriverChannels {
     pub outbound: mpsc::Receiver<PulseFrame>,
     pub inbound: mpsc::Sender<Vec<u8>>,
     pub status: mpsc::Sender<PulseStatus>,
+    pub uplink: UplinkReport,
 }
 
 /// Build a matched [`PulseLink`] / [`PulseDriverChannels`] pair.
@@ -218,11 +239,13 @@ pub fn pulse_channels(capacity: usize) -> (PulseLink, PulseDriverChannels) {
     let (outbound_tx, outbound_rx) = mpsc::channel(capacity);
     let (inbound_tx, inbound_rx) = mpsc::channel(capacity);
     let (status_tx, status_rx) = mpsc::channel(16);
+    let uplink = UplinkReport::default();
 
     (
         PulseLink {
             outbound: outbound_tx,
             traffic: Default::default(),
+            uplink: uplink.clone(),
             inbound: inbound_rx,
             status: status_rx,
         },
@@ -230,6 +253,7 @@ pub fn pulse_channels(capacity: usize) -> (PulseLink, PulseDriverChannels) {
             outbound: outbound_rx,
             inbound: inbound_tx,
             status: status_tx,
+            uplink,
         },
     )
 }

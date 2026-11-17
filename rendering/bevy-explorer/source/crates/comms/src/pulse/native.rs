@@ -27,9 +27,10 @@ use rusty_enet as enet;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc::{self, error::TrySendError};
 
+use super::pacing::DiscreteEventPacer;
 use super::transport::{
-    collapse_inputs, PulseDisconnect, PulseDriverChannels, PulseFrame, PulseReliability,
-    PulseStatus, PulseTransportConfig,
+    collapse_inputs, FrameKind, PulseDisconnect, PulseDriverChannels, PulseFrame, PulseReliability,
+    PulseStatus, PulseTransportConfig, UplinkSnapshot,
 };
 
 /// Channels in server order: RELIABLE=0, UNRELIABLE_SEQUENCED=1, UNRELIABLE_UNSEQUENCED=2
@@ -51,6 +52,22 @@ const MAX_HELD_RELIABLE: usize = 65_536;
 /// 32 MiB a packet, so the count alone would not bound the memory held; past either cap the
 /// connection fails alike.
 const MAX_HELD_BYTES: usize = 16 * 1024 * 1024;
+
+/// How often the uplink is probed with a ping when nothing reliable is in flight. ENet pings only
+/// when nothing arrives, and the server streams to us, so without this an uplink that stalls while
+/// only inputs flow would go unnoticed.
+const PROBE_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long reliable traffic (a probe at least) may go unacknowledged before the uplink counts as
+/// stalled and inputs are held: what is sent meanwhile can land at once when it recovers, and the
+/// servers charge their input budget (burst 16) on arrival. A stall goes unnoticed for at most a
+/// probe interval, a loop pass and this, under a second; `movement_pacing` keeps what it sends in
+/// that time under the burst (its bound holds for stalls up to about 1.3 s).
+const STALL_AFTER: Duration = Duration::from_millis(600);
+
+/// Teleports and emotes let out with no moment in between when everything was acknowledged: half
+/// the servers' burst of 16, so ENet retransmitting all of them at once after a stall still fits.
+const MAX_UNCONFIRMED_DISCRETE: usize = 8;
 
 pub(super) fn spawn(
     config: PulseTransportConfig,
@@ -271,6 +288,108 @@ impl Backlog {
     }
 }
 
+/// Keeps what a stalled uplink would deliver in one burst within the servers' budgets. ENet
+/// retransmits every unacknowledged teleport and emote at once when the link comes back, and the
+/// servers charge them on arrival; a session that overruns a budget ends for good. So at most
+/// [`MAX_UNCONFIRMED_DISCRETE`] go out between moments with nothing unacknowledged, and inputs wait
+/// while the uplink is stalled. Only the latest frame of each kind waits; an input also waits behind
+/// a waiting teleport or emote, whose start carries an older pose.
+#[derive(Default)]
+struct UplinkGate {
+    /// Since when reliable traffic has been unacknowledged without a break.
+    unacknowledged_since: Option<Instant>,
+    /// Teleports and emotes let out since everything was last acknowledged.
+    unconfirmed_discrete: usize,
+    /// At most one frame of each kind, in the order they are to go.
+    held: Vec<PulseFrame>,
+    /// When the uplink was last probed.
+    probed_at: Option<Instant>,
+}
+
+impl UplinkGate {
+    /// What the peer says at `now`: whether anything reliable it sent is unacknowledged.
+    fn observe(&mut self, now: Instant, unacknowledged: bool) {
+        if unacknowledged {
+            self.unacknowledged_since.get_or_insert(now);
+        } else {
+            self.unacknowledged_since = None;
+            self.unconfirmed_discrete = 0;
+        }
+    }
+
+    /// Whether to ping now: nothing reliable is in flight to show the uplink works, and no probe
+    /// went out for [`PROBE_INTERVAL`].
+    fn wants_probe(&mut self, now: Instant) -> bool {
+        let due = self.unacknowledged_since.is_none()
+            && self
+                .probed_at
+                .is_none_or(|at| now.duration_since(at) >= PROBE_INTERVAL);
+        if due {
+            self.probed_at = Some(now);
+        }
+        due
+    }
+
+    /// What the gate holds back at `now`, for the debug panel.
+    fn snapshot(&self, now: Instant) -> UplinkSnapshot {
+        let holds = |kind| self.held.iter().any(|held| held.kind == kind);
+        UplinkSnapshot {
+            stalled: self.stalled(now),
+            unconfirmed_discrete: self.unconfirmed_discrete,
+            held_teleport: holds(FrameKind::Teleport),
+            held_emote: holds(FrameKind::Emote),
+            held_input: holds(FrameKind::Input),
+        }
+    }
+
+    fn stalled(&self, now: Instant) -> bool {
+        self.unacknowledged_since
+            .is_some_and(|since| now.duration_since(since) >= STALL_AFTER)
+    }
+
+    /// The frames to queue now, in order: what was held and may go, then `frames` as far as they
+    /// may; the rest is held.
+    fn admit(&mut self, frames: Vec<PulseFrame>, now: Instant) -> Vec<PulseFrame> {
+        let stalled = self.stalled(now);
+        let was_holding = !self.held.is_empty();
+        let out = self.admit_inner(frames, stalled);
+        match (was_holding, self.held.is_empty()) {
+            (false, false) => bevy::log::debug!("pulse: uplink unconfirmed, holding frames"),
+            (true, true) => bevy::log::debug!("pulse: uplink confirmed, held frames sent"),
+            _ => {}
+        }
+        out
+    }
+
+    fn admit_inner(&mut self, frames: Vec<PulseFrame>, stalled: bool) -> Vec<PulseFrame> {
+        let mut out = Vec::new();
+        for frame in std::mem::take(&mut self.held).into_iter().chain(frames) {
+            let discrete = DiscreteEventPacer::paces(frame.kind);
+            let hold = if discrete {
+                stalled || self.unconfirmed_discrete >= MAX_UNCONFIRMED_DISCRETE
+            } else if frame.kind == FrameKind::Input {
+                stalled
+                    || self
+                        .held
+                        .iter()
+                        .any(|held| DiscreteEventPacer::paces(held.kind))
+            } else {
+                false
+            };
+            if hold {
+                self.held.retain(|held| held.kind != frame.kind);
+                self.held.push(frame);
+            } else {
+                if discrete {
+                    self.unconfirmed_discrete += 1;
+                }
+                out.push(frame);
+            }
+        }
+        out
+    }
+}
+
 async fn drive(
     channels: &mut PulseDriverChannels,
     config: &PulseTransportConfig,
@@ -312,6 +431,7 @@ async fn drive(
     let connecting_since = Instant::now();
     let mut connected = false;
     let mut backlog = Backlog::with_caps(MAX_HELD_RELIABLE, MAX_HELD_BYTES);
+    let mut gate = UplinkGate::default();
 
     while !stop.load(Ordering::Relaxed) {
         // Whatever the protocol layer has made room for since the last pass.
@@ -342,9 +462,21 @@ async fn drive(
             batch.push(frame);
         }
         // Frames queued behind each other go out as one batch, so a run of inputs is cut down to
-        // its newest before it reaches the peer.
-        for frame in collapse_inputs(batch) {
+        // its newest before it reaches the peer. While the uplink is unconfirmed the gate holds the
+        // latest of each kind instead, and lets it out once it is.
+        let now = Instant::now();
+        gate.observe(
+            now,
+            connected && host.peer(peer).has_unacknowledged_reliable(),
+        );
+        if connected && gate.wants_probe(now) {
+            host.peer_mut(peer).ping();
+        }
+        for frame in gate.admit(collapse_inputs(batch), now) {
             queue_frame(&mut host, peer, &frame);
+        }
+        if let Ok(mut report) = channels.uplink.lock() {
+            *report = Some(gate.snapshot(now));
         }
 
         // Service the host: socket I/O + dispatch all ready events.

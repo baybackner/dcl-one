@@ -11,7 +11,7 @@
   "normalization": "Exact upstream and patched file bytes. Repository .gitattributes disables newline conversion for this subtree. SHA256 manifests are UTF-8 with LF lines and lexicographically sorted repository-relative paths. No Git metadata or Cargo cache marker is imported.",
   "manifests": {
     "upstream-files.sha256": "7bce19bf15feb754a84a36ffd7e17f1d2a540cda764a2f7179b69021c3394fca",
-    "checksums.sha256": "31aa3ba4cd67f74693d5d21bbc89cfdc9964c83a66b42b9ad2cea15945b553df"
+    "checksums.sha256": "78e012b5341b9fe7efd835b3a70127831f0e7e88da1299ace52fa0064cc43d09"
   },
   "patches": [
     {
@@ -71,6 +71,13 @@
       "sha256": "07f82e57096294f3383128ce75ba7a177cab5a20b81febc2c4bceda26356b3b8",
       "changes": [
         "Name the borrowed Event lifetime in the connected host's handle_event, check_events and service return types, matching the host's Rust 1.99 lifetime syntax fix"
+      ]
+    },
+    {
+      "path": "patches/0008-peer-unacknowledged-reliable.patch",
+      "sha256": "d51764f9367b149015b3b56de7bf900ac598098c67c4ba8c2ab4dcb10cbf5f63",
+      "changes": [
+        "Report whether a peer has reliable commands sent and unacknowledged or waiting for window room, so a client can tell a stalled uplink before its retransmissions arrive in one burst"
       ]
     }
   ],

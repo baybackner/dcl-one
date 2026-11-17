@@ -71,6 +71,8 @@ async fn run(config: PulseTransportConfig, channels: PulseDriverChannels, stop: 
         outbound,
         inbound,
         status,
+        // No acknowledgements to gate on: the report stays empty.
+        uplink: _,
     } = channels;
 
     let _ = status.try_send(PulseStatus::Connecting);
