@@ -88,34 +88,8 @@ jobs:
           name: bevy-explorer-v8-issue
           path: .cache/upstream-drift/v8-issue.md
           retention-days: 7
-  # A failed run on main is reported in one issue: a comment on the open issue with this title, or a
-  # new issue. Only this job has a permission to write, and it runs no code of the repository.
-  report:
-    name: Report a failed run
-    needs: drift
-    if: ${{ failure() && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    steps:
-      - name: Open the issue or add a comment to it
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TITLE: 'Bevy Explorer: the daily dependency drift run fails'
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          body="The daily run of the dependency drift workflow failed: $RUN_URL"
-          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -n 1)
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --body "$body"
-          else
-            gh issue create --title "$TITLE" --body "$body"
-          fi
-  # Opens, updates or closes the V8 freshness issue from the drift job's verdict. Like `report`, it
-  # writes issues and runs no code of the repository.
+  # Opens, updates or closes the V8 freshness issue from the drift job's verdict. Like `report` below,
+  # it writes issues and runs no code of the repository.
   v8-issue:
     name: Report the scene runtime V8 age
     needs: drift
@@ -160,4 +134,30 @@ jobs:
             for open in "$@"; do
               gh issue close "$open" --comment 'Neither the Explorer nor the catalyst V8 is behind rusty_v8, deno_core or Chrome any more.'
             done
+          fi
+  # A failed run on main is reported in one issue: a comment on the open issue with this title, or a
+  # new issue. Only this job has a permission to write, and it runs no code of the repository.
+  report:
+    name: Report a failed run
+    needs: drift
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open the issue or add a comment to it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: 'Bevy Explorer: the daily dependency drift run fails'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="The daily run of the dependency drift workflow failed: $RUN_URL"
+          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -n 1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
           fi

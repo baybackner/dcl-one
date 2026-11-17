@@ -26,6 +26,14 @@ ignore = [
   { id = "RUSTSEC-2025-0134", reason = "TODO: replace rustls-pemfile 2.2.0 or the crate that pulls it in" },
   { id = "RUSTSEC-2026-0173", reason = "TODO: replace proc-macro-error2 2.0.1 or the crate that pulls it in" },
   { id = "RUSTSEC-2026-0441", reason = "TODO: replace pin-utils 0.1.1 or the crate that pulls it in" },
+  # Published after the baseline, found by this gate's first run (2026-11-17)
+  { id = "RUSTSEC-2026-0420", reason = "TODO: bump wasmtime-wasi 50.0.0 to 50.0.1 or newer" },
+  { id = "RUSTSEC-2026-0422", reason = "TODO: bump wasmtime 50.0.0 to 50.0.1 or newer" },
+  { id = "RUSTSEC-2026-0423", reason = "TODO: bump wasmtime 50.0.0 to 50.0.1 or newer" },
+  { id = "RUSTSEC-2026-0424", reason = "TODO: bump wasmtime 50.0.0 to 50.0.1 or newer" },
+  { id = "RUSTSEC-2026-0486", reason = "TODO: bump rustix 1.1.5 to 1.1.6 or newer" },
+  { id = "RUSTSEC-2026-0543", reason = "TODO: replace chrono 0.4.45 or the crates that pull it in" },
+  { id = "RUSTSEC-2026-0555", reason = "TODO: replace chrono-tz 0.10.4 or the crates that pull it in" },
 ]
 
 [bans]

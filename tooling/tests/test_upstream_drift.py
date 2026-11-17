@@ -637,14 +637,14 @@ class VersionLogicTests(unittest.TestCase):
 
     def test_v8_issue_job_writes_issues_without_running_repository_code(self):
         text = WORKFLOW.read_text()
-        job = text[text.index('  v8-issue:'):]
+        job = text[text.index('  v8-issue:'):text.index('  report:')]
         self.assertIn('permissions:\n      issues: write\n', job)
         self.assertNotIn('actions/checkout', job)
         self.assertNotIn('python3', job)
         self.assertNotIn('--search', job)
         self.assertIn('select(.title == env.TITLE and .author.login == "app/github-actions")', job)
         self.assertIn('gh issue close "$extra" --comment "Duplicate of #$keep."', job)
-        drift_job = text[text.index('  drift:'):text.index('  report:')]
+        drift_job = text[text.index('  drift:'):text.index('  v8-issue:')]
         self.assertNotIn('issues: write', drift_job)
         self.assertIn('python3 tooling/upstream-drift.py v8-report --body "$body"', drift_job)
 

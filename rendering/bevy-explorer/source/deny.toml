@@ -57,6 +57,11 @@ ignore = [
   { id = "RUSTSEC-2026-0202", reason = "TODO: bump cxx 1.0.194 to 1.0.195 or newer (via libwebrtc, webrtc-sys)" },
   { id = "RUSTSEC-2026-0221", reason = "TODO: bump event-listener 5.4.1 to 5.4.2 or newer (via async-lock, async-broadcast)" },
   { id = "RUSTSEC-2026-0386", reason = "TODO: bump tokio 1.50.0 past the unsound API" },
+  # Published after the baseline, found by this gate's first run (2026-11-17)
+  { id = "RUSTSEC-2026-0545", reason = "TODO: bump zip 0.6.6, 2.4.2 to 9.0.5 or newer" },
+  { id = "RUSTSEC-2026-0548", reason = "TODO: bump zip 0.6.6, 2.4.2 to 9.0.5 or newer" },
+  { id = "RUSTSEC-2026-0486", reason = "TODO: bump rustix 1.1.4 to 1.1.6 or newer" },
+  { id = "RUSTSEC-2026-0543", reason = "TODO: replace chrono 0.4.45 or the crates that pull it in" },
 ]
 
 [bans]
