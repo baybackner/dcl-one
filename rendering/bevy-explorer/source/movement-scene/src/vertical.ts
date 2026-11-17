@@ -420,8 +420,10 @@ function applyJumpAndGravity(noGravity: boolean) {
 
   // Predicted landing: frames from this one until the engine puts the avatar on the ground,
   // with the previous reply held for the frames before this one's lands (-1: not in the window).
+  // Not on the launch tick: the avatar still touches the ground then, and the contact's tiny
+  // height (either sign) must not read as a landing.
   predictedLandFrame = -1;
-  if (!grounded && frameTime > 0 && !vstate.gliding && groundDistance < Infinity) {
+  if (!grounded && !vstate.launched && frameTime > 0 && !vstate.gliding && groundDistance < Infinity) {
     let h = groundDistance;
     for (let k = 0; k <= frames; k++) {
       h += (k < replyDelay ? prevActualVelocity.y : vy + externalY) * frameTime;
