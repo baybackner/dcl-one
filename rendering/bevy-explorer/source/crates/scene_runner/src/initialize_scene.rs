@@ -1265,9 +1265,11 @@ pub fn process_realm_change(
 }
 
 /// `move_to_parcel` for the node's badges: every parcel change of the player, with the scene the
-/// realm lists there, and the current parcel again after a login or realm change.
+/// realm lists there, and the current parcel again after a login or realm change. Nothing while
+/// out of world (still at the old realm's parcel after a realm change), and a move made without a
+/// usable auth chain is sent from the last parcel sent once one is.
 fn report_move_to_parcel(
-    player: Query<&GlobalTransform, With<PrimaryUser>>,
+    player: Query<&GlobalTransform, (With<PrimaryUser>, Without<OutOfWorld>)>,
     pointers: Res<ScenePointers>,
     config: Option<Res<SegmentConfig>>,
     metrics: Option<ResMut<SegmentMetricsEvents>>,
@@ -1278,13 +1280,14 @@ fn report_move_to_parcel(
         return;
     };
     let parcel = vec3_to_parcel(player.translation());
-    let common = config.common();
-    let Some(old) = tracker.moved(&common.dcl_eth_address, &common.realm, parcel) else {
+    let (address, realm) = (&config.common().dcl_eth_address, &config.common().realm);
+    let Some(old) = tracker.moved(address, realm, parcel) else {
         return;
     };
     let Some(common) = wallet.and_then(|wallet| config.client_event_common(&wallet)) else {
         return;
     };
+    tracker.sent(address, realm, parcel);
     let scene = pointers
         .get(parcel)
         .map(|pointer| pointer.hash_and_urn().map(|(hash, _)| hash));

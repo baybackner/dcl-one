@@ -722,8 +722,9 @@ fn end_jump_on_landing(dynamic_state: &mut AvatarDynamicState) {
     }
 }
 
-// The player's own walking, for analytics: a parcel scene's movement override, a suppression,
-// an impulse or force this frame, or no movement input held leaves none.
+// The player's own walking, for analytics: the controller's displacement after collisions, so
+// lifts, platforms and walls add nothing; a parcel scene's movement override, a suppression, an
+// impulse or force this frame, or no movement input held leaves none.
 fn record_own_movement(
     mut player: Query<
         (
@@ -739,15 +740,17 @@ fn record_own_movement(
     let Ok((mut dynamic_state, movement)) = player.single_mut() else {
         return;
     };
+    // a zero request skips `apply_movement`'s solve, leaving `actual_velocity` stale
     let own = movement.scene_is_portable
+        && movement.component.velocity != Vec3::ZERO
         && !movement_suppressed(&movement_control, movement)
         && info.0.external_velocity.is_none()
         && input_manager.get_analog(MOVE_SET, InputPriority::Scene) != Vec2::ZERO;
-    dynamic_state.own_velocity = if own {
-        movement.component.velocity
-    } else {
-        Vec3::ZERO
-    };
+    dynamic_state.own_velocity = info
+        .0
+        .actual_velocity
+        .filter(|_| own)
+        .map_or(Vec3::ZERO, |v| v.world_vec_to_vec3());
 }
 
 // (scene entity, collider id) of collider player is standing on

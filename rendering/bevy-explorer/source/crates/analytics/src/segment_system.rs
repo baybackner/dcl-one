@@ -409,8 +409,10 @@ impl SegmentConfig {
         if !address.eq_ignore_ascii_case(&self.common.dcl_eth_address) {
             return None;
         }
+        // checked before the clone: a player without a chain retries a pending move every frame
+        let auth_chain = login_auth_chain(wallet, Utc::now())?;
         let mut common = self.common.clone();
-        common.auth_chain = Some(login_auth_chain(wallet, Utc::now())?);
+        common.auth_chain = Some(auth_chain);
         Some(common)
     }
 

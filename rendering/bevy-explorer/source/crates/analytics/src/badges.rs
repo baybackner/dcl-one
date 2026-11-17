@@ -30,8 +30,7 @@ pub const SEND_AT_STEPS: u64 = 100;
 /// The total elevation gain in one session that completes vertical voyager, in metres: the
 /// badge is "a total elevation gain of at least 500m in one session", so every climb adds up.
 pub const HEIGHT: f32 = 500.0;
-/// A rise is counted once it passes this (jitter stays out) and only below the cap (a teleport
-/// or a beam is not climbing), in metres.
+/// A rise is counted once it passes this (jitter stays out) and only below the cap, in metres.
 pub const MIN_RISE: f32 = 0.01;
 pub const MAX_RISE: f32 = 10.0;
 
@@ -79,12 +78,12 @@ impl StepCounter {
 /// How the player stands this frame, for the elevation gain.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Footing {
-    /// Walking on the ground under its own control: a rise counts.
+    /// Walking on the ground under its own control: the rise counts.
     Walking,
     /// Not moving under its own control (standing, carried by a lift, platform or scene, pushed):
-    /// a rise is not climbing.
+    /// the rise so far is dropped.
     Standing,
-    /// Jumping under its own control: the rise is counted on landing.
+    /// Jumping under its own control: the rise is counted on landing, net of the fall.
     Airborne,
     /// Teleported or behind the loading screen.
     Moved,
@@ -94,14 +93,15 @@ pub enum Footing {
 #[derive(Default)]
 pub struct ElevationGain {
     address: Option<String>,
-    reference: Option<f32>,
+    pending: f32,
     gain: f32,
     reached: bool,
 }
 
 impl ElevationGain {
-    /// The player at height `y`; the gain once it first passes [`HEIGHT`].
-    pub fn tick(&mut self, address: &str, y: f32, footing: Footing) -> Option<f32> {
+    /// A frame in which the player's own movement rose `dy` metres; the gain once it first passes
+    /// [`HEIGHT`].
+    pub fn tick(&mut self, address: &str, dy: f32, footing: Footing) -> Option<f32> {
         if self.address.as_deref() != Some(address) {
             *self = Self {
                 address: Some(address.to_owned()),
@@ -111,24 +111,23 @@ impl ElevationGain {
         if self.reached || address == UNAUTHENTICATED {
             return None;
         }
-        let reference = match (footing, self.reference) {
-            (Footing::Airborne, _) => return None,
-            (Footing::Moved, _) => {
-                self.reference = None;
+        match footing {
+            Footing::Standing | Footing::Moved => {
+                self.pending = 0.0;
                 return None;
             }
-            (Footing::Standing, _) | (Footing::Walking, None) => {
-                self.reference = Some(y);
+            Footing::Airborne => {
+                self.pending += dy;
                 return None;
             }
-            (Footing::Walking, Some(reference)) => reference,
-        };
-        let rise = y - reference;
-        // a rise below the threshold builds up against the same reference
+            Footing::Walking => self.pending += dy,
+        }
+        let rise = self.pending;
+        // a rise below the threshold builds up
         if rise.abs() <= MIN_RISE {
             return None;
         }
-        self.reference = Some(y);
+        self.pending = 0.0;
         if rise < MAX_RISE {
             self.gain += rise.max(0.0);
         }
@@ -187,31 +186,29 @@ impl EmoteThrottle {
     }
 }
 
-/// The last parcel a `move_to_parcel` was considered for, per login and realm.
+/// The last parcel a `move_to_parcel` was sent for, per login and realm.
 #[derive(Default)]
 pub struct ParcelTracker(Option<(String, String, IVec2)>);
 
 impl ParcelTracker {
     /// `Some(old)` when the player is somewhere new: a new parcel, or the same parcel under
     /// another login or realm, whose previous parcel is `None`.
-    pub fn moved(&mut self, address: &str, realm: &str, parcel: IVec2) -> Option<Option<IVec2>> {
-        let old = match &self.0 {
-            Some((a, r, p)) if a == address && r == realm => {
-                if *p == parcel {
-                    return None;
-                }
-                Some(*p)
-            }
-            _ => None,
-        };
+    pub fn moved(&self, address: &str, realm: &str, parcel: IVec2) -> Option<Option<IVec2>> {
+        match &self.0 {
+            Some((a, r, p)) if a == address && r == realm => (*p != parcel).then_some(Some(*p)),
+            _ => Some(None),
+        }
+    }
+
+    /// The move to `parcel` was sent.
+    pub fn sent(&mut self, address: &str, realm: &str, parcel: IVec2) {
         self.0 = Some((address.to_owned(), realm.to_owned(), parcel));
-        Some(old)
     }
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn report_badge_events(
-    player: Query<(&GlobalTransform, &AvatarDynamicState, Has<OutOfWorld>), With<PrimaryUser>>,
+    player: Query<(&AvatarDynamicState, Has<OutOfWorld>), With<PrimaryUser>>,
     time: Res<Time>,
     config: Option<Res<SegmentConfig>>,
     metrics: Option<ResMut<SegmentMetricsEvents>>,
@@ -241,7 +238,7 @@ pub fn report_badge_events(
         }
     }
     let teleported = teleports.read().count() > 0;
-    let Ok((transform, dynamics, out_of_world)) = player.single() else {
+    let Ok((dynamics, out_of_world)) = player.single() else {
         return;
     };
     let footing = if teleported || out_of_world {
@@ -262,7 +259,8 @@ pub fn report_badge_events(
             );
         }
     }
-    if let Some(height) = elevation.tick(&address, transform.translation().y, footing) {
+    let own_rise = dynamics.own_velocity.y * time.delta_secs();
+    if let Some(height) = elevation.tick(&address, own_rise, footing) {
         if let Some(common) = client_common() {
             metrics.add_event(
                 SegmentEvent::VerticalHeightReached(SegmentEventVerticalHeightReached { height }),
@@ -293,35 +291,41 @@ mod tests {
         assert_eq!(counter.tick("0xb", 0.0, 30.0), None);
     }
 
-    // Only rises walked count: a lift, platform or scene ride (no own movement), a jump's apex and
-    // a teleport do not, a ledge climbed by jumping counts on landing, and the climbs add up to
-    // one event per login.
+    // Only the player's own rises count: a jump's apex, a descent and a rise interrupted by
+    // standing still or a teleport do not, a ledge climbed by jumping counts on landing, small
+    // rises build up, and the climbs add up to one event per login.
     #[test]
-    fn elevation_counts_rises_walked_once_per_login() {
+    fn elevation_counts_own_rises_once_per_login() {
         let mut gain = ElevationGain::default();
+        // a jump onto a 2 m ledge: up 3, down 1, landing while walking on
+        assert_eq!(gain.tick("0xa", 3.0, Footing::Airborne), None);
+        assert_eq!(gain.tick("0xa", -1.0, Footing::Airborne), None);
         assert_eq!(gain.tick("0xa", 0.0, Footing::Walking), None);
-        // a lift
-        assert_eq!(gain.tick("0xa", 300.0, Footing::Standing), None);
-        // a jump onto a 2 m ledge, landing while walking on
-        assert_eq!(gain.tick("0xa", 303.0, Footing::Airborne), None);
-        assert_eq!(gain.tick("0xa", 302.0, Footing::Walking), None);
         assert_eq!(gain.gain, 2.0);
-        // a teleport up
-        assert_eq!(gain.tick("0xa", 900.0, Footing::Moved), None);
-        assert_eq!(gain.tick("0xa", 900.0, Footing::Walking), None);
-        // small rises build up against the same reference
-        for _ in 0..4 {
-            assert_eq!(gain.tick("0xa", 900.004, Footing::Walking), None);
+        // a jump in place nets nothing, a descent subtracts nothing
+        assert_eq!(gain.tick("0xa", 1.0, Footing::Airborne), None);
+        assert_eq!(gain.tick("0xa", -1.0, Footing::Walking), None);
+        assert_eq!(gain.tick("0xa", -5.0, Footing::Walking), None);
+        assert_eq!(gain.gain, 2.0);
+        // a rise cut short by standing still or a teleport
+        assert_eq!(gain.tick("0xa", 1.0, Footing::Airborne), None);
+        assert_eq!(gain.tick("0xa", 0.0, Footing::Standing), None);
+        assert_eq!(gain.tick("0xa", 1.0, Footing::Airborne), None);
+        assert_eq!(gain.tick("0xa", 0.0, Footing::Moved), None);
+        assert_eq!(gain.tick("0xa", 0.0, Footing::Walking), None);
+        assert_eq!(gain.gain, 2.0);
+        // small rises build up
+        for _ in 0..2 {
+            assert_eq!(gain.tick("0xa", 0.004, Footing::Walking), None);
         }
-        assert_eq!(gain.gain, 2.0);
-        let mut y = 900.0;
+        assert_eq!(gain.tick("0xa", 0.004, Footing::Walking), None);
+        assert!((gain.gain - 2.012).abs() < 1e-4);
         let mut reached = None;
         while reached.is_none() {
-            y += 0.5;
-            reached = gain.tick("0xa", y, Footing::Walking);
+            reached = gain.tick("0xa", 0.5, Footing::Walking);
         }
         assert!(reached.unwrap() > HEIGHT);
-        assert_eq!(gain.tick("0xa", y + 600.0, Footing::Walking), None);
+        assert_eq!(gain.tick("0xa", 600.0, Footing::Walking), None);
         // the next login climbs again
         assert_eq!(gain.tick("0xb", 0.0, Footing::Walking), None);
         assert!(!gain.reached);
@@ -362,7 +366,7 @@ mod tests {
     }
 
     // A login or realm change sends the current parcel again from nowhere, so Genesis (0,0) to a
-    // world's (0,0) is a move; standing still is not.
+    // world's (0,0) is a move; standing still is not, and an unsent move stays pending.
     #[test]
     fn a_move_is_per_login_realm_and_parcel() {
         let mut tracker = ParcelTracker::default();
@@ -372,13 +376,22 @@ mod tests {
             tracker.moved(UNAUTHENTICATED, genesis, IVec2::ZERO),
             Some(None)
         );
+        tracker.sent(UNAUTHENTICATED, genesis, IVec2::ZERO);
         assert_eq!(tracker.moved(UNAUTHENTICATED, genesis, IVec2::ZERO), None);
         assert_eq!(tracker.moved("0xa", genesis, IVec2::ZERO), Some(None));
+        tracker.sent("0xa", genesis, IVec2::ZERO);
+        // not sent: the next move still starts from (0,0)
         assert_eq!(
             tracker.moved("0xa", genesis, IVec2::X),
             Some(Some(IVec2::ZERO))
         );
-        assert_eq!(tracker.moved("0xa", world, IVec2::X), Some(None));
-        assert_eq!(tracker.moved("0xa", world, IVec2::X), None);
+        assert_eq!(
+            tracker.moved("0xa", genesis, IVec2::Y),
+            Some(Some(IVec2::ZERO))
+        );
+        tracker.sent("0xa", genesis, IVec2::Y);
+        assert_eq!(tracker.moved("0xa", world, IVec2::Y), Some(None));
+        tracker.sent("0xa", world, IVec2::Y);
+        assert_eq!(tracker.moved("0xa", world, IVec2::Y), None);
     }
 }
