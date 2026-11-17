@@ -811,6 +811,39 @@ export async function saveCaptureFrames(explorer: Pick<Explorer, 'run'>, sequenc
   return { ...sequence, frames }
 }
 
+/** One entity of `/scene_entities --labels`. */
+export interface LabelledEntity {
+  crdtEntityId: number
+  /** `gltf <src>`, `mesh Box`, `text "..."`, `hidden`, `parent <id>`, joined by `, `; null when nothing describes it */
+  label: string | null
+}
+
+/** One entity `/visible_entities` lists. */
+export interface VisibleEntity {
+  crdtEntityId: number
+  label: string | null
+  /** logical pixels, clamped to the view; null when nothing of it lands there */
+  screenRect: { x: number; y: number; width: number; height: number } | null
+  center: { x: number; y: number } | null
+  coverage: number
+  distance: number | null
+  distanceToCamera: number
+  renderers: number
+}
+
+/** `/visible_entities`: frustum and bounds only, occlusion is not evaluated. */
+export interface VisibleEntities {
+  scene: string
+  screen: Size & { scale: number }
+  cameraPosition: { x: number; y: number; z: number }
+  candidates: number
+  inFrustum: number
+  returned: number
+  truncated: boolean
+  occlusion: string
+  entities: VisibleEntity[]
+}
+
 /** A read of the log ring: the header's fields and the lines after it (a continuation line stays
  *  its own entry, indented). */
 export interface SceneLogPage {
@@ -1571,6 +1604,17 @@ export class Explorer {
   async sceneEntities(component?: string): Promise<string[]> {
     const reply = await this.run(component ? `/scene_entities ${component}` : '/scene_entities')
     return reply === '(no entities)' ? [] : reply.split('\n')
+  }
+
+  /** The target scene's entities with what each shows; `name` keeps the labels holding it, any case. */
+  async sceneEntityLabels(options: { component?: string; name?: string } = {}): Promise<{ scene: string; total: number; matched: number; entities: LabelledEntity[] }> {
+    const flags = `${options.component ? ` ${options.component}` : ''}${options.name === undefined ? ' --labels' : ` --name ${quoteWord(options.name)}`}`
+    return this.json(`/scene_entities${flags}`)
+  }
+
+  /** The scene's mesh and glTF entities in the camera's view, largest coverage first. */
+  visibleEntities(options: { limit?: number; minCoverage?: number } = {}): Promise<VisibleEntities> {
+    return this.json<VisibleEntities>(`/visible_entities${options.limit === undefined ? '' : ` --limit ${options.limit}`}${options.minCoverage === undefined ? '' : ` --min-coverage ${options.minCoverage}`}`)
   }
 
   /** Point the scene commands (`/scene_entities`, `/inspect_component`, `/scene_logs`) at a scene

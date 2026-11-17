@@ -436,6 +436,25 @@ State, in every build:
   `height` in logical pixels, `scale`). The scene is the one `/set_scene`
   picked, else the player's; the entity is as `/scene_entities` lists it. `--bounds` aims at the
   centre of its visible meshes instead of its origin.
+- `/scene_entities [component] [--labels] [--name <text>]`: the live entities of the scene,
+  one per line. With `--labels`, or `--name` (alias `--filter`), JSON: `scene`, `total`,
+  `matched`, and `entities` by id, each `crdtEntityId` and `label`, what it shows from the
+  scene's own state: `gltf <src>`, `mesh <Box|Sphere|Cylinder|Plane|Gltf>`, `text "<first 24
+  characters>…"`, `hidden` (a `VisibilityComponent` set to false), `parent <id>` (a parent other
+  than the root), joined by `, `; `scene root`, `player`, `camera` for the reserved ids; `null`
+  when nothing describes it. `--name` keeps the labels holding the text, any case (`mesh box`,
+  `hidden`, `gltf models/`).
+- `/visible_entities [--limit N] [--min-coverage F]`: JSON of the scene's entities that draw a
+  primitive mesh or a glTF (signs and boards, bare `TextShape`s, are not listed) whose meshes'
+  world bounds meet the primary camera's frustum, sorted by `coverage`, largest first (default
+  25, at most 200; `--min-coverage` 0 to 1 drops smaller ones): `crdtEntityId`, `label`,
+  `screenRect` (logical pixels from the top left, the box's corners and its crossings of the
+  near plane projected, clamped to the view; `null` when nothing of it lands there), `center`
+  (normalized), `coverage` (share of the view), `distance` (player to the box's centre),
+  `distanceToCamera`, `renderers` (meshes merged; a child entity's meshes count for the child).
+  With `scene`, `screen`, `cameraPosition` (Decentraland coordinates), `candidates` (entities
+  that draw), `inFrustum`, `returned`, `truncated` and `occlusion`: it is not evaluated, so an
+  entity behind a wall is still listed; a screenshot shows what is visible.
 - `/photo_mode [on|off] [button|shortcut|console]`: the camera reel's in-world camera as JSON:
   `active`, the primary camera's `position`, `storage` (`[current, max]` photos kept, meaningful
   once `storageLoaded`), `phase` (`idle`, `capturing`, `encoding` or `uploading`), this session's

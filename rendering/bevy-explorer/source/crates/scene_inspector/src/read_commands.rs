@@ -228,7 +228,10 @@ fn scene_logs_cmd(
 
 // --- /scene_entities ---
 
-/// List live entities in the active scene, optionally filtered by component name
+/// List live entities in the active scene, optionally filtered by component name. With `--labels`
+/// or `--name` the reply is JSON: `scene`, `total`, `matched`, and `entities` (`crdtEntityId`,
+/// `label`: `gltf <src>`, `mesh <Box|Sphere|...>`, `text "<excerpt>"`, `hidden`, `parent <id>`,
+/// or null), by id.
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/scene_entities")]
 struct SceneEntitiesCommand {
@@ -237,6 +240,12 @@ struct SceneEntitiesCommand {
     panel: bool,
     /// Filter to entities that have this component (PascalCase)
     component: Option<String>,
+    /// Reply JSON with what each entity shows
+    #[arg(long)]
+    labels: bool,
+    /// Keep the entities whose label holds this text, any case (implies --labels)
+    #[arg(long, alias = "filter")]
+    name: Option<String>,
 }
 
 fn scene_entities_cmd(
@@ -265,6 +274,12 @@ fn scene_entities_cmd(
         } else {
             resolver.resolve_entity()
         };
+        let scene = target
+            .as_ref()
+            .ok()
+            .and_then(|root| resolver.scenes.get(*root).ok())
+            .map(|(_, ctx)| ctx.hash.clone())
+            .unwrap_or_default();
         match resolver.request_snapshot_from(target, &mut pending, move |crdt| {
             let entities: Vec<SceneEntityId> = crdt
                 .lww
@@ -292,7 +307,14 @@ fn scene_entities_cmd(
                 .into_iter()
                 .collect();
 
-            let result = if entities.is_empty() {
+            let result = if cmd.labels || cmd.name.is_some() {
+                Ok(labelled_entities(
+                    crdt,
+                    entities,
+                    cmd.name.as_deref(),
+                    &scene,
+                ))
+            } else if entities.is_empty() {
                 Ok("(no entities)".to_string())
             } else {
                 let mut lines: Vec<String> = entities.iter().map(entity_alias).collect();
@@ -612,6 +634,42 @@ fn print_tree(
 }
 
 // --- helpers ---
+
+/// The `--labels` reply: every entity with its label, by id, those matching `name` only.
+fn labelled_entities(
+    crdt: &CrdtStore,
+    mut entities: Vec<SceneEntityId>,
+    name: Option<&str>,
+    scene: &str,
+) -> String {
+    entities.sort_by_key(|e| e.as_proto_u32().unwrap_or(e.id as u32));
+    let total = entities.len();
+    let needle = name.map(str::to_lowercase);
+    let listed: Vec<_> = entities
+        .into_iter()
+        .map(|entity| (entity, crate::labels::label(crdt, entity)))
+        .filter(|(_, label)| {
+            needle.as_ref().is_none_or(|needle| {
+                label
+                    .as_ref()
+                    .is_some_and(|label| label.to_lowercase().contains(needle))
+            })
+        })
+        .map(|(entity, label)| {
+            serde_json::json!({
+                "crdtEntityId": entity.as_proto_u32().unwrap_or(entity.id as u32),
+                "label": label,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "scene": scene,
+        "total": total,
+        "matched": listed.len(),
+        "entities": listed,
+    })
+    .to_string()
+}
 
 fn entity_alias(eid: &SceneEntityId) -> String {
     let id = eid.as_proto_u32().unwrap_or(eid.id as u32);

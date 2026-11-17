@@ -127,6 +127,18 @@ describe('Explorer', () => {
     ])
   })
 
+  test('sceneEntityLabels and visibleEntities pass their flags', async () => {
+    const fake = new FakeConsole({
+      scene_entities: '{"scene":"h","total":2,"matched":1,"entities":[{"crdtEntityId":571,"label":"mesh Box"}]}',
+      visible_entities: '{"returned":0,"entities":[]}'
+    })
+    const explorer = new Explorer(fake)
+    assert.deepEqual((await explorer.sceneEntityLabels({ name: 'mesh box' })).entities, [{ crdtEntityId: 571, label: 'mesh Box' }])
+    await explorer.sceneEntityLabels({ component: 'MeshRenderer' })
+    await explorer.visibleEntities({ limit: 10, minCoverage: 0.01 })
+    assert.deepEqual(fake.lines, ['/scene_entities --name "mesh box"', '/scene_entities MeshRenderer --labels', '/visible_entities --limit 10 --min-coverage 0.01'])
+  })
+
   test('sceneLogRead passes the cursor and parses the header', async () => {
     const fake = new FakeConsole({ scene_logs: 'latestSeq=42 dropped=3 source=scene+client omitted=1\n40 [scene] error boom\n    at line 2\n41 [client:comms] warn w' })
     const explorer = new Explorer(fake)

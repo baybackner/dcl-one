@@ -360,6 +360,11 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   at a true interval and replies their paths, scene ticks and `late` frames, never images: files
   natively, memory on the web (`/capture_frame <path>` reads one). Both wait for a camera
   transition and refuse while another capture runs, naming it.
+- What is in frame: `/visible_entities [--limit N] [--min-coverage F]` lists the scene's mesh and
+  glTF entities whose bounds meet the camera's view, largest first, with `screenRect`, a
+  normalized `center`, `coverage`, distances and `screen` (frustum and bounds only: occlusion is
+  not evaluated). `/scene_entities --labels` and `--name <text>` reply JSON with what each entity
+  shows: `gltf <src>`, `mesh Box`, `text "<excerpt>"`, `hidden`, `parent <id>`.
 - Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
   `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` and `/ui_at
