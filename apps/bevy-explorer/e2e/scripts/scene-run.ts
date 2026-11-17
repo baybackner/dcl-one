@@ -6,7 +6,7 @@
 //   node scripts/scene-run.ts --scenes <root> --commands <dir> [--scene <folder> ...] [--report <dir>] [--web-app <dir>]
 //
 // A scene folder is a direct child of the root holding `scene.json` and its built `main` bundle;
-// folders without the bundle are listed as not built and left out of the realm. A scene runs when
+// folders without the bundle are counted as not built and left out of the realm. A scene runs when
 // `<commands dir>/<folder>.txt` exists (`--scene` keeps only the named folders). The command file
 // has the drive tool's form: one console line each, blank and `#` lines skipped. For each run
 // `<report>/<folder>/` gets `result.json` (`scene`, `title`, `parcel`, `arrival`, `commands`,
