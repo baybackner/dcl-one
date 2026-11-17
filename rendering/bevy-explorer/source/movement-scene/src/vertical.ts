@@ -10,7 +10,7 @@ import {
   GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
   VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
-import { engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
+import { engineAssist, engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
 import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jumpHeight, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
 import { frameTime, replyDelay, replyDelaySmooth, tickAdvance } from './clock';
@@ -497,7 +497,7 @@ var followsGround = false;
 // longer: it takes the lowest grade from here or from there over up to FOLLOW_HOLD_TICKS ticks, as a move down into
 // the ground costs nothing (the engine stops it) while one up into the air lifts the avatar off.
 export function slopeFollowSpeed(vx: number, vz: number): number {
-  if (!followsGround || groundRayNormal.y < GROUNDED_ANGLE_Y_LEN) return 0;
+  if (!followsGround || engineAssist.snap || groundRayNormal.y < GROUNDED_ANGLE_Y_LEN) return 0;
   const speed = Math.hypot(vx, vz);
   if (speed < 1e-3) return 0;
   const frame = frameTime > 0 ? frameTime : FIXED_STEP;
@@ -546,7 +546,8 @@ function snapToGround() {
   const launched = isLaunched();
 
   if (
-    jumpStartHeight === undefined // not jumping
+    !engineAssist.snap // the engine does not keep the avatar on the ground itself
+    && jumpStartHeight === undefined // not jumping
     && !launched // not pushed upward
     && !stepping // not stepping
     && (prevGrounded || landedNow) // was grounded last frame, or a jump just landed (within the grounded height)
@@ -559,7 +560,7 @@ function snapToGround() {
     velocity.y -= snapSpeed;
     setGrounded(true); // maintain prevGrounded for next frame
     followsGround = true;
-  } else if (onEdge && grounded && jumpStartHeight === undefined && !launched && !stepping && prevGrounded
+  } else if (!engineAssist.snap && onEdge && grounded && jumpStartHeight === undefined && !launched && !stepping && prevGrounded
     && Vector3.lengthSquared(movementAxis) === 0 && Math.hypot(velocity.x, velocity.z) < 0.1) {
     // standing on an edge: the capsule settles onto the corner. The engine must not push it into the corner, which would
     // slide it off the edge: the reply closes half the gap the previous reply leaves until this one lands, over the time

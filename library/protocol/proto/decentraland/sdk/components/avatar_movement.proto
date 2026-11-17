@@ -57,9 +57,16 @@ message MovementAnimation {
 //   on impact:
 //       if grounded and the surface is not walkable (slope limit):
 //           velocity = velocity - (horizontal normal * min(0, dot(velocity, horizontal normal)))
+//       else if grounded and dot(velocity, normal) < 0 (ground following, keeps the horizontal speed):
+//           velocity.y = velocity.y - dot(velocity, normal) / normal.y
+//           continue with the residual time
 //       project velocity onto slide plane (standard "Collide & Slide")
 //       velocity = old velocity - (normal * dot(velocity, normal))
 //       repeat continue with residual velocity and residual time
+//   if grounded and velocity.y <= 0 (ground snap):
+//       shapecast avatar down by 0.15m + horizontal distance moved * tan(46.5 degrees)
+//       on a walkable surface no further down than 0.15m + horizontal distance moved * its slope:
+//           move down onto it
 // 7: provide AvatarMovementInfo values
 //      actual velocity = (final - P3+N) / timestep
 //      external_velocity = sum of scene impulses + scene forces * timestep + push out of moving colliders / timestep

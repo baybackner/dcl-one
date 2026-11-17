@@ -8,7 +8,7 @@ use bevy::{
 };
 use common::{
     dynamics::{
-        MAX_GROUND_INCLINE, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS,
+        GROUND_SNAP_DROP, MAX_GROUND_INCLINE, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS,
         PLAYER_GROUND_THRESHOLD,
     },
     sets::{PostUpdateSets, SceneSets},
@@ -619,8 +619,12 @@ pub fn apply_movement(
     // Orientation was already set this frame by `apply_rotation` (pipeline step 1);
     // here we only apply velocity. The same suppression gate still governs velocity.
     let suppress = movement_suppressed(&movement_control, movement);
+    // standing still: nothing moves, unless the avatar hovers over the ground it stands on and
+    // the ground snap below settles it
+    let settle = dynamic_state.ground_height > SETTLE_HEIGHT
+        && dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
 
-    if suppress || movement.component.velocity == Vec3::ZERO {
+    if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
         dynamic_state.velocity = Vec3::ZERO;
         (dynamic_state.ground_height, dynamic_state.contact_height) =
             ground_heights(&mut scenes, transform.translation);
@@ -638,7 +642,8 @@ pub fn apply_movement(
         warn!("move disabling {} colliders", disabled.len());
     }
 
-    let mut position = transform.translation.as_dvec3();
+    let start = transform.translation.as_dvec3();
+    let mut position = start;
     let mut time = time_res.delta_secs_f64();
     let mut velocity = movement.component.velocity.as_dvec3();
     let mut steps = 0;
@@ -655,28 +660,21 @@ pub fn apply_movement(
         velocity = DVec3::select(cap, velocity.min(DVec3::ZERO), velocity);
     }
 
-    while steps < 60 && time > 1e-10 {
+    // a scene standing still sweeps nothing, but the ground snap below still settles it
+    while velocity != DVec3::ZERO && steps < 60 && time > 1e-10 {
         steps += 1;
         let mut step_time = time;
         let mut contact_normal = DVec3::ZERO;
         if movement_control.suppress_clipping.is_empty() {
-            for (e, mut collider_data) in scenes.iter_mut() {
-                if let Some(hit) = collider_data.cast_avatar_nearest(
-                    position,
-                    velocity,
-                    step_time,
-                    ColliderLayer::ClPhysics as u32 | GROUND_COLLISION_MASK,
-                    movement_control.deliberate_penetration,
-                    false,
-                    disabled
-                        .get(&e)
-                        .map(|d| d.iter().collect())
-                        .unwrap_or_default(),
-                    -PLAYER_COLLIDER_OVERLAP,
-                ) {
-                    step_time = hit.toi as f64;
-                    contact_normal = hit.normal.as_dvec3();
-                }
+            if let Some(hit) = cast_avatar(
+                &mut scenes,
+                disabled,
+                position,
+                velocity,
+                step_time,
+                movement_control.deliberate_penetration,
+            ) {
+                (step_time, contact_normal) = hit;
             }
         }
 
@@ -687,8 +685,35 @@ pub fn apply_movement(
             // as a wall does, so the avatar does not walk up it
             let across = contact_normal.with_y(0.0).normalize_or_zero();
             velocity -= velocity.dot(across).min(0.0) * across;
+        } else if grounded && contact_normal != DVec3::ZERO && velocity.dot(contact_normal) < 0.0 {
+            // ground following: on ground it can stand on, the move keeps its horizontal speed,
+            // turned along the ground, instead of losing the part into it
+            velocity.y -= velocity.dot(contact_normal) / contact_normal.y;
+            continue;
         }
         velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
+    }
+
+    // ground snap: a walking step that asked for no rise follows the ground down when it falls
+    // away by at most GROUND_SNAP_DROP beyond the ground's own slope over the distance moved
+    if grounded
+        && movement.component.velocity.y <= 0.0
+        && !movement_control.deliberate_penetration
+        && movement_control.suppress_clipping.is_empty()
+    {
+        let moved = (position - start).with_y(0.0).length();
+        let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
+        if let Some((drop, normal)) =
+            cast_avatar(&mut scenes, disabled, position, DVec3::NEG_Y, reach, false)
+        {
+            let slope = normal.with_y(0.0).length() / normal.y;
+            if walkable(normal)
+                && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
+                && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope
+            {
+                position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
+            }
+        }
     }
 
     debug!(
@@ -724,6 +749,43 @@ pub fn apply_movement(
     (dynamic_state.ground_height, dynamic_state.contact_height) =
         ground_heights(&mut scenes, transform.translation);
 }
+
+/// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
+/// `motion` is a velocity, distance when it is a unit direction), over every scene's colliders:
+/// the span to the hit and the collider's normal there.
+fn cast_avatar(
+    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    disabled: &HashMap<Entity, HashSet<ColliderId>>,
+    position: DVec3,
+    motion: DVec3,
+    span: f64,
+    skip_inside: bool,
+) -> Option<(f64, DVec3)> {
+    let mut nearest = None;
+    let mut span = span;
+    for (e, mut collider_data) in scenes.iter_mut() {
+        if let Some(hit) = collider_data.cast_avatar_nearest(
+            position,
+            motion,
+            span,
+            ColliderLayer::ClPhysics as u32 | GROUND_COLLISION_MASK,
+            skip_inside,
+            false,
+            disabled
+                .get(&e)
+                .map(|d| d.iter().collect())
+                .unwrap_or_default(),
+            -PLAYER_COLLIDER_OVERLAP,
+        ) {
+            span = hit.toi as f64;
+            nearest = Some((span, hit.normal.as_dvec3()));
+        }
+    }
+    nearest
+}
+
+/// Height over the ground below which an avatar standing still is not settled onto it.
+const SETTLE_HEIGHT: f32 = 1e-3;
 
 /// A contact normal of a surface the avatar can stand on ([`MAX_GROUND_INCLINE`]).
 fn walkable(normal: DVec3) -> bool {
@@ -1171,6 +1233,40 @@ mod tests {
     fn walking_into_a_walkable_slope_climbs_it() {
         let end = walk(&[ramp(30.0)], Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0));
         assert!(end.y > 0.5, "stayed at {end}");
+    }
+
+    /// A platform with its top at `height`, its east edge at x 1.
+    fn platform(height: f32) -> (Vec3, Vec3, Quat) {
+        (
+            Vec3::new(-4.0, height * 0.5, 0.0),
+            Vec3::new(5.0, height * 0.5, 5.0),
+            Quat::IDENTITY,
+        )
+    }
+
+    #[test]
+    fn walking_up_a_walkable_slope_keeps_the_horizontal_speed() {
+        let end = walk(&[ramp(30.0)], Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0));
+        assert!(end.x > 4.85, "slowed to {end}");
+        let on_ramp = (end.x - 1.0) * 30f32.to_radians().tan();
+        assert!((end.y - on_ramp).abs() < 0.05, "left the ramp at {end}");
+    }
+
+    #[test]
+    fn walking_off_a_low_step_follows_it_down_and_off_a_high_one_does_not() {
+        let start = Vec3::new(0.0, 0.1, 0.0);
+        let end = walk(&[platform(0.1)], start, Vec3::new(1.5, 0.0, 0.0));
+        assert!(end.y < 0.01, "stayed up at {end}");
+        let start = Vec3::new(0.0, 0.3, 0.0);
+        let end = walk(&[platform(0.3)], start, Vec3::new(1.5, 0.0, 0.0));
+        // it rounds the corner as far as the corner can be stood on, then is left to fall
+        assert!(end.y > 0.2, "followed a 0.3 m drop to {end}");
+    }
+
+    #[test]
+    fn an_avatar_standing_just_over_the_ground_settles_onto_it() {
+        let end = walk(&[], Vec3::new(0.0, 0.03, 0.0), Vec3::ZERO);
+        assert!(end.y < 1e-3, "hovers at {end}");
     }
 
     #[test]
