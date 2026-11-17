@@ -38,12 +38,11 @@ use common::{
     structs::{
         AvatarDynamicState, CurrentRealm, PrimaryCamera, PrimaryUser, SessionGraphics, Version,
     },
+    util::RingBufferReceiver,
 };
 use console::{AddDebugSection, DebugSection, DoAddConsoleCommand};
-use dcl_component::proto_components::{
-    common::Vector3,
-    sdk::components::{GlideState, LocomotionGait, LocomotionState},
-};
+use dcl_component::proto_components::common::Vector3;
+use dcl_types::SceneLogMessage;
 use input_manager::{InputManager, InputPriority};
 use scene_runner::{
     initialize_scene::PARCEL_SIZE, renderer_context::RendererSceneContext, ContainingScene,
@@ -77,6 +76,9 @@ const WAIT_LIMIT: f64 = 30.0;
 /// With `--start placed`, starts anyway when the player is still in the air this long after the
 /// scenario's `settle` (s).
 const GROUNDED_WAIT: f64 = 5.0;
+/// The start of the console line in which the scene controlling movement prints its movement
+/// model's state: `LOCO ` and a JSON object, from `console.log('LOCO ' + JSON.stringify(state))`.
+const LOCOMOTION_LINE: &str = "LOCO ";
 
 pub struct MovementTracePlugin;
 
@@ -534,30 +536,21 @@ fn sdk_vector(v: Option<Vector3>) -> String {
     vector(Vec3::new(v.x, v.y, v.z))
 }
 
-/// The movement model's state as JSON: `null` when the controlling scene publishes none.
-fn locomotion_json(state: Option<&LocomotionState>) -> String {
-    let Some(state) = state else {
-        return "null".into();
+/// The movement model's state from a scene log line (see [`LOCOMOTION_LINE`]), as compact JSON;
+/// `None` for any other line. The log keeps `console.log`'s level, `LOG `; the native runtime
+/// writes a string argument JSON-quoted, the web one as it is.
+fn locomotion_line(message: &str) -> Option<String> {
+    let text = message.strip_prefix("LOG ")?;
+    let unquoted;
+    let text = if text.starts_with('"') {
+        unquoted = serde_json::from_str::<String>(text).ok()?;
+        unquoted.as_str()
+    } else {
+        text
     };
-    let gait = match state.gait() {
-        LocomotionGait::LgIdle => "idle",
-        LocomotionGait::LgWalk => "walk",
-        LocomotionGait::LgJog => "jog",
-        LocomotionGait::LgRun => "run",
-    };
-    let glide = match state.glide_state() {
-        GlideState::GsClosed => "closed",
-        GlideState::GsOpening => "opening",
-        GlideState::GsGliding => "gliding",
-        GlideState::GsClosing => "closing",
-    };
-    format!(
-        concat!(
-            "{{\"gait\":\"{}\",\"grounded\":{},\"jump_count\":{},\"glide\":\"{}\",",
-            "\"stunned\":{},\"sliding\":{}}}"
-        ),
-        gait, state.grounded, state.jump_count, glide, state.stunned, state.sliding,
-    )
+    let state: serde_json::Value =
+        serde_json::from_str(text.strip_prefix(LOCOMOTION_LINE)?).ok()?;
+    state.is_object().then(|| state.to_string())
 }
 
 fn utc_now() -> String {
@@ -666,6 +659,10 @@ struct Run {
     dropped: u32,
     mismatches: u32,
     scene_ticks: u32,
+    /// the log of the scene controlling movement, read for its movement model's state
+    scene_log: Option<(Entity, RingBufferReceiver<SceneLogMessage>)>,
+    /// the latest movement model state that scene printed (JSON), `None` before the first
+    locomotion: Option<String>,
     /// where the player stood when the run started
     start_position: Option<Vec3>,
     last_position: Vec3,
@@ -704,8 +701,8 @@ impl Run {
     ///   `grounded`, `yaw_avatar`, `yaw_camera`, and `extra`: the `kind` (gait), `vel_requested`
     ///   (by the movement scene), `vel_external` (SDK forces and impulses), `scene_tick` (1
     ///   when the controlling scene's reply landed this frame, 0 when the frame reused its last
-    ///   one) and `locomotion` (the movement model's state the scene published: `gait`,
-    ///   `grounded`, `jump_count`, `glide`, `stunned`, `sliding`; `null` when it publishes none).
+    ///   one) and `locomotion` (the latest movement model state the controlling scene printed in a
+    ///   `LOCO {...}` console line, as printed; `null` before the first).
     /// - footer: `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
     ///   and `extra.input_mismatch_frames` (frames whose input differs from the scenario's) and
     ///   `extra.scene_tick_frames`.
@@ -1042,6 +1039,8 @@ fn movement_trace_command(
                     dropped: 0,
                     mismatches: 0,
                     scene_ticks: 0,
+                    scene_log: None,
+                    locomotion: None,
                     start_position: None,
                     last_position: Vec3::ZERO,
                     last_t: 0.0,
@@ -1227,6 +1226,33 @@ fn record_frame(
     let consumed = run.consumed.take().unwrap_or_default();
     let consumed = consumed.with_jump(uses_jump && consumed.jump);
 
+    // the controlling scene's console: keep the latest movement model state it printed
+    let scene = movement.scene();
+    if run
+        .scene_log
+        .as_ref()
+        .is_none_or(|(log_scene, _)| *log_scene != scene)
+    {
+        run.scene_log = scenes.get(scene).ok().map(|ctx| {
+            let (_, backlog, receiver) = ctx.logs.read();
+            if let Some(state) = backlog
+                .iter()
+                .rev()
+                .find_map(|l| locomotion_line(&l.message))
+            {
+                run.locomotion = Some(state);
+            }
+            (scene, receiver)
+        });
+    }
+    if let Some((_, log)) = run.scene_log.as_mut() {
+        while let Ok(line) = log.try_recv() {
+            if let Some(state) = locomotion_line(&line.message) {
+                run.locomotion = Some(state);
+            }
+        }
+    }
+
     let mut outcome = None;
     match run.phase {
         Phase::Spawning | Phase::Starting => (),
@@ -1330,7 +1356,7 @@ fn record_frame(
             sdk_vector(step.requested_velocity),
             sdk_vector(step.external_velocity),
             scene_tick as u8,
-            locomotion_json(movement.component.locomotion.as_ref()),
+            run.locomotion.as_deref().unwrap_or("null"),
         ));
         run.last_position = position;
         run.last_t = t;
@@ -1613,6 +1639,8 @@ mod tests {
             dropped: 0,
             mismatches: 0,
             scene_ticks: 0,
+            scene_log: None,
+            locomotion: None,
             start_position: None,
             last_position: Vec3::ZERO,
             last_t: 0.0,
@@ -1716,24 +1744,27 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_shows_the_movement_models_state_or_null() {
-        assert_eq!(locomotion_json(None), "null");
-        let state = LocomotionState {
-            gait: LocomotionGait::LgJog as i32,
-            grounded: false,
-            jump_count: 2,
-            glide_state: GlideState::GsOpening as i32,
-            stunned: false,
-            sliding: true,
-        };
-        let json: serde_json::Value = serde_json::from_str(&locomotion_json(Some(&state))).unwrap();
+    fn the_movement_model_state_is_read_from_the_scenes_console_line() {
+        let state = r#"{"t":42,"gait":"jog","grounded":false,"jump_count":1,"glide":"closed","stunned":false,"sliding":false}"#;
+        // the web runtime writes the string as it is, the native one JSON-quoted
         assert_eq!(
-            json,
-            serde_json::json!({
-                "gait": "jog", "grounded": false, "jump_count": 2, "glide": "opening",
-                "stunned": false, "sliding": true
-            })
+            locomotion_line(&format!("LOG LOCO {state}")).as_deref(),
+            Some(state)
         );
+        let quoted = serde_json::Value::from(format!("LOCO {state}")).to_string();
+        assert_eq!(
+            locomotion_line(&format!("LOG {quoted}")).as_deref(),
+            Some(state)
+        );
+        for other in [
+            "LOG \"hello\"",
+            "LOG LOCO",
+            "LOG LOCO 3",
+            "LOG LOCO {broken",
+            &format!("ERROR LOCO {state}"),
+        ] {
+            assert_eq!(locomotion_line(other), None, "{other}");
+        }
     }
 
     #[test]

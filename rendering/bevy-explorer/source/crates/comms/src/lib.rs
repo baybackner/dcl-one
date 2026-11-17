@@ -7,6 +7,7 @@ pub mod global_crdt;
 #[cfg(feature = "livekit")]
 pub mod livekit;
 pub mod moderation;
+mod movement_animation;
 pub mod movement_compressed;
 pub mod preview;
 #[cfg(feature = "livekit")]

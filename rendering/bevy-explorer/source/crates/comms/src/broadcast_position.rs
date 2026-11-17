@@ -1,14 +1,10 @@
 use bevy::prelude::*;
 
-use common::{
-    locomotion::{self, GaitSpeeds, SceneLocomotion},
-    structs::{AvatarDynamicState, HeadSync, MoveKind, PointAtSync, PrimaryUser, SceneDrivenAnim},
+use common::structs::{
+    AvatarDynamicState, HeadSync, MoveKind, PointAtSync, PrimaryUser, SceneDrivenAnim,
 };
 use dcl_component::{
-    proto_components::{
-        kernel::comms::rfc4,
-        sdk::components::{GlideState, LocomotionState},
-    },
+    proto_components::kernel::comms::rfc4,
     transform_and_parent::{DclQuat, DclTranslation},
 };
 use wallet::Wallet;
@@ -16,7 +12,7 @@ use wallet::Wallet;
 use crate::{
     broadcast, broadcast_to,
     global_crdt::GlobalCrdtState,
-    movement_compressed::{Movement, Temporal},
+    movement_animation::{ClipMotion, JumpCount, WireAnimation},
     BroadcastTarget,
 };
 
@@ -59,83 +55,8 @@ struct LastAnim {
     // Monotonic counter stamped onto each outbound SDA so the (unreliable) receiver can
     // order datagrams and drop reordered/duplicate ones. Carries no timing.
     sequence: u32,
-    // The movement model's state last broadcast: a change (a jump, the glider, a stun) breaks the
-    // keepalive like an anim change.
-    locomotion: Option<LocomotionState>,
-}
-
-/// The animation fields of an rfc4 `Movement`.
-#[derive(Debug, Clone, PartialEq)]
-struct WireAnimation {
-    movement_blend_value: f32,
-    slide_blend_value: f32,
-    is_grounded: bool,
-    is_jumping: bool,
-    is_long_jump: bool,
-    is_falling: bool,
-    is_long_fall: bool,
-    is_stunned: bool,
-    jump_count: i32,
-    glide_state: i32,
-}
-
-impl WireAnimation {
-    /// From the movement model's state: the movement blend 0-3 from the gait and horizontal speed,
-    /// the slide blend's target, the model's jump count, glide phase, ground and stun, and the
-    /// falls from the vertical velocity. `is_jumping` (deprecated) marks a jump in the air not yet
-    /// falling; `is_long_jump` no client reads, so it stays off.
-    fn from_locomotion(state: &LocomotionState, velocity: Vec3, speeds: GaitSpeeds) -> Self {
-        let falling = locomotion::is_falling(state, velocity.y);
-        Self {
-            movement_blend_value: locomotion::movement_blend(
-                state.gait(),
-                velocity.xz().length(),
-                speeds,
-            ),
-            slide_blend_value: if state.sliding { 1.0 } else { 0.0 },
-            is_grounded: state.grounded,
-            is_jumping: !state.grounded && state.jump_count > 0 && !falling,
-            is_long_jump: false,
-            is_falling: falling,
-            is_long_fall: locomotion::is_long_falling(state, velocity.y),
-            is_stunned: state.stunned,
-            jump_count: state.jump_count as i32,
-            glide_state: match state.glide_state() {
-                GlideState::GsClosed => rfc4::movement::GlideState::PropClosed,
-                GlideState::GsOpening => rfc4::movement::GlideState::OpeningProp,
-                GlideState::GsGliding => rfc4::movement::GlideState::Gliding,
-                GlideState::GsClosing => rfc4::movement::GlideState::ClosingProp,
-            } as i32,
-        }
-    }
-
-    /// Without a model state: the flags from the engine's move kind and ground height, the movement
-    /// blend as the squared speed, and `jump_count` / `glide_state` guessed from the scene
-    /// animation's file name. The movement scene uses glb filenames containing "double"
-    /// (DoubleJump_Base2.glb) or "glide" (glide.glb); a lowercase substring match keeps this
-    /// resilient to small naming variations. A glide is only reachable after the air-jump slot has
-    /// been consumed, so jump_count is also 2 during a glide.
-    fn inferred(temporal: &Temporal, velocity: Vec3, anim_src: Option<&str>) -> Self {
-        let anim_src = anim_src.map(str::to_lowercase);
-        let is_double_jump = anim_src.as_deref().is_some_and(|s| s.contains("double"));
-        let is_glide = anim_src.as_deref().is_some_and(|s| s.contains("glide"));
-        Self {
-            movement_blend_value: velocity.length_squared(),
-            slide_blend_value: 0.0,
-            is_grounded: temporal.grounded(),
-            is_jumping: temporal.jump(),
-            is_long_jump: temporal.long_jump(),
-            is_falling: temporal.falling(),
-            is_long_fall: temporal.long_falling(),
-            is_stunned: temporal.stunned(),
-            jump_count: if is_double_jump || is_glide { 2 } else { 0 },
-            glide_state: if is_glide {
-                rfc4::movement::GlideState::Gliding
-            } else {
-                rfc4::movement::GlideState::PropClosed
-            } as i32,
-        }
-    }
+    // Jumps since the ground, followed every frame from the clips.
+    jump_count: JumpCount,
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -146,7 +67,6 @@ fn broadcast_position(
             &AvatarDynamicState,
             &PrimaryUser,
             Option<&SceneDrivenAnim>,
-            Option<&SceneLocomotion>,
             Option<&HeadSync>,
             Option<&PointAtSync>,
         ),
@@ -168,16 +88,13 @@ fn broadcast_position(
     if common::structs::server_mode() {
         return;
     }
-    // client-only system (see above): the single shared context holds the realm bounds
-    let Ok(global_crdt) = contexts.single() else {
+    // client-only system (see above): the single shared context
+    if contexts.single().is_err() {
+        return;
+    }
+    let Ok((player, dynamics, user, scene_anim, head_sync, point_at)) = player.single() else {
         return;
     };
-    let Ok((player, dynamics, user, scene_anim, scene_locomotion, head_sync, point_at)) =
-        player.single()
-    else {
-        return;
-    };
-    let locomotion_state = scene_locomotion.and_then(|l| l.0.as_ref());
     let head_sync = head_sync.copied().unwrap_or_default();
     let point_at = point_at.copied().unwrap_or_default();
     let time = time.elapsed_secs_f64();
@@ -205,6 +122,15 @@ fn broadcast_position(
         last_anim.last_seen_sounds = current_sounds.to_vec();
     }
 
+    // What the scene's clip (or, without one, the engine's move kind) shows, and the jumps since
+    // the ground, followed every frame so a short jump clip between broadcasts still counts.
+    let grounded = dynamics.ground_height < 0.2;
+    let motion = match scene_anim.and_then(|s| s.active.as_ref()) {
+        Some(anim) => ClipMotion::of_clip(&anim.src, anim.speed),
+        None => ClipMotion::of_move_kind(dynamics.move_kind),
+    };
+    let jump_count = last_anim.jump_count.update(grounded, motion);
+
     let elapsed = time - *last_sent;
     // Pending seeks do NOT bypass the 10Hz gate — sending faster than that gets us
     // shadowbanned. The latch above already holds the most recent seek; it rides out
@@ -221,7 +147,6 @@ fn broadcast_position(
         .and_then(|s| s.active.as_ref())
         .map(|a| (a.scene_hash.clone(), a.content_hash.clone()));
     let anim_changed = current_hashes != last_anim.hashes;
-    let locomotion_changed = locomotion_state != last_anim.locomotion.as_ref();
     // Toggling either enabled flag, or a yaw/pitch delta past the threshold, also
     // breaks the keepalive — same shape as anim_changed. Sub-threshold drift just
     // rides the 1Hz keepalive.
@@ -241,7 +166,6 @@ fn broadcast_position(
         && (dynamics.velocity - last_position.2).length_squared() < 0.01
         && last_anim.pending_seek.is_none()
         && !anim_changed
-        && !locomotion_changed
         && !head_changed
         && !point_at_changed
     {
@@ -249,23 +173,6 @@ fn broadcast_position(
     }
 
     let dcl_position = DclTranslation::from_bevy_translation(translation);
-
-    let movement = Movement::new(
-        translation,
-        dynamics.velocity,
-        global_crdt.realm_bounds.0,
-        global_crdt.realm_bounds.1,
-    );
-    let temporal = Temporal::from_parts(
-        time,
-        false,
-        rotation.to_euler(bevy::math::EulerRot::YXZ).0,
-        movement.velocity_tier(),
-        dynamics.move_kind,
-        dynamics.ground_height < 0.2,
-    );
-
-    let movement_compressed = crate::movement_compressed::MovementCompressed { temporal, movement };
 
     // Scene-driven animation carrier. The hash pair is sent on transition (new clip, or
     // an empty `scene_hash` to clear a prior active anim) and re-sent every
@@ -350,21 +257,16 @@ fn broadcast_position(
         None
     };
 
-    // The animation state other clients read: from the movement model's state when the scene
-    // publishes one, otherwise inferred.
-    let wire = match locomotion_state {
-        Some(state) => {
-            // Full gait speeds as the receiving clients' blend expects them: the user's defaults,
-            // not a scene's modifiers.
-            WireAnimation::from_locomotion(state, dynamics.velocity, GaitSpeeds::of(user))
-        }
-        None => WireAnimation::inferred(
-            &movement_compressed.temporal,
-            dynamics.velocity,
-            active_anim.map(|a| a.src.as_str()),
-        ),
-    };
-    last_anim.locomotion = locomotion_state.cloned();
+    // The animation state other clients read: the movement blend from the horizontal speed at the
+    // user's gait speeds (not a scene's modifiers), falls from the vertical speed, and jumps, the
+    // glider and a hard landing from the clip (see `movement_animation`).
+    let wire = WireAnimation::new(
+        dynamics.velocity,
+        [user.walk_speed, user.jog_speed, user.run_speed],
+        grounded,
+        motion,
+        jump_count,
+    );
 
     let movement_uncompressed = dcl_component::proto_components::kernel::comms::rfc4::Movement {
         timestamp: time as f32,
@@ -384,10 +286,10 @@ fn broadcast_position(
         velocity_y: dynamics.velocity.y,
         velocity_z: -dynamics.velocity.z,
         movement_blend_value: wire.movement_blend_value,
-        slide_blend_value: wire.slide_blend_value,
+        slide_blend_value: 0.0,
         is_grounded: wire.is_grounded,
         is_jumping: wire.is_jumping,
-        is_long_jump: wire.is_long_jump,
+        is_long_jump: false,
         is_long_fall: wire.is_long_fall,
         is_falling: wire.is_falling,
         is_stunned: wire.is_stunned,
@@ -411,16 +313,6 @@ fn broadcast_position(
         position_precision: None,
     };
 
-    // let movement_packet = rfc4::MovementCompressed {
-    //     temporal_data: i32::from_le_bytes(movement_compressed.temporal.into_bytes()),
-    //     movement_data: i64::from_le_bytes(movement_compressed.movement.into_bytes()),
-    // };
-
-    // debug!("sending compressed: {movement_packet:?}");
-    // let packet = rfc4::Packet {
-    //     message: Some(rfc4::packet::Message::MovementCompressed(movement_packet)),
-    //     protocol_version: 100,
-    // };
     debug!("sending movement: {movement_uncompressed:?}");
 
     // Movement rides each rfc4 packet to exactly its consumer: `Movement` to Pulse alone (its routing
@@ -477,111 +369,4 @@ fn broadcast_position(
     *last_head_sync = head_sync;
     *last_point_at = point_at;
     *last_sent = time;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::movement_compressed::VelocityTier;
-    use dcl_component::proto_components::sdk::components::LocomotionGait;
-
-    fn state(gait: LocomotionGait, grounded: bool, jump_count: u32) -> LocomotionState {
-        LocomotionState {
-            gait: gait as i32,
-            grounded,
-            jump_count,
-            ..Default::default()
-        }
-    }
-
-    fn wire(state: &LocomotionState, velocity: Vec3) -> WireAnimation {
-        WireAnimation::from_locomotion(state, velocity, GaitSpeeds::default())
-    }
-
-    #[test]
-    fn the_movement_blend_runs_from_idle_0_to_run_3() {
-        let walk = wire(
-            &state(LocomotionGait::LgWalk, true, 0),
-            Vec3::new(1.5, 0.0, 0.0),
-        );
-        assert_eq!(walk.movement_blend_value, 1.0);
-        let jog = wire(
-            &state(LocomotionGait::LgJog, true, 0),
-            Vec3::new(0.0, 0.0, -8.0),
-        );
-        assert_eq!(jog.movement_blend_value, 2.0);
-        // not the squared speed: a run at 12 m/s stays at 3
-        let run = wire(
-            &state(LocomotionGait::LgRun, true, 0),
-            Vec3::new(0.0, 0.0, 12.0),
-        );
-        assert_eq!(run.movement_blend_value, 3.0);
-        assert!(run.is_grounded && !run.is_falling && !run.is_jumping);
-        assert_eq!(run.jump_count, 0);
-        assert_eq!(
-            run.glide_state,
-            rfc4::movement::GlideState::PropClosed as i32
-        );
-    }
-
-    #[test]
-    fn jumps_glides_falls_stun_and_slide_come_from_the_model() {
-        let rising = wire(
-            &state(LocomotionGait::LgJog, false, 1),
-            Vec3::new(0.0, 4.0, 3.0),
-        );
-        assert!(!rising.is_grounded && rising.is_jumping && !rising.is_falling);
-        assert_eq!(rising.jump_count, 1);
-
-        let second = wire(
-            &state(LocomotionGait::LgJog, false, 2),
-            Vec3::new(0.0, -9.0, 0.0),
-        );
-        assert_eq!(second.jump_count, 2);
-        assert!(second.is_falling && second.is_long_fall && !second.is_jumping);
-
-        let mut gliding = state(LocomotionGait::LgRun, false, 2);
-        gliding.glide_state = GlideState::GsGliding as i32;
-        assert_eq!(
-            wire(&gliding, Vec3::new(0.0, -1.5, 6.0)).glide_state,
-            rfc4::movement::GlideState::Gliding as i32
-        );
-        gliding.glide_state = GlideState::GsClosing as i32;
-        assert_eq!(
-            wire(&gliding, Vec3::ZERO).glide_state,
-            rfc4::movement::GlideState::ClosingProp as i32
-        );
-
-        let mut landed = state(LocomotionGait::LgIdle, true, 0);
-        landed.stunned = true;
-        landed.sliding = true;
-        let landed = wire(&landed, Vec3::ZERO);
-        assert!(landed.is_stunned && landed.is_grounded);
-        assert_eq!(landed.slide_blend_value, 1.0);
-        assert_eq!(landed.movement_blend_value, 0.0);
-    }
-
-    #[test]
-    fn without_a_model_state_the_clip_name_and_squared_speed_stand_in() {
-        let temporal =
-            Temporal::from_parts(0.0, false, 0.0, VelocityTier::Slow, MoveKind::Walk, true);
-        let velocity = Vec3::new(2.0, 0.0, 0.0);
-        let walk = WireAnimation::inferred(&temporal, velocity, Some("assets/Walk.glb"));
-        assert_eq!(walk.movement_blend_value, 4.0);
-        assert!(walk.is_grounded);
-        assert_eq!(walk.jump_count, 0);
-
-        let double = WireAnimation::inferred(&temporal, velocity, Some("DoubleJump_Base2.glb"));
-        assert_eq!(double.jump_count, 2);
-        let glide = WireAnimation::inferred(&temporal, velocity, Some("glide.glb"));
-        assert_eq!(glide.jump_count, 2);
-        assert_eq!(
-            glide.glide_state,
-            rfc4::movement::GlideState::Gliding as i32
-        );
-        assert_eq!(
-            WireAnimation::inferred(&temporal, velocity, None).jump_count,
-            0
-        );
-    }
 }

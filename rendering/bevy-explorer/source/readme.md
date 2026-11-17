@@ -239,7 +239,8 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   scene it stands in, waits until it has stood still for the scenario's `settle` (`--start placed`:
   only the `settle` from the placement and a grounded frame, wherever the player is), then
   presses the scenario's movement and jump keys by frame time, as window keyboard events ahead of
-  the input systems, and records each frame (position, velocity, input, yaw, the movement model's state);
+  the input systems, and records each frame (position, velocity, input, yaw, and the movement
+  state the scene prints as a `LOCO {...}` console line);
   `/movement_trace status` reports the run,
   `/movement_trace fetch` returns the trace as JSON Lines and `/movement_trace stop` abandons the
   run. `--input external` presses nothing and starts on the first movement or jump input, for a

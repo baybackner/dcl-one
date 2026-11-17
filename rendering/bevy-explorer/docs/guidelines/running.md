@@ -290,8 +290,10 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   displacement over its delta), `grounded`, `yaw_avatar` and `yaw_camera` (degrees clockwise from
   north, in (-180, 180]), and under `extra` the gait, the movement scene's requested velocity, the
   SDK external velocity, `scene_tick` (1 when the movement scene's reply landed in the frame) and
-  `locomotion`, the movement model's state the scene published with `AvatarMovement` (`gait`,
-  `grounded`, `jump_count`, `glide`, `stunned`, `sliding`; `null` when it publishes none).
+  `locomotion`: the latest movement model state the movement scene printed to its console as one
+  line `LOCO {...}` (`console.log('LOCO ' + JSON.stringify(state))`; the object is copied as
+  printed: `t` the scene tick, `gait`, `grounded`, `jump_count`, `glide`, `stunned`, `sliding`),
+  `null` before the first such line.
   The footer holds `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
   and, under `extra`, `input_mismatch_frames` (frames whose input, jump included, differs from the
   scenario's) and `scene_tick_frames`.

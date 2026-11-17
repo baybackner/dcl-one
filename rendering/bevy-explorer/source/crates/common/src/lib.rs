@@ -6,7 +6,6 @@ pub mod dynamics;
 pub mod gateway;
 pub mod gpu_time;
 pub mod inputs;
-pub mod locomotion;
 pub mod memory;
 #[cfg(test)]
 mod memory_tests;
