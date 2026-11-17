@@ -340,6 +340,12 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   for the gait, and answers once the player has settled with `startPosition`, `endPosition`,
   `distance`, `parcel`, the held `seconds` and whether an `InputModifier` was active
   (`modifierActive`, `modifier`); `docs/guidelines/running.md` has the details.
+- Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
+  mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
+  `warning` when the pitch clamp or the third-person orbit keeps the point off), and
+  `/player_state` reads the player's pose, velocity, `grounded`, the camera's mode and pose,
+  `modeChangeAllowed` and `pointerLocked`. Euler angles are Decentraland's
+  (`cameraRotationEuler.x` is the pitch, looking down positive).
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the
   capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the pointer commands go

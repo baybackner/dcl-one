@@ -23,6 +23,9 @@ use tween::SystemTween;
 
 use crate::TRANSITION_TIME;
 
+/// How far the player's camera pitches up or down, in radians (about 85.7 degrees).
+pub const PITCH_LIMIT: f32 = PI / 2.1;
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub struct CinematicInitialData {
     base_yaw: f32,
@@ -30,17 +33,29 @@ pub struct CinematicInitialData {
     base_roll: f32,
 }
 
+/// A turn the console asks of the camera this frame (`/camera_look`, `/look_at`), in radians:
+/// `yaw` turns right (+) or left (-), `pitch` looks up (+) or down (-). `update_camera` adds it to
+/// the mouse's turn, so the same rules hold it back (a scene camera that allows no manual rotation,
+/// the pitch clamp, a cinematic camera's ranges), and clears it.
+#[derive(Resource, Default)]
+pub struct SyntheticLook {
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn update_camera(
     time: Res<Time>,
     mut camera: Query<(&Transform, &mut PrimaryCamera), Without<PhotoMode>>,
     locks: Res<CursorLocks>,
+    mut synthetic: ResMut<SyntheticLook>,
     mut cinematic_data: Local<Option<CinematicInitialData>>,
     input_manager: InputManager,
     config: Res<AppConfig>,
     mut smoothed_delta: Local<Vec2>,
 ) {
     let dt = time.delta_secs();
+    let synthetic = std::mem::take(&mut *synthetic);
 
     let Ok((camera_transform, mut options)) = camera.single_mut() else {
         return;
@@ -108,9 +123,10 @@ pub fn update_camera(
             }
         }
 
-        options.pitch = (options.pitch - mouse_delta.y * options.sensitivity / 1000.0)
-            .clamp(-PI / 2.1, PI / 2.1);
-        options.yaw -= mouse_delta.x * options.sensitivity / 1000.0;
+        options.pitch = (options.pitch - mouse_delta.y * options.sensitivity / 1000.0
+            + synthetic.pitch)
+            .clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        options.yaw -= mouse_delta.x * options.sensitivity / 1000.0 + synthetic.yaw;
     }
 
     // `distance` is the third-person follow distance; a cinematic camera has its own fov

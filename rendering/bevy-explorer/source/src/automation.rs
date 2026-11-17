@@ -84,7 +84,7 @@ impl AutomationOptions {
     }
 }
 
-/// `/press_key`, `/click_at`, the pointer commands and `/walk`, in every build.
+/// `/press_key`, `/click_at`, the pointer commands, `/walk` and the camera commands, in every build.
 pub struct AutomationPlugin;
 
 impl Plugin for AutomationPlugin {
@@ -96,10 +96,15 @@ impl Plugin for AutomationPlugin {
                 PreUpdate,
                 input::play_input_script.before(bevy::input::InputSystem),
             );
-        app.add_plugins((pointer::AutomationPointerPlugin, walk::AutomationWalkPlugin));
+        app.add_plugins((
+            pointer::AutomationPointerPlugin,
+            walk::AutomationWalkPlugin,
+            camera::AutomationCameraPlugin,
+        ));
     }
 }
 
+pub(crate) mod camera;
 pub(crate) mod pointer;
 pub(crate) mod walk;
 

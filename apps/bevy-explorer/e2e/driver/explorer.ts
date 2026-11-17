@@ -94,6 +94,67 @@ export interface WalkReport {
   settled: boolean
 }
 
+/** Decentraland euler angles in degrees, 0 to 360: `x` the pitch (looking down positive), `y` the yaw
+ *  clockwise from north, `z` the roll. */
+export interface Euler {
+  x: number
+  y: number
+  z: number
+}
+
+/** What `/camera_look` reports once the turn is done. */
+export interface CameraLookReport {
+  /** degrees per second, right (+) or left (-) */
+  deltaX: number
+  /** degrees per second, up (+) or down (-) */
+  deltaY: number
+  units: 'degrees per second'
+  seconds: number
+  /** the degrees the camera turned, read back: `x` right, `y` up */
+  turned: { x: number; y: number }
+  cameraRotationEuler: Euler
+  /** the camera turned less than asked, and why */
+  warning?: string
+}
+
+/** What `/look_at` reports once the aim has settled. Positions are Decentraland world coordinates. */
+export interface LookAtReport {
+  target: { x: number; y: number; z: number }
+  /** the angle left between the camera's forward and the point */
+  aimErrorDegrees: number
+  cameraRotationEuler: Euler
+  cameraPosition: { x: number; y: number; z: number }
+  mode: CameraMode
+  /** false when it timed out before the aim stopped changing */
+  settled: boolean
+  frames: number
+  /** above 2 degrees: the rig limit that keeps the point off */
+  warning?: string
+}
+
+export type CameraMode = 'first_person' | 'third_person' | 'cinematic' | 'free'
+
+/** What `/player_state` reports. Positions and velocity are Decentraland world coordinates. */
+export interface PlayerState {
+  position: { x: number; y: number; z: number }
+  rotationEuler: Euler
+  parcel: [number, number]
+  velocity: { x: number; y: number; z: number }
+  grounded: boolean | null
+  outOfWorld: boolean
+  camera: {
+    mode: CameraMode
+    position: { x: number; y: number; z: number }
+    rotationEuler: Euler
+    /** vertical, in degrees */
+    fov: number | null
+    /** false while a CameraModeArea or VirtualCamera holds the camera */
+    modeChangeAllowed: boolean
+  } | null
+  /** the scene's pointer lock */
+  pointerLocked: boolean
+}
+
 /** The scene input actions `/press_input` takes, by their SDK names. */
 export type InputActionName =
   | 'pointer'
@@ -1128,6 +1189,25 @@ export class Explorer {
     if (options.jump) line += ' --jump'
     if (options.ignoreInputModifiers) line += ' --ignore-input-modifiers'
     return this.json<WalkReport>(line)
+  }
+
+  /** Turns the camera as a held mouse would: `dx` right (+) or left (-), `dy` up (+) or down (-), in
+   *  degrees per second, for `seconds` (0.5 by default). */
+  cameraLook(dx: number, dy: number, options: { seconds?: number } = {}): Promise<CameraLookReport> {
+    let line = `/camera_look ${dx} ${dy}`
+    if (options.seconds !== undefined) line += ` --seconds ${options.seconds}`
+    return this.json<CameraLookReport>(line)
+  }
+
+  /** Aims the camera at a world point (Decentraland coordinates); resolves once the aim has settled. */
+  lookAt(x: number, y: number, z: number, options: { timeoutSeconds?: number } = {}): Promise<LookAtReport> {
+    let line = `/look_at ${x} ${y} ${z}`
+    if (options.timeoutSeconds !== undefined) line += ` --timeout-seconds ${options.timeoutSeconds}`
+    return this.json<LookAtReport>(line)
+  }
+
+  playerState(): Promise<PlayerState> {
+    return this.json<PlayerState>('/player_state')
   }
 
   raycastStats(): Promise<RaycastStats> {

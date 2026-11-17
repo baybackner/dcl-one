@@ -48,7 +48,8 @@ impl Plugin for UserInputPlugin {
                 .chain(),
         );
         app.init_resource::<EngineMovementControl>()
-            .init_resource::<CursorLocks>();
+            .init_resource::<CursorLocks>()
+            .init_resource::<camera::SyntheticLook>();
         app.add_preview_console_command::<NoClipCommand, _>(no_clip);
         app.add_preview_console_command::<SpeedCommand, _>(speed_cmd);
         app.add_preview_console_command::<JumpCommand, _>(jump_cmd);

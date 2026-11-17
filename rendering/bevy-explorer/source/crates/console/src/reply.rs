@@ -60,14 +60,15 @@ pub fn normalized_point(x: f32, y: f32) -> Result<Vec2, String> {
     }
 }
 
-/// Hundredths, finer than anything a click or a scene can tell, so replies stay short.
+/// Hundredths, finer than anything a click or a scene can tell, so replies stay short. Never a
+/// negative zero (adding 0 makes it a plain one), which JSON would print as `-0.0`.
 pub fn round(v: f32) -> f64 {
-    (f64::from(v) * 100.0).round() / 100.0
+    (f64::from(v) * 100.0).round() / 100.0 + 0.0
 }
 
 /// Ten-thousandths, for normalized coordinates: a hundredth of a pixel on a 10000-pixel screen.
 pub fn round_fine(v: f32) -> f64 {
-    (f64::from(v) * 10000.0).round() / 10000.0
+    (f64::from(v) * 10000.0).round() / 10000.0 + 0.0
 }
 
 /// How long a gesture lasts: `--frames` as given, or `--seconds` counted in frames at the frame
@@ -158,6 +159,14 @@ pub fn add_warning(reply: &mut Value, warning: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounding_never_gives_a_negative_zero() {
+        assert!(round(-0.0).is_sign_positive());
+        assert!(round(-0.001).is_sign_positive());
+        assert!(round_fine(-0.00001).is_sign_positive());
+        assert_eq!(round(-1.234), -1.23);
+    }
 
     const SCREEN: Screen = Screen {
         width: 1280.0,

@@ -393,6 +393,31 @@ The HUD and input:
   `InputModifier` disabled during the walk: `all`, `walk`, `jog`, `run`, `jump`, ..., or `null`;
   reported with the bypass too) and `ignoreInputModifiers`. A second walk, a gamepad binding or
   input the HUD holds is refused. `/walk_player_to` walks to a point instead.
+- `/camera_look <dx> <dy> [--seconds S]` (`src/automation/camera.rs`): turn the camera as a held
+  mouse would for `--seconds` (0.5 by default, at most 10): `dx` right (+) or left (-), `dy` up
+  (+) or down (-), in degrees per second, timed by the frame clock so the turn is `rate × seconds`
+  whatever the frame rate. The turn is a `SyntheticLook` that `update_camera` adds to the mouse's,
+  so the pitch clamp (85.7° up or down) and a scene camera's ranges hold it back as they hold the
+  mouse. It answers with `deltaX`, `deltaY`, `units` (`degrees per second`), `seconds`, `turned`
+  (`x` right, `y` up, in degrees, read back from the camera) and `cameraRotationEuler`, with a
+  `warning` naming the cause when the camera turned less than asked.
+- `/look_at x y z [--timeout-seconds S]`: aim the camera at a world point (Decentraland
+  coordinates) in a closed loop: each frame it asks for the yaw and pitch that aim the camera at
+  the point from where the camera now stands (a third-person camera moves as it turns) and
+  measures the angle left between the camera's forward and the point. It answers once that angle
+  has been steady for 5 frames, or after `--timeout-seconds` (3 by default, `settled:false`), with
+  `target`, `aimErrorDegrees`, `cameraRotationEuler`, `cameraPosition`, `mode`, `settled`,
+  `frames` and a `warning` above 2° naming the rig limit (the pitch clamp, the third-person orbit).
+- `/player_state`: JSON `position`, `rotationEuler`, `parcel`, `velocity` (Decentraland axes),
+  `grounded` (within 0.2 m of the ground), `outOfWorld`, `camera` (`mode`: `first_person`,
+  `third_person`, `cinematic` under a scene's camera, `free` in photo mode; `position`,
+  `rotationEuler`, `fov` in degrees, `modeChangeAllowed`: false while a `CameraModeArea` or
+  `VirtualCamera` holds the camera) and `pointerLocked` (the scene's pointer lock). Euler angles
+  everywhere are Decentraland's, as a scene reads them: degrees 0 to 360, `x` the pitch with
+  looking down positive, `y` the yaw clockwise from north. The camera commands refuse
+  (`{"refused", "cause"}`) while another turn runs, in photo mode, out of world, while the HUD
+  holds input, and under a scene's cinematic camera (`/camera_look` only when it allows no manual
+  rotation). `/world_state` stays the arrival and position read.
 - `/raycast_stats` (JSON: the capped tier's `budgetMs`, `ran`, `deferred` and `spentMs`, and the
   uncapped tier's `uncappedRan` and `uncappedSpentMs`, each for its last frame with raycasts to
   cast) and `/raycast_budget [ms|auto]` (show the capped budget, a tenth of the target frame, or
