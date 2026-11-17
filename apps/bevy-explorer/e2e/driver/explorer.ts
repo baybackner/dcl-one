@@ -691,6 +691,24 @@ export interface UiScrollReply extends UiWriteReply {
   delivered: { scroll: UiVerdict }
 }
 
+export interface UiDragReply {
+  ok: boolean
+  path: 'sdk' | 'device'
+  from: { x: number; y: number }
+  to: { x: number; y: number }
+  durationFrames: number
+  /** `the scene's UI (crdtId N)`, `the client's UI (name)` or `world` */
+  pointerOver: { start: string; end: string }
+  delivered: { down: UiVerdict; up: UiVerdict }
+  entered: number[]
+  left: number[]
+  events: Array<{ crdtEntityId: number; event: string; tick: number }>
+  rootBroadcast: boolean
+  screen: Screen
+  info?: string
+  reason?: string
+}
+
 export interface UiList {
   stack: 'sdk'
   scene: { hash: string; title: string } | null
@@ -1054,6 +1072,14 @@ export class Explorer {
   uiScroll(crdtId: number, options: { dx?: number; dy?: number }): Promise<UiScrollReply> {
     const flags = `${options.dx === undefined ? '' : ` --dx ${options.dx}`}${options.dy === undefined ? '' : ` --dy ${options.dy}`}`
     return this.json<UiScrollReply>(`/ui_scroll ${crdtId}${flags}`)
+  }
+
+  /** Drag between two normalized points (`/ui_drag`): pressed at `from`, moved over
+   *  `durationFrames`, released at `to`; `path` sdk holds the pointer on the scene's UI, device
+   *  moves the cursor. Fails when the scene did not consume a declared press or release. */
+  uiDrag(from: { x: number; y: number }, to: { x: number; y: number }, options: { durationFrames?: number; path?: 'auto' | 'sdk' | 'device' } = {}): Promise<UiDragReply> {
+    const flags = `${options.durationFrames === undefined ? '' : ` --duration-frames ${options.durationFrames}`}${options.path ? ` --path ${options.path}` : ''}`
+    return this.json<UiDragReply>(`/ui_drag --from ${from.x} ${from.y} --to ${to.x} ${to.y}${flags}`)
   }
 
   /** The parcel scene's UI elements on screen (`/ui_list`); labels only with `kind: 'text'`. */

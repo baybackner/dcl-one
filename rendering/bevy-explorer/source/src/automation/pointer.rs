@@ -272,7 +272,7 @@ pub struct PointerJob {
 
 impl PointerJob {
     /// The refusal while a job runs or its release has not landed yet.
-    fn busy(&self) -> Option<String> {
+    pub(crate) fn busy(&self) -> Option<String> {
         let what = self.job.as_ref().map(|job| job.what.clone()).or(self
             .releasing
             .as_ref()

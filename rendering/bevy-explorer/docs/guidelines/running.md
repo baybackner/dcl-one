@@ -290,6 +290,22 @@ State, in every build:
   `clamped` (an end cut the scroll short), `info` (`scroll offset (0, 0) -> (0, 400)`, or `did not
   move: ...` naming why) and `delivered.scroll` (`not_sent` when it did not move), with the
   element's fields. Not a scroll container is refused.
+- `/ui_drag --from x y --to x y [--duration-frames N] [--path auto|sdk|device]`: a drag between
+  two normalized points (0 to 1 from the top left, as `/ui_list`'s `center`): pressed at `--from`,
+  moved over N frames (20), released at `--to`. `--path sdk` holds the pointer on the scene-UI
+  element under each point of the path, as a cursor moving over it would (off the scene's UI it
+  stays on the last element), and presses the pointer's binding; it is refused when `--from` is
+  not on the scene's UI. `--path device` moves the cursor and presses the left mouse button, so
+  whatever is drawn under it takes the drag (scene UI, the HUD, the world). `auto` (default) is
+  `sdk` when `--from` is on the scene's UI, else `device`. It waits (up to 180 frames) for the
+  scene to be sent the events, then replies `ok`, `path`, `from`, `to`, `durationFrames`,
+  `pointerOver` {`start`, `end`}: `the scene's UI (crdtId N)`, `the client's UI (name)` or
+  `world`, `delivered` {`down` on the start element, `up` on the end element}: `consumed`,
+  `not_declared`, `not_sent` or `not_drained`, `entered` and `left` (crdtIds the hover reached and
+  left), `events` (`crdtEntityId`, `event`, `tick`; 0 is the scene root), `rootBroadcast`,
+  `screen` and an `info` line naming both ends. It fails with a `reason` when the scene did not
+  consume a declared press or release, or neither end declares one; a drag with both ends over the
+  world is `ok` and says no UI element received it.
 - `/avatar_state [all|<address>]`: avatars as selected (body shape, wearables, emotes, forced
   slots), as rendered (built or not, wearables by category, hidden categories) and the emote
   each plays (with `idle`: whether a triggered emote may take over, which a scene's non-idle

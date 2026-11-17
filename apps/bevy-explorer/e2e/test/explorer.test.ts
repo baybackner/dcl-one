@@ -111,6 +111,14 @@ describe('Explorer', () => {
     ])
   })
 
+  test('uiDrag composes the points and flags', async () => {
+    const fake = new FakeConsole({ ui_drag: JSON.stringify({ ok: true, path: 'sdk', delivered: { down: 'consumed', up: 'consumed' } }) })
+    const explorer = new Explorer(fake)
+    assert.equal((await explorer.uiDrag({ x: 0.4, y: 0.7 }, { x: 0.6, y: 0.7 })).delivered.up, 'consumed')
+    await explorer.uiDrag({ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }, { durationFrames: 10, path: 'device' })
+    assert.deepEqual(fake.lines, ['/ui_drag --from 0.4 0.7 --to 0.6 0.7', '/ui_drag --from 0.1 0.2 --to 0.3 0.4 --duration-frames 10 --path device'])
+  })
+
   test('uiClick passes the path flags and reads the verdicts', async () => {
     const reply = { ok: true, path: 'device', crdtId: 619, delivered: { enter: 'not_declared', down: 'consumed', up: 'not_declared' } }
     const fake = new FakeConsole({ ui_click: JSON.stringify(reply) })

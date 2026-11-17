@@ -61,8 +61,14 @@ impl UiKind {
 /// What is drawn over an element's centre and takes the pointer there.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cover {
-    /// a scene-UI element (of this scene or another)
-    Scene { crdt_id: u32, scene: Entity },
+    /// a scene-UI element (of this scene or another): its id, its scene, and the element's own
+    /// scene entity (what an aim at it takes)
+    Scene {
+        crdt_id: u32,
+        scene: Entity,
+        entity: Entity,
+        id: SceneEntityId,
+    },
     /// the engine's own UI, by its `Name` where it has one
     Client(String),
 }
@@ -332,12 +338,14 @@ impl UiAutomation<'_, '_> {
         let mut node = top;
         loop {
             let (owner, _) = self.owners.get(node).ok()?;
-            if let Some(scene_entity) =
-                owner.and_then(|owner| self.scene_entities.get(owner.0).ok())
+            if let Some((owner, scene_entity)) =
+                owner.and_then(|owner| Some((owner.0, self.scene_entities.get(owner.0).ok()?)))
             {
                 return Some(Cover::Scene {
                     crdt_id: scene_entity.id.as_proto_u32().unwrap_or_default(),
                     scene: scene_entity.root,
+                    entity: owner,
+                    id: scene_entity.id,
                 });
             }
             match self.hierarchy.get(node) {
@@ -553,6 +561,8 @@ mod tests {
             covered_by: Some(Cover::Scene {
                 crdt_id: 600,
                 scene: Entity::PLACEHOLDER,
+                entity: Entity::PLACEHOLDER,
+                id: SceneEntityId::new(600, 0),
             }),
         };
         let screen = Screen {
