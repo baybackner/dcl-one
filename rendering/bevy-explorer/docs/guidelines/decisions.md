@@ -147,7 +147,20 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
     unaffected.
   - Don't offer Speak there: the nearby voice popover still opens, with Speak disabled and the same
     hint, so hearing and volume stay adjustable; the minimap header lists "Nearby voice disabled".
-  - A player the gatekeeper refuses from a scene room is not handled here; that is next work.
+  - A scene room that refuses the player as banned (a platform, world or scene ban, as
+    `SceneAdmission` reads the refusal) turns nearby voice off the same way. The room asks again
+    every 15 s, since an unban reaches only the players inside it; an admission, or a new scene,
+    realm or wallet, lifts it without reopening the mic. A recheck with no answer (a network
+    error, a 503) keeps the refusal. The interval bounds both the gatekeeper requests from a
+    player who stays banned and the wait before an unban is noticed. Platform bans recheck here
+    too: the platform ban-status poll (every 300 s) reads the ban but never admits the room
+    again. unity-explorer suppresses on any 401 or 403 from the scene room and lifts it on the
+    room's next connect or disconnect; its scene room asks again every 5 s while refused.
+- **Blocked and scene-banned players are not heard nearby.** A player blocked in either
+  direction, or banned by the connected scene room, carries `BlockedOrBanned`, and their nearby
+  voice track is unsubscribed while it lasts; unity-explorer keeps the track and creates no audio
+  source. Calls and community streams still carry them. Scene bans apply without the
+  `alfa-banned-users-from-scene` flag unity-explorer reads, as in Nearby chat.
 - **Saved mutes for nearby voice** follow unity-explorer's: the profile menu's Hush and Hear, the
   list kept by the social service (`/v1/mutes`), a mute that holds for the session when saving it
   fails, a saved list that only adds to what the user did before it arrived, and a muted player
