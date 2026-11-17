@@ -26,6 +26,14 @@ function minutes(value: number | null) {
   };
 }
 
+/** A total in whole minutes, compact like the other counts: `5 min`, `8.83K min`. */
+function wholeMinutes(value: number | null) {
+  return {
+    value: formatCount(value === null ? null : Math.round(value)),
+    unit: value === null ? undefined : t('analytics.detail.engagement.minutes'),
+  };
+}
+
 export function OverviewTab({ overview }: Props) {
   return (
     <Box className="OverviewTab">
@@ -60,6 +68,11 @@ export function OverviewTab({ overview }: Props) {
               label: t('analytics.metrics.peak_concurrent_users.label'),
               tooltip: t('analytics.metrics.peak_concurrent_users.tooltip'),
               value: formatCount(overview.peakConcurrentUsers),
+            },
+            {
+              label: t('analytics.metrics.total_playtime.label'),
+              tooltip: t('analytics.metrics.total_playtime.tooltip'),
+              ...wholeMinutes(overview.totalPlaytime),
             },
           ]}
         />

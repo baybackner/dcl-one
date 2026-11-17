@@ -1567,6 +1567,10 @@
         "label": "Retención Día 7",
         "tooltip": "El porcentaje de usuarios nuevos que volvieron a tu place dentro de los 7 días posteriores a su primera visita."
       },
+      "total_playtime": {
+        "label": "Tiempo de Juego Total",
+        "tooltip": "Todo el tiempo que los usuarios pasaron en tu place, sumando cada visita."
+      },
       "median_playtime": {
         "label": "Mediana de Tiempo de Juego",
         "tooltip": "Mediana del tiempo que cada usuario pasa en tu place por día: la mitad de las visitas diarias duran más y la otra mitad menos."
