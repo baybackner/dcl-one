@@ -91,6 +91,26 @@ describe('Explorer', () => {
     assert.deepEqual(fake.lines, ['/reload --current --wait --timeout-seconds 60', '/scene_state'])
   })
 
+  test('uiSetText and uiScroll compose the lines', async () => {
+    const fake = new FakeConsole({
+      ui_set_text: JSON.stringify({ ok: true, crdtId: 624, value: 'hello mcp', delivered: { change: 'consumed' } }),
+      ui_scroll: JSON.stringify({ ok: true, crdtId: 649, clamped: true, info: 'did not move', delivered: { scroll: 'not_sent' } })
+    })
+    const explorer = new Explorer(fake)
+    assert.equal((await explorer.uiSetText(624, { text: 'hello mcp' })).delivered.change, 'consumed')
+    await explorer.uiSetText(624, { text: 'final answer', submit: true })
+    await explorer.uiSetText(630, { optionIndex: 2 })
+    assert.equal((await explorer.uiScroll(649, { dy: -400 })).clamped, true)
+    await explorer.uiScroll(649, { dx: 10, dy: 400 })
+    assert.deepEqual(fake.lines, [
+      '/ui_set_text 624 --text "hello mcp"',
+      '/ui_set_text 624 --text "final answer" --submit',
+      '/ui_set_text 630 --option-index 2',
+      '/ui_scroll 649 --dy -400',
+      '/ui_scroll 649 --dx 10 --dy 400'
+    ])
+  })
+
   test('uiClick passes the path flags and reads the verdicts', async () => {
     const reply = { ok: true, path: 'device', crdtId: 619, delivered: { enter: 'not_declared', down: 'consumed', up: 'not_declared' } }
     const fake = new FakeConsole({ ui_click: JSON.stringify(reply) })

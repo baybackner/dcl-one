@@ -102,6 +102,7 @@ impl Plugin for AutomationPlugin {
             camera::AutomationCameraPlugin,
             reticle::AutomationReticlePlugin,
             sweep::AutomationSweepPlugin,
+            ui_write::AutomationUiWritePlugin,
         ));
     }
 }
@@ -110,6 +111,7 @@ pub(crate) mod camera;
 pub(crate) mod pointer;
 pub(crate) mod reticle;
 pub(crate) mod sweep;
+pub(crate) mod ui_write;
 pub(crate) mod walk;
 
 pub(crate) mod input {

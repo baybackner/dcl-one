@@ -93,6 +93,8 @@ pub struct UiElement {
     /// the laid-out Bevy node
     pub node: Entity,
     pub kind: UiKind,
+    /// a scroll container's scrollable (it holds the `ScrollPosition`)
+    pub scroll: Option<Entity>,
     /// the visible part, logical pixels from the window's top left
     pub rect: Rect,
     /// a scroll container or the window cuts part of it off
@@ -268,6 +270,7 @@ impl UiAutomation<'_, '_> {
             id,
             node,
             kind,
+            scroll: link.scroll_entity,
             rect: Rect {
                 min: shown.min * scale,
                 max: shown.max * scale,
@@ -537,6 +540,7 @@ mod tests {
             id: SceneEntityId::new(597, 1),
             node: Entity::PLACEHOLDER,
             kind: UiKind::PointerTarget,
+            scroll: None,
             rect: Rect::new(100.0, 50.0, 300.0, 90.0),
             clipped: false,
             draw_order: 3,

@@ -236,7 +236,7 @@ fn ui_click(
 
 /// The element triple every reply carries, success or failure: `crdtId`, `kind`, `screenRect`,
 /// `center`, `screen`, and what covers it.
-fn element_fields(element: &UiElement, screen: &Screen) -> Value {
+pub(crate) fn element_fields(element: &UiElement, screen: &Screen) -> Value {
     let listed = element.to_json(screen);
     json!({
         "crdtId": listed["crdtId"],
@@ -248,7 +248,7 @@ fn element_fields(element: &UiElement, screen: &Screen) -> Value {
     })
 }
 
-fn merge(into: &mut Value, fields: &Value) {
+pub(crate) fn merge(into: &mut Value, fields: &Value) {
     if let (Some(into), Some(fields)) = (into.as_object_mut(), fields.as_object()) {
         for (key, value) in fields {
             into.entry(key.clone()).or_insert_with(|| value.clone());

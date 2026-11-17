@@ -357,7 +357,12 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   [--force]` clicks one: refused, naming the cover (`blockedBy`), when something covers its centre,
   or when it is disabled; it answers once the scene has been sent the click, with `delivered`
   (`enter`, `down`, `up`: `consumed`, `not_declared`, `not_sent` or `not_drained`), and fails
-  when the scene consumed neither the press nor the release.
+  when the scene consumed neither the press nor the release. `/ui_set_text <crdtId> --text
+  "<text>" [--submit]` replaces an input's text as typing would and with `--submit` sends it as
+  Enter does; `--option-index N` (or `--text` naming an option) picks a dropdown's option; a
+  disabled element is refused. `/ui_scroll <crdtId> [--dx px] [--dy px]` scrolls a container
+  (positive: toward later content) and replies `before`, `after`, `max`, `clamped` and an `info`
+  line. Both answer once the scene has been sent the write, with `delivered`.
 - Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and

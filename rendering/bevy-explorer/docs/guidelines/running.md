@@ -269,6 +269,27 @@ State, in every build:
   release had a handler, the click's `hit`, `events` and `rootBroadcast`, and the element's
   `crdtId`, `kind`, `screenRect`, `center`, `coveredBy` and `screen`, on refusals too. A click the
   scene consumed neither the press nor the release of fails with that reply and a `reason`.
+- `/ui_set_text <crdtId> [--text "<text>"] [--submit] [--option-index N] [--timeout-seconds S]`:
+  writes a scene-UI element `/ui_list` lists through the widget's own paths. An input's text is
+  replaced as typing would replace it (the scene gets a change); `--submit` then sends it as
+  Enter does, after the scene has been sent the change (the scene keeps only an element's last
+  result in a tick), and an input that clears on submit is emptied, as Enter empties it. A
+  dropdown takes `--option-index N` (from 0) or `--text` naming an option, picked as an option's
+  click picks it. Refused before anything is written (`{"refused", "cause"}` with the element's
+  fields) for a disabled element, a kind that takes no text, a missing or out-of-range option,
+  `--submit` on a dropdown, or another write still running. Replies `ok`, `value`,
+  `previousValue` (`selectedIndex` and `previousIndex` for a dropdown), `submitted`,
+  `clearsOnSubmit`, `delivered` (`change`, `submit`: `consumed` once the scene ticked past it,
+  `not_sent` when the widget never took it, `not_drained`) and the element's `crdtId`, `kind`,
+  `screenRect`, `center`, `coveredBy` and `screen`; a write not consumed fails with that reply and a
+  `reason`.
+- `/ui_scroll <crdtId> [--dx px] [--dy px] [--timeout-seconds S]`: scrolls a scene-UI scroll
+  container by logical pixels, positive toward later content (right, down), through the
+  scrollable's own position event, as far as the content reaches. Replies `ok`, `before` and
+  `after` offsets `{x, y}` in pixels, `max` (how far the content can move), `requested`,
+  `clamped` (an end cut the scroll short), `info` (`scroll offset (0, 0) -> (0, 400)`, or `did not
+  move: ...` naming why) and `delivered.scroll` (`not_sent` when it did not move), with the
+  element's fields. Not a scroll container is refused.
 - `/avatar_state [all|<address>]`: avatars as selected (body shape, wearables, emotes, forced
   slots), as rendered (built or not, wearables by category, hidden categories) and the emote
   each plays (with `idle`: whether a triggered emote may take over, which a scene's non-idle

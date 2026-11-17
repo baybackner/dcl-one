@@ -195,8 +195,9 @@ pub struct ScrollTargetEvent {
     pub position: ScrollTarget,
 }
 
+/// The node a scrollable moves: its size less the scrollable's is how far it can scroll.
 #[derive(Component)]
-struct ScrollContent(Entity);
+pub struct ScrollContent(pub Entity);
 
 #[derive(Component)]
 struct ScrollBar {

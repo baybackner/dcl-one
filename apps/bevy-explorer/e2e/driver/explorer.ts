@@ -4,7 +4,7 @@
 import { type Console, ConsoleError, redact, redactLine, replaceSecrets, secretsOf } from './console.ts'
 import { type AuthIdentity, encodeIdentity } from './identity.ts'
 import { type Selector, describeSelector, selectorArg, toSelectorObject } from './selectors.ts'
-import { sleep, until } from './wait.ts'
+import { sleep, TimeoutError, until } from './wait.ts'
 
 /** `/photo_mode` and `/take_photo`: whether the in-world camera is open, where it is, the
  *  player's photo storage and this session's capture counters. */
@@ -657,6 +657,40 @@ export interface UiClickReply {
   rootBroadcast?: boolean
 }
 
+/** What `/ui_set_text` and `/ui_scroll` share: the element's fields and what reached the scene. */
+interface UiWriteReply {
+  ok: boolean
+  crdtId: number
+  kind: UiElement['kind']
+  screenRect: UiElement['screenRect']
+  center: UiElement['center']
+  coveredBy: UiElement['coveredBy']
+  screen: Screen
+  reason?: string
+}
+
+export interface UiSetTextReply extends UiWriteReply {
+  value: string | null
+  /** an input's text before the write */
+  previousValue?: string | null
+  submitted?: boolean
+  clearsOnSubmit?: boolean
+  /** a dropdown's */
+  selectedIndex?: number
+  previousIndex?: number
+  delivered: { change?: UiVerdict; submit?: UiVerdict }
+}
+
+export interface UiScrollReply extends UiWriteReply {
+  before: { x: number; y: number }
+  after: { x: number; y: number }
+  max: { x: number; y: number }
+  requested: { dx: number; dy: number }
+  clamped: boolean
+  info: string
+  delivered: { scroll: UiVerdict }
+}
+
 export interface UiList {
   stack: 'sdk'
   scene: { hash: string; title: string } | null
@@ -980,7 +1014,12 @@ export class Explorer {
     const before = (await this.worldState()).arrivals
     const teleport = await this.json<TeleportReport>(`/teleport ${x} ${y} --wait --timeout-seconds ${settleSeconds(timeoutMs)}`)
     const left = Math.max(1, timeoutMs - (Date.now() - startedAt))
-    return { ...(await this.#waitArrival(before, left, `the arrival at ${x},${y}`)), teleport }
+    const what = `the arrival at ${x},${y}`
+    // the wait gets what is left of the caller's timeout; its error names the caller's
+    const arrived = await this.#waitArrival(before, left, what).catch((error: unknown) => {
+      throw error instanceof TimeoutError ? new TimeoutError(what, timeoutMs, error.last) : error
+    })
+    return { ...arrived, teleport }
   }
 
   /** Reload the parcel scene under the player and wait for the new one to settle
@@ -1000,6 +1039,21 @@ export class Explorer {
   uiClick(crdtId: number, options: { device?: boolean; force?: boolean; button?: 'pointer' | 'primary' | 'secondary' } = {}): Promise<UiClickReply> {
     const flags = `${options.device ? ' --device' : ''}${options.force ? ' --force' : ''}${options.button ? ` --button ${options.button}` : ''}`
     return this.json<UiClickReply>(`/ui_click ${crdtId}${flags}`)
+  }
+
+  /** Write a scene-UI input's text as typing would, and with `submit` send it as Enter does; or
+   *  pick a dropdown's option by `optionIndex` (or `text` naming it) (`/ui_set_text`). A disabled
+   *  element is refused; a write the scene was not sent fails. */
+  uiSetText(crdtId: number, options: { text?: string; submit?: boolean; optionIndex?: number }): Promise<UiSetTextReply> {
+    const flags = `${options.text === undefined ? '' : ` --text ${quoteWord(options.text)}`}${options.submit ? ' --submit' : ''}${options.optionIndex === undefined ? '' : ` --option-index ${options.optionIndex}`}`
+    return this.json<UiSetTextReply>(`/ui_set_text ${crdtId}${flags}`)
+  }
+
+  /** Scroll a scene-UI scroll container by logical pixels, positive toward later content
+   *  (`/ui_scroll`); the reply says the offsets before and after and whether an end clamped it. */
+  uiScroll(crdtId: number, options: { dx?: number; dy?: number }): Promise<UiScrollReply> {
+    const flags = `${options.dx === undefined ? '' : ` --dx ${options.dx}`}${options.dy === undefined ? '' : ` --dy ${options.dy}`}`
+    return this.json<UiScrollReply>(`/ui_scroll ${crdtId}${flags}`)
   }
 
   /** The parcel scene's UI elements on screen (`/ui_list`); labels only with `kind: 'text'`. */

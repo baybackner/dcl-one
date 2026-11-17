@@ -70,7 +70,7 @@ const BOUNDS_MARGIN: f32 = 0.05;
 
 mod machine;
 mod press;
-mod ui;
+pub(crate) mod ui;
 pub use machine::{
     binding_error, check_hover_frames, classify_point, press_out_of_reach, refuse_while_held,
     undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
