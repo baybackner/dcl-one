@@ -425,6 +425,25 @@ fn a_realm_change_withdraws_a_held_teleport() {
     );
 }
 
+/// An input held behind a teleport goes in the pass that withdraws that teleport.
+#[test]
+fn a_withdrawal_releases_what_waited_behind_the_teleport_at_once() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, in_flight(MAX_UNACKNOWLEDGED_RELIABLE, 1));
+    let out = gate.admit(
+        vec![frame(FrameKind::Teleport, 1), frame(FrameKind::Input, 2)],
+        now,
+    );
+    assert!(out.is_empty());
+
+    assert_eq!(
+        tags(&gate.admit(vec![withdraw()], now)),
+        [(FrameKind::Input, 2)]
+    );
+    assert!(gate.held.is_empty());
+}
+
 #[test]
 fn the_snapshot_reports_what_the_gate_holds() {
     let mut gate = UplinkGate::default();

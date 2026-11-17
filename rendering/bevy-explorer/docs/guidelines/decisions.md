@@ -370,8 +370,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   The native driver also holds teleports and emotes while 8 reliable messages are
   unacknowledged, and holds inputs once traffic has been in flight for 600 ms with no
   acknowledgement arriving, probing the uplink with a ping every 250 ms, so what a stall delivers
-  at once stays within the servers' bursts. A realm change withdraws a held teleport, as it does
-  the pacer's. WebTransport exposes no acknowledgements, so the web build has no such gate
+  at once stays within the servers' bursts. The count is ENet's, so resyncs, a fragmented
+  handshake and announcements count too: a burst of them holds a teleport or emote for a round
+  trip, which ENet's acknowledgements, not tracked per message, cannot tell apart. A realm change
+  withdraws a held teleport, as it does the pacer's. WebTransport exposes no acknowledgements, so the web build has no such gate
   (`native.rs`).
 - **The client never sends what the Pulse server refuses for good.** A one-shot emote longer than
   60 s goes out without a duration and ends with an explicit stop, and inputs and teleports from

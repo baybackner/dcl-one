@@ -67,7 +67,8 @@ const STALL_AFTER: Duration = Duration::from_millis(600);
 
 /// Reliable messages that may be unacknowledged before teleports and emotes wait: half the servers'
 /// burst of 16, so ENet retransmitting all of them at once after a stall still fits. Handshakes,
-/// resyncs and announcements count too, and are never held.
+/// resyncs and announcements count too (a burst of them delays a teleport a round trip), and are
+/// never held.
 const MAX_UNACKNOWLEDGED_RELIABLE: usize = 8;
 
 pub(super) fn spawn(
@@ -396,6 +397,13 @@ impl UplinkGate {
     }
 
     fn admit_inner(&mut self, frames: Vec<PulseFrame>, stalled: bool) -> Vec<PulseFrame> {
+        // Withdraw first, so nothing waits a pass behind a teleport for the realm left.
+        if frames
+            .iter()
+            .any(|frame| frame.kind == FrameKind::WithdrawTeleport)
+        {
+            self.held.retain(|held| held.kind != FrameKind::Teleport);
+        }
         let mut out = Vec::new();
         for frame in std::mem::take(&mut self.held).into_iter().chain(frames) {
             if frame.kind == FrameKind::WithdrawTeleport {
