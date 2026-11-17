@@ -3,7 +3,7 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, sliding, updateGroundAdjust, updateGroundProbes } from './ground';
 import { gait, movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
+import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, HARD_LANDING_ONLY_FROM_LONG_FALL, VEC3_DOWN, VEC3_ZERO } from './constants';
@@ -339,24 +339,12 @@ export var glideTurnRate = 0;
 // so the engine banks the whole avatar — replaces the old discrete left/right lean clips.
 export var glideTilt = 0;
 
-// Glide animation phase (mirrors the old glider.ts prop state machine, now expressed as
-// avatar-clip selection): 'deploy' plays the Start clip (glider opens) once on entry,
-// 'glide' is the steady forward/idle loop, 'stow' plays the End clip (glider closes) once
-// when glide ends mid-air. A glide that ends by landing skips 'stow' (the landing clip
-// takes over).
+// Glide animation phase, from the vertical model's glider prop (glideProp): 'deploy' plays the
+// Start clip (glider opens) while the prop opens, 'glide' is the steady forward/idle loop while
+// it glides, 'stow' plays the End clip (glider closes) while it closes mid-air. A glide that
+// ends by landing skips 'stow' (the landing clip takes over).
 type GlidePhase = 'none' | 'deploy' | 'glide' | 'stow';
 var glidePhase: GlidePhase = 'none';
-// The glider open/close clips are baked sped-up (merge-glider-into-avatar.mjs `propSpeed`)
-// to match the original glider feel. The deploy/stow phases run for the resulting clip
-// length — OPEN/CLOSE_DURATION (0.5s, from the old glider.ts) divided by that speed — so
-// the glider stops opening/closing at the same time the old prop rig did
-// (OPEN_DURATION / gliderOpenSpeed). Deploy is timed (not played to the end of the Start
-// clip) so we don't add the rest of the Start body motion or drift the prop before the seam.
-const GLIDER_PROP_SPEED = 2.1; // keep in sync with propSpeed in merge-glider-into-avatar.mjs
-const GLIDE_DEPLOY_TIME = 0.5 / GLIDER_PROP_SPEED; // ~0.238s
-const GLIDE_STOW_TIME = 0.5 / GLIDER_PROP_SPEED;
-var glideStowEndsAt = 0;
-var glideDeployEndsAt = 0;
 // Set when a glide ends by touching down, so the next landing uses the glider-close
 // landing clip (the stow plays concurrently with the landing). Consumed in landingAnimation.
 var landingFromGlide = false;
@@ -600,20 +588,20 @@ function stepTriggered(prev: number, cur: number, duration: number, triggers: nu
 }
 
 function selectAnimation(): MovementAnimation {
-  if (!isGliding) {
-    // Glide ended. Stow (close) only if we ended mid-air (jump released while falling);
-    // a glide that ends by landing lets the landing clip take over. Clear a stow that
-    // gets interrupted by touching down.
+  const glideOpen = glideProp === GlideProp.OPENING || glideProp === GlideProp.GLIDING;
+  if (!glideOpen || grounded) {
+    // Glide ended, or the avatar is on the ground with the prop still open(ing). Stow (close)
+    // only if we ended mid-air (jump released while falling); a glide that ends by landing
+    // lets the landing clip take over. A stow ends when the prop has closed or on touchdown.
     if (glidePhase === 'deploy' || glidePhase === 'glide') {
       if (grounded) {
         // Landed while gliding: let the landing clip stow the glider (close embedded).
         glidePhase = 'none';
-        landingFromGlide = true;
+        landingFromGlide = wasJumpingOrFalling;
       } else {
         glidePhase = 'stow';
-        glideStowEndsAt = time + GLIDE_STOW_TIME;
       }
-    } else if (glidePhase === 'stow' && grounded) {
+    } else if (glidePhase === 'stow' && (grounded || glideProp === GlideProp.CLOSED)) {
       glidePhase = 'none';
     }
     prevGlideSrc = undefined;
@@ -647,29 +635,23 @@ function selectAnimation(): MovementAnimation {
     hardLanding = 'none';
     longFallShown = false;
 
-    if (isGliding) {
+    if (glideOpen) {
       jumpPhase = 'none';
-      // Deploy: on entry, play the Start clip (glider opens) for the open duration, then
-      // hand to the steady loop. Timed (not played to the end of the Start clip) so we
-      // don't add the rest of the Start body motion or drift the prop before the seam.
-      if (glidePhase !== 'deploy' && glidePhase !== 'glide') {
+      // Deploy: the Start clip (glider opens) while the prop opens, then the steady loop.
+      if (glideProp === GlideProp.OPENING) {
         glidePhase = 'deploy';
-        glideDeployEndsAt = time + GLIDE_DEPLOY_TIME;
+        return {
+          src: GLIDE_AVATAR.start,
+          speed: 1,
+          loop: false,
+          idle: false,
+          transitionSeconds: settings.transAir,
+          sounds: [],
+        };
       }
-      if (glidePhase === 'deploy') {
-        if (time >= glideDeployEndsAt) {
-          glidePhase = 'glide';
-          prevGlideSrc = undefined; // first steady frame isn't a pose swap
-        } else {
-          return {
-            src: GLIDE_AVATAR.start,
-            speed: 1,
-            loop: false,
-            idle: false,
-            transitionSeconds: settings.transAir,
-            sounds: [],
-          };
-        }
+      if (glidePhase !== 'glide') {
+        glidePhase = 'glide';
+        prevGlideSrc = undefined; // first steady frame isn't a pose swap
       }
       // Steady glide. Left/right banking is procedural via tiltRoll (see applyMovement /
       // writeMovement) — the engine rolls the whole avatar — so the clip only
@@ -699,20 +681,17 @@ function selectAnimation(): MovementAnimation {
       };
     }
 
-    // Stow: glide ended mid-air -> play the End clip (glider closes) for the close
-    // duration before the fall resumes.
+    // Stow: glide ended mid-air -> play the End clip (glider closes) while the prop closes,
+    // then the fall resumes.
     if (glidePhase === 'stow') {
-      if (time < glideStowEndsAt) {
-        return {
-          src: GLIDE_AVATAR.end,
-          speed: 1,
-          loop: false,
-          idle: false,
-          transitionSeconds: settings.transAir,
-          sounds: [],
-        };
-      }
-      glidePhase = 'none';
+      return {
+        src: GLIDE_AVATAR.end,
+        speed: 1,
+        loop: false,
+        idle: false,
+        transitionSeconds: settings.transAir,
+        sounds: [],
+      };
     }
 
     if (isDoubleJump && !doubleJumpFalling) {
@@ -878,10 +857,12 @@ function writeMovement() {
 
 // The movement model's state for the engine's movement trace: one console line `LOCO {...}` (see the engine's
 // movement_trace.rs), printed only when the state changes; the trace keeps the latest.
-const GLIDE_NAMES: Record<GlidePhase, string> = { none: 'closed', deploy: 'opening', glide: 'gliding', stow: 'closing' };
+const GLIDE_NAMES: Record<GlideProp, string> = {
+  [GlideProp.CLOSED]: 'closed', [GlideProp.OPENING]: 'opening', [GlideProp.GLIDING]: 'gliding', [GlideProp.CLOSING]: 'closing',
+};
 const loco = { gait: '', grounded: false, jump_count: -1, glide: '', stunned: false, sliding: false };
 function logLocomotion() {
-  const jumps = jumpCount(), glide = GLIDE_NAMES[glidePhase], stun = stunned();
+  const jumps = jumpCount(), glide = GLIDE_NAMES[glideProp], stun = stunned();
   if (loco.gait === gait && loco.grounded === grounded && loco.jump_count === jumps && loco.glide === glide
     && loco.stunned === stun && loco.sliding === sliding) return;
   loco.gait = gait; loco.grounded = grounded; loco.jump_count = jumps; loco.glide = glide; loco.stunned = stun;

@@ -102,13 +102,23 @@ export const AIR_JUMP_RISE_BUFFER_STEPS: number = 0;
 // Height tracking during the hover: 1 = both ways (the avatar drifts to the model's hover height), 0 = none (a flat hover;
 // tracking resumes at the launch).
 export const AIR_JUMP_HOVER_TRACK: number = 0;
-// Glide: a fresh press in the air once the jumps are spent (the air jump included) opens the glider
-// while held, once long enough after the latest jump's press and above the ground.
+// Glide: a fresh press in the air once the jumps are spent (the air jump included) opens the glider's prop, once long
+// enough after the latest jump's press, above the ground and with the prop shut. The fall goes on while the prop opens;
+// once open, the glide holds the fall while the key is held. Released, or near the ground, the prop closes.
 export const GLIDE_FALL_SPEED = 1; // max fall speed while gliding (m/s)
 export const GLIDE_HORIZONTAL_SPEED = 6; // horizontal speed limit while gliding (m/s)
 export const GLIDE_MIN_GROUND_DISTANCE = 0.12; // model height above the ground (m)
 export const JUMP_TO_GLIDE_TIME = 0.52; // s from the latest jump's press (26 steps)
-export const GLIDE_COOLDOWN = 0.22; // s after a glide ends (11 steps)
+export const GLIDE_COOLDOWN = 0.22; // s after the prop has closed (11 steps)
+// s from the press that opens the prop to the first step that glides (18 steps: the 0.333 s opening clip, seen a frame
+// later)
+export const GLIDE_OPEN_TIME = 0.36;
+export const GLIDE_CLOSE_TIME = 0.28; // s the prop takes to close (14 steps: the 0.283 s closing clip)
+// Behaviour switches:
+// 1: a tap opens the prop all the same: it opens, then closes without gliding; 0: a release while it opens closes it.
+export const GLIDE_OPENS_ON_TAP: number = 1;
+// 1: a landing while the prop opens lets it open (it closes on the next step); 0: the landing closes it.
+export const GLIDE_OPEN_THROUGH_LANDING: number = 1;
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
 // Landing stun: a landing more than LANDING_STUN_DROP below the top of the airtime (the highest point since the ground;
