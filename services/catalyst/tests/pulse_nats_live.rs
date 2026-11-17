@@ -14,17 +14,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use catalyst::comms::protocol::bus::topology::{DISCOVERY_SUBJECT, ISLANDS_SUBJECT};
-use catalyst::comms::pulse::PeerClusterChange;
-use catalyst::comms::pulse::cluster::feed::{ClusterFeedPublisher, CurrentAssignment};
-use catalyst::comms::pulse::cluster::nats::{NatsClusterFeed, NatsFeedOptions};
-use catalyst::comms::pulse::cluster::{
+use catalyst::pulse::PeerClusterChange;
+use catalyst::pulse::cluster::feed::{ClusterFeedPublisher, CurrentAssignment};
+use catalyst::pulse::cluster::nats::{NatsClusterFeed, NatsFeedOptions};
+use catalyst::pulse::cluster::{
     ClusterInfo, ClusterOptions, ClusterPass, ClusterPeerInfo, ClusterTracker,
 };
-use catalyst::comms::pulse::decentraland::common::Vector3;
-use catalyst::comms::pulse::decentraland::kernel::comms::v3::{
+use catalyst::pulse::decentraland::common::Vector3;
+use catalyst::pulse::decentraland::kernel::comms::v3::{
     IslandStatusMessage, ServiceDiscoveryMessage,
 };
-use catalyst::comms::pulse::snapshot::IdentityBoard;
+use catalyst::pulse::snapshot::IdentityBoard;
 use futures::StreamExt;
 use prost::Message as _;
 
@@ -253,7 +253,7 @@ async fn the_cluster_feed_reaches_a_live_broker_on_every_subject() {
     );
     assert_eq!(
         status.commit_hash.as_deref(),
-        Some(catalyst::comms::pulse::cluster::nats::DEFAULT_COMMIT_HASH),
+        Some(catalyst::pulse::cluster::nats::DEFAULT_COMMIT_HASH),
         "an options set that never named a commit still announces upstream's fallback, never a \
          blank string a discovery consumer would have to special-case"
     );

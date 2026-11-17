@@ -2,7 +2,7 @@
 #[path = "support/pulse_contract.rs"]
 mod pulse_contract;
 use catalyst_comms::protocol::pulse::decentraland::pulse::*;
-use catalyst_comms::pulse::{
+use catalyst_pulse::{
     PulseServer,
     server::{Action, SERVER_FEATURES, channel},
     simulation::{PeerConnectionState, PeerState},
@@ -550,7 +550,7 @@ fn client_msg(message: client_message::Message) -> Vec<u8> {
 async fn signed_handshake_request() -> (Vec<u8>, String, i64) {
     use alloy::signers::{Signer, local::PrivateKeySigner};
     use catalyst::auth::{AuthLink, AuthLinkType};
-    use catalyst_comms::pulse::handshake::build_signed_fetch_payload;
+    use catalyst_pulse::handshake::build_signed_fetch_payload;
 
     let root: PrivateKeySigner = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
         .parse()

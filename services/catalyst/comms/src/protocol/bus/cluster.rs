@@ -210,7 +210,7 @@ impl SelectionRetirementLookup {
     pub fn subject(&self) -> String {
         format!("peer.{}.selection_retirement", self.wallet)
     }
-    pub(crate) fn valid(&self) -> bool {
+    pub fn valid(&self) -> bool {
         wallet_token(&self.wallet).as_deref() == Some(self.wallet.as_str())
             && wallet_token(&self.session).as_deref() == Some(self.session.as_str())
             && !self.source_incarnation.is_empty()

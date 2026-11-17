@@ -70,6 +70,7 @@ members = [
     "jobs",
     "land-authz",
     "price",
+    "pulse",
     "shared",
     "shop",
     "social",
@@ -193,6 +194,7 @@ catalyst-builder = { path = "builder" }
 catalyst-social = { path = "social" }
 catalyst-worlds = { path = "worlds" }
 catalyst-comms = { path = "comms" }
+catalyst-pulse = { path = "pulse" }
 catalyst-explore = { path = "explore" }
 catalyst-content = { path = "content" }
 catalyst-land-authz = { path = "land-authz" }
@@ -236,7 +238,7 @@ metrics.workspace = true
 ts-rs = { workspace = true, optional = true }
 
 [features]
-test-support = ["catalyst-comms/test-support"]
+test-support = ["catalyst-comms/test-support", "catalyst-pulse/test-support"]
 # The library/catalyst-api TypeScript exports (scripts/gen-ts.sh).
 ts = ["dep:ts-rs", "catalyst-shared/ts", "catalyst-config/ts", "catalyst-storage/ts", "catalyst-price/ts", "catalyst-chain-index/ts", "catalyst-land-authz/ts", "catalyst-content/ts", "catalyst-explore/ts", "catalyst-comms/ts", "catalyst-worlds/ts", "catalyst-social/ts", "catalyst-builder/ts", "catalyst-camera-reel/ts", "catalyst-shop/ts"]
 
@@ -252,6 +254,7 @@ catalyst-camera-reel = { path = "camera-reel", features = ["test-support"] }
 catalyst-builder = { path = "builder", features = ["test-support"] }
 catalyst-social = { path = "social", features = ["test-support"] }
 catalyst-comms = { path = "comms", features = ["test-support"] }
+catalyst-pulse = { path = "pulse", features = ["test-support"] }
 catalyst-worlds = { path = "worlds", features = ["test-support"] }
 catalyst-explore = { path = "explore", features = ["test-support"] }
 catalyst-content = { path = "content", features = ["test-support"] }

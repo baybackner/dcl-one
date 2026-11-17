@@ -3,7 +3,7 @@
 mod gate;
 #[path = "support/nats_broker.rs"]
 mod nats_broker;
-use catalyst::comms::pulse::{
+use catalyst::pulse::{
     cluster::nats::{NatsClusterFeed, NatsFeedOptions},
     cluster::{ClusterOptions, ClusterTracker},
     decentraland::{common::Vector3, pulse::PeerClusterSnapshot},
@@ -117,7 +117,7 @@ async fn publish_control(
 #[tokio::test]
 async fn real_versioned_control_ordering_expiry_and_reconnect_keep_exact_authority() {
     use catalyst::comms::protocol::bus::control_position::ControlPosition;
-    use catalyst::comms::pulse::cluster::feed::ClusterFeedPublisher;
+    use catalyst::pulse::cluster::feed::ClusterFeedPublisher;
     let binary = gate::require_env("PULSE_NATS_SERVER_BIN").expect("required NATS executable");
     let broker = Broker::start(&binary, None);
     let port = broker.port;
@@ -303,7 +303,7 @@ async fn real_versioned_control_ordering_expiry_and_reconnect_keep_exact_authori
 #[tokio::test]
 async fn real_versioned_control_heads_share_one_wallet_capacity() {
     use catalyst::comms::protocol::bus::control_position::ControlPosition;
-    use catalyst::comms::pulse::cluster::feed::ClusterFeedPublisher;
+    use catalyst::pulse::cluster::feed::ClusterFeedPublisher;
     let binary = gate::require_env("PULSE_NATS_SERVER_BIN").expect("required NATS executable");
     let broker = Broker::start(&binary, None);
     let client = async_nats::connect(broker.url()).await.unwrap();
@@ -312,7 +312,7 @@ async fn real_versioned_control_heads_share_one_wallet_capacity() {
         .feed
         .enable_control_positions("capacity-readers")
         .unwrap();
-    let capacity = catalyst::comms::pulse::cluster::control::DEFAULT_CONTROL_POSITION_CAPACITY;
+    let capacity = catalyst::pulse::cluster::control::DEFAULT_CONTROL_POSITION_CAPACITY;
     let input = |wallet| ControlPosition {
         audience: "capacity-readers".into(),
         wallet: address(wallet),
@@ -470,7 +470,7 @@ async fn real_versioned_control_readers_preserve_single_class_service_and_refuse
 #[tokio::test]
 async fn complete_lookup_cap_keeps_pending_recovery_and_refuses_one_byte_over() {
     use catalyst::comms::protocol::bus::cluster::{ClusterLookup, valid_reply};
-    use catalyst::comms::pulse::cluster::feed::{ClusterFeedPublisher, CurrentAssignment};
+    use catalyst::pulse::cluster::feed::{ClusterFeedPublisher, CurrentAssignment};
     let binary = gate::require_env("PULSE_NATS_SERVER_BIN").expect("required NATS executable");
     let broker = Broker::start(&binary, None);
     let client = async_nats::connect(broker.url()).await.unwrap();

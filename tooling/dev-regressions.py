@@ -20,7 +20,7 @@ EXTERNAL_COMMAND = "python3 tooling/dev-regressions.py --archipelago-external"
 AUTH_STRESS = "rpc_validator::tests::provisioned_rpc_workload_runs_3000_verifiers_at_nine_links"
 EXTERNAL_SHARD = "CATALYST_TEST_PROVISIONED_SHARD"
 EXTERNAL = [
-    ("catalyst_comms", "lib", "pulse::cluster::nats::statistics_tests::statistics_live_broker_late_join_and_reconnect_recover_complete_state"),
+    ("catalyst_pulse", "lib", "cluster::nats::statistics_tests::statistics_live_broker_late_join_and_reconnect_recover_complete_state"),
     ("sockets_3", "test", "archipelago_socket_bounds::orderly_shutdown_drains_authenticated_disconnect_to_live_pulse"),
     ("sockets_3", "test", "archipelago_socket_bounds::idle_transport_retires_no_pong_but_preserves_pong_and_data_activity"),
 ]
@@ -37,7 +37,6 @@ MANDATORY_ARCHIPELAGO = {
         "archipelago::registry::tests::full_assignment_retries_even_after_older_accepted_frames_flush",
         "gatekeeper::admission::relay_authority::tests::failed_generation_check_clears_only_the_matching_renewal_without_extending_its_lease",
         "protocol::bus::selection_view::tests::complete_bad_digest_fails_at_the_last_page_and_valid_empty_views_complete",
-        "pulse::application_relay::http::tests::generation_loss_refuses_a_late_http_lease_and_further_cached_admission",
         "gatekeeper::admission::cluster::generation::tests::exact_operation_permission_is_single_use_and_never_refreshes_its_deadline",
         "protocol::bus::selection_view::tests::bounded_selection_view_transfers_more_than_one_reply_and_refuses_mixed_or_missing_pages",
         "protocol::bus::selection_view::tests::two_interleaved_readers_share_one_immutable_multpage_view",
@@ -79,9 +78,7 @@ MANDATORY_ARCHIPELAGO = {
         "stats::tests::every_contiguous_change_is_visible_at_callback_completion_and_gaps_require_recovery",
         "archipelago::observations::tests::queue_saturation_and_unavailable_shutdown_count_every_lost_observation",
         "archipelago::tests::shutdown_waits_for_handler_observations_after_writers_are_gone",
-        "pulse::cluster::nats::statistics_tests::statistics_publisher_recovers_during_single_item_refill",
-        "pulse::cluster::nats::statistics_tests::statistics_publisher_preserves_checkpoint_prefix_during_continuous_backlog",
-        "pulse::statistics::tests::overflow_and_failed_transfer_discard_pending_checkpoint_for_complete_recovery",
+        "statistics::tests::overflow_and_failed_transfer_discard_pending_checkpoint_for_complete_recovery",
         "archipelago::ws::io::tests::legacy_heartbeat_encodings_receive_identical_rate_accounting",
         "stats::tests::http_tests::root_bypasses_non_candidates_and_records_exact_selection_paths",
         "stats::tests::http_tests::root_collision_suppresses_claim_and_matcher_fault_is_not_a_nonmatch",
@@ -138,17 +135,6 @@ MANDATORY_ARCHIPELAGO = {
         "protocol::bus::control_position::tests::selected_intent_vectors_use_exact_closed_bytes_and_preserve_signed_zero",
         "protocol::bus::cluster::tests::complete_selected_reply_boundaries_match_canonical_bytes_without_truncating_pending",
         "protocol::bus::cluster::tests::selection_retirement_codec_is_exact_bounded_and_negative_only",
-        "pulse::cluster::assignments::current_tests::retirement_requires_complete_absence_and_survives_record_and_control_gc",
-        "pulse::cluster::assignments::current_tests::retirement_withholds_blocked_pending_and_successor_current_evidence",
-        "pulse::cluster::control::tests::versions_share_wallet_capacity_and_unproved_mixed_heads_never_select",
-        "pulse::cluster::control::tests::duplicate_does_not_refresh_live_expiry_for_either_version",
-        "pulse::cluster::control::tests::explicit_withdrawal_is_terminal_but_live_expiry_can_resume",
-        "pulse::cluster::control::tests::same_epoch_session_is_fixed",
-        "pulse::cluster::control::tests::native_aba_preserves_cleanup_across_terminal_and_expired_control_heads",
-        "pulse::cluster::assignments::current_tests::native_arrival_departure_without_pass_or_lookup_invalidates_all_legacy_variants",
-        "pulse::cluster::assignments::current_tests::native_current_peer_and_exhausted_legacy_revalidation_never_reauthorize_old_stamps",
-        "pulse::cluster::tests::native_reservation_survives_unusable_position_and_different_legacy_session",
-        "pulse::cluster::tests::native_reservation_outweighs_legacy_owner_and_terminal_tombstone",
         "gatekeeper::admission::cluster::fence::tests::selected_wire_vectors_preserve_exact_u64_json_and_refuse_unknown_authority",
         "gatekeeper::admission::cluster::fence::tests::old_unknown_and_cleanup_only_snapshots_cannot_create_admission_stamps",
         "gatekeeper::admission::island_refresh::tests::selected_u64_domains_refresh_through_real_nats_and_persisted_assignment_documents",
@@ -156,7 +142,7 @@ MANDATORY_ARCHIPELAGO = {
         "archipelago::observations::tests::disconnect_waiters_retain_admission_credit_across_repeated_churn",
         "archipelago::observations::tests::disconnect_admission_ignores_link_readiness_but_counts_bus_and_shutdown_loss",
         "archipelago::observations::tests::refused_observations_count_every_loss_without_logging_on_the_socket_path",
-        "pulse::statistics::tests::draining_changes_releases_bytes_while_the_backlog_stays_nonempty",
+        "statistics::tests::draining_changes_releases_bytes_while_the_backlog_stays_nonempty",
         "stats::tests::indexed_changes_preserve_order_and_rebuild_after_removal_and_recovery",
         "stats::tests::render_tests::f32_position_extremes_and_receipt_rounding_keep_exact_public_bytes",
         "stats::tests::render_tests::discovery_uses_absolute_strict_age_and_advertised_count",
@@ -172,12 +158,28 @@ MANDATORY_ARCHIPELAGO = {
         "archipelago::handlers::tests::connector_method_flood_preserves_http_without_creating_metric_series",
         "stats::runtime::tests::connector_observer_bounds_method_labels_and_preserves_known_lowercase_labels",
         "archipelago::observations::tests::producer_registration_is_lazy_and_recovers_restart_without_replaying_events",
-        "pulse::statistics::tests::invalid_observations_are_counted_without_changing_population",
-        "pulse::statistics::tests::capacity_refuses_registration_without_forgetting_any_cursor",
-        "pulse::statistics::tests::capacity_metrics_report_retention_and_only_refused_registration_attempts",
-        "pulse::statistics::tests::candidate_confirmation_and_restart_preserve_exact_fences",
-        "pulse::statistics::tests::repeated_handovers_keep_every_outgoing_connectors_events_and_cursors",
-        "pulse::statistics::tests::backlog_recovery_retains_complete_state_across_handovers",
+        "statistics::tests::invalid_observations_are_counted_without_changing_population",
+        "statistics::tests::capacity_refuses_registration_without_forgetting_any_cursor",
+        "statistics::tests::capacity_metrics_report_retention_and_only_refused_registration_attempts",
+        "statistics::tests::candidate_confirmation_and_restart_preserve_exact_fences",
+        "statistics::tests::repeated_handovers_keep_every_outgoing_connectors_events_and_cursors",
+        "statistics::tests::backlog_recovery_retains_complete_state_across_handovers",
+    ],
+    ("catalyst_pulse", "lib"): [
+        "application_relay::http::tests::generation_loss_refuses_a_late_http_lease_and_further_cached_admission",
+        "cluster::nats::statistics_tests::statistics_publisher_recovers_during_single_item_refill",
+        "cluster::nats::statistics_tests::statistics_publisher_preserves_checkpoint_prefix_during_continuous_backlog",
+        "cluster::assignments::current_tests::retirement_requires_complete_absence_and_survives_record_and_control_gc",
+        "cluster::assignments::current_tests::retirement_withholds_blocked_pending_and_successor_current_evidence",
+        "cluster::control::tests::versions_share_wallet_capacity_and_unproved_mixed_heads_never_select",
+        "cluster::control::tests::duplicate_does_not_refresh_live_expiry_for_either_version",
+        "cluster::control::tests::explicit_withdrawal_is_terminal_but_live_expiry_can_resume",
+        "cluster::control::tests::same_epoch_session_is_fixed",
+        "cluster::control::tests::native_aba_preserves_cleanup_across_terminal_and_expired_control_heads",
+        "cluster::assignments::current_tests::native_arrival_departure_without_pass_or_lookup_invalidates_all_legacy_variants",
+        "cluster::assignments::current_tests::native_current_peer_and_exhausted_legacy_revalidation_never_reauthorize_old_stamps",
+        "cluster::tests::native_reservation_survives_unusable_position_and_different_legacy_session",
+        "cluster::tests::native_reservation_outweighs_legacy_owner_and_terminal_tombstone",
     ],
     ("catalyst_content", "lib"): [
         "entity::tests::deployment_metadata_retains_order_and_exact_scalars",
@@ -612,7 +614,7 @@ def verify_resolution(root=ROOT):
         lock = tomllib.loads((directory / "Cargo.lock").read_text())
         entries = [entry for entry in lock["package"] if entry["name"] == "rusty_enet"]
         require(len(entries) == 1 and entries[0]["version"] == "0.4.0" and "source" not in entries[0] and "checksum" not in entries[0], f"{workspace}: ENet lock must resolve exactly one local 0.4.0")
-    for consumer in ["services/catalyst/comms", "rendering/bevy-explorer/source/crates/comms"]:
+    for consumer in ["services/catalyst/pulse", "rendering/bevy-explorer/source/crates/comms"]:
         manifest = tomllib.loads((root / consumer / "Cargo.toml").read_text())
         dependencies = manifest["dependencies"] if consumer.startswith("services/") else manifest["target"]['cfg(not(target_arch = "wasm32"))']["dependencies"]
         require(dependencies.get("rusty_enet") == {"workspace": True}, f"{consumer}: ENet must inherit the shared workspace dependency")

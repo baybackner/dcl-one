@@ -1,6 +1,6 @@
 //! The island half of comms: Pulse's cluster feed (`peer.*.cluster_change`)
 //! and the `/ws` connector's session announcements turned into LiveKit island
-//! credentials. Pulse (`comms::pulse`, its own process) derives the clusters
+//! credentials. Pulse (`catalyst-pulse`, its own process) derives the clusters
 //! and publishes one change per peer on the NATS broker; archipelago's sockets
 //! (`comms::archipelago`, in this process) hand the island to the explorer; in
 //! between, this module gates the wallet on the platform ban store, evicts a

@@ -161,9 +161,10 @@ The connector retains enforcement room assignments separately from statistics. F
 
 ## Placement
 
-The producer belongs in `comms::pulse`; shared observation and snapshot contracts
-belong in `comms::protocol`; the read-only view and HTTP projection belong in
-`comms::stats`. These are modules in `catalyst-comms`, not new crates or processes.
+The producer belongs in Pulse (`catalyst-pulse`), which runs the producer state in
+`comms::statistics` ([ADR](2026-11-17-pulse-crate.md)); shared observation and snapshot
+contracts belong in `comms::protocol`; the read-only view and HTTP projection belong in
+`comms::stats`. These add no process.
 The connector's retained room-assignment state serves moderation and socket safety,
 not statistics. Pulse imports no Gatekeeper implementation and receives no LiveKit
 credential or SQL pool.

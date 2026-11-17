@@ -46,12 +46,12 @@ use uuid::Uuid;
 use catalyst::auth::hash::hash_bytes_v1;
 use catalyst::auth::{AuthLink, AuthLinkType};
 use catalyst::comms::protocol::archipelago::{Position, archipelago};
-use catalyst::comms::pulse::decentraland::pulse::{
+use catalyst::pulse::decentraland::pulse::{
     ClientMessage, HandshakeRequest, PlayerInitialState, PlayerState, ServerMessage,
     client_message, server_message,
 };
-use catalyst::comms::pulse::interest::{ParcelEncoder, ParcelEncoderOptions};
-use catalyst::comms::pulse::transport::{Event, Host, HostConfig, Packet, PeerId};
+use catalyst::pulse::interest::{ParcelEncoder, ParcelEncoderOptions};
+use catalyst::pulse::transport::{Event, Host, HostConfig, Packet, PeerId};
 use catalyst::shared::signed_fetch::{
     AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, build_payload_v6,
 };

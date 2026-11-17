@@ -91,7 +91,7 @@ impl HeldPulseGeneration {
 }
 
 pub async fn run_from_env() -> anyhow::Result<()> {
-    crate::comms::pulse::env::validate_auth_requests(
+    crate::pulse::env::validate_auth_requests(
         std::env::var("PULSE_LEGACY_HANDSHAKE"),
         std::env::var("PULSE_V4_ENABLED"),
     )?;
@@ -116,7 +116,7 @@ pub async fn run_from_env() -> anyhow::Result<()> {
     )
     .await?;
     let authority = HeldPulseGeneration::acquire(pool.clone(), audience.trim().into()).await?;
-    let pulse = crate::comms::pulse::env::run_from_env_with_generation(Some(authority.clone()));
+    let pulse = crate::pulse::env::run_from_env_with_generation(Some(authority.clone()));
     tokio::pin!(pulse);
     let result = tokio::select! {
         result = &mut pulse => result,

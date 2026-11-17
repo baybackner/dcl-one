@@ -4,12 +4,12 @@ mod wt_client;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use catalyst::comms::pulse::transport::webtransport::config::{
+use catalyst::pulse::transport::webtransport::config::{
     DEFAULT_MAX_DATAGRAM_BYTES, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_SERVICE_TIMEOUT_MS,
 };
-use catalyst::comms::pulse::transport::webtransport::framing::{datagram_frame, stream_frame};
-use catalyst::comms::pulse::transport::webtransport::{WtConfig, WtHost};
-use catalyst::comms::pulse::transport::{Event, Packet};
+use catalyst::pulse::transport::webtransport::framing::{datagram_frame, stream_frame};
+use catalyst::pulse::transport::webtransport::{WtConfig, WtHost};
+use catalyst::pulse::transport::{Event, Packet};
 
 use sha2::{Digest, Sha256};
 use wt_client::{Client, ClientConfig};
@@ -198,7 +198,7 @@ async fn production_startup_can_initialize_webtransport_inside_tokio() {
     };
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        catalyst::comms::pulse::PulseServer::new().run_with_webtransport(
+        catalyst::pulse::PulseServer::new().run_with_webtransport(
             "127.0.0.1:0".parse().unwrap(),
             50,
             Some(config),

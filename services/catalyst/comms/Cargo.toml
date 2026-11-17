@@ -2,7 +2,7 @@
 name = "catalyst-comms"
 version.workspace = true
 edition = "2024"
-description = "Comms and multiplayer: pulse, the archipelago connector, the gatekeeper and live presence"
+description = "Comms and multiplayer: the archipelago connector, the gatekeeper and live presence"
 publish = false
 
 [dependencies]
@@ -45,13 +45,7 @@ reqwest.workspace = true
 url.workspace = true
 prost.workspace = true
 hmac.workspace = true
-getrandom.workspace = true
 rand.workspace = true
-rusty_enet.workspace = true
-web-transport-quinn.workspace = true
-rustls.workspace = true
-rustls-pemfile.workspace = true
-rustls-pki-types.workspace = true
 async-nats.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
@@ -75,5 +69,3 @@ catalyst-db = { path = "../db", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 alloy = { version = "2", default-features = false, features = ["std", "signer-local"] }
 tokio-tungstenite.workspace = true
-proptest = "1.11.0"
-rcgen = "0.14.10"

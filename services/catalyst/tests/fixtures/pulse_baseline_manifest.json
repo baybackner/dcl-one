@@ -1133,7 +1133,7 @@
       "integrated Bevy sends feature zero; no published client private-feature sender established"
     ],
     "activation_audit": {
-      "source": "services/catalyst/comms/src/pulse/env.rs",
+      "source": "services/catalyst/pulse/src/env.rs",
       "legacy": "PULSE_LEGACY_HANDSHAKE validates the baseline authentication posture; absent, blank or true accepted; false rejected at startup; effective deployment value unverified",
       "v4": "PULSE_V4_ENABLED validates the baseline authentication posture; absent, blank or false accepted; true rejected at startup; effective deployment value unverified",
       "application_relay": "Public startup does not activate application relay; this baseline fixture certifies no relay activation; effective deployment configuration unverified",

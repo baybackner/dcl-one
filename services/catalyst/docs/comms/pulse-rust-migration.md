@@ -2,7 +2,7 @@
 
 Preserve Pulse's conceptual structure while expressing ownership, concurrency and resource lifetime in Rust. A developer who knows `HandshakeHandler`, `PeerSnapshotPublisher`, `PeerSimulation` or `ClusterTracker` should be able to find the corresponding Rust responsibility by name and follow the same data flow. Learning the implementation should require a small C# to Rust vocabulary, not learning a replacement architecture.
 
-The destination is the existing `catalyst-comms` crate and its `pulse` module. Evolve that implementation in place. Keep Pulse running as `catalyst pulse` in a separate process, and keep the gatekeeper's responsibilities outside it. This guide specifies migration work; the proposed worker decomposition below is not the current runtime and is not an implementation or deployment verdict.
+The destination is the existing `catalyst-pulse` crate (`pulse/`), which builds on `catalyst-comms`. Evolve that implementation in place. Keep Pulse running as `catalyst pulse` in a separate process, and keep the gatekeeper's responsibilities outside it. This guide specifies migration work; the proposed worker decomposition below is not the current runtime and is not an implementation or deployment verdict.
 
 For navigation, start with the [responsibility map](#functional-responsibility-map), then read [threading](#threading-and-scheduling), [shared state](#shared-state-and-rust-ownership), [accepted differences](#accepted-differences-that-a-mechanical-port-must-respect) and the [migration sequence](#migration-sequence-and-evidence).
 
@@ -30,13 +30,13 @@ This guide covers avatar synchronization, both transports, authentication and de
 
 ## Start here if you know the C# code
 
-The current Rust implementation lives in [`comms/src/pulse`](../../comms/src/pulse/mod.rs). Its familiar types are already present, but several responsibilities are combined in [`PulseServer`](../../comms/src/pulse/server/mod.rs). Start with this reading order:
+The current Rust implementation lives in [`pulse/src`](../../pulse/src/lib.rs). Its familiar types are already present, but several responsibilities are combined in [`PulseServer`](../../pulse/src/server/mod.rs). Start with this reading order:
 
-1. [`env.rs`](../../comms/src/pulse/env.rs) assembles the service: the closest equivalent of `Program.cs`.
-2. [`server/mod.rs`](../../comms/src/pulse/server/mod.rs) owns lifecycle and dispatch today: responsibilities spread across `PeersManager` and named handlers in C#.
-3. [`snapshot.rs`](../../comms/src/pulse/snapshot.rs) already contains `PeerSnapshotPublisher` and the boards. [`interest.rs`](../../comms/src/pulse/interest.rs) and [`simulation/mod.rs`](../../comms/src/pulse/simulation/mod.rs) hold interest selection and observer delivery.
-4. [`cluster/mod.rs`](../../comms/src/pulse/cluster/mod.rs), [`feed.rs`](../../comms/src/pulse/cluster/feed.rs) and [`nats.rs`](../../comms/src/pulse/cluster/nats.rs) derive clusters and hand off the feed.
-5. [`transport`](../../comms/src/pulse/transport/mod.rs) owns protocol transport details. Shared protobuf types live in [`comms::protocol::pulse`](../../comms/src/protocol/pulse/mod.rs).
+1. [`env.rs`](../../pulse/src/env.rs) assembles the service: the closest equivalent of `Program.cs`.
+2. [`server/mod.rs`](../../pulse/src/server/mod.rs) owns lifecycle and dispatch today: responsibilities spread across `PeersManager` and named handlers in C#.
+3. [`snapshot.rs`](../../pulse/src/snapshot.rs) already contains `PeerSnapshotPublisher` and the boards. [`interest.rs`](../../pulse/src/interest.rs) and [`simulation/mod.rs`](../../pulse/src/simulation/mod.rs) hold interest selection and observer delivery.
+4. [`cluster/mod.rs`](../../pulse/src/cluster/mod.rs), [`feed.rs`](../../pulse/src/cluster/feed.rs) and [`nats.rs`](../../pulse/src/cluster/nats.rs) derive clusters and hand off the feed.
+5. [`transport`](../../pulse/src/transport/mod.rs) owns protocol transport details. Shared protobuf types live in [`comms::protocol::pulse`](../../comms/src/protocol/pulse/mod.rs).
 
 Rust naming changes are mechanical: `PublishFromPlayerState` becomes `publish_from_player_state`; the type remains `PeerSnapshotPublisher`. An interface becomes a trait without the `I` prefix when it still earns an abstraction. A class with state becomes a `struct` plus `impl`; a stateless helper can be a function in its named module.
 
@@ -44,7 +44,7 @@ Keep a short source-equivalence sentence in each module's `//!` documentation, s
 
 ## Functional responsibility map
 
-The C# column is rooted at `src/DCLPulse/` unless another project is named. The Rust column is rooted at `comms/src/pulse/` unless qualified. Existing locations are navigation aids, not a declaration that every behavior is already equivalent.
+The C# column is rooted at `src/DCLPulse/` unless another project is named. The Rust column is rooted at `pulse/src/` unless qualified; `quantize.rs` and `messages.rs` are in `comms/src/protocol/pulse/`. Existing locations are navigation aids, not a declaration that every behavior is already equivalent.
 
 | C# responsibility | Existing Rust location | Instruction for the migration |
 | --- | --- | --- |
@@ -439,8 +439,8 @@ Run from `services/catalyst` using its pinned toolchain. These are verification 
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked -p catalyst-comms --all-targets -- -D warnings
-cargo test --locked -p catalyst-comms --lib pulse::
+cargo clippy --locked -p catalyst-comms -p catalyst-pulse --all-targets -- -D warnings
+cargo test --locked -p catalyst-pulse --lib
 cargo test --locked -p catalyst --test sockets_1 -- pulse_quantize_differential:: pulse_loopback:: pulse_application_transport::
 cargo test --locked -p catalyst --test sockets_2 -- pulse_webtransport_wire:: pulse_webtransport_loopback:: pulse_batch_bandwidth::
 ```

@@ -189,12 +189,12 @@
     },
     {
       "id": "pulse",
-      "description": "Independent realtime process (catalyst pulse); its code is comms::pulse, listed after comms so the narrower path wins",
+      "description": "Independent realtime process (catalyst pulse); its code is the catalyst-pulse crate",
       "owners": [
         "@decentraland/apis"
       ],
       "paths": [
-        "/services/catalyst/comms/src/pulse/"
+        "/services/catalyst/pulse/"
       ]
     },
     {

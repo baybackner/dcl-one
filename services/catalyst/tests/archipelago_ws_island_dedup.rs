@@ -1251,8 +1251,7 @@ async fn each_device_disconnect_removes_statistics_but_only_last_socket_clears_e
     assert_eq!(active.producer, observed.producer);
     assert_eq!(active.generation, observed.generation);
     // Replay the wire events through an independently registered Pulse projection.
-    let mut pulse =
-        catalyst::comms::pulse::statistics::Statistics::with_incarnation(active.incarnation);
+    let mut pulse = catalyst::comms::statistics::Statistics::with_incarnation(active.incarnation);
     let ProducerReply::Grant(grant) = pulse.control(begin) else {
         panic!("replay producer candidate")
     };

@@ -44,7 +44,7 @@ impl LegacyRoomIntent {
         Some(intent)
     }
 
-    pub(crate) fn position_update(&self) -> ControlPosition {
+    pub fn position_update(&self) -> ControlPosition {
         ControlPosition {
             audience: self.audience.clone(),
             wallet: self.wallet.clone(),

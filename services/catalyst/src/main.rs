@@ -49,7 +49,7 @@ enum Command {
         command: BvimpostersCommand,
     },
     /// Run Pulse (the ENet/UDP + WebTransport realtime layer) in its own
-    /// process; reads the `PULSE_*` contract (`comms::pulse::env::ENV_DOCS`)
+    /// process; reads the `PULSE_*` contract (`pulse::env::ENV_DOCS`)
     /// and installs its own tracing and Prometheus exporter. Deployed as a
     /// second unit beside `serve` (AGENTS.md, "Ownership").
     Pulse,

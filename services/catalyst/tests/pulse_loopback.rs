@@ -2,7 +2,7 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use catalyst::comms::pulse::transport::{Event, Host, HostConfig, Packet, PeerId};
+use catalyst::pulse::transport::{Event, Host, HostConfig, Packet, PeerId};
 
 fn cfg(port: u16) -> HostConfig {
     HostConfig {

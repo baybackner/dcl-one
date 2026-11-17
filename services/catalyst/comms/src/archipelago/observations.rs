@@ -772,7 +772,7 @@ mod tests {
     }
     struct LifecycleBus {
         inner: InProcessBus,
-        state: parking_lot::Mutex<crate::pulse::statistics::Statistics>,
+        state: parking_lot::Mutex<crate::statistics::Statistics>,
         requests: parking_lot::Mutex<Vec<ProducerRequest>>,
         lose_confirmation: std::sync::atomic::AtomicBool,
         hold_confirmation: std::sync::atomic::AtomicBool,
@@ -904,7 +904,7 @@ mod tests {
             3
         );
         let restarted = uuid::Uuid::new_v4();
-        *bus.state.lock() = crate::pulse::statistics::Statistics::with_incarnation(restarted);
+        *bus.state.lock() = crate::statistics::Statistics::with_incarnation(restarted);
         hint(restarted);
         bus.lose_confirmation.store(true, Ordering::Relaxed);
         assert!(out.publish(heartbeat()));
@@ -950,7 +950,7 @@ mod tests {
         .await
         .unwrap();
         let next_source = uuid::Uuid::new_v4();
-        *bus.state.lock() = crate::pulse::statistics::Statistics::with_incarnation(next_source);
+        *bus.state.lock() = crate::statistics::Statistics::with_incarnation(next_source);
         hint(next_source);
         bus.finish_confirmation.notify_one();
         wait(5).await;

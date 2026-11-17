@@ -2,8 +2,8 @@
 use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
-use catalyst::comms::pulse::transport::webtransport::{WtConfig, WtHost};
-use catalyst::comms::pulse::transport::{Event, Host, HostConfig, Packet};
+use catalyst::pulse::transport::webtransport::{WtConfig, WtHost};
+use catalyst::pulse::transport::{Event, Host, HostConfig, Packet};
 use sha2::{Digest, Sha256};
 
 #[tokio::test]

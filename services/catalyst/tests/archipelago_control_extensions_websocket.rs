@@ -560,7 +560,7 @@ async fn legacy_barrier(socket: &mut Socket, token: u8) {
 #[tokio::test]
 async fn configured_legacy_heartbeat_reaches_real_pulse_clustering_over_nats() {
     use catalyst::comms::gatekeeper::bus::BrokerBus;
-    use catalyst::comms::pulse::{
+    use catalyst::pulse::{
         cluster::{
             ClusterOptions, ClusterTracker,
             nats::{NatsClusterFeed, NatsFeedOptions},
@@ -767,7 +767,7 @@ async fn configured_legacy_heartbeat_reaches_real_pulse_clustering_over_nats() {
     legacy_barrier(&mut socket, 18).await;
     // A native registration has no /ws, yet must acquire the known selected SQL predecessor.
     let native = format!("{:#x}", PrivateKeySigner::random().address());
-    let position = catalyst::comms::pulse::decentraland::common::Vector3 {
+    let position = catalyst::pulse::decentraland::common::Vector3 {
         x: 1.0,
         y: 2.0,
         z: 3.0,
@@ -775,7 +775,7 @@ async fn configured_legacy_heartbeat_reaches_real_pulse_clustering_over_nats() {
     board.set_active(0);
     board.publish(
         0,
-        catalyst::comms::pulse::snapshot::PeerSnapshot {
+        catalyst::pulse::snapshot::PeerSnapshot {
             global_position: position,
             realm: Some("shared-realm".into()),
             ..Default::default()

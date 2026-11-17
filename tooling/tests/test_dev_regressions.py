@@ -147,7 +147,7 @@ class InventoryTests(unittest.TestCase):
             ("comms/src/protocol/bus/cluster.rs", "protocol::bus::cluster::tests::", [
                 "selection_retirement_codec_is_exact_bounded_and_negative_only",
             ]),
-            ("comms/src/pulse/cluster/assignments.rs", "pulse::cluster::assignments::current_tests::", [
+            ("pulse/src/cluster/assignments.rs", "cluster::assignments::current_tests::", [
                 "retirement_requires_complete_absence_and_survives_record_and_control_gc",
                 "retirement_withholds_blocked_pending_and_successor_current_evidence",
             ]),
@@ -159,7 +159,7 @@ class InventoryTests(unittest.TestCase):
             ]),
         ]
         for path, prefix, names in cases:
-            target = ("sockets_2", "test") if path == "tests/pulse_cluster_lookup.rs" else (("node_2", "test") if path.startswith("tests/") else ("catalyst_comms", "lib"))
+            target = ("sockets_2", "test") if path == "tests/pulse_cluster_lookup.rs" else (("node_2", "test") if path.startswith("tests/") else (("catalyst_pulse", "lib") if path.startswith("pulse/") else ("catalyst_comms", "lib")))
             required = guard.MANDATORY_ARCHIPELAGO[target]
             source = (ROOT / "services/catalyst" / path).read_text(encoding="utf-8")
             bodies = re.findall(r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]\s*(?:async\s+)?fn\s+(\w+)", source)
@@ -187,7 +187,7 @@ class InventoryTests(unittest.TestCase):
                 "archipelago::observations::tests::disconnect_waiters_retain_admission_credit_across_repeated_churn",
                 "archipelago::observations::tests::disconnect_admission_ignores_link_readiness_but_counts_bus_and_shutdown_loss",
                 "archipelago::observations::tests::refused_observations_count_every_loss_without_logging_on_the_socket_path",
-                "pulse::statistics::tests::draining_changes_releases_bytes_while_the_backlog_stays_nonempty",
+                "statistics::tests::draining_changes_releases_bytes_while_the_backlog_stays_nonempty",
                 "stats::tests::indexed_changes_preserve_order_and_rebuild_after_removal_and_recovery",
                 "stats::tests::http_tests::method_admission_bounds_labels_without_relabeling_accepted_extensions",
                 "stats::tests::content_tests::thumbnail_only_sql_matches_full_projection_for_metadata_and_selection_variants",
@@ -200,12 +200,12 @@ class InventoryTests(unittest.TestCase):
                 "archipelago::handlers::tests::connector_method_flood_preserves_http_without_creating_metric_series",
                 "stats::runtime::tests::connector_observer_bounds_method_labels_and_preserves_known_lowercase_labels",
                 "archipelago::observations::tests::producer_registration_is_lazy_and_recovers_restart_without_replaying_events",
-                "pulse::statistics::tests::invalid_observations_are_counted_without_changing_population",
-                "pulse::statistics::tests::capacity_refuses_registration_without_forgetting_any_cursor",
-                "pulse::statistics::tests::capacity_metrics_report_retention_and_only_refused_registration_attempts",
-                "pulse::statistics::tests::candidate_confirmation_and_restart_preserve_exact_fences",
-                "pulse::statistics::tests::repeated_handovers_keep_every_outgoing_connectors_events_and_cursors",
-                "pulse::statistics::tests::backlog_recovery_retains_complete_state_across_handovers",
+                "statistics::tests::invalid_observations_are_counted_without_changing_population",
+                "statistics::tests::capacity_refuses_registration_without_forgetting_any_cursor",
+                "statistics::tests::capacity_metrics_report_retention_and_only_refused_registration_attempts",
+                "statistics::tests::candidate_confirmation_and_restart_preserve_exact_fences",
+                "statistics::tests::repeated_handovers_keep_every_outgoing_connectors_events_and_cursors",
+                "statistics::tests::backlog_recovery_retains_complete_state_across_handovers",
             ],
             ("catalyst_content", "lib"): [
                 "write_path_tests::a_profile_with_nul_metadata_preserves_the_write_error_and_active_profile",
@@ -368,7 +368,7 @@ class InventoryTests(unittest.TestCase):
     def test_external_target_selection_includes_lib_and_root_integration(self):
         import json
         artifacts = [
-            {"reason": "compiler-artifact", "executable": "unit", "profile": {"test": True}, "target": {"name": "catalyst_comms", "kind": ["lib"]}},
+            {"reason": "compiler-artifact", "executable": "unit", "profile": {"test": True}, "target": {"name": "catalyst_pulse", "kind": ["lib"]}},
             {"reason": "compiler-artifact", "executable": "socket", "profile": {"test": True}, "target": {"name": "sockets_3", "kind": ["test"]}},
             {"reason": "compiler-artifact", "executable": "config", "profile": {"test": True}, "target": {"name": "catalyst_config", "kind": ["lib"]}},
             {"reason": "compiler-artifact", "executable": "auth", "profile": {"test": True}, "target": {"name": "dcl_auth", "kind": ["lib"]}},
@@ -440,12 +440,12 @@ class InventoryTests(unittest.TestCase):
         import json
         artifacts = [{"reason": "compiler-artifact", "executable": executable, "profile": {"test": True},
                       "target": {"name": name, "kind": [kind]}}
-                     for executable, name, kind in [("unit", "catalyst_comms", "lib"), ("socket", "sockets_3", "test")]]
+                     for executable, name, kind in [("unit", "catalyst_pulse", "lib"), ("socket", "sockets_3", "test")]]
         output = "\n".join(map(json.dumps, artifacts))
         names = [entry[2] for entry in guard.EXTERNAL]
 
         def check(environment, listed):
-            with mock.patch.object(guard, "MANDATORY_ARCHIPELAGO", {("catalyst_comms", "lib"): ["required"]}), \
+            with mock.patch.object(guard, "MANDATORY_ARCHIPELAGO", {("catalyst_pulse", "lib"): ["required"]}), \
                  mock.patch.dict(guard.os.environ, environment, clear=True), \
                  mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
                  mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "nats fixture")) as process, \
@@ -885,7 +885,7 @@ class InventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="enet-resolution-") as tmp:
             root = Path(tmp)
             for relative in ["services/catalyst/Cargo.toml", "services/catalyst/Cargo.lock",
-                             "services/catalyst/comms/Cargo.toml", "rendering/bevy-explorer/source/Cargo.toml",
+                             "services/catalyst/pulse/Cargo.toml", "rendering/bevy-explorer/source/Cargo.toml",
                              "rendering/bevy-explorer/source/Cargo.lock", "rendering/bevy-explorer/source/crates/comms/Cargo.toml"]:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)

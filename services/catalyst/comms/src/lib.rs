@@ -1,8 +1,8 @@
-//! Comms and multiplayer, on layer 8 under worlds and social: `pulse` (the
-//! real-time layer), the archipelago connector (the `/ws` sockets that hand
-//! each wallet its island), the comms gatekeeper (admission, moderation,
-//! voice, streaming, the LiveKit webhook and room events) and live presence.
-//! Worlds and social call it; it imports nothing from worlds, social or
+//! Comms and multiplayer, on layer 8 under worlds, social and Pulse (the
+//! real-time layer, `catalyst-pulse`): the archipelago connector (the `/ws`
+//! sockets that hand each wallet its island), the comms gatekeeper (admission,
+//! moderation, voice, streaming, the LiveKit webhook and room events) and live
+//! presence. Worlds, social and Pulse call it; it imports nothing from them or
 //! above. It also owns the vocabulary comms shares with the crates above it: the
 //! world identity types (`world_identity`), the access vocabulary of a world
 //! join (`access`), the per-key rate limiter (`limits`, from `shared`), the worlds error
@@ -31,9 +31,9 @@ pub use crate::shared::limits;
 pub mod metrics;
 pub mod presence;
 pub mod protocol;
-pub mod pulse;
 pub mod rooms;
 pub mod signed_fetch;
+pub mod statistics;
 pub mod stats;
 #[cfg(test)]
 mod test_logs;

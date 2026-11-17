@@ -24,6 +24,7 @@ pub use catalyst_content as content;
 pub use catalyst_explore as explore;
 pub use catalyst_land_authz as land_authz;
 pub use catalyst_price as price;
+pub use catalyst_pulse as pulse;
 pub use catalyst_shared as shared;
 pub use catalyst_shop as shop;
 pub use catalyst_social as social;

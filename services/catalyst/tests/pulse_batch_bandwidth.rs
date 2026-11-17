@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use catalyst::comms::pulse::{
+use catalyst::pulse::{
     batch::{BatchSubject, MAX_BATCH_BYTES, SeqEncoding, encode_batches},
     decentraland::pulse,
     transport::{Event, Host, HostConfig, Packet, PeerId},
@@ -251,7 +251,7 @@ async fn crowded_movement_halves_enet_ipv4_egress_bytes() {
 }
 
 fn measure_webtransport(batch: bool) -> usize {
-    use catalyst::comms::pulse::transport::webtransport::{WtConfig, WtHost};
+    use catalyst::pulse::transport::webtransport::{WtConfig, WtHost};
     use sha2::{Digest, Sha256};
     use wt_client::{Client, ClientConfig, ClientEvent};
 

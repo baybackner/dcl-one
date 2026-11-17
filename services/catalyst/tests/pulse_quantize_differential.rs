@@ -1,5 +1,5 @@
 // from: catalyrst/crates/catalyrst-pulse/tests/quantize_differential.rs
-use catalyst::comms::pulse::quantize::{decode, decode_power, encode, encode_power};
+use catalyst::pulse::quantize::{decode, decode_power, encode, encode_power};
 
 const POS_MIN: f32 = 0.0;
 const POS_MAX: f32 = 16.0;

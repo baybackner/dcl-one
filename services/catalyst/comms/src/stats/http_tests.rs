@@ -1095,7 +1095,7 @@ async fn source_handler_fixtures_match_pulse_state_and_all_http_aliases() {
     let fixture: Value = serde_json::from_str(include_str!("source-fixtures.json")).unwrap();
     let (mut state, docs, _, bus, _sub) = setup();
     state.settings.content_url = fixture["baseUrl"].as_str().unwrap().into();
-    let mut store = crate::pulse::statistics::Statistics::default();
+    let mut store = crate::statistics::Statistics::default();
     let ProducerReply::Grant(grant) = store.control(ProducerRequest::Begin {
         incarnation: uuid::Uuid::nil(),
         producer: uuid::Uuid::nil(),

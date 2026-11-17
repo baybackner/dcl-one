@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use catalyst::comms::pulse::{
+use catalyst::pulse::{
     cluster::nats::{NatsClusterFeed, NatsFeedOptions},
     cluster::{ClusterOptions, ClusterTracker},
     decentraland::common::Vector3,

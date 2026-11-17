@@ -787,7 +787,7 @@ impl catalyst::comms::gatekeeper::bus::NatsBus for RetirementBus {
     }
 }
 
-struct SelectedSourceSockets(Arc<catalyst::comms::pulse::cluster::feed::CurrentAssignments>);
+struct SelectedSourceSockets(Arc<catalyst::pulse::cluster::feed::CurrentAssignments>);
 impl IslandSockets for SelectedSourceSockets {
     fn selected_transport_is_current(&self, snapshot: &PeerClusterSnapshot) -> bool {
         self.0.lookup(&snapshot.wallet, &snapshot.session).as_ref() == Some(snapshot)
@@ -808,8 +808,8 @@ impl IslandSockets for SelectedSourceSockets {
 /// fixtures invoke the same selected writer to control mutation ordering.
 struct RetirementHarness {
     bus: Arc<RetirementBus>,
-    source: Arc<catalyst::comms::pulse::cluster::feed::CurrentAssignments>,
-    identity: catalyst::comms::pulse::snapshot::IdentityBoard,
+    source: Arc<catalyst::pulse::cluster::feed::CurrentAssignments>,
+    identity: catalyst::pulse::snapshot::IdentityBoard,
     subscriber: Arc<ClusterSubscriber>,
     fence: Arc<super::PgAssignmentFence>,
     gateway: Arc<RecordingGateway>,
@@ -825,14 +825,14 @@ impl RetirementHarness {
         harness
     }
     fn new_unstarted(pool: sqlx::PgPool, limit: usize) -> Self {
-        use catalyst::comms::pulse::cluster::{
+        use catalyst::pulse::cluster::{
             ClusterOptions, ClusterTracker,
             feed::{ClusterFeedPublisher, RecordingClusterFeed},
         };
         let feed = Arc::new(RecordingClusterFeed::default());
         let source = feed.current_assignments().unwrap();
         let tracker = ClusterTracker::new(ClusterOptions::default(), 2, feed);
-        let mut identity = catalyst::comms::pulse::snapshot::IdentityBoard::new(2);
+        let mut identity = catalyst::pulse::snapshot::IdentityBoard::new(2);
         tracker.bind_identity(&mut identity);
         let inner = Arc::new(InProcessBus::new());
         let authority = source.clone();
@@ -915,7 +915,7 @@ impl RetirementHarness {
         }
     }
     fn select(&mut self, wallet: &str, session: &str, native: bool) -> PeerClusterSnapshot {
-        use catalyst::comms::pulse::cluster::feed::CurrentAssignment;
+        use catalyst::pulse::cluster::feed::CurrentAssignment;
         self.pass += 1;
         let epoch = if native {
             self.identity

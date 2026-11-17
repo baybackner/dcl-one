@@ -1,6 +1,7 @@
 # catalyst-comms: as-built boundaries
 
-`services/catalyst/comms` (`catalyst-comms`, layer 8) owns comms and multiplayer.
+`services/catalyst/comms` (`catalyst-comms`, layer 8) owns comms and multiplayer;
+Pulse's code is its own crate above it, `services/catalyst/pulse` (`catalyst-pulse`, layer 9).
 The ownership boundary is the [root AGENTS.md "Ownership → comms" bullet](../../../../AGENTS.md#ownership);
 this file adds modules, interfaces and channel contracts. Decisions, findings and acceptance evidence live in the task report; use the [record workflow](README.md).
 
@@ -10,7 +11,7 @@ separate from the current runtime described here.
 
 ## Architectural constraints
 
-- One crate, not four, evolved in place from the moved dcl-one modules.
+- Two crates evolved in place from the moved dcl-one modules: `catalyst-comms` and, above it, `catalyst-pulse`, which only the root crate links ([ADR](../../../../docs/adr/2026-11-17-pulse-crate.md)).
 - Client-facing contracts (HTTP paths, room names, client wire protocol) stay compatible; NATS subjects are internal and change with both ends in one commit.
 - Services talk over core NATS, at most once; it was kept over gRPC, Zenoh and Postgres NOTIFY because it alone covers per-key events, snapshots, fan-out and request/reply.
 - The gatekeeper runs inside the primary `catalyst serve`; only the primary serves `/ws`. Pulse runs as `catalyst pulse`.
@@ -25,7 +26,7 @@ separate from the current runtime described here.
 
 | Module | Runs in | Owns |
 |---|---|---|
-| `pulse` | `catalyst pulse` | avatar sync over ENet UDP (default `:9000`) and WebTransport (`:7743`); islands (`cluster`); the dormant [application relay implementation](../../comms/src/pulse/application_relay/README.md); ban snapshots (`bans`, ETag poll of `GET /bans`); remote flags and per-IP admission (`flags`) |
+| `pulse` (`catalyst-pulse`) | `catalyst pulse` | avatar sync over ENet UDP (default `:9000`) and WebTransport (`:7743`); islands (`cluster`); the dormant [application relay implementation](../../pulse/src/application_relay/README.md); ban snapshots (`bans`, ETag poll of `GET /bans`); remote flags and per-IP admission (`flags`) |
 | `archipelago` | primary `serve` | `/ws`, authenticated observations, socket registrations and enforcement room assignments |
 | `stats` | every `serve` | complete read-only Pulse statistics snapshots, HTTP projections, `CommsCore` and archive views; uncached enrichment through the existing content pool |
 | `gatekeeper::admission` | `serve` | scene, server-scene, world (`world_mint`) and island tokens; the Pulse room authority (`relay_authority`) |
@@ -35,7 +36,8 @@ separate from the current runtime described here.
 | `gatekeeper::webhook`, `events` | `serve` | the one LiveKit webhook; a typed nine-field `RoomEvent` to `RoomEventSink` and `RoomEventStore` |
 | `gatekeeper::bus` | `serve` | `serve`'s one NATS link |
 | `presence`, `topology` | every `serve` | `/live-data`, `/wallet/{w}/connected-world`, capacity counts from LiveKit occupancy; social online from Pulse's topology |
-| `protocol` | all | Pulse proto, legacy archipelago, `bus`, `room_authority`: the only module the services share |
+| `protocol` | all | Pulse proto and its quantized-field codecs, legacy archipelago, `bus`, `room_authority`: the only module the services share |
+| `statistics` | `catalyst pulse` | Pulse's legacy statistics producer state; the in-process bus fake answers producer control with it |
 | `rooms`, `world_identity`, `access`, `limits` (from `shared`), `worlds_envelope`, `writes`, `signed_fetch`, `deny_list` | library | the vocabulary worlds and social use |
 
 Outside: access, room resolution and storage (worlds); privacy, friendships, roles, notification

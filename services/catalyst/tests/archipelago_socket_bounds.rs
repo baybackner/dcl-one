@@ -1485,7 +1485,7 @@ fn heartbeat(x: f32) -> Message {
 async fn orderly_shutdown_drains_authenticated_disconnect_to_live_pulse() {
     use catalyst::comms::gatekeeper::bus::{BrokerBus, NatsBus};
     use catalyst::comms::protocol::bus::statistics::{ProducerReply, ProducerRequest};
-    use catalyst::comms::pulse::cluster::nats::{NatsClusterFeed, NatsFeedOptions};
+    use catalyst::pulse::cluster::nats::{NatsClusterFeed, NatsFeedOptions};
     use std::sync::Arc;
     let broker = nats_broker::Broker::start(&std::env::var("PULSE_NATS_SERVER_BIN").unwrap(), None);
     let bus = Arc::new(BrokerBus::new(

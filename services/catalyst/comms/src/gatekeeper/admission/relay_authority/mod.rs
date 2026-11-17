@@ -1,6 +1,6 @@
 //! The Pulse application relay's room authority: `POST
 //! /internal/pulse/room-authority/v1`, the protobuf endpoint `catalyst
-//! pulse` (`comms::pulse::application_relay::http::HttpAuthority`) asks
+//! pulse` (`HttpAuthority` in `catalyst-pulse`) asks
 //! before it admits a peer to a LiveKit-scoped relay room, on every lease
 //! renewal (at most two seconds apart) and at release. The request is
 //! authenticated with a dedicated HMAC service key (`PULSE_ROOM_AUTHORITY_KEY`,

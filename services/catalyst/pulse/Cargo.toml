@@ -1,0 +1,54 @@
+[package]
+name = "catalyst-pulse"
+version.workspace = true
+edition = "2024"
+description = "Pulse, the realm-wide real-time layer: ENet/UDP and WebTransport sessions, interest and clustering"
+publish = false
+
+[dependencies]
+catalyst-comms = { path = "../comms" }
+catalyst-config = { path = "../config" }
+catalyst-shared = { path = "../shared" }
+dcl-auth.workspace = true
+dcl-http = { workspace = true, features = ["db"] }
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+uuid.workspace = true
+tokio-util.workspace = true
+hex.workspace = true
+base64.workspace = true
+sha2.workspace = true
+reqwest.workspace = true
+url.workspace = true
+prost.workspace = true
+hmac.workspace = true
+getrandom.workspace = true
+rand.workspace = true
+rusty_enet.workspace = true
+web-transport-quinn.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+rustls-pki-types.workspace = true
+async-nats.workspace = true
+metrics.workspace = true
+
+[features]
+test-support = ["catalyst-comms/test-support", "catalyst-shared/test-support", "catalyst-config/test-support"]
+
+[dev-dependencies]
+catalyst-comms = { path = "../comms", features = ["test-support"] }
+catalyst-shared = { path = "../shared", features = ["test-support"] }
+catalyst-config = { path = "../config", features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+alloy = { version = "2", default-features = false, features = ["std", "signer-local"] }
+proptest = "1.11.0"
+rcgen = "0.14.10"

@@ -190,7 +190,7 @@ struct InProcessShared {
     unconfirmed: AtomicBool,
     responder: Mutex<Option<NatsResponder>>,
     #[cfg(any(test, feature = "test-support"))]
-    statistics: Mutex<crate::pulse::statistics::Statistics>,
+    statistics: Mutex<crate::statistics::Statistics>,
 }
 
 impl SubscriptionRegistry for InProcessShared {
@@ -224,7 +224,7 @@ impl InProcessBus {
                 unconfirmed: AtomicBool::new(false),
                 responder: Mutex::new(None),
                 #[cfg(any(test, feature = "test-support"))]
-                statistics: Mutex::new(crate::pulse::statistics::Statistics::default()),
+                statistics: Mutex::new(crate::statistics::Statistics::default()),
             }),
         }
     }

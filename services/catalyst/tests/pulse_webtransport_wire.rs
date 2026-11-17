@@ -6,16 +6,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use prost::Message as _;
 use sha2::{Digest, Sha256};
 
-use catalyst::comms::pulse::PulseServer;
-use catalyst::comms::pulse::decentraland::pulse::{
+use catalyst::pulse::PulseServer;
+use catalyst::pulse::decentraland::pulse::{
     ClientMessage, HandshakeRequest, PlayerState, PlayerStateInput, ServerMessage, client_message,
     server_message,
 };
-use catalyst::comms::pulse::server::ENET_CAPACITY;
-use catalyst::comms::pulse::transport::webtransport::framing::StreamFrameReader;
-use catalyst::comms::pulse::transport::webtransport::framing::{datagram_frame, stream_frame};
-use catalyst::comms::pulse::transport::webtransport::{WtConfig, WtHost};
-use catalyst::comms::pulse::transport::{Host, HostConfig, Transports};
+use catalyst::pulse::server::ENET_CAPACITY;
+use catalyst::pulse::transport::webtransport::framing::StreamFrameReader;
+use catalyst::pulse::transport::webtransport::framing::{datagram_frame, stream_frame};
+use catalyst::pulse::transport::webtransport::{WtConfig, WtHost};
+use catalyst::pulse::transport::{Host, HostConfig, Transports};
 
 use wt_client::{Client, ClientConfig, ClientEvent};
 
@@ -42,7 +42,7 @@ fn now_ms() -> i64 {
 async fn signed_handshake(ts_ms: i64) -> (Vec<u8>, String) {
     use alloy::signers::{Signer, local::PrivateKeySigner};
     use catalyst::auth::{AuthLink, AuthLinkType};
-    use catalyst::comms::pulse::handshake::build_signed_fetch_payload;
+    use catalyst::pulse::handshake::build_signed_fetch_payload;
 
     let root: PrivateKeySigner = ROOT_KEY.parse().unwrap();
     let root_addr = format!("{:#x}", root.address());

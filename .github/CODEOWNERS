@@ -79,7 +79,7 @@
 /library/dcl-livekit-token/ @decentraland/apis
 
 # pulse
-/services/catalyst/comms/src/pulse/ @decentraland/apis
+/services/catalyst/pulse/ @decentraland/apis
 
 # web
 /apps/sites/ @decentraland/web-applications

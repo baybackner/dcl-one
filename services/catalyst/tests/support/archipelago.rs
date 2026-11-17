@@ -156,7 +156,7 @@ pub async fn serve(state: AppState) -> u16 {
 #[derive(Default)]
 struct StatisticsBus {
     bus: catalyst::comms::gatekeeper::bus::InProcessBus,
-    statistics: std::sync::Mutex<catalyst::comms::pulse::statistics::Statistics>,
+    statistics: std::sync::Mutex<catalyst::comms::statistics::Statistics>,
 }
 fn statistics_sequence() -> u64 {
     static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

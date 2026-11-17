@@ -1,7 +1,7 @@
 //! Cross-service projection regressions. LiveKit rosters are adapter-controlled;
 //! Pulse topology, discovery, signed sockets and subscriber admission are real.
 use super::*;
-use catalyst::comms::pulse::cluster::nats::NatsFeedOptions;
+use catalyst::pulse::cluster::nats::NatsFeedOptions;
 use serde_json::{Value, json};
 
 struct Projection {

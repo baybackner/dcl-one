@@ -1,8 +1,23 @@
 //! One Prometheus exporter installer for the Pulse and serve processes.
-use crate::pulse::metrics::{CLUSTER_SIZE_BUCKETS, RESYNC_SEQ_GAP_BUCKETS};
 pub use metrics_exporter_prometheus::PrometheusHandle;
 use metrics_exporter_prometheus::{BuildError, Matcher, PrometheusBuilder};
 use std::net::SocketAddr;
+
+/// Tracks upstream Pulse `ClusterSizeHistogram.BOUNDS`; move it only in lockstep.
+/// Exponential over the reachable range -- a cluster cannot exceed the transport's peer ceiling --
+/// so resolution is fine where nearly every cluster lands and coarse at the top, where only a
+/// collapsed partition reaches.
+pub const CLUSTER_SIZE_BUCKETS: [f64; 13] = [
+    1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0,
+];
+
+/// Tracks upstream Pulse `PulseMetrics.Simulation.RESYNC_SEQ_GAP_BUCKETS`; move it only in
+/// lockstep. Dense around the snapshot ring depth, the eviction cliff a baseline crosses to turn
+/// a targeted delta into a STATE_FULL, with a `0` edge separating "already current" from "one
+/// publish behind" and a tail measuring how many publishes a client went dark for.
+pub const RESYNC_SEQ_GAP_BUCKETS: [f64; 14] = [
+    0.0, 1.0, 2.0, 4.0, 8.0, 10.0, 16.0, 20.0, 24.0, 32.0, 64.0, 128.0, 256.0, 1024.0,
+];
 
 /// The social sockets' lifetime buckets (upstream social-service-ea
 /// `ws_connection_duration_seconds_by_protocol`, seconds).

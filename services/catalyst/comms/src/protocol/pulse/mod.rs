@@ -6,6 +6,10 @@
 //! `library/protocol/proto`; the module tree below keeps the package nesting
 //! (`decentraland::pulse` reaches `AuthChain` as `super::common::AuthChain`).
 
+// The quantized fields' codecs and accessors on the generated Pulse messages.
+pub mod messages;
+pub mod quantize;
+
 #[allow(clippy::all)]
 pub mod decentraland {
     pub mod common {
