@@ -1,6 +1,6 @@
 import { ColliderLayer, engine, Entity, InputAction, inputSystem, RaycastQueryType, RaycastShape, raycastSystem, RaycastSystemCallback, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math';
-import { groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundRayDistance, groundRayNormal, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
+import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayDistance, groundRayNormal, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
 import {
   AIR_JUMP_COOLDOWN, AIR_JUMP_HOLD_ANY_PRESS, AIR_JUMP_HOLD_FROM_PRESS, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS, EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL,
@@ -32,8 +32,28 @@ export function updateVerticalVelocity() {
     return;
   }
   stepUp();
+  leaveEdge();
   applyJumpAndGravity(false);
   snapToGround();
+}
+
+// The avatar stands on an edge: grounded with no ground under the centre (centreSupported), only the rim of the capsule
+// resting on the corner, its centre R * sin(tilt) past it, where the tilt of the contact normal reaches GROUNDED_ANGLE at
+// the most. A move off the edge that carries the centre past that before the next reply lands leaves the ground at
+// once: it goes on at air speed and falls (a jog released at a ledge carries on past it), where a slower one stays on
+// the edge until then. Standing on an edge, the capsule settles onto the corner (snapToGround).
+export var onEdge = false;
+// vertical velocity of the previous reply, still applied until this tick's reply lands
+var edgeLastVy = 0;
+const EDGE_REACH = PLAYER_COLLIDER_RADIUS * Math.sin(GROUNDED_ANGLE * Math.PI / 180);
+function leaveEdge() {
+  edgeLastVy = velocity.y;
+  onEdge = grounded && !stepping && jumpStartHeight === undefined && !centreSupported();
+  const h = Math.hypot(groundNormal.x, groundNormal.z);
+  if (!onEdge || h < 1e-3) return;
+  const out = (velocity.x * groundNormal.x + velocity.z * groundNormal.z) / h;
+  const ahead = tickTime + replyDelay * frameTime;
+  if (out > 0 && PLAYER_COLLIDER_RADIUS * h + out * ahead > EDGE_REACH) setGrounded(false);
 }
 
 // ---------------------------------------------------------------- jump and gravity
@@ -52,6 +72,7 @@ type VState = {
   step: number; // steps run so far
   lastGroundedStep: number;
   triggerStep: number; // step the latest press is due on
+  pressBack: number; // steps the latest press may predate its due step (it was made in an earlier frame of its tick)
   consumedStep: number; // step the latest jump launched on
   jumpCount: number; // jumps since the ground (falling past the grace window counts as one)
   glideWanted: boolean;
@@ -70,7 +91,7 @@ const NEVER = -1e9;
 const vstate: VState = {
   vy: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false,
   gliding: false, glideEndStep: NEVER, launched: false, y: 0, airPressStep: NEVER, airLaunchStep: NEVER, airLaunched: false,
-  heldSincePress: false, topY: -Infinity, stunEndStep: NEVER,
+  heldSincePress: false, topY: -Infinity, stunEndStep: NEVER, pressBack: 0,
 };
 const vprobe: VState = { ...vstate };
 var vpending = 0;
@@ -93,6 +114,7 @@ function copyVState(from: VState, to: VState) {
   to.gliding = from.gliding; to.glideEndStep = from.glideEndStep; to.launched = from.launched; to.y = from.y;
   to.airPressStep = from.airPressStep; to.airLaunchStep = from.airLaunchStep; to.airLaunched = from.airLaunched;
   to.heldSincePress = from.heldSincePress; to.topY = from.topY; to.stunEndStep = from.stunEndStep;
+  to.pressBack = from.pressBack;
 }
 
 // Ground height under the avatar this tick (-Infinity: none in range). An air jump needs the model above it.
@@ -147,7 +169,8 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   if (!hover) {
     // the grace window both buffers an early press and allows a late jump off an edge
     const grace = s.vy > 0 || s.step < JUMP_GRACE_STEPS ? 0 : JUMP_GRACE_STEPS;
-    const coyote = s.step - s.lastGroundedStep < grace;
+    // a late jump off an edge counts from when the press may have been made, not from when the tick saw it
+    const coyote = s.step - (s.step === s.triggerStep ? s.pressBack : 0) - s.lastGroundedStep < grace;
     if (!onGround && !coyote) s.jumpCount = Math.max(s.jumpCount, 1);
     const canJump = s.jumpCount === 0 && (onGround || coyote) && maxGroundJumps > 0 && jumpHeight > 0;
     const wants = s.step === s.triggerStep || s.step <= s.triggerStep + grace;
@@ -268,8 +291,9 @@ function applyJumpAndGravity(noGravity: boolean) {
   // a published launch the committed steps have not reached yet: the model is still on the ground, even when the
   // published launch has already lifted the avatar past the grounded height
   const onGround = (grounded || launchPending) && !isLaunched();
-  // on the ground the model stands where the avatar stands
-  if (onGround && vstate.vy <= 0) vstate.y = playerPosition.y - Math.max(0, groundDistance);
+  // on the ground the model stands where the avatar stands (a published late jump off an edge launches from where the
+  // model is, not from the ground below the avatar)
+  if (onGround && vstate.vy <= 0 && (grounded || vstate.lastGroundedStep === vstate.step)) vstate.y = playerPosition.y - Math.max(0, groundDistance);
   // in the air the stun's top is the avatar's highest point since the ground, or its height while gliding
   if (!onGround) vstate.topY = vstate.gliding ? playerPosition.y : Math.max(vstate.topY, playerPosition.y);
   const stepPressed = INPUT_DELAY_TICKS > 0 ? prevJumpPressed : pressed;
@@ -292,7 +316,11 @@ function applyJumpAndGravity(noGravity: boolean) {
   if (onGround || vstate.step >= airPublishedStep || (vstate.airLaunchStep === NEVER && vstate.triggerStep === NEVER)) airPublishedStep = NEVER;
 
   // a press is due on the first step after this frame
-  if (pressed && !jumpWasPressed) vstate.triggerStep = vstate.step + 1;
+  if (pressed && !jumpWasPressed) {
+    vstate.triggerStep = vstate.step + 1;
+    // the frames of this tick before the current one (none when the scene answers every frame)
+    vstate.pressBack = Math.max(0, Math.round((tickAdvance - frameTime) / FIXED_STEP));
+  }
   jumpWasPressed = pressed;
   prevJumpPressed = pressed;
   prevRunning = running;
@@ -509,11 +537,21 @@ function snapToGround() {
     && (groundDistance < GROUND_SNAP_HEIGHT + unrequestedLift || probesAllowSnap(GROUND_SNAP_HEIGHT + unrequestedLift)) // close enough
     && stepDropAllowsSnap() // not down a step (STEP_DOWN_FALLS)
     && groundRayNormal.y >= GROUNDED_ANGLE_Y_LEN // not onto a slope too steep to walk (off a crest the avatar falls)
+    && !onEdge // not onto the corner of an edge (below)
   ) {
     snapSpeed = Math.max(0, groundDistance / stepTime);
     velocity.y -= snapSpeed;
     setGrounded(true); // maintain prevGrounded for next frame
     followsGround = true;
+  } else if (onEdge && grounded && jumpStartHeight === undefined && !launched && !stepping && prevGrounded
+    && Vector3.lengthSquared(movementAxis) === 0 && Math.hypot(velocity.x, velocity.z) < 0.1) {
+    // standing on an edge: the capsule settles onto the corner. The engine must not push it into the corner, which would
+    // slide it off the edge: the reply closes half the gap the previous reply leaves until this one lands, over the time
+    // a reply is held (frame times jitter, so the rest is left to the next ticks).
+    const gap = Math.max(0, groundDistance) + Math.min(0, edgeLastVy) * replyDelay * frameTime;
+    snapSpeed = Math.max(0, gap) / (2 * Math.max(stepTime, tickTime));
+    velocity.y -= snapSpeed;
+    followsGround = false;
   } else {
     snapSpeed = 0;
     followsGround = false;

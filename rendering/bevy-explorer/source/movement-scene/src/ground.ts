@@ -202,6 +202,15 @@ export function probesAllowSnap(maxRise: number): boolean {
     return sampled && height - (playerPosition.y - groundDistance) <= GROUND_SNAP_HEIGHT;
 }
 
+// Walkable ground under the centre, no further below the capsule's contact than the ground snap follows (a step of
+// GROUND_SNAP_STEP_DROP, see stepDropAllowsSnap; with STEP_DOWN_FALLS off, GROUND_SNAP_HEIGHT). False on an edge: only
+// the rim of the capsule rests on the corner of a ledge, a riser or a steep crest.
+export function centreSupported(): boolean {
+    if (groundRayDistance === Infinity || groundRayNormal.y < GROUNDED_ANGLE_Y_LEN) return false;
+    const drop = groundRayDistance - Math.max(0, groundDistance);
+    return STEP_DOWN_FALLS ? drop <= GROUND_SNAP_STEP_DROP && stepDropAllowsSnap() : drop <= GROUND_SNAP_HEIGHT;
+}
+
 // STEP_DOWN_FALLS: snap follows the ground under the centre down from where the feet stood last tick by at most
 // GROUND_SNAP_STEP_DROP beyond what the slope of the ground (then or now) accounts for over the distance moved since;
 // past a larger drop (a step edge) the avatar falls.
