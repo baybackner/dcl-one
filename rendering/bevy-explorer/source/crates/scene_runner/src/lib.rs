@@ -97,6 +97,8 @@ pub struct SceneUpdates {
     pub jobs_in_flight: HashSet<Entity>,
     pub update_deadline: SystemTime,
     pub eligible_jobs: usize,
+    /// When this frame's scene loop started.
+    pub loop_start_time: Instant,
     pub loop_end_time: Instant,
     /// The frame length `run_scene_loop` last targeted (vsync refresh rate or the fps target,
     /// with the session override); None when the target is uncapped (fps 0).
@@ -370,6 +372,7 @@ impl Plugin for SceneRunnerPlugin {
             update_deadline: web_time::SystemTime::now(),
             eligible_jobs: 0,
             scene_queue: Default::default(),
+            loop_start_time: Instant::now(),
             loop_end_time: Instant::now(),
             frame_target: None,
             priority_scenes: Default::default(),
@@ -506,6 +509,7 @@ fn run_scene_loop(world: &mut World) {
     loop_schedule.next_frame_end = target_end_time + frame_target_duration;
 
     let mut updates = world.resource_mut::<SceneUpdates>();
+    updates.loop_start_time = start_loop_time;
     updates.loop_end_time = target_end_time;
     updates.frame_target = (fps != 0.0).then_some(frame_target_duration);
 
@@ -1417,6 +1421,12 @@ fn send_scene_updates(
     } else {
         context.set_in_flight(true);
         context.last_sent = now;
+        context.tick_timing.sent = Some(renderer_context::SentTiming {
+            at: Instant::now(),
+            frame: engine_info.frame.0,
+            loop_start: updates.loop_start_time,
+            deadline: updates.loop_end_time,
+        });
         dcl_assert!(!updates.jobs_in_flight.contains(&ent));
         updates.jobs_in_flight.insert(ent);
     }
@@ -1535,6 +1545,13 @@ fn receive_scene_updates(
                             }
                             context.total_runtime = runtime.0;
                             context.last_update_frame = frame.0;
+                            context.tick_timing.reply = context.tick_timing.sent.map(|sent| {
+                                renderer_context::ReplyTiming {
+                                    sent,
+                                    at: Instant::now(),
+                                    frame: frame.0,
+                                }
+                            });
                             // extend (not assign) so renderer-side births (the inspector's /new_entity
                             // adds the freshly-allocated ids straight to `nascent`) aren't clobbered by
                             // the scene's reported births. `nascent` is drained every lifecycle pass, so

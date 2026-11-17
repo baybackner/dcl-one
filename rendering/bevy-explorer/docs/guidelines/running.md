@@ -293,7 +293,12 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   `locomotion`: the latest movement model state the movement scene printed to its console as one
   line `LOCO {...}` (`console.log('LOCO ' + JSON.stringify(state))`; the object is copied as
   printed: `t` the scene tick, `gait`, `grounded`, `jump_count`, `glide`, `stunned`, `sliding`),
-  `null` before the first such line.
+  `null` before the first such line. Also under `extra`, the movement scene's tick timing:
+  `scene_sent` (ms after the frame's scene loop started that the scene was dispatched; `null` when
+  it was not dispatched in the frame), and for the reply applied in the frame `scene_reply_late`
+  (ms after the deadline of the frame it was dispatched in that the engine received it, negative
+  before it; a late reply is received at the next frame's first poll) and `scene_reply_frames`
+  (frames from its dispatch, 0 when it landed in its own frame); both `null` without a reply.
   The footer holds `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
   and, under `extra`, `input_mismatch_frames` (frames whose input, jump included, differs from the
   scenario's) and `scene_tick_frames`.
@@ -302,6 +307,15 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   The reply is `enabled` and the count of `clips` still playing. Foot IK (`/footik`) is separate.
 - `/movement_state`: the active locomotion settings and the last completed movement step's
   `requested`, `actual` and `external` velocities, in SDK axes.
+- `/movement_scene_replies`: over the last 256 frames the movement scene controlled the player,
+  sampled whether or not anything reads them: `frames`, `missRate` (% of frames that applied no
+  reply dispatched in the same frame) and `missed` (`[late, not dispatched]`: frames whose reply
+  came after the frame's deadline, and frames the scene's previous tick was still in flight), and
+  `[min, mean, max]` ms of `sent` (dispatch after the frame's scene loop started),
+  `sentBeforeDeadline`, `onTime` (replies before their frame's deadline, ms before it) and `late`
+  (replies after it, ms after it), `lateFrames` (`[mean, max]` frames a late reply waited),
+  `frameTarget` (ms) and the `scene` title. The debug panel's "Movement Scene Replies" section
+  shows it.
 
 The HUD and input:
 

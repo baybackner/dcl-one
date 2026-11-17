@@ -45,8 +45,9 @@ use dcl_component::proto_components::common::Vector3;
 use dcl_types::SceneLogMessage;
 use input_manager::{InputManager, InputPriority};
 use scene_runner::{
-    initialize_scene::PARCEL_SIZE, renderer_context::RendererSceneContext, ContainingScene,
-    OutOfWorld,
+    initialize_scene::PARCEL_SIZE,
+    renderer_context::{RendererSceneContext, SceneTickTiming},
+    ContainingScene, OutOfWorld,
 };
 use serde::Deserialize;
 
@@ -504,6 +505,26 @@ fn horizontal_speed(v: Option<Vector3>) -> f32 {
 
 // --- formatting ---
 
+/// The controlling scene's tick timing in a frame's `extra`, each key followed by a comma:
+/// `scene_sent` (ms after the frame's scene loop started that the scene was dispatched; null when
+/// it was not dispatched this frame), `scene_reply_late` (for the reply applied this frame, ms
+/// after its dispatch frame's deadline that the engine received it, negative before it; null
+/// without one) and `scene_reply_frames` (frames from that reply's dispatch to this frame).
+fn tick_timing_json(timing: Option<&SceneTickTiming>, frame: u32) -> String {
+    let sent = timing
+        .and_then(|t| t.sent)
+        .filter(|sent| sent.frame == frame);
+    let reply = timing
+        .and_then(|t| t.reply)
+        .filter(|reply| reply.frame == frame);
+    format!(
+        "\"scene_sent\":{},\"scene_reply_late\":{},\"scene_reply_frames\":{},",
+        sent.map_or("null".into(), |s| num(f64::from(s.after_start_ms()))),
+        reply.map_or("null".into(), |r| num(f64::from(r.after_deadline_ms()))),
+        reply.map_or("null".into(), |r| r.frames().to_string()),
+    )
+}
+
 fn num(v: f64) -> String {
     if !v.is_finite() {
         return "null".into();
@@ -701,7 +722,9 @@ impl Run {
     ///   `grounded`, `yaw_avatar`, `yaw_camera`, and `extra`: the `kind` (gait), `vel_requested`
     ///   (by the movement scene), `vel_external` (SDK forces and impulses), `scene_tick` (1
     ///   when the controlling scene's reply landed this frame, 0 when the frame reused its last
-    ///   one) and `locomotion` (the latest movement model state the controlling scene printed in a
+    ///   one), `scene_sent`, `scene_reply_late` and `scene_reply_frames` (the scene's dispatch
+    ///   and reply times against the frame's deadline, [`tick_timing_json`]) and `locomotion`
+    ///   (the latest movement model state the controlling scene printed in a
     ///   `LOCO {...}` console line, as printed; `null` before the first).
     /// - footer: `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
     ///   and `extra.input_mismatch_frames` (frames whose input differs from the scenario's) and
@@ -1327,9 +1350,8 @@ fn record_frame(
         if !consumed.matches(&expected) {
             run.mismatches += 1;
         }
-        let scene_tick = scenes
-            .get(movement.scene())
-            .is_ok_and(|ctx| ctx.last_update_frame == frame.0);
+        let scene_ctx = scenes.get(movement.scene()).ok();
+        let scene_tick = scene_ctx.is_some_and(|ctx| ctx.last_update_frame == frame.0);
         run.scene_ticks += scene_tick as u32;
         let yaw_camera = camera
             .single()
@@ -1340,7 +1362,7 @@ fn record_frame(
                 "{{\"type\":\"frame\",\"i\":{},\"t\":{},\"dt\":{},\"in\":{},",
                 "\"pos\":{},\"vel\":{},\"grounded\":{},",
                 "\"yaw_avatar\":{},\"yaw_camera\":{},\"extra\":{{\"kind\":\"{}\",",
-                "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{},",
+                "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{},{}",
                 "\"locomotion\":{}}}}}"
             ),
             i,
@@ -1356,6 +1378,7 @@ fn record_frame(
             sdk_vector(step.requested_velocity),
             sdk_vector(step.external_velocity),
             scene_tick as u8,
+            tick_timing_json(scene_ctx.map(|ctx| &ctx.tick_timing), frame.0),
             run.locomotion.as_deref().unwrap_or("null"),
         ));
         run.last_position = position;
@@ -1573,6 +1596,61 @@ mod tests {
         let world = world_translation(Vec3::new(32.0, 0.0, 8.0), base);
         assert_eq!(world, Vec3::new(1376.0, 0.0, 88.0));
         assert_eq!(scene_position(world, base), Vec3::new(32.0, 0.0, 8.0));
+    }
+
+    #[test]
+    fn a_frame_writes_the_movement_scenes_dispatch_and_reply_times() {
+        use scene_runner::renderer_context::{ReplyTiming, SentTiming};
+        use std::time::Duration;
+        use std::time::Instant;
+
+        // the keys as the frame line carries them, each followed by a comma
+        let fields = |keys: String| -> serde_json::Value {
+            serde_json::from_str(&format!("{{{}}}", keys.trim_end_matches(','))).unwrap()
+        };
+        let start = Instant::now();
+        let ms = |v: u64| start + Duration::from_millis(v);
+        let sent = |frame, at| SentTiming {
+            at: ms(at),
+            frame,
+            loop_start: ms(0),
+            deadline: ms(16),
+        };
+        // dispatched in frame 7, 2 ms into the loop; frame 6's reply came 3 ms after its deadline
+        let timing = SceneTickTiming {
+            sent: Some(sent(7, 2)),
+            reply: Some(ReplyTiming {
+                sent: sent(6, 4),
+                at: ms(19),
+                frame: 7,
+            }),
+        };
+        assert_eq!(
+            fields(tick_timing_json(Some(&timing), 7)),
+            serde_json::json!({"scene_sent": 2.0, "scene_reply_late": 3.0, "scene_reply_frames": 1})
+        );
+        // a frame with neither
+        assert_eq!(
+            fields(tick_timing_json(Some(&timing), 8)),
+            serde_json::json!({"scene_sent": null, "scene_reply_late": null, "scene_reply_frames": null})
+        );
+        // a reply 5 ms before the deadline of the frame it was dispatched in
+        let timing = SceneTickTiming {
+            sent: Some(sent(7, 2)),
+            reply: Some(ReplyTiming {
+                sent: sent(7, 2),
+                at: ms(11),
+                frame: 7,
+            }),
+        };
+        assert_eq!(
+            fields(tick_timing_json(Some(&timing), 7)),
+            serde_json::json!({"scene_sent": 2.0, "scene_reply_late": -5.0, "scene_reply_frames": 0})
+        );
+        assert_eq!(
+            fields(tick_timing_json(None, 7)),
+            serde_json::json!({"scene_sent": null, "scene_reply_late": null, "scene_reply_frames": null})
+        );
     }
 
     #[test]

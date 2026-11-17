@@ -137,6 +137,71 @@ pub struct RendererSceneContext {
     pub resource_counters: Option<SceneResourceCounters>,
     pub(crate) counter_sample_time: Option<web_time::Instant>,
     pub(crate) crdt_bytes_per_second: Option<f64>,
+    /// When the scene's last tick was dispatched and its last reply arrived, against the frame's
+    /// scene loop.
+    pub tick_timing: SceneTickTiming,
+}
+
+/// A scene tick's dispatch: when it left and the frame's scene loop it left in.
+#[derive(Debug, Clone, Copy)]
+pub struct SentTiming {
+    pub at: web_time::Instant,
+    pub frame: u32,
+    /// When the frame's scene loop started.
+    pub loop_start: web_time::Instant,
+    /// When the frame's scene loop ends: a reply that arrives later is applied in a later frame.
+    pub deadline: web_time::Instant,
+}
+
+impl SentTiming {
+    /// Milliseconds from the start of the frame's scene loop to the dispatch.
+    pub fn after_start_ms(&self) -> f32 {
+        signed_ms(self.at, self.loop_start)
+    }
+
+    /// Milliseconds from the dispatch to the end of the frame's scene loop.
+    pub fn before_deadline_ms(&self) -> f32 {
+        signed_ms(self.deadline, self.at)
+    }
+}
+
+/// A scene tick's reply: its dispatch, and when and in which frame the engine received it.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplyTiming {
+    pub sent: SentTiming,
+    /// When the engine received the reply. A reply that arrives after its frame's scene loop
+    /// ended is received at the next loop's first poll.
+    pub at: web_time::Instant,
+    pub frame: u32,
+}
+
+impl ReplyTiming {
+    /// Frames from the dispatch to the frame the reply was applied in (0: the same frame).
+    pub fn frames(&self) -> u32 {
+        self.frame.wrapping_sub(self.sent.frame)
+    }
+
+    /// Milliseconds from the end of the dispatch frame's scene loop to the reply (negative: the
+    /// reply arrived before it).
+    pub fn after_deadline_ms(&self) -> f32 {
+        signed_ms(self.at, self.sent.deadline)
+    }
+}
+
+/// The last dispatch and reply of a scene ([`RendererSceneContext::tick_timing`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SceneTickTiming {
+    pub sent: Option<SentTiming>,
+    pub reply: Option<ReplyTiming>,
+}
+
+/// `a - b` in milliseconds, negative when `a` is earlier.
+fn signed_ms(a: web_time::Instant, b: web_time::Instant) -> f32 {
+    if a >= b {
+        (a - b).as_secs_f32() * 1000.0
+    } else {
+        -(b - a).as_secs_f32() * 1000.0
+    }
 }
 
 /// Block reason used by /freeze_scene and /tick_scene.
@@ -254,6 +319,7 @@ impl RendererSceneContext {
             resource_counters: None,
             counter_sample_time: None,
             crdt_bytes_per_second: None,
+            tick_timing: SceneTickTiming::default(),
         };
 
         new_context.live_entities[SceneEntityId::ROOT.id as usize] =

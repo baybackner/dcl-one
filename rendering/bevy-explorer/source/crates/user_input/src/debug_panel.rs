@@ -1,17 +1,23 @@
-use bevy::prelude::*;
+use std::collections::VecDeque;
+
+use bevy::{diagnostic::FrameCount, prelude::*};
 use bevy_console::ConsoleCommand;
 use common::structs::{AvatarDynamicState, PrimaryCamera, PrimaryUser};
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use dcl_component::proto_components::common::Vector3;
-use serde_json::json;
+use scene_runner::{renderer_context::RendererSceneContext, SceneUpdates};
+use serde_json::{json, Value};
 
 use crate::avatar_movement::{
     ActivePlayerComponent, AvatarLocomotionSettings, AvatarMovement, LastMovementStep,
 };
 
 pub(super) fn register(app: &mut App) {
-    app.add_console_command::<CameraState, _>(camera_state)
+    app.init_resource::<MovementSceneReplies>()
+        .add_systems(PostUpdate, sample_movement_scene_replies)
+        .add_console_command::<CameraState, _>(camera_state)
         .add_console_command::<MovementState, _>(movement_state)
+        .add_console_command::<MovementSceneRepliesCommand, _>(movement_scene_replies)
         .add_preview_console_command::<CameraSensitivity, _>(camera_sensitivity)
         .add_preview_debug_inputs(DebugSection {
             title: "Camera",
@@ -51,7 +57,179 @@ pub(super) fn register(app: &mut App) {
             ],
             inputs: &[],
             actions: &[],
+        })
+        .add_debug_section(DebugSection {
+            title: "Movement Scene Replies",
+            query: "/movement_scene_replies",
+            fields: &[
+                ("Movement scene", "scene"),
+                ("Frames sampled (last 256)", "frames"),
+                ("Frame target (ms)", "frameTarget"),
+                ("Frames without a reply from the same frame (%)", "missRate"),
+                (
+                    "Frames without a reply from the same frame (late reply / not dispatched)",
+                    "missed",
+                ),
+                (
+                    "Dispatch after the frame's scene loop start (ms) (min / mean / max)",
+                    "sent",
+                ),
+                (
+                    "Dispatch before the frame's deadline (ms) (min / mean / max)",
+                    "sentBeforeDeadline",
+                ),
+                (
+                    "Reply in time: before the deadline (ms) (min / mean / max)",
+                    "onTime",
+                ),
+                (
+                    "Reply late: after the deadline (ms) (min / mean / max)",
+                    "late",
+                ),
+                ("Reply late: frames to apply (mean / max)", "lateFrames"),
+            ],
+            inputs: &[],
+            actions: &[],
         });
+}
+
+/// Frames [`MovementSceneReplies`] keeps.
+const REPLY_WINDOW: usize = 256;
+
+/// One frame of the movement scene's ticks, from the scene runner's dispatch and reply times.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct ReplySample {
+    /// The scene was dispatched this frame: ms after the frame's scene loop started, ms before
+    /// its deadline.
+    sent: Option<(f32, f32)>,
+    /// A reply was applied this frame: frames since its dispatch, ms after its dispatch frame's
+    /// deadline (negative: before it).
+    reply: Option<(u32, f32)>,
+}
+
+/// The movement scene's last [`REPLY_WINDOW`] frames, sampled whether or not the panel is open.
+#[derive(Resource, Default)]
+struct MovementSceneReplies {
+    scene: Option<Entity>,
+    frames: VecDeque<ReplySample>,
+}
+
+fn sample_movement_scene_replies(
+    player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
+    scenes: Query<&RendererSceneContext>,
+    frame: Res<FrameCount>,
+    mut replies: ResMut<MovementSceneReplies>,
+) {
+    let scene = player
+        .single()
+        .ok()
+        .map(|active| active.scene())
+        .filter(|&e| e != Entity::PLACEHOLDER);
+    let Some((scene, context)) = scene.and_then(|e| scenes.get(e).ok().map(|c| (e, c))) else {
+        return;
+    };
+    if replies.scene != Some(scene) {
+        replies.scene = Some(scene);
+        replies.frames.clear();
+    }
+    if replies.frames.len() == REPLY_WINDOW {
+        replies.frames.pop_front();
+    }
+    replies.frames.push_back(reply_sample(context, frame.0));
+}
+
+fn reply_sample(context: &RendererSceneContext, frame: u32) -> ReplySample {
+    let timing = &context.tick_timing;
+    ReplySample {
+        sent: timing
+            .sent
+            .filter(|sent| sent.frame == frame)
+            .map(|sent| (sent.after_start_ms(), sent.before_deadline_ms())),
+        reply: timing
+            .reply
+            .filter(|reply| reply.frame == frame)
+            .map(|reply| (reply.frames(), reply.after_deadline_ms())),
+    }
+}
+
+/// `[min, mean, max]`, rounded to 0.01, or null without values.
+fn spread(values: impl Iterator<Item = f32>) -> Value {
+    let (mut n, mut sum, mut min, mut max) = (0, 0.0, f32::INFINITY, f32::NEG_INFINITY);
+    for v in values {
+        n += 1;
+        sum += v;
+        min = min.min(v);
+        max = max.max(v);
+    }
+    let r = |v: f32| (f64::from(v) * 100.0).round() / 100.0;
+    if n == 0 {
+        Value::Null
+    } else {
+        json!([r(min), r(sum / n as f32), r(max)])
+    }
+}
+
+/// The panel's figures over the sampled frames. A frame misses when no reply dispatched in it
+/// was applied in it: its reply came after the deadline, or the scene was not dispatched (its
+/// previous tick was still in flight).
+fn summarize_replies(frames: &VecDeque<ReplySample>) -> Value {
+    let on_time = |f: &&ReplySample| f.reply.is_some_and(|(n, _)| n == 0);
+    let late = frames
+        .iter()
+        .filter(|f| !on_time(f) && f.sent.is_some())
+        .count();
+    let not_sent = frames
+        .iter()
+        .filter(|f| !on_time(f) && f.sent.is_none())
+        .count();
+    let replies = || frames.iter().filter_map(|f| f.reply);
+    let late_frames = spread(replies().filter(|(n, _)| *n > 0).map(|(n, _)| n as f32));
+    json!({
+        "frames": frames.len(),
+        "missRate": (!frames.is_empty())
+            .then(|| ((late + not_sent) as f64 * 1000.0 / frames.len() as f64).round() / 10.0),
+        "missed": [late, not_sent],
+        "sent": spread(frames.iter().filter_map(|f| f.sent).map(|(start, _)| start)),
+        "sentBeforeDeadline": spread(frames.iter().filter_map(|f| f.sent).map(|(_, d)| d)),
+        "onTime": spread(replies().filter(|(n, _)| *n == 0).map(|(_, ms)| -ms)),
+        "late": spread(replies().filter(|(n, _)| *n > 0).map(|(_, ms)| ms)),
+        "lateFrames": late_frames.as_array().map(|a| json!([a[1], a[2]])),
+    })
+}
+
+/// Read when the movement scene's ticks were dispatched in their frame and how their replies
+/// met the frame's deadline, over the last 256 frames.
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/movement_scene_replies")]
+struct MovementSceneRepliesCommand;
+
+fn movement_scene_replies(
+    mut cmd: ConsoleCommand<MovementSceneRepliesCommand>,
+    replies: Res<MovementSceneReplies>,
+    scenes: Query<&RendererSceneContext>,
+    updates: Res<SceneUpdates>,
+) {
+    let Some(Ok(_)) = cmd.take() else { return };
+    let mut report = summarize_replies(&replies.frames);
+    let title = replies
+        .scene
+        .and_then(|e| scenes.get(e).ok())
+        .map(|context| context.title.clone());
+    report["scene"] = json!(title);
+    report["frameTarget"] = json!(updates
+        .frame_target
+        .map(|d| (d.as_secs_f64() * 100_000.0).round() / 100.0));
+    report["unavailable"] = json!({
+        "": "No movement scene has controlled the player yet.",
+        "frameTarget": "The frame rate is uncapped.",
+        "missRate": "No frames sampled.",
+        "sent": "The movement scene was not dispatched in the sampled frames.",
+        "sentBeforeDeadline": "The movement scene was not dispatched in the sampled frames.",
+        "onTime": "No reply arrived in its own frame.",
+        "late": "No reply arrived after its frame's deadline.",
+        "lateFrames": "No reply arrived after its frame's deadline.",
+    });
+    cmd.reply_ok(report.to_string());
 }
 
 /// Read the player's camera.
@@ -177,6 +355,39 @@ mod tests {
         assert_eq!(report["requested"], json!([0.0, 0.0, 0.0]));
         assert_eq!(report["actual"], json!([0.0, 0.0, 0.0]));
         assert!(report["external"].is_null());
+    }
+
+    #[test]
+    fn replies_are_summarized_as_misses_dispatch_times_and_lateness() {
+        let on_time = ReplySample {
+            sent: Some((1.0, 15.0)),
+            reply: Some((0, -5.0)),
+        };
+        // dispatched, its reply 2 ms after the deadline; applied in the next frame, which the
+        // scene's tick still in flight kept from dispatching
+        let late = ReplySample {
+            sent: Some((3.0, 13.0)),
+            reply: None,
+        };
+        let applied_late = ReplySample {
+            sent: None,
+            reply: Some((1, 2.0)),
+        };
+        let frames = VecDeque::from([on_time, late, applied_late, on_time]);
+        let report = summarize_replies(&frames);
+        assert_eq!(report["frames"], 4);
+        assert_eq!(report["missRate"], 50.0);
+        assert_eq!(report["missed"], json!([1, 1]));
+        assert_eq!(report["sent"], json!([1.0, 1.67, 3.0]));
+        assert_eq!(report["sentBeforeDeadline"], json!([13.0, 14.33, 15.0]));
+        assert_eq!(report["onTime"], json!([5.0, 5.0, 5.0]));
+        assert_eq!(report["late"], json!([2.0, 2.0, 2.0]));
+        assert_eq!(report["lateFrames"], json!([1.0, 1.0]));
+
+        let report = summarize_replies(&VecDeque::new());
+        assert!(report["missRate"].is_null());
+        assert!(report["late"].is_null());
+        assert!(report["lateFrames"].is_null());
     }
 
     // The scenes' broadcast clears `AvatarMovementInfo` at the start of each frame, before a
