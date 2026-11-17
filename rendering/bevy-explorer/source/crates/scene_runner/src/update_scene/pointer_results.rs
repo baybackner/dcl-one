@@ -887,7 +887,8 @@ fn resolve_pointer_target(
     }
 
     // a synthetic aim at a scene-UI element holds the pointer on it, as the cursor's hover would
-    let aimed_ui = synthetic.0.as_ref().and_then(|aim| match aim.at {
+    let aim = synthetic.0.as_ref();
+    let aimed_ui = aim.and_then(|aim| match aim.at {
         AimAt::Ui { target, .. } => Some(target),
         _ => None,
     });
@@ -903,8 +904,17 @@ fn resolve_pointer_target(
             face: None,
             ty: PointerTargetType::Ui,
         });
+    } else if aim.is_some_and(|aim| aim.started_frame == tick.0) {
+        // an aim set this frame came after the world target was cast: that target is the cursor's
+        // or the previous aim's, at its distance, so nothing is under the aim yet
+        target.0 = None;
     } else {
         match &ui_target.0 {
+            // a world aim passes through the screen's UI: the element under the cursor is not
+            // under the aim
+            UiPointerTargetValue::Primary(..) if aim.is_some() => {
+                target.0.clone_from(&world_target.0)
+            }
             UiPointerTargetValue::Primary(e, mesh) => {
                 target.0 = Some(PointerTargetInfo {
                     container: *e,
@@ -936,16 +946,6 @@ fn resolve_pointer_target(
                     face: None,
                     ty: PointerTargetType::Ui,
                 });
-            }
-            // an aim set this frame came after the world target was cast: that target is the
-            // cursor's or the previous aim's, at its distance, so nothing is under the aim yet
-            UiPointerTargetValue::None
-                if synthetic
-                    .0
-                    .as_ref()
-                    .is_some_and(|aim| aim.started_frame == tick.0) =>
-            {
-                target.0 = None
             }
             UiPointerTargetValue::None => target.0.clone_from(&world_target.0),
         }
@@ -2138,5 +2138,58 @@ mod distance_tests {
         assert!(!check(info(Some(0.0), None, None)));
         // camera distance plays no part in proximity
         assert!(!check(info(Some(2.4), None, Some(100.0))));
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use crate::update_scene::synthetic_pointer::{Hold, SyntheticAim};
+
+    fn world_info(container: Entity) -> PointerTargetInfo {
+        PointerTargetInfo {
+            container,
+            mesh_name: None,
+            distance: FloatOrd(1.0),
+            camera_distance: FloatOrd(5.0),
+            in_scene: true,
+            position: Some(Vec3::ZERO),
+            normal: None,
+            face: None,
+            ty: PointerTargetType::World,
+        }
+    }
+
+    /// The target `resolve_pointer_target` gives on frame 5, with a world aim set on `started`,
+    /// the cursor over a screen UI element and the world target cast at `world`.
+    fn resolved(started: u32) -> (Option<Entity>, Entity) {
+        let mut app = App::new();
+        let ui = app.world_mut().spawn_empty().id();
+        let world = app.world_mut().spawn_empty().id();
+        app.insert_resource(FrameCount(5))
+            .insert_resource(UiPointerTarget(UiPointerTargetValue::Primary(ui, None)))
+            .insert_resource(WorldPointerTarget(Some(world_info(world))))
+            .insert_resource(SyntheticPointer(Some(SyntheticAim {
+                scene: world,
+                at: AimAt::Point(Vec3::ZERO),
+                hold: Hold::Open,
+                started_frame: started,
+            })))
+            .init_resource::<PointerTarget>()
+            .add_systems(Update, resolve_pointer_target);
+        app.update();
+        let target = app.world().resource::<PointerTarget>();
+        (target.0.as_ref().map(|t| t.container), world)
+    }
+
+    #[test]
+    fn a_world_aim_passes_through_the_screen_ui_under_the_cursor() {
+        let (target, world) = resolved(4);
+        assert_eq!(target, Some(world));
+    }
+
+    #[test]
+    fn a_world_aim_has_no_target_on_the_frame_it_is_set() {
+        assert_eq!(resolved(5).0, None);
     }
 }

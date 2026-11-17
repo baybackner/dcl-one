@@ -122,7 +122,8 @@ false}}`. A press is never sent without a hit, so a miss never reaches the scene
   avatar or another scene), where the ray hit it in Decentraland world coordinates, and
   `playerDistance` again, at the top level.
 - `hoverText`: the hover text of the hit's entries, an enabled entry's first.
-- `blockedByUi`: scene UI covering the aim. Not checked yet: always `false`.
+- `blockedByUi`: scene UI covering the aim. Always `false`: an aim at a world entity or point
+  passes through the screen's UI, including an element the cursor rests on.
 - `rootBroadcast`: whether the scene root received a pointer result while the job ran, which a
   press reaches when no entity takes it (the hit entity declares no entry for the button and
   event). Read from the results written, not assumed. A press the root received has landed: the

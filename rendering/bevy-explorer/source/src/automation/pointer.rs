@@ -178,7 +178,7 @@ struct Reply<'a> {
     /// from the player to the hit
     distance: Option<f64>,
     hover_text: Option<&'a str>,
-    /// scene UI covering the aim: not checked yet, so always false
+    /// scene UI covering the aim: always false, a world aim passes through the screen's UI
     blocked_by_ui: bool,
     /// whether the scene root got a pointer result while the job ran (no entity took the press)
     root_broadcast: bool,
