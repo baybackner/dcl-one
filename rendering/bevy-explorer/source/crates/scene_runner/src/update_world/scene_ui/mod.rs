@@ -1,3 +1,4 @@
+pub mod ui_automation;
 pub mod ui_background;
 pub mod ui_dropdown;
 pub mod ui_input;
@@ -502,6 +503,7 @@ impl Plugin for SceneUiPlugin {
         app.add_systems(PreUpdate, check_text_links.after(UiActionSet));
 
         app.add_console_command::<ToggleSceneUiCommand, _>(toggle_scene_ui_command);
+        app.add_console_command::<ui_automation::UiListCommand, _>(ui_automation::ui_list_command);
     }
 }
 

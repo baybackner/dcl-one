@@ -91,6 +91,29 @@ describe('Explorer', () => {
     assert.deepEqual(fake.lines, ['/reload --current --wait --timeout-seconds 60', '/scene_state'])
   })
 
+  test('uiList passes the kind and limit and reads the elements', async () => {
+    const element = {
+      crdtId: 66133,
+      kind: 'input',
+      screenRect: { x: 100, y: 50, width: 200, height: 20 },
+      center: { x: 0.125, y: 0.0738 },
+      disabled: true,
+      pointerEventTypes: [],
+      clipped: false,
+      drawOrder: 12,
+      coveredBy: null,
+      value: '',
+      placeholder: 'locked'
+    }
+    const screen = { width: 1600, height: 813, scale: 2 }
+    const fake = new FakeConsole({ ui_list: JSON.stringify({ stack: 'sdk', scene: null, screen, count: 1, elements: [element], coverage: '' }) })
+    const explorer = new Explorer(fake)
+    const list = await explorer.uiList({ kind: 'input', limit: 5 })
+    assert.equal(list.elements[0]!.disabled, true)
+    await explorer.uiList()
+    assert.deepEqual(fake.lines, ['/ui_list --kind input --limit 5', '/ui_list'])
+  })
+
   test('teleport times out with the last state when the player never arrives', async () => {
     const fake = new FakeConsole({ world_state: () => world({ arrivals: 1, inWorld: false }), teleport: JSON.stringify({ ...settled, arrived: false, settled: false }) })
     const explorer = new Explorer(fake)

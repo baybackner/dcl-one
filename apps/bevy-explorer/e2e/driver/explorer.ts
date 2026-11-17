@@ -612,6 +612,40 @@ export interface Screen {
 
 /** Where `/click_at` clicked, in pixels and normalized, and on what window. The web page adds how
  *  (`input`: `trusted` from the test runner, else `synthetic`). */
+/** One scene-UI element as `/ui_list` reports it. Ids can renumber when the scene rebuilds its
+ *  UI; identify an element by `center` and `kind`. */
+export interface UiElement {
+  crdtId: number
+  kind: 'input' | 'dropdown' | 'scroll' | 'pointerTarget' | 'text'
+  /** the visible part, logical pixels from the window's top left */
+  screenRect: { x: number; y: number; width: number; height: number }
+  /** normalized 0..1, the centre of `screenRect` */
+  center: { x: number; y: number }
+  disabled: boolean
+  /** the declared pointer events, e.g. `PetDown`, `PetHoverEnter` */
+  pointerEventTypes: string[]
+  clipped: boolean
+  drawOrder: number
+  /** what is drawn over the centre and takes the pointer there */
+  coveredBy: { crdtId: number } | { client: string } | null
+  text?: string
+  value?: string
+  placeholder?: string
+  options?: string[]
+  selectedIndex?: number
+}
+
+export interface UiList {
+  stack: 'sdk'
+  scene: { hash: string; title: string } | null
+  screen: Screen
+  count: number
+  elements: UiElement[]
+  /** what `coveredBy` can and cannot see */
+  coverage: string
+  truncated?: boolean
+}
+
 export interface ClickAtReply {
   x: number
   y: number
@@ -926,6 +960,12 @@ export class Explorer {
   /** The parcel scene under the player: its id, state and whether it is ready. */
   sceneState(): Promise<SceneStateReport> {
     return this.json<SceneStateReport>('/scene_state')
+  }
+
+  /** The parcel scene's UI elements on screen (`/ui_list`); labels only with `kind: 'text'`. */
+  uiList(options: { kind?: UiElement['kind']; limit?: number } = {}): Promise<UiList> {
+    const flags = `${options.kind ? ` --kind ${options.kind}` : ''}${options.limit === undefined ? '' : ` --limit ${options.limit}`}`
+    return this.json<UiList>(`/ui_list${flags}`)
   }
 
   /** Change realm (a realm URL or a world name) and wait for the arrival in it. */

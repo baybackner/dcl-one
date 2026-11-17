@@ -104,7 +104,10 @@ pub fn write_ui_layout_feedback(
 }
 
 // a node inside a display:none ancestor keeps its last computed size, so walk up
-fn displayed(hierarchy: &Query<(&Node, Option<&ChildOf>)>, mut ui_entity: Entity) -> bool {
+pub(super) fn displayed(
+    hierarchy: &Query<(&Node, Option<&ChildOf>)>,
+    mut ui_entity: Entity,
+) -> bool {
     loop {
         let Ok((node, parent)) = hierarchy.get(ui_entity) else {
             return true;

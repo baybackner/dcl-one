@@ -346,6 +346,11 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   teleport adds `arrived`, `sceneReady`, `sceneHash`), or with `settled:false` and a `warning`
   naming what it waited for. `/scene_state` reads the parcel scene under the player: `sceneId`
   (its hash), `title`, `parcel`, `state`, `isReady`, `loadingStage`, `sdkVersion`.
+- Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
+  `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
+  `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` takes as it
+  is, `disabled`, `pointerEventTypes`, the text, value or options, and `coveredBy` (a scene element
+  or the engine's own UI over its centre), with `screen`.
 - Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and

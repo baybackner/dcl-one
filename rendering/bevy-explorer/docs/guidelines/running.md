@@ -239,6 +239,20 @@ State, in every build:
   `sceneId` (the hash), `title`, `parcel` (its base), `state` (`loading`, `failed`, `starting`,
   `blocked` with `blocked` naming the holds, `broken`, `running`, or `none` on an empty parcel),
   `isReady`, `loadingStage`, `sdkVersion`, `tick`.
+- `/ui_list [--stack sdk] [--kind K] [--limit N]`: JSON of the parcel scene's UI elements that
+  are laid out and shown, top to bottom then left to right: `crdtId`, `kind` (`input` for a
+  `UiInput`, `dropdown`, `scroll` for a scrolling container, `pointerTarget` for an element that
+  declares pointer events, and `text` for a label, listed only with `--kind text`), `screenRect`
+  (`x`, `y`, `width`, `height` of the visible part, logical pixels from the window's top left),
+  `center` (normalized, the centre of `screenRect`), `disabled` (an input or dropdown),
+  `pointerEventTypes` (`PetDown`, `PetHoverEnter`, ...), `text`, an input's `value` and
+  `placeholder`, a dropdown's `options` and `selectedIndex`, `clipped`, `drawOrder`, and
+  `coveredBy`: the topmost element drawn over the centre that takes the pointer there, a scene
+  element (`{"crdtId"}`) or the engine's own UI (`{"client": name}`), null when none. What the
+  HUD covers is not tested (the page on the web, the CEF overlay natively); `coverage` says so.
+  The reply carries `screen`, `count`, `scene` (`hash`, `title`) and `truncated` past `--limit`
+  (200). `--stack` other than `sdk` is refused: the client's own UI is `/hud_list`. Scene-UI ids
+  can change when the scene rebuilds its UI: find an element again by its `center` and `kind`.
 - `/avatar_state [all|<address>]`: avatars as selected (body shape, wearables, emotes, forced
   slots), as rendered (built or not, wearables by category, hidden categories) and the emote
   each plays (with `idle`: whether a triggered emote may take over, which a scene's non-idle
