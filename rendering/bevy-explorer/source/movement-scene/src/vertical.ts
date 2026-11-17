@@ -4,7 +4,7 @@ import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, ground
 import {
   AIR_JUMP_COOLDOWN, AIR_JUMP_HOLD_ANY_PRESS, AIR_JUMP_HOLD_FROM_PRESS, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS,
-  FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
+  FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
   GLIDE_OPENS_ON_TAP, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
   LANDING_STUN_DROP, LANDING_STUN_TIME, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
@@ -83,7 +83,8 @@ export var isGliding = false;
 
 // The avatar moves at vy + ve: one vertical speed that gravity and scene pushes act on (the ballistic speed, vg + ve),
 // with the player's own moves added on top of it (vy - vg). A jump's quick rise and its held window, an air jump's held
-// height and the glide shape vy only, so they never cancel a push, and a push never gets the jump's rise gravity.
+// height and the glide's fall shape vy only, so they never cancel a push, and a push never gets the jump's rise gravity.
+// The glider's drag takes a push's share while gliding (GLIDE_DAMP_TIME).
 type VState = {
   vy: number; // the player's own vertical velocity: gravity, jumps, an air jump's held height, the glide
   // the ballistic part of vy: vy itself, except while a jump rises or an air jump holds the height, when it goes on
@@ -169,6 +170,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   let vy0 = s.vy;
   let vb0 = s.vg + s.ve; // the ballistic speed at the start of the step
   let justJumped = false;
+  let glideDrag = false;
   const onGround = onGroundTick && s.vy <= 0;
   if (onGround) {
     // a landing more than LANDING_STUN_DROP below the top of the airtime stuns
@@ -265,19 +267,20 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
       s.prop = GlideProp.CLOSING;
       s.propStep = s.step;
     } else {
-      // the glide holds the fall, a pushed one too, at glidingFallingSpeed; a push upward rises and falls back to it
-      s.vy = Math.max(s.vy, -glidingFallingSpeed - Math.max(0, s.ve));
-      s.ve = Math.max(s.ve, -glidingFallingSpeed - s.vy);
+      // the glide holds the player's own fall at glidingFallingSpeed; the glider's drag takes a push, up or down
+      s.vy = Math.max(s.vy, -glidingFallingSpeed);
+      glideDrag = true;
     }
   }
   // scene pushes: while the ballistic speed rises it fades and is braked, which takes from their share; on the ground
-  // the ballistic speed is all theirs, gravity takes it and the ground stops it
+  // the ballistic speed is all theirs, gravity takes it and the ground stops it; a glide's drag takes their share instead
   const vb = vb0 > 0 ? Math.max(0, vb0 * Math.exp(-h / VERTICAL_DAMP_TIME) - VERTICAL_STOP_DECEL * h) : vb0;
   if (onGround && !justJumped) {
     s.ve = Math.max(0, noGravity ? vb : vb - G * h);
     s.vg = 0;
   } else {
-    s.ve -= vb0 - vb;
+    if (glideDrag) s.ve *= Math.exp(-h / GLIDE_DAMP_TIME);
+    else s.ve -= vb0 - vb;
     if (!hover && s.vy <= 0) s.vg = s.vy;
     else if (!noGravity) s.vg -= G * h;
   }
@@ -370,7 +373,6 @@ function applyJumpAndGravity(noGravity: boolean) {
   // too weak to lift the avatar (isLaunched) is held by the ground
   if (!onGround || vstate.launched || isLaunched()) {
     vstate.ve += prevExternalVelocity.y;
-    if (vstate.prop === GlideProp.GLIDING) vstate.ve = Math.max(vstate.ve, -glidingFallingSpeed - vstate.vy);
   }
   if (vstate.launched) {
     jumpStartHeight = playerPosition.y;

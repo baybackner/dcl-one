@@ -107,6 +107,9 @@ export const AIR_JUMP_HOVER_TRACK: number = 0;
 // enough after the latest jump's press, above the ground and with the prop shut. The fall goes on while the prop opens;
 // once open, the glide holds the fall while the key is held. Released, or near the ground, the prop closes.
 export const GLIDE_FALL_SPEED = 1; // max fall speed while gliding (m/s)
+// While gliding, the glider's drag takes what scene pushes add to the vertical speed, up or down, with this time
+// constant (s); the glide's own fall is held as above.
+export const GLIDE_DAMP_TIME = 0.1;
 export const GLIDE_HORIZONTAL_SPEED = 6; // horizontal speed limit while gliding (m/s)
 export const GLIDE_MIN_GROUND_DISTANCE = 0.12; // model height above the ground (m)
 export const JUMP_TO_GLIDE_TIME = 0.52; // s from the latest jump's press (26 steps)
