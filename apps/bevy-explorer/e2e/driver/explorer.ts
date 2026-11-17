@@ -209,6 +209,29 @@ export interface ReticleReport {
   entries: { button: string; event: string; hoverText: string | null; enabled: boolean; tooFar: boolean }[]
 }
 
+/** What `/sweep_pointer` reports once the release has landed. */
+export interface SweepReport {
+  button: 'pointer' | 'primary' | 'secondary'
+  deltaX: number
+  deltaY: number
+  units: 'degrees per second'
+  seconds: number
+  aimErrorDegrees: number
+  pressed: SweepMoment
+  /** degrees turned while held: `x` right, `y` up */
+  swept: { x: number; y: number }
+  released: SweepMoment
+  cameraRotationEuler: Euler
+  warning?: string
+}
+
+/** A frame of a sweep: the engine frame, the scene's tick and what the ray hit. */
+export interface SweepMoment {
+  frame: number
+  tick: number | null
+  hit: { crdtEntityId: number | null; hitPoint: { x: number; y: number; z: number } | null } | null
+}
+
 /** The scene input actions `/press_input` takes, by their SDK names. */
 export type InputActionName =
   | 'pointer'
@@ -1284,6 +1307,20 @@ export class Explorer {
 
   getReticle(): Promise<ReticleReport> {
     return this.json<ReticleReport>('/get_reticle')
+  }
+
+  /** Presses on an entity or a world point, turns the camera while held (degrees per second) and releases. */
+  sweepPointer(
+    target: { entity: number | string } | { at: [number, number, number] },
+    options: { dx?: number; dy?: number; seconds?: number; button?: 'pointer' | 'primary' | 'secondary' } = {}
+  ): Promise<SweepReport> {
+    let line = '/sweep_pointer'
+    line += 'entity' in target ? ` --entity ${target.entity}` : ` --at ${target.at.join(' ')}`
+    if (options.dx !== undefined) line += ` --dx ${options.dx}`
+    if (options.dy !== undefined) line += ` --dy ${options.dy}`
+    if (options.seconds !== undefined) line += ` --seconds ${options.seconds}`
+    if (options.button) line += ` --button ${options.button}`
+    return this.json<SweepReport>(line)
   }
 
   raycastStats(): Promise<RaycastStats> {

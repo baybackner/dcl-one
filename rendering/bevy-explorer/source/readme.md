@@ -350,7 +350,10 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   when it looks at a point. `/set_camera_mode first_person|third_person` switches the view and is
   refused, naming the area or camera, while a scene holds it. `/get_reticle` says what the pointer
   ray reaches now (`kind`, `crdtEntityId`, `hitPoint`, `withinRange`, `hoverText`) and through
-  which cursor (`cursorLocked`, `rayFromScreenCenter`, `cursor` with `screen`). Euler angles are
+  which cursor (`cursorLocked`, `rayFromScreenCenter`, `cursor` with `screen`). `/sweep_pointer
+  --entity <id> | --at x y z --dx D --dy D --seconds S` presses the pointer on a target, turns the
+  camera while it is held and releases, answering with the hit at the press and at the release
+  and the degrees `swept`. Euler angles are
   Decentraland's (`cameraRotationEuler.x` is the pitch, looking down positive).
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the

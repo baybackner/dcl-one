@@ -309,6 +309,13 @@ struct Job {
 #[derive(Resource, Default)]
 pub struct CameraJob(Option<Job>);
 
+impl CameraJob {
+    /// A turn, aim or move is running.
+    pub(crate) fn busy(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
 /// Why a turn cannot start, or `None`. A cinematic camera refuses `/look_at` always and
 /// `/camera_look` when it allows no manual rotation.
 fn refuse_turn(

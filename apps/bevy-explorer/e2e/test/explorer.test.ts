@@ -431,9 +431,9 @@ describe('Explorer', () => {
     ])
   })
 
-  test('hoverEntity, clickEntity, pressInput, walk, camera, move, reticle, raycast and scene log commands compose the lines', async () => {
+  test('hoverEntity, clickEntity, pressInput, walk, camera, move, reticle, sweep, raycast and scene log commands compose the lines', async () => {
     const report = JSON.stringify({ hit: null, entries: [], events: [], diagnosis: 'blocked by entity 9' })
-    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, walk: report, camera_look: report, look_at: report, player_state: report, move_to: report, set_camera_mode: report, get_reticle: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
+    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, walk: report, camera_look: report, look_at: report, player_state: report, move_to: report, set_camera_mode: report, get_reticle: report, sweep_pointer: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
     const explorer = new Explorer(fake)
     assert.equal((await explorer.hoverEntity(512, { bounds: true, frames: 10 })).diagnosis, 'blocked by entity 9')
     await explorer.clickEntity('512', { button: 'primary', event: 'down', timeoutFrames: 60 })
@@ -452,6 +452,8 @@ describe('Explorer', () => {
     await explorer.moveTo(-1.5, 0, 2, { timeoutSeconds: 4 })
     await explorer.setCameraMode('first_person')
     await explorer.getReticle()
+    await explorer.sweepPointer({ entity: 591 }, { dx: 10, dy: -5, seconds: 2 })
+    await explorer.sweepPointer({ at: [2398, 2.2, 2393] }, { button: 'primary' })
     assert.equal((await explorer.raycastStats()).budgetMs, 1.67)
     assert.equal(await explorer.raycastBudget(0), 0)
     assert.deepEqual(await explorer.sceneLogs(50), ['[1.00] Info: a', '[2.00] Info: b'])
@@ -473,6 +475,8 @@ describe('Explorer', () => {
       '/move_to -1.5 0 2 --timeout-seconds 4',
       '/set_camera_mode first_person',
       '/get_reticle',
+      '/sweep_pointer --entity 591 --dx 10 --dy -5 --seconds 2',
+      '/sweep_pointer --at 2398 2.2 2393 --button primary',
       '/raycast_stats',
       '/raycast_budget 0',
       '/scene_logs 50'

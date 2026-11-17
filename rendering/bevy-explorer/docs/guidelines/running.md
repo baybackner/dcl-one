@@ -441,6 +441,18 @@ The HUD and input:
   `world` or `nothing`), `crdtEntityId`, `scene`, `hitPoint`, `distanceToPlayer`,
   `distanceToCamera`, `hasPointerEvents`, `withinRange` (an entry the cursor reaches),
   `hoverQualified` (a hover-enter entry within range), `hoverText` and the cursor `entries`.
+- `/sweep_pointer --entity <id> | --at x y z [--dx D] [--dy D] [--seconds S] [--button B]`
+  (`src/automation/sweep.rs`): a held press that moves, as painting a stroke is. It aims the
+  camera at the target (an entity's bounds centre, or the point) as `/look_at` does, parks the
+  cursor at the view's centre, presses the button's binding (`pointer` by default, `primary`,
+  `secondary`) through the input script, turns the camera at `--dx`/`--dy` degrees per second for
+  `--seconds` (1 by default, at most 10) while it is held, and releases. Because the cursor is in
+  the window and the press is real, the scene sees `PrimaryPointerInfo.worldRayDirection` follow
+  the turn. JSON `button`, `deltaX`, `deltaY`, `units`, `seconds`, `aimErrorDegrees`, `pressed`
+  and `released` (each `frame`, the scene's `tick` and the `hit`: `crdtEntityId`, `hitPoint`),
+  `swept` (`x` right, `y` up, degrees) and `cameraRotationEuler`, with a `warning` when the press
+  landed off the entity asked for. Refused while another sweep, camera turn or pointer aim runs,
+  under a scene camera, in photo mode and while the HUD holds the button.
 - `/raycast_stats` (JSON: the capped tier's `budgetMs`, `ran`, `deferred` and `spentMs`, and the
   uncapped tier's `uncappedRan` and `uncappedSpentMs`, each for its last frame with raycasts to
   cast) and `/raycast_budget [ms|auto]` (show the capped budget, a tenth of the target frame, or
