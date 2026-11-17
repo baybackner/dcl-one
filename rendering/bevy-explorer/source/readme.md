@@ -326,9 +326,12 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   `/smart_wearable run|kill|restart <urn>` and the `, smart wearable` mark in `/live_scenes`
   ([Smart wearables and portables](#smart-wearables-and-portables)).
 - Scene pointer: `/hover_entity <entity>` and `/click_entity <entity>` hover and click a scene
-  entity by id through the pointer pipeline, on native and web alike, and answer with the hit, the
-  hover entries, the scene's pointer events and a diagnosis (`docs/guidelines/running.md`). A hover
-  lasts at most 1800 frames (`--frames`) and is never cut short by `--timeout-frames`.
+  entity, by id or by a world point (`--at x y z`), through the pointer pipeline, on native and web
+  alike, and answer with the hit (`crdtEntityId`, `hitPoint`), the hover entries, the scene's
+  pointer events, whether the scene root got a result (`rootBroadcast`), a diagnosis and a
+  `warning` for a button the entity does not listen for (`docs/guidelines/interaction.md`). Nothing
+  at an `--at` point refuses without pressing. A hover lasts at most 1800 frames (`--frames` or
+  `--seconds`) and is never cut short by its timeout.
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the
   capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the two pointer commands go

@@ -17,8 +17,8 @@ use console::DoAddConsoleCommand;
 use system_bridge::{HoverAction, HoverEvent, ProximityEvent, SystemApi};
 
 use super::synthetic_pointer::{
-    aim_ray, anchor_point, cursor_entries, expire_synthetic_aim, ui_gate_passes,
-    LoggedPointerEvent, PointerEventLog, SyntheticPointer,
+    aim_ray, cursor_entries, expire_synthetic_aim, ui_gate_passes, LoggedPointerEvent,
+    PointerEventLog, SyntheticPointer,
 };
 use crate::{
     gltf_resolver::GltfMeshResolver,
@@ -367,7 +367,8 @@ fn update_pointer_target(
     // get new 3d hover target: along the synthetic aim when one is active, else the cursor
     let ray = if let Some(aim) = synthetic.0.as_ref() {
         // an aimed entity that is gone or not placed yet has no target
-        let Some(ray) = anchor_point(aim.target, aim.anchor, &transforms, &meshes, &children)
+        let Some(ray) = aim
+            .point(&transforms, &meshes, &children)
             .and_then(|point| aim_ray(camera_position.translation(), point))
         else {
             world_target.0 = None;
@@ -1832,6 +1833,17 @@ fn send_action_events(
         for &(pet, button, maybe_consumer) in &events_and_consumers {
             if maybe_consumer == Some(entity) {
                 continue;
+            }
+            // a synthetic aim's caller reads the broadcast from the log (`rootBroadcast`)
+            if synthetic.0.is_some() {
+                log.0.push(LoggedPointerEvent {
+                    container: entity,
+                    entity: SceneEntityId::ROOT,
+                    event: pet,
+                    button,
+                    tick: tick_number,
+                    frame: frame.0,
+                });
             }
 
             context.update_crdt(

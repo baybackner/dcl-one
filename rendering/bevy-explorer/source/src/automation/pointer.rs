@@ -1,17 +1,20 @@
-//! `/hover_entity` and `/click_entity`: hover and click a scene entity by id through the
-//! production pointer pipeline, on native and web alike. A command sets a synthetic aim
-//! (`SyntheticPointer`) at the entity, so the pointer ray goes from the camera to it whatever the
-//! cursor does; a click presses the bound key or mouse button through the input script, so the
-//! press reaches the scene exactly as a person's would. `drive_pointer_job` follows the job frame
-//! by frame with [`ClickMachine`] and answers with what the pipeline did:
+//! `/hover_entity` and `/click_entity`: hover and click a scene entity, by id or by a world point
+//! (`--at x y z`), through the production pointer pipeline, on native and web alike. A command
+//! sets a synthetic aim (`SyntheticPointer`) at the entity or the point, so the pointer ray goes
+//! from the camera through it whatever the cursor does; a click presses the bound key or mouse
+//! button through the input script, so the press reaches the scene exactly as a person's would.
+//! `drive_pointer_job` follows the job frame by frame with [`ClickMachine`] and answers with what
+//! the pipeline did:
 //!
 //! `{"hit": {"entity", "container", "scene", "playerDistance", "cameraDistance"} | null,
-//! "entries": [HoverEntryReport], "events": [{"event", "button", "tick"}], "diagnosis": string |
-//! null}`
+//! "crdtEntityId", "hitPoint": {"x", "y", "z"}, "distance", "hoverText", "blockedByUi",
+//! "rootBroadcast", "button", "entries": [HoverEntryReport], "events": [{"event", "button",
+//! "tick"}], "diagnosis": string | null, "warning"?}`
 //!
-//! A diagnosis (the entity is blocked, out of reach of the ray, gone, the HUD holds the input, a
-//! stage timed out) still answers with that JSON; a refusal (a press is already held, a gamepad
-//! binding, nothing to release) fails the command.
+//! A diagnosis (the entity is blocked, gone, the HUD holds the input, a stage timed out) still
+//! answers with that JSON; a refusal (a press is already held, a gamepad binding, nothing to
+//! release, nothing at the aimed point) fails the command, and one decided by the pipeline is
+//! `{"refused", "cause"}` (docs/adr/2026-11-17-console-command-conventions.md).
 
 use std::collections::HashSet;
 
@@ -30,9 +33,16 @@ use common::{
     inputs::{CommonInputAction, InputIdentifier, InputMap},
     rpc::{RpcResultReceiver, RpcResultSender},
     sets::SceneSets,
+    structs::PrimaryCamera,
 };
-use console::{DoAddConsoleCommand, PendingConsoleResponses};
-use dcl_component::{proto_components::sdk::components::common::PointerEventType, SceneEntityId};
+use console::{
+    reply::{self, FrameRate, Span},
+    DoAddConsoleCommand, PendingConsoleResponses,
+};
+use dcl_component::{
+    proto_components::sdk::components::common::PointerEventType,
+    transform_and_parent::DclTranslation, SceneEntityId,
+};
 use input_manager::{InputManager, InputPriority};
 use scene_inspector::{parse_entity_id, SceneResolver};
 use scene_runner::{
@@ -40,8 +50,8 @@ use scene_runner::{
     update_scene::{
         pointer_results::{PointerTarget, PointerTargetInfo},
         synthetic_pointer::{
-            anchor_point, hover_entries, Anchor, Hold, HoverEntryReport, PointerEventLog,
-            SyntheticAim, SyntheticPointer,
+            anchor_point, hover_entries, world_bounds, AimAt, Anchor, Hold, HoverEntryReport,
+            PointerEventLog, SyntheticAim, SyntheticPointer,
         },
     },
     update_world::pointer_events::PointerEvents,
@@ -53,17 +63,17 @@ use super::input::{key_from_code, InputScript, Step};
 
 /// Frames a hover lasts without `--frames`.
 const DEFAULT_HOVER_FRAMES: u32 = 30;
-/// Frames a job may take without `--timeout-frames`.
+/// Frames a job may take without `--timeout-frames` or `--timeout-seconds`.
 const DEFAULT_TIMEOUT_FRAMES: u32 = 600;
-/// The id a hit reports when it is no entity of the job's scene (an avatar, another scene).
-const FOREIGN_HIT: u32 = u32::MAX;
+/// How far outside a hit's visible bounds an aimed point may be and still be inside them.
+const BOUNDS_MARGIN: f32 = 0.05;
 
 mod machine;
 pub use machine::{
-    binding_error, check_hover_frames, refuse_while_held, ClickKind, ClickMachine, Effect,
-    Observed, TargetSeen,
+    binding_error, check_hover_frames, classify_point, press_out_of_reach, refuse_while_held,
+    undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
 };
-use machine::{ENTITY_NOT_LIVE, HUD_HOLDS_INPUT};
+use machine::{ENTITY_NOT_LIVE, FOREIGN_HIT, HUD_HOLDS_INPUT};
 
 pub(crate) struct AutomationPointerPlugin;
 
@@ -113,6 +123,9 @@ struct HitReport {
     scene: String,
     player_distance: f32,
     camera_distance: f32,
+    /// where the ray hit, reported at the top level as `hitPoint`
+    #[serde(skip)]
+    point: Option<Vec3>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,12 +135,60 @@ struct EventReport {
     tick: u32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+struct Point {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+impl Point {
+    /// A bevy world point in Decentraland world coordinates, as `--at` and `/world_state` use them.
+    fn from_bevy(v: Vec3) -> Self {
+        let [x, y, z] = DclTranslation::from_bevy_translation(v).0;
+        Self::from(Vec3::new(x, y, z))
+    }
+}
+
+impl From<Vec3> for Point {
+    fn from(v: Vec3) -> Self {
+        Self {
+            x: reply::round(v.x),
+            y: reply::round(v.y),
+            z: reply::round(v.z),
+        }
+    }
+}
+
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Reply<'a> {
     hit: Option<&'a HitReport>,
+    /// the hit entity, `null` without a hit or for an avatar or another scene's entity
+    crdt_entity_id: Option<u32>,
+    hit_point: Option<Point>,
+    /// from the player to the hit
+    distance: Option<f64>,
+    hover_text: Option<&'a str>,
+    /// scene UI covering the aim: not checked yet, so always false
+    blocked_by_ui: bool,
+    /// whether the scene root got a pointer result while the job ran (no entity took the press)
+    root_broadcast: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    button: Option<&'a str>,
     entries: &'a [HoverEntryReport],
     events: &'a [EventReport],
     diagnosis: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
+/// What a reply says beyond the hit, the entries, the events and the diagnosis.
+#[derive(Default)]
+struct ReplyExtra<'a> {
+    button: Option<&'a str>,
+    root_broadcast: bool,
+    warning: Option<String>,
 }
 
 fn reply_json(
@@ -135,14 +196,40 @@ fn reply_json(
     entries: &[HoverEntryReport],
     events: &[EventReport],
     diagnosis: Option<String>,
+    extra: ReplyExtra,
 ) -> String {
+    let hover_text = entries
+        .iter()
+        .filter(|entry| entry.hover_text.is_some())
+        .max_by_key(|entry| entry.enabled)
+        .and_then(|entry| entry.hover_text.as_deref());
     serde_json::to_string(&Reply {
         hit,
+        crdt_entity_id: hit.map(|hit| hit.entity).filter(|&id| id != FOREIGN_HIT),
+        hit_point: hit.and_then(|hit| hit.point).map(Point::from_bevy),
+        distance: hit.map(|hit| reply::round(hit.player_distance)),
+        hover_text,
+        blocked_by_ui: false,
+        root_broadcast: extra.root_broadcast,
+        button: extra.button,
         entries,
         events,
         diagnosis,
+        warning: extra.warning,
     })
     .unwrap_or_default()
+}
+
+/// A refusal decided by the pipeline: nothing was pressed, and the cause says what the ray found.
+fn refusal_json(reason: String, hit: Option<&HitReport>, root_broadcast: bool) -> String {
+    reply::refusal(
+        reason,
+        Some(serde_json::json!({
+            "crdtEntityId": hit.map(|hit| hit.entity).filter(|&id| id != FOREIGN_HIT),
+            "hitPoint": hit.and_then(|hit| hit.point).map(Point::from_bevy),
+            "rootBroadcast": root_broadcast,
+        })),
+    )
 }
 
 // --- the job ---
@@ -159,13 +246,12 @@ pub struct PointerJob {
 impl PointerJob {
     /// The refusal while a job runs or its release has not landed yet.
     fn busy(&self) -> Option<String> {
-        let entity = self
-            .job
+        let what = self.job.as_ref().map(|job| job.what.clone()).or(self
+            .releasing
             .as_ref()
-            .map(Job::requested)
-            .or(self.releasing.as_ref().map(|releasing| releasing.entity))?;
+            .map(|releasing| releasing.what.clone()))?;
         Some(format!(
-            "a pointer command is still running on entity {entity}; wait for its reply or send /hover_entity --clear"
+            "a pointer command is still running on {what}; wait for its reply or send /hover_entity --clear"
         ))
     }
 }
@@ -178,21 +264,32 @@ type PendingAnswer = (
 /// A queued release: the aim stays on its entity until the release has been played and the
 /// pointer pipeline has run after it, then the aim ends and the replies go out.
 struct Releasing {
-    /// the proto id the refusal names
-    entity: u32,
-    /// the aimed entity whose aim ends; `None` ends any aim
-    target: Option<Entity>,
+    /// what the refusal names: `entity 512`, `the point (x, y, z)`
+    what: String,
+    /// the aim that ends; `None` ends any aim
+    target: Option<AimAt>,
     /// the input script step number of the release
     step: u64,
     replies: Vec<PendingAnswer>,
 }
 
-/// A press left held by `--event down`, with the aim kept open on its entity.
+/// A press left held by `--event down`, with the aim kept open on its entity or point.
 struct Held {
     scene: Entity,
-    entity: SceneEntityId,
-    target: Entity,
+    /// the entity asked for, `None` for a point aim naming none
+    entity: Option<SceneEntityId>,
+    /// the proto id the press landed on: the one asked for, or the hit at the point
+    pressed: u32,
+    target: Option<Entity>,
+    at: AimAt,
     binding: InputIdentifier,
+}
+
+/// The pressed button as the command names it and as the scene's entries name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ButtonNames {
+    arg: &'static str,
+    action: &'static str,
 }
 
 pub struct Job {
@@ -200,10 +297,20 @@ pub struct Job {
     reply: RpcResultSender<Result<String, String>>,
     /// the pressed binding; `None` for a hover
     binding: Option<InputIdentifier>,
+    button: Option<ButtonNames>,
     scene: Entity,
-    entity: SceneEntityId,
-    target: Entity,
+    /// the entity asked for, `None` for a point aim naming none
+    entity: Option<SceneEntityId>,
+    /// its bevy entity, while the scene maps it
+    target: Option<Entity>,
+    at: AimAt,
+    /// what a refusal names: `entity 512`, `the point (x, y, z)`
+    what: String,
     started: u32,
+    /// the scene root got a pointer result while the job ran
+    root_broadcast: bool,
+    /// the events the scene root got while the job ran
+    root_events: HashSet<PointerEventType>,
     // what the frames since the start saw, so an aim that expires loses nothing
     hit: Option<HitReport>,
     entries: Vec<HoverEntryReport>,
@@ -216,8 +323,8 @@ pub struct Job {
 }
 
 impl Job {
-    fn requested(&self) -> u32 {
-        self.entity.as_proto_u32().unwrap_or_default()
+    fn requested(&self) -> Option<u32> {
+        self.entity.map(|id| id.as_proto_u32().unwrap_or_default())
     }
 
     fn release_binding(&self) -> Option<InputIdentifier> {
@@ -225,7 +332,7 @@ impl Job {
     }
 }
 
-/// Ends the aim on `target` (any aim for `None`) and sends `answer`: at once, or, with a press to
+/// Ends the aim `target` (any aim for `None`) and sends `answer`: at once, or, with a press to
 /// release, once the release has been played and the pointer pipeline has run after it
 /// ([`settle_release`]), so the release lands on the aimed entity and no new command takes the aim
 /// before it does.
@@ -236,8 +343,8 @@ fn wind_down(
     log: &mut PointerEventLog,
     script: &mut InputScript,
     release: Option<InputIdentifier>,
-    entity: u32,
-    target: Option<Entity>,
+    what: String,
+    target: Option<AimAt>,
     answer: PendingAnswer,
 ) {
     let step = release
@@ -253,7 +360,7 @@ fn wind_down(
         }
         (Some(step), None) => {
             jobs.releasing = Some(Releasing {
-                entity,
+                what,
                 target,
                 step,
                 replies: vec![answer],
@@ -266,12 +373,12 @@ fn wind_down(
     }
 }
 
-/// Ends the aim if it is on `target` (any aim for `None`), and clears the log with it.
-fn end_aim(synthetic: &mut SyntheticPointer, log: &mut PointerEventLog, target: Option<Entity>) {
+/// Ends the aim if it is `target` (any aim for `None`), and clears the log with it.
+fn end_aim(synthetic: &mut SyntheticPointer, log: &mut PointerEventLog, target: Option<AimAt>) {
     let ours = synthetic
         .0
         .as_ref()
-        .is_some_and(|aim| target.is_none_or(|target| aim.target == target));
+        .is_some_and(|aim| target.is_none_or(|target| aim.at == target));
     if ours {
         synthetic.0 = None;
         log.0.clear();
@@ -286,19 +393,18 @@ fn clear_pointer(
     script: &mut InputScript,
     reply: RpcResultSender<Result<String, String>>,
 ) {
-    let (release, entity) = if let Some(job) = jobs.job.take() {
+    let (release, what) = if let Some(job) = jobs.job.take() {
         let release = job.release_binding();
-        let entity = job.requested();
         job.reply
             .send(Err("cleared by /hover_entity --clear".to_owned()));
-        (release, entity)
+        (release, job.what)
     } else {
         let held = jobs.held.take();
-        let entity = held
+        let what = held
             .as_ref()
-            .and_then(|held| held.entity.as_proto_u32())
+            .map(|held| format!("entity {}", held.pressed))
             .unwrap_or_default();
-        (held.map(|held| held.binding), entity)
+        (held.map(|held| held.binding), what)
     };
     jobs.held = None;
     wind_down(
@@ -307,7 +413,7 @@ fn clear_pointer(
         log,
         script,
         release,
-        entity,
+        what,
         None,
         (reply, Ok("cleared".to_owned())),
     );
@@ -336,40 +442,54 @@ fn settle_release(
 
 // --- the commands ---
 
-/// Hover a scene entity of the active scene through the pointer pipeline, for --frames frames,
-/// and answer, as JSON, with the hit, the hover entries, the pointer events the scene got and a
-/// diagnosis when the entity was not hovered. --frames is at most 1800, and a hover may always
-/// take its frames plus 3 whatever --timeout-frames says. --clear ends any aim and releases a held
-/// press
+/// Hover a scene entity of the active scene through the pointer pipeline, by id or by a world
+/// point (--at x y z: whatever the ray from the camera reaches there; with an id too, that entity
+/// must be at the point), for --frames frames or --seconds seconds (30 frames by default), and
+/// answer, as JSON, with the hit, the hover entries, the pointer events the scene got and a
+/// diagnosis when the entity was not hovered. --frames is at most 1800, and a hover may always take
+/// its frames plus 3 whatever its timeout says. Nothing at the point refuses. --clear ends any aim
+/// and releases a held press
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/hover_entity")]
 pub struct HoverEntityCommand {
     /// Entity id (u32, as /scene_entities lists it) or alias: root, player, camera
     entity: Option<String>,
+    /// Aim at this world point instead of the entity's anchor
+    #[arg(long, num_args = 3, value_names = ["x", "y", "z"], allow_negative_numbers = true)]
+    at: Option<Vec<f32>>,
     /// Aim at the centre of the bounds of the visible meshes of the entity and its descendants,
     /// rather than at its origin (the origin when it has none)
     #[arg(long)]
     bounds: bool,
-    /// Frames to hover for, at most 1800
-    #[arg(long, default_value_t = DEFAULT_HOVER_FRAMES)]
-    frames: u32,
-    /// Frames the hover may take in all; never fewer than --frames plus 3
-    #[arg(long, default_value_t = DEFAULT_TIMEOUT_FRAMES)]
-    timeout_frames: u32,
+    /// How long to hover: --frames (at most 1800) or --seconds
+    #[command(flatten)]
+    span: Span,
+    /// Frames the hover may take in all (600 by default); never fewer than its frames plus 3
+    #[arg(long, conflicts_with = "timeout_seconds")]
+    timeout_frames: Option<u32>,
+    /// Seconds the hover may take in all, instead of --timeout-frames
+    #[arg(long)]
+    timeout_seconds: Option<f32>,
     /// End any aim, releasing a held press, instead of hovering
     #[arg(long)]
     clear: bool,
 }
 
-/// Click a scene entity of the active scene through the pointer pipeline, pressing the key or
-/// mouse button bound to the action, and answer, as JSON, with the hit, the hover entries, the
-/// pointer events the scene got and a diagnosis when the click did not land. `--event down` keeps
-/// the press held until `--event up` or /hover_entity --clear
+/// Click a scene entity of the active scene through the pointer pipeline, by id or by a world
+/// point (--at x y z: whatever the ray from the camera reaches there; with an id too, that entity
+/// must be at the point), pressing the key or mouse button bound to the action, and answer, as
+/// JSON, with the hit, the hover entries, the pointer events the scene got and a diagnosis when
+/// the click did not land; a `warning` when the hit entity declares no entry for the button and
+/// event. Nothing at the point refuses without pressing. `--event down` keeps the press held until
+/// `--event up` or /hover_entity --clear
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/click_entity")]
 pub struct ClickEntityCommand {
     /// Entity id (u32, as /scene_entities lists it) or alias: root, player, camera
-    entity: String,
+    entity: Option<String>,
+    /// Aim at this world point instead of the entity's anchor
+    #[arg(long, num_args = 3, value_names = ["x", "y", "z"], allow_negative_numbers = true)]
+    at: Option<Vec<f32>>,
     /// Aim at the centre of the bounds of the visible meshes of the entity and its descendants,
     /// rather than at its origin (the origin when it has none)
     #[arg(long)]
@@ -380,9 +500,12 @@ pub struct ClickEntityCommand {
     /// click (down then up), down or up
     #[arg(long, default_value = "click")]
     event: String,
-    /// Frames the click may take in all
-    #[arg(long, default_value_t = DEFAULT_TIMEOUT_FRAMES)]
-    timeout_frames: u32,
+    /// Frames the click may take in all (600 by default)
+    #[arg(long, conflicts_with = "timeout_seconds")]
+    timeout_frames: Option<u32>,
+    /// Seconds the click may take in all, instead of --timeout-frames
+    #[arg(long)]
+    timeout_seconds: Option<f32>,
 }
 
 /// How a command answers.
@@ -405,7 +528,38 @@ fn answer<T: bevy_console::Command>(
 }
 
 fn diagnosed(diagnosis: &str) -> Answer {
-    Answer::Json(reply_json(None, &[], &[], Some(diagnosis.to_owned())))
+    Answer::Json(reply_json(
+        None,
+        &[],
+        &[],
+        Some(diagnosis.to_owned()),
+        ReplyExtra::default(),
+    ))
+}
+
+/// The world point `--at` names, if it does, in Decentraland world coordinates (z north, as
+/// `/world_state` reports the position); clap takes exactly three numbers.
+fn at_point(at: &Option<Vec<f32>>) -> Result<Option<Vec3>, String> {
+    match at.as_deref() {
+        None => Ok(None),
+        Some(&[x, y, z]) if x.is_finite() && y.is_finite() && z.is_finite() => {
+            Ok(Some(Vec3::new(x, y, z)))
+        }
+        Some(other) => Err(format!(
+            "--at takes three finite numbers x y z; got {other:?}"
+        )),
+    }
+}
+
+/// The frames a job may take: `--timeout-frames`, `--timeout-seconds` or the default.
+fn timeout_frames(
+    frames: Option<u32>,
+    seconds: Option<f32>,
+    rate: &FrameRate,
+) -> Result<u32, String> {
+    Span { frames, seconds }
+        .frames(rate)
+        .map(|frames| frames.unwrap_or(DEFAULT_TIMEOUT_FRAMES))
 }
 
 /// What both commands share: the scene, the aim, the job and the input script.
@@ -417,6 +571,7 @@ pub(crate) struct PointerControl<'w, 's> {
     jobs: ResMut<'w, PointerJob>,
     script: ResMut<'w, InputScript>,
     frame: Res<'w, FrameCount>,
+    rate: Res<'w, FrameRate>,
     pending: ResMut<'w, PendingConsoleResponses>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
     meshes: Query<
@@ -434,36 +589,38 @@ pub(crate) struct PointerControl<'w, 's> {
 /// A job a command asks for.
 struct Request<'a> {
     command: &'a str,
-    entity: &'a str,
+    entity: Option<&'a str>,
+    at: Option<Vec3>,
     kind: ClickKind,
     bounds: bool,
     timeout: u32,
     /// the binding to press, `None` for a hover and an up (which releases the held one)
     binding: Option<InputIdentifier>,
+    button: Option<ButtonNames>,
     /// the HUD holds the binding's input
     hud_holds: bool,
 }
 
 impl PointerControl<'_, '_> {
     fn start(&mut self, request: Request) -> Answer {
-        let id = match parse_entity_id(request.entity) {
+        let id = match request.entity.map(parse_entity_id).transpose() {
             Ok(id) => id,
             Err(e) => return Answer::Failed(e),
         };
-        let requested = id.as_proto_u32().unwrap_or_default();
+        if id.is_none() && request.at.is_none() {
+            return Answer::Failed("expected an entity id, or --at x y z".to_owned());
+        }
+        let requested = id.map(|id| id.as_proto_u32().unwrap_or_default());
         if let Some(refusal) = self.jobs.busy() {
             return Answer::Failed(refusal);
         }
-        let held_on = self
-            .jobs
-            .held
-            .as_ref()
-            .map(|held| held.entity.as_proto_u32().unwrap_or_default());
+        let held_on = self.jobs.held.as_ref().map(|held| held.pressed);
         if request.kind == ClickKind::Up {
             if held_on.is_none() {
                 return Answer::Failed("no press is held".to_owned());
             }
-            if held_on != Some(requested) {
+            // an up names the held entity, or only a point
+            if requested.is_some_and(|requested| held_on != Some(requested)) {
                 return Answer::Failed(
                     refuse_while_held(held_on, request.command).unwrap_or_default(),
                 );
@@ -473,33 +630,56 @@ impl PointerControl<'_, '_> {
         }
 
         let frame = self.frame.0;
-        let (scene, target, binding) = if let Some(held) = self.jobs.held.take() {
+        let (scene, entity, target, at, binding) = if let Some(held) = self.jobs.held.take() {
             // an up releases the held press on the aim the down left open
-            (held.scene, held.target, Some(held.binding))
+            (
+                held.scene,
+                held.entity,
+                held.target,
+                held.at,
+                Some(held.binding),
+            )
         } else {
             let (scene, ctx) = match self.resolver.resolve() {
                 Ok(resolved) => resolved,
                 Err(e) => return Answer::Failed(e),
             };
-            let Some(target) = ctx.bevy_entity(id) else {
-                return diagnosed(ENTITY_NOT_LIVE);
+            let target = match id {
+                Some(id) => match ctx.bevy_entity(id) {
+                    Some(target) => Some(target),
+                    None => return diagnosed(ENTITY_NOT_LIVE),
+                },
+                None => None,
             };
             if request.hud_holds {
                 return diagnosed(HUD_HOLDS_INPUT);
             }
-            let bounds = request.bounds
-                && anchor_point(
-                    target,
-                    Anchor::Bounds,
-                    &self.transforms,
-                    &self.meshes,
-                    &self.children,
-                )
-                .is_some();
-            let anchor = if bounds {
-                Anchor::Bounds
-            } else {
-                Anchor::Origin
+            let at = match (request.at, id, target) {
+                (Some(point), ..) => {
+                    AimAt::Point(DclTranslation(point.to_array()).to_bevy_translation())
+                }
+                (None, Some(entity), Some(target)) => {
+                    let bounds = request.bounds
+                        && anchor_point(
+                            target,
+                            Anchor::Bounds,
+                            &self.transforms,
+                            &self.meshes,
+                            &self.children,
+                        )
+                        .is_some();
+                    let anchor = if bounds {
+                        Anchor::Bounds
+                    } else {
+                        Anchor::Origin
+                    };
+                    AimAt::Entity {
+                        entity,
+                        target,
+                        anchor,
+                    }
+                }
+                _ => unreachable!("an id without a live target returned above"),
             };
             let hold = match request.kind {
                 ClickKind::Hover(frames) => Hold::Frames(frames.saturating_add(2)),
@@ -507,25 +687,38 @@ impl PointerControl<'_, '_> {
             };
             self.synthetic.0 = Some(SyntheticAim {
                 scene,
-                entity: id,
-                target,
-                anchor,
+                at,
                 hold,
                 started_frame: frame,
             });
-            (scene, target, request.binding)
+            (scene, id, target, at, request.binding)
         };
         self.log.0.clear();
 
+        let what = match (entity, request.at) {
+            (Some(entity), _) => format!("entity {}", entity.as_proto_u32().unwrap_or_default()),
+            (None, Some(p)) => format!("the point ({}, {}, {})", p.x, p.y, p.z),
+            (None, None) => "the held press".to_owned(),
+        };
         let (reply, rx) = RpcResultSender::channel();
         self.jobs.job = Some(Job {
-            machine: ClickMachine::new(request.kind, requested, request.timeout, frame),
+            machine: ClickMachine::new(
+                request.kind,
+                entity.map(|id| id.as_proto_u32().unwrap_or_default()),
+                request.timeout,
+                frame,
+            ),
             reply,
             binding,
+            button: request.button,
             scene,
-            entity: id,
+            entity,
             target,
+            at,
+            what,
             started: frame,
+            root_broadcast: false,
+            root_events: HashSet::new(),
             hit: None,
             entries: Vec::new(),
             events: Vec::new(),
@@ -556,22 +749,38 @@ fn hover_entity_cmd(mut input: ConsoleCommand<HoverEntityCommand>, mut control: 
     };
     let result = if command.clear {
         control.clear()
-    } else if let Err(refusal) = check_hover_frames(command.frames) {
-        Answer::Failed(refusal)
-    } else if let Some(entity) = command.entity.as_deref() {
-        control.start(Request {
-            command: "/hover_entity",
-            entity,
-            kind: ClickKind::Hover(command.frames),
-            bounds: command.bounds,
-            timeout: command.timeout_frames,
-            binding: None,
-            hud_holds: false,
-        })
     } else {
-        Answer::Failed("expected an entity id, or --clear".to_owned())
+        hover_request(&command, &mut control).unwrap_or_else(Answer::Failed)
     };
     answer(&mut input, &mut control.pending, result);
+}
+
+fn hover_request(
+    command: &HoverEntityCommand,
+    control: &mut PointerControl,
+) -> Result<Answer, String> {
+    let frames = command
+        .span
+        .frames(&control.rate)?
+        .unwrap_or(DEFAULT_HOVER_FRAMES);
+    check_hover_frames(frames)?;
+    let timeout = timeout_frames(
+        command.timeout_frames,
+        command.timeout_seconds,
+        &control.rate,
+    )?;
+    let at = at_point(&command.at)?;
+    Ok(control.start(Request {
+        command: "/hover_entity",
+        entity: command.entity.as_deref(),
+        at,
+        kind: ClickKind::Hover(frames),
+        bounds: command.bounds,
+        timeout,
+        binding: None,
+        button: None,
+        hud_holds: false,
+    }))
 }
 
 fn click_entity_cmd(
@@ -583,7 +792,8 @@ fn click_entity_cmd(
     let Some(Ok(command)) = input.take() else {
         return;
     };
-    let result = click_request(&command, &mut control, &input_map, &input_manager);
+    let result = click_request(&command, &mut control, &input_map, &input_manager)
+        .unwrap_or_else(Answer::Failed);
     answer(&mut input, &mut control.pending, result);
 }
 
@@ -592,44 +802,55 @@ fn click_request(
     control: &mut PointerControl,
     input_map: &InputMap,
     input_manager: &InputManager,
-) -> Answer {
+) -> Result<Answer, String> {
     let kind = match command.event.as_str() {
         "click" => ClickKind::Click,
         "down" => ClickKind::Down,
         "up" => ClickKind::Up,
-        other => return Answer::Failed(format!("unknown event `{other}`: use click, down or up")),
+        other => return Err(format!("unknown event `{other}`: use click, down or up")),
     };
-    let action = match command.button.as_str() {
-        "pointer" => CommonInputAction::IaPointer,
-        "primary" => CommonInputAction::IaPrimary,
-        "secondary" => CommonInputAction::IaSecondary,
+    let (action, button) = match command.button.as_str() {
+        "pointer" => (CommonInputAction::IaPointer, ("pointer", "IaPointer")),
+        "primary" => (CommonInputAction::IaPrimary, ("primary", "IaPrimary")),
+        "secondary" => (CommonInputAction::IaSecondary, ("secondary", "IaSecondary")),
         other => {
-            return Answer::Failed(format!(
+            return Err(format!(
                 "unknown button `{other}`: use pointer, primary or secondary"
             ));
         }
     };
+    let timeout = timeout_frames(
+        command.timeout_frames,
+        command.timeout_seconds,
+        &control.rate,
+    )?;
+    let at = at_point(&command.at)?;
     let (binding, hud_holds) = if kind == ClickKind::Up {
         (None, false)
     } else {
         let Some(binding) = input_map.get_input(action) else {
-            return Answer::Failed(format!("{} has no binding", command.button));
+            return Err(format!("{} has no binding", command.button));
         };
         if let Some(refusal) = binding_error(&command.button, &binding) {
-            return Answer::Failed(refusal);
+            return Err(refusal);
         }
         let hud_holds = !input_manager.check_priority(&binding, InputPriority::Scene);
         (Some(binding), hud_holds)
     };
-    control.start(Request {
+    Ok(control.start(Request {
         command: "/click_entity",
-        entity: &command.entity,
+        entity: command.entity.as_deref(),
+        at,
         kind,
         bounds: command.bounds,
-        timeout: command.timeout_frames,
+        timeout,
         binding,
+        button: Some(ButtonNames {
+            arg: button.0,
+            action: button.1,
+        }),
         hud_holds,
-    })
+    }))
 }
 
 // --- the driver ---
@@ -683,6 +904,12 @@ fn target_seen(
     }
 }
 
+/// How a job ended: done (`Err` carries the diagnosis), or refused before pressing anything.
+enum Outcome {
+    Done(Result<(), String>),
+    Refused(String),
+}
+
 /// Follows the running job each frame after the pointer pipeline: snapshots what the pipeline
 /// saw, steps the machine, plays its presses and releases, and answers when it finishes.
 #[allow(clippy::too_many_arguments)]
@@ -697,6 +924,9 @@ fn drive_pointer_job(
     ids: Query<(Option<&SceneEntity>, Option<&ContainerEntity>)>,
     parents: Query<&ChildOf>,
     pointer_events: Query<&PointerEvents>,
+    camera: Query<&GlobalTransform, With<PrimaryCamera>>,
+    meshes: Query<(&Aabb, &GlobalTransform, &InheritedVisibility)>,
+    children: Query<&Children>,
 ) {
     let frame = frame.0;
     let Some(job) = jobs.job.as_mut() else {
@@ -704,11 +934,7 @@ fn drive_pointer_job(
     };
 
     // the target counts only while this job's aim drives the pointer
-    let aimed = frame > job.started
-        && synthetic
-            .0
-            .as_ref()
-            .is_some_and(|aim| aim.target == job.target);
+    let aimed = frame > job.started && synthetic.0.as_ref().is_some_and(|aim| aim.at == job.at);
     let seen = pointer
         .0
         .as_ref()
@@ -730,6 +956,7 @@ fn drive_pointer_job(
             scene: scene_title,
             player_distance: info.distance.0,
             camera_distance: info.camera_distance.0,
+            point: info.position,
         });
         job.entries = pointer_events
             .get(info.container)
@@ -737,11 +964,37 @@ fn drive_pointer_job(
             .unwrap_or_default();
         job.hit_entity = Some(seen.entity);
     }
+    // an aim at a world point: where the hit is against the point
+    let point = match job.at {
+        AimAt::Point(point) if aimed => camera.single().ok().map(|camera| {
+            let hit = seen.as_ref().map(|(info, _)| info);
+            let inside = hit
+                .and_then(|info| world_bounds(info.container, &meshes, &children))
+                .is_some_and(|(min, max)| {
+                    point.cmpge(min - BOUNDS_MARGIN).all() && point.cmple(max + BOUNDS_MARGIN).all()
+                });
+            classify_point(
+                camera.translation(),
+                point,
+                hit.map(|info| info.position.unwrap_or(point)),
+                inside,
+            )
+        }),
+        _ => None,
+    };
 
     let requested = job.requested();
     for logged in &log.0 {
         let id = logged.entity.as_proto_u32().unwrap_or_default();
-        if id != requested && Some(id) != job.hit_entity {
+        if logged.entity == SceneEntityId::ROOT
+            && logged.container == job.scene
+            && requested != Some(id)
+        {
+            job.root_broadcast = true;
+            job.root_events.insert(logged.event);
+            continue;
+        }
+        if Some(id) != requested && Some(id) != job.hit_entity {
             continue;
         }
         if job
@@ -755,9 +1008,11 @@ fn drive_pointer_job(
             });
         }
     }
+    // a press no entity took reaches the scene root: it landed all the same, so the job goes on
+    // to its release rather than wait for the entity
     let logged = |event: PointerEventType| {
         let name = format!("{event:?}");
-        job.events.iter().any(|e| e.event == name)
+        job.events.iter().any(|e| e.event == name) || job.root_events.contains(&event)
     };
     let ctx = scenes.get(job.scene).ok();
     let target = seen.map(|(_, seen)| seen);
@@ -767,7 +1022,13 @@ fn drive_pointer_job(
         down_logged: logged(PointerEventType::PetDown),
         up_logged: logged(PointerEventType::PetUp),
         release_played: job.release_step.is_some_and(|step| script.played() >= step),
-        entity_live: ctx.and_then(|ctx| ctx.bevy_entity(job.entity)) == Some(job.target),
+        entity_live: job
+            .entity
+            .is_none_or(|entity| ctx.and_then(|ctx| ctx.bevy_entity(entity)) == job.target),
+        point,
+        out_of_reach: job
+            .button
+            .is_some_and(|button| press_out_of_reach(button.action, &job.entries)),
     };
 
     let mut finished = None;
@@ -789,7 +1050,8 @@ fn drive_pointer_job(
                     }
                 }
             }
-            Effect::Finish(result) => finished = Some(result),
+            Effect::Finish(result) => finished = Some(Outcome::Done(result)),
+            Effect::Refuse(reason) => finished = Some(Outcome::Refused(reason)),
         }
     }
     let Some(result) = finished else {
@@ -799,24 +1061,47 @@ fn drive_pointer_job(
     let Some(job) = jobs.job.take() else {
         return;
     };
-    let diagnosis = result.err();
-    let reply = Ok(reply_json(
-        job.hit.as_ref(),
-        &job.entries,
-        &job.events,
-        diagnosis.clone(),
-    ));
+    let (reply, diagnosis) = match result {
+        Outcome::Refused(reason) => (
+            Err(refusal_json(reason, job.hit.as_ref(), job.root_broadcast)),
+            None,
+        ),
+        Outcome::Done(result) => {
+            let diagnosis = result.err();
+            let warning = job
+                .button
+                .filter(|_| diagnosis.is_none() && job.hit.is_some())
+                .and_then(|button| {
+                    undeclared_warning(job.machine.kind(), button.action, &job.entries)
+                });
+            let reply = reply_json(
+                job.hit.as_ref(),
+                &job.entries,
+                &job.events,
+                diagnosis.clone(),
+                ReplyExtra {
+                    button: job.button.map(|button| button.arg),
+                    root_broadcast: job.root_broadcast,
+                    warning,
+                },
+            );
+            (Ok(reply), diagnosis)
+        }
+    };
     match job.binding {
         // a down that landed keeps its press and its open aim
         Some(binding)
             if diagnosis.is_none()
+                && reply.is_ok()
                 && job.machine.kind() == ClickKind::Down
                 && job.machine.holds_press() =>
         {
             jobs.held = Some(Held {
                 scene: job.scene,
                 entity: job.entity,
+                pressed: job.requested().or(job.hit_entity).unwrap_or_default(),
                 target: job.target,
+                at: job.at,
                 binding,
             });
             job.reply.send(reply);
@@ -824,15 +1109,14 @@ fn drive_pointer_job(
         // anything else ends its aim, releasing a press it still holds first
         _ => {
             let release = job.release_binding();
-            let entity = job.requested();
             wind_down(
                 &mut jobs,
                 &mut synthetic,
                 &mut log,
                 &mut script,
                 release,
-                entity,
-                Some(job.target),
+                job.what,
+                Some(job.at),
                 (job.reply, reply),
             );
         }
@@ -878,18 +1162,23 @@ mod tests {
         let scene = app.world_mut().spawn_empty().id();
         let target = app.world_mut().spawn_empty().id();
         let entity = SceneEntityId::new(7, 0);
-        app.world_mut().resource_mut::<SyntheticPointer>().0 = Some(SyntheticAim {
-            scene,
+        let at = AimAt::Entity {
             entity,
             target,
             anchor: Anchor::Origin,
+        };
+        app.world_mut().resource_mut::<SyntheticPointer>().0 = Some(SyntheticAim {
+            scene,
+            at,
             hold: Hold::Open,
             started_frame: 0,
         });
         app.world_mut().resource_mut::<PointerJob>().held = Some(Held {
             scene,
-            entity,
-            target,
+            entity: Some(entity),
+            pressed: 7,
+            target: Some(target),
+            at,
             binding: InputIdentifier::Mouse(MouseButton::Left),
         });
         // a step queued ahead (another command's), so the release plays a frame later

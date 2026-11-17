@@ -437,13 +437,17 @@ describe('Explorer', () => {
     const explorer = new Explorer(fake)
     assert.equal((await explorer.hoverEntity(512, { bounds: true, frames: 10 })).diagnosis, 'blocked by entity 9')
     await explorer.clickEntity('512', { button: 'primary', event: 'down', timeoutFrames: 60 })
+    await explorer.clickEntity(null, { at: [2402, 1, -2387.5], event: 'up' })
+    await explorer.hoverEntity(542, { at: [2402, 1, 2387], seconds: 1.5, timeoutSeconds: 4 })
     await explorer.clearPointer()
     assert.equal((await explorer.raycastStats()).budgetMs, 1.67)
     assert.equal(await explorer.raycastBudget(0), 0)
     assert.deepEqual(await explorer.sceneLogs(50), ['[1.00] Info: a', '[2.00] Info: b'])
     assert.deepEqual(fake.lines, [
       '/hover_entity 512 --bounds --frames 10',
-      '/click_entity 512 --button primary --event down --timeout-frames 60',
+      '/click_entity 512 --timeout-frames 60 --button primary --event down',
+      '/click_entity --at 2402 1 -2387.5 --event up',
+      '/hover_entity 542 --at 2402 1 2387 --timeout-seconds 4 --seconds 1.5',
       '/hover_entity --clear',
       '/raycast_stats',
       '/raycast_budget 0',

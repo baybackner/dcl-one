@@ -1,7 +1,7 @@
-//! A synthetic pointer: an aim at one scene entity that the pointer pipeline follows instead of
-//! the cursor, so a console command can hover and click an entity without moving the mouse. The
-//! ray is cast from the camera to the entity's anchor point and then runs through the same casts,
-//! distance checks and result writers as a real cursor.
+//! A synthetic pointer: an aim at one scene entity, or at a world point, that the pointer pipeline
+//! follows instead of the cursor, so a console command can hover and click without moving the
+//! mouse. The ray is cast from the camera through the entity's anchor point (or the world point)
+//! and then runs through the same casts, distance checks and result writers as a real cursor.
 
 use bevy::{
     diagnostic::FrameCount,
@@ -22,23 +22,51 @@ use crate::update_world::pointer_events::PointerEvents;
 
 use super::pointer_results::{ActionCandidateMode, PointerTargetInfo};
 
-/// The active aim, if any. While it holds one the pointer ray goes from the camera to the aimed
-/// entity, whatever the cursor does, and the UI gate is open.
+/// The active aim, if any. While it holds one the pointer ray goes from the camera through the
+/// aimed entity or point, whatever the cursor does, and the UI gate is open.
 #[derive(Resource, Default)]
 pub struct SyntheticPointer(pub Option<SyntheticAim>);
 
 #[derive(Debug, Clone)]
 pub struct SyntheticAim {
-    /// the scene the entity belongs to
+    /// the scene the aim is for
     pub scene: Entity,
-    /// the entity as the scene names it
-    pub entity: SceneEntityId,
-    /// the bevy entity aimed at
-    pub target: Entity,
-    pub anchor: Anchor,
+    pub at: AimAt,
     pub hold: Hold,
     /// the frame the aim was set on
     pub started_frame: u32,
+}
+
+impl SyntheticAim {
+    /// The world point the ray goes through: `None` while an aimed entity is gone or not placed.
+    pub fn point(
+        &self,
+        transforms: &Query<&GlobalTransform>,
+        meshes: &Query<(&Aabb, &GlobalTransform, &InheritedVisibility)>,
+        children: &Query<&Children>,
+    ) -> Option<Vec3> {
+        match self.at {
+            AimAt::Entity { target, anchor, .. } => {
+                anchor_point(target, anchor, transforms, meshes, children)
+            }
+            AimAt::Point(point) => Some(point),
+        }
+    }
+}
+
+/// What an aim points at
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AimAt {
+    /// a scene entity, at its anchor
+    Entity {
+        /// the entity as the scene names it
+        entity: SceneEntityId,
+        /// the bevy entity aimed at
+        target: Entity,
+        anchor: Anchor,
+    },
+    /// a world point: the ray reaches whatever a cursor over that point would
+    Point(Vec3),
 }
 
 /// Where on the entity the aim points
@@ -59,7 +87,8 @@ pub enum Hold {
     Open,
 }
 
-/// The pointer results written while an aim is active, oldest first
+/// The pointer results written while an aim is active, oldest first. A result broadcast to a
+/// scene root is logged with `entity` `ROOT` and `container` the scene's entity
 #[derive(Resource, Default)]
 pub struct PointerEventLog(pub Vec<LoggedPointerEvent>);
 
@@ -114,8 +143,29 @@ pub fn anchor_point(
     }
 }
 
+/// The world box (min, max) around the visible meshes of `target` and its descendants; `None`
+/// without one.
+pub fn world_bounds(
+    target: Entity,
+    meshes: &Query<(&Aabb, &GlobalTransform, &InheritedVisibility)>,
+    children: &Query<&Children>,
+) -> Option<(Vec3, Vec3)> {
+    placed_bounds(
+        std::iter::once(target)
+            .chain(children.iter_descendants(target))
+            .filter_map(|e| meshes.get(e).ok())
+            .filter(|(_, _, visible)| visible.get())
+            .map(|(aabb, transform, _)| (*aabb, transform.affine())),
+    )
+}
+
 /// The centre of the box around every local-space `Aabb`, each placed in the world by its transform
 fn world_bounds_centre(boxes: impl IntoIterator<Item = (Aabb, Affine3A)>) -> Option<Vec3> {
+    placed_bounds(boxes).map(|(min, max)| (min + max) * 0.5)
+}
+
+/// The box around every local-space `Aabb`, each placed in the world by its transform
+fn placed_bounds(boxes: impl IntoIterator<Item = (Aabb, Affine3A)>) -> Option<(Vec3, Vec3)> {
     let mut bounds: Option<(Vec3A, Vec3A)> = None;
     for (aabb, placement) in boxes {
         let centre = placement.transform_point3a(aabb.center);
@@ -132,7 +182,7 @@ fn world_bounds_centre(boxes: impl IntoIterator<Item = (Aabb, Affine3A)>) -> Opt
             None => (min, max),
         });
     }
-    bounds.map(|(min, max)| Vec3::from((min + max) * 0.5))
+    bounds.map(|(min, max)| (Vec3::from(min), Vec3::from(max)))
 }
 
 /// Whether the pointer target may be taken from the world: the cursor is over the 3D view (a UI
@@ -282,9 +332,11 @@ mod tests {
     fn an_aim_held_for_frames_expires_and_clears_the_log() {
         let aim = |hold, started_frame| SyntheticAim {
             scene: Entity::from_raw(1),
-            entity: SceneEntityId::from_proto_u32(512),
-            target: Entity::from_raw(2),
-            anchor: Anchor::Origin,
+            at: AimAt::Entity {
+                entity: SceneEntityId::from_proto_u32(512),
+                target: Entity::from_raw(2),
+                anchor: Anchor::Origin,
+            },
             hold,
             started_frame,
         };

@@ -50,13 +50,45 @@ export interface WorldState {
 
 /**
  * What `/hover_entity` and `/click_entity` report. A hit on an avatar or on another scene's
- * entity reports `entity` and `container` as 4294967295.
+ * entity reports `entity` and `container` as 4294967295, and `crdtEntityId` as null.
  */
 export interface PointerReport {
   hit: { entity: number; container: number; scene: string; playerDistance: number; cameraDistance: number } | null
+  crdtEntityId: number | null
+  hitPoint: { x: number; y: number; z: number } | null
+  /** from the player to the hit */
+  distance: number | null
+  hoverText: string | null
+  /** scene UI covering the aim: not checked yet, always false */
+  blockedByUi: boolean
+  /** the scene root received a pointer result while the job ran */
+  rootBroadcast: boolean
+  /** `/click_entity`: the action pressed */
+  button?: 'pointer' | 'primary' | 'secondary'
   entries: { button: string; event: string; hoverText: string | null; enabled: boolean; tooFar: boolean }[]
   events: { event: string; button: string; tick: number }[]
   diagnosis: string | null
+  /** `/click_entity`: the hit entity declares no entry for the button and an event the click sends */
+  warning?: string
+}
+
+/** Where a pointer command aims, beyond the entity: a world point (`--at`), and how long it may take. */
+export interface AimOptions {
+  /** aim through this world point; with an entity too, that entity must be at the point */
+  at?: [number, number, number]
+  bounds?: boolean
+  timeoutFrames?: number
+  timeoutSeconds?: number
+}
+
+/** The flags of `AimOptions`, in the order the commands document them. */
+function aimFlags(options: AimOptions): string {
+  let flags = ''
+  if (options.at) flags += ` --at ${options.at.join(' ')}`
+  if (options.bounds) flags += ' --bounds'
+  if (options.timeoutFrames !== undefined) flags += ` --timeout-frames ${options.timeoutFrames}`
+  if (options.timeoutSeconds !== undefined) flags += ` --timeout-seconds ${options.timeoutSeconds}`
+  return flags
 }
 
 /** `/raycast_stats`: the capped tier's budget and last pass, and the uncapped tier's last pass. */
@@ -987,12 +1019,16 @@ export class Explorer {
     return this.json<ScreenPosition>(`/entity_screen_position ${entity}${options.bounds ? ' --bounds' : ''}`)
   }
 
-  /** Aims the pointer at an entity and reports what it hovers; a blocked outcome resolves with `diagnosis` set; a refusal rejects. */
-  hoverEntity(entity: string | number, options: { bounds?: boolean; frames?: number; timeoutFrames?: number } = {}): Promise<PointerReport> {
-    let line = `/hover_entity ${entity}`
-    if (options.bounds) line += ' --bounds'
+  /** Aims the pointer at an entity, or through a world point (`at`, with `entity` null), and
+   *  reports what it hovers; a blocked outcome resolves with `diagnosis` set; a refusal (nothing at
+   *  the point included) rejects. */
+  hoverEntity(
+    entity: string | number | null,
+    options: AimOptions & { frames?: number; seconds?: number } = {}
+  ): Promise<PointerReport> {
+    let line = `/hover_entity${entity === null ? '' : ` ${entity}`}${aimFlags(options)}`
     if (options.frames !== undefined) line += ` --frames ${options.frames}`
-    if (options.timeoutFrames !== undefined) line += ` --timeout-frames ${options.timeoutFrames}`
+    if (options.seconds !== undefined) line += ` --seconds ${options.seconds}`
     return this.json<PointerReport>(line)
   }
 
@@ -1000,15 +1036,14 @@ export class Explorer {
     await this.run('/hover_entity --clear')
   }
 
+  /** Clicks an entity, or what is at a world point (`at`, with `entity` null); see `hoverEntity`. */
   clickEntity(
-    entity: string | number,
-    options: { bounds?: boolean; button?: 'pointer' | 'primary' | 'secondary'; event?: 'click' | 'down' | 'up'; timeoutFrames?: number } = {}
+    entity: string | number | null,
+    options: AimOptions & { button?: 'pointer' | 'primary' | 'secondary'; event?: 'click' | 'down' | 'up' } = {}
   ): Promise<PointerReport> {
-    let line = `/click_entity ${entity}`
-    if (options.bounds) line += ' --bounds'
+    let line = `/click_entity${entity === null ? '' : ` ${entity}`}${aimFlags(options)}`
     if (options.button) line += ` --button ${options.button}`
     if (options.event) line += ` --event ${options.event}`
-    if (options.timeoutFrames !== undefined) line += ` --timeout-frames ${options.timeoutFrames}`
     return this.json<PointerReport>(line)
   }
 

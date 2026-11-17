@@ -348,15 +348,19 @@ The HUD and input:
   `/click_at <x> <y> [--button left|right|middle] [--normalized]`: logical pixels from the top
   left, or 0 to 1 of the window with `--normalized`. It replies JSON: `x` and `y` in pixels,
   `normalized`, `button`, `screen` and, on the web, `input` (`trusted` or `synthetic`).
-- `/hover_entity <entity> [--bounds] [--frames N] [--timeout-frames N]`, `/hover_entity --clear`
-  and `/click_entity <entity> [--bounds] [--button pointer|primary|secondary] [--event
-  click|down|up] [--timeout-frames N]`: hover or click a scene entity of the active scene by id
-  through the pointer pipeline, on native and web alike. The pointer ray is aimed from the camera
-  at the entity, and a click presses the key or mouse button bound to the action. The reply is
-  JSON: `hit` (`entity`, `container`, `scene`, `playerDistance`, `cameraDistance`, or `null`), the
-  hover `entries`, the pointer `events` the scene got (`event`, `button`, `tick`) and a `diagnosis`
-  (`null`, `blocked by entity <id>`, `entity not live`, `input held by the HUD`,
-  `timed out waiting for target|hover|tick|release`). `--event down` keeps the press
+- `/hover_entity [<entity>] [--at x y z] [--bounds] [--frames N | --seconds S] [--timeout-frames N
+  | --timeout-seconds S]`, `/hover_entity --clear` and `/click_entity [<entity>] [--at x y z]
+  [--bounds] [--button pointer|primary|secondary] [--event click|down|up] [--timeout-frames N |
+  --timeout-seconds S]`: hover or click a scene entity of the active scene, by id or by the world
+  point `--at` names, through the pointer pipeline, on native and web alike. The pointer ray is
+  aimed from the camera through the entity or the point, and a click presses the key or mouse
+  button bound to the action. The reply is JSON: `hit` (`entity`, `container`, `scene`,
+  `playerDistance`, `cameraDistance`, or `null`), `crdtEntityId`, `hitPoint`, `distance`,
+  `hoverText`, `blockedByUi`, `rootBroadcast`, `button`, the hover `entries`, the pointer `events`
+  the scene got (`event`, `button`, `tick`), a `diagnosis` (`null`, `blocked by entity <id>`,
+  `entity not live`, `input held by the HUD`, `timed out waiting for target|hover|tick|release`)
+  and a `warning` when the hit entity declares no entry for the button. Nothing at an `--at` point
+  refuses without pressing (`{"refused", "cause"}`). `--event down` keeps the press
   held until `--event up` or `/hover_entity --clear`; other pointer commands are refused meanwhile
   (`src/automation/pointer.rs`). `--frames` is at most 1800, and a hover's deadline is never
   shorter than its frames plus 3, whatever `--timeout-frames` says.

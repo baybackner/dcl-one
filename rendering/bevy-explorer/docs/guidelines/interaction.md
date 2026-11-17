@@ -55,11 +55,12 @@ current scene only, and defers the ones that do not fit. Ours differ on purpose:
 ## Driving the pointer
 
 `/hover_entity` and `/click_entity` (`src/automation/pointer.rs`, `src/automation/pointer/machine.rs`)
-hover and click a scene entity of the active scene by id through the production pointer
-pipeline, on native and web alike. The scene is the one `/set_scene` picked, else the player's.
-A command sets a synthetic aim (`SyntheticPointer`, `synthetic_pointer.rs`): the pointer ray goes
-from the camera to the entity's anchor point whatever the cursor does, and runs through the same
-casts, distance checks and result writers as a real cursor. A click presses the key or mouse
+hover and click a scene entity of the active scene, by id or by a world point, through the
+production pointer pipeline, on native and web alike. The scene is the one `/set_scene` picked,
+else the player's. A command sets a synthetic aim (`SyntheticPointer`, `synthetic_pointer.rs`):
+the pointer ray goes from the camera through the entity's anchor point, or through the world
+point, whatever the cursor does, and runs through the same casts, distance checks and result
+writers as a real cursor. A click presses the key or mouse
 button bound to the action through the input script, so the press reaches the scene as a
 person's would.
 
@@ -69,29 +70,44 @@ input (`window.__dclTrustedInput`), so they need no DevTools client.
 
 ### Options
 
-`/hover_entity <entity> [--bounds] [--frames N] [--timeout-frames N]` and `/hover_entity --clear`:
+`/hover_entity [<entity>] [--at x y z] [--bounds] [--frames N | --seconds S] [--timeout-frames N |
+--timeout-seconds S]` and `/hover_entity --clear`:
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `<entity>` | An id as `/scene_entities` lists it, or `root`, `player`, `camera` | required, unless `--clear` |
-| `--bounds` | Aim at the centre of the bounds of the visible meshes of the entity and its descendants; the origin when it has none | the entity's origin |
-| `--frames` | How long to hover; at most 1800 (more is refused) | 30 |
-| `--timeout-frames` | Frames the job may take in all. A hover's deadline is `max(timeout, frames + 3)`, so the default never cuts a long hover short | 600 |
+| `<entity>` | An id as `/scene_entities` lists it, or `root`, `player`, `camera` | an entity or `--at`, unless `--clear` |
+| `--at x y z` | Aim through this world point, in Decentraland world coordinates (as `/world_state` reports the position; z runs north): the job takes what the ray reaches there (see [Aiming at a point](#aiming-at-a-point)). With `<entity>` too, that entity must be what is there | the entity's anchor |
+| `--bounds` | Aim at the centre of the bounds of the visible meshes of the entity and its descendants; the origin when it has none. Ignored with `--at` | the entity's origin |
+| `--frames`, `--seconds` | How long to hover; seconds count in frames at the measured frame rate; at most 1800 frames (more is refused) | 30 frames |
+| `--timeout-frames`, `--timeout-seconds` | How long the job may take in all. A hover's deadline is `max(timeout, frames + 3)`, so the default never cuts a long hover short | 600 frames |
 | `--clear` | End any aim and release a held press, instead of hovering | off |
 
-`/click_entity <entity> [--bounds] [--button pointer|primary|secondary] [--event click|down|up]
-[--timeout-frames N]`:
+`/click_entity [<entity>] [--at x y z] [--bounds] [--button pointer|primary|secondary] [--event
+click|down|up] [--timeout-frames N | --timeout-seconds S]`:
 
 | Option | Meaning | Default |
 | --- | --- | --- |
 | `--button` | The action to press, by its binding | `pointer` |
-| `--event` | `click` presses, then releases on a later scene tick; `down` presses and holds; `up` releases a held press | `click` |
-| `--timeout-frames` | Frames the click may take in all | 600 |
+| `--event` | `click` presses, then releases on a later scene tick; `down` presses and holds; `up` releases a held press (by the held entity's id, or by `--at` alone) | `click` |
+| `--timeout-frames`, `--timeout-seconds` | How long the click may take in all | 600 frames |
+
+### Aiming at a point
+
+With `--at`, the ray goes from the camera through the point and the job takes the first collider
+it reaches, as a cursor over that point would. That hit is *at the point* when it is within 1 m
+of it, or when the point lies inside the hit entity's visible bounds (a box aimed at its centre).
+A hit nearer the camera than that stands in front of the point: the job ends with the `blocked by`
+diagnosis and presses nothing. Nothing at the point (no hit, or a hit beyond it, so the point is in
+empty air) refuses the command without pressing anything, after two frames of looking:
+`{"refused": "nothing at the point: ...", "cause": {"crdtEntityId", "hitPoint", "rootBroadcast":
+false}}`. A press is never sent without a hit, so a miss never reaches the scene root.
 
 ### The reply
 
 ```json
 {"hit": {"entity": 512, "container": 512, "scene": "pointer-targets", "playerDistance": 4.0, "cameraDistance": 6.2},
+ "crdtEntityId": 512, "hitPoint": {"x": 8.0, "y": 1.0, "z": 7.5}, "distance": 4.0, "hoverText": "Near",
+ "blockedByUi": false, "rootBroadcast": false, "button": "pointer",
  "entries": [{"button": "IaPointer", "event": "PetDown", "hoverText": "Near", "enabled": true, "tooFar": false}],
  "events": [{"event": "PetDown", "button": "IaPointer", "tick": 31}],
  "diagnosis": null}
@@ -102,6 +118,20 @@ input (`window.__dclTrustedInput`), so they need no DevTools client.
   another scene) reports id 4294967295 for both. `scene` is the hit scene's title.
   `playerDistance` is from the avatar to the nearest point of the collider, `cameraDistance`
   from the camera along the ray.
+- `crdtEntityId`, `hitPoint`, `distance`: the hit entity's id (`null` without a hit, or for an
+  avatar or another scene), where the ray hit it in Decentraland world coordinates, and
+  `playerDistance` again, at the top level.
+- `hoverText`: the hover text of the hit's entries, an enabled entry's first.
+- `blockedByUi`: scene UI covering the aim. Not checked yet: always `false`.
+- `rootBroadcast`: whether the scene root received a pointer result while the job ran, which a
+  press reaches when no entity takes it (the hit entity declares no entry for the button and
+  event). Read from the results written, not assumed. A press the root received has landed: the
+  click goes on to its release on a later tick, and the `warning` names the missing entry.
+- `button` (`/click_entity`): the action pressed, as `--button` names it.
+- `warning` (`/click_entity`, only when there is one): the hit entity declares no cursor entry for
+  the button and an event the click sends, one part per edge, e.g. `press: the entity declares no
+  PointerEvents entry for PetDown/IaPointer; it listens for: PetDown/IaPrimary`. The press still
+  reaches the entity's results; no handler bound to a declared entry runs on it.
 - `entries`: the cursor pointer-event entries of the hit container, each with `button`, `event`,
   `hoverText`, `enabled` and `tooFar` (the distance check failed).
 - `events`: the pointer events the scene received for the entity or the hit entity, each with
@@ -114,10 +144,12 @@ A diagnosis is a resolved reply with `diagnosis` set, not a failure: read it fro
 
 | `diagnosis` | Meaning |
 | --- | --- |
-| `blocked by entity <id>` | The ray hit another entity's collider first; `<id>` is that container |
+| `blocked by entity <id>` | The ray hit another entity's collider first, or, with `--at`, one in front of the point; `<id>` is that container |
+| `blocked by an avatar or another scene's entity` | The same, for a collider that is no entity of the scene |
+| `out of reach: the entity's entry for the button is past its distance limit` | `/click_entity`: the hit entity declares an entry for the button, and none is in reach. Nothing is pressed: the press would go past the entity to the scene root |
 | `entity not live` | The scene has no live entity for the id, or it was replaced while the job ran |
 | `input held by the HUD` | The HUD holds the bound input, so the press would not reach the scene |
-| `timed out waiting for <stage>` | The job passed its deadline; `<stage>` is `target` (the ray hit nothing before the deadline: no collider, or one still loading), `hover` (a hover did not finish), `tick` (the scene never logged the press) or `release` (the release was never played) |
+| `timed out waiting for <stage>` | The job passed its deadline; `<stage>` is `target` (the ray hit nothing before the deadline: no collider, or one still loading), `hover` (a hover did not finish), `tick` (neither the entity nor the scene root got the press) or `release` (the release was never played) |
 
 ### Refusals
 
@@ -129,12 +161,16 @@ A refusal fails the command (the web call rejects, the loopback answers `ok: fal
   `/hover_entity --clear`; an `up` with nothing held fails with `no press is held`;
 - `--frames` over 1800, an unknown `--event` or `--button`, a button with no binding, or a
   button bound to a gamepad input;
-- neither an entity nor `--clear`, or an id that does not parse.
+- neither an entity, `--at` nor `--clear`, or an id that does not parse;
+- `--at`: nothing at the point (above), or, with an entity too, another entity of the scene at
+  the point: `the point holds entity <hit>, not entity <id>`. These two are JSON
+  (`{"refused", "cause"}`) and nothing was pressed.
 
 ### The open press
 
 `--event down` presses and keeps the aim open on the entity (no expiry) once the scene has logged
-the press. The press stays held until `--event up` on the same entity or `/hover_entity --clear`;
+the press. The press stays held until `--event up` on the same entity (or with `--at` alone) or
+`/hover_entity --clear`;
 other pointer commands are refused meanwhile. A hover or a click ends its aim when it replies.
 When a press is still held at the end (`--clear`, or a click that failed after pressing), the
 release is played on the aimed entity first: the reply, and the end of the aim, wait until it has
