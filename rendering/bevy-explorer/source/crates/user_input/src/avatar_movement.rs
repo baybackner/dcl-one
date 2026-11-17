@@ -34,7 +34,7 @@ use ipfs::{
 };
 
 use scene_runner::{
-    initialize_scene::PARCEL_SIZE,
+    initialize_scene::{PortableScenes, PARCEL_SIZE},
     renderer_context::RendererSceneContext,
     update_world::{
         avatar_modifier_area::InputModifier,
@@ -722,9 +722,15 @@ fn end_jump_on_landing(dynamic_state: &mut AvatarDynamicState) {
     }
 }
 
+// Below this an impulse or force sum is no push: a zero `PhysicsCombinedForce` still sets
+// `external_velocity`.
+const NO_EXTERNAL_VELOCITY: f32 = 1e-3;
+
 // The player's own walking, for analytics: the controller's displacement after collisions, so
-// lifts, platforms and walls add nothing; a parcel scene's movement override, a suppression, an
-// impulse or force this frame, or no movement input held leaves none.
+// lifts, platforms and walls add nothing. Only a startup portable (the default controller)
+// counts; a parcel scene's override, a smart wearable or scene-spawned portable, a suppression,
+// an impulse or force this frame, or no movement input held leaves none.
+#[allow(clippy::type_complexity)]
 fn record_own_movement(
     mut player: Query<
         (
@@ -733,6 +739,8 @@ fn record_own_movement(
         ),
         With<PrimaryUser>,
     >,
+    scenes: Query<&RendererSceneContext>,
+    portables: Res<PortableScenes>,
     info: Res<AvatarMovementInfo>,
     movement_control: Res<EngineMovementControl>,
     input_manager: InputManager,
@@ -740,17 +748,30 @@ fn record_own_movement(
     let Ok((mut dynamic_state, movement)) = player.single_mut() else {
         return;
     };
+    let default_controller = scenes
+        .get(movement.scene())
+        .ok()
+        .filter(|ctx| ctx.is_portable)
+        .and_then(|ctx| portables.get(&ctx.hash))
+        .is_some_and(|source| source.is_startup());
+    let pushed = info
+        .0
+        .external_velocity
+        .is_some_and(|v| v.world_vec_to_vec3().length() > NO_EXTERNAL_VELOCITY);
     // a zero request skips `apply_movement`'s solve, leaving `actual_velocity` stale
-    let own = movement.scene_is_portable
+    let own = default_controller
         && movement.component.velocity != Vec3::ZERO
         && !movement_suppressed(&movement_control, movement)
-        && info.0.external_velocity.is_none()
+        && !pushed
         && input_manager.get_analog(MOVE_SET, InputPriority::Scene) != Vec2::ZERO;
-    dynamic_state.own_velocity = info
+    let velocity = info
         .0
         .actual_velocity
         .filter(|_| own)
         .map_or(Vec3::ZERO, |v| v.world_vec_to_vec3());
+    dynamic_state.own_velocity = velocity;
+    // `step_time` is this frame's delta, the one `actual_velocity` was divided by
+    dynamic_state.own_displacement = velocity * info.0.step_time;
 }
 
 // (scene entity, collider id) of collider player is standing on

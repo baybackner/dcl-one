@@ -145,6 +145,47 @@ describe('Passport analytics', () => {
     })
     expect(opened(from)).toEqual([['profile_opened', '0xme']])
   })
+
+  it('waits for your own profile before reporting another player\'s passport opened early', async () => {
+    receiveProfile('0xabc', RICH)
+    const from = pending().length
+    const s = fakeSession()
+    const view = await renderSettled(
+      <SessionProvider value={s}>
+        <Passport userId="0xabc" onClose={vi.fn()} />
+      </SessionProvider>
+    )
+    expect(opened(from)).toEqual([])
+    const loaded = { ...s, profile: fakeProfileState({ data: ME }) }
+    await act(async () => {
+      view.rerender(
+        <SessionProvider value={loaded}>
+          <Passport userId="0xabc" onClose={vi.fn()} />
+        </SessionProvider>
+      )
+    })
+    expect(opened(from)).toEqual([['passport_opened', '0xabc']])
+  })
+
+  it('reports the same player once when the address changes case', async () => {
+    receiveProfile('0xabc', RICH)
+    const from = pending().length
+    const s = fakeSession()
+    signedIn(s)
+    const view = await renderSettled(
+      <SessionProvider value={s}>
+        <Passport userId="0xabc" onClose={vi.fn()} />
+      </SessionProvider>
+    )
+    await act(async () => {
+      view.rerender(
+        <SessionProvider value={s}>
+          <Passport userId="0xABC" onClose={vi.fn()} />
+        </SessionProvider>
+      )
+    })
+    expect(opened(from)).toEqual([['passport_opened', '0xabc']])
+  })
 })
 
 describe('Passport block & report', () => {

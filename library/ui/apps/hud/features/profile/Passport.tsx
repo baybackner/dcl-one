@@ -71,10 +71,10 @@ export function Passport({
   const meKnown = session.profile.data != null
   const reported = useRef<string | null>(null)
   useEffect(() => {
-    if (!meKnown || reported.current === userId) return
-    reported.current = userId
+    if (!meKnown || reported.current === a) return
+    reported.current = a
     track(isSelf ? 'profile_opened' : 'passport_opened', { receiver_id: userId })
-  }, [userId, isSelf, meKnown])
+  }, [a, userId, isSelf, meKnown])
   useEffect(
     () => () => {
       const picked = pickedRef.current

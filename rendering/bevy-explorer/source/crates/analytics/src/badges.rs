@@ -49,9 +49,9 @@ pub struct StepCounter {
 }
 
 impl StepCounter {
-    /// A frame of `dt` seconds at `grounded_speed` m/s of the player's own walking; the steps to
+    /// A frame of `dt` seconds in which the player walked `metres` on the ground; the steps to
     /// report when a chunk closes.
-    pub fn tick(&mut self, address: &str, grounded_speed: f32, dt: f32) -> Option<u64> {
+    pub fn tick(&mut self, address: &str, metres: f32, dt: f32) -> Option<u64> {
         if self.address.as_deref() != Some(address) {
             *self = Self {
                 address: Some(address.to_owned()),
@@ -62,7 +62,7 @@ impl StepCounter {
         if address == UNAUTHENTICATED {
             return None;
         }
-        self.metres += grounded_speed * dt;
+        self.metres += metres;
         let whole = (self.metres / STEP_METRES).floor();
         self.steps += whole as u64;
         self.metres -= whole * STEP_METRES;
@@ -99,8 +99,8 @@ pub struct ElevationGain {
 }
 
 impl ElevationGain {
-    /// A frame in which the player's own movement rose `dy` metres; the gain once it first passes
-    /// [`HEIGHT`].
+    /// A frame in which the player's own movement rose `dy` metres; the gain once past
+    /// [`HEIGHT`], every frame until [`Self::sent`].
     pub fn tick(&mut self, address: &str, dy: f32, footing: Footing) -> Option<f32> {
         if self.address.as_deref() != Some(address) {
             *self = Self {
@@ -112,27 +112,26 @@ impl ElevationGain {
             return None;
         }
         match footing {
-            Footing::Standing | Footing::Moved => {
-                self.pending = 0.0;
-                return None;
-            }
-            Footing::Airborne => {
+            Footing::Standing | Footing::Moved => self.pending = 0.0,
+            Footing::Airborne => self.pending += dy,
+            Footing::Walking => {
                 self.pending += dy;
-                return None;
+                let rise = self.pending;
+                // a rise below the threshold builds up
+                if rise.abs() > MIN_RISE {
+                    self.pending = 0.0;
+                    if rise < MAX_RISE {
+                        self.gain += rise.max(0.0);
+                    }
+                }
             }
-            Footing::Walking => self.pending += dy,
         }
-        let rise = self.pending;
-        // a rise below the threshold builds up
-        if rise.abs() <= MIN_RISE {
-            return None;
-        }
-        self.pending = 0.0;
-        if rise < MAX_RISE {
-            self.gain += rise.max(0.0);
-        }
-        self.reached = self.gain > HEIGHT;
-        self.reached.then_some(self.gain)
+        (self.gain > HEIGHT).then_some(self.gain)
+    }
+
+    /// The event went out: nothing more this login.
+    pub fn sent(&mut self) {
+        self.reached = true;
     }
 }
 
@@ -227,10 +226,11 @@ pub fn report_badge_events(
     let client_common = || wallet.as_ref().and_then(|w| config.client_event_common(w));
     let address = config.common().dcl_eth_address.clone();
     for emote in emotes.read() {
-        if !throttle.allow(&address, time.elapsed_secs_f64()) {
+        // the minute's slot is spent only by an emote that goes out
+        let Some(common) = client_common() else {
             continue;
-        }
-        if let Some(common) = client_common() {
+        };
+        if throttle.allow(&address, time.elapsed_secs_f64()) {
             metrics.add_event(
                 SegmentEvent::UsedEmote(SegmentEventUsedEmote::new(&emote.urn, emote.source)),
                 &common,
@@ -247,11 +247,11 @@ pub fn report_badge_events(
         footing(dynamics)
     };
 
-    let own_speed = match footing {
-        Footing::Walking => dynamics.own_velocity.xz().length(),
+    let walked = match footing {
+        Footing::Walking => dynamics.own_displacement.xz().length(),
         _ => 0.0,
     };
-    if let Some(step_count) = steps.tick(&address, own_speed, time.delta_secs()) {
+    if let Some(step_count) = steps.tick(&address, walked, time.delta_secs()) {
         if let Some(common) = client_common() {
             metrics.add_event(
                 SegmentEvent::WalkedDistance(SegmentEventWalkedDistance { step_count }),
@@ -259,13 +259,13 @@ pub fn report_badge_events(
             );
         }
     }
-    let own_rise = dynamics.own_velocity.y * time.delta_secs();
-    if let Some(height) = elevation.tick(&address, own_rise, footing) {
+    if let Some(height) = elevation.tick(&address, dynamics.own_displacement.y, footing) {
         if let Some(common) = client_common() {
             metrics.add_event(
                 SegmentEvent::VerticalHeightReached(SegmentEventVerticalHeightReached { height }),
                 &common,
             );
+            elevation.sent();
         }
     }
 }
@@ -279,12 +279,12 @@ mod tests {
     #[test]
     fn steps_are_reported_per_chunk_or_past_the_threshold() {
         let mut counter = StepCounter::default();
-        assert_eq!(counter.tick(UNAUTHENTICATED, 1.5, 40.0), None);
+        assert_eq!(counter.tick(UNAUTHENTICATED, 60.0, 40.0), None);
         for _ in 0..29 {
             assert_eq!(counter.tick("0xa", 1.5, 1.0), None);
         }
         assert_eq!(counter.tick("0xa", 1.5, 1.0), Some(60));
-        assert_eq!(counter.tick("0xa", 10.0, 7.6), Some(101));
+        assert_eq!(counter.tick("0xa", 76.0, 7.6), Some(101));
         assert_eq!(counter.tick("0xa", 0.0, 30.0), None);
         // a new login starts over
         counter.tick("0xa", 1.5, 1.0);
@@ -293,7 +293,7 @@ mod tests {
 
     // Only the player's own rises count: a jump's apex, a descent and a rise interrupted by
     // standing still or a teleport do not, a ledge climbed by jumping counts on landing, small
-    // rises build up, and the climbs add up to one event per login.
+    // rises build up, and the climbs add up to one event per login, due until it is sent.
     #[test]
     fn elevation_counts_own_rises_once_per_login() {
         let mut gain = ElevationGain::default();
@@ -324,7 +324,11 @@ mod tests {
         while reached.is_none() {
             reached = gain.tick("0xa", 0.5, Footing::Walking);
         }
-        assert!(reached.unwrap() > HEIGHT);
+        let reached = reached.unwrap();
+        assert!(reached > HEIGHT);
+        // not sent yet (no usable chain): still due, even standing
+        assert_eq!(gain.tick("0xa", 0.0, Footing::Standing), Some(reached));
+        gain.sent();
         assert_eq!(gain.tick("0xa", 600.0, Footing::Walking), None);
         // the next login climbs again
         assert_eq!(gain.tick("0xb", 0.0, Footing::Walking), None);
