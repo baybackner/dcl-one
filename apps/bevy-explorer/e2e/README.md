@@ -120,6 +120,15 @@ has them written to `captures/sequence-<n>/` in the report folder as it runs, an
 names each file in the frame's `savedTo`. The other variables of the table above apply as for a
 run.
 
+The tool takes no wait or sleep lines: the commands wait for their own effects. To pace a longer
+script, pipe in a feed script that writes each line when it is due and reads stdout to decide the
+next one, for example counting the reply lines before going on, or taking the element ids of a
+fresh `/ui_list` reply, since scene UI ids change when a panel is drawn again. Give the scene
+about 15 s after arrival before a capture that must show it drawn. Because lines run one at a
+time, a feed cannot make two commands overlap, so a refusal of a command that arrives while
+another holds the same resource (a second `/screenshot` during a capture) needs another
+transport.
+
 ## How a spec is written
 
 One file per explorer-automation fixture under `specs/`, headed by a table of its test cases
