@@ -41,8 +41,8 @@ TSC = node_modules/.bin/tsc
 ESLINT = node_modules/.bin/eslint
 SYNC_PACK = node_modules/.bin/syncpack
 JEST = node_modules/.bin/jest
-# library/hashing is a pnpm package; a machine with pnpm on its PATH can pass PNPM=pnpm
-PNPM ?= corepack pnpm@12.21.0
+# library/hashing is a pnpm package; PNPM names another pnpm
+PNPM ?= pnpm
 export PNPM
 
 # this DEVELOPER_MODE is important to not send developer's events to the same segment

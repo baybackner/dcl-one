@@ -29,6 +29,7 @@
       - .github/workflows/bevy-explorer-*.yml
       - .github/actions/bevy-explorer-ci-status/**
       - .github/actions/bevy-explorer-tools/**
+      - .github/actions/setup-pnpm/**
       - flake.*
       - rendering/bevy-explorer/**
       - .github/workflows/bevy-explorer-ci.yml
@@ -76,6 +77,7 @@
       - .github/workflows/bevy-explorer-*.yml
       - .github/actions/bevy-explorer-ci-status/**
       - .github/actions/bevy-explorer-tools/**
+      - .github/actions/setup-pnpm/**
       - flake.*
       - rendering/bevy-explorer/**
       - .github/workflows/bevy-explorer-ci.yml
@@ -859,7 +861,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - uses: ./.github/actions/setup-pnpm
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         if: steps.engine-cache.outputs.cache-matched-key == ''
         with:
@@ -969,7 +971,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - uses: ./.github/actions/setup-pnpm
       - name: Download the tested web app
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -995,9 +997,9 @@ jobs:
         env:
           pnpm_config_store_dir: ${{ runner.temp }}/pnpm-store
         run: |
-          corepack pnpm@12.21.0 --dir react-web install --frozen-lockfile --ignore-scripts
-          corepack pnpm@12.21.0 --dir react-web/bridge-scene install --frozen-lockfile --ignore-scripts
-          corepack pnpm@12.21.0 --dir react-web/bridge-scene --filter @dcl/hashing build
+          pnpm --dir react-web install --frozen-lockfile --ignore-scripts
+          pnpm --dir react-web/bridge-scene install --frozen-lockfile --ignore-scripts
+          pnpm --dir react-web/bridge-scene --filter @dcl/hashing build
       - name: Save the pnpm store from main
         if: github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1034,11 +1036,11 @@ jobs:
       - name: Export the compiled bridge scene for the CDN
         # The web job linted and tested the scene; its compiled bin/ is not part of the artifact.
         run: |
-          corepack pnpm@12.21.0 exec sdk-commands build --production
+          pnpm exec sdk-commands build --production
           SCENE_BASE_URL="$(node -p "require('../../deploy/web/package.json').homepage || ''")/bridge-scene/static/"
           export SCENE_BASE_URL
           echo "SCENE_BASE_URL=$SCENE_BASE_URL"
-          corepack pnpm@12.21.0 run export-web
+          pnpm run export-web
         working-directory: rendering/bevy-explorer/source/react-web/bridge-scene
       - name: Upload the stamped package for publication
         if: needs.build-deploy-web.outputs.publish == 'true'

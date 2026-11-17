@@ -1,8 +1,8 @@
 .PHONY: buf-lint buf-build buf-breaking test all install list-components-ids check-component-id
 
 BIN="./node_modules/.bin"
-# The SDK installs this package with the same command and lockfile; a machine with pnpm on its PATH can pass PNPM=pnpm
-PNPM ?= corepack pnpm@12.21.0
+# The SDK installs this package with the same command and lockfile; PNPM names another pnpm
+PNPM ?= pnpm
 BUF_VERSION=1.8.0
 OS = $(shell uname -s)
 OS_ARCH = $(shell uname -m)

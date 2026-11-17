@@ -45,6 +45,7 @@ name: Bevy Explorer / E2E
       - '.cargo/**'
       - 'rust-toolchain*'
       - '.github/workflows/bevy-explorer-e2e.yml'
+      - '.github/actions/setup-pnpm/**'
       - 'tooling/bevy-e2e-*.py'
       - 'tooling/tests/test_bevy_e2e_*.py'
   workflow_run:
@@ -108,10 +109,11 @@ jobs:
         if: steps.gate.outputs.changed == 'true'
         with:
           node-version: 24
+      - uses: ./.github/actions/setup-pnpm
+        if: steps.gate.outputs.changed == 'true'
       - name: Install the suite
         if: steps.gate.outputs.changed == 'true'
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
       - name: Typecheck
         if: steps.gate.outputs.changed == 'true'
@@ -267,9 +269,9 @@ jobs:
           path: web-app
           run-id: ${{ needs.inputs.outputs.web_run_id }}
           github-token: ${{ github.token }}
+      - uses: ./.github/actions/setup-pnpm
       - name: Install the suite
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
       # The web driver looks for Chrome under Google's install paths; an image without one gets
       # the pinned Chrome for Testing build, checked against the sum recorded here (Google

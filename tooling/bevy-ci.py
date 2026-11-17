@@ -39,7 +39,7 @@ TOOLS_INPUTS = ('flake.nix', 'flake.lock', 'infra/packages/default.nix', 'infra/
 INPUTS = ('rendering/bevy-explorer/source', PATCHES + '/bevy', 'rendering/bevy-explorer/vendor', 'library/vendor/rusty_enet', 'tooling/dev-regressions*', 'library/protocol/proto', 'apps/bevy-explorer',
           'infra/gateway', *GATEWAY_HUD_INPUTS, *TOOLS_INPUTS,
           'tooling/bevy-ci.py', 'tooling/hud_shared_inputs.py', 'tooling/ci_paths.py', 'tooling/bevy-mtimes.py', 'tooling/bevy-target-cache.py', PATCH_TOOL, 'tooling/play-artifact.py', 'tooling/tests/test_play_*.py',
-          'library/hashing', 'tooling/check-local-hashing.mjs',
+          'library/hashing', 'tooling/check-local-hashing.mjs', '.github/actions/setup-pnpm',
           'tooling/tests/test_bevy_*.py', 'tooling/tests/test_hud_shared_inputs.py', 'tooling/tests/hud_manifest_fixture.py', 'tooling/tests/hud_manifest_invalid_cases.json', 'tooling/tests/check_hud_manifest_nix.py', WORKFLOW, SCENES_WORKFLOW,
           '.github/workflows/bevy-explorer-images.yml',
           '.github/workflows/bevy-explorer-headless.yml',
@@ -313,6 +313,9 @@ def select(base, head):
         elif path.startswith('library/hashing/') or path == 'tooling/check-local-hashing.mjs':
             # The bridge scene's SDK commands load library/hashing, and play-artifact.py
             # fingerprints both paths with the web app.
+            affected = ('web',)
+        elif path.startswith('.github/actions/setup-pnpm/'):
+            # The web lane installs, tests and bundles the HUD and the bridge scene with this pnpm.
             affected = ('web',)
         elif path in TOOLS_INPUTS or path.startswith('.github/actions/bevy-explorer-tools/'):
             # The Linux lanes compile with the flake's protoc and build the web engine with its

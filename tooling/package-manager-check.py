@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fail on an npm or yarn lockfile, a project or workflow off the pinned pnpm, a setting pnpm ignores in .npmrc, or npm or yarn in a workflow."""
+"""Fail on an npm or yarn lockfile, a pnpm pin in a project, pnpm fetched outside .github/actions/setup-pnpm, a setting
+pnpm ignores in .npmrc, or npm or yarn in a workflow."""
 import argparse
 import json
 import os
@@ -18,14 +19,14 @@ NPMRC_READ = {'ca', 'cafile', 'cert', 'key', 'registry', '_auth', '_authToken', 
               'https-proxy', 'proxy', 'no-proxy', 'http-proxy', 'local-address', 'strict-ssl'}
 NPMRC_KEY = re.compile(r'^\s*([^#;\s=][^=]*?)\s*=', re.M)
 WORKFLOWS = ('.github/workflows/', '.github/actions/')
-# The pnpm every project pins in packageManager and every workflow fetches.
-PNPM_VERSION = '12.21.0'
-# The registry's sha512 for that release, which corepack checks a pin's integrity against.
-PNPM_SHA512 = ('66fd8278ee28935ce951792d34367ff3af5c432a2756445823029533835b8da5'
-               '29bbe0be5130afd56ed0713fb8789e47bad82d93bd5ae2fe54b15562d6276ef0')
-PNPM_NAMED = re.compile(r'\bpnpm@(\d+\.\d+\.\d+)')
+# CI takes pnpm from this action only: its two PNPM_VERSION steps and digests.txt name one release.
+SETUP_ACTION = '.github/actions/setup-pnpm'
+ACTION_VERSION = re.compile(r'^\s*PNPM_VERSION:\s*(\S+)\s*$', re.M)
+DIGESTS_VERSION = re.compile(r'^# pnpm (\S+)$', re.M)
+# corepack, or a pnpm fetched by its version (npx pnpm@..., pnpm add --global pnpm@...).
+PNPM_FETCH = re.compile(r'\bcorepack\b|\bpnpm@\d')
 # Copies of projects the service test installs with the pnpm its machine carries.
-UNPINNED = ('infra/dev/service-test/fixture/',)
+FIXTURES = ('infra/dev/service-test/fixture/',)
 # A job may fetch a newer npm to publish; that npm is checked like any other.
 NPX_NPM = re.compile(r'\bnpx\s+--yes\s+npm@\S+')
 # npm commands that install or run a project, after any global flags; publishing and registry queries stay on npm.
@@ -55,15 +56,12 @@ def offenders(root):
         name = rel.rsplit('/', 1)[-1]
         if name in LOCKFILES:
             found.append(f'{rel}: npm or yarn lockfile; convert it with `pnpm import` and delete it')
-        elif name == 'pnpm-lock.yaml' and not rel.startswith(UNPINNED):
+        elif name == 'pnpm-lock.yaml' and not rel.startswith(FIXTURES):
             manifest = root / rel.rsplit('/', 1)[0] / 'package.json' if '/' in rel else root / 'package.json'
-            pinned = json.loads(manifest.read_text(encoding='utf-8')).get('packageManager', '') if manifest.is_file() else ''
-            version, _, integrity = pinned.partition('+')
-            if version != f'pnpm@{PNPM_VERSION}':
-                found.append(f'{manifest.relative_to(root).as_posix()}: pins `{pinned or "nothing"}`; set packageManager to pnpm@{PNPM_VERSION}')
-            elif integrity not in ('', f'sha512.{PNPM_SHA512}'):
-                found.append(f'{manifest.relative_to(root).as_posix()}: pins pnpm {PNPM_VERSION} with another integrity; '
-                             f'use sha512.{PNPM_SHA512}')
+            pinned = json.loads(manifest.read_text(encoding='utf-8')).get('packageManager') if manifest.is_file() else None
+            if pinned is not None:
+                found.append(f'{manifest.relative_to(root).as_posix()}: pins `{pinned}`; remove packageManager, '
+                             f'CI takes pnpm from {SETUP_ACTION}')
         elif name == '.npmrc':
             for match in NPMRC_KEY.finditer((root / rel).read_text(encoding='utf-8', errors='replace')):
                 key = match.group(1)
@@ -75,9 +73,15 @@ def offenders(root):
                     continue
                 if NPM_USE.search(NPX_NPM.sub('npm', line)):
                     found.append(f'{rel}:{number}: installs or runs with npm or yarn; use pnpm')
-                for version in PNPM_NAMED.findall(line):
-                    if version != PNPM_VERSION:
-                        found.append(f'{rel}:{number}: fetches pnpm {version}; the projects pin {PNPM_VERSION}')
+                if PNPM_FETCH.search(line) and not rel.startswith(SETUP_ACTION + '/'):
+                    found.append(f'{rel}:{number}: fetches pnpm itself; use {SETUP_ACTION}')
+    action, digests = root / SETUP_ACTION / 'action.yml', root / SETUP_ACTION / 'digests.txt'
+    if action.is_file():
+        named = set(ACTION_VERSION.findall(action.read_text(encoding='utf-8')))
+        listed = set(DIGESTS_VERSION.findall(digests.read_text(encoding='utf-8'))) if digests.is_file() else set()
+        if len(named) != 1 or listed != named:
+            found.append(f'{SETUP_ACTION}: action.yml names pnpm {", ".join(sorted(named)) or "nothing"} and digests.txt '
+                         f'{", ".join(sorted(listed)) or "nothing"}; both name one release')
     return found
 
 

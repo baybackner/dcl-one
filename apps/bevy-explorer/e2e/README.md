@@ -24,7 +24,6 @@ and a visible window: Chrome runs headed, with the benchmark runner's flags
 
 ```sh
 cd apps/bevy-explorer/e2e
-corepack enable                        # once: puts the pnpm that package.json pins on the PATH
 pnpm install --frozen-lockfile
 pnpm run typecheck                     # tsc
 pnpm test                              # the driver's tests (a stub page in headless Chrome)

@@ -62,7 +62,7 @@ engine.addEntity({
 ### Prerequisites for Development
 
 - **Node.js** 22.x or higher
-- **pnpm**, at the version the workspace's `package.json` pins (`corepack enable` provides it)
+- **pnpm** 12, the version `.github/actions/setup-pnpm` installs in CI; `nix develop` provides pnpm
 - **Docker** (for running local content server)
 - **@dcl/sdk-commands** installed globally or locally
 

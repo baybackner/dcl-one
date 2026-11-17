@@ -5,10 +5,12 @@ on:
     paths:
       - library/protocol/**
       - .github/workflows/protocol.yml
+      - .github/actions/setup-pnpm/**
   pull_request:
     paths:
       - library/protocol/**
       - .github/workflows/protocol.yml
+      - .github/actions/setup-pnpm/**
 permissions:
   contents: read
 jobs:
@@ -28,6 +30,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      - uses: ./.github/actions/setup-pnpm
       - name: Install dependencies and the google well-known types
         run: make install
       - name: Lint

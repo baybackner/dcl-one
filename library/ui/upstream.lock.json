@@ -4803,7 +4803,7 @@
   "publicComponents": {
     "files": {
       "generation.json": {
-        "sha256": "9ea60219cd51436d9cdb3e0e3414bfd9e48a10288f8e6ba919a092a9d21f7e6a",
+        "sha256": "ad30ea8a7136047e497dfca541628a978b50332d52c64fc44beacdc51b87e888",
         "origin": {
           "kind": "generated",
           "source": "{\"repository\":\"https://github.com/decentraland/figma-design-system\",\"codeRevision\":\"9c6dfbe61b2c218ff0b820841aac722df4ebd8aa\",\"snapshotRevision\":\"9c6dfbe61b2c218ff0b820841aac722df4ebd8aa\",\"digestTableHash\":\"bcd458ff2f008acd71b32ebc15b85a20cd7a4efc6dece1336f18cebdb7bbb097\"}",

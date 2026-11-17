@@ -116,7 +116,7 @@ jobs:
       - run: node figma/lock-digests.mjs
       # The skill installed at the repository root matches its source in figma/agent-kit (dependency-free).
       - run: node figma/agent-kit/cli.mjs check --target ../..
-      - run: corepack enable
+      - uses: ./.github/actions/setup-pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint

@@ -89,7 +89,7 @@ creator-hub/
 Before starting, ensure you have the following installed:
 
 - **Node.js** 22.x or higher ([Download](https://nodejs.org/))
-- **pnpm**, at the version `package.json` pins (`corepack enable` provides it)
+- **pnpm** 12, the version `.github/actions/setup-pnpm` installs in CI; `nix develop` provides pnpm
 - **Git** ([Download](https://git-scm.com/downloads))
 - **Docker** (optional, required for local asset-packs content server development)
 

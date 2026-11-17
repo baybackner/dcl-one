@@ -12,7 +12,7 @@ Decentraland Creator Hub is a monorepo (a pnpm workspace) with three packages:
 
 Dependencies flow: `asset-packs` → `inspector` → `creator-hub` (each depends on the previous via `file:` links).
 
-Install, run and test with pnpm, at the version the root `package.json` pins (`corepack enable` provides it). `pnpm-workspace.yaml` holds the workspace's install settings; `packages/inspector/agents/bevy` is a separate project with its own lock and settings. The two published manifests (`packages/asset-packs`, `packages/inspector`) carry nothing pnpm-specific: no `packageManager`, no `workspace:` range, and their own scripts chain with `npm run`, so the packed `package.json` is the one in the tree.
+Install, run and test with pnpm 12, the version `.github/actions/setup-pnpm` installs in CI; `nix develop` provides pnpm. `pnpm-workspace.yaml` holds the workspace's install settings; `packages/inspector/agents/bevy` is a separate project with its own lock and settings. The two published manifests (`packages/asset-packs`, `packages/inspector`) carry nothing pnpm-specific: no `packageManager`, no `workspace:` range, and their own scripts chain with `npm run`, so the packed `package.json` is the one in the tree.
 
 ## Common Commands
 

@@ -22,15 +22,16 @@ Internal development and CI install with pnpm. This replaces the package-manager
 [SDK](2026-10-26-sdk-in-dcl-one.md) and [Creator Hub](2026-11-09-creator-hub-in-dcl-one.md)
 decisions; the rest of both stands.
 
-- A project commits `pnpm-lock.yaml` and pins pnpm 12.21.0 in its root `packageManager`. pnpm 12
-  is a native program; through corepack it downloads and verifies that program on first use. Each
-  lockfile opens with the pinned pnpm's own packages and their integrity
-  (`packageManagerDependencies`), and a frozen install fails until it does.
-  CI and the build scripts install with `--frozen-lockfile` on that version, through corepack
-  (`corepack enable`, or `corepack pnpm@12.21.0`, the `PNPM` default of the SDK and protocol
-  Makefiles) or through the development shell's pnpm, which switches to the pinned version. The
-  Nix builds run the Nix package set's pnpm and ignore the pin.
-- `library/ui`'s `package.json` is an input of its generated components, so changing its pin is a
+- A project commits `pnpm-lock.yaml` and pins no pnpm: it has no `packageManager` field. CI takes
+  pnpm 12.21.0 from `.github/actions/setup-pnpm`, which downloads the release asset for the
+  runner and checks its sha256 against `digests.txt`. The action's `PNPM_VERSION` is the only
+  place that names the version. CI and the build scripts install with `--frozen-lockfile`; the
+  `PNPM` default of the SDK and protocol Makefiles is `pnpm`. The development shell provides pnpm,
+  and the Nix builds run the Nix package set's pnpm. Without a pin, pnpm writes no record of
+  itself at the top of a lockfile.
+- No corepack. Node 25 and later do not ship it, and a pin makes another pnpm (the development
+  shell's) switch to a downloaded program that does not start on NixOS.
+- `library/ui`'s `package.json` is an input of its generated components, so a change to it is a
   component regeneration (`pnpm figma port prepare`, then `port verify`).
 - pnpm does not read `package-lock.json`. A project moves with `pnpm import`, which writes
   `pnpm-lock.yaml` from it, and then deletes `package-lock.json`. The import resolves again
@@ -48,10 +49,11 @@ decisions; the rest of both stands.
   hands a `--` to the script as an argument, where npm removes it.
 - Published `@dcl/*` packages carry no pnpm-specific field or configuration, so their users
   install with npm, yarn or pnpm. Publishing keeps `npm pack` and `npm publish`.
-- `tooling/package-manager-check.py` fails on an npm or yarn lockfile, on a project or workflow
-  off the pinned pnpm (`PNPM_VERSION`), on a pin carrying another release's integrity
-  (`PNPM_SHA512`), on an `.npmrc` key pnpm does not read, and on a workflow that installs or runs
-  with npm or yarn, or runs anything through `npx`. A newer npm fetched to publish (`npx --yes npm@…`) is checked like npm.
+- `tooling/package-manager-check.py` fails on an npm or yarn lockfile, on a `packageManager`
+  field in a project, on a workflow that fetches pnpm itself (corepack, or `pnpm@<version>`), on a
+  setup action whose steps and `digests.txt` name different releases, on an `.npmrc` key pnpm does
+  not read, and on a workflow that installs or runs with npm or yarn, or runs anything through
+  `npx`. A newer npm fetched to publish (`npx --yes npm@…`) is checked like npm.
 
 Where the layout differs from pnpm's default:
 
@@ -76,8 +78,7 @@ What stays on npm:
 - What the products run for a creator, and the test scenes that stand in for a creator's project:
   the SDK's `npm install` in a scene, `library/js-sdk-toolchain/test/snapshots`,
   `test/build-ecs/fixtures` and `init-test-scene`, and the npm the Creator Hub bundles.
-- `react-web`'s `bundle:native` starts the bridge scene's export with `npm --prefix`, since pnpm
-  started through corepack is not on the `PATH` of the scripts it runs.
+- `react-web`'s `bundle:native` starts the bridge scene's export with `npm --prefix`.
 
 ## Consequences
 
@@ -87,9 +88,11 @@ What stays on npm:
   declare, which the flat install hides. Declaring them changes what their users install and is a
   separate decision.
 - The electron-builder setting depends on that tool's internals and is checked on each upgrade.
-- Another pnpm version is one change: each project's pin and the record at the top of its lockfile
-  (`pnpm install --lockfile-only`), the workflows, the Makefiles' `PNPM` defaults and
-  `PNPM_VERSION` with `PNPM_SHA512`, which the guard then holds everything to.
-- CI fetches pnpm through the corepack Node 24 ships. Node 25 and later do not ship corepack, so a
-  move of CI past Node 24 needs another way to fetch the pinned pnpm. The development shell
-  provides pnpm itself.
+- Another pnpm version is one change: `PNPM_VERSION` in both steps of `.github/actions/setup-pnpm`
+  and `digests.txt` (the sha256 of each release asset, as the release lists it), which the guard
+  holds together. The workflows that install with pnpm name the action in their path filters, so
+  the change runs them.
+- CI does not depend on corepack, so it can move past Node 24. The action covers Linux, macOS and
+  Windows on x64 and arm64; another runner needs its asset in `digests.txt`.
+- The development shell's pnpm comes from the Nix package set and can be another 12.x release than
+  CI's; both read the same lockfiles.

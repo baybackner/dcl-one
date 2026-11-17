@@ -20,10 +20,9 @@ git clone https://github.com/decentraland/dcl-one.git
 cd dcl-one/library/js-sdk-toolchain
 ```
 
-2. With Node ≥24.16 and Corepack available, install dependencies and build:
+2. With Node ≥24.16 and pnpm 12 on the PATH, install dependencies and build:
 
 ```bash
-corepack enable
 make install
 make build
 ```
