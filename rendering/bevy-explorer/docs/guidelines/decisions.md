@@ -76,7 +76,8 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   nearest parcel (not its corner); a scene behind the rendering camera counts four times
   farther in the tick queue (no once-a-second cap, no frozen far scenes). Request slots go to
   the head of the best-ranked queue (one per scene, wearable or emote hash, and one for requests
-  with no hash): the player's scenes, then avatars' wearables and the emotes they play, then the
+  with no hash): the player's own wearables and the emotes they play, then the player's scenes,
+  then the other avatars' wearables and emotes, then the
   other scenes, the last two by parcel ring, in front before behind, then raw distance; then
   requests no scene or avatar owns (no hash, or a hash nobody holds), oldest first; last, the
   downloads of a scene that has left.
@@ -508,6 +509,22 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   show seams between the slices, so here they are radii, borders and gradients with the sprites'
   colours. The canvas scales by the smaller of width and height, as every menu page does, where
   unity-explorer's scales by width.
+- **The hills follow the Landscape Distance.** The distance is the config's `landscape_distance`
+  (default 1000 m), read at startup and held to 500 to 7000 m.
+  Unity displaces its whole terrain and its Landscape Distance setting does not drive it. Here the
+  ground's rings are displaced out to the Landscape Distance from the player, never less than the
+  832 m the parcel-sized rings cover, and the hills flatten over a further tenth of it, so
+  the rest of the 13 km ground costs the vertex shader nothing and walking moves no vertex abruptly.
+  Each ring coarser than a parcel snaps to its own cell size, so its vertices stay on the same
+  terrain points and the far hills do not swim.
+- **Cliffs reach 768 m at most.** Unity culls each cliff prefab whose bounds are beyond the
+  Landscape Distance from the camera. Bevy's cliffs are procedural chunks built around the
+  player's parcel out to the nearer of 768 m and the Landscape Distance: building them out to
+  7 km would mean hundreds of chunks with their invisible walls.
+- **The sea is always drawn.** Unity culls its water chunks one by one beyond the Landscape
+  Distance. Bevy has one sea plane, a single opaque quad that casts no shadows, so hiding it would
+  save almost nothing, and the water material draws without fog, so nothing would soften it
+  appearing and disappearing.
 
 ## Deliberate choices that look like mistakes
 
