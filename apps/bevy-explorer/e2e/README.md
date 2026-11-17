@@ -249,7 +249,7 @@ Each new file's header classes its cases as above. The chat helpers the chat spe
 | Emotes | Equip, Replace equipped, Pagination | `backpack-emotes` | Partial |
 | Emotes | Animations | none: the Bevy Backpack does not play an emote on the preview, by design | Drop |
 | Emotes | Wheel | `emote-wheel`, `emote-slots` | Port |
-| Emotes | Play | `emote-wheel` (a click), `emote-slots` (the slot's numpad key; the engine binds quick emotes to the numpad, not B and a digit) | Partial |
+| Emotes | Play | `emote-wheel` (a click), `emote-slots` (B, then the slot's numpad key: quick emotes are bound to the numpad, and play only while the wheel is open) | Port |
 | Profile | Passport, Overview, Edit name, Equipped items | `passport` | Port, Partial |
 | Profile | Edit name color | `passport-links` | Gap |
 | Profile | Edit about me | `passport` (bio), `passport-links` (links) | Partial |

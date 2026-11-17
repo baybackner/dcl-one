@@ -1,19 +1,18 @@
 // The QA Automation Suite's EMOTES cases beyond explorer-automation's EmoteWheelTests and
 // BackpackEmotesTests (emote-wheel.test.ts, backpack-emotes.test.ts): the wheel showing what the
-// Backpack assigned, and a quick emote from the numpad. The Backpack lists its slots as
+// Backpack assigned, and a quick emote from B and a numpad digit. The Backpack lists its slots as
 // `<slot> <emote or None>` (backpack.ts emoteSlots); the wheel names them `Emote slot <n>` with
 // `: <emote>` when one is set (emote-wheel.test.ts), and its hint reads "Press [B+num] to run an emote".
 //
 // | Suite case   | Here                                                                                | Class   |
 // | Wheel        | B opens the wheel; each of its ten slots names the emote the Backpack's slot holds   | Port    |
-// | Play         | a slot's numpad key plays that slot's emote                                          | Partial |
+// | Play         | B, then a slot's numpad key, plays that slot's emote and closes the wheel            | Port    |
 // | Animations   | none: the Bevy Backpack plays nothing on the preview when an emote is selected        | Drop    |
 //
-// Partial, Play: the checklist says B and a digit, but the explorer binds the quick emotes
-// (`QuickEmote0` to `QuickEmote9`, inputs.rs) to Numpad0 to Numpad9 only; the top-row digits 1 to 4
-// are scene actions, and the wheel's own key handler takes only E. The wheel's "[B+num]" hint means
-// the numpad. The wheel is read for the occupied slots, closed, then the slot's numpad key is pressed
-// (`/press_key Numpad<n>`).
+// Play: the "digit" is the numpad's. The explorer binds the quick emotes (`QuickEmote0` to
+// `QuickEmote9`, inputs.rs) to Numpad0 to Numpad9 only (the top-row digits 1 to 4 are scene
+// actions), and the HUD plays QuickEmoteN only while the wheel is open (useEngineSession.ts), which
+// the emote then closes: B, then `/press_key Numpad<n>` with the wheel still open.
 //
 // Drop, Animations: by design the Backpack does not animate the preview avatar with the selected
 // emote; the wheel's own click is emote-wheel.test.ts.
@@ -63,7 +62,7 @@ scenario(
 )
 
 scenario(
-  "a slot's numpad key plays that slot's emote",
+  "B, then a slot's numpad key, plays that slot's emote and closes the wheel",
   async ({ explorer, restore, t }) => {
     restore(async () => {
       if (await explorer.hud.isVisible(WHEEL)) {
@@ -80,18 +79,18 @@ scenario(
     }
     const slot = occupied[0]
     assert.ok(slot !== undefined, 'no emote wheel slot has an emote: nothing to play')
-    await explorer.key('KeyB')
-    await explorer.hud.waitHidden(WHEEL, CONTROL_TIMEOUT_MS)
     const expected = (await explorer.myAvatar()).selected.emotes[slot]
     assert.ok(expected, `the player's emote ${slot} should name the emote the wheel shows`)
     t.diagnostic(`slot ${slot}: ${expected}`)
 
+    // the wheel stays open: the HUD plays a quick emote only while it is
     await explorer.key(`Numpad${slot}`)
     await until(
       async () => (await explorer.myAvatar()).emote,
       (emote) => emote !== null && emote.source === 'triggeredEmote' && !emote.finished && sameEmote(emote.urn, expected),
-      { timeoutMs: CONTROL_TIMEOUT_MS, intervalMs: 100, what: `the avatar to play ${expected} after Numpad${slot}` }
+      { timeoutMs: CONTROL_TIMEOUT_MS, intervalMs: 100, what: `the avatar to play ${expected} after B and Numpad${slot}` }
     )
+    await explorer.hud.waitHidden(WHEEL, CONTROL_TIMEOUT_MS)
   },
   { timeoutMs: 120_000 }
 )
