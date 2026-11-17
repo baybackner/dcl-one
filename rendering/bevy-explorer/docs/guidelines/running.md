@@ -376,6 +376,23 @@ The HUD and input:
   `entityBound`, `aimed`, `holdSeconds`, `holdFrames`, `rootEvents` (the root's results with
   their ticks) and a `hint` when the root got the press
   ([Interaction](interaction.md#pressing-an-input-action)).
+- `/walk <dx> <dy> [--seconds S] [--kind walk|jog|run] [--jump] [--ignore-input-modifiers]`
+  (`src/automation/walk.rs`): walk camera-relative by holding the keys bound to the movement
+  actions for `--seconds` (1 by default, at most 30), as the keyboard does: `dx` is right (+) or
+  left (-), `dy` forward (+) or backward (-), each from -1 to 1, and a component at least 0.3 from
+  0 presses its key. The movement scene sets the gait from the actions held with them: `IaWalk`
+  for `walk`, `IaModifier` for `run`, neither for `jog` (the default). `--jump` presses jump as
+  the walk starts and holds it at most 0.5 s. The movement scene applies the active
+  `InputModifier`, which the engine passes it in the avatar movement info;
+  `--ignore-input-modifiers` withholds it for the walk (`InputModifierBypass`). Because the keys
+  are real input, a walk also reaches the scene root as `IaForward` (and the other actions) presses,
+  as a person's walk does. It answers, once the player has been still for 3 frames after the keys
+  are up (or 3 s have passed: `settled:false`), with JSON: `startPosition`, `endPosition`
+  (Decentraland world coordinates), `distance` (straight), `parcel`, `seconds` (how long the keys
+  were down), `kind`, `jump`, `keys`, `modifierActive`, `modifier` (what the active
+  `InputModifier` disabled during the walk: `all`, `walk`, `jog`, `run`, `jump`, ..., or `null`;
+  reported with the bypass too) and `ignoreInputModifiers`. A second walk, a gamepad binding or
+  input the HUD holds is refused. `/walk_player_to` walks to a point instead.
 - `/raycast_stats` (JSON: the capped tier's `budgetMs`, `ran`, `deferred` and `spentMs`, and the
   uncapped tier's `uncappedRan` and `uncappedSpentMs`, each for its last frame with raycasts to
   cast) and `/raycast_budget [ms|auto]` (show the capped budget, a tenth of the target frame, or

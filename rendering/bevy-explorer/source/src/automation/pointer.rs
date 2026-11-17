@@ -94,7 +94,7 @@ impl Plugin for AutomationPointerPlugin {
 }
 
 /// The input script step pressing or releasing `binding`; `None` for a gamepad binding.
-fn binding_step(binding: &InputIdentifier, state: ButtonState) -> Option<Step> {
+pub(crate) fn binding_step(binding: &InputIdentifier, state: ButtonState) -> Option<Step> {
     match *binding {
         InputIdentifier::Key(key_code) => {
             // bevy names key codes as the DOM does, so the press carries the key and text a
@@ -138,7 +138,7 @@ struct EventReport {
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
-struct Point {
+pub(crate) struct Point {
     x: f64,
     y: f64,
     z: f64,
@@ -146,7 +146,7 @@ struct Point {
 
 impl Point {
     /// A bevy world point in Decentraland world coordinates, as `--at` and `/world_state` use them.
-    fn from_bevy(v: Vec3) -> Self {
+    pub(crate) fn from_bevy(v: Vec3) -> Self {
         let [x, y, z] = DclTranslation::from_bevy_translation(v).0;
         Self::from(Vec3::new(x, y, z))
     }

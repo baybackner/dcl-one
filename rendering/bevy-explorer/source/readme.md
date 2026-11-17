@@ -335,6 +335,11 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   action by its lowercase SDK name (`primary`, `jump`, `action_3`, ...) through its binding, held
   `--hold` seconds, aimed by `--entity` or `--at` or landing wherever the cursor is, and adds
   `action`, `entityBound` and the scene root's `rootEvents` to the click's reply.
+- Movement: `/walk <dx> <dy> [--seconds S] [--kind walk|jog|run] [--jump]
+  [--ignore-input-modifiers]` holds the movement keys camera-relative, with the walk or run key
+  for the gait, and answers once the player has settled with `startPosition`, `endPosition`,
+  `distance`, `parcel`, the held `seconds` and whether an `InputModifier` was active
+  (`modifierActive`, `modifier`); `docs/guidelines/running.md` has the details.
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the
   capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the pointer commands go

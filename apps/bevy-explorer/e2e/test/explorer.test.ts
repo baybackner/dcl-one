@@ -431,9 +431,9 @@ describe('Explorer', () => {
     ])
   })
 
-  test('hoverEntity, clickEntity, pressInput, raycast and scene log commands compose the lines', async () => {
+  test('hoverEntity, clickEntity, pressInput, walk, raycast and scene log commands compose the lines', async () => {
     const report = JSON.stringify({ hit: null, entries: [], events: [], diagnosis: 'blocked by entity 9' })
-    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
+    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, walk: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
     const explorer = new Explorer(fake)
     assert.equal((await explorer.hoverEntity(512, { bounds: true, frames: 10 })).diagnosis, 'blocked by entity 9')
     await explorer.clickEntity('512', { button: 'primary', event: 'down', timeoutFrames: 60 })
@@ -443,6 +443,8 @@ describe('Explorer', () => {
     await explorer.pressInput('primary')
     await explorer.pressInput('jump', { hold: 1 })
     await explorer.pressInput('action_3', { entity: 584, at: [2404, 1, 2413], timeoutSeconds: 2 })
+    await explorer.walk(0, 1, { seconds: 1.2, kind: 'walk' })
+    await explorer.walk(-1, 0.5, { kind: 'run', jump: true, ignoreInputModifiers: true })
     assert.equal((await explorer.raycastStats()).budgetMs, 1.67)
     assert.equal(await explorer.raycastBudget(0), 0)
     assert.deepEqual(await explorer.sceneLogs(50), ['[1.00] Info: a', '[2.00] Info: b'])
@@ -455,6 +457,8 @@ describe('Explorer', () => {
       '/press_input primary',
       '/press_input jump --hold 1',
       '/press_input action_3 --entity 584 --at 2404 1 2413 --timeout-seconds 2',
+      '/walk 0 1 --seconds 1.2 --kind walk',
+      '/walk -1 0.5 --kind run --jump --ignore-input-modifiers',
       '/raycast_stats',
       '/raycast_budget 0',
       '/scene_logs 50'

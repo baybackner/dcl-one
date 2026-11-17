@@ -72,6 +72,28 @@ export interface PointerReport {
   warning?: string
 }
 
+/** What `/walk` reports once the player has settled. Positions are Decentraland world coordinates. */
+export interface WalkReport {
+  startPosition: { x: number; y: number; z: number }
+  endPosition: { x: number; y: number; z: number }
+  /** straight from the start to the end */
+  distance: number
+  parcel: [number, number]
+  /** how long the keys were down */
+  seconds: number
+  kind: 'walk' | 'jog' | 'run'
+  jump: boolean
+  /** the keys held, by `KeyboardEvent.code` */
+  keys: string[]
+  /** an InputModifier disabled something while the walk ran */
+  modifierActive: boolean
+  /** what it disabled (`all`, `walk`, `jog`, `run`, `jump`, ...), null without one */
+  modifier: string[] | null
+  ignoreInputModifiers: boolean
+  /** the player stopped within 3 s of the keys going up */
+  settled: boolean
+}
+
 /** The scene input actions `/press_input` takes, by their SDK names. */
 export type InputActionName =
   | 'pointer'
@@ -1091,6 +1113,21 @@ export class Explorer {
     if (options.entity !== undefined) line += ` --entity ${options.entity}`
     line += aimFlags(options)
     return this.json<PressReport>(line)
+  }
+
+  /** Walks camera-relative by holding the movement keys: `dx` right (+) or left (-), `dy` forward (+)
+   *  or backward (-), each -1 to 1; resolves once the player has settled. */
+  walk(
+    dx: number,
+    dy: number,
+    options: { seconds?: number; kind?: 'walk' | 'jog' | 'run'; jump?: boolean; ignoreInputModifiers?: boolean } = {}
+  ): Promise<WalkReport> {
+    let line = `/walk ${dx} ${dy}`
+    if (options.seconds !== undefined) line += ` --seconds ${options.seconds}`
+    if (options.kind) line += ` --kind ${options.kind}`
+    if (options.jump) line += ' --jump'
+    if (options.ignoreInputModifiers) line += ' --ignore-input-modifiers'
+    return this.json<WalkReport>(line)
   }
 
   raycastStats(): Promise<RaycastStats> {

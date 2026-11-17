@@ -66,6 +66,7 @@ impl Plugin for AvatarMovementPlugin {
         );
 
         app.init_resource::<AvatarMovementInfo>();
+        app.init_resource::<InputModifierBypass>();
         app.register_required_components::<RendererSceneContext, MovementPeriod>();
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
@@ -106,6 +107,12 @@ impl Plugin for AvatarMovementPlugin {
         );
     }
 }
+
+/// While set, the movement scene is not told of the active `InputModifier`, so the player moves as
+/// if no scene restricted it (`/walk --ignore-input-modifiers`). The modifier stays active for
+/// everything else that reads it.
+#[derive(Resource, Default)]
+pub struct InputModifierBypass(pub bool);
 
 fn update_priority_scene(
     player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
@@ -953,12 +960,15 @@ fn broadcast_movement_info(
     feedback: Res<SceneDrivenAnimationFeedback>,
     mut scenes: Query<(&mut RendererSceneContext, &MovementPeriod)>,
     time: Res<Time>,
+    bypass: Res<InputModifierBypass>,
     mut buf: Local<Vec<u8>>,
 ) {
     let (maybe_locomotion, maybe_modifier) = active_components.single().unwrap_or_default();
 
     info.0.active_avatar_locomotion_settings = maybe_locomotion.map(|l| l.component.0.clone());
-    info.0.active_input_modifier = maybe_modifier.and_then(|l| l.component.0.clone());
+    info.0.active_input_modifier = maybe_modifier
+        .filter(|_| !bypass.0)
+        .and_then(|l| l.component.0.clone());
     info.0.active_animation_state = feedback.state.as_ref().map(|s| AvatarAnimationState {
         src: s.src.clone(),
         r#loop: s.r#loop,
