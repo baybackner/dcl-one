@@ -1,12 +1,15 @@
 import { ColliderLayer, engine, Entity, Material, MeshRenderer, RaycastQueryType, RaycastShape, raycastSystem, Transform, VisibilityComponent } from '@dcl/sdk/ecs'
 import { Color4, Vector3 } from '@dcl/sdk/math';
 import { playerPosition, prevActualVelocity, prevExternalVelocity, prevPlayerPosition, printvec, tick, time } from '.';
-import { GROUND_PROBE_COUNT, GROUND_PROBE_INTERVAL, GROUND_SNAP_HEIGHT, GROUNDED_ANGLE, GROUNDED_HEIGHT, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, PLAYER_COLLIDER_RADIUS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
+import { GROUND_PROBE_COUNT, GROUND_PROBE_INTERVAL, GROUND_SNAP_HEIGHT, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, PLAYER_COLLIDER_RADIUS, STEP_DOWN_FALLS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
 
 // updated in raycast update
 export var groundNormal = Vector3.Zero();
 export var groundPosition = Vector3.Zero();
 export var groundDistance = 0;
+// ground straight below the centre (point ray): feet height above it (Infinity: none in range) and its normal
+export var groundRayDistance = Infinity;
+export var groundRayNormal = Vector3.Zero();
 // updated in recordGroundPosition @ 100000 - 2
 export var grounded = false;
 export var prevGrounded = false;
@@ -66,14 +69,15 @@ export function initGroundRaycast() {
     // can be a graze against the corner of the step behind (its normal comes
     // from the capsule surface, so a side contact reads near-horizontal and
     // unwalkable, masking the flat tread underfoot). A center ray reports the
-    // true face normal below the player and can't graze.
+    // true face normal below the player and can't graze. It reaches as far as the
+    // capsule cast, so ground snap can tell what lies under the centre.
     groundRayCaster = engine.addEntity();
     Transform.create(groundRayCaster, { parent: engine.PlayerEntity, position: { x: 0, y: PLAYER_COLLIDER_RADIUS, z: 0 } });
 
     raycastSystem.registerGlobalDirectionRaycast({
         entity: groundRayCaster,
         opts: {
-            maxDistance: PLAYER_COLLIDER_RADIUS + GROUNDED_HEIGHT,
+            maxDistance: PLAYER_COLLIDER_RADIUS + GROUND_SNAP_HEIGHT * (GROUND_PROBE_COUNT + 1),
             queryType: RaycastQueryType.RQT_HIT_FIRST,
             continuous: true,
             collisionMask: ColliderLayer.CL_PHYSICS,
@@ -83,6 +87,12 @@ export function initGroundRaycast() {
         }
     },
         (hit) => {
+            groundRayDistance = Infinity;
+            Vector3.copyFrom(VEC3_ZERO, groundRayNormal);
+            for (const h of hit.hits) {
+                groundRayDistance = h.length - PLAYER_COLLIDER_RADIUS;
+                Vector3.copyFrom(h.normalHit ?? VEC3_ZERO, groundRayNormal);
+            }
             if (hit.hits.some((hit) =>
                 (hit.length < PLAYER_COLLIDER_RADIUS + GROUNDED_HEIGHT) && (hit.normalHit?.y ?? 0) >= GROUNDED_ANGLE_Y_LEN
             )) {
@@ -186,4 +196,16 @@ export function probesAllowSnap(maxRise: number): boolean {
         sampled = true;
     }
     return sampled && height - (playerPosition.y - groundDistance) <= GROUND_SNAP_HEIGHT;
+}
+
+// STEP_DOWN_FALLS: snap follows the ground under the centre down from where the feet stood last tick by at most
+// GROUND_SNAP_STEP_DROP beyond what the slope of that ground accounts for over the distance moved since; past a larger
+// drop (a step edge) the avatar falls.
+export function stepDropAllowsSnap(): boolean {
+    if (!STEP_DOWN_FALLS || Number.isNaN(prevGroundY)) return true;
+    if (groundRayDistance === Infinity) return false;
+    const ny = groundRayNormal.y;
+    const slope = ny > 0 ? Math.sqrt(Math.max(0, 1 - ny * ny)) / ny : Infinity;
+    const travelled = Math.hypot(playerPosition.x - prevPlayerPosition.x, playerPosition.z - prevPlayerPosition.z);
+    return prevGroundY - (playerPosition.y - groundRayDistance) <= GROUND_SNAP_STEP_DROP + travelled * slope;
 }

@@ -127,9 +127,14 @@ export const GLIDER_TURN_MAX_DEGREES_SEC = 200; // max degrees to turn (set to i
 export const GROUNDED_HEIGHT = 0.05; // distance from surface at which player is considered "grounded"
 export const GROUNDED_ANGLE = 47.5; // angle (0-90) from flat at which ground is considered ground (can jump / won't slide)
 export const MAX_STEP_HEIGHT = 0.45; // highest step player can walk up (player may still walk up slightly higher steps if approached at an angle)
-export const MIN_STEP_HEIGHT = 0.1; // landings closer than this to current ground don't need a step (the capsule slides over smaller obstacles)
-export const STEP_CLEARANCE_EXCESS = 0.2; // clearance required at step height beyond the feet-level hit distance before stepping up
+export const MIN_STEP_HEIGHT = 0.05; // rises up to this need no step (the capsule slides over them)
 export const GROUND_SNAP_HEIGHT = 0.40 // height below which we snap to ground (if previously grounded)
+// Behaviour switch, ground snap down a step: 1 = the snap follows the ground under the centre down at most
+// GROUND_SNAP_STEP_DROP beyond the ground's slope, so a 0.1 m riser keeps the avatar on the stairs, while from 0.2 m
+// walk falls tread by tread and jog/run fly over the whole staircase; 0 = it follows any drop within
+// GROUND_SNAP_HEIGHT, so stairs up to that riser keep the avatar on them at any gait.
+export const STEP_DOWN_FALLS: number = 1;
+export const GROUND_SNAP_STEP_DROP = 0.15; // m
 // Sub-step ground probes: downward casts placed along the velocity at multiples of
 // GROUND_PROBE_INTERVAL from the avatar. When a tick covers more ground than one 60fps step
 // they let ground-snap check each sub-step's drop against GROUND_SNAP_HEIGHT, so stairs and
@@ -138,10 +143,12 @@ export const GROUND_PROBE_COUNT = 8;
 export const GROUND_PROBE_INTERVAL = 1 / 60;
 // Cap on the unrequested height gain that ground-snap will pull back down (see snapToGround).
 export const MAX_UNREQUESTED_LIFT = 1.0;
-// Time over which a step-up climbs to its landing. A velocity can be held for several engine
-// frames when the scene misses ticks, so the climb is sized to a fixed time rather than a
-// single frame, which would overshoot when held.
-export const POSITION_CORRECTION_TIME = 0.1;
+// Step-up. The forward casts reach STEP_UP_LOOKAHEAD past the collider, so a riser is found before the capsule
+// reaches it. The climb starts when the riser would be reached before the next reply lands and ends as the centre
+// comes within STEP_UP_END_DISTANCE of the riser, so the capsule passes over the riser's edge at gait speed instead of
+// stopping against it; a riser the capsule already touches is climbed within one frame.
+export const STEP_UP_LOOKAHEAD = 1.0; // m
+export const STEP_UP_END_DISTANCE = 0.04; // m
 
 
 // don't edit

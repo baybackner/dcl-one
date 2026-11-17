@@ -1,16 +1,16 @@
 import { ColliderLayer, engine, Entity, InputAction, inputSystem, RaycastQueryType, RaycastShape, raycastSystem, RaycastSystemCallback, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math';
-import { groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded } from './ground';
+import { groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
 import {
   AIR_JUMP_COOLDOWN, AIR_JUMP_HOLD_ANY_PRESS, AIR_JUMP_HOLD_FROM_PRESS, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS, EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL,
   FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
   LANDING_STUN_DROP, LANDING_STUN_TIME, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
-  PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, RAMP_GUARD, STEP_CLEARANCE_EXCESS, VEC3_ZERO,
+  PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, VEC3_ZERO,
   VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
-import { engineDriven, horizontalResync, playerPosition, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
+import { engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
 import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jumpHeight, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
 import { frameTime, replyDelay, replyDelaySmooth, tickAdvance } from './clock';
@@ -462,6 +462,7 @@ function snapToGround() {
     && !stepping // not stepping
     && (prevGrounded || landedNow) // was grounded last frame, or a jump just landed (within the grounded height)
     && (groundDistance < GROUND_SNAP_HEIGHT + unrequestedLift || probesAllowSnap(GROUND_SNAP_HEIGHT + unrequestedLift)) // close enough
+    && stepDropAllowsSnap() // not down a step (STEP_DOWN_FALLS)
   ) {
     snapSpeed = Math.max(0, groundDistance / stepTime);
     velocity.y -= snapSpeed;
@@ -473,28 +474,24 @@ function snapToGround() {
   }
 }
 
-var fwdCast: Entity;
-var upCast: Entity;
-var upFwdCast: Entity;
-var landingCast: Entity;
-
-// The landing probe starts above MAX_STEP_HEIGHT so a tread at exactly max
-// step height is still hit, and just beyond the collider surface so it lands
-// on the prospective tread rather than the riser face.
+// The forward cast reaches STEP_UP_LOOKAHEAD past the collider: a riser ahead is found before the capsule reaches it.
+const FWD_CAST_LENGTH = PLAYER_COLLIDER_RADIUS + STEP_UP_LOOKAHEAD;
+// Landing probes: rays down onto the ground ahead, from above MAX_STEP_HEIGHT so a tread at exactly max step height is
+// still hit, every LANDING_CAST_SPACING from just past the collider over the forward cast's reach. They read the
+// height profile ahead in the same tick as the forward cast.
 const LANDING_CAST_HEIGHT = MAX_STEP_HEIGHT + 0.1;
-const LANDING_CAST_FORWARD = PLAYER_COLLIDER_RADIUS + 0.05;
+const LANDING_CAST_INSET = 0.05; // past the riser face, so the probe lands on the tread rather than the riser
+const LANDING_CAST_SPACING = 0.15;
+const LANDING_CAST_COUNT = Math.ceil(STEP_UP_LOOKAHEAD / LANDING_CAST_SPACING) + 1;
 
-// cast fwd
-var fwdDistance: number = Infinity;
+// cast fwd (nearest hit)
+var fwdDistance: number = Infinity; // capsule travel to the hit
 var fwdWalkable: boolean = true;
-var fwdNormal: Vector3 = Vector3.Zero();
-// cast up
-var upDistance: number = Infinity;
-// cast up at +step height
-var upFwdDistance: number = Infinity;
-// cast down onto the prospective landing
-var landingHeight: number = -Infinity;
-var landingWalkable: boolean = false;
+// casts down onto the ground ahead, nearest first: height above the feet (-Infinity: no hit), walkability (false for a
+// probe that starts inside a collider) and the slope (tangent of the ground angle)
+const landingHeights: number[] = [];
+const landingWalkables: boolean[] = [];
+const landingSlopes: number[] = [];
 
 export function initStepCasts() {
   function initCast(position: Vector3, local: boolean, opts: { direction: Vector3, maxDistance: number, shape: RaycastShape, queryType?: RaycastQueryType }, cb: RaycastSystemCallback): Entity {
@@ -521,92 +518,126 @@ export function initStepCasts() {
     return e;
   }
 
-  fwdCast = initCast({ x: 0, y: 0, z: 0 }, true, { direction: Vector3.Forward(), maxDistance: PLAYER_COLLIDER_RADIUS, shape: RaycastShape.RS_AVATAR }, (hits) => {
+  initCast({ x: 0, y: 0, z: 0 }, true, { direction: Vector3.Forward(), maxDistance: FWD_CAST_LENGTH, shape: RaycastShape.RS_AVATAR }, (hits) => {
     fwdDistance = Infinity;
     fwdWalkable = true;
 
     for (const hit of hits.hits) {
       fwdDistance = Math.min(fwdDistance, hit.length);
       fwdWalkable = (hit.normalHit?.y ?? 0) > GROUNDED_ANGLE_Y_LEN;
-      Vector3.copyFrom(hit.normalHit ?? VEC3_ZERO, fwdNormal);
     }
   })
 
-  // query-all so a wall/corner graze (filtered below) can't mask a real
-  // ceiling on another collider behind it
-  upCast = initCast({ x: 0, y: 0, z: 0 }, false, { direction: Vector3.Up(), maxDistance: MAX_STEP_HEIGHT, shape: RaycastShape.RS_AVATAR, queryType: RaycastQueryType.RQT_QUERY_ALL }, (hits) => {
-    upDistance = Infinity;
-    for (const hit of hits.hits) {
-      // only count ceiling-like hits (normal facing down): the swept capsule
-      // grazing a wall/step-corner beside us reports a ~horizontal normal at
-      // ~zero distance, which would collapse the raised fwd probe to feet level
-      if ((hit.normalHit?.y ?? 0) < -0.5) {
-        upDistance = Math.min(upDistance, hit.length);
+  for (let i = 0; i < LANDING_CAST_COUNT; i++) {
+    landingHeights.push(-Infinity);
+    landingWalkables.push(false);
+    landingSlopes.push(0);
+    // local forward offset, along the avatar's facing (the parent's yaw turns the position)
+    const forward = PLAYER_COLLIDER_RADIUS + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
+    initCast({ x: 0, y: LANDING_CAST_HEIGHT, z: forward }, false, { direction: Vector3.Down(), maxDistance: 2 * LANDING_CAST_HEIGHT, shape: RaycastShape.RS_RAY }, (hits) => {
+      landingHeights[i] = -Infinity;
+      landingWalkables[i] = false;
+      for (const hit of hits.hits) {
+        const ny = hit.normalHit?.y ?? 0;
+        landingHeights[i] = LANDING_CAST_HEIGHT - hit.length;
+        landingWalkables[i] = hit.length > 1e-4 && ny >= GROUNDED_ANGLE_Y_LEN;
+        landingSlopes[i] = ny > 0 ? Math.sqrt(Math.max(0, 1 - ny * ny)) / ny : Infinity;
       }
-    }
-  })
-
-  upFwdCast = initCast({ x: 0, y: MAX_STEP_HEIGHT, z: 0 }, true, { direction: Vector3.Forward(), maxDistance: PLAYER_COLLIDER_RADIUS + STEP_CLEARANCE_EXCESS, shape: RaycastShape.RS_AVATAR }, (hits) => {
-    upFwdDistance = Infinity;
-    for (const hit of hits.hits) {
-      upFwdDistance = Math.min(upFwdDistance, hit.length);
-    }
-  })
-
-  landingCast = initCast({ x: 0, y: LANDING_CAST_HEIGHT, z: LANDING_CAST_FORWARD }, false, { direction: Vector3.Down(), maxDistance: LANDING_CAST_HEIGHT, shape: RaycastShape.RS_RAY }, (hits) => {
-    landingHeight = -Infinity;
-    landingWalkable = false;
-    for (const hit of hits.hits) {
-      landingHeight = LANDING_CAST_HEIGHT - hit.length;
-      landingWalkable = (hit.normalHit?.y ?? 0) >= GROUNDED_ANGLE_Y_LEN;
-    }
-  })
+    })
+  }
 }
 
 var stepping = false;
-// feet height the current step episode is ascending to, from the landing probe
+// feet height the current step episode is ascending to: the highest tread planned so far
 var stepTargetY = 0;
-// climb speed for the current step episode, held until the landing is reached
+// climb speed, from the latest plan, held until the landing is reached
 var stepSpeed = 0;
 var prevSteppingY = 0;
+// consecutive ticks a step episode has not risen
+var stepStalls = 0;
+// highest tread the latest plan climbs to
+var planTargetY = -Infinity;
+const facing: Vector3.MutableVector3 = Vector3.create(0, 0, 0);
+
+// Risers ahead on the landing probes' height profile. A riser is a rise between neighbouring probes of more than
+// MIN_STEP_HEIGHT beyond the slope of the ground on either side, up to MAX_STEP_HEIGHT (higher is a wall: nothing past
+// it counts). For each riser the capsule reaches before the next tick's reply lands, plus a frame (this reply lands
+// replyDelay frames from now, the next one replyDelay + 1 frames later), the speed that puts the feet on its tread by
+// the time the centre comes within STEP_UP_END_DISTANCE of it. Returns the highest such speed (-Infinity: nothing to
+// climb yet) and sets planTargetY.
+function planStepUp(speed: number): number {
+  planTargetY = -Infinity;
+  const frame = frameTime > 0 ? frameTime : FIXED_STEP;
+  const reach = (2 * replyDelay + 2) * frame; // one frame of margin: frame times jitter
+  const r = PLAYER_COLLIDER_RADIUS;
+  let need = -Infinity;
+  let prev = -Math.max(0, groundDistance); // the ground under the feet, relative to them
+  let prevSlope = 0;
+  for (let i = 0; i < LANDING_CAST_COUNT; i++) {
+    const h = landingHeights[i];
+    // no ground in range (a drop), a face the probe starts inside or a steep one: nothing to step onto past it
+    if (h === -Infinity || !landingWalkables[i]) break;
+    const rise = h - prev;
+    const gap = i === 0 ? r + LANDING_CAST_INSET : LANDING_CAST_SPACING; // from the previous sample
+    if (rise - gap * Math.max(prevSlope, landingSlopes[i]) > MIN_STEP_HEIGHT) {
+      if (rise > MAX_STEP_HEIGHT) break;
+      // the capsule touches a riser lower than its radius before its centre is a radius away, at sqrt(r^2 - (r - h)^2)
+      const face = rise >= r ? r : Math.sqrt(r * r - (r - rise) * (r - rise));
+      // the riser lies between this probe and the previous one: where the forward cast found it, if that is there
+      const offset = r + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
+      const hit = fwdDistance + face;
+      const distance = !fwdWalkable && hit <= offset && (i === 0 || hit > offset - LANDING_CAST_SPACING)
+        ? hit : Math.max(face, offset - LANDING_CAST_SPACING / 2);
+      if ((distance - face) / speed > reach) break; // reached later: a later tick plans it
+      const climb = Math.max((distance - STEP_UP_END_DISTANCE) / speed - replyDelay * frame, frame);
+      need = Math.max(need, h / climb);
+      planTargetY = playerPosition.y + h;
+    }
+    prev = h;
+    prevSlope = landingSlopes[i];
+  }
+  return need;
+}
 
 function stepUp() {
-  // adjust fwdUp to start from ceiling (if any)
-  Transform.getMutable(upFwdCast).position.y = Math.min(MAX_STEP_HEIGHT, upDistance);
+  // a riser is climbed when the avatar moves the way it faces (the probes look along the facing)
+  Vector3.rotateToRef(Vector3.Forward(), playerRotation, facing);
+  facing.y = 0;
+  Vector3.normalizeToRef(facing, facing);
+  const speed = Math.hypot(velocity.x, velocity.z);
+  const plan = speed > 0.1 && Vector3.dot(facing, movementAxis) > 0.9
+    && (stepping || grounded || lastGroundTime > time - JUMP_COYOTE_TIME) // step from (near-)ground only
+    ? planStepUp(speed) : -Infinity;
+  if (plan > -Infinity) {
+    if (!stepping) {
+      stepping = true;
+      stepStalls = 0;
+      prevSteppingY = -Infinity;
+      stepTargetY = planTargetY;
+    }
+    stepTargetY = Math.max(stepTargetY, planTargetY);
+    stepSpeed = plan;
+  } else if (stepping) {
+    stepStalls = playerPosition.y <= prevSteppingY + 1e-4 ? stepStalls + 1 : 0;
+  }
 
   if (stepping) {
     if (
       Vector3.length(movementAxis) === 0 // input released
       || playerPosition.y >= stepTargetY - 1e-3 // reached the landing
-      || playerPosition.y <= prevSteppingY + 1e-4 // blocked, making no progress
+      || stepStalls >= 2 // blocked, making no progress (the first tick of an early climb may not have risen yet)
     ) {
       stepping = false;
       velocity.y = Math.min(0, velocity.y);
     } else {
       prevSteppingY = playerPosition.y;
-      velocity.y = Math.min(stepSpeed, (stepTargetY - playerPosition.y) / tickTime);
+      // not past the tread when the reply is held until the next one lands
+      const held = ((frameTime > 0 ? replyDelay : 0) + 1) * (frameTime > 0 ? frameTime : tickTime);
+      velocity.y = Math.min(stepSpeed, (stepTargetY - playerPosition.y) / held);
     }
     // a step-up is ground locomotion: hold the grounded state through the
     // episode (and its final frame) so the animation doesn't see an
     // airborne flicker and play a landing bob on every stair step
-    setGrounded(true);
-    return;
-  }
-
-  if (
-    !fwdWalkable && // angle doesn't allow normal walk/climb
-    fwdDistance < PLAYER_COLLIDER_RADIUS * 0.25 && // can't move fwd
-    upFwdDistance > fwdDistance + STEP_CLEARANCE_EXCESS && // can if we move up (excess rules out the recession of a steep planar slope)
-    Vector3.dot(fwdNormal, movementAxis) < -0.85 && // ~facing the step
-    landingWalkable && // a walkable landing exists ...
-    landingHeight > MIN_STEP_HEIGHT && landingHeight <= MAX_STEP_HEIGHT && // ... above current ground, within step height
-    (grounded || lastGroundTime > time - JUMP_COYOTE_TIME) // step from (near-)ground only: one step per landing
-  ) {
-    stepping = true;
-    stepTargetY = playerPosition.y + landingHeight;
-    prevSteppingY = -Infinity;
-    stepSpeed = landingHeight / Math.max(POSITION_CORRECTION_TIME, tickTime);
-    velocity.y = stepSpeed;
     setGrounded(true);
   }
 }
