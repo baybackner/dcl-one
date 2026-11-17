@@ -3,13 +3,13 @@ import { Vector3 } from '@dcl/sdk/math';
 import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayDistance, groundRayNormal, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
 import {
   AIR_JUMP_COOLDOWN, AIR_JUMP_HOLD_ANY_PRESS, AIR_JUMP_HOLD_FROM_PRESS, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
-  AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS, EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL,
+  AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS,
   FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
   GLIDE_OPENS_ON_TAP, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
   LANDING_STUN_DROP, LANDING_STUN_TIME, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
   GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
-  VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
+  VERTICAL_DAMP_TIME, VERTICAL_PREDICT, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
 import { engineAssist, engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
@@ -81,8 +81,15 @@ export enum GlideProp { CLOSED, OPENING, GLIDING, CLOSING }
 export var glideProp = GlideProp.CLOSED;
 export var isGliding = false;
 
+// The avatar moves at vy + ve: one vertical speed that gravity and scene pushes act on (the ballistic speed, vg + ve),
+// with the player's own moves added on top of it (vy - vg). A jump's quick rise and its held window, an air jump's held
+// height and the glide shape vy only, so they never cancel a push, and a push never gets the jump's rise gravity.
 type VState = {
-  vy: number; // vertical velocity from gravity and jumps
+  vy: number; // the player's own vertical velocity: gravity, jumps, an air jump's held height, the glide
+  // the ballistic part of vy: vy itself, except while a jump rises or an air jump holds the height, when it goes on
+  // under plain gravity from the step before (at the apex the jump's added lift joins it)
+  vg: number;
+  ve: number; // what scene pushes add to vy
   step: number; // steps run so far
   lastGroundedStep: number;
   triggerStep: number; // step the latest press is due on
@@ -105,15 +112,13 @@ type VState = {
 };
 const NEVER = -1e9;
 const vstate: VState = {
-  vy: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false,
+  vy: 0, vg: 0, ve: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false,
   prop: GlideProp.CLOSED, propStep: NEVER, glideOpenStep: NEVER, glideClosedStep: NEVER, launched: false, y: 0,
   airPressStep: NEVER, airLaunchStep: NEVER, airLaunched: false,
   heldSincePress: false, topY: -Infinity, stunEndStep: NEVER, pressBack: 0,
 };
 const vprobe: VState = { ...vstate };
 var vpending = 0;
-// Vertical velocity from external impulses and forces, kept apart from vy.
-var externalY = 0;
 var jumpWasPressed = false;
 var prevJumpPressed = false;
 var prevRunning = false;
@@ -126,7 +131,7 @@ export var launchAhead = false;
 export var predictedLandFrame = -1;
 
 function copyVState(from: VState, to: VState) {
-  to.vy = from.vy; to.step = from.step; to.lastGroundedStep = from.lastGroundedStep; to.triggerStep = from.triggerStep;
+  to.vy = from.vy; to.vg = from.vg; to.ve = from.ve; to.step = from.step; to.lastGroundedStep = from.lastGroundedStep; to.triggerStep = from.triggerStep;
   to.consumedStep = from.consumedStep; to.jumpCount = from.jumpCount; to.glideWanted = from.glideWanted;
   to.prop = from.prop; to.propStep = from.propStep; to.glideOpenStep = from.glideOpenStep;
   to.glideClosedStep = from.glideClosedStep; to.launched = from.launched; to.y = from.y;
@@ -162,6 +167,7 @@ function launchSpeed(running: boolean): number {
 function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: boolean, noGravity: boolean, h: number) {
   s.step++;
   let vy0 = s.vy;
+  let vb0 = s.vg + s.ve; // the ballistic speed at the start of the step
   let justJumped = false;
   const onGround = onGroundTick && s.vy <= 0;
   if (onGround) {
@@ -196,6 +202,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     const wants = s.step === s.triggerStep || s.step <= s.triggerStep + grace;
     if (canJump && wants) {
       s.vy = launchSpeed(running);
+      vb0 = keepPush(s);
       justJumped = true;
       s.launched = true;
       s.jumpCount++;
@@ -205,6 +212,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     } else if ((wants || (s.vy > 0 && s.step <= s.triggerStep + AIR_JUMP_RISE_BUFFER_STEPS)) && !onGround && airJumpAllowed(s, h)) {
       // air jump: gravity still acts on this step, the height is held from the next one
       airPress = true;
+      vb0 = keepPush(s);
       prevTrigger = s.triggerStep;
       prevConsumed = s.consumedStep;
       s.jumpCount++;
@@ -257,12 +265,25 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
       s.prop = GlideProp.CLOSING;
       s.propStep = s.step;
     } else {
-      s.vy = Math.max(s.vy, -glidingFallingSpeed);
+      // the glide holds the fall, a pushed one too, at glidingFallingSpeed; a push upward rises and falls back to it
+      s.vy = Math.max(s.vy, -glidingFallingSpeed - Math.max(0, s.ve));
+      s.ve = Math.max(s.ve, -glidingFallingSpeed - s.vy);
     }
   }
-  // height: gravity is constant within a step, so the step moves the mean of its start and end velocity, and what
-  // scene pushes add
-  s.y += (0.5 * (vy0 + s.vy) + externalY) * h;
+  // scene pushes: while the ballistic speed rises it fades and is braked, which takes from their share; on the ground
+  // the ballistic speed is all theirs, gravity takes it and the ground stops it
+  const vb = vb0 > 0 ? Math.max(0, vb0 * Math.exp(-h / VERTICAL_DAMP_TIME) - VERTICAL_STOP_DECEL * h) : vb0;
+  if (onGround && !justJumped) {
+    s.ve = Math.max(0, noGravity ? vb : vb - G * h);
+    s.vg = 0;
+  } else {
+    s.ve -= vb0 - vb;
+    if (!hover && s.vy <= 0) s.vg = s.vy;
+    else if (!noGravity) s.vg -= G * h;
+  }
+  // height: gravity is constant within a step, so the step moves the mean of its start and end velocity, and the
+  // pushes' share
+  s.y += (0.5 * (vy0 + s.vy) + s.ve) * h;
 
   if (airPress && s.y <= groundY) {
     // the press step reaches the ground: the landing cancels the air jump
@@ -275,6 +296,15 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
       s.consumedStep = prevConsumed;
     }
   }
+}
+
+// A jump replaces the player's own vertical velocity, so the ballistic speed starts again from what the pushes still
+// add: an upward push only as far as it still carries the avatar up (gravity has taken the rest), a downward one in
+// full. Returns the ballistic speed.
+function keepPush(s: VState): number {
+  if (s.ve > 0) s.ve = Math.max(0, s.vg + s.ve);
+  s.vg = 0;
+  return s.ve;
 }
 
 // A held key lowers gravity for LONG_JUMP_TIME after a jump's press (an air jump: see AIR_JUMP_HOLD_*).
@@ -309,16 +339,8 @@ function applyJumpAndGravity(noGravity: boolean) {
   if (horizontalResync) {
     // the engine moved us at another velocity: continue from what it applied
     vstate.vy = prevActualVelocity.y;
-    externalY = 0;
-  }
-
-  // external vertical velocity: upward fades, downward is stopped by the ground
-  externalY += prevExternalVelocity.y;
-  if (externalY > 0) {
-    externalY *= Math.exp(-tickTime / EXTERNAL_UP_DAMP_TIME);
-    externalY = Math.max(0, externalY - EXTERNAL_UP_DECEL * tickTime);
-  } else if (grounded) {
-    externalY = 0;
+    vstate.vg = Math.min(0, vstate.vy);
+    vstate.ve = 0;
   }
 
   groundY = groundDistance < Infinity ? playerPosition.y - Math.max(0, groundDistance) : -Infinity;
@@ -328,8 +350,9 @@ function applyJumpAndGravity(noGravity: boolean) {
     setGrounded(false);
   }
   // a published launch the committed steps have not reached yet: the model is still on the ground, even when the
-  // published launch has already lifted the avatar past the grounded height
-  const onGround = (grounded || launchPending) && !isLaunched();
+  // published launch has already lifted the avatar past the grounded height. A push that lifts the avatar arrived
+  // after these steps (it is added below): they still run on the ground.
+  const onGround = grounded || launchPending;
   // on the ground the model stands where the avatar stands (a published late jump off an edge launches from where the
   // model is, not from the ground below the avatar)
   if (onGround && vstate.vy <= 0 && (grounded || vstate.lastGroundedStep === vstate.step)) vstate.y = playerPosition.y - Math.max(0, groundDistance);
@@ -343,6 +366,12 @@ function applyJumpAndGravity(noGravity: boolean) {
   vstate.airLaunched = false;
   const pressBefore = vstate.airPressStep;
   vpending = vadvance(vstate, stepPressed, stepRunning, onGround, noGravity, vpending + tickAdvance);
+  // this tick's scene pushes (externalVelocity sums impulses and force * time since the last tick); on the ground one
+  // too weak to lift the avatar (isLaunched) is held by the ground
+  if (!onGround || vstate.launched || isLaunched()) {
+    vstate.ve += prevExternalVelocity.y;
+    if (vstate.prop === GlideProp.GLIDING) vstate.ve = Math.max(vstate.ve, -glidingFallingSpeed - vstate.vy);
+  }
   if (vstate.launched) {
     jumpStartHeight = playerPosition.y;
     stepping = false;
@@ -433,7 +462,7 @@ function applyJumpAndGravity(noGravity: boolean) {
   // vertical velocity equals the requested one; the ground stopping a fall is the landing, handled below.
   const blocked = (prevRequestedVelocity.y > 0 && prevActualVelocity.y < prevRequestedVelocity.y - VERTICAL_TRACK_BLOCK)
     || prevActualVelocity.y > Math.max(0, prevRequestedVelocity.y) + VERTICAL_TRACK_BLOCK;
-  if (jumpTracked && (vstate.prop === GlideProp.GLIDING || stepping || externalY !== 0 || horizontalResync || noGravity || blocked
+  if (jumpTracked && (vstate.prop === GlideProp.GLIDING || stepping || vstate.ve !== 0 || horizontalResync || noGravity || blocked
     || (onGround && vstate.vy <= 0 && !vstate.launched && !launchPending))) jumpTracked = false;
   if (VERTICAL_TRACK_MAX > 0 && VERTICAL_TRACK_TIME > 0 && jumpTracked && frameTime > 0) {
     // compared at the start of this frame, where the avatar's height is known whichever reply the engine applies
@@ -463,7 +492,7 @@ function applyJumpAndGravity(noGravity: boolean) {
   if (!grounded && !vstate.launched && frameTime > 0 && vstate.prop !== GlideProp.GLIDING && groundDistance < Infinity) {
     let h = groundDistance;
     for (let k = 0; k <= frames; k++) {
-      h += (k < replyDelay ? prevActualVelocity.y : vy + externalY) * frameTime;
+      h += (k < replyDelay ? prevActualVelocity.y : vy + vstate.ve) * frameTime;
       if (h <= 0) { predictedLandFrame = k; break; }
     }
   }
@@ -478,7 +507,7 @@ function applyJumpAndGravity(noGravity: boolean) {
   // makes consecutive replies alternate between the committed and the predicted state. Between
   // two airborne replies without a launch, glide, landing or push, a reply never rises above
   // the last one.
-  const inAir = !grounded && !vstate.launched && !launchPending && !isGliding && externalY === 0
+  const inAir = !grounded && !vstate.launched && !launchPending && !isGliding && vstate.ve === 0
     && !horizontalResync && !stepping && predictedLandFrame < 0 && !airJump;
   if ((RAMP_GUARD & 2) && inAir && lastReplyAir) vy = Math.min(vy, lastReplyVy);
   lastReplyVy = vy;
@@ -486,7 +515,7 @@ function applyJumpAndGravity(noGravity: boolean) {
 
   // a step-up owns the vertical velocity while it climbs
   if (stepping) return;
-  velocity.y = vy + externalY;
+  velocity.y = vy + vstate.ve;
 }
 // A jump is in progress (launched or published): replies track the model's height (VERTICAL_TRACK_MAX).
 var jumpTracked = false;

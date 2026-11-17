@@ -56,10 +56,11 @@ export const VERTICAL_TRACK_MAX: number = 2;
 // Height tracking stops for the rest of the jump when the applied vertical velocity differs from the requested one by
 // more than this (m/s): the avatar hit something.
 export const VERTICAL_TRACK_BLOCK: number = 0.5;
-// Upward external velocity (impulses) fades with this time constant plus a constant
-// deceleration; downward external velocity is kept until the ground stops it.
-export const EXTERNAL_UP_DAMP_TIME = 0.75;
-export const EXTERNAL_UP_DECEL = 5;
+// Scene pushes (impulses, forces) and gravity act on one vertical speed. While that speed points up it fades with
+// this time constant and loses a constant deceleration on top of gravity; a fall keeps its speed until the ground
+// stops it.
+export const VERTICAL_DAMP_TIME = 0.75;
+export const VERTICAL_STOP_DECEL = 5;
 
 // Hard cap on total velocity magnitude — applied after external velocity is
 // added each frame, so runaway accumulation from repeated external impulses
