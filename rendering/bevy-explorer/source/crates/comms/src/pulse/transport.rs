@@ -39,6 +39,9 @@ pub enum FrameKind {
     Emote,
     /// Everything else: handshakes, resync, profile announcements, scene-listener updates.
     Control,
+    /// Never sent: a driver holding a teleport back drops it, as the pacer drops its waiting one,
+    /// because the realm it names was left.
+    WithdrawTeleport,
 }
 
 /// One outbound unit of work: an already-encoded `ClientMessage` plus how to deliver it.
@@ -185,11 +188,13 @@ pub struct PulseTransportConfig {
 pub struct UplinkSnapshot {
     /// Reliable traffic has gone unacknowledged long enough that inputs are held.
     pub stalled: bool,
-    /// Teleports and emotes let out since everything was last acknowledged.
-    pub unconfirmed_discrete: usize,
+    /// Reliable messages unacknowledged; teleports and emotes wait at 8.
+    pub unacknowledged_reliable: usize,
     pub held_teleport: bool,
     pub held_emote: bool,
     pub held_input: bool,
+    /// Pings sent to probe the uplink.
+    pub probes: u64,
 }
 
 /// The driver's latest [`UplinkSnapshot`]; `None` from a driver without a gate (WebTransport).
@@ -219,6 +224,16 @@ impl PulseLink {
         let bytes = self.inbound.try_recv().ok()?;
         self.traffic.record_received(bytes.len());
         Some(bytes)
+    }
+
+    /// Tell the driver to drop a teleport it holds back. In band, so a teleport sent after this is
+    /// never the one dropped.
+    pub(crate) fn withdraw_teleport(&mut self) {
+        let _ = self.outbound.try_send(PulseFrame {
+            bytes: Vec::new(),
+            reliability: PulseReliability::Reliable,
+            kind: FrameKind::WithdrawTeleport,
+        });
     }
 
     pub(crate) fn uplink(&self) -> Option<UplinkSnapshot> {

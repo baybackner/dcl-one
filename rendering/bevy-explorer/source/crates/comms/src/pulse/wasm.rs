@@ -34,7 +34,7 @@ use super::framing::{
     frame_datagram, frame_stream, StreamAssembler, CHANNEL_SEQUENCED, CHANNEL_UNSEQUENCED,
 };
 use super::transport::{
-    collapse_inputs, PulseDisconnect, PulseDriverChannels, PulseFrame, PulseReliability,
+    collapse_inputs, FrameKind, PulseDisconnect, PulseDriverChannels, PulseFrame, PulseReliability,
     PulseStatus, PulseTransportConfig,
 };
 
@@ -219,6 +219,10 @@ async fn pump_outbound(
         }
 
         for frame in collapse_inputs(batch) {
+            // Nothing held back here to withdraw.
+            if frame.kind == FrameKind::WithdrawTeleport {
+                continue;
+            }
             match frame.reliability {
                 PulseReliability::Reliable => {
                     // The reliable channel is a single ordered stream: a failed write means it's

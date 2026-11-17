@@ -58,16 +58,17 @@ const MAX_HELD_BYTES: usize = 16 * 1024 * 1024;
 /// only inputs flow would go unnoticed.
 const PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
-/// How long reliable traffic (a probe at least) may go unacknowledged before the uplink counts as
-/// stalled and inputs are held: what is sent meanwhile can land at once when it recovers, and the
+/// How long reliable traffic (a probe at least) may be in flight with no acknowledgement arriving
+/// before the uplink counts as stalled and inputs are held: what is sent meanwhile can land at once when it recovers, and the
 /// servers charge their input budget (burst 16) on arrival. A stall goes unnoticed for at most a
 /// probe interval, a loop pass and this, under a second; `movement_pacing` keeps what it sends in
 /// that time under the burst (its bound holds for stalls up to about 1.3 s).
 const STALL_AFTER: Duration = Duration::from_millis(600);
 
-/// Teleports and emotes let out with no moment in between when everything was acknowledged: half
-/// the servers' burst of 16, so ENet retransmitting all of them at once after a stall still fits.
-const MAX_UNCONFIRMED_DISCRETE: usize = 8;
+/// Reliable messages that may be unacknowledged before teleports and emotes wait: half the servers'
+/// burst of 16, so ENet retransmitting all of them at once after a stall still fits. Handshakes,
+/// resyncs and announcements count too, and are never held.
+const MAX_UNACKNOWLEDGED_RELIABLE: usize = 8;
 
 pub(super) fn spawn(
     config: PulseTransportConfig,
@@ -288,32 +289,63 @@ impl Backlog {
     }
 }
 
+/// What the peer says about its reliable traffic (see the `rusty_enet` accessors).
+#[derive(Debug, Clone, Copy, Default)]
+struct PeerAcks {
+    /// Anything reliable, a ping included, is unacknowledged.
+    unacknowledged: bool,
+    /// Reliable messages unacknowledged, pings excluded.
+    packets: usize,
+    /// Changes whenever an acknowledgement arrives.
+    last_acknowledgement: u32,
+}
+
+impl PeerAcks {
+    fn of<S: enet::Socket>(peer: &enet::Peer<S>) -> Self {
+        Self {
+            unacknowledged: peer.has_unacknowledged_reliable(),
+            packets: peer.unacknowledged_reliable_packets(),
+            last_acknowledgement: peer.last_acknowledgement(),
+        }
+    }
+}
+
 /// Keeps what a stalled uplink would deliver in one burst within the servers' budgets. ENet
 /// retransmits every unacknowledged teleport and emote at once when the link comes back, and the
-/// servers charge them on arrival; a session that overruns a budget ends for good. So at most
-/// [`MAX_UNCONFIRMED_DISCRETE`] go out between moments with nothing unacknowledged, and inputs wait
-/// while the uplink is stalled. Only the latest frame of each kind waits; an input also waits behind
-/// a waiting teleport or emote, whose start carries an older pose.
+/// servers charge them on arrival; a session that overruns a budget ends for good. So teleports and
+/// emotes wait while [`MAX_UNACKNOWLEDGED_RELIABLE`] reliable messages are unacknowledged, and
+/// inputs wait while traffic is in flight with no acknowledgement for [`STALL_AFTER`]. Only the
+/// latest frame of each kind waits; an input also waits behind a waiting teleport or emote, whose
+/// start carries an older pose.
 #[derive(Default)]
 struct UplinkGate {
-    /// Since when reliable traffic has been unacknowledged without a break.
+    /// Since when reliable traffic has been in flight with no acknowledgement arriving.
     unacknowledged_since: Option<Instant>,
-    /// Teleports and emotes let out since everything was last acknowledged.
-    unconfirmed_discrete: usize,
+    /// The peer's acknowledgement mark as last observed.
+    last_acknowledgement: u32,
+    /// Reliable messages unacknowledged, counting those let out since the last observation.
+    unacknowledged_reliable: usize,
     /// At most one frame of each kind, in the order they are to go.
     held: Vec<PulseFrame>,
     /// When the uplink was last probed.
     probed_at: Option<Instant>,
+    /// Probes sent.
+    probes: u64,
 }
 
 impl UplinkGate {
-    /// What the peer says at `now`: whether anything reliable it sent is unacknowledged.
-    fn observe(&mut self, now: Instant, unacknowledged: bool) {
-        if unacknowledged {
-            self.unacknowledged_since.get_or_insert(now);
-        } else {
+    /// What the peer says at `now`.
+    fn observe(&mut self, now: Instant, acks: PeerAcks) {
+        let acknowledged = acks.last_acknowledgement != self.last_acknowledgement;
+        self.last_acknowledgement = acks.last_acknowledgement;
+        self.unacknowledged_reliable = acks.packets;
+        if !acks.unacknowledged {
             self.unacknowledged_since = None;
-            self.unconfirmed_discrete = 0;
+        } else if acknowledged {
+            // A busy link is not a stalled one: measure from the latest acknowledgement.
+            self.unacknowledged_since = Some(now);
+        } else {
+            self.unacknowledged_since.get_or_insert(now);
         }
     }
 
@@ -326,6 +358,7 @@ impl UplinkGate {
                 .is_none_or(|at| now.duration_since(at) >= PROBE_INTERVAL);
         if due {
             self.probed_at = Some(now);
+            self.probes += 1;
         }
         due
     }
@@ -335,10 +368,11 @@ impl UplinkGate {
         let holds = |kind| self.held.iter().any(|held| held.kind == kind);
         UplinkSnapshot {
             stalled: self.stalled(now),
-            unconfirmed_discrete: self.unconfirmed_discrete,
+            unacknowledged_reliable: self.unacknowledged_reliable,
             held_teleport: holds(FrameKind::Teleport),
             held_emote: holds(FrameKind::Emote),
             held_input: holds(FrameKind::Input),
+            probes: self.probes,
         }
     }
 
@@ -364,9 +398,14 @@ impl UplinkGate {
     fn admit_inner(&mut self, frames: Vec<PulseFrame>, stalled: bool) -> Vec<PulseFrame> {
         let mut out = Vec::new();
         for frame in std::mem::take(&mut self.held).into_iter().chain(frames) {
+            if frame.kind == FrameKind::WithdrawTeleport {
+                // The realm a held teleport names was left.
+                self.held.retain(|held| held.kind != FrameKind::Teleport);
+                continue;
+            }
             let discrete = DiscreteEventPacer::paces(frame.kind);
             let hold = if discrete {
-                stalled || self.unconfirmed_discrete >= MAX_UNCONFIRMED_DISCRETE
+                stalled || self.unacknowledged_reliable >= MAX_UNACKNOWLEDGED_RELIABLE
             } else if frame.kind == FrameKind::Input {
                 stalled
                     || self
@@ -380,8 +419,8 @@ impl UplinkGate {
                 self.held.retain(|held| held.kind != frame.kind);
                 self.held.push(frame);
             } else {
-                if discrete {
-                    self.unconfirmed_discrete += 1;
+                if frame.reliability == PulseReliability::Reliable {
+                    self.unacknowledged_reliable += 1;
                 }
                 out.push(frame);
             }
@@ -465,10 +504,12 @@ async fn drive(
         // its newest before it reaches the peer. While the uplink is unconfirmed the gate holds the
         // latest of each kind instead, and lets it out once it is.
         let now = Instant::now();
-        gate.observe(
-            now,
-            connected && host.peer(peer).has_unacknowledged_reliable(),
-        );
+        let acks = if connected {
+            PeerAcks::of(host.peer(peer))
+        } else {
+            PeerAcks::default()
+        };
+        gate.observe(now, acks);
         if connected && gate.wants_probe(now) {
             host.peer_mut(peer).ping();
         }

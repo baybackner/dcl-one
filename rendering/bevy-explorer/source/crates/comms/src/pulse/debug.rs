@@ -51,10 +51,11 @@ impl Plugin for PulseDebugPlugin {
                     ("Emote for selected peer", "emote"),
                     ("Uplink stalled", "uplink.stalled"),
                     (
-                        "Unacknowledged teleports and emotes",
-                        "uplink.unconfirmedDiscrete",
+                        "Unacknowledged reliable messages",
+                        "uplink.unacknowledgedReliable",
                     ),
                     ("Held (teleport / emote / input)", "uplink.held"),
+                    ("Uplink probes sent", "uplink.probes"),
                 ],
                 actions: &[],
                 inputs: &inputs,
@@ -170,8 +171,9 @@ fn uplink_json(link: Option<Option<UplinkSnapshot>>) -> (serde_json::Value, Opti
         Some(Some(snapshot)) => (
             json!({
                 "stalled": snapshot.stalled,
-                "unconfirmedDiscrete": snapshot.unconfirmed_discrete,
+                "unacknowledgedReliable": snapshot.unacknowledged_reliable,
                 "held": [snapshot.held_teleport, snapshot.held_emote, snapshot.held_input],
+                "probes": snapshot.probes,
             }),
             None,
         ),
@@ -220,15 +222,21 @@ mod tests {
     fn the_uplink_readout_shows_what_the_gate_holds() {
         let (value, unavailable) = uplink_json(Some(Some(UplinkSnapshot {
             stalled: true,
-            unconfirmed_discrete: 8,
+            unacknowledged_reliable: 8,
             held_teleport: true,
             held_emote: false,
             held_input: true,
+            probes: 3,
         })));
 
         assert_eq!(
             value,
-            json!({"stalled": true, "unconfirmedDiscrete": 8, "held": [true, false, true]})
+            json!({
+                "stalled": true,
+                "unacknowledgedReliable": 8,
+                "held": [true, false, true],
+                "probes": 3,
+            })
         );
         assert_eq!(unavailable, None);
     }

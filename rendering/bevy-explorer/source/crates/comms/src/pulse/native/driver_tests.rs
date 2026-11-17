@@ -167,15 +167,22 @@ fn a_live_peer_reports_reliable_traffic_unacknowledged_until_acknowledged() {
         }
     };
     settle(&mut client, &mut server);
+    // The acknowledgement mark is in whole milliseconds of the host clock.
+    thread::sleep(Duration::from_millis(2));
 
     let (channel, packet) = packet_for_frame(&frame(FrameKind::Emote, 1));
     client.peer_mut(peer).send(channel, &packet).unwrap();
     client.peer_mut(peer).ping();
     client.flush();
     assert!(client.peer(peer).has_unacknowledged_reliable());
+    // The ping is in flight but is no message.
+    assert_eq!(client.peer(peer).unacknowledged_reliable_packets(), 1);
+    let mark = client.peer(peer).last_acknowledgement();
 
     settle(&mut client, &mut server);
     assert!(!client.peer(peer).has_unacknowledged_reliable());
+    assert_eq!(client.peer(peer).unacknowledged_reliable_packets(), 0);
+    assert_ne!(client.peer(peer).last_acknowledgement(), mark);
 }
 
 #[test]
@@ -219,8 +226,34 @@ fn frame(kind: FrameKind, tag: u8) -> PulseFrame {
     }
 }
 
+fn withdraw() -> PulseFrame {
+    PulseFrame {
+        bytes: Vec::new(),
+        reliability: PulseReliability::Reliable,
+        kind: FrameKind::WithdrawTeleport,
+    }
+}
+
 fn tags(frames: &[PulseFrame]) -> Vec<(FrameKind, u8)> {
     frames.iter().map(|f| (f.kind, f.bytes[0])).collect()
+}
+
+/// `packets` reliable messages in flight, the last acknowledgement at mark `acknowledged`.
+fn in_flight(packets: usize, acknowledged: u32) -> PeerAcks {
+    PeerAcks {
+        unacknowledged: true,
+        packets,
+        last_acknowledgement: acknowledged,
+    }
+}
+
+/// Everything acknowledged, the last at mark `acknowledged`.
+fn settled(acknowledged: u32) -> PeerAcks {
+    PeerAcks {
+        unacknowledged: false,
+        packets: 0,
+        last_acknowledgement: acknowledged,
+    }
 }
 
 #[test]
@@ -228,7 +261,7 @@ fn an_acknowledged_uplink_lets_everything_through() {
     let mut gate = UplinkGate::default();
     let now = Instant::now();
     // Briefly unacknowledged, as after any send, is no stall.
-    gate.observe(now, true);
+    gate.observe(now, in_flight(1, 1));
     let out = gate.admit(
         vec![frame(FrameKind::Emote, 1), frame(FrameKind::Input, 2)],
         now + STALL_AFTER / 2,
@@ -237,15 +270,38 @@ fn an_acknowledged_uplink_lets_everything_through() {
     assert_eq!(tags(&out), [(FrameKind::Emote, 1), (FrameKind::Input, 2)]);
 }
 
+/// Overlapping reliable sends on a healthy link keep something in flight all the time; each
+/// acknowledgement that arrives shows the uplink works, so it never reads as stalled.
+#[test]
+fn a_busy_healthy_link_never_reads_as_stalled() {
+    let mut gate = UplinkGate::default();
+    let start = Instant::now();
+
+    for step in 0..30u32 {
+        let now = start + Duration::from_millis(100) * step;
+        // Two teleports or emotes always in flight at a 150 ms round trip, one acknowledged a pass.
+        gate.observe(now, in_flight(2, step + 1));
+        let out = gate.admit(
+            vec![
+                frame(FrameKind::Teleport, step as u8),
+                frame(FrameKind::Input, 100),
+            ],
+            now,
+        );
+        assert_eq!(out.len(), 2, "held at step {step}");
+        assert!(!gate.snapshot(now).stalled);
+    }
+}
+
 #[test]
 fn a_stalled_uplink_holds_only_the_latest_input_until_it_recovers() {
     let mut gate = UplinkGate::default();
     let start = Instant::now();
-    gate.observe(start, true);
+    gate.observe(start, in_flight(0, 1));
     let stalled = start + STALL_AFTER;
 
     for tag in 0..30 {
-        gate.observe(stalled, true);
+        gate.observe(stalled, in_flight(0, 1));
         assert!(gate
             .admit(vec![frame(FrameKind::Input, tag)], stalled)
             .is_empty());
@@ -254,38 +310,41 @@ fn a_stalled_uplink_holds_only_the_latest_input_until_it_recovers() {
     let control = gate.admit(vec![frame(FrameKind::Control, 99)], stalled);
     assert_eq!(tags(&control), [(FrameKind::Control, 99)]);
 
-    gate.observe(stalled, false);
+    // An acknowledgement arrives: the latest input goes.
+    gate.observe(stalled, in_flight(1, 2));
     let out = gate.admit(Vec::new(), stalled);
     assert_eq!(tags(&out), [(FrameKind::Input, 29)]);
 }
 
 #[test]
-fn unconfirmed_teleports_and_emotes_stay_within_half_the_servers_burst() {
+fn unacknowledged_teleports_and_emotes_stay_within_half_the_servers_burst() {
     let mut gate = UplinkGate::default();
     let now = Instant::now();
-    gate.observe(now, true);
+    gate.observe(now, in_flight(0, 1));
 
     let mut let_out = 0;
-    for tag in 0..20 {
+    for tag in 0..20u8 {
         let kind = if tag % 2 == 0 {
             FrameKind::Emote
         } else {
             FrameKind::Teleport
         };
-        let out = gate.admit(vec![frame(kind, tag)], now);
-        let_out += out.len();
-        // Inputs queue behind a held start, which carries an older pose.
-        assert!(
-            gate.admit(vec![frame(FrameKind::Input, 100 + tag)], now)
-                .len()
-                <= 1
-        );
+        let_out += gate.admit(vec![frame(kind, tag)], now).len();
+        // An input goes while nothing is held, and queues behind a held start, which carries an
+        // older pose.
+        let inputs = gate.admit(vec![frame(FrameKind::Input, 100 + tag)], now);
+        let expected = if usize::from(tag) < MAX_UNACKNOWLEDGED_RELIABLE {
+            1
+        } else {
+            0
+        };
+        assert_eq!(inputs.len(), expected, "tag {tag}");
     }
-    assert_eq!(let_out, MAX_UNCONFIRMED_DISCRETE);
-    const _: () = assert!(MAX_UNCONFIRMED_DISCRETE * 2 <= 16);
+    assert_eq!(let_out, MAX_UNACKNOWLEDGED_RELIABLE);
+    const _: () = assert!(MAX_UNACKNOWLEDGED_RELIABLE * 2 <= 16);
 
     // Everything acknowledged: the latest of each kind goes, the input after them.
-    gate.observe(now, false);
+    gate.observe(now, settled(2));
     let out = gate.admit(Vec::new(), now);
     assert_eq!(
         tags(&out),
@@ -297,11 +356,80 @@ fn unconfirmed_teleports_and_emotes_stay_within_half_the_servers_burst() {
     );
 }
 
+/// Handshakes, resyncs and announcements in flight count toward the limit too.
+#[test]
+fn reliable_control_messages_in_flight_count_toward_the_limit() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, in_flight(MAX_UNACKNOWLEDGED_RELIABLE, 1));
+
+    assert!(gate.admit(vec![frame(FrameKind::Emote, 1)], now).is_empty());
+    gate.observe(now, in_flight(MAX_UNACKNOWLEDGED_RELIABLE - 1, 2));
+    assert_eq!(tags(&gate.admit(Vec::new(), now)), [(FrameKind::Emote, 1)]);
+}
+
+/// A start and its stop in one pass both go, in order, on a healthy link. Held back, only the stop
+/// waits, as the pacer keeps only the latest emote command.
+#[test]
+fn an_emote_start_and_stop_together() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, settled(1));
+    let out = gate.admit(
+        vec![frame(FrameKind::Emote, 1), frame(FrameKind::Emote, 2)],
+        now,
+    );
+    assert_eq!(tags(&out), [(FrameKind::Emote, 1), (FrameKind::Emote, 2)]);
+
+    gate.observe(now, in_flight(MAX_UNACKNOWLEDGED_RELIABLE, 1));
+    let out = gate.admit(
+        vec![frame(FrameKind::Emote, 3), frame(FrameKind::Emote, 4)],
+        now,
+    );
+    assert!(out.is_empty());
+    gate.observe(now, settled(2));
+    assert_eq!(tags(&gate.admit(Vec::new(), now)), [(FrameKind::Emote, 4)]);
+}
+
+/// A realm change withdraws a held teleport, which names the realm left; a teleport offered after
+/// the withdrawal is the new realm's and stays.
+#[test]
+fn a_realm_change_withdraws_a_held_teleport() {
+    let mut gate = UplinkGate::default();
+    let start = Instant::now();
+    gate.observe(start, in_flight(0, 1));
+    let stalled = start + STALL_AFTER;
+    gate.admit(vec![frame(FrameKind::Teleport, 1)], stalled);
+    assert!(gate.snapshot(stalled).held_teleport);
+
+    // Never sent itself.
+    assert!(gate.admit(vec![withdraw()], stalled).is_empty());
+    assert!(!gate.snapshot(stalled).held_teleport);
+    gate.observe(stalled, settled(2));
+    assert!(gate.admit(Vec::new(), stalled).is_empty());
+
+    gate.observe(stalled, in_flight(0, 2));
+    let later = stalled + STALL_AFTER;
+    gate.admit(
+        vec![
+            frame(FrameKind::Teleport, 2),
+            withdraw(),
+            frame(FrameKind::Teleport, 3),
+        ],
+        later,
+    );
+    gate.observe(later, settled(3));
+    assert_eq!(
+        tags(&gate.admit(Vec::new(), later)),
+        [(FrameKind::Teleport, 3)]
+    );
+}
+
 #[test]
 fn the_snapshot_reports_what_the_gate_holds() {
     let mut gate = UplinkGate::default();
     let start = Instant::now();
-    gate.observe(start, true);
+    gate.observe(start, in_flight(0, 1));
     let stalled = start + STALL_AFTER;
     gate.admit(
         vec![frame(FrameKind::Teleport, 1), frame(FrameKind::Input, 2)],
@@ -312,18 +440,19 @@ fn the_snapshot_reports_what_the_gate_holds() {
         gate.snapshot(stalled),
         UplinkSnapshot {
             stalled: true,
-            unconfirmed_discrete: 0,
+            unacknowledged_reliable: 0,
             held_teleport: true,
             held_emote: false,
             held_input: true,
+            probes: 0,
         }
     );
-    gate.observe(stalled, false);
+    gate.observe(stalled, settled(2));
     gate.admit(Vec::new(), stalled);
     assert_eq!(
         gate.snapshot(stalled),
         UplinkSnapshot {
-            unconfirmed_discrete: 1,
+            unacknowledged_reliable: 1,
             ..Default::default()
         }
     );
@@ -336,8 +465,87 @@ fn the_uplink_is_probed_only_when_nothing_reliable_is_in_flight() {
 
     assert!(gate.wants_probe(now));
     assert!(!gate.wants_probe(now + PROBE_INTERVAL / 2));
-    gate.observe(now + PROBE_INTERVAL, true);
+    gate.observe(now + PROBE_INTERVAL, in_flight(0, 1));
     assert!(!gate.wants_probe(now + PROBE_INTERVAL));
-    gate.observe(now + PROBE_INTERVAL * 2, false);
+    gate.observe(now + PROBE_INTERVAL * 2, settled(2));
     assert!(gate.wants_probe(now + PROBE_INTERVAL * 2));
+    assert_eq!(gate.snapshot(now).probes, 2);
+}
+
+/// The driver itself, against a loopback server: probes go out on an idle link, and an input held
+/// while the server stops answering goes on a later pass that no outbound frame woke, once the
+/// server answers again.
+#[test]
+fn the_driver_probes_the_uplink_and_releases_held_frames_on_its_own_wake() {
+    let mut server = loopback_host();
+    let port = server.socket().local_addr().unwrap().port();
+    let (mut link, channels) = pulse_channels(16);
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver = spawn(
+        PulseTransportConfig {
+            host: "127.0.0.1".to_owned(),
+            port,
+            cert_hash: None,
+        },
+        channels,
+        stop.clone(),
+    );
+    let pump_until =
+        |server: &mut enet::Host<std::net::UdpSocket>,
+         what: &str,
+         mut done: Box<dyn FnMut(Option<(u8, Vec<u8>)>) -> bool + '_>| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(Instant::now() < deadline, "{what}");
+                let received = match server.service() {
+                    Ok(Some(enet::Event::Receive {
+                        channel_id, packet, ..
+                    })) => Some((channel_id, packet.data().to_vec())),
+                    _ => None,
+                };
+                if done(received) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+
+    pump_until(
+        &mut server,
+        "never connected",
+        Box::new(|_| matches!(link.status.try_recv(), Ok(PulseStatus::Connected))),
+    );
+    // An idle link is probed, and the probes are answered.
+    pump_until(
+        &mut server,
+        "never probed",
+        Box::new(|_| {
+            link.uplink()
+                .is_some_and(|uplink| uplink.probes >= 2 && !uplink.stalled)
+        }),
+    );
+
+    // The server stops answering: the probe in flight goes unacknowledged until the uplink reads
+    // as stalled, and an input sent then is held.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !link.uplink().is_some_and(|uplink| uplink.stalled) {
+        assert!(Instant::now() < deadline, "never stalled");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(link.send(frame(FrameKind::Input, 7)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !link.uplink().is_some_and(|uplink| uplink.held_input) {
+        assert!(Instant::now() < deadline, "never held");
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    // Answering again, with nothing more sent, lets the input through.
+    pump_until(
+        &mut server,
+        "the held input never arrived",
+        Box::new(|received| received == Some((1, vec![7]))),
+    );
+
+    stop.store(true, Ordering::Relaxed);
+    driver.join().unwrap();
 }
