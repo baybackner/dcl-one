@@ -235,10 +235,12 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   and `/click_at`, which need a DevTools client for real input. `docs/guidelines/interaction.md`
   has the options, replies and diagnoses.
 - Movement: `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat
-  <n>] [--input keys|external] <scenario JSON>` places the player in the scene it stands in, waits
-  until it has stood still for the scenario's `settle`, then presses the scenario's movement and
-  jump keys by frame time, as window keyboard events ahead of the input systems, and records each
-  frame (position, velocity, input, yaw); `/movement_trace status` reports the run,
+  <n>] [--input keys|external] [--start still|placed] <scenario JSON>` places the player in the
+  scene it stands in, waits until it has stood still for the scenario's `settle` (`--start placed`:
+  only the `settle` from the placement and a grounded frame, wherever the player is), then
+  presses the scenario's movement and jump keys by frame time, as window keyboard events ahead of
+  the input systems, and records each frame (position, velocity, input, yaw);
+  `/movement_trace status` reports the run,
   `/movement_trace fetch` returns the trace as JSON Lines and `/movement_trace stop` abandons the
   run. `--input external` presses nothing and starts on the first movement or jump input, for a
   driver's real keys. `/avatar_animations [on|off]` holds the player's own avatar pose while off.

@@ -251,9 +251,9 @@ State, in every build:
 Movement measurement (`crates/user_input/src/movement_trace.rs`):
 
 - `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat <n>]
-  [--input keys|external] <scenario JSON>`: plays a keyboard scenario on the player and records
-  every frame. The scenario is `{"format": 1, "id", "seed", "fps", "camera_yaw", "settle",
-  "duration", "events"}`; each event `{"t", "fwd", "right", "walk", "sprint", "jump"}` holds its
+  [--input keys|external] [--start still|placed] <scenario JSON>`: plays a keyboard scenario on
+  the player and records every frame. The scenario is `{"format": 1, "id", "seed", "fps",
+  "camera_yaw", "settle", "duration", "events"}`; each event `{"t", "fwd", "right", "walk", "sprint", "jump"}` holds its
   keys (`fwd` W 1 or S -1, `right` D 1 or A -1, the walk and sprint modifiers, the jump key; a key
   an event leaves out is up) until the next event's `t`. The run places the player at `--spawn`,
   relative to the base parcel of the scene it stands in and facing `yaw` (the camera yaw by
@@ -267,7 +267,12 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   frame rate for the run (the session rate is restored after it); `--dt fixed` advances the clock
   by exactly 1/fps each frame, whatever the frame took; `--input external` presses nothing and
   starts at the first frame with movement or jump input, so a driver's real keys are recorded on
-  the same timeline. The reply is the base parcel, scene and spawn the run uses.
+  the same timeline. `--start placed` places the player once and skips the still and in-place
+  check: t = 0 follows the first grounded frame at least `settle` seconds after the placement (or
+  the first frame 5 s later, if it is still airborne), wherever the player is then, so a run can
+  start on a ledge edge or a slope the player slides on; the default `--start still` waits as
+  above and places the player again, up to five times, when it does not stay. The reply is the
+  base parcel, scene, spawn and `start` the run uses.
 - `/movement_trace status`: `phase` (`spawning`, `settling`, `starting`, `armed`, `running`,
   `done`, `failed`, `idle`), `error`, and the run's `frames`, `t`, `dropped`,
   `inputMismatchFrames`, `sceneTickFrames`, the horizontal `distance` from t = 0 and the `file`
@@ -277,8 +282,9 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
 - The trace is JSON Lines. The header holds `format`, `client` (`bevy`), `client_version`,
   `scenario`, `seed`, `fps_target`, `animations`, `position` (realm, scene, base parcel, spawn) and
   `started_utc`, with the repeat, scenario timings, `input_seam`, `dt_mode`, `camera_mode`,
-  `scene_base_parcel`, `spawn` and `spawn_yaw` under `extra`. Each frame holds `i`, `t`, `dt`, `in`
-  (the movement input given to the scenes: `fwd` and `right`, normalised on a diagonal, and `walk`
+  `scene_base_parcel`, `spawn`, `spawn_yaw`, `start_pos` (where the player stood before t = 0)
+  and, for a `--start placed` run, `start` (`placed`) under `extra`. Each frame holds `i`, `t`,
+  `dt`, `in` (the movement input given to the scenes: `fwd` and `right`, normalised on a diagonal, and `walk`
   and `sprint`, false without a direction, and `jump` when the scenario has a jump event), `pos`
   (after the frame's movement, in SDK axes relative to the base parcel), `vel` (the frame's
   displacement over its delta), `grounded`, `yaw_avatar` and `yaw_camera` (degrees clockwise from

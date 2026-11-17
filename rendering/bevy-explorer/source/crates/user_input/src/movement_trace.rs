@@ -3,8 +3,10 @@
 //!
 //! A run places the player at a spawn point in the scene it stands in, as an SDK `movePlayerTo`
 //! with a facing does, and waits until the player has stood still, grounded and in place, for the
-//! scenario's `settle` seconds. The next frame is t = 0. From then on the scenario's keys are
-//! pressed by frame time and each frame is recorded until `duration`.
+//! scenario's `settle` seconds. The next frame is t = 0. With `--start placed` it waits only the
+//! `settle` seconds from the placement and then the first grounded frame, wherever the player is,
+//! so a run can start on a ledge edge or a steep slope the player slides off. From t = 0 the
+//! scenario's keys are pressed by frame time and each frame is recorded until `duration`.
 //!
 //! The keys enter as window keyboard events ahead of Bevy's input systems, the way the window
 //! delivers a real key: bindings, input priorities, the scenes' input events and the movement
@@ -69,6 +71,9 @@ const RESPAWN_AFTER: f64 = 1.0;
 const MAX_SPAWNS: u32 = 5;
 /// Gives up settling, or waiting for external input, after this long (s).
 const WAIT_LIMIT: f64 = 30.0;
+/// With `--start placed`, starts anyway when the player is still in the air this long after the
+/// scenario's `settle` (s).
+const GROUNDED_WAIT: f64 = 5.0;
 
 pub struct MovementTracePlugin;
 
@@ -545,6 +550,35 @@ pub enum InputSource {
     External,
 }
 
+/// When a run's t = 0 comes after the placement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum StartCondition {
+    /// Once the player has stood still, grounded and at the spawn for the scenario's `settle`;
+    /// placed again when it does not stay there
+    #[default]
+    Still,
+    /// The first grounded frame at least `settle` after the placement, or the first frame
+    /// [`GROUNDED_WAIT`] later, wherever the player is: it may be sliding or falling
+    Placed,
+}
+
+impl StartCondition {
+    fn name(&self) -> &'static str {
+        match self {
+            StartCondition::Still => "still",
+            StartCondition::Placed => "placed",
+        }
+    }
+}
+
+/// Whether a `--start placed` run starts in a frame `since_placed` seconds after the placement.
+/// The placement's own frame never does: its grounded state may still be the old position's.
+fn placed_start(since_placed: f64, settle: f64, grounded: bool) -> bool {
+    since_placed > 0.0
+        && since_placed >= settle
+        && (grounded || since_placed >= settle + GROUNDED_WAIT)
+}
+
 #[derive(Debug, PartialEq)]
 enum Phase {
     /// The player is placed in the next frame's `PreUpdate`
@@ -581,6 +615,7 @@ struct Run {
     fps: u32,
     repeat: u32,
     input: InputSource,
+    start: StartCondition,
     fixed_dt: bool,
     /// The session frame-rate setting to put back afterwards
     previous_fps: Option<usize>,
@@ -602,7 +637,7 @@ struct Run {
     dropped: u32,
     mismatches: u32,
     scene_ticks: u32,
-    /// where the player stood, settled, when the run started
+    /// where the player stood when the run started
     start_position: Option<Vec3>,
     last_position: Vec3,
     last_t: f64,
@@ -630,8 +665,9 @@ impl Run {
     ///   (realm, scene, base parcel and spawn), `started_utc` (t = 0) and `extra`: the repeat,
     ///   the scenario's `camera_yaw`, `settle` and `duration`, `input_seam` (`keyboard`: keys
     ///   pressed by the run; `external`: keys from outside), `dt_mode` (`real`, or `fixed` at
-    ///   1/fps), `camera_mode`, `scene_base_parcel`, `spawn`, `spawn_yaw` and `start_pos` (where
-    ///   the player stood, settled, before t = 0).
+    ///   1/fps), `camera_mode`, `scene_base_parcel`, `spawn`, `spawn_yaw`, `start_pos` (where
+    ///   the player stood before t = 0) and, for a run with `--start placed`, `start`
+    ///   (`placed`: the player need not have been still or at the spawn at t = 0).
     /// - frame: `i`, `t` and `dt` (s, the frame clock), `in` (the movement input given this
     ///   frame: `fwd` and `right`, normalised on a diagonal, `walk` and `sprint` from the gait,
     ///   and `jump` when the scenario has a jump),
@@ -655,7 +691,7 @@ impl Run {
                 "\"scenario\":{},\"seed\":{},\"fps_target\":{},\"animations\":{},\"position\":{},",
                 "\"started_utc\":{},\"extra\":{{\"repeat\":{},\"camera_yaw\":{},\"settle\":{},",
                 "\"duration\":{},\"input_seam\":\"{}\",\"dt_mode\":\"{}\",\"camera_mode\":\"{}\",",
-                "\"scene_base_parcel\":[{},{}],\"spawn\":{},\"spawn_yaw\":{},\"start_pos\":{}}}}}"
+                "\"scene_base_parcel\":[{},{}],\"spawn\":{},\"spawn_yaw\":{},\"start_pos\":{}{}}}}}"
             ),
             FORMAT,
             serde_json::Value::from(self.client_version.as_str()),
@@ -680,6 +716,11 @@ impl Run {
             vector(self.spawn),
             num(self.spawn_yaw),
             self.start_position.map_or("null".into(), vector),
+            // the earlier header form unless the run started on placement
+            match self.start {
+                StartCondition::Still => "",
+                StartCondition::Placed => ",\"start\":\"placed\"",
+            },
         );
         let footer = format!(
             "{{\"type\":\"footer\",\"frames\":{},\"dropped\":{},\"extra\":{{\"input_mismatch_frames\":{},\"scene_tick_frames\":{}}}}}",
@@ -818,6 +859,11 @@ struct MovementTraceCommand {
     /// first movement input from outside)
     #[arg(long)]
     input: Option<String>,
+    /// play: `still` (t = 0 once the player has stood still, grounded and at the spawn for the
+    /// scenario's `settle`) or `placed` (t = 0 on the first grounded frame `settle` seconds after
+    /// the placement, wherever the player is then)
+    #[arg(long)]
+    start: Option<String>,
     /// play: the scenario as JSON
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
     json: Vec<String>,
@@ -900,6 +946,11 @@ fn movement_trace_command(
                     Some("external") => InputSource::External,
                     Some(other) => return Err(format!("input `{other}`: use keys or external")),
                 };
+                let start = match command.start.as_deref() {
+                    None | Some("still") => StartCondition::Still,
+                    Some("placed") => StartCondition::Placed,
+                    Some(other) => return Err(format!("start `{other}`: use still or placed")),
+                };
                 let (player, transform, out_of_world) =
                     player.single().map_err(|_| "no player".to_string())?;
                 if out_of_world {
@@ -938,6 +989,7 @@ fn movement_trace_command(
                     fps,
                     repeat: command.repeat.unwrap_or(1),
                     input,
+                    start,
                     fixed_dt,
                     previous_fps: session.as_ref().and_then(|s| s.fps_target),
                     base,
@@ -982,6 +1034,7 @@ fn movement_trace_command(
                         "scene": run.scene,
                         "spawn": [run.spawn.x, run.spawn.y, run.spawn.z],
                         "spawnYaw": run.spawn_yaw,
+                        "start": run.start.name(),
                     });
                     trace.last = None;
                     trace.run = Some(run);
@@ -1151,33 +1204,42 @@ fn record_frame(
             placed_at,
             ref mut still_since,
         } => {
-            let still = grounded
-                && horizontal_speed(step.actual_velocity) < STILL_SPEED
-                && horizontal_speed(step.requested_velocity) < STILL_SPEED;
-            let in_place = (position.xz() - run.spawn.xz()).length() < SPAWN_TOLERANCE
-                && yaw_difference(yaw_avatar, run.spawn_yaw).abs() < SPAWN_YAW_TOLERANCE;
-            if still && in_place {
-                let since = *still_since.get_or_insert(now);
-                if now - since >= run.scenario.settle {
-                    run.start_position = Some(position);
-                    run.phase = match run.input {
-                        InputSource::Keys(_) => Phase::Starting,
-                        InputSource::External => Phase::Armed { since: now },
-                    };
+            let settled = match run.start {
+                StartCondition::Placed => {
+                    placed_start(now - placed_at, run.scenario.settle, grounded)
                 }
-            } else {
-                *still_since = None;
-                if still && now - placed_at > RESPAWN_AFTER {
-                    if run.spawns >= MAX_SPAWNS {
-                        outcome = Some(Err(format!(
-                            "the player does not stay at the spawn: at {} facing {}",
-                            vector(position),
-                            num(yaw_avatar)
-                        )));
+                StartCondition::Still => {
+                    let still = grounded
+                        && horizontal_speed(step.actual_velocity) < STILL_SPEED
+                        && horizontal_speed(step.requested_velocity) < STILL_SPEED;
+                    let in_place = (position.xz() - run.spawn.xz()).length() < SPAWN_TOLERANCE
+                        && yaw_difference(yaw_avatar, run.spawn_yaw).abs() < SPAWN_YAW_TOLERANCE;
+                    if still && in_place {
+                        let since = *still_since.get_or_insert(now);
+                        now - since >= run.scenario.settle
                     } else {
-                        run.phase = Phase::Spawning;
+                        *still_since = None;
+                        if still && now - placed_at > RESPAWN_AFTER {
+                            if run.spawns >= MAX_SPAWNS {
+                                outcome = Some(Err(format!(
+                                    "the player does not stay at the spawn: at {} facing {}",
+                                    vector(position),
+                                    num(yaw_avatar)
+                                )));
+                            } else {
+                                run.phase = Phase::Spawning;
+                            }
+                        }
+                        false
                     }
                 }
+            };
+            if settled {
+                run.start_position = Some(position);
+                run.phase = match run.input {
+                    InputSource::Keys(_) => Phase::Starting,
+                    InputSource::External => Phase::Armed { since: now },
+                };
             }
             if now - run.settle_started > WAIT_LIMIT && outcome.is_none() {
                 outcome = Some(Err(format!(
@@ -1499,6 +1561,7 @@ mod tests {
             scenario,
             repeat: 1,
             input: InputSource::Keys(keys),
+            start: StartCondition::Still,
             fixed_dt: true,
             previous_fps: None,
             base: IVec2::ZERO,
@@ -1612,5 +1675,26 @@ mod tests {
         assert_eq!(lines[2]["dropped"], 1);
         assert_eq!(lines[2]["extra"]["input_mismatch_frames"], 2);
         assert_eq!(run.file_name(), "jog-W-hold2.0-release__fps60__r1.jsonl");
+        // a run that waits for the player to stand still keeps the earlier header
+        assert!(lines[0]["extra"].get("start").is_none());
+        run.start = StartCondition::Placed;
+        let header: serde_json::Value =
+            serde_json::from_str(run.finish().lines().next().unwrap()).unwrap();
+        assert_eq!(header["extra"]["start"], "placed");
+    }
+
+    #[test]
+    fn a_placed_start_waits_for_the_settle_and_the_ground_but_not_for_stillness() {
+        // never the placement's own frame, even with no settle
+        assert!(!placed_start(0.0, 0.0, true));
+        assert!(placed_start(1.0 / 60.0, 0.0, true));
+        // the settle counts from the placement
+        assert!(!placed_start(0.5, 1.0, true));
+        assert!(placed_start(1.0, 1.0, true));
+        // in the air it waits for the ground, then starts anyway
+        assert!(!placed_start(1.0, 0.0, false));
+        assert!(!placed_start(GROUNDED_WAIT - 0.01, 0.0, false));
+        assert!(placed_start(GROUNDED_WAIT, 0.0, false));
+        assert!(placed_start(1.0 + GROUNDED_WAIT, 1.0, false));
     }
 }
