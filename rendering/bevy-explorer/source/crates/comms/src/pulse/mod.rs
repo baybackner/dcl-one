@@ -51,30 +51,33 @@ pub struct PulseParcelGrid {
     min_x: i32,
     min_z: i32,
     width: i32,
+    height: i32,
     parcel_size: i32,
 }
 
 impl PulseParcelGrid {
     /// Takes the server's full `ParcelEncoder` option set (1:1) so deployments can be configured
-    /// straight from the instance's `appsettings`. `max_parcel_z` only bounds index *validity* on
-    /// the server (`width * height`); the decode itself needs only `width`, so it's accepted but
-    /// unused here — we trust server-issued indices.
+    /// straight from the instance's `appsettings`. `max_parcel_z` bounds what we encode, as it bounds
+    /// index validity on the server (`width * height`); decoding trusts server-issued indices.
     pub fn new(
         min_parcel_x: i32,
         min_parcel_z: i32,
         max_parcel_x: i32,
-        _max_parcel_z: i32,
+        max_parcel_z: i32,
         padding: i32,
         parcel_size: i32,
     ) -> Self {
         let min_x = min_parcel_x - padding;
         let min_z = min_parcel_z - padding;
         let max_x = max_parcel_x + padding;
+        let max_z = max_parcel_z + padding;
         let width = max_x - min_x + 1;
+        let height = max_z - min_z + 1;
         Self {
             min_x,
             min_z,
             width,
+            height,
             parcel_size,
         }
     }
@@ -93,16 +96,30 @@ impl PulseParcelGrid {
 
     /// Inverse of [`Self::decode_to_world`]: a world position (DCL convention) → the server's
     /// `parcel_index` plus the in-parcel local offset, matching the server's `ParcelEncoder.Encode`
-    /// + relative-position split. Used to build our own `TeleportRequest`.
-    pub fn encode_to_parcel(&self, world: Vec3) -> (i32, Vec3) {
-        let parcel = self.parcel_coords(world);
+    /// plus relative-position split. Used to build our own `TeleportRequest` and inputs. `None` outside
+    /// the grid, where the server refuses the index for good and an x past the edge would wrap into
+    /// the next row.
+    pub fn encode_to_parcel(&self, world: Vec3) -> Option<(i32, Vec3)> {
+        if !world.is_finite() {
+            return None;
+        }
+        let size = self.parcel_size as f32;
+        let (x, z) = ((world.x / size).floor(), (world.z / size).floor());
+        // Checked as floats so a huge coordinate can't saturate into range.
+        let in_range = |value: f32, min: i32, len: i32| {
+            value >= min as f32 && value < (min as i64 + len as i64) as f32
+        };
+        if !in_range(x, self.min_x, self.width) || !in_range(z, self.min_z, self.height) {
+            return None;
+        }
+        let parcel = IVec2::new(x as i32, z as i32);
         let parcel_index = (parcel.x - self.min_x) + (parcel.y - self.min_z) * self.width;
         let local = Vec3::new(
             world.x - (parcel.x * self.parcel_size) as f32,
             world.y,
             world.z - (parcel.y * self.parcel_size) as f32,
         );
-        (parcel_index, local)
+        Some((parcel_index, local))
     }
 
     /// The parcel a world position (DCL convention) stands in, as `(x, z)` coordinates rather than
@@ -1109,16 +1126,20 @@ fn signed_angle(deg: f32) -> f32 {
 /// bool fields are folded back into `state_flags`; head yaw/pitch and point-at ride only when their
 /// enable flag is set (matching Unity's `WritePlayerState`). Fields with no Pulse equivalent
 /// (`is_jumping`, `is_emoting`, `scene_driven_animation`) are dropped — animation stays on LiveKit.
+/// `None` outside the parcel grid: the server would refuse the input for good.
 pub(crate) fn from_movement(
     movement: &rfc4::Movement,
     grid: &PulseParcelGrid,
-) -> pulse::PlayerState {
+) -> Option<pulse::PlayerState> {
     let world = Vec3::new(
         movement.position_x,
         movement.position_y,
         movement.position_z,
     );
-    let (parcel_index, local) = grid.encode_to_parcel(world);
+    let Some((parcel_index, local)) = grid.encode_to_parcel(world) else {
+        warn_out_of_grid("input", world);
+        return None;
+    };
 
     let mut state_flags = 0u32;
     let mut set = |on: bool, f: pulse::PlayerAnimationFlags| {
@@ -1145,7 +1166,7 @@ pub(crate) fn from_movement(
     );
 
     use pulse::PlayerState as P;
-    pulse::PlayerState {
+    Some(pulse::PlayerState {
         parcel_index,
         position_x: P::position_x_quantized(local.x),
         position_y: P::position_y_quantized(local.y),
@@ -1176,7 +1197,25 @@ pub(crate) fn from_movement(
         point_at_z: movement
             .is_pointing_at
             .then(|| P::point_at_z_quantized(movement.point_at_z)),
+    })
+}
+
+/// How often a skipped out-of-grid send is logged.
+const OUT_OF_GRID_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Log a send skipped because `world` (DCL convention) is outside the parcel grid, at most once per
+/// [`OUT_OF_GRID_LOG_INTERVAL`]: a player standing outside skips one every tick.
+pub(crate) fn warn_out_of_grid(what: &str, world: Vec3) {
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let Ok(mut last) = LAST.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    if last.is_some_and(|last| now.duration_since(last) < OUT_OF_GRID_LOG_INTERVAL) {
+        return;
     }
+    *last = Some(now);
+    bevy::log::warn!("pulse: {what} at {world} is outside the parcel grid; not sent");
 }
 
 #[cfg(test)]

@@ -167,6 +167,10 @@ pub(crate) struct PulseSession {
     /// The realm the pending or accepted handshake's initial state carried. The server holds the
     /// player there, so acceptance needs no teleport into it.
     initial_realm: Option<String>,
+    /// A teleport was skipped because the player stood outside the parcel grid: the server still
+    /// places them where the last one did, or nowhere. Sent from the player's position, in the
+    /// realm current then, once they are back inside ([`pulse_teleport_on_grid_reentry`]).
+    teleport_owed: bool,
     state: Connection,
 }
 
@@ -583,7 +587,13 @@ impl Plugin for PulsePlugin {
                     .before(resolve_lsd_realm),
             );
         }
-        app.add_systems(Update, pulse_teleport_on_local_move);
+        app.add_systems(
+            Update,
+            (
+                pulse_teleport_on_local_move,
+                pulse_teleport_on_grid_reentry.after(pulse_teleport_on_local_move),
+            ),
+        );
     }
 }
 
@@ -727,6 +737,7 @@ fn connect_pulse(
         policy: ReconnectPolicy::default(),
         accepted: false,
         initial_realm: None,
+        teleport_owed: false,
         state: Connection::Down { respawn_at: 0.0 },
     });
 
@@ -1211,6 +1222,8 @@ fn drive_connection(
             }
             if let Announcement::Player { initial_state, .. } = &announcement {
                 session.initial_realm = initial_state.as_ref().map(|state| state.realm.clone());
+                // An initial state places the player afresh.
+                session.teleport_owed &= initial_state.is_none();
             }
             let wallet = wallet.clone();
             let server_id = session.server_id.clone();
@@ -2009,9 +2022,14 @@ fn send_teleport_at(session: &mut PulseSession, realm: &CurrentRealm, world: Vec
     // Bevy render position → DCL world coords (the `-z` flip), then split into parcel + local —
     // exactly the inverse of how inbound state is decoded.
     let dcl = DclTranslation::from_bevy_translation(world).0;
-    let (parcel_index, local) = session
-        .grid
-        .encode_to_parcel(Vec3::new(dcl[0], dcl[1], dcl[2]));
+    let dcl = Vec3::new(dcl[0], dcl[1], dcl[2]);
+    let Some((parcel_index, local)) = session.grid.encode_to_parcel(dcl) else {
+        // The server refuses an out-of-grid teleport for good; it goes on re-entry instead.
+        super::warn_out_of_grid("teleport", dcl);
+        session.teleport_owed = true;
+        return;
+    };
+    session.teleport_owed = false;
 
     let teleport = pulse::TeleportRequest {
         parcel_index,
@@ -2071,6 +2089,32 @@ fn pulse_teleport_on_local_move(
         return;
     };
     send_teleport_at(&mut session, &realm, position);
+}
+
+/// Send the teleport skipped outside the parcel grid once the player is back inside it.
+fn pulse_teleport_on_grid_reentry(
+    session: Option<ResMut<PulseSession>>,
+    realm: Res<CurrentRealm>,
+    player: Query<&GlobalTransform, With<PrimaryUser>>,
+) {
+    let Some(mut session) = session else {
+        return;
+    };
+    if !session.teleport_owed {
+        return;
+    }
+    let Ok(transform) = player.single() else {
+        return;
+    };
+    let world = transform.translation();
+    let dcl = DclTranslation::from_bevy_translation(world).0;
+    if session
+        .grid
+        .encode_to_parcel(Vec3::new(dcl[0], dcl[1], dcl[2]))
+        .is_some()
+    {
+        send_teleport_at(&mut session, &realm, world);
+    }
 }
 
 /// What a handshake says about where the player already is: the last pose built, the realm it is

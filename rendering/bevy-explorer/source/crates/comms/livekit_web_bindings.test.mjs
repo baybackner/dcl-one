@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import {
   local_audio_track_set_enabled,
   local_audio_track_stop,
+  remote_audio_track_set_volume,
   remote_track_pan_and_volume,
   room_connect,
   room_drop,
@@ -252,4 +253,79 @@ test('repeat subscribe disposes the previous rig and streaming attachment', asyn
   room_drop(room);
   assert.equal(attached.size, 0);
   assert.equal(connected.size, 0);
+});
+
+test('the microphone permission prompt releases the capture it opened', async (t) => {
+  const { promptMicrophonePermission } = await import('./livekit_web_bindings.js?prompt');
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  t.after(() => Object.defineProperty(globalThis, 'navigator', previous));
+  const stopped = [];
+  const stream = { getTracks: () => ['a', 'b'].map(id => ({ stop() { stopped.push(id); } })) };
+  let reply = Promise.resolve(stream);
+  const getUserMedia = () => reply;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { mediaDevices: { getUserMedia } },
+    configurable: true,
+  });
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.off('unhandledRejection', onUnhandled));
+
+  promptMicrophonePermission();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(stopped, ['a', 'b']);
+
+  reply = Promise.reject(new Error('NotAllowedError'));
+  const previousWarn = console.warn;
+  console.warn = () => {};
+  t.after(() => { console.warn = previousWarn; });
+  promptMicrophonePermission();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});
+
+test('volume setters never pass a value their target rejects', () => {
+  const element = { volume: 1 };
+  const elementTrack = {
+    audioElement: element,
+    setVolume(volume) {
+      // HTMLMediaElement.volume throws IndexSizeError outside 0..1, NaN included
+      if (!(volume >= 0 && volume <= 1)) throw new RangeError(`volume ${volume}`);
+      element.volume = volume;
+    },
+  };
+  const param = () => ({
+    v: 0,
+    get value() { return this.v; },
+    // AudioParam.value throws TypeError on non-finite values
+    set value(v) {
+      if (!Number.isFinite(v)) throw new TypeError(`value ${v}`);
+      this.v = v;
+    },
+  });
+  const rigTrack = { trackRig: { pannerNode: { pan: param() }, gainNode: { gain: param() } } };
+  const { pannerNode: { pan }, gainNode: { gain } } = rigTrack.trackRig;
+
+  remote_audio_track_set_volume(elementTrack, 2);
+  assert.equal(element.volume, 1);
+  remote_audio_track_set_volume(elementTrack, -1);
+  assert.equal(element.volume, 0);
+  remote_audio_track_set_volume(elementTrack, 0.5);
+  remote_audio_track_set_volume(elementTrack, NaN);
+  assert.equal(element.volume, 0);
+
+  remote_audio_track_set_volume(rigTrack, 1.5);
+  assert.equal(gain.value, 1.5);
+  remote_audio_track_set_volume(rigTrack, Infinity);
+  assert.equal(gain.value, 0);
+  remote_audio_track_set_volume(rigTrack, 1e9);
+  assert.ok(gain.value > 1 && gain.value < 1e9);
+
+  remote_track_pan_and_volume(rigTrack, 1, -2);
+  assert.deepEqual([pan.value, gain.value], [1, 0]);
+  remote_track_pan_and_volume(rigTrack, NaN, NaN);
+  assert.deepEqual([pan.value, gain.value], [0, 0]);
+  remote_track_pan_and_volume(rigTrack, -Infinity, 0.25);
+  assert.deepEqual([pan.value, gain.value], [0, 0.25]);
 });

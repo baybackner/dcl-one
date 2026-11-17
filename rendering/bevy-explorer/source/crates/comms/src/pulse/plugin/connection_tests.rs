@@ -46,6 +46,7 @@ pub(super) fn session_with_link(role: PulseRole) -> (PulseSession, PulseDriverCh
         policy: ReconnectPolicy::exact(),
         accepted: false,
         initial_realm: None,
+        teleport_owed: false,
         state: Connection::Connecting,
     };
     (session, driver)
@@ -163,6 +164,7 @@ fn standing_in(x: i32) -> Vec3 {
 fn parcel_index(x: i32) -> i32 {
     PulseParcelGrid::default()
         .encode_to_parcel(standing_in(x))
+        .unwrap()
         .0
 }
 
@@ -788,7 +790,7 @@ fn the_outbox_keeps_the_caches_while_disconnected() {
 
         assert_eq!(
             harness.session().last_state,
-            Some(from_movement(&movement(), &PulseParcelGrid::default()))
+            from_movement(&movement(), &PulseParcelGrid::default())
         );
         assert_eq!(
             harness.driver.outbound.try_recv().unwrap_err(),
@@ -830,6 +832,124 @@ fn an_emote_is_kept_from_its_start_to_its_stop() {
     assert_eq!(harness.session().local_emote, None);
     let kinds: Vec<_> = harness.sent().iter().map(|(kind, _)| *kind).collect();
     assert_eq!(kinds, [FrameKind::Emote]);
+}
+
+/// A one-shot longer than the servers accept goes out durationless, like a loop, and is kept as
+/// one for the handshake, so neither the start nor a later handshake ends the session.
+#[test]
+fn a_one_shot_too_long_for_pulse_goes_out_durationless() {
+    let mut harness = Harness::established(10.0);
+    harness.sent();
+    harness.broadcast(movement());
+
+    for (duration_ms, sent_as) in [
+        (
+            crate::PULSE_MAX_EMOTE_DURATION_MS,
+            Some(crate::PULSE_MAX_EMOTE_DURATION_MS),
+        ),
+        (crate::PULSE_MAX_EMOTE_DURATION_MS + 1, None),
+    ] {
+        harness.broadcast(Emote {
+            duration_ms: Some(duration_ms),
+            ..emote(false)
+        });
+        harness.drain_at(12.0);
+
+        let sent = harness.sent();
+        let Some((_, pulse::client_message::Message::EmoteStart(start))) = sent.last() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(start.duration_ms, sent_as);
+        assert_eq!(
+            harness.session().local_emote.as_ref().unwrap().duration_ms,
+            sent_as
+        );
+    }
+
+    // Long past the cap the handshake still names it, with no duration the server would refuse.
+    let initial = initial_state(
+        Some(&pose()),
+        harness.session().local_emote.as_ref(),
+        Some(HOME),
+        true,
+        200.0,
+    )
+    .unwrap();
+    assert_eq!(initial.emote_id.as_deref(), Some("wave"));
+    assert_eq!(initial.emote_duration_ms, None);
+}
+
+/// Outside the parcel grid nothing is sent that the server would refuse for good: no input, no
+/// teleport, and no stale pose kept for an emote or a handshake to carry.
+#[test]
+fn nothing_is_sent_from_outside_the_parcel_grid() {
+    let mut harness = Harness::established(10.0);
+    harness.sent();
+    harness.broadcast(movement());
+    harness.drain_at(11.0);
+    assert!(harness.session().last_state.is_some());
+    harness.sent();
+
+    harness.broadcast(rfc4::Movement {
+        position_z: 16.0 * 1000.0,
+        ..movement()
+    });
+    harness.drain_at(12.0);
+    assert_eq!(harness.session().last_state, None);
+
+    harness.teleport_to(standing_in(1000));
+    harness.drain_at(13.0);
+    harness.broadcast(emote(false));
+    harness.drain_at(14.0);
+    let sent = harness.sent();
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
+/// A teleport skipped outside the grid goes once the player is back inside, from where they are
+/// then and in the realm current then, and only once.
+#[test]
+fn a_teleport_skipped_outside_the_grid_goes_on_reentry() {
+    let mut harness = Harness::established(10.0);
+    harness.sent();
+
+    harness.teleport_to(standing_in(1000));
+    harness.drain_at(11.0);
+    assert!(harness.sent().is_empty());
+    assert!(harness.session().teleport_owed);
+
+    // Still outside: nothing yet.
+    let user = harness.user;
+    harness
+        .world
+        .entity_mut(user)
+        .insert(GlobalTransform::from_translation(standing_in(1000)));
+    harness
+        .world
+        .run_system_once(pulse_teleport_on_grid_reentry)
+        .unwrap();
+    harness.drain_at(12.0);
+    assert!(harness.sent().is_empty());
+
+    harness.world.insert_resource(realm("away"));
+    harness
+        .world
+        .entity_mut(user)
+        .insert(GlobalTransform::from_translation(standing_in(3)));
+    for now in [13.0, 14.0] {
+        harness
+            .world
+            .run_system_once(pulse_teleport_on_grid_reentry)
+            .unwrap();
+        harness.drain_at(now);
+    }
+
+    let sent = harness.sent();
+    assert_eq!(teleported_parcels(&sent), [parcel_index(3)]);
+    let [(_, pulse::client_message::Message::Teleport(teleport))] = sent.as_slice() else {
+        panic!("{sent:?}")
+    };
+    assert_eq!(teleport.realm, "away");
+    assert!(!harness.session().teleport_owed);
 }
 
 /// An emote the bucket allows leaves in its place in the queue. A start carries the pose it was

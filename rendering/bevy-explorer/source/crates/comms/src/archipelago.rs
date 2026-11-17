@@ -607,50 +607,16 @@ async fn archipelago_handler_inner(
             bail!("received empty packet")
         };
 
-        match message {
-            server_packet::Message::Welcome(_) => {
+        match handshake_reply(message, &wallet).await? {
+            Some(reply) => {
+                stream.send(reply.encode_to_vec().into()).await?;
+                debug!(">> auth chain sent");
+            }
+            None => {
                 debug!("archipelago welcome received");
                 health.connected();
                 break;
             }
-            server_packet::Message::ChallengeResponse(ChallengeResponseMessage {
-                challenge_to_sign,
-                already_connected,
-                ..
-            }) => {
-                if already_connected {
-                    return Err(AdmissionError::new(FailureKind::IdentityConflict).into());
-                }
-                // send challenge response
-                debug!("archipelago challenge received");
-
-                if !challenge_to_sign.starts_with("dcl-") {
-                    return Err(AdmissionError::new(FailureKind::Invalid).into());
-                }
-
-                // sign challenge
-                let chain = wallet.sign_message(challenge_to_sign).await?;
-                let auth_chain_json = serde_json::to_string(&chain)?;
-                debug!("archipelago auth chain created");
-
-                // send response
-                let message = ClientPacket {
-                    request_sequence: 0,
-                    message: Some(client_packet::Message::SignedChallenge(
-                        SignedChallengeMessage { auth_chain_json },
-                    )),
-                };
-                let message = message.encode_to_vec();
-                stream.send(message.into()).await?;
-                debug!(">> auth chain sent");
-            }
-            server_packet::Message::Kicked(kicked) => {
-                return Err(kick_error(kicked.reason).into());
-            }
-            server_packet::Message::Error(error) => {
-                return Err(control_error(&error).into());
-            }
-            _ => bail!("unexpected archipelago handshake packet"),
         }
     }
 
@@ -743,6 +709,43 @@ async fn archipelago_handler_inner(
     select! {
         read_res = f_read => read_res,
         write_res = f_write => write_res,
+    }
+}
+
+/// The signed reply to a handshake packet, or `None` once the server welcomes this peer.
+async fn handshake_reply(
+    message: server_packet::Message,
+    wallet: &Wallet,
+) -> Result<Option<ClientPacket>, anyhow::Error> {
+    match message {
+        server_packet::Message::Welcome(_) => Ok(None),
+        server_packet::Message::ChallengeResponse(ChallengeResponseMessage {
+            challenge_to_sign,
+            already_connected,
+            ..
+        }) => {
+            // Also set for this device's own stale socket, which sign-in replaces; a real
+            // conflict arrives as Kicked(KrNewSession).
+            if already_connected {
+                debug!("archipelago reports an existing session for this wallet");
+            }
+            debug!("archipelago challenge received");
+            if !challenge_to_sign.starts_with("dcl-") {
+                return Err(AdmissionError::new(FailureKind::Invalid).into());
+            }
+            let chain = wallet.sign_message(challenge_to_sign).await?;
+            let auth_chain_json = serde_json::to_string(&chain)?;
+            debug!("archipelago auth chain created");
+            Ok(Some(ClientPacket {
+                request_sequence: 0,
+                message: Some(client_packet::Message::SignedChallenge(
+                    SignedChallengeMessage { auth_chain_json },
+                )),
+            }))
+        }
+        server_packet::Message::Kicked(kicked) => Err(kick_error(kicked.reason).into()),
+        server_packet::Message::Error(error) => Err(control_error(&error).into()),
+        _ => bail!("unexpected archipelago handshake packet"),
     }
 }
 
@@ -1179,6 +1182,40 @@ mod tests {
             .get::<ConnectionHealth>(current)
             .unwrap()
             .is_connected());
+    }
+
+    #[test]
+    fn an_existing_session_for_the_wallet_still_signs_the_challenge() {
+        use dcl_component::proto_components::kernel::comms::v3::KickedMessage;
+        let mut wallet = Wallet::default();
+        wallet.finalize_as_guest_with_seed([7; 32]);
+        let reply = |message| futures_lite::future::block_on(handshake_reply(message, &wallet));
+
+        let signed = reply(server_packet::Message::ChallengeResponse(
+            ChallengeResponseMessage {
+                challenge_to_sign: "dcl-challenge".to_owned(),
+                already_connected: true,
+            },
+        ))
+        .unwrap();
+        let Some(ClientPacket {
+            message: Some(client_packet::Message::SignedChallenge(signed)),
+            ..
+        }) = signed
+        else {
+            panic!("expected a signed challenge, got {signed:?}");
+        };
+        assert!(signed.auth_chain_json.contains("dcl-challenge"));
+
+        // the server's replacement notice remains the identity conflict
+        let kicked = reply(server_packet::Message::Kicked(KickedMessage {
+            reason: KickedReason::KrNewSession as i32,
+        }))
+        .unwrap_err();
+        assert_eq!(
+            kicked.downcast_ref::<AdmissionError>().unwrap().kind,
+            FailureKind::IdentityConflict
+        );
     }
 
     #[test]

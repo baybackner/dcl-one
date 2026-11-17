@@ -783,6 +783,8 @@ fn drive_voice_chat(
         }
     }
     let changed = had_inputs || !effects.is_empty();
+    // the query cannot see a room spawned by an earlier effect of this drive
+    let mut spawned: Option<Entity> = None;
     for effect in effects {
         debug!(target: "comms::voice_chat", "effect {}", redact_access_token(&format!("{effect:?}")));
         match effect {
@@ -798,7 +800,11 @@ fn drive_voice_chat(
                 }
             }
             Effect::SpawnRoom(url) => {
-                for (entity, ..) in rooms.iter() {
+                for entity in rooms
+                    .iter()
+                    .map(|(entity, ..)| entity)
+                    .chain(spawned.take())
+                {
                     commands.entity(entity).despawn();
                 }
                 let Some(("livekit", address)) = url.split_once(':') else {
@@ -810,15 +816,23 @@ fn drive_voice_chat(
                     continue;
                 };
                 let (components, sender, control) = standalone_room_components(address.to_owned());
-                commands.spawn((
-                    components,
-                    VoiceRoom::new(voice.state.kind, sender, control),
-                ));
+                spawned = Some(
+                    commands
+                        .spawn((
+                            components,
+                            VoiceRoom::new(voice.state.kind, sender, control),
+                        ))
+                        .id(),
+                );
                 connection = VoiceChatConnection::Connecting;
                 info!(target: "comms::voice_chat", "joining the voice room");
             }
             Effect::DespawnRoom => {
-                for (entity, ..) in rooms.iter() {
+                for entity in rooms
+                    .iter()
+                    .map(|(entity, ..)| entity)
+                    .chain(spawned.take())
+                {
                     commands.entity(entity).despawn();
                 }
                 connection = VoiceChatConnection::None;
@@ -1086,7 +1100,7 @@ mod tests {
 
     use super::*;
 
-    fn in_call() -> (App, Entity) {
+    fn app() -> App {
         let mut app = App::new();
         app.add_event::<SystemApi>()
             .add_event::<VoiceEventReceived>()
@@ -1103,6 +1117,11 @@ mod tests {
                 dials.0 += 1;
             })
             .add_systems(Update, drive_voice_chat);
+        app
+    }
+
+    fn in_call() -> (App, Entity) {
+        let mut app = app();
         {
             let mut voice = app.world_mut().resource_mut::<VoiceChat>();
             voice
@@ -1134,6 +1153,41 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct Dials(u32);
+
+    fn voice_rooms(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<(), With<VoiceRoom>>()
+            .iter(app.world())
+            .count()
+    }
+
+    /// Joins a community; the reply, and `then`, arrive in one drive.
+    fn joined_in_one_drive(then: Option<Input>) -> App {
+        let mut app = app();
+        let mut voice = app.world_mut().resource_mut::<VoiceChat>();
+        voice
+            .state
+            .apply(Input::JoinCommunity("c1".to_owned()), 0.0);
+        let mut inputs = app.world_mut().resource_mut::<VoiceInputs>();
+        inputs.0.push_back(Input::Reply(Reply::JoinCommunity(
+            "c1".to_owned(),
+            1,
+            Ok("livekit:ws://x".to_owned()),
+        )));
+        inputs.0.extend(then);
+        app.update();
+        app
+    }
+
+    #[test]
+    fn a_hang_up_in_the_joining_drive_leaves_no_voice_room() {
+        let mut app = joined_in_one_drive(None);
+        assert_eq!(voice_rooms(&mut app), 1);
+
+        let mut app = joined_in_one_drive(Some(Input::EndCall));
+        assert!(!app.world().resource::<VoiceChat>().state.is_in_call());
+        assert_eq!(voice_rooms(&mut app), 0);
+    }
 
     fn refuse(app: &mut App, room: Entity) {
         app.world_mut().entity_mut(room).remove::<Connecting>();

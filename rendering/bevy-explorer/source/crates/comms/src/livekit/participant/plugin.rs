@@ -104,10 +104,12 @@ impl Plugin for LivekitParticipantPlugin {
 #[derive(Component, Deref, DerefMut)]
 struct ActiveSpeakerGracePeriod(Timer);
 
+#[allow(clippy::too_many_arguments)]
 fn participant_connected(
     trigger: Trigger<ParticipantConnected>,
     mut commands: Commands,
-    rooms: Query<&LivekitRoom>,
+    rooms: Query<(&LivekitRoom, Option<&HostingParticipants>)>,
+    locals: Query<&LivekitParticipant, With<Local>>,
     mut indexes: Query<&mut ParticipantIndex>,
     transport_senders: crate::global_crdt::TransportSenders,
     mut player_update_tasks: PlayerUpdateTasksMut,
@@ -117,7 +119,7 @@ fn participant_connected(
         participant,
         room: room_entity,
     } = trigger.event();
-    let Ok(room) = rooms.get(*room_entity) else {
+    let Ok((room, hosting)) = rooms.get(*room_entity) else {
         debug_panic!("Room {room_entity} given to ParticipantConnected was invalid.");
     };
     debug!(
@@ -128,6 +130,20 @@ fn participant_connected(
     );
 
     let is_local = matches!(participant.participant, Participant::Local(_));
+    if is_local {
+        let existing = hosting
+            .into_iter()
+            .flat_map(|hosting| hosting.collection().iter().copied())
+            .filter_map(|entity| locals.get(entity).ok().map(|local| (entity, local.sid())));
+        let Some(stale) = stale_locals(existing, &participant.sid()) else {
+            // an SDK resume re-announces the same local participant
+            return;
+        };
+        // a restarted session has a new sid: drop the old entity and its publications
+        for entity in stale {
+            commands.entity(entity).despawn();
+        }
+    }
 
     let mut cmd = commands.spawn((
         participant.clone(),
@@ -179,7 +195,11 @@ fn participant_connected(
 fn participant_disconnected(
     trigger: Trigger<ParticipantDisconnected>,
     mut commands: Commands,
-    rooms: Query<(&LivekitRoom, &ParticipantIndex)>,
+    rooms: Query<(
+        &LivekitRoom,
+        &ParticipantIndex,
+        Option<&HostingParticipants>,
+    )>,
     participants: Query<&LivekitParticipant>,
     transport_senders: crate::global_crdt::TransportSenders,
     mut player_update_tasks: PlayerUpdateTasksMut,
@@ -189,7 +209,7 @@ fn participant_disconnected(
         participant,
         room: room_entity,
     } = trigger.event();
-    let Ok((room, index)) = rooms.get(*room_entity) else {
+    let Ok((room, index, hosting)) = rooms.get(*room_entity) else {
         debug_panic!("Room {room_entity} given to ParticipantDisconnected was invalid.");
     };
     debug!(
@@ -199,46 +219,89 @@ fn participant_disconnected(
         room.name()
     );
 
-    if let Some(address) = participant.identity().as_str().as_h160() {
-        let transport_id = *room_entity;
-        // the transport (or its context) may already be torn down; skip only the
-        // notification — the participant entity below must still be despawned
-        if let Some(sender) = transport_senders.get(transport_id) {
-            let task = livekit_runtime.spawn(async move {
-                sender
-                    .send(NetworkUpdate::PlayerLeft {
-                        transport_id,
-                        address,
-                    })
-                    .await
-            });
-            player_update_tasks.push(PlayerUpdateTask {
-                runtime: (*livekit_runtime).clone(),
-                task,
-            });
+    let hosted = hosting
+        .into_iter()
+        .flat_map(|hosting| hosting.collection().iter().copied())
+        .filter_map(|entity| {
+            participants
+                .get(entity)
+                .ok()
+                .map(|current| (entity, current.sid()))
+        });
+    let indexed = index
+        .get(&ParticipantIndex::key(participant.identity().as_str()))
+        .copied();
+    let departure = plan_departure(hosted, &participant.sid(), indexed);
+
+    // a same-identity rejoin that already owns the index keeps its membership
+    if departure.leaves {
+        if let Some(address) = participant.identity().as_str().as_h160() {
+            let transport_id = *room_entity;
+            // the transport (or its context) may already be torn down; skip only the
+            // notification — the participant entity below must still be despawned
+            if let Some(sender) = transport_senders.get(transport_id) {
+                let task = livekit_runtime.spawn(async move {
+                    sender
+                        .send(NetworkUpdate::PlayerLeft {
+                            transport_id,
+                            address,
+                        })
+                        .await
+                });
+                player_update_tasks.push(PlayerUpdateTask {
+                    runtime: (*livekit_runtime).clone(),
+                    task,
+                });
+            }
         }
     }
 
-    // by identity, then confirmed by sid: a rejoin under the same identity may already own the
-    // index entry
-    let Some(entity) = index
-        .get(&ParticipantIndex::key(participant.identity().as_str()))
-        .copied()
-        .filter(|entity| {
-            participants
-                .get(*entity)
-                .is_ok_and(|current| current.sid() == participant.sid())
-        })
-    else {
-        error!(
+    // the index entry is cleared on removal, only while it still names this entity
+    match departure.despawn {
+        Some(entity) => commands.entity(entity).despawn(),
+        None => error!(
             "Disconnecting participant '{}' ({}) not found in participants.",
             participant.sid(),
             participant.identity()
-        );
-        return;
-    };
+        ),
+    }
+}
 
-    commands.entity(entity).despawn();
+/// Local participant entities superseded by `sid`, or `None` if `sid` is already present.
+fn stale_locals<S: PartialEq>(
+    existing: impl IntoIterator<Item = (Entity, S)>,
+    sid: &S,
+) -> Option<Vec<Entity>> {
+    let mut stale = Vec::new();
+    for (entity, existing) in existing {
+        if existing == *sid {
+            return None;
+        }
+        stale.push(entity);
+    }
+    Some(stale)
+}
+
+struct Departure {
+    despawn: Option<Entity>,
+    leaves: bool,
+}
+
+/// The leaving participant is found by sid among the room's participants. The player leaves the
+/// transport only if no other entity (a same-identity rejoin) holds its index entry.
+fn plan_departure<S: PartialEq>(
+    hosted: impl IntoIterator<Item = (Entity, S)>,
+    sid: &S,
+    indexed: Option<Entity>,
+) -> Departure {
+    let despawn = hosted
+        .into_iter()
+        .find(|(_, hosted)| hosted == sid)
+        .map(|(entity, _)| entity);
+    Departure {
+        despawn,
+        leaves: indexed.is_none() || indexed == despawn,
+    }
 }
 
 // Covers both explicit disconnects and relationship-cascade despawns on room teardown, so
@@ -641,6 +704,45 @@ mod tests {
         assert_eq!(limiter.windows.len(), 1);
         assert!(limiter.allow(room, "community:0xlive", 10.5));
         assert_eq!(limiter.windows.len(), 1);
+    }
+
+    #[test]
+    fn a_resumed_local_participant_is_not_duplicated() {
+        let old = Entity::from_raw(1);
+        assert_eq!(stale_locals([(old, "PA_1")], &"PA_1"), None);
+        assert_eq!(stale_locals::<&str>([], &"PA_1"), Some(vec![]));
+    }
+
+    #[test]
+    fn a_restarted_session_replaces_the_previous_local_participant() {
+        let old = Entity::from_raw(1);
+        assert_eq!(stale_locals([(old, "PA_1")], &"PA_2"), Some(vec![old]));
+    }
+
+    #[test]
+    fn a_rejoin_announced_before_the_old_departure_keeps_the_player() {
+        let (old, new) = (Entity::from_raw(1), Entity::from_raw(2));
+        // Connected(new) already took the index entry
+        let departure = plan_departure([(old, "PA_old"), (new, "PA_new")], &"PA_old", Some(new));
+        assert_eq!(departure.despawn, Some(old));
+        assert!(!departure.leaves);
+    }
+
+    #[test]
+    fn a_departure_before_the_rejoin_announcement_leaves_the_transport() {
+        let old = Entity::from_raw(1);
+        let departure = plan_departure([(old, "PA_old")], &"PA_old", Some(old));
+        assert_eq!(departure.despawn, Some(old));
+        assert!(departure.leaves);
+        // Connected(new) follows with a fresh index entry and a fresh Joined
+    }
+
+    #[test]
+    fn an_unknown_sid_despawns_nothing_and_spares_a_live_rejoin() {
+        let new = Entity::from_raw(2);
+        let departure = plan_departure([(new, "PA_new")], &"PA_old", Some(new));
+        assert_eq!(departure.despawn, None);
+        assert!(!departure.leaves);
     }
 
     #[test]
