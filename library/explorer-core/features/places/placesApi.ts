@@ -104,7 +104,8 @@ export function fetchWorlds(args: FetchPlacesArgs = {}): Promise<PlacesResponse>
 // ---- destinations ----
 // The feed decentraland.org/places and the desktop client read: places AND worlds in one list,
 // ordered `highlighted DESC, user_count DESC`, with live presence when with_realms_detail is set.
-// It ignores every order_by but most_active, and only matches searches of 3+ characters.
+// Every order_by but most_active and created_at with order=desc only breaks ties below that, and
+// it only matches searches of 3+ characters.
 
 export interface FetchDestinationsArgs {
   limit?: number
