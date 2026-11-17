@@ -34,6 +34,7 @@
 // <index> <value>`), and the HUD's switches and selects by the HUD, whatever the outcome.
 import assert from 'node:assert/strict'
 import { spec, until, type Explorer, type Selector } from '../driver/index.ts'
+import { PAGES, pressRailRow } from './pages.ts'
 
 const scenario = spec(import.meta.url)
 
@@ -42,7 +43,6 @@ const CONTROL_TIMEOUT_MS = 10_000
 /** A change in the HUD reaches the engine and comes back in the next settings push. */
 const APPLY_TIMEOUT_MS = 10_000
 
-const RAIL_SETTINGS: Selector = { name: 'Settings', role: 'button' }
 const HEADING: Selector = { name: 'Settings', role: 'heading' }
 const CATEGORIES: Selector = { name: 'Settings categories', role: 'tablist' }
 
@@ -70,7 +70,8 @@ async function restoreValues(explorer: Explorer, category: string, before: Value
 
 /** The Settings page, from the rail, as a user opens it. */
 async function openSettings(explorer: Explorer): Promise<void> {
-  if (!(await explorer.hud.isVisible(HEADING))) await explorer.hud.click(RAIL_SETTINGS)
+  // the rail's System panel holds the Settings row (#929)
+  if (!(await explorer.hud.isVisible(HEADING))) await pressRailRow(explorer, PAGES.settings.rail!)
   await explorer.hud.wait(HEADING, { timeoutMs: PAGE_TIMEOUT_MS })
   await explorer.hud.wait(CATEGORIES, { timeoutMs: CONTROL_TIMEOUT_MS })
 }

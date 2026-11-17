@@ -42,6 +42,7 @@ import assert from 'node:assert/strict'
 import { Explorer, openSession, readTarget, spec, until, WebConsole, type Selector } from '../driver/index.ts'
 import { chromeArgs } from '../driver/chrome.ts'
 import { CLOSE_CHAT, closeChat, openChat, submitLine } from './chat.ts'
+import { PAGES, pressRailRow } from './pages.ts'
 
 const scenario = spec(import.meta.url)
 
@@ -74,7 +75,8 @@ async function restoreValues(explorer: Explorer, category: string, before: Value
 }
 
 async function openGraphics(explorer: Explorer): Promise<void> {
-  if (!(await explorer.hud.isVisible(SETTINGS_HEADING))) await explorer.hud.click({ name: 'Settings', role: 'button' })
+  // the rail's System panel holds the Settings row (#929)
+  if (!(await explorer.hud.isVisible(SETTINGS_HEADING))) await pressRailRow(explorer, PAGES.settings.rail!)
   await explorer.hud.wait(SETTINGS_HEADING, { timeoutMs: PAGE_TIMEOUT_MS })
   await explorer.hud.click({ name: 'Graphics', role: 'tab' })
   await explorer.hud.wait({ name: 'Avatar Ghosts', role: 'switch' }, { timeoutMs: CONTROL_TIMEOUT_MS })
@@ -145,11 +147,11 @@ scenario("the rail's Scene permissions opens the popover and closes it again", a
 })
 
 scenario("the rail's Create opens the Create page, and its Close returns to the world", async ({ explorer, restore }) => {
-  const create: Selector = { name: 'Create', role: 'button' }
   restore(async () => {
     if (!(await explorer.hud.isVisible(RAIL_NAVIGATION)) && (await explorer.hud.isVisible(MENU_CLOSE))) await explorer.hud.click(MENU_CLOSE)
   })
-  await explorer.hud.click(create)
+  // the rail's System panel holds the Create row (#929)
+  await pressRailRow(explorer, { button: 'System', row: 'Create' })
   // a menu page takes the screen: the rail gives way to the top bar, with Create among its tabs
   await explorer.hud.waitHidden(RAIL_NAVIGATION, PAGE_TIMEOUT_MS)
   await explorer.hud.wait(MENU_CLOSE, { timeoutMs: PAGE_TIMEOUT_MS })

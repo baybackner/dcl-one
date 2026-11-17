@@ -16,6 +16,8 @@ export const CLOSE_CHAT = { name: 'Close chat', role: 'button' } as const
 export const INPUT_FOCUSED = { name: 'Write a message', role: 'textbox' } as const
 export const INPUT_IDLE = { name: 'Press Enter to chat', role: 'textbox' } as const
 export const EMOJI = { name: 'Emoji', role: 'button' } as const
+/** The conversation rail's Nearby button, pressed while the Nearby conversation shows (ConversationRail.tsx). */
+export const NEARBY_CHAT = { name: 'Nearby chat', role: 'button' } as const
 
 export async function ownAddress(explorer: Explorer): Promise<string> {
   const { address } = await explorer.worldState()
@@ -23,15 +25,25 @@ export async function ownAddress(explorer: Explorer): Promise<string> {
   return address.toLowerCase()
 }
 
-/** The chat open and its input focused: from the rail when closed, from the input when open and idle. */
+/** The chat open on the Nearby conversation with its input focused: from the rail when closed, from
+ *  the input when open and idle. The chat reopens on the conversation it last showed, and a
+ *  community's conversation the account is not connected to has no input at all ("You are not
+ *  connected to chat"), so a conversation an earlier scenario left selected gives way to Nearby. */
 export async function openChat(explorer: Explorer): Promise<void> {
-  if ((await explorer.hud.get(RAIL_CHAT)).checked) {
-    const idle = !(await explorer.hud.isVisible(INPUT_FOCUSED))
-    if (idle) await explorer.hud.click(INPUT_IDLE)
-  } else {
-    await explorer.hud.click(RAIL_CHAT)
-  }
+  if (!(await explorer.hud.get(RAIL_CHAT)).checked) await explorer.hud.click(RAIL_CHAT)
   await explorer.hud.wait(CLOSE_CHAT, { timeoutMs: CONTROL_TIMEOUT_MS })
+  const nearby = await explorer.hud.find(NEARBY_CHAT)
+  if (nearby && !nearby.checked) {
+    await explorer.hud.click(NEARBY_CHAT)
+    await until(async () => (await explorer.hud.find(NEARBY_CHAT))?.checked, (shown) => shown === true, { timeoutMs: CONTROL_TIMEOUT_MS, what: 'the Nearby conversation to show' })
+  }
+  // the rail's click focuses the input itself, a moment later; an input left idle takes a click
+  const input = await until(
+    async () => ((await explorer.hud.isVisible(INPUT_FOCUSED)) ? 'focused' : (await explorer.hud.isVisible(INPUT_IDLE)) ? 'idle' : undefined),
+    (state) => state !== undefined,
+    { timeoutMs: TEXT_TIMEOUT_MS, intervalMs: 100, what: 'the chat input' }
+  )
+  if (input === 'idle') await explorer.hud.click(INPUT_IDLE)
   await explorer.hud.wait(INPUT_FOCUSED, { timeoutMs: TEXT_TIMEOUT_MS })
 }
 

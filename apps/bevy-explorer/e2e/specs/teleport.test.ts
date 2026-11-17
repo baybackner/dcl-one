@@ -29,7 +29,7 @@
 // Every scenario puts the player back on the realm and the parcel it started on.
 import assert from 'node:assert/strict'
 import { closeToRest, spec, until, type Explorer, type WorldState } from '../driver/index.ts'
-import { RAIL_CHAT, closeChat, openChat, submitLine } from './chat.ts'
+import { NEARBY_CHAT, RAIL_CHAT, closeChat, openChat, submitLine } from './chat.ts'
 import { PAGES, closePage, openWithKey } from './pages.ts'
 
 const scenario = spec(import.meta.url)
@@ -40,8 +40,6 @@ const ARRIVAL_TIMEOUT_MS = 90_000
 /** A realm change: the world's about, its scenes and the comms connection. */
 const REALM_TIMEOUT_MS = 120_000
 const CONTROL_TIMEOUT_MS = 20_000
-/** The conversation rail's Nearby button, pressed while the Nearby conversation shows (ConversationRail.tsx). */
-const NEARBY_CHAT = { name: 'Nearby chat', role: 'button' } as const
 const WORLD = (process.env.DCL_E2E_WORLD ?? '33.dcl.eth').toLowerCase()
 const WORLD_PARCEL = (process.env.DCL_E2E_WORLD_PARCEL ?? '2,3').split(',').map(Number) as [number, number]
 const SCENARIO_TIMEOUT_MS = 300_000

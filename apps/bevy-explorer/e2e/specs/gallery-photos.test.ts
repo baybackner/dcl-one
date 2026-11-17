@@ -20,7 +20,7 @@
 // newest photo first, so the photo a scenario takes is the first tile.
 import assert from 'node:assert/strict'
 import { readTarget, spec, until, type Explorer, type Selector } from '../driver/index.ts'
-import { closePage, openFromRail, openWithKey } from './pages.ts'
+import { closePage, openFromRail, openWithKey, pressRailRow } from './pages.ts'
 
 const scenario = spec(import.meta.url)
 
@@ -58,7 +58,7 @@ async function newestPublicPhotoId(address: string): Promise<string | null> {
 /** The own passport's PHOTOS tab once its photos have loaded (the Loading spinner gone): whether
  *  it shows a first photo tile. The passport is closed again either way. */
 async function passportShowsAPhoto(explorer: Explorer): Promise<boolean> {
-  await explorer.hud.click({ name: 'Profile', role: 'button' })
+  await pressRailRow(explorer, { button: 'Me', row: 'Profile' })
   await explorer.hud.wait(PASSPORT, { timeoutMs: PASSPORT_TIMEOUT_MS })
   try {
     await explorer.hud.click(PHOTOS_TAB)
@@ -116,15 +116,17 @@ async function closeViewer(explorer: Explorer): Promise<void> {
 }
 
 /** Open the first photo's options menu. The tile shows its options button only while the pointer is
- *  over it (`display: none` otherwise, ReelGrid.module.css), and the driver moves the pointer only
- *  with a click: so the click goes where the button shows, 12 px in from the tile's right and 33 px
- *  down (ReelGrid.tsx), which hovers the tile first; a click that opened the photo instead is closed,
- *  and the pointer, left over the tile, has revealed the button for a plain click. */
+ *  over it or focus is inside it (`display: none` otherwise, ReelGrid.module.css), and the driver's
+ *  click moves the pointer and presses in one go: Chrome applies the hover a frame later, so the
+ *  press lands on the tile's Open photo and opens the viewer. That viewer is closed with Escape, which
+ *  leaves the pointer where it is, over the tile: once the viewer is gone Chrome re-reads the hover,
+ *  the options button shows, and a plain click on it opens the menu. */
 async function openOptions(explorer: Explorer): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await explorer.hud.isVisible(OPTIONS)) {
       await explorer.hud.click(OPTIONS)
     } else {
+      // where the options button shows: 12 px in from the tile's right edge, 16 px wide, 33 px down (ReelGrid)
       const tile = await explorer.hud.get(OPEN_PHOTO)
       await explorer.clickAt(tile.x + tile.width - 20, tile.y + 33)
     }
@@ -134,7 +136,13 @@ async function openOptions(explorer: Explorer): Promise<void> {
       { timeoutMs: TEXT_TIMEOUT_MS, what: "the photo's options menu" }
     ).catch(() => undefined)
     if (opened === 'menu') return
-    if (opened === 'viewer') await closeViewer(explorer)
+    if (opened === 'viewer') {
+      await explorer.escape()
+      const gone = await explorer.hud.waitHidden(VIEWER, TEXT_TIMEOUT_MS).then(() => true, () => false)
+      if (!gone) await closeViewer(explorer)
+      // the pointer, still over the tile, reveals its options button once the hover is re-read
+      await until(() => explorer.hud.isVisible(OPTIONS), (shown) => shown, { timeoutMs: 3_000, intervalMs: 100, what: 'the options button' }).catch(() => undefined)
+    }
   }
   assert.fail("the first photo's options menu did not open")
 }

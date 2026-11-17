@@ -27,7 +27,10 @@ const LOBBY_TIMEOUT_MS = 30_000
 const NAME = 'e2esignout'
 
 const WELCOME: Selector = { name: 'Welcome', role: 'heading', exact: false }
-const SIGN_OUT: Selector = { name: 'SIGN OUT', role: 'button' }
+/** The profile chip's menu row (LobbyProfile.tsx), and the confirmation it asks for first. */
+const SIGN_OUT: Selector = { name: 'Sign Out', role: 'menuitem' }
+const CONFIRM: Selector = { name: 'Sign out?', role: 'dialog' }
+const CONFIRM_SIGN_OUT: Selector = { name: 'Sign Out', role: 'button' }
 
 /** The startup Lobby's profile chip: the one button named after a profile, `<initial> <name>#<tag>`.
  *  A guest's name is the HUD's own pick, not the one the sign-in asked for. */
@@ -51,6 +54,8 @@ scenario('the startup Lobby\'s profile chip signs out of the engine and the HUD'
 
   await press(explorer, await profileChip(explorer))
   await press(explorer, SIGN_OUT)
+  await explorer.hud.wait(CONFIRM, { timeoutMs: CONTROL_TIMEOUT_MS })
+  await press(explorer, CONFIRM_SIGN_OUT)
   await explorer.hud.waitHidden(WELCOME, LOBBY_TIMEOUT_MS)
   const after = await until(() => explorer.worldState(), (state) => !state.signedIn || state.address?.toLowerCase() !== reply.address.toLowerCase(), {
     timeoutMs: LOBBY_TIMEOUT_MS,

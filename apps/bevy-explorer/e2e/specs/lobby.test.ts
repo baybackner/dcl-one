@@ -7,7 +7,7 @@
 // | Jump in to Home                   | the in-world landing card shows the home place and its Jump in goes there     | Partial |
 // | Customize avatar from Lobby       | Customize opens the Backpack over the Lobby, and Escape returns to it          | Partial |
 // | Notifications from Lobby          | the Lobby's bell opens the notifications panel and closes it again           | Port    |
-// | Profile menu in Lobby             | the profile chip's VIEW PROFILE opens the passport (Sign out: `auth`)         | Partial |
+// | Profile menu in Lobby             | the profile chip's Profile row opens the passport  (Sign out: `auth`)         | Partial |
 // | Recommended Places                | the section shows cards, and one's Jump in travels                            | Partial |
 // | Jump Back In                      | a place visited from the Lobby is listed under Jump Back In                   | Gap     |
 // | Live Now                          | the section's cards each offer a Jump in, when anything is live               | Partial |
@@ -47,6 +47,7 @@
 // the client afterwards.
 import assert from 'node:assert/strict'
 import { buildAuthIdentity, newPrivateKey, readTarget, spec, until, type Explorer, type Selector, type WorldState } from '../driver/index.ts'
+import { PAGES, pressRailRow } from './pages.ts'
 
 const scenario = spec(import.meta.url)
 
@@ -56,7 +57,6 @@ const TRAVEL_TIMEOUT_MS = 120_000
 const PARCEL_METERS = 16
 
 /** The page the top bar's Lobby button sits on: any menu page has it; Settings opens from the rail. */
-const SETTINGS_RAIL: Selector = { name: 'Settings', role: 'button' }
 const SETTINGS_PAGE: Selector = { name: 'Settings', role: 'heading' }
 const LOBBY_BUTTON: Selector = { name: 'Lobby', role: 'button' }
 /** The Lobby's welcome line, `Welcome <name>!` (or `Welcome!` before the profile is known). */
@@ -66,8 +66,9 @@ const CUSTOMIZE: Selector = { name: 'Customize', role: 'button' }
 const BELL: Selector = { name: 'Notifications', role: 'button' }
 const NOTIFICATIONS_CLOSE: Selector = { name: 'Close notifications', role: 'button' }
 const BACKPACK_MODAL: Selector = { name: 'Backpack', role: 'dialog' }
-const VIEW_PROFILE: Selector = { name: 'VIEW PROFILE', role: 'button' }
-const SIGN_OUT: Selector = { name: 'SIGN OUT', role: 'button' }
+const VIEW_PROFILE: Selector = { name: 'Profile', role: 'menuitem' }
+/** The profile chip's menu (LobbyProfile.tsx): its rows are menu items. */
+const SIGN_OUT: Selector = { name: 'Sign Out', role: 'menuitem' }
 const PASSPORT: Selector = { name: 'Passport sections', role: 'tablist' }
 const JUMP_IN = 'Jump in'
 const RECOMMENDED: Selector = { name: 'Recommended Places', role: 'heading' }
@@ -86,7 +87,8 @@ async function press(explorer: Explorer, selector: Selector): Promise<void> {
 
 /** Open the in-world Lobby: Settings from the rail, then the top bar's Lobby. */
 async function openLobby(explorer: Explorer): Promise<void> {
-  await press(explorer, SETTINGS_RAIL)
+  // the rail's System panel holds the Settings row, whose page's top bar has the Lobby (#929)
+  await pressRailRow(explorer, PAGES.settings.rail!)
   await explorer.hud.wait(SETTINGS_PAGE, { timeoutMs: CONTROL_TIMEOUT_MS })
   await press(explorer, LOBBY_BUTTON)
   await explorer.hud.wait(WELCOME, { timeoutMs: LOBBY_TIMEOUT_MS })

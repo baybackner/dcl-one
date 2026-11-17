@@ -2,7 +2,7 @@
 // community from the Communities page (library/ui/apps/hud/features/communities). A card is a button
 // named by its whole text, ending `(Public|Private) · <n> Members (Join|View|Request to Join|Cancel
 // join request|…)` (see specs/communities.test.ts); its detail is a popup with the community's name
-// as a heading, Join (`✓ Joined` once a member), `Request to Join` (`Cancel join request` once sent)
+// as a heading, Join (`Joined` once a member), `Request to Join` (`Cancel join request` once sent)
 // for a private one, `Open chat` for a member, the `More` menu (Copy link, Leave community) and the
 // `Community sections` tabs (ANNOUNCEMENTS, MEMBERS, PLACES, PHOTOS). A member row is `View <name>'s
 // profile` with `More options for <name>`, which opens the member's profile card (`Profile` dialog:
@@ -46,7 +46,8 @@ const DISCARD: Selector = { name: 'Discard', role: 'button' }
 const DETAIL: Selector = { name: 'Community sections', role: 'tablist' }
 const MEMBERS_TAB: Selector = { name: 'MEMBERS', role: 'tab' }
 const OPEN_CHAT: Selector = { name: 'Open chat', role: 'button' }
-const JOINED: Selector = { name: '✓ Joined', role: 'button' }
+/** The member's disabled Joined button: an aria-hidden check icon and `Joined` (CommunityModal.tsx). */
+const JOINED: Selector = { name: 'Joined', role: 'button' }
 const MORE: Selector = { name: 'More', role: 'button' }
 const LEAVE: Selector = { name: 'Leave community', role: 'button' }
 const PROFILE_CARD: Selector = { name: 'Profile', role: 'dialog' }

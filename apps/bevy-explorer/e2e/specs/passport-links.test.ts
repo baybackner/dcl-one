@@ -15,6 +15,7 @@
 // Gap, Edit name color: the Bevy passport has no name colour picker (Notion U5).
 import assert from 'node:assert/strict'
 import { spec, until, type Explorer, type Selector } from '../driver/index.ts'
+import { pressRailRow } from './pages.ts'
 
 const scenario = spec(import.meta.url)
 
@@ -32,7 +33,8 @@ const titleField = (n: number): Selector => ({ name: `Link ${n} title`, role: 't
 const urlField = (n: number): Selector => ({ name: `Link ${n} URL`, role: 'textbox' })
 
 async function openOwnPassport(explorer: Explorer): Promise<void> {
-  await explorer.hud.click({ name: 'Profile', role: 'button' })
+  // the rail's Me panel holds the Profile row (#929), as passport.test.ts opens it
+  await pressRailRow(explorer, { button: 'Me', row: 'Profile' })
   await explorer.hud.wait(PASSPORT, { timeoutMs: READY_TIMEOUT_MS })
   // The links arrive with the rest of the profile, after the identity the passport opens with.
   await explorer.hud.wait({ name: 'Edit name', role: 'button' }, { timeoutMs: READY_TIMEOUT_MS })
