@@ -61,7 +61,7 @@ pub trait AVPlayer: Component {
 }
 
 /// A scene's volume as a player volume: unset is full, non-finite is silent, the rest 0..=1.
-fn scene_volume(volume: Option<f32>) -> f32 {
+pub(crate) fn scene_volume(volume: Option<f32>) -> f32 {
     match volume {
         None => 1.,
         Some(volume) if volume.is_finite() => volume.clamp(0., 1.),

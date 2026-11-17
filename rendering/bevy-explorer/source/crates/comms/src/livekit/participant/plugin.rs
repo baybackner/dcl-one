@@ -84,7 +84,7 @@ impl Plugin for LivekitParticipantPlugin {
         app.init_resource::<InboundRateLimiter>();
         app.add_observer(participant_connected);
         app.add_observer(participant_disconnected);
-        app.add_observer(participant_entity_removed);
+        app.add_observer(participant_entity_removed::<LivekitParticipant>);
         app.add_observer(participant_connection_quality_changed);
         app.add_observer(participant_payload);
         app.add_observer(active_speakers_changed);
@@ -130,33 +130,18 @@ fn participant_connected(
     );
 
     let is_local = matches!(participant.participant, Participant::Local(_));
-    if is_local {
-        let existing = hosting
-            .into_iter()
-            .flat_map(|hosting| hosting.collection().iter().copied())
-            .filter_map(|entity| locals.get(entity).ok().map(|local| (entity, local.sid())));
-        let Some(stale) = stale_locals(existing, &participant.sid()) else {
-            // an SDK resume re-announces the same local participant
-            return;
-        };
-        // a restarted session has a new sid: drop the old entity and its publications
-        for entity in stale {
-            commands.entity(entity).despawn();
-        }
-    }
-
-    let mut cmd = commands.spawn((
+    if admit_member(
+        &mut commands,
+        *room_entity,
+        hosting,
+        &locals,
+        &mut indexes,
         participant.clone(),
-        <HostedBy as Relationship>::from(*room_entity),
-    ));
-    if is_local {
-        cmd.insert(Local);
-    }
-    if let Ok(mut index) = indexes.get_mut(*room_entity) {
-        index.insert(
-            ParticipantIndex::key(participant.identity().as_str()),
-            cmd.id(),
-        );
+        is_local,
+    )
+    .is_none()
+    {
+        return;
     }
 
     // Register presence explicitly. Membership is otherwise implied by a `PlayerUpdate` arriving,
@@ -219,19 +204,14 @@ fn participant_disconnected(
         room.name()
     );
 
-    let hosted = hosting
-        .into_iter()
-        .flat_map(|hosting| hosting.collection().iter().copied())
-        .filter_map(|entity| {
-            participants
-                .get(entity)
-                .ok()
-                .map(|current| (entity, current.sid()))
-        });
-    let indexed = index
-        .get(&ParticipantIndex::key(participant.identity().as_str()))
-        .copied();
-    let departure = plan_departure(hosted, &participant.sid(), indexed);
+    let departure = depart_member(
+        &mut commands,
+        index,
+        hosting,
+        &participants,
+        participant.member_sid(),
+        &participant.member_identity(),
+    );
 
     // a same-identity rejoin that already owns the index keeps its membership
     if departure.leaves {
@@ -256,15 +236,93 @@ fn participant_disconnected(
         }
     }
 
-    // the index entry is cleared on removal, only while it still names this entity
-    match departure.despawn {
-        Some(entity) => commands.entity(entity).despawn(),
-        None => error!(
+    if departure.despawn.is_none() {
+        error!(
             "Disconnecting participant '{}' ({}) not found in participants.",
             participant.sid(),
             participant.identity()
-        ),
+        );
     }
+}
+
+/// The sid and identity the room bookkeeping keys on; tests supply a stand-in for the SDK type.
+pub(super) trait RoomMember: Component {
+    fn member_sid(&self) -> String;
+    fn member_identity(&self) -> String;
+}
+
+impl RoomMember for LivekitParticipant {
+    fn member_sid(&self) -> String {
+        self.sid().to_string()
+    }
+    fn member_identity(&self) -> String {
+        self.identity().as_str().to_owned()
+    }
+}
+
+/// Spawns the member in the room and indexes it. Returns `None` for an SDK resume that
+/// re-announces a local participant already present.
+fn admit_member<M: RoomMember>(
+    commands: &mut Commands,
+    room: Entity,
+    hosting: Option<&HostingParticipants>,
+    locals: &Query<&M, With<Local>>,
+    indexes: &mut Query<&mut ParticipantIndex>,
+    member: M,
+    local: bool,
+) -> Option<Entity> {
+    if local {
+        let existing = hosting
+            .into_iter()
+            .flat_map(|hosting| hosting.collection().iter().copied())
+            .filter_map(|entity| {
+                locals
+                    .get(entity)
+                    .ok()
+                    .map(|local| (entity, local.member_sid()))
+            });
+        // a restarted session has a new sid: drop the old entity and its publications
+        for entity in stale_locals(existing, &member.member_sid())? {
+            commands.entity(entity).despawn();
+        }
+    }
+    let key = ParticipantIndex::key(&member.member_identity());
+    let mut cmd = commands.spawn((member, <HostedBy as Relationship>::from(room)));
+    if local {
+        cmd.insert(Local);
+    }
+    let entity = cmd.id();
+    if let Ok(mut index) = indexes.get_mut(room) {
+        index.insert(key, entity);
+    }
+    Some(entity)
+}
+
+/// Despawns the departing member, found by sid. The index entry is cleared on removal, only
+/// while it still names that entity.
+fn depart_member<M: RoomMember>(
+    commands: &mut Commands,
+    index: &ParticipantIndex,
+    hosting: Option<&HostingParticipants>,
+    members: &Query<&M>,
+    sid: String,
+    identity: &str,
+) -> Departure {
+    let hosted = hosting
+        .into_iter()
+        .flat_map(|hosting| hosting.collection().iter().copied())
+        .filter_map(|entity| {
+            members
+                .get(entity)
+                .ok()
+                .map(|member| (entity, member.member_sid()))
+        });
+    let indexed = index.get(&ParticipantIndex::key(identity)).copied();
+    let departure = plan_departure(hosted, &sid, indexed);
+    if let Some(entity) = departure.despawn {
+        commands.entity(entity).despawn();
+    }
+    departure
 }
 
 /// Local participant entities superseded by `sid`, or `None` if `sid` is already present.
@@ -306,33 +364,29 @@ fn plan_departure<S: PartialEq>(
 
 // Covers both explicit disconnects and relationship-cascade despawns on room teardown, so
 // rate-limiter entries can't outlive their participant.
-fn participant_entity_removed(
-    trigger: Trigger<OnRemove, LivekitParticipant>,
-    participants: Query<(&LivekitParticipant, Option<&HostedBy>)>,
+fn participant_entity_removed<M: RoomMember>(
+    trigger: Trigger<OnRemove, M>,
+    participants: Query<(&M, Option<&HostedBy>)>,
     mut indexes: Query<&mut ParticipantIndex>,
     mut rate_limiter: ResMut<InboundRateLimiter>,
 ) {
     let Ok((participant, maybe_hosted)) = participants.get(trigger.target()) else {
         return;
     };
-    let identity = participant.identity();
+    let identity = participant.member_identity();
     match maybe_hosted {
         Some(hosted) => {
             // a rejoin under the same identity may have replaced the entry already
             if let Ok(mut index) = indexes.get_mut(hosted.get()) {
-                let key = ParticipantIndex::key(identity.as_str());
+                let key = ParticipantIndex::key(&identity);
                 if index.get(&key) == Some(&trigger.target()) {
                     index.remove(&key);
                 }
             }
-            rate_limiter
-                .windows
-                .remove(&(hosted.get(), identity.as_str().to_owned()));
+            rate_limiter.windows.remove(&(hosted.get(), identity));
         }
         // no room to scope by; over-evicting just forgets ≤1s of history
-        None => rate_limiter
-            .windows
-            .retain(|(_, id), _| id != identity.as_str()),
+        None => rate_limiter.windows.retain(|(_, id), _| *id != identity),
     }
 }
 
@@ -707,42 +761,215 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_local_participant_is_not_duplicated() {
-        let old = Entity::from_raw(1);
-        assert_eq!(stale_locals([(old, "PA_1")], &"PA_1"), None);
-        assert_eq!(stale_locals::<&str>([], &"PA_1"), Some(vec![]));
-    }
-
-    #[test]
-    fn a_restarted_session_replaces_the_previous_local_participant() {
-        let old = Entity::from_raw(1);
-        assert_eq!(stale_locals([(old, "PA_1")], &"PA_2"), Some(vec![old]));
-    }
-
-    #[test]
-    fn a_rejoin_announced_before_the_old_departure_keeps_the_player() {
-        let (old, new) = (Entity::from_raw(1), Entity::from_raw(2));
-        // Connected(new) already took the index entry
-        let departure = plan_departure([(old, "PA_old"), (new, "PA_new")], &"PA_old", Some(new));
-        assert_eq!(departure.despawn, Some(old));
-        assert!(!departure.leaves);
-    }
-
-    #[test]
-    fn a_departure_before_the_rejoin_announcement_leaves_the_transport() {
-        let old = Entity::from_raw(1);
-        let departure = plan_departure([(old, "PA_old")], &"PA_old", Some(old));
-        assert_eq!(departure.despawn, Some(old));
-        assert!(departure.leaves);
-        // Connected(new) follows with a fresh index entry and a fresh Joined
-    }
-
-    #[test]
     fn an_unknown_sid_despawns_nothing_and_spares_a_live_rejoin() {
         let new = Entity::from_raw(2);
         let departure = plan_departure([(new, "PA_new")], &"PA_old", Some(new));
         assert_eq!(departure.despawn, None);
         assert!(!departure.leaves);
+    }
+
+    /// Stand-in for the SDK participant, which only a live LiveKit connection can construct.
+    #[derive(Component, Clone)]
+    struct Member {
+        sid: &'static str,
+        identity: &'static str,
+    }
+
+    impl RoomMember for Member {
+        fn member_sid(&self) -> String {
+            self.sid.to_owned()
+        }
+        fn member_identity(&self) -> String {
+            self.identity.to_owned()
+        }
+    }
+
+    #[derive(Event)]
+    struct Joined {
+        room: Entity,
+        member: Member,
+        local: bool,
+    }
+
+    #[derive(Event)]
+    struct Left {
+        room: Entity,
+        member: Member,
+    }
+
+    /// `PlayerLeft` decisions, in order.
+    #[derive(Resource, Default)]
+    struct Leaves(Vec<bool>);
+
+    /// Stands for a `MicrophonePublication`: revoked when its participant entity goes.
+    #[derive(Component)]
+    struct Publication(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Publication {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    // the same room bookkeeping as `participant_connected` / `participant_disconnected`
+    fn on_joined(
+        trigger: Trigger<Joined>,
+        mut commands: Commands,
+        rooms: Query<Option<&HostingParticipants>>,
+        locals: Query<&Member, With<Local>>,
+        mut indexes: Query<&mut ParticipantIndex>,
+    ) {
+        let Joined {
+            room,
+            member,
+            local,
+        } = trigger.event();
+        let hosting = rooms.get(*room).unwrap();
+        admit_member(
+            &mut commands,
+            *room,
+            hosting,
+            &locals,
+            &mut indexes,
+            member.clone(),
+            *local,
+        );
+    }
+
+    fn on_left(
+        trigger: Trigger<Left>,
+        mut commands: Commands,
+        rooms: Query<(&ParticipantIndex, Option<&HostingParticipants>)>,
+        members: Query<&Member>,
+        mut leaves: ResMut<Leaves>,
+    ) {
+        let Left { room, member } = trigger.event();
+        let (index, hosting) = rooms.get(*room).unwrap();
+        let departure = depart_member(
+            &mut commands,
+            index,
+            hosting,
+            &members,
+            member.member_sid(),
+            &member.member_identity(),
+        );
+        leaves.0.push(departure.leaves);
+    }
+
+    fn room_world() -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<InboundRateLimiter>();
+        world.init_resource::<Leaves>();
+        world.add_observer(on_joined);
+        world.add_observer(on_left);
+        world.add_observer(participant_entity_removed::<Member>);
+        let room = world.spawn(ParticipantIndex::default()).id();
+        (world, room)
+    }
+
+    fn join(world: &mut World, room: Entity, sid: &'static str, local: bool) {
+        world.trigger(Joined {
+            room,
+            member: Member {
+                sid,
+                identity: "0xAbC",
+            },
+            local,
+        });
+        world.flush();
+    }
+
+    fn leave(world: &mut World, room: Entity, sid: &'static str) {
+        world.trigger(Left {
+            room,
+            member: Member {
+                sid,
+                identity: "0xAbC",
+            },
+        });
+        world.flush();
+    }
+
+    fn members(world: &mut World) -> Vec<(&'static str, bool)> {
+        let mut members = world
+            .query::<(&Member, Has<Local>)>()
+            .iter(world)
+            .map(|(member, local)| (member.sid, local))
+            .collect::<Vec<_>>();
+        members.sort();
+        members
+    }
+
+    fn indexed(world: &World, room: Entity) -> Option<&'static str> {
+        let entity = *world
+            .get::<ParticipantIndex>(room)?
+            .get(&ParticipantIndex::key("0xabc"))?;
+        Some(world.get::<Member>(entity)?.sid)
+    }
+
+    #[test]
+    fn an_sdk_resume_keeps_the_one_local_participant_and_its_publication() {
+        let (mut world, room) = room_world();
+        join(&mut world, room, "PA_1", true);
+        let local = world
+            .query_filtered::<Entity, With<Local>>()
+            .single(&world)
+            .unwrap();
+        let revoked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        world.entity_mut(local).insert(Publication(revoked.clone()));
+
+        join(&mut world, room, "PA_1", true);
+
+        assert_eq!(members(&mut world), vec![("PA_1", true)]);
+        assert!(world.get_entity(local).is_ok());
+        assert!(!revoked.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_restarted_session_replaces_the_local_participant_and_revokes_its_publication() {
+        let (mut world, room) = room_world();
+        join(&mut world, room, "PA_1", true);
+        let old = world
+            .query_filtered::<Entity, With<Local>>()
+            .single(&world)
+            .unwrap();
+        let revoked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        world.entity_mut(old).insert(Publication(revoked.clone()));
+
+        join(&mut world, room, "PA_2", true);
+
+        assert_eq!(members(&mut world), vec![("PA_2", true)]);
+        assert!(world.get_entity(old).is_err());
+        assert!(revoked.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(indexed(&world, room), Some("PA_2"));
+    }
+
+    #[test]
+    fn a_rejoin_announced_before_the_old_departure_keeps_the_live_peer() {
+        let (mut world, room) = room_world();
+        join(&mut world, room, "PA_old", false);
+        join(&mut world, room, "PA_new", false);
+
+        leave(&mut world, room, "PA_old");
+
+        assert_eq!(members(&mut world), vec![("PA_new", false)]);
+        assert_eq!(indexed(&world, room), Some("PA_new"));
+        assert_eq!(world.resource::<Leaves>().0, vec![false]);
+    }
+
+    #[test]
+    fn a_departure_before_the_rejoin_leaves_and_the_rejoin_is_indexed_afresh() {
+        let (mut world, room) = room_world();
+        join(&mut world, room, "PA_old", false);
+
+        leave(&mut world, room, "PA_old");
+        assert!(members(&mut world).is_empty());
+        assert_eq!(indexed(&world, room), None);
+        join(&mut world, room, "PA_new", false);
+
+        assert_eq!(members(&mut world), vec![("PA_new", false)]);
+        assert_eq!(indexed(&world, room), Some("PA_new"));
+        assert_eq!(world.resource::<Leaves>().0, vec![true]);
     }
 
     #[test]

@@ -535,8 +535,11 @@ export function local_audio_track_set_enabled(track, enabled) {
 }
 
 export function local_audio_track_stop(track) {
-    track.mediaStreamTrack.enabled = false;
-    track.stop();
+    try {
+        track.mediaStreamTrack.enabled = false;
+    } finally {
+        track.stop();
+    }
 }
 
 /**

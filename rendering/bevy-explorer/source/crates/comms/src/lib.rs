@@ -905,6 +905,18 @@ mod scene_room_metadata_tests {
     }
 
     #[test]
+    fn a_server_scene_room_without_a_world_names_the_server_and_carries_no_secret() {
+        let meta = scene_room_metadata("main", "bafyscene", None, false, true, None);
+
+        assert_eq!(meta["signer"], "dcl:explorer");
+        assert_eq!(meta["intent"], "dcl:explorer:comms-handshake");
+        assert_eq!(meta["isGuest"], false);
+        assert_eq!(meta["realm"]["serverName"], "main");
+        assert!(meta.get("secret").is_none());
+        assert!(meta.get("deviceIdentifier").is_none());
+    }
+
+    #[test]
     fn a_world_scene_room_also_names_the_server_and_carries_the_secret() {
         let meta = scene_room_metadata("w.dcl.eth", "bafy", None, false, true, Some("s3cret"));
 

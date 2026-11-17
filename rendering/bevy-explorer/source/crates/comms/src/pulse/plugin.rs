@@ -171,6 +171,10 @@ pub(crate) struct PulseSession {
     /// places them where the last one did, or nowhere. Sent from the player's position, in the
     /// realm current then, once they are back inside ([`pulse_teleport_on_grid_reentry`]).
     teleport_owed: bool,
+    /// The realm the server holds the player in on this connection, as far as we know: the
+    /// handshake's initial state, then each teleport offered. A teleport into another realm is
+    /// never owed: a realm the server never hears of would leave the avatar frozen in the old one.
+    placed_realm: Option<String>,
     state: Connection,
 }
 
@@ -738,6 +742,7 @@ fn connect_pulse(
         accepted: false,
         initial_realm: None,
         teleport_owed: false,
+        placed_realm: None,
         state: Connection::Down { respawn_at: 0.0 },
     });
 
@@ -1224,6 +1229,7 @@ fn drive_connection(
                 session.initial_realm = initial_state.as_ref().map(|state| state.realm.clone());
                 // An initial state places the player afresh.
                 session.teleport_owed &= initial_state.is_none();
+                session.placed_realm = session.initial_realm.clone();
             }
             let wallet = wallet.clone();
             let server_id = session.server_id.clone();
@@ -2023,13 +2029,27 @@ fn send_teleport_at(session: &mut PulseSession, realm: &CurrentRealm, world: Vec
     // exactly the inverse of how inbound state is decoded.
     let dcl = DclTranslation::from_bevy_translation(world).0;
     let dcl = Vec3::new(dcl[0], dcl[1], dcl[2]);
-    let Some((parcel_index, local)) = session.grid.encode_to_parcel(dcl) else {
-        // The server refuses an out-of-grid teleport for good; it goes on re-entry instead.
-        super::warn_out_of_grid("teleport", dcl);
-        session.teleport_owed = true;
-        return;
+    // The server refuses an out-of-grid teleport for good. Within the realm it is owed until
+    // re-entry; into another realm it goes now from the nearest edge, and re-entry snaps again.
+    let encoded = match session.grid.encode_to_parcel(dcl) {
+        Some(encoded) => {
+            session.teleport_owed = false;
+            encoded
+        }
+        None => {
+            super::warn_out_of_grid(super::OutOfGrid::Teleport, dcl);
+            session.teleport_owed = true;
+            if session.placed_realm.as_deref() == Some(realm_name.as_str()) {
+                return;
+            }
+            let Some(edge) = session.grid.encode_clamped(dcl) else {
+                return;
+            };
+            edge
+        }
     };
-    session.teleport_owed = false;
+    let (parcel_index, local) = encoded;
+    session.placed_realm = Some(realm_name.clone());
 
     let teleport = pulse::TeleportRequest {
         parcel_index,
@@ -2095,7 +2115,7 @@ fn pulse_teleport_on_local_move(
 fn pulse_teleport_on_grid_reentry(
     session: Option<ResMut<PulseSession>>,
     realm: Res<CurrentRealm>,
-    player: Query<&GlobalTransform, With<PrimaryUser>>,
+    player: Query<(&GlobalTransform, Has<OutOfWorld>), With<PrimaryUser>>,
 ) {
     let Some(mut session) = session else {
         return;
@@ -2103,7 +2123,8 @@ fn pulse_teleport_on_grid_reentry(
     if !session.teleport_owed {
         return;
     }
-    let Ok(transform) = player.single() else {
+    // Behind the loading screen the position is provisional; the spawn teleport announces it.
+    let Ok((transform, false)) = player.single() else {
         return;
     };
     let world = transform.translation();

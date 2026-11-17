@@ -372,6 +372,30 @@ fn encoding_covers_the_grid_edges_and_refuses_beyond_them() {
 }
 
 #[test]
+fn clamping_moves_a_position_onto_the_nearest_edge() {
+    let grid = PulseParcelGrid::default();
+    let (index, local) = grid.encode_clamped(Vec3::new(1e9, 2.0, -1e9)).unwrap();
+    // Far x edge (165) in the near z row (-152).
+    assert_eq!(index, 165 - -152);
+    assert!(local.x < 16.0 && local.z >= 0.0 && local.y == 2.0);
+    let inside = Vec3::new(161.0, 2.0, 323.0);
+    assert_eq!(grid.encode_clamped(inside), grid.encode_to_parcel(inside));
+    assert_eq!(grid.encode_clamped(Vec3::NAN), None);
+}
+
+#[test]
+fn skipped_inputs_and_teleports_are_logged_apart() {
+    let mut log = OutOfGridLog::default();
+    let now = Instant::now();
+
+    assert!(log.should_log(OutOfGrid::Input, now));
+    assert!(!log.should_log(OutOfGrid::Input, now));
+    // A stream of skipped inputs does not hide a skipped teleport.
+    assert!(log.should_log(OutOfGrid::Teleport, now));
+    assert!(log.should_log(OutOfGrid::Input, now + OUT_OF_GRID_LOG_INTERVAL));
+}
+
+#[test]
 fn movement_outside_the_grid_has_no_pulse_state() {
     let movement = rfc4::Movement {
         position_x: 0.0,

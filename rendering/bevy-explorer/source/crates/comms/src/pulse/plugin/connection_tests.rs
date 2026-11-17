@@ -47,6 +47,7 @@ pub(super) fn session_with_link(role: PulseRole) -> (PulseSession, PulseDriverCh
         accepted: false,
         initial_realm: None,
         teleport_owed: false,
+        placed_realm: None,
         state: Connection::Connecting,
     };
     (session, driver)
@@ -907,6 +908,110 @@ fn nothing_is_sent_from_outside_the_parcel_grid() {
 
 /// A teleport skipped outside the grid goes once the player is back inside, from where they are
 /// then and in the realm current then, and only once.
+impl Harness {
+    /// The player stands at `position` (Bevy world space).
+    fn stand_at(&mut self, position: Vec3) {
+        let user = self.user;
+        self.world
+            .entity_mut(user)
+            .insert(GlobalTransform::from_translation(position));
+    }
+
+    /// The owed teleport is checked at `now`, and what is due drained.
+    fn reenter_at(&mut self, now: f64) {
+        self.world
+            .run_system_once(pulse_teleport_on_grid_reentry)
+            .unwrap();
+        self.drain_at(now);
+    }
+}
+
+/// The edge parcel nearest `standing_in(x)` (DCL convention, z = 0).
+fn edge_index(x: i32) -> i32 {
+    PulseParcelGrid::default()
+        .encode_clamped(standing_in(x))
+        .unwrap()
+        .0
+}
+
+/// A realm change outside the grid is never owed: the server would keep the avatar frozen in the
+/// realm left. It goes at once from the nearest edge, and re-entry snaps to the real position.
+#[test]
+fn a_realm_change_outside_the_grid_goes_from_the_edge() {
+    let mut harness = Harness::established(10.0);
+    harness.sent();
+
+    harness.world.insert_resource(realm("away"));
+    harness.teleport_to(standing_in(1000));
+    harness.drain_at(11.0);
+
+    let sent = harness.sent();
+    let [(_, pulse::client_message::Message::Teleport(teleport))] = sent.as_slice() else {
+        panic!("{sent:?}")
+    };
+    assert_eq!(teleport.realm, "away");
+    assert_eq!(teleport.parcel_index, edge_index(1000));
+    assert!(harness.session().teleport_owed);
+
+    harness.stand_at(standing_in(3));
+    harness.reenter_at(12.0);
+    assert_eq!(teleported_parcels(&harness.sent()), [parcel_index(3)]);
+    assert!(!harness.session().teleport_owed);
+}
+
+/// Behind the loading screen the position is provisional: an owed teleport waits for the player to
+/// be placed.
+#[test]
+fn an_owed_teleport_waits_out_the_loading_screen() {
+    let mut harness = Harness::established(10.0);
+    harness.sent();
+    harness.teleport_to(standing_in(1000));
+    harness.drain_at(11.0);
+    assert!(harness.sent().is_empty());
+
+    harness.stand_at(standing_in(3));
+    harness.leave_world();
+    harness.reenter_at(12.0);
+    assert!(harness.sent().is_empty());
+    assert!(harness.session().teleport_owed);
+
+    harness.enter_world();
+    harness.reenter_at(13.0);
+    assert_eq!(teleported_parcels(&harness.sent()), [parcel_index(3)]);
+}
+
+/// A teleport owed when the connection drops is still owed on the next one, whose handshake has no
+/// pose to carry from outside the grid: acceptance places the player at the edge, and re-entry
+/// where they are. A handshake that does carry a pose settles it.
+#[test]
+fn an_owed_teleport_survives_a_reconnect() {
+    let mut harness = Harness::idle();
+    harness.stand_at(standing_in(1000));
+    harness.session_mut().teleport_owed = true;
+    harness.session_mut().placed_realm = Some(HOME.to_owned());
+
+    let handshake = harness.signed_handshake(4.5);
+    assert_eq!(handshake.initial_state, None);
+    harness.receive(handshake_response(true));
+    harness.pump_at(5.0);
+    let sent = harness.sent();
+    assert_eq!(teleported_parcels(&sent), [edge_index(1000)]);
+    assert!(harness.session().teleport_owed);
+
+    harness.stand_at(standing_in(3));
+    harness.reenter_at(6.0);
+    harness.reenter_at(7.0);
+    assert_eq!(teleported_parcels(&harness.sent()), [parcel_index(3)]);
+
+    // Owed again, but the next handshake carries a pose: nothing more to send on re-entry.
+    let mut harness = Harness::idle();
+    harness.session_mut().teleport_owed = true;
+    harness.session_mut().last_state = Some(pose());
+    let handshake = harness.signed_handshake(4.5);
+    assert!(handshake.initial_state.is_some());
+    assert!(!harness.session().teleport_owed);
+}
+
 #[test]
 fn a_teleport_skipped_outside_the_grid_goes_on_reentry() {
     let mut harness = Harness::established(10.0);

@@ -4,6 +4,13 @@ import { EventEmitter } from 'node:events';
 import {
   local_audio_track_set_enabled,
   local_audio_track_stop,
+  local_participant_can_publish,
+  local_participant_publish_track,
+  local_participant_unpublish_track,
+  local_track_publication_kind,
+  local_track_publication_sid,
+  local_track_publication_source,
+  remote_track_publication_set_subscribed,
   remote_audio_track_set_volume,
   remote_track_pan_and_volume,
   room_connect,
@@ -328,4 +335,56 @@ test('volume setters never pass a value their target rejects', () => {
   assert.deepEqual([pan.value, gain.value], [0, 0]);
   remote_track_pan_and_volume(rigTrack, -Infinity, 0.25);
   assert.deepEqual([pan.value, gain.value], [0, 0.25]);
+});
+
+test('stopping local capture stops the track even if disabling the source throws', () => {
+  let stopped = false;
+  const mediaStreamTrack = {
+    set enabled(_) { throw new Error('ended'); },
+  };
+  assert.throws(() => local_audio_track_stop({
+    mediaStreamTrack,
+    stop() { stopped = true; },
+  }));
+  assert.equal(stopped, true);
+});
+
+test('page calls the host catches surface failures as throws or empty results', async () => {
+  // the host reads a publication only after a null check, and catches these throws
+  for (const read of [
+    local_track_publication_sid,
+    local_track_publication_kind,
+    local_track_publication_source,
+  ]) {
+    assert.throws(() => read(undefined), TypeError);
+  }
+  assert.deepEqual(
+    [local_track_publication_sid, local_track_publication_kind, local_track_publication_source]
+      .map(read => read({ trackSid: 'TR_1', kind: 'audio', source: 'microphone' })),
+    ['TR_1', 'audio', 'microphone'],
+  );
+  // an SDK that held no publication resolves empty; the host reports that as unpublished
+  assert.equal(
+    await local_participant_unpublish_track({ unpublishTrack: async () => undefined }, {}),
+    undefined,
+  );
+  // a publish that resolves without a publication still resolves; the host builds it from the track
+  assert.equal(
+    await local_participant_publish_track({ publishTrack: async () => undefined }, {}, {}),
+    undefined,
+  );
+  await assert.rejects(
+    local_participant_publish_track({ publishTrack: async () => { throw new Error('denied'); } }, {}, {}),
+    /denied/,
+  );
+  assert.throws(
+    () => remote_track_publication_set_subscribed(
+      { setSubscribed() { throw new Error('gone'); } },
+      true,
+    ),
+    /gone/,
+  );
+  assert.throws(() => local_audio_track_set_enabled({}, true), TypeError);
+  assert.equal(local_participant_can_publish({}), true);
+  assert.equal(local_participant_can_publish({ permissions: { canPublish: false } }), false);
 });

@@ -1189,6 +1189,32 @@ mod tests {
         assert_eq!(voice_rooms(&mut app), 0);
     }
 
+    #[test]
+    fn a_rejoin_in_the_joining_drive_leaves_one_voice_room() {
+        let mut app = app();
+        let mut inputs = app.world_mut().resource_mut::<VoiceInputs>();
+        inputs.0.extend([
+            Input::JoinCommunity("c1".to_owned()),
+            Input::Reply(Reply::JoinCommunity(
+                "c1".to_owned(),
+                1,
+                Ok("livekit:ws://x".to_owned()),
+            )),
+            Input::EndCall,
+            Input::JoinCommunity("c2".to_owned()),
+            Input::Reply(Reply::JoinCommunity(
+                "c2".to_owned(),
+                2,
+                Ok("livekit:ws://y".to_owned()),
+            )),
+        ]);
+        app.update();
+        let voice = app.world().resource::<VoiceChat>();
+        assert_eq!(voice.state.community_id.as_deref(), Some("c2"));
+        assert!(voice.state.is_in_call());
+        assert_eq!(voice_rooms(&mut app), 1);
+    }
+
     fn refuse(app: &mut App, room: Entity) {
         app.world_mut().entity_mut(room).remove::<Connecting>();
         let now = app.world().resource::<Time>().elapsed_secs_f64();

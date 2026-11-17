@@ -494,7 +494,13 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
                     )
                     .await
                     .map_err(js_error)
-                    .and_then(|publication| local_track_publication(&publication)),
+                    .map(|publication| {
+                        // published even if the result is unreadable: an Err would skip the unpublish
+                        local_track_publication(&publication).unwrap_or_else(|err| {
+                            warn!("unreadable track publication: {err}");
+                            local_track_as_publication(&track)
+                        })
+                    }),
                     (Err(err), _) | (_, Err(err)) => Err(err),
                 };
                 reply(&events, request, Reply::Publish(result));

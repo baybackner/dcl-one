@@ -122,6 +122,27 @@ impl PulseParcelGrid {
         Some((parcel_index, local))
     }
 
+    /// [`Self::encode_to_parcel`] for the nearest point inside the grid: a position past an edge
+    /// moves onto it. `None` only for a non-finite position.
+    pub fn encode_clamped(&self, world: Vec3) -> Option<(i32, Vec3)> {
+        if !world.is_finite() {
+            return None;
+        }
+        let size = self.parcel_size as f32;
+        // Just inside the far edge, so the floor lands on the last parcel.
+        let clamp = |value: f32, min: i32, len: i32| {
+            let low = min as f32 * size;
+            let high = (min as i64 + len as i64) as f32 * size - 0.01;
+            value.clamp(low, high)
+        };
+        let clamped = Vec3::new(
+            clamp(world.x, self.min_x, self.width),
+            world.y,
+            clamp(world.z, self.min_z, self.height),
+        );
+        self.encode_to_parcel(clamped)
+    }
+
     /// The parcel a world position (DCL convention) stands in, as `(x, z)` coordinates rather than
     /// the server's packed index. A scene listener routes by this: Pulse says where a peer is, the
     /// listener's parcel→context map says whose scene that is.
@@ -1137,7 +1158,7 @@ pub(crate) fn from_movement(
         movement.position_z,
     );
     let Some((parcel_index, local)) = grid.encode_to_parcel(world) else {
-        warn_out_of_grid("input", world);
+        warn_out_of_grid(OutOfGrid::Input, world);
         return None;
     };
 
@@ -1203,19 +1224,40 @@ pub(crate) fn from_movement(
 /// How often a skipped out-of-grid send is logged.
 const OUT_OF_GRID_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
+/// What a skipped out-of-grid send was; each kind is rate-limited on its own, so a stream of
+/// skipped inputs never hides a skipped teleport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutOfGrid {
+    Input,
+    Teleport,
+}
+
+/// When each kind of skipped send was last logged.
+#[derive(Default)]
+pub(crate) struct OutOfGridLog([Option<Instant>; 2]);
+
+impl OutOfGridLog {
+    /// Whether a skip of `kind` at `now` is logged: at most once per [`OUT_OF_GRID_LOG_INTERVAL`].
+    pub(crate) fn should_log(&mut self, kind: OutOfGrid, now: Instant) -> bool {
+        let last = &mut self.0[kind as usize];
+        if last.is_some_and(|last| now.duration_since(last) < OUT_OF_GRID_LOG_INTERVAL) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+}
+
 /// Log a send skipped because `world` (DCL convention) is outside the parcel grid, at most once per
-/// [`OUT_OF_GRID_LOG_INTERVAL`]: a player standing outside skips one every tick.
-pub(crate) fn warn_out_of_grid(what: &str, world: Vec3) {
-    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-    let Ok(mut last) = LAST.lock() else {
+/// [`OUT_OF_GRID_LOG_INTERVAL`] for each kind: a player standing outside skips one every tick.
+pub(crate) fn warn_out_of_grid(kind: OutOfGrid, world: Vec3) {
+    static LOG: std::sync::Mutex<OutOfGridLog> = std::sync::Mutex::new(OutOfGridLog([None; 2]));
+    let Ok(mut log) = LOG.lock() else {
         return;
     };
-    let now = Instant::now();
-    if last.is_some_and(|last| now.duration_since(last) < OUT_OF_GRID_LOG_INTERVAL) {
-        return;
+    if log.should_log(kind, Instant::now()) {
+        bevy::log::warn!("pulse: {kind:?} at {world} is outside the parcel grid; not sent as is");
     }
-    *last = Some(now);
-    bevy::log::warn!("pulse: {what} at {world} is outside the parcel grid; not sent");
 }
 
 #[cfg(test)]
