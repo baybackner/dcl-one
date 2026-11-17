@@ -6,6 +6,7 @@ use common::{
     structs::{PortableExperiencesToggle, SpawnPoint},
     util::{dcl_assert, RingBuffer},
 };
+use console::log_ring::{self, Severity};
 use dcl_component::{DclReader, DclWriter, SceneComponentId, SceneEntityId, ToDclWriter};
 use dcl_types::{
     interface::{CrdtStore, CrdtType},
@@ -439,6 +440,14 @@ impl RendererSceneContext {
             }
         }
 
+        // `/scene_logs` reads the process ring; a scene error is an error there, as the scene
+        // wrote it with `console.error`
+        let (severity, label) = match log.level {
+            dcl_types::SceneLogLevel::Log => (Severity::Info, "Log"),
+            dcl_types::SceneLogLevel::SceneError => (Severity::Error, "SceneError"),
+            dcl_types::SceneLogLevel::SystemError => (Severity::Error, "SystemError"),
+        };
+        log_ring::push_scene(&self.hash, severity, label, log.timestamp, &log.message);
         self.logs.send(log);
     }
 }

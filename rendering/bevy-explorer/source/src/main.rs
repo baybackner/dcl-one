@@ -15,6 +15,7 @@ use bevy::{
     prelude::*,
 };
 use clap::Parser;
+use console::log_ring::LogRingLayer;
 use dcl_deno_ipc::init_runtime;
 use mimalloc::MiMalloc;
 use perf_output::{
@@ -66,7 +67,8 @@ fn main() {
                 bevy::log::tracing_subscriber::fmt::layer()
                     .with_writer(non_blocking)
                     .with_ansi(false)
-                    .and_then(PerfLogLayer::new(&BENCHMARK_LOG)),
+                    .and_then(PerfLogLayer::new(&BENCHMARK_LOG))
+                    .and_then(LogRingLayer),
             ))
         },
         ..default()

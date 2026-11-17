@@ -349,6 +349,9 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   teleport adds `arrived`, `sceneReady`, `sceneHash`), or with `settled:false` and a `warning`
   naming what it waited for. `/scene_state` reads the parcel scene under the player: `sceneId`
   (its hash), `title`, `parcel`, `state`, `isReady`, `loadingStage`, `sdkVersion`.
+  `/scene_logs [count] [--since seq] [--severity level] [--client]` reads the scene's log lines
+  after a header `latestSeq=N dropped=N source=scene`: pass the last `latestSeq` as `--since` to
+  get only newer lines, `--client` adds the engine's warnings and errors as `[client:<target>]`.
 - Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
   `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` and `/ui_at

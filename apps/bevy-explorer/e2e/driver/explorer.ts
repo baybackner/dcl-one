@@ -715,6 +715,33 @@ export interface UiDragReply {
   hoverEnded?: string
 }
 
+export type LogSeverity = 'trace' | 'debug' | 'info' | 'warn' | 'error'
+
+/** A read of the log ring: the header's fields and the lines after it (a continuation line stays
+ *  its own entry, indented). */
+export interface SceneLogPage {
+  latestSeq: number
+  dropped: number
+  omitted: number
+  source: 'scene' | 'scene+client'
+  lines: string[]
+}
+
+/** Splits a `/scene_logs` reply into its header and lines. */
+export function parseSceneLogs(reply: string): SceneLogPage {
+  const [header = '', ...lines] = reply.split('\n')
+  const field = (name: string): string | undefined => new RegExp(`(?:^| )${name}=(\\S+)`).exec(header)?.[1]
+  const latestSeq = field('latestSeq')
+  if (latestSeq === undefined) throw new Error(`unexpected /scene_logs header: ${header}`)
+  return {
+    latestSeq: Number(latestSeq),
+    dropped: Number(field('dropped') ?? 0),
+    omitted: Number(field('omitted') ?? 0),
+    source: field('source') === 'scene+client' ? 'scene+client' : 'scene',
+    lines
+  }
+}
+
 /** `/ui_hover`'s reply. A hover whose enter was not sent fails, with this as its JSON. */
 export interface UiHoverReply {
   ok: boolean
@@ -1616,10 +1643,17 @@ export class Explorer {
     return Number(match[1])
   }
 
-  /** The target scene's last log lines, oldest first; a leading "(+N older entries not retained)" line is kept. */
+  /** The target scene's last log lines, oldest first, without the header (`<seq> [<time>] <Level>: <text>`). */
   async sceneLogs(count = 20): Promise<string[]> {
-    const reply = await this.run(`/scene_logs ${count}`)
-    return reply === '(no logs)' ? [] : reply.split('\n')
+    return (await this.sceneLogRead({ count })).lines
+  }
+
+  /** A read of the log ring (`/scene_logs`): pass the last read's `latestSeq` as `since` for only
+   *  newer lines; `client` adds the engine's warnings and errors; `severity` is the least shown.
+   *  `dropped` counts lines after the cursor the ring evicted before this read. */
+  async sceneLogRead(options: { count?: number; since?: number; severity?: LogSeverity; client?: boolean } = {}): Promise<SceneLogPage> {
+    const flags = `${options.count === undefined ? '' : ` ${options.count}`}${options.since === undefined ? '' : ` --since ${options.since}`}${options.severity ? ` --severity ${options.severity}` : ''}${options.client ? ' --client' : ''}`
+    return parseSceneLogs(await this.run(`/scene_logs${flags}`))
   }
 
   async close(): Promise<void> {

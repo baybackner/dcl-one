@@ -239,6 +239,20 @@ State, in every build:
   `sceneId` (the hash), `title`, `parcel` (its base), `state` (`loading`, `failed`, `starting`,
   `blocked` with `blocked` naming the holds, `broken`, `running`, or `none` on an empty parcel),
   `isReady`, `loadingStage`, `sdkVersion`, `tick`.
+- `/scene_logs [count] [--since seq] [--severity trace|debug|info|warn|error] [--client]
+  [--panel]`: the active scene's log lines (the debug panel's parcel with `--panel`), oldest
+  first, from one process-wide ring of the last 1000 lines of every scene and of the client. Each
+  line has a `seq` that grows across the whole ring. The first line is a header `latestSeq=N
+  dropped=N source=scene` (`scene+client` with `--client`, ` omitted=N` when `count` left older
+  lines out): `latestSeq` is the newest seq of any source, to pass as the next read's `--since`
+  (only lines after it), and `dropped` counts the lines after the cursor (any source) the ring
+  evicted before this read. `count` keeps the newest lines (20, or all with `--since`).
+  `--severity` is the least severity shown; a scene's `console.log` is `info`, its errors are
+  `error`. `--client` adds the engine's own warnings and errors (never its info lines, which would
+  evict the scenes'; a credential in one is replaced). Without `--since`, `--severity` or
+  `--client` a line reads `<seq> [<scene time>] <Level>: <text>` (`Log`, `SceneError`,
+  `SystemError`); with any of them `<seq> [scene] <severity> <text>` or `<seq>
+  [client:<target>] <severity> <text>`. A text's further lines are indented four spaces.
 - `/ui_list [--stack sdk] [--kind K] [--limit N]`: JSON of the parcel scene's UI elements that
   are laid out and shown, top to bottom then left to right: `crdtId`, `kind` (`input` for a
   `UiInput`, `dropdown`, `scroll` for a scrolling container, `pointerTarget` for an element that

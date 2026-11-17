@@ -1,6 +1,6 @@
 use bevy::{
     asset::WasmLoaderHandle,
-    log::{BoxedLayer, Level, LogPlugin},
+    log::{tracing_subscriber::Layer, BoxedLayer, Level, LogPlugin},
     prelude::*,
     render::{render_resource::PipelineCompilationHandler, renderer::RenderDevice},
     tasks::BoxedFuture,
@@ -16,6 +16,7 @@ use common::{
     },
     util::JsThread,
 };
+use console::log_ring::LogRingLayer;
 use dcl_wasm::init_runtime;
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 use input_manager::InputPriorities;
@@ -545,8 +546,12 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
         level: Level::INFO,
         filter,
         custom_layer: |_| {
-            perf_output::stream::log_sink()
-                .map(|sink| Box::new(PerfLogLayer::new(sink)) as BoxedLayer)
+            Some(match perf_output::stream::log_sink() {
+                Some(sink) => {
+                    Box::new(PerfLogLayer::new(sink).and_then(LogRingLayer)) as BoxedLayer
+                }
+                None => Box::new(LogRingLayer),
+            })
         },
     });
 
