@@ -344,8 +344,9 @@ pub(crate) fn scene_thread(
     let mut last_stats = metrics_started;
     // run startup function
     let run_start = thread_cpu_us();
-    let result =
-        rt.block_on(async { run_script(&mut runtime, &script, "onStart", |_| Vec::new()).await });
+    let result = rt.block_on(async {
+        run_script(&mut runtime, &script, "onStart", &kill_flag, |_| Vec::new()).await
+    });
     state
         .borrow_mut()
         .borrow_mut::<SceneResourceCounters>()
@@ -377,7 +378,7 @@ pub(crate) fn scene_thread(
         // run the onUpdate function
         let run_start = thread_cpu_us();
         let result = rt.block_on(async {
-            run_script(&mut runtime, &script, "onUpdate", |scope| {
+            run_script(&mut runtime, &script, "onUpdate", &kill_flag, |scope| {
                 vec![v8::Number::new(scope, dt).into()]
             })
             .await
@@ -525,11 +526,21 @@ fn thread_cpu_us() -> u64 {
     }
 }
 
+// how often a pending script call checks whether its scene was killed
+const KILL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+async fn killed(kill_flag: &KillFlag) {
+    while !kill_flag.killed() {
+        tokio::time::sleep(KILL_POLL_INTERVAL).await;
+    }
+}
+
 // helper to setup, acquire, run and return results from a script function
-async fn run_script(
+pub(crate) async fn run_script(
     runtime: &mut JsRuntime,
     script: &v8::Global<v8::Value>,
     fn_name: &str,
+    kill_flag: &KillFlag,
     arg_fn: impl for<'a> Fn(&mut v8::HandleScope<'a>) -> Vec<v8::Local<'a, v8::Value>>,
 ) -> Result<(), AnyError> {
     // set up scene i/o
@@ -570,10 +581,16 @@ async fn run_script(
     let f = runtime.resolve(promise);
 
     let result = if true {
-        runtime
-            .with_event_loop_promise(f, PollEventLoopOptions::default())
-            .await
-            .map(|_| ())
+        // A killed scene can stay parked on an op that never completes (a stalled fetch,
+        // an open websocket) and isolate termination only lands once JS runs again, so
+        // abandon the call; the caller's kill check then drops the runtime and its ops.
+        tokio::select! {
+            biased;
+            result = runtime.with_event_loop_promise(f, PollEventLoopOptions::default()) => {
+                result.map(|_| ())
+            }
+            _ = killed(kill_flag) => Err(anyhow!("scene killed during {fn_name}")),
+        }
     } else {
         timeout(
             Duration::from_secs(30),

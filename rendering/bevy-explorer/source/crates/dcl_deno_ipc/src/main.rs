@@ -26,6 +26,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // renderer channel closes) before its isolate is forcibly terminated
 const KILL_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(5);
 
+// a force-terminated scene thread still alive after this long is reported as a zombie
+const ZOMBIE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+const ZOMBIE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("info")))
@@ -63,6 +67,20 @@ fn main() -> Result<()> {
 
     let f_in = rt.spawn(scene_ipc_in(recv_half, scene_sx, system_api_sx));
     let f_out = rt.spawn(scene_ipc_out(send_half, scene_rx, close_rx, system_api_rx));
+
+    rt.spawn(async {
+        let mut interval = tokio::time::interval(ZOMBIE_CHECK_INTERVAL);
+        loop {
+            interval.tick().await;
+            let zombies = dcl_deno::zombie_scene_count(ZOMBIE_MIN_AGE);
+            if zombies > 0 {
+                warn!(
+                    "{zombies} killed scene thread(s) still alive {}s+ after force-termination",
+                    ZOMBIE_MIN_AGE.as_secs()
+                );
+            }
+        }
+    });
 
     info!("IPC scene host running");
 

@@ -271,3 +271,44 @@ async fn abort_skips_a_queued_fetch_and_releases_an_active_body_read() {
     result.unwrap();
     assert_released(&mut runtime);
 }
+
+// A scene call parked on a Fetch whose permission never arrives stands in for any op that
+// never completes.
+fn parked_scene(runtime: &mut JsRuntime) -> deno_core::v8::Global<deno_core::v8::Value> {
+    runtime
+        .execute_script(
+            "<test>",
+            "({ onUpdate: () => fetch('http://127.0.0.1:9/').then(() => {}) })",
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_pending_scene_call_keeps_waiting_while_the_scene_is_alive() {
+    let mut runtime = client_runtime();
+    let script = parked_scene(&mut runtime);
+    let kill_flag = dcl_js::KillFlag::default();
+    let call = crate::js::run_script(&mut runtime, &script, "onUpdate", &kill_flag, |_| {
+        Vec::new()
+    });
+    assert!(timeout(Duration::from_millis(1500), call).await.is_err());
+}
+
+#[tokio::test]
+async fn killing_a_scene_ends_a_call_parked_on_a_pending_op() {
+    let mut runtime = client_runtime();
+    let script = parked_scene(&mut runtime);
+    let kill_flag = dcl_js::KillFlag::default();
+    let killer = kill_flag.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        killer.kill();
+    });
+    let call = crate::js::run_script(&mut runtime, &script, "onUpdate", &kill_flag, |_| {
+        Vec::new()
+    });
+    let result = timeout(Duration::from_secs(5), call)
+        .await
+        .expect("the kill should end the pending call");
+    assert!(result.is_err());
+}
