@@ -34,14 +34,7 @@ export const settings = {
   walkRunThreshold: 2.6,
   // Horizontal speed (m/s) above which we leave idle and play walk/run.
   moveGate: 0.1,
-  // Clip-playback divisor per locomotion clip = the ground speed the clip's steps
-  // match, so the clip plays at native 1.0x at that speed and scales proportionally
-  // otherwise (keeps the leg cadence matched to ground speed). Lower = faster legs.
-  // Fixed per clip, independent of the gait speeds.
-  walkPlaybackDiv: 2.5,          // Walk clip
-  jogPlaybackDiv: 8.18,          // Jog clip (default movement)
   sprintThreshold: 9.5,          // h-speed boundary: jog clip below, run clip above
-  sprintPlaybackDiv: 11,         // Run clip (sprint)
   // Cross-fade time (s) into each clip. Locomotion blends are ~0.2 (smooth gait
   // changes); air/jump phase transitions are short so the brief one-shot clips
   // (Start/Mid/End ~0.2-0.4s) aren't swallowed by the blend.

@@ -6,7 +6,7 @@ import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } 
 import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, snapSpeed, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
-import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_FORWARD, VEC3_ZERO } from './constants';
+import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
 import { beginTick } from './clock';
 // Debug/tuning infrastructure — kept in the tree but disconnected so it has no
@@ -59,6 +59,14 @@ function pickRandom(pool: string[]): string {
 // a footstep. Native config: walk.(0.41, 0.91), run.(0.21, 0.54).
 const WALK_STEP_TIMES = [0.41, 0.91];
 const RUN_STEP_TIMES = [0.21, 0.54];
+
+// Ground speed (m/s) at which each locomotion loop plays at 1.0x: the default
+// walk, jog and run gait speeds. Playback = horizontal speed / this, so the
+// stride stays matched to the ground at any speed. Fixed per clip: a scene
+// that changes its gait speeds keeps the clips' stride, not their cadence.
+const WALK_CLIP_SPEED = 1.5;
+const JOG_CLIP_SPEED = 8;
+const RUN_CLIP_SPEED = 10;
 
 // New phased / per-locomotion animation set lives in assets/animations/.
 // Locomotion is a real 3-tier system: walk -> jog (default move) -> run (sprint).
@@ -481,11 +489,10 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
 
 // Detects whether the clip's playback time crossed any of the given trigger
 // timestamps (in seconds) while playing forward between `prev` and `cur`.
-// Backward motion (negative animation speed, e.g. while turning in place
-// with the walk clip's speed driven by signed directional velocity) is
-// ignored so we don't fire a storm of sounds as the clip scrubs back and
-// forth. A genuine loop wrap is distinguished from backward play by
-// requiring the apparent reverse jump to span more than half the clip.
+// Backward motion (a playback time that goes back without a loop) is
+// ignored so a scrubbing clip can't fire a storm of sounds. A genuine loop
+// wrap is distinguished from backward play by requiring the apparent reverse
+// jump to span more than half the clip.
 function stepTriggered(prev: number, cur: number, duration: number, triggers: number[]): boolean {
   if (cur === prev) return false;
   const isLoopWrap = cur < prev && duration > 0 && prev - cur > duration * 0.5;
@@ -500,7 +507,6 @@ function stepTriggered(prev: number, cur: number, duration: number, triggers: nu
   return false;
 }
 
-var forward = Vector3.Zero();
 function selectAnimation(): MovementAnimation {
   if (!isGliding) {
     // Glide ended. Stow (close) only if we ended mid-air (jump released while falling);
@@ -637,10 +643,10 @@ function selectAnimation(): MovementAnimation {
     if (landing !== null) return landing;
   }
 
-  // Directional (signed) forward speed — matches engine's damped_velocity projected
-  // onto gt.forward(); lets the walk/run anim play reversed when moving backward.
-  Vector3.rotateToRef(VEC3_FORWARD, playerRotation, forward);
-  const directionalVelLen = velocity.x * forward.x + velocity.z * forward.z;
+  // Locomotion clips play at horizontal speed / the clip's reference speed. The
+  // magnitude, not a projection on the facing: the clip never plays backwards
+  // while the avatar turns. No floor: below moveGate the avatar idles, and
+  // above it a slower clip keeps the feet planted (walk starts at ~0.07x).
 
   // Locomotion tiers only while there's actual movement input. With no keys
   // held, the residual decelerating velocity (jog -> 0 passes through walk
@@ -653,7 +659,7 @@ function selectAnimation(): MovementAnimation {
     if (horizontalSpeed <= settings.walkRunThreshold) {
       return {
         src: CLIP_WALK,
-        speed: directionalVelLen / settings.walkPlaybackDiv,
+        speed: horizontalSpeed / WALK_CLIP_SPEED,
         loop: true,
         idle: false,
         transitionSeconds: settings.transWalk,
@@ -664,7 +670,7 @@ function selectAnimation(): MovementAnimation {
     if (horizontalSpeed <= settings.sprintThreshold) {
       return {
         src: CLIP_JOG,
-        speed: directionalVelLen / settings.jogPlaybackDiv,
+        speed: horizontalSpeed / JOG_CLIP_SPEED,
         loop: true,
         idle: false,
         transitionSeconds: settings.transRun,
@@ -674,7 +680,7 @@ function selectAnimation(): MovementAnimation {
     // Tier 3: run (sprint)
     return {
       src: CLIP_RUN,
-      speed: directionalVelLen / settings.sprintPlaybackDiv,
+      speed: horizontalSpeed / RUN_CLIP_SPEED,
       loop: true,
       idle: false,
       transitionSeconds: settings.transRun,
