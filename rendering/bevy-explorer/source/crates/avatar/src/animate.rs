@@ -409,6 +409,7 @@ fn broadcast_emote(
 
 /// Whether an emote that stops playing needs an explicit stop on the wire: a loop, or a one-shot
 /// sent without its duration because Pulse refuses one that long.
+#[cfg(feature = "explorer")]
 fn ends_with_stop(emote: &EmotePlayback) -> bool {
     emote.repeat || comms::pulse_emote_duration(emote.duration_ms).is_none()
 }
@@ -2283,7 +2284,7 @@ fn play_scene_driven_sounds(
     last_sounds.retain(|e, _| seen.contains(e));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "explorer"))]
 mod stop_tests {
     use super::*;
 
