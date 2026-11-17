@@ -386,6 +386,14 @@ const PORTABLE_STATES: readonly PortableState[] = ['loading', 'running', 'failed
 
 /** `/live_scenes`: `<title> [<hash>, portable, smart wearable, broken]` per line, the flags
  *  optional, or `no scenes loaded`. */
+/** What `/changerealm` takes to go back to the realm `state` was read in: a World by its name (its
+ *  `realm` stays the catalyst's URL, so that URL would land in Genesis City), any other realm by
+ *  its URL. */
+export function realmTarget(state: Pick<WorldState, 'realm' | 'realmName'>): string {
+  const name = state.realmName ?? ''
+  return name.toLowerCase().endsWith('.eth') ? name : state.realm
+}
+
 export function parseLiveScenes(reply: string): LiveScene[] {
   if (reply.trim() === 'no scenes loaded') return []
   return reply
@@ -620,6 +628,14 @@ export class Explorer {
     const before = (await this.worldState()).arrivals
     await this.run(`/changerealm ${realm}`)
     return this.#waitArrival(before, options.timeoutMs ?? DEFAULT_ARRIVAL_TIMEOUT_MS, `the arrival in ${realm}`)
+  }
+
+  /** Back in the realm `before` was read in, a World included (`realmTarget`), and the arrival
+   *  waited for; nothing when the player is still there (the same `realm` and `realmName`). */
+  async returnToRealm(before: Pick<WorldState, 'realm' | 'realmName'>, options: { timeoutMs?: number } = {}): Promise<WorldState | undefined> {
+    const now = await this.worldState()
+    if (now.realm === before.realm && now.realmName === before.realmName) return undefined
+    return this.changeRealm(realmTarget(before), options)
   }
 
   #waitArrival(before: number, timeoutMs: number, what: string): Promise<WorldState> {

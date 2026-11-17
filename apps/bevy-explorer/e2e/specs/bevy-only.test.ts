@@ -210,8 +210,7 @@ scenario("/world to a world that does not exist is refused, and the player stays
   restore(async () => {
     if (await explorer.hud.isVisible(dialog)) await explorer.hud.click({ name: 'OK', role: 'button' })
     if (await explorer.hud.isVisible(CLOSE_CHAT)) await closeChat(explorer)
-    const now = await explorer.worldState()
-    if (now.realm !== before.realm || now.realmName !== before.realmName) await explorer.changeRealm(before.realm)
+    await explorer.returnToRealm(before)
   })
   await openChat(explorer)
   await submitLine(explorer, `/world ${missing}`)

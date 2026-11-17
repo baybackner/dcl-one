@@ -19,7 +19,7 @@
 // account's camera reel is shared with later runs and its storage is finite. The Gallery lists the
 // newest photo first, so the photo a scenario takes is the first tile.
 import assert from 'node:assert/strict'
-import { spec, until, type Explorer, type Selector } from '../driver/index.ts'
+import { readTarget, spec, until, type Explorer, type Selector } from '../driver/index.ts'
 import { closePage, openFromRail, openWithKey } from './pages.ts'
 
 const scenario = spec(import.meta.url)
@@ -41,18 +41,33 @@ const VIEWER: Selector = { name: 'Photo', role: 'dialog' }
 const VIEWER_ACTIONS = ['Download', 'Copy link', 'Share', 'Delete']
 const PASSPORT: Selector = { name: 'Passport sections', role: 'tablist' }
 const PHOTOS_TAB: Selector = { name: 'PHOTOS', role: 'tab' }
+/** The passport's photos load behind this spinner (PassportPhotos.tsx), with no `aria-busy`. */
+const LOADING: Selector = { name: 'Loading', role: 'status' }
+const NO_PHOTOS: Selector = { name: 'No photos here yet!', exact: false }
 
-/** How many photos the own passport's PHOTOS tab shows: the passport opened from the rail, its
- *  tab once nothing in it is loading, then closed again. */
-async function passportPhotoCount(explorer: Explorer): Promise<number> {
+/** The id of `address`'s newest public photo, as the passport reads it: the camera reel's unsigned
+ *  list (publicReels.ts), which holds only public photos, newest first. Null when there is none. */
+async function newestPublicPhotoId(address: string): Promise<string | null> {
+  const url = `https://camera-reel-service.${readTarget().baseDomain}/api/users/${address.toLowerCase()}/images?limit=1&offset=0&compact=true`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`the camera reel answered ${res.status} for the public photos`)
+  const body = (await res.json()) as { images?: { id: string }[] }
+  return body.images?.[0]?.id ?? null
+}
+
+/** The own passport's PHOTOS tab once its photos have loaded (the Loading spinner gone): whether
+ *  it shows a first photo tile. The passport is closed again either way. */
+async function passportShowsAPhoto(explorer: Explorer): Promise<boolean> {
   await explorer.hud.click({ name: 'Profile', role: 'button' })
   await explorer.hud.wait(PASSPORT, { timeoutMs: PASSPORT_TIMEOUT_MS })
-  await explorer.hud.click(PHOTOS_TAB)
-  await explorer.hud.waitReady(PHOTOS_TAB, PASSPORT_TIMEOUT_MS)
-  const count = (await explorer.hud.list('button')).filter((button) => button.name === 'Open photo').length
-  await explorer.hud.click({ name: 'Close', role: 'button' })
-  await explorer.hud.waitHidden(PASSPORT, 20_000)
-  return count
+  try {
+    await explorer.hud.click(PHOTOS_TAB)
+    await explorer.hud.waitHidden(LOADING, PASSPORT_TIMEOUT_MS)
+    return (await explorer.hud.isVisible(OPEN_PHOTO)) && !(await explorer.hud.isVisible(NO_PHOTOS))
+  } finally {
+    await explorer.hud.click({ name: 'Close', role: 'button' })
+    await explorer.hud.waitHidden(PASSPORT, 20_000)
+  }
 }
 
 /** Take a photo and wait for its upload; the restore registered first deletes it whatever happens. */
@@ -178,10 +193,9 @@ scenario("a photo's options menu and its opened view list the photo's actions", 
 })
 
 scenario('a photo set as public shows in the own passport PHOTOS tab', async ({ explorer, t, restore }) => {
-  // the shared account may already have public photos (one a failed restore left): count them first,
-  // so the check is that this scenario's photo was added
-  const before = await passportPhotoCount(explorer)
-  await takeUploadedPhoto(explorer, restore)
+  const address = (await explorer.worldState()).address
+  assert.ok(address, 'the player should be signed in')
+  const photoId = await takeUploadedPhoto(explorer, restore)
   await openGalleryWithPhoto(explorer)
   await openOptions(explorer)
   assert.equal((await explorer.hud.get(SET_PUBLIC)).checked, false, 'a new photo should not be public')
@@ -206,11 +220,15 @@ scenario('a photo set as public shows in the own passport PHOTOS tab', async ({ 
   )
   await closePage(explorer, 'gallery')
 
-  // the passport reads the public photos when it opens: it is reopened until the new one is there
-  const after = await until(() => passportPhotoCount(explorer), (count) => count > before, {
-    timeoutMs: PASSPORT_TIMEOUT_MS,
+  // The passport lists the public photos newest first, from the list read here, and its tiles carry
+  // no photo id: this photo heading that list is what puts it on the passport's first tile. Earlier
+  // public photos on the shared account (one a failed restore left) cannot satisfy it, and the
+  // virtualized grid's tile count does not matter.
+  await until(() => newestPublicPhotoId(address), (id) => id === photoId, {
+    timeoutMs: PUBLISH_TIMEOUT_MS,
     intervalMs: 1000,
-    what: `the passport PHOTOS tab to show more than the ${before} public photo(s) it had before`
+    what: `photo ${photoId} to head the account's public photos`
   })
-  t.diagnostic(`public photos in the passport: ${before} before, ${after} after`)
+  assert.ok(await passportShowsAPhoto(explorer), 'the passport PHOTOS tab should show the public photo, not "No photos here yet!"')
+  t.diagnostic(`photo ${photoId} is public and first in the passport`)
 })

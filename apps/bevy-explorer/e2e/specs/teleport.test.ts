@@ -70,9 +70,9 @@ async function startingPoint(explorer: Explorer, restore: (undo: () => Promise<v
     // A failure can leave the Map or the chat open: the rail, and the chat's button on it, come back at rest.
     await closeToRest(explorer)
     await closeChat(explorer)
-    const now = await explorer.waitInWorld(ARRIVAL_TIMEOUT_MS)
-    // in a World `realm` stays the catalyst's URL and only `realmName` changes: compare both
-    if (now.realm !== state.realm || now.realmName !== state.realmName) await explorer.changeRealm(state.realm, { timeoutMs: REALM_TIMEOUT_MS })
+    await explorer.waitInWorld(ARRIVAL_TIMEOUT_MS)
+    // back to the starting realm before its parcel: a World by its name, Genesis City by its URL
+    await explorer.returnToRealm(state, { timeoutMs: REALM_TIMEOUT_MS })
     const back = await explorer.worldState()
     if (showParcel(parcelOf(back)) !== showParcel(parcel)) await explorer.teleport(parcel[0], parcel[1], { timeoutMs: ARRIVAL_TIMEOUT_MS })
     await hudBack(explorer)
