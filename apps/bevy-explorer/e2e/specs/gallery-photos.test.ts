@@ -42,6 +42,19 @@ const VIEWER_ACTIONS = ['Download', 'Copy link', 'Share', 'Delete']
 const PASSPORT: Selector = { name: 'Passport sections', role: 'tablist' }
 const PHOTOS_TAB: Selector = { name: 'PHOTOS', role: 'tab' }
 
+/** How many photos the own passport's PHOTOS tab shows: the passport opened from the rail, its
+ *  tab once nothing in it is loading, then closed again. */
+async function passportPhotoCount(explorer: Explorer): Promise<number> {
+  await explorer.hud.click({ name: 'Profile', role: 'button' })
+  await explorer.hud.wait(PASSPORT, { timeoutMs: PASSPORT_TIMEOUT_MS })
+  await explorer.hud.click(PHOTOS_TAB)
+  await explorer.hud.waitReady(PHOTOS_TAB, PASSPORT_TIMEOUT_MS)
+  const count = (await explorer.hud.list('button')).filter((button) => button.name === 'Open photo').length
+  await explorer.hud.click({ name: 'Close', role: 'button' })
+  await explorer.hud.waitHidden(PASSPORT, 20_000)
+  return count
+}
+
 /** Take a photo and wait for its upload; the restore registered first deletes it whatever happens. */
 async function takeUploadedPhoto(explorer: Explorer, restore: (undo: () => Promise<void>) => void): Promise<string> {
   restore(async () => {
@@ -165,6 +178,9 @@ scenario("a photo's options menu and its opened view list the photo's actions", 
 })
 
 scenario('a photo set as public shows in the own passport PHOTOS tab', async ({ explorer, t, restore }) => {
+  // the shared account may already have public photos (one a failed restore left): count them first,
+  // so the check is that this scenario's photo was added
+  const before = await passportPhotoCount(explorer)
   await takeUploadedPhoto(explorer, restore)
   await openGalleryWithPhoto(explorer)
   await openOptions(explorer)
@@ -190,13 +206,11 @@ scenario('a photo set as public shows in the own passport PHOTOS tab', async ({ 
   )
   await closePage(explorer, 'gallery')
 
-  await explorer.hud.click({ name: 'Profile', role: 'button' })
-  await explorer.hud.wait(PASSPORT, { timeoutMs: PASSPORT_TIMEOUT_MS })
-  await explorer.hud.click(PHOTOS_TAB)
-  const tile = await explorer.hud.wait({ name: 'Open photo', role: 'button', index: 0 }, { timeoutMs: PASSPORT_TIMEOUT_MS })
-  assert.ok(tile.found, 'the public photo should show in the passport PHOTOS tab')
-  const tiles = (await explorer.hud.list('button')).filter((button) => button.name === 'Open photo').length
-  t.diagnostic(`${tiles} public photo(s) in the passport`)
-  await explorer.hud.click({ name: 'Close', role: 'button' })
-  await explorer.hud.waitHidden(PASSPORT, 20_000)
+  // the passport reads the public photos when it opens: it is reopened until the new one is there
+  const after = await until(() => passportPhotoCount(explorer), (count) => count > before, {
+    timeoutMs: PASSPORT_TIMEOUT_MS,
+    intervalMs: 1000,
+    what: `the passport PHOTOS tab to show more than the ${before} public photo(s) it had before`
+  })
+  t.diagnostic(`public photos in the passport: ${before} before, ${after} after`)
 })

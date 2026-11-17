@@ -78,9 +78,10 @@ scenario(
 
 scenario('the Wearables tab offers the SHOP button', async ({ explorer }) => {
   await openBackpack(explorer, 'outfits')
-  // The top bar's Shop tab matches the name too (names match case-insensitively): it comes first.
+  // The top bar's Shop tab matches the name too (names match case-insensitively): it comes first,
+  // so the Wearables section's own SHOP is a second match. It is never clicked (it calls window.open).
   const shops = (await explorer.hud.list('button')).filter((entry) => entry.name.toLowerCase() === 'shop')
-  assert.ok(shops.length > 0, 'the Wearables tab should show a SHOP button')
+  assert.ok(shops.length >= 2, `the Wearables tab should show its own SHOP button beside the top bar's Shop: ${shops.length} match(es)`)
   await explorer.hud.wait({ name: 'SHOP', role: 'button', index: shops.length - 1 }, { state: 'actionable', timeoutMs: 10_000 })
   await closePage(explorer, 'backpack')
 })

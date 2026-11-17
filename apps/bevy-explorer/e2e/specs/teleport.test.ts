@@ -71,7 +71,8 @@ async function startingPoint(explorer: Explorer, restore: (undo: () => Promise<v
     await closeToRest(explorer)
     await closeChat(explorer)
     const now = await explorer.waitInWorld(ARRIVAL_TIMEOUT_MS)
-    if (now.realm !== state.realm) await explorer.changeRealm(state.realm, { timeoutMs: REALM_TIMEOUT_MS })
+    // in a World `realm` stays the catalyst's URL and only `realmName` changes: compare both
+    if (now.realm !== state.realm || now.realmName !== state.realmName) await explorer.changeRealm(state.realm, { timeoutMs: REALM_TIMEOUT_MS })
     const back = await explorer.worldState()
     if (showParcel(parcelOf(back)) !== showParcel(parcel)) await explorer.teleport(parcel[0], parcel[1], { timeoutMs: ARRIVAL_TIMEOUT_MS })
     await hudBack(explorer)
@@ -141,7 +142,7 @@ scenario(
     const { state } = await startingPoint(explorer, restore)
     await openChat(explorer)
     await submitLine(explorer, `/world ${WORLD}`)
-    const inWorld = await until(() => explorer.worldState(), (now) => now.arrivals > state.arrivals && now.inWorld && now.realmName.toLowerCase() === WORLD, {
+    const inWorld = await until(() => explorer.worldState(), (now) => now.arrivals > state.arrivals && now.inWorld && (now.realmName ?? '').toLowerCase() === WORLD, {
       timeoutMs: REALM_TIMEOUT_MS,
       what: `the arrival in ${WORLD}`
     })
@@ -151,7 +152,7 @@ scenario(
     await openChat(explorer)
     await submitLine(explorer, `/goto ${showParcel(WORLD_PARCEL)}`)
     const there = await waitArrivalAt(explorer, inWorld.arrivals, WORLD_PARCEL)
-    assert.equal(there.realm, inWorld.realm, 'a /goto inside a world should keep the player in the world')
+    assert.equal((there.realmName ?? '').toLowerCase(), WORLD, 'a /goto inside a world should keep the player in the world')
     await closeChat(explorer)
   },
   { timeoutMs: SCENARIO_TIMEOUT_MS }

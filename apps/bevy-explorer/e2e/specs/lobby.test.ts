@@ -133,7 +133,7 @@ async function backToStart(explorer: Explorer): Promise<void> {
   const target = readTarget()
   const [x, y] = target.position.split(',').map(Number) as [number, number]
   // a Jump in can land in a World: its `realm` stays the catalyst's, its `realmName` is the World's
-  if ((await explorer.worldState()).realmName.toLowerCase().endsWith('.eth')) await explorer.changeRealm(target.realm, { timeoutMs: TRAVEL_TIMEOUT_MS })
+  if (((await explorer.worldState()).realmName ?? '').toLowerCase().endsWith('.eth')) await explorer.changeRealm(target.realm, { timeoutMs: TRAVEL_TIMEOUT_MS })
   const here = parcelOf(await explorer.worldState())
   if (here && here[0] === x && here[1] === y) return
   await explorer.teleport(x, y, { timeoutMs: TRAVEL_TIMEOUT_MS })
