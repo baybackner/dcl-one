@@ -268,10 +268,11 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   by exactly 1/fps each frame, whatever the frame took; `--input external` presses nothing and
   starts at the first frame with movement or jump input, so a driver's real keys are recorded on
   the same timeline. `--start placed` places the player once and skips the still and in-place
-  check: t = 0 follows the first grounded frame at least `settle` seconds after the placement (or
-  the first frame 5 s later, if it is still airborne), wherever the player is then, so a run can
-  start on a ledge edge or a slope the player slides on; the default `--start still` waits as
-  above and places the player again, up to five times, when it does not stay. The reply is the
+  check: t = 0 follows the first frame the player rests on ground or on a slope too steep to stand
+  on, at least `settle` seconds after the placement (or the first frame 5 s later, if it is still
+  airborne), wherever the player is then, so a run can start on a ledge edge or a slope the
+  player slides on; the default `--start still` waits as above and places the player again, up
+  to five times, when it does not stay. The reply is the
   base parcel, scene, spawn and `start` the run uses.
 - `/movement_trace status`: `phase` (`spawning`, `settling`, `starting`, `armed`, `running`,
   `done`, `failed`, `idle`), `error`, and the run's `frames`, `t`, `dropped`,
@@ -287,9 +288,11 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   `dt`, `in` (the movement input given to the scenes: `fwd` and `right`, normalised on a diagonal, and `walk`
   and `sprint`, false without a direction, and `jump` when the scenario has a jump event), `pos`
   (after the frame's movement, in SDK axes relative to the base parcel), `vel` (the frame's
-  displacement over its delta), `grounded`, `yaw_avatar` and `yaw_camera` (degrees clockwise from
-  north, in (-180, 180]), and under `extra` the gait, the movement scene's requested velocity, the
-  SDK external velocity, `scene_tick` (1 when the movement scene's reply landed in the frame) and
+  displacement over its delta), `grounded` (the feet within 0.05 m of ground the player can stand
+  on: not a wall it grazes or a slope steeper than 46.5 degrees), `yaw_avatar` and `yaw_camera`
+  (degrees clockwise from north, in (-180, 180]), and under `extra` the gait, the movement
+  scene's requested velocity, the SDK external velocity, `scene_tick` (1 when the movement
+  scene's reply landed in the frame) and
   `locomotion`: the latest movement model state the movement scene printed to its console as one
   line `LOCO {...}` (`console.log('LOCO ' + JSON.stringify(state))`; the object is copied as
   printed: `t` the scene tick, `gait`, `grounded`, `jump_count`, `glide`, `stunned`, `sliding`),

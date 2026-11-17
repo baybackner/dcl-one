@@ -4,8 +4,9 @@
 //! A run places the player at a spawn point in the scene it stands in, as an SDK `movePlayerTo`
 //! with a facing does, and waits until the player has stood still, grounded and in place, for the
 //! scenario's `settle` seconds. The next frame is t = 0. With `--start placed` it waits only the
-//! `settle` seconds from the placement and then the first grounded frame, wherever the player is,
-//! so a run can start on a ledge edge or a steep slope the player slides off. From t = 0 the
+//! `settle` seconds from the placement and then the first frame the player rests on something
+//! (ground, or a slope too steep to stand on), wherever it is, so a run can start on a ledge edge
+//! or a steep slope the player slides off. From t = 0 the
 //! scenario's keys are pressed by frame time and each frame is recorded until `duration`.
 //!
 //! The keys enter as window keyboard events ahead of Bevy's input systems, the way the window
@@ -600,8 +601,9 @@ pub enum StartCondition {
     /// placed again when it does not stay there
     #[default]
     Still,
-    /// The first grounded frame at least `settle` after the placement, or the first frame
-    /// [`GROUNDED_WAIT`] later, wherever the player is: it may be sliding or falling
+    /// The first frame resting on ground or a steep slope at least `settle` after the placement,
+    /// or the first frame [`GROUNDED_WAIT`] later, wherever the player is: it may be sliding or
+    /// falling
     Placed,
 }
 
@@ -615,11 +617,12 @@ impl StartCondition {
 }
 
 /// Whether a `--start placed` run starts in a frame `since_placed` seconds after the placement.
-/// The placement's own frame never does: its grounded state may still be the old position's.
-fn placed_start(since_placed: f64, settle: f64, grounded: bool) -> bool {
+/// The placement's own frame never does: its ground state may still be the old position's.
+/// `landed`: the player rests on ground or on a slope too steep to stand on.
+fn placed_start(since_placed: f64, settle: f64, landed: bool) -> bool {
     since_placed > 0.0
         && since_placed >= settle
-        && (grounded || since_placed >= settle + GROUNDED_WAIT)
+        && (landed || since_placed >= settle + GROUNDED_WAIT)
 }
 
 #[derive(Debug, PartialEq)]
@@ -719,7 +722,9 @@ impl Run {
     ///   frame: `fwd` and `right`, normalised on a diagonal, `walk` and `sprint` from the gait,
     ///   and `jump` when the scenario has a jump),
     ///   `pos` (after this frame's movement), `vel` (this frame's displacement over its delta),
-    ///   `grounded`, `yaw_avatar`, `yaw_camera`, and `extra`: the `kind` (gait), `vel_requested`
+    ///   `grounded` (the feet within 0.05 m of ground the player can stand on: not a wall it
+    ///   grazes or a slope steeper than 46.5 degrees), `yaw_avatar`, `yaw_camera`, and `extra`:
+    ///   the `kind` (gait), `vel_requested`
     ///   (by the movement scene), `vel_external` (SDK forces and impulses), `scene_tick` (1
     ///   when the controlling scene's reply landed this frame, 0 when the frame reused its last
     ///   one), `scene_sent`, `scene_reply_late` and `scene_reply_frames` (the scene's dispatch
@@ -910,8 +915,8 @@ struct MovementTraceCommand {
     #[arg(long)]
     input: Option<String>,
     /// play: `still` (t = 0 once the player has stood still, grounded and at the spawn for the
-    /// scenario's `settle`) or `placed` (t = 0 on the first grounded frame `settle` seconds after
-    /// the placement, wherever the player is then)
+    /// scenario's `settle`) or `placed` (t = 0 on the first frame resting on ground or a steep
+    /// slope `settle` seconds after the placement, wherever the player is then)
     #[arg(long)]
     start: Option<String>,
     /// play: the scenario as JSON
@@ -1244,6 +1249,8 @@ fn record_frame(
     let position = scene_position(transform.translation, run.base);
     let yaw_avatar = sdk_yaw(transform.rotation);
     let grounded = dynamics.ground_height <= common::dynamics::PLAYER_GROUND_THRESHOLD;
+    // resting on something, ground or a slope too steep to stand on
+    let landed = dynamics.contact_height <= common::dynamics::PLAYER_GROUND_THRESHOLD;
     let uses_jump = run.scenario.uses_jump();
     // a scenario without jumps neither compares nor writes the jump key
     let consumed = run.consumed.take().unwrap_or_default();
@@ -1285,7 +1292,7 @@ fn record_frame(
         } => {
             let settled = match run.start {
                 StartCondition::Placed => {
-                    placed_start(now - placed_at, run.scenario.settle, grounded)
+                    placed_start(now - placed_at, run.scenario.settle, landed)
                 }
                 StartCondition::Still => {
                     let still = grounded
