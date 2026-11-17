@@ -504,6 +504,7 @@ impl Plugin for SceneUiPlugin {
 
         app.add_console_command::<ToggleSceneUiCommand, _>(toggle_scene_ui_command);
         app.add_console_command::<ui_automation::UiListCommand, _>(ui_automation::ui_list_command);
+        app.add_console_command::<ui_automation::UiAtCommand, _>(ui_automation::ui_at_command);
     }
 }
 

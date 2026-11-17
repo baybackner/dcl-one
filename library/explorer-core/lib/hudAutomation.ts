@@ -932,16 +932,18 @@ export const PAGE_COMMANDS: Record<string, PageCommand> = {
       { name: 'x', kind: 'string', optional: false },
       { name: 'y', kind: 'string', optional: false }
     ],
-    help: 'Click at a page position, in CSS pixels from the top left (or, with --normalized, 0 to 1 of the page from the top left), as the mouse would: the HUD gets it where it is, the world elsewhere. --button is left (the default), right or middle. Replies JSON {"x", "y"} in pixels, "normalized" {"x", "y"}, "button", the page\'s "screen" {"width", "height", "scale"} and "input": "trusted" when the test runner driving the browser clicked, "synthetic" for DOM events',
+    help: 'Click at a page position, in CSS pixels from the top left (or, with --normalized, 0 to 1 of the page from the top left), as the mouse would: the HUD gets it where it is, the world elsewhere. Refused, nothing pressed, where a scene\'s UI takes the pointer (asked of the engine\'s /ui_at): the refusal says "hit": false and "blockedByUi": "the scene\'s UI (crdtId N)"; /ui_click activates that element, --force clicks it anyway. --button is left (the default), right or middle. Replies JSON {"x", "y"} in pixels, "normalized" {"x", "y"}, "button", the page\'s "screen" {"width", "height", "scale"} and "input": "trusted" when the test runner driving the browser clicked, "synthetic" for DOM events',
     run: async (rest) => {
       const words = rest.trim().split(/\s+/)
       const [xText, yText] = words
       let button: string | undefined
       let normalized = false
+      let force = false
       for (let i = 2; i < words.length; i++) {
         if (words[i] === '--button') button = words[++i]
         else if (words[i] === '--normalized') normalized = true
-        else throw new Error(`unexpected \`${words[i]}\`: /click_at <x> <y> [--button b] [--normalized]`)
+        else if (words[i] === '--force') force = true
+        else throw new Error(`unexpected \`${words[i]}\`: /click_at <x> <y> [--button b] [--normalized] [--force]`)
       }
       const given = { x: Number(xText), y: Number(yText) }
       if (!Number.isFinite(given.x) || !Number.isFinite(given.y)) throw new Error('expected /click_at <x> <y>')
@@ -954,9 +956,54 @@ export const PAGE_COMMANDS: Record<string, PageCommand> = {
       }
       const x = normalized ? given.x * screen.width : given.x
       const y = normalized ? given.y * screen.height : given.y
+      if (!force) {
+        const at = await sceneUiAt(x, y, screen)
+        if (at?.blockedByUi != null) throw new Error(JSON.stringify(clickAtRefusal(x, y, button ?? 'left', screen, at)))
+      }
       const input = await clickAt(x, y, button)
       return JSON.stringify(clickAtReply(x, y, button ?? 'left', screen, input))
     }
+  }
+}
+
+/** The engine's /ui_at: what takes the pointer at a point, `blockedByUi` when a scene's UI does. */
+export interface UiAt {
+  takenBy: { crdtId: number; scene?: string } | { client: string } | null
+  blockedByUi?: string
+}
+
+/** What the engine says takes the pointer at a page point the world's canvas is under, asked
+ *  normalized so the page's and the engine's pixels need not agree; null where the HUD is on top
+ *  (the click is the HUD's) or there is no engine to ask. */
+export async function sceneUiAt(x: number, y: number, screen: { width: number; height: number }): Promise<UiAt | null> {
+  if (document.elementFromPoint(x, y)?.tagName !== 'CANVAS') return null
+  const ask = (window as { engine_console_command?: (line: string) => Promise<unknown> }).engine_console_command
+  if (typeof ask !== 'function') return null
+  let reply: unknown
+  try {
+    reply = await ask(`/ui_at ${x / screen.width} ${y / screen.height} --normalized`)
+  } catch (e) {
+    throw new Error(`could not ask the engine what takes the pointer there (/ui_at): ${e instanceof Error ? e.message : String(e)}; --force clicks without asking`)
+  }
+  return (typeof reply === 'string' ? JSON.parse(reply) : reply) as UiAt
+}
+
+/** /click_at's refusal where a scene's UI takes the pointer, as the engine words it natively
+ *  (src/automation.rs, click_at_refusal): nothing is pressed. */
+export function clickAtRefusal(
+  x: number,
+  y: number,
+  button: MouseButtonName,
+  screen: { width: number; height: number; scale: number },
+  at: UiAt
+) {
+  const { input: _, ...click } = clickAtReply(x, y, button, screen, 'trusted')
+  return {
+    refused: "a scene's UI takes the pointer here; /ui_click activates it, --force clicks it anyway",
+    cause: { blockedByUi: at.blockedByUi, takenBy: at.takenBy },
+    ...click,
+    hit: false,
+    blockedByUi: at.blockedByUi
   }
 }
 

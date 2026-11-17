@@ -874,6 +874,75 @@ describe('trusted input from a test runner', () => {
     })
   })
 
+  describe('clicking where a scene\'s UI takes the pointer', () => {
+    const engineWindow = window as { engine_console_command?: (line: string) => Promise<string> }
+    let asked: string[]
+    const placeCanvas = () => place(render('<canvas></canvas>').firstElementChild!, 0, 0, 1600, 900)
+
+    beforeEach(() => {
+      asked = []
+      Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: 900, configurable: true })
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true })
+      engineWindow.engine_console_command = async (line) => {
+        asked.push(line)
+        return line.startsWith('/ui_at 0.5 ')
+          ? JSON.stringify({ takenBy: { crdtId: 640, scene: 'bafk' }, blockedByUi: "the scene's UI (crdtId 640)" })
+          : JSON.stringify({ takenBy: null })
+      }
+    })
+
+    afterEach(() => {
+      delete engineWindow.engine_console_command
+    })
+
+    it('refuses over the world\'s canvas where the engine names a scene\'s UI, pressing nothing', async () => {
+      placeCanvas()
+      const refusal = await Promise.resolve(PAGE_COMMANDS['/click_at'].run('0.5 0.25 --normalized')).then(
+        () => null,
+        (e: Error) => JSON.parse(e.message)
+      )
+      expect(refusal).toStrictEqual({
+        refused: "a scene's UI takes the pointer here; /ui_click activates it, --force clicks it anyway",
+        cause: { blockedByUi: "the scene's UI (crdtId 640)", takenBy: { crdtId: 640, scene: 'bafk' } },
+        x: 800,
+        y: 225,
+        normalized: { x: 0.5, y: 0.25 },
+        button: 'left',
+        screen: { width: 1600, height: 900, scale: 2 },
+        hit: false,
+        blockedByUi: "the scene's UI (crdtId 640)"
+      })
+      expect(asked).toEqual(['/ui_at 0.5 0.25 --normalized'])
+      expect(sent).toEqual([])
+    })
+
+    it('clicks where the world gets the pointer, and with --force without asking', async () => {
+      placeCanvas()
+      expect(JSON.parse(await PAGE_COMMANDS['/click_at'].run('400 450'))).toMatchObject({ x: 400, y: 450 })
+      expect(JSON.parse(await PAGE_COMMANDS['/click_at'].run('800 225 --force'))).toMatchObject({ x: 800, y: 225 })
+      expect(asked).toEqual(['/ui_at 0.25 0.5 --normalized'])
+      expect(sent).toEqual([
+        req({ op: 'click', x: 400, y: 450, button: 'left' }),
+        req({ op: 'click', x: 800, y: 225, button: 'left' })
+      ])
+    })
+
+    it('leaves a point the HUD is on top of to the HUD, asking the engine nothing', async () => {
+      placeCanvas()
+      placeButton()
+      expect(JSON.parse(await PAGE_COMMANDS['/click_at'].run('20 30'))).toMatchObject({ x: 20, y: 30 })
+      expect(asked).toEqual([])
+    })
+
+    it('fails, pressing nothing, when the engine cannot be asked', async () => {
+      placeCanvas()
+      engineWindow.engine_console_command = () => Promise.reject(new Error('engine not initialized'))
+      await expect(PAGE_COMMANDS['/click_at'].run('10 10')).rejects.toThrow('(/ui_at): engine not initialized; --force clicks without asking')
+      expect(sent).toEqual([])
+    })
+  })
+
   describe('when the runner does not deliver', () => {
     it('fails a command with the error the runner answers with', async () => {
       placeButton()

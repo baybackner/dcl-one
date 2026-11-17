@@ -318,8 +318,11 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   that keeps its start page. `/hud_logout` signs the HUD out, the engine with it, so `/hud_login`
   can sign in again; the engine's `/logout` leaves the HUD signed in.
 - Input: `/press_key <code> [--state down|up]` (`KeyboardEvent.code` names) and
-  `/click_at <x> <y> [--button left|right|middle] [--normalized]` (logical pixels, or 0 to 1 of the
-  window with `--normalized`; replies JSON `x`, `y`, `normalized`, `button`, `screen`). Natively these and the HUD commands go through
+  `/click_at <x> <y> [--button left|right|middle] [--normalized] [--force]` (logical pixels, or 0
+  to 1 of the window with `--normalized`; replies JSON `x`, `y`, `normalized`, `button`, `screen`;
+  refused, nothing pressed, with `hit: false` and `blockedByUi: "the scene's UI (crdtId N)"` where
+  a scene's UI takes the pointer, unless `--force`; `/ui_at <x> <y> [--normalized]` says what
+  takes it there). Natively these and the HUD commands go through
   CEF and the window's own input, always real. On the web the page needs a DevTools client to make
   them real (below); without one they fall back to DOM events and say `"input": "synthetic"`.
 - Portables and smart wearables: `/portables`, `/stop_portable <hash>`, `/smart_wearables`,
@@ -348,8 +351,8 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   (its hash), `title`, `parcel`, `state`, `isReady`, `loadingStage`, `sdkVersion`.
 - Scene UI: `/ui_list [--kind K] [--limit N]` lists the parcel scene's UI elements on screen:
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
-  `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` takes as it
-  is, `disabled`, `pointerEventTypes`, the text, value or options, and `coveredBy` (a scene element
+  `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` and `/ui_at
+  --normalized` take as it is, `disabled`, `pointerEventTypes`, the text, value or options, and `coveredBy` (a scene element
   or the engine's own UI over its centre), with `screen`. `/ui_click <crdtId> [--device]
   [--force]` clicks one: refused, naming the cover (`blockedBy`), when something covers its centre,
   or when it is disabled; it answers once the scene has been sent the click, with `delivered`

@@ -677,6 +677,16 @@ export interface ClickAtReply {
   input?: 'trusted' | 'synthetic'
 }
 
+/** `/ui_at`'s reply; `blockedByUi` names a scene's UI as `/click_at` refuses it. */
+export interface UiAtReply {
+  x: number
+  y: number
+  normalized: { x: number; y: number }
+  screen: Screen
+  takenBy: { crdtId: number; scene: string | null } | { client: string } | null
+  blockedByUi?: string
+}
+
 export interface Position {
   x: number
   y: number
@@ -1277,10 +1287,18 @@ export class Explorer {
   }
 
   /** A click at window pixels (as `/entity_screen_position` and `/hud_read` report them), or, with
-   *  `normalized`, at 0 to 1 of the window from the top left. */
-  async clickAt(x: number, y: number, button: MouseButton = 'left', options: { normalized?: boolean } = {}): Promise<ClickAtReply> {
-    const flags = `${button === 'left' ? '' : ` --button ${button}`}${options.normalized ? ' --normalized' : ''}`
+   *  `normalized`, at 0 to 1 of the window from the top left. Refused, nothing pressed, where a
+   *  scene's UI takes the pointer (the failure's JSON has `hit: false` and `blockedByUi`), unless
+   *  `force`. */
+  async clickAt(x: number, y: number, button: MouseButton = 'left', options: { normalized?: boolean; force?: boolean } = {}): Promise<ClickAtReply> {
+    const flags = `${button === 'left' ? '' : ` --button ${button}`}${options.normalized ? ' --normalized' : ''}${options.force ? ' --force' : ''}`
     return this.json<ClickAtReply>(`/click_at ${x} ${y}${flags}`)
+  }
+
+  /** What takes the pointer at a window position (`/ui_at`): a scene's UI, the engine's own, or
+   *  the world (`takenBy: null`); pixels, or 0 to 1 with `normalized`. */
+  uiAt(x: number, y: number, options: { normalized?: boolean } = {}): Promise<UiAtReply> {
+    return this.json<UiAtReply>(`/ui_at ${x} ${y}${options.normalized ? ' --normalized' : ''}`)
   }
 
   // --- scenes -------------------------------------------------------------------------------

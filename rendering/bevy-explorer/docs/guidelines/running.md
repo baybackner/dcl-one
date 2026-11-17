@@ -393,9 +393,21 @@ The HUD and input:
   the engine still holds keeps the next one waiting (`a sign-in is still finishing`) until the
   engine answers it; one it never answers needs a page reload.
 - `/press_key <code> [--state down|up]`, with the key named as `KeyboardEvent.code` names it, and
-  `/click_at <x> <y> [--button left|right|middle] [--normalized]`: logical pixels from the top
-  left, or 0 to 1 of the window with `--normalized`. It replies JSON: `x` and `y` in pixels,
-  `normalized`, `button`, `screen` and, on the web, `input` (`trusted` or `synthetic`).
+  `/click_at <x> <y> [--button left|right|middle] [--normalized] [--force]`: logical pixels from
+  the top left, or 0 to 1 of the window with `--normalized`. It replies JSON: `x` and `y` in
+  pixels, `normalized`, `button`, `screen` and, on the web, `input` (`trusted` or `synthetic`).
+  Where a scene's UI takes the pointer it is refused before anything is pressed: `refused`,
+  `cause` (`blockedByUi`, `takenBy`), the click's fields, `hit: false` and `blockedByUi: "the
+  scene's UI (crdtId N)"`. `/ui_click` activates that element; `--force` clicks anyway, and the
+  real click then reaches the scene's UI, as a person's would. The engine's own UI and, on the
+  web, the HUD's page over the point take the click as they do a person's, without a refusal;
+  natively the CEF HUD's overlay is not tested.
+- `/ui_at <x> <y> [--normalized]`: what takes the pointer at a window position, as `/click_at`
+  asks it: `takenBy` `{"crdtId", "scene"}` for a scene's UI (any scene's, `scene` its hash),
+  `{"client": name}` for the engine's own, null where the world gets it, with `blockedByUi` for a
+  scene's UI, `x`, `y`, `normalized` and `screen`. It reads the layout of the last frame and
+  presses nothing. On the web the page's `/click_at` asks it, normalized, when the world's canvas
+  is under the point.
 - `/hover_entity [<entity>] [--at x y z] [--bounds] [--frames N | --seconds S] [--timeout-frames N
   | --timeout-seconds S]`, `/hover_entity --clear` and `/click_entity [<entity>] [--at x y z]
   [--bounds] [--button pointer|primary|secondary] [--event click|down|up] [--timeout-frames N |

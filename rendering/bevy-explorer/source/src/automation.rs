@@ -127,6 +127,10 @@ pub(crate) mod input {
         reply::{self, Screen},
         PendingConsoleResponses,
     };
+    use scene_runner::{
+        renderer_context::RendererSceneContext,
+        update_world::scene_ui::ui_automation::{self, Cover, UiAutomation},
+    };
 
     /// Input queued by `/press_key`, `/click_at`, `/click_entity` and the standalone's
     /// `/hud_fill`, one step a frame so each lands as a frame of its own, the way a person's key or
@@ -307,9 +311,10 @@ pub(crate) mod input {
 
     /// Click at a window position, in logical pixels from the top left (or, with --normalized,
     /// 0 to 1 of the window from the top left), as the mouse would: the HUD gets it where it is
-    /// opaque, the world elsewhere. Moves the system cursor there. Replies JSON {"x", "y"} in
-    /// pixels, "normalized" {"x", "y"}, "button" and the window's "screen" {"width", "height",
-    /// "scale"}
+    /// opaque, the world elsewhere. Moves the system cursor there. Refused, nothing pressed, where
+    /// a scene's UI takes the pointer (`blockedByUi`; /ui_click activates it). Replies JSON
+    /// {"x", "y"} in pixels, "normalized" {"x", "y"}, "button" and the window's "screen"
+    /// {"width", "height", "scale"}
     #[derive(clap::Parser, ConsoleCommand)]
     #[command(name = "/click_at")]
     pub struct ClickAtCommand {
@@ -321,11 +326,16 @@ pub(crate) mod input {
         /// x and y are 0 to 1 of the window from the top left, not pixels
         #[arg(long)]
         normalized: bool,
+        /// click even where a scene's UI takes the pointer: the click then reaches that UI
+        #[arg(long)]
+        force: bool,
     }
 
     pub fn click_at_cmd(
         mut input: ConsoleCommand<ClickAtCommand>,
         windows: Query<&Window, With<PrimaryWindow>>,
+        ui: UiAutomation,
+        contexts: Query<&RendererSceneContext>,
         mut script: ResMut<InputScript>,
         mut pending: ResMut<PendingConsoleResponses>,
     ) {
@@ -358,6 +368,16 @@ pub(crate) mod input {
         } else {
             Vec2::new(command.x, command.y)
         };
+        if !command.force {
+            let cover = ui.at(position * screen.scale);
+            if let Some(cover @ Cover::Scene { .. }) = &cover {
+                input.reply_failed(click_at_refusal(
+                    click_at_reply(position, button, &screen),
+                    ui_automation::ui_at_reply(position, &screen, Some(cover), &contexts),
+                ));
+                return;
+            }
+        }
         for step in [
             Step::Cursor(position),
             Step::Button(button, ButtonState::Pressed),
@@ -394,6 +414,26 @@ pub(crate) mod input {
             },
             "screen": screen.to_json(),
         })
+    }
+
+    /// `/click_at`'s refusal where a scene's UI takes the pointer: `refused`, `cause`, the click's
+    /// fields, `hit: false` and `blockedByUi`, as the page words it on the web (hudAutomation.ts).
+    pub(crate) fn click_at_refusal(click: serde_json::Value, at: serde_json::Value) -> String {
+        let mut refusal: serde_json::Value = serde_json::from_str(&reply::refusal(
+            "a scene's UI takes the pointer here; /ui_click activates it, --force clicks it anyway",
+            Some(serde_json::json!({
+                "blockedByUi": at["blockedByUi"],
+                "takenBy": at["takenBy"],
+            })),
+        ))
+        .unwrap_or_default();
+        if let (Some(refusal), serde_json::Value::Object(click)) = (refusal.as_object_mut(), click)
+        {
+            refusal.extend(click);
+            refusal.insert("hit".into(), false.into());
+            refusal.insert("blockedByUi".into(), at["blockedByUi"].clone());
+        }
+        refusal.to_string()
     }
 
     const LETTERS: [KeyCode; 26] = [
@@ -704,6 +744,28 @@ mod tests {
         assert_eq!(reply["button"], "right");
         assert_eq!(reply["screen"]["width"], 1600.0);
         assert_eq!(reply["screen"]["scale"], 2.0);
+    }
+
+    #[test]
+    fn a_click_on_scene_ui_is_refused_naming_the_element() {
+        let screen = console::reply::Screen {
+            width: 1600.0,
+            height: 900.0,
+            scale: 2.0,
+        };
+        let click = input::click_at_reply(Vec2::new(800.0, 225.0), MouseButton::Left, &screen);
+        let at = serde_json::json!({
+            "takenBy": { "crdtId": 640, "scene": "bafk" },
+            "blockedByUi": "the scene's UI (crdtId 640)",
+        });
+        let refusal: serde_json::Value =
+            serde_json::from_str(&input::click_at_refusal(click, at)).unwrap();
+        assert!(refusal["refused"].as_str().unwrap().contains("/ui_click"));
+        assert_eq!(refusal["hit"], false);
+        assert_eq!(refusal["blockedByUi"], "the scene's UI (crdtId 640)");
+        assert_eq!(refusal["cause"]["takenBy"]["crdtId"], 640);
+        assert_eq!(refusal["normalized"]["y"], 0.25);
+        assert_eq!(refusal["screen"]["width"], 1600.0);
     }
 
     #[test]

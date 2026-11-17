@@ -14,7 +14,7 @@ use console::reply::{self, Screen};
 use input_manager::{InputManager, InputPriority};
 use scene_runner::{
     renderer_context::RendererSceneContext,
-    update_world::scene_ui::ui_automation::{Cover, UiAutomation, UiElement},
+    update_world::scene_ui::ui_automation::{UiAutomation, UiElement},
 };
 use serde_json::{json, Value};
 
@@ -174,15 +174,9 @@ fn ui_click(
         ));
     }
     if let (Some(cover), false) = (&found.covered_by, command.force) {
-        let blocked_by = match cover {
-            Cover::Scene { crdt_id, .. } => {
-                json!(format!("the scene's UI (crdtId {crdt_id})"))
-            }
-            Cover::Client(name) => json!(format!("the client's UI ({name})")),
-        };
         return Err(refused(
             "another element covers the target at its center".to_owned(),
-            json!({ "blockedBy": blocked_by, "coveredBy": element["coveredBy"] }),
+            json!({ "blockedBy": cover.blocked_by(), "coveredBy": element["coveredBy"] }),
         ));
     }
 

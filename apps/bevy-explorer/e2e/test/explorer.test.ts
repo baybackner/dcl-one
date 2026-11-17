@@ -478,7 +478,7 @@ describe('Explorer', () => {
   })
 
   test('key, escape and clickAt compose the lines', async () => {
-    const fake = new FakeConsole({ press_key: 'pressed', click_at: '{"x":30,"y":35,"normalized":{"x":0.02,"y":0.04},"button":"left","screen":{"width":1600,"height":900,"scale":2}}' })
+    const fake = new FakeConsole({ press_key: 'pressed', click_at: '{"x":30,"y":35,"normalized":{"x":0.02,"y":0.04},"button":"left","screen":{"width":1600,"height":900,"scale":2}}', ui_at: '{"x":800,"y":225,"normalized":{"x":0.5,"y":0.25},"screen":{"width":1600,"height":900,"scale":2},"takenBy":{"crdtId":640,"scene":"bafk"},"blockedByUi":"the scene\'s UI (crdtId 640)"}' })
     const explorer = new Explorer(fake)
     await explorer.key('KeyB')
     await explorer.key('ShiftLeft', 'down')
@@ -487,13 +487,19 @@ describe('Explorer', () => {
     await explorer.clickAt(1, 2, 'right')
     const reply = await explorer.clickAt(0.5, 0.25, 'left', { normalized: true })
     assert.deepEqual(reply.screen, { width: 1600, height: 900, scale: 2 })
+    await explorer.clickAt(0.5, 0.25, 'left', { normalized: true, force: true })
+    assert.equal((await explorer.uiAt(0.5, 0.25, { normalized: true })).blockedByUi, "the scene's UI (crdtId 640)")
+    await explorer.uiAt(800, 225)
     assert.deepEqual(fake.lines, [
       '/press_key KeyB',
       '/press_key ShiftLeft --state down',
       '/press_key Escape',
       '/click_at 1 2',
       '/click_at 1 2 --button right',
-      '/click_at 0.5 0.25 --normalized'
+      '/click_at 0.5 0.25 --normalized',
+      '/click_at 0.5 0.25 --normalized --force',
+      '/ui_at 0.5 0.25 --normalized',
+      '/ui_at 800 225'
     ])
   })
 

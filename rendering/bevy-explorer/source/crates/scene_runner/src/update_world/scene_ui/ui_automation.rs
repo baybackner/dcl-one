@@ -67,6 +67,23 @@ pub enum Cover {
     Client(String),
 }
 
+impl Cover {
+    /// How a refusal names it: `the scene's UI (crdtId N)`, `the client's UI (<name>)`.
+    pub fn blocked_by(&self) -> String {
+        match self {
+            Cover::Scene { crdt_id, .. } => format!("the scene's UI (crdtId {crdt_id})"),
+            Cover::Client(name) => format!("the client's UI ({name})"),
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        match self {
+            Cover::Scene { crdt_id, .. } => json!({ "crdtId": crdt_id }),
+            Cover::Client(name) => json!({ "client": name }),
+        }
+    }
+}
+
 /// One laid-out scene-UI element.
 #[derive(Clone, Debug)]
 pub struct UiElement {
@@ -111,11 +128,7 @@ impl UiElement {
             "pointerEventTypes": self.event_types,
             "clipped": self.clipped,
             "drawOrder": self.draw_order,
-            "coveredBy": match &self.covered_by {
-                None => Value::Null,
-                Some(Cover::Scene { crdt_id, .. }) => json!({ "crdtId": crdt_id }),
-                Some(Cover::Client(name)) => json!({ "client": name }),
-            },
+            "coveredBy": self.covered_by.as_ref().map_or(Value::Null, Cover::to_json),
         });
         for (key, value) in [
             ("text", &self.text),
@@ -281,7 +294,23 @@ impl UiAutomation<'_, '_> {
     fn cover(&self, node: Entity, stack_index: u32, point: Vec2) -> Option<Cover> {
         let stack = self.stack.as_ref()?;
         let above = stack.uinodes.get(stack_index as usize + 1..)?;
-        let top = above.iter().rev().copied().find(|&other| {
+        self.top_at(above, point, |other| self.inside(other, node))
+    }
+
+    /// What takes the pointer at `point` (physical pixels): the topmost shown, interactive,
+    /// blocking node there, scene UI or the engine's own. `None` when the world gets it.
+    pub fn at(&self, point: Vec2) -> Option<Cover> {
+        let stack = self.stack.as_ref()?;
+        self.top_at(&stack.uinodes, point, |_| false)
+    }
+
+    fn top_at(
+        &self,
+        nodes: &[Entity],
+        point: Vec2,
+        skip: impl Fn(Entity) -> bool,
+    ) -> Option<Cover> {
+        let top = nodes.iter().rev().copied().find(|&other| {
             let Ok((computed, global, visibility, clip, interaction, focus)) =
                 self.nodes.get(other)
             else {
@@ -293,18 +322,30 @@ impl UiAutomation<'_, '_> {
                 && interaction.is_some()
                 && focus.is_none_or(|focus| *focus == FocusPolicy::Block)
                 && rect.contains(point)
-                && !self.inside(other, node)
+                && !skip(other)
         })?;
-        let (owner, name) = self.owners.get(top).ok()?;
-        match owner.and_then(|owner| self.scene_entities.get(owner.0).ok()) {
-            Some(scene_entity) => Some(Cover::Scene {
-                crdt_id: scene_entity.id.as_proto_u32().unwrap_or_default(),
-                scene: scene_entity.root,
-            }),
-            None => Some(Cover::Client(
-                name.map_or_else(|| format!("{top}"), |name| name.to_string()),
-            )),
+        // a widget's inner node (a text entry's, a scroll bar's) belongs to the nearest ancestor
+        // a scene entity owns
+        let mut node = top;
+        loop {
+            let (owner, _) = self.owners.get(node).ok()?;
+            if let Some(scene_entity) =
+                owner.and_then(|owner| self.scene_entities.get(owner.0).ok())
+            {
+                return Some(Cover::Scene {
+                    crdt_id: scene_entity.id.as_proto_u32().unwrap_or_default(),
+                    scene: scene_entity.root,
+                });
+            }
+            match self.hierarchy.get(node) {
+                Ok((_, Some(parent))) => node = parent.parent(),
+                _ => break,
+            }
         }
+        let name = self.owners.get(top).ok().and_then(|(_, name)| name);
+        Some(Cover::Client(
+            name.map_or_else(|| format!("{top}"), |name| name.to_string()),
+        ))
     }
 
     /// Whether `node` is `ancestor` or below it.
@@ -405,6 +446,69 @@ pub fn ui_list_command(
         reply["truncated"] = json!(true);
     }
     input.reply_ok(reply.to_string());
+}
+
+/// What takes the pointer at a window position, in logical pixels from the top left (or, with
+/// --normalized, 0 to 1): `takenBy` {crdtId} for a scene's UI, {client} for the engine's own,
+/// null where the world gets it; `blockedByUi` names a scene's UI as /click_at refuses it
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/ui_at")]
+pub struct UiAtCommand {
+    x: f32,
+    y: f32,
+    /// x and y are 0 to 1 of the window from the top left, not pixels
+    #[arg(long)]
+    normalized: bool,
+}
+
+pub fn ui_at_command(
+    mut input: ConsoleCommand<UiAtCommand>,
+    ui: UiAutomation,
+    contexts: Query<&RendererSceneContext>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Some(Ok(command)) = input.take() else {
+        return;
+    };
+    let Some(screen) = Screen::primary(&windows) else {
+        input.reply_failed("no window");
+        return;
+    };
+    let position = if command.normalized {
+        match reply::normalized_point(command.x, command.y) {
+            Ok(point) => screen.to_pixels(point),
+            Err(e) => {
+                input.reply_failed(e);
+                return;
+            }
+        }
+    } else {
+        Vec2::new(command.x, command.y)
+    };
+    let cover = ui.at(position * screen.scale);
+    input.reply_ok(ui_at_reply(position, &screen, cover.as_ref(), &contexts).to_string());
+}
+
+/// `/ui_at`'s reply, and the fields `/click_at` refuses with.
+pub fn ui_at_reply(
+    position: Vec2,
+    screen: &Screen,
+    cover: Option<&Cover>,
+    contexts: &Query<&RendererSceneContext>,
+) -> Value {
+    let normalized = screen.to_normalized(position);
+    let mut reply = json!({
+        "x": reply::round(position.x),
+        "y": reply::round(position.y),
+        "normalized": { "x": reply::round_fine(normalized.x), "y": reply::round_fine(normalized.y) },
+        "screen": screen.to_json(),
+        "takenBy": cover.map_or(Value::Null, Cover::to_json),
+    });
+    if let Some(Cover::Scene { scene, .. }) = cover {
+        reply["takenBy"]["scene"] = json!(contexts.get(*scene).ok().map(|c| c.hash.as_ref()));
+        reply["blockedByUi"] = json!(cover.map(Cover::blocked_by));
+    }
+    reply
 }
 
 #[cfg(test)]
