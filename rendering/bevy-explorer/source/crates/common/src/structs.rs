@@ -1656,9 +1656,11 @@ pub enum MoveKind {
 #[derive(Component, Default)]
 pub struct AvatarDynamicState {
     pub velocity: Vec3,
-    /// Primary player only: the default controller's own velocity this frame, after collisions
+    /// Primary player only: the velocity a startup portable's controller (launch-time, console or
+    /// server-hosted, such as the default controller) gave the player this frame, after collisions
     /// and without lifts or platforms, with movement input held; zero while a parcel scene, a
-    /// smart wearable or another portable drives, a suppression holds or a force pushes the player.
+    /// smart wearable or a scene-spawned portable drives, a suppression holds or a force pushes the
+    /// player.
     pub own_velocity: Vec3,
     /// `own_velocity` over this frame: the distance it moved the player.
     pub own_displacement: Vec3,

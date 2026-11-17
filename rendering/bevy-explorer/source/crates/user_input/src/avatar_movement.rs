@@ -727,9 +727,10 @@ fn end_jump_on_landing(dynamic_state: &mut AvatarDynamicState) {
 const NO_EXTERNAL_VELOCITY: f32 = 1e-3;
 
 // The player's own walking, for analytics: the controller's displacement after collisions, so
-// lifts, platforms and walls add nothing. Only a startup portable (the default controller)
-// counts; a parcel scene's override, a smart wearable or scene-spawned portable, a suppression,
-// an impulse or force this frame, or no movement input held leaves none.
+// lifts, platforms and walls add nothing. Only a startup portable counts (launch-time, console or
+// server-hosted, which includes the default controller); a parcel scene's override, a smart
+// wearable or scene-spawned portable, a suppression, an impulse or force this frame, or no
+// movement input held leaves none.
 #[allow(clippy::type_complexity)]
 fn record_own_movement(
     mut player: Query<
@@ -748,7 +749,7 @@ fn record_own_movement(
     let Ok((mut dynamic_state, movement)) = player.single_mut() else {
         return;
     };
-    let default_controller = scenes
+    let startup_controller = scenes
         .get(movement.scene())
         .ok()
         .filter(|ctx| ctx.is_portable)
@@ -759,7 +760,7 @@ fn record_own_movement(
         .external_velocity
         .is_some_and(|v| v.world_vec_to_vec3().length() > NO_EXTERNAL_VELOCITY);
     // a zero request skips `apply_movement`'s solve, leaving `actual_velocity` stale
-    let own = default_controller
+    let own = startup_controller
         && movement.component.velocity != Vec3::ZERO
         && !movement_suppressed(&movement_control, movement)
         && !pushed
