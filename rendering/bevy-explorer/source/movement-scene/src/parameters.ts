@@ -1,6 +1,6 @@
 import { DeepReadonlyObject, PBAvatarLocomotionSettings, PBInputModifier } from "@dcl/sdk/ecs";
 import { settings } from "./settings";
-import { DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED } from "./constants";
+import { AIR_JUMP_COUNT, DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED } from "./constants";
 
 export var sprintSpeed = 0;
 export var jogSpeed = 0;
@@ -64,8 +64,8 @@ export function initParamters(
     sprintJumpHeight = jumpEnabled ? baseSprintJumpHeight : 0;
 
     maxGroundJumps = jumpEnabled ? 1 : 0;
-    // No in-air jump: a fresh airborne press goes to the glide instead.
-    maxAirJumps = 0;
+    // One air jump per airtime; once it is spent a fresh airborne press goes to the glide.
+    maxAirJumps = doubleJumpEnabled && doubleJumpHeight > 0 ? AIR_JUMP_COUNT : 0;
 
     disableOrientation = !anyEnabled;
 }

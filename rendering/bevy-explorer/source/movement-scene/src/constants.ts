@@ -71,20 +71,44 @@ export const MAX_SPEED = 30;
 export const JUMP_HEIGHT = 1;
 export const JUMP_HEIGHT_SPRINT = 1.5;
 export const GRAVITY_RISE_FACTOR = 4; // gravity multiplier while moving up (also sizes the launch speed)
-export const LONG_JUMP_TIME = 0.5; // s after the launch during which a held key scales gravity
+export const LONG_JUMP_TIME = 0.52; // s after a jump's press during which a held key scales gravity (26 steps)
 export const LONG_JUMP_GRAVITY_SCALE = 0.5;
 // Steps a press is buffered before landing, and steps after leaving the ground that a jump
 // is still allowed (one window for both; off while moving up).
 export const JUMP_GRACE_STEPS = 8;
 export const JUMP_COYOTE_TIME = 0.16; // s, the same window for the step-up check
-export const DOUBLE_JUMP_HEIGHT = 2; // in-air jump height (in-air jumps are disabled)
-// Glide: a fresh press in the air after the jump (or after the grace window when falling)
-// opens the glider while held, once long enough after the launch and above the ground.
+// Air jump: one per airtime, by a fresh press in the air after the ground jump (or once the grace window of a fall
+// off an edge has passed). The avatar holds its height for AIR_JUMP_HOVER_TIME, then launches to DOUBLE_JUMP_HEIGHT
+// (any gait). Scenes turn it off with InputModifier disableDoubleJump.
+export const DOUBLE_JUMP_HEIGHT = 2; // in-air jump height (m), overridden by the locomotion settings
+export const AIR_JUMP_COUNT = 1; // air jumps per airtime
+export const AIR_JUMP_COOLDOWN = 0.32; // s from the previous jump's press before an air jump can start (16 steps)
+export const AIR_JUMP_HOVER_TIME = 0.2; // s the height is held between the press and the launch (whole steps)
+export const AIR_JUMP_HOVER_SPEED = 0; // vertical speed during the hover (m/s)
+// Horizontal speed at the launch (m/s): max(AIR_JUMP_IMPULSE, current speed) along the keys held on the launch step.
+// 0 keeps the current speed (turned toward the keys).
+export const AIR_JUMP_IMPULSE = 8;
+// Behaviour switches:
+// 1: a press whose step reaches the ground is lost (the landing cancels the air jump); 0: it is buffered to the ground.
+export const AIR_JUMP_LOST_ON_TOUCHDOWN: number = 1;
+// 1: no movement key on the launch step stops horizontal motion; 0: the horizontal velocity is kept.
+export const AIR_JUMP_STOP_WITHOUT_KEYS: number = 1;
+// 1: the held-key window (LONG_JUMP_TIME) counts from the air press, so the hover uses part of it; 0: from the launch.
+export const AIR_JUMP_HOLD_FROM_PRESS: number = 1;
+// 1: any jump key held in that window lowers gravity (a later, ignored press too); 0: only the air press held throughout.
+export const AIR_JUMP_HOLD_ANY_PRESS: number = 1;
+// Steps a press made while rising stays wanted for an air jump (0: a press before the cooldown while rising is dropped).
+export const AIR_JUMP_RISE_BUFFER_STEPS: number = 0;
+// Height tracking during the hover: 1 = both ways (the avatar drifts to the model's hover height), 0 = none (a flat hover;
+// tracking resumes at the launch).
+export const AIR_JUMP_HOVER_TRACK: number = 0;
+// Glide: a fresh press in the air once the jumps are spent (the air jump included) opens the glider
+// while held, once long enough after the latest jump's press and above the ground.
 export const GLIDE_FALL_SPEED = 1; // max fall speed while gliding (m/s)
 export const GLIDE_HORIZONTAL_SPEED = 6; // horizontal speed limit while gliding (m/s)
-export const GLIDE_MIN_GROUND_DISTANCE = 0.2;
-export const JUMP_TO_GLIDE_TIME = 0.5;
-export const GLIDE_COOLDOWN = 0.2;
+export const GLIDE_MIN_GROUND_DISTANCE = 0.12; // model height above the ground (m)
+export const JUMP_TO_GLIDE_TIME = 0.52; // s from the latest jump's press (26 steps)
+export const GLIDE_COOLDOWN = 0.22; // s after a glide ends (11 steps)
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
 

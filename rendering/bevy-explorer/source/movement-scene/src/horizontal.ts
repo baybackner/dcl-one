@@ -1,7 +1,7 @@
 import { engine, InputAction, inputSystem, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
-  ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
+  AIR_JUMP_IMPULSE, AIR_JUMP_STOP_WITHOUT_KEYS, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
   FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, MAX_EXTERNAL_SPEED,
   MAX_FIXED_STEPS, RAMP_GUARD, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
@@ -9,7 +9,7 @@ import {
 import { horizontalResync, landRecoverUntil, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, time, velocity } from '.';
 import { grounded } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { isGliding, launchAhead, predictedLandFrame } from './vertical';
+import { airLaunchStep, isGliding, launchAhead, predictedLandFrame } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -75,10 +75,12 @@ function copyInput(from: StepInput, to: StepInput) {
 
 // Integration state. ax/az are the camera-relative axis speeds (right, forward), adx/adz their
 // smoothing rates, weight the input-hold weight (0..1), vx/vz the world-space move velocity,
-// ex/ez the external (impulse) velocity.
-type State = { ax: number; az: number; adx: number; adz: number; weight: number; vx: number; vz: number; ex: number; ez: number };
-const state: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex: 0, ez: 0 };
-const probe: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex: 0, ez: 0 };
+// ex/ez the external (impulse) velocity, n the steps run so far (the vertical model's step count).
+type State = { ax: number; az: number; adx: number; adz: number; weight: number; vx: number; vz: number; ex: number; ez: number; n: number };
+const state: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex: 0, ez: 0, n: 0 };
+const probe: State = { ax: 0, az: 0, adx: 0, adz: 0, weight: 0, vx: 0, vz: 0, ex: 0, ez: 0, n: 0 };
+// Step the air jump launches on (vertical model), read once per tick.
+var launchStep = -1;
 // Time not yet covered by a step.
 var pending = 0;
 // Horizontal velocity of the last reply (ramp guard).
@@ -86,7 +88,7 @@ var lastReplyX = 0, lastReplyZ = 0;
 
 function copyState(from: State, to: State) {
   to.ax = from.ax; to.az = from.az; to.adx = from.adx; to.adz = from.adz; to.weight = from.weight;
-  to.vx = from.vx; to.vz = from.vz; to.ex = from.ex; to.ez = from.ez;
+  to.vx = from.vx; to.vz = from.vz; to.ex = from.ex; to.ez = from.ez; to.n = from.n;
 }
 
 function moveTowards(current: number, target: number, maxDelta: number): number {
@@ -120,6 +122,7 @@ function smoothDamp(current: number, target: number, rate: number, smoothTime: n
 }
 
 function step(s: State, c: StepInput, h: number) {
+  s.n++;
   const xTarget = c.limit * c.x;
   const zTarget = c.limit * c.z;
   s.weight = moveTowards(s.weight, xTarget !== 0 || zTarget !== 0 ? 1 : 0, h / Math.max(1e-3, settings.accelTimeGround));
@@ -152,12 +155,14 @@ function step(s: State, c: StepInput, h: number) {
   if (c.grounded) {
     // on the ground the move velocity follows the axes directly
     s.vx = tx; s.vz = tz;
+    if (s.n === launchStep) airLaunch(s, c);
   } else {
     // in the air it chases them at the air acceleration, against quadratic drag
     const dx = tx - s.vx, dz = tz - s.vz;
     const dl = Math.sqrt(dx * dx + dz * dz);
     const maxD = accel * h;
     if (dl <= maxD) { s.vx = tx; s.vz = tz; } else { s.vx += dx / dl * maxD; s.vz += dz / dl * maxD; }
+    if (s.n === launchStep) airLaunch(s, c);
     const sp = Math.sqrt(s.vx * s.vx + s.vz * s.vz);
     if (sp > 0) {
       const f = Math.max(0, 1 - AIR_DRAG * sp * h);
@@ -173,6 +178,15 @@ function step(s: State, c: StepInput, h: number) {
   else if (es > MAX_EXTERNAL_SPEED * MAX_EXTERNAL_SPEED) { const f = MAX_EXTERNAL_SPEED / Math.sqrt(es); s.ex *= f; s.ez *= f; }
 }
 
+// Air jump launch: the move velocity turns to the keys held on this step, at least AIR_JUMP_IMPULSE fast.
+function airLaunch(s: State, c: StepInput) {
+  if (!AIR_JUMP_STOP_WITHOUT_KEYS && c.x === 0 && c.z === 0) return;
+  const v = Math.max(AIR_JUMP_IMPULSE, Math.sqrt(s.vx * s.vx + s.vz * s.vz));
+  s.ax = v * c.x; s.az = v * c.z; s.adx = 0; s.adz = 0;
+  s.vx = right.x * s.ax + fwd.x * s.az;
+  s.vz = right.z * s.ax + fwd.z * s.az;
+}
+
 // Runs the whole steps that fit into `pending` (plus `extra`), returns the time left over.
 function advance(s: State, c: StepInput, time: number): number {
   let n = 0;
@@ -186,6 +200,7 @@ function advance(s: State, c: StepInput, time: number): number {
 
 export function updateHorizontalVelocity() {
   readInput();
+  launchStep = airLaunchStep();
 
   if (horizontalResync) {
     // the engine moved us at another velocity: continue from what it applied
