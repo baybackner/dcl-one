@@ -9,6 +9,8 @@ const engine = new URL('../../deploy/web/engine/', import.meta.url)
 // Observe dispatch before Chromium applies its own per-origin connection limit.
 function observeTransport() {
   const send = self.fetch.bind(self)
+  const NativePromise = Promise
+  const defineProperty = Object.defineProperty
   self.sends = []
   self.peak = 0
   let active = 0
@@ -16,7 +18,10 @@ function observeTransport() {
     self.sends.push({ url: input.url, addressSpace: init?.targetAddressSpace })
     self.peak = Math.max(self.peak, ++active)
     try {
-      return await send(input, init)
+      // Awaited without reading a `constructor` a case may have replaced.
+      const sent = send(input, init)
+      defineProperty(sent, 'constructor', { __proto__: null, value: NativePromise })
+      return await sent
     } finally {
       active--
     }
@@ -32,6 +37,8 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
   let cachedHits = 0
   // Cookie headers the server saw, by path and query.
   const cookies = []
+  // Requests that reached /probe or /steered, here or through the node's scene proxy.
+  const probes = []
   const server = createServer(async (req, res) => {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
     res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
@@ -40,6 +47,20 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
     if (path === '/') {
       res.setHeader('Set-Cookie', 'page=1; Path=/')
       return res.end('<!doctype html>')
+    }
+    if (path === '/_scene') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify({ routes: { 'rooms.example': '/_scene/rooms.example' } }))
+    }
+    if (path.endsWith('/probe') || path.endsWith('/steered')) {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      probes.push({
+        path, case: url.searchParams.get('case'), method: req.method, body,
+        cookie: req.headers.cookie ?? '', ipfs: req.headers['x-ipfs'] ?? '', cache: req.headers['cache-control'] ?? '',
+      })
+      res.setHeader('Cache-Control', 'max-age=600')
+      return res.end(String(probes.length))
     }
     if (path === '/cookie') {
       cookies.push([req.url, req.headers.cookie ?? ''])
@@ -73,7 +94,12 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
       import { scrubSceneGlobal, createSceneScope } from '/engine/scene_global.js'
       self.scrubSceneGlobal = scrubSceneGlobal
       self.createSceneScope = createSceneScope
-      self.onmessage = ({data}) => postMessage({type:'INIT_COMPLETE', killToken:data.payload.killToken})
+      // The worker's own INIT_WORKER handler takes the routing map, then stops at the missing runtime.
+      const init = self.onmessage
+      self.onmessage = ({data}) => {
+        init({ data: { type: 'INIT_WORKER', payload: { sceneRoutes: data.payload.sceneRoutes } } })
+        postMessage({type:'INIT_COMPLETE', killToken:data.payload.killToken})
+      }
     `)
     if (path.endsWith('/dcl_scene_wasm.js')) return res.end('export default () => {}')
     const modules = ['/engine/sandbox_host.js', '/engine/sandbox_worker.js', '/engine/relay_copy.js', '/engine/scene_fetch.js', '/engine/scene_global.js']
@@ -185,7 +211,7 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
         indexedDB: typeof indexedDB, caches: typeof caches, storage: typeof navigator.storage,
         storageBuckets: typeof navigator.storageBuckets, locks: typeof navigator.locks,
         serviceWorker: typeof navigator.serviceWorker, XMLHttpRequest: typeof XMLHttpRequest,
-        EventSource: typeof EventSource, importScripts: typeof importScripts,
+        EventSource: typeof EventSource, importScripts: typeof importScripts, Notification: typeof Notification,
         usb: typeof navigator.usb, hid: typeof navigator.hid, serial: typeof navigator.serial,
       }`)
       const before = reachable()
@@ -276,10 +302,104 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
           ticked: await new Promise(resolve => {
             const id = globalThis.setInterval(() => { globalThis.clearInterval(id); resolve(true) }, 1)
           }),
+          replaced: (() => {
+            'use strict'
+            const polyfill = () => 0
+            globalThis.setTimeout = polyfill
+            return globalThis.setTimeout === polyfill
+          })(),
         }))()`)
       return scene.call(proxy, proxy)
     })
-    assert.deepEqual(result, { same: true, fired: true, cleared: true, ticked: true })
+    assert.deepEqual(result, { same: true, fired: true, cleared: true, ticked: true, replaced: true })
+  })
+
+  // What the server saw of each request of a case: no cookie, no X-IPFS, and the no-cache
+  // request headers that cache "no-store" adds.
+  const sentAs = name => probes.filter(probe => probe.case === name)
+  const policy = { cookie: '', ipfs: '', cache: 'no-cache' }
+  const assertPolicy = (name, count) => {
+    const seen = sentAs(name)
+    assert.equal(seen.length, count, `${name} requests sent`)
+    for (const { cookie, ipfs, cache } of seen) assert.deepEqual({ cookie, ipfs, cache }, policy, name)
+  }
+
+  await t.test('a request to a listed host goes through the node without credentials, cache or X-IPFS', async () => {
+    const worker = await spawn('client')
+    const result = await worker.evaluate(async () => {
+      const init = { headers: { 'X-IPFS': '1' }, credentials: 'include', cache: 'force-cache' }
+      const get = async () => (await fetch('https://rooms.example/probe?case=routed', init)).text()
+      const post = await fetch('https://rooms.example/probe?case=routed-post', { ...init, method: 'POST', body: 'room payload' })
+      return { first: await get(), second: await get(), posted: post.status }
+    })
+    assert.notEqual(result.first, result.second)
+    assert.equal(result.posted, 200)
+    assertPolicy('routed', 2)
+    assertPolicy('routed-post', 1)
+    assert.deepEqual(sentAs('routed-post').map(({ path, method, body }) => [path, method, body]),
+      [['/_scene/rooms.example/probe', 'POST', 'room payload']])
+    assert.ok(sentAs('routed').every(({ path }) => path === '/_scene/rooms.example/probe'))
+  })
+
+  await t.test('replaced Map, Set, URL and Request lookups cannot steer a request', async () => {
+    const worker = await spawn('client')
+    const result = await worker.evaluate(async () => {
+      Object.defineProperty(Request.prototype, 'url', { get: () => `${location.origin}/steered?case=steered` })
+      Object.defineProperty(Request.prototype, 'method', { get: () => 'GET' })
+      Map.prototype.get = () => ''
+      Set.prototype.has = () => true
+      self.Request = url => url
+      self.URL = function () { return { protocol: 'https:', host: 'rooms.example', pathname: '/steered', search: '?case=steered' } }
+      const routed = await (await fetch('https://rooms.example/probe?case=tampered', { headers: { 'X-IPFS': '1' }, credentials: 'include' })).status
+      const other = await fetch('https://unlisted.invalid/steered?case=steered').then(() => 'sent', e => e.name)
+      return { routed, other }
+    })
+    assert.deepEqual(result, { routed: 200, other: 'TypeError' })
+    assertPolicy('tampered', 1)
+    assert.equal(sentAs('tampered')[0].path, '/_scene/rooms.example/probe')
+    assert.deepEqual(probes.filter(({ path }) => path.endsWith('/steered')), [])
+  })
+
+  await t.test('a replaced Promise species or instanceof keeps every slot and every answer', async () => {
+    const worker = await spawn('client')
+    await worker.evaluate(() => {
+      const throwing = function () { throw new Error('scene species') }
+      Promise.prototype.constructor = { [Symbol.species]: throwing }
+      Object.defineProperty(Promise, Symbol.hasInstance, { value: () => true, configurable: true })
+      // Kept unobserved until the tampering is undone: then and catch would read the species too.
+      self.answers = [
+        ...Array.from({ length: 8 }, (_, i) => fetch(`/probe?case=species&i=${i}`, { headers: { 'X-IPFS': '1' } })),
+        fetch('https://rooms.example/probe?case=species&i=routed', { headers: { 'X-IPFS': '1' } }),
+        fetch('https://rooms.example/probe?case=species&i=post', { method: 'POST', body: 'species', headers: { 'X-IPFS': '1' } }),
+      ]
+    })
+    const deadline = Date.now() + 10_000
+    while (sentAs('species').length < 10 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    const statuses = await worker.evaluate(async () => {
+      Promise.prototype.constructor = Promise
+      delete Promise[Symbol.hasInstance]
+      return Promise.all(answers.map(answer => answer.then(response => response.status, e => e.message)))
+    })
+    assert.deepEqual(statuses, Array(10).fill(200))
+    assertPolicy('species', 10)
+  })
+
+  await t.test('a polluted Object.prototype does not put headers back on what is sent', async () => {
+    const worker = await spawn('client')
+    const result = await worker.evaluate(async () => {
+      Object.prototype.headers = { 'X-IPFS': '1' }
+      try {
+        return [
+          (await fetch('/probe?case=polluted')).status,
+          (await fetch('https://rooms.example/probe?case=polluted')).status,
+          (await fetch('https://rooms.example/probe?case=polluted', { method: 'POST', body: 'polluted' })).status,
+        ]
+      } finally {
+        delete Object.prototype.headers
+      }
+    })
+    assert.deepEqual(result, [200, 200, 200])
+    assertPolicy('polluted', 3)
   })
 
   await t.test('headers release the slot and the caller can abort the response body', async () => {
@@ -293,4 +413,19 @@ test('scene Fetch isolates workers and preserves the browser request', { timeout
     })
     assert.deepEqual(result, { timeout: 'TimeoutError', bodies: Array(5).fill('AbortError'), sent: 6 })
   })
+})
+
+// The test bundle replaces the worker's message handler, so the scrub is called directly above;
+// this checks that the real handler scrubs the global before it builds the scene scope or runs any
+// scene code.
+test('the sandbox worker scrubs its global before scene code runs', async () => {
+  const source = (await readFile(new URL('sandbox_worker.js', engine), 'utf8')).replaceAll('\r\n', '\n')
+  const body = source.slice(source.indexOf('function createJsContext('), source.indexOf('\nasync function runWithScope('))
+  const scrub = body.indexOf('\n  scrubSceneGlobal();\n')
+  assert.notEqual(scrub, -1, 'createJsContext calls scrubSceneGlobal()')
+  assert.ok(scrub < body.indexOf('createSceneScope(jsContext)'), 'before it builds the scene scope')
+  const init = source.slice(source.indexOf('self.onmessage = async'))
+  const created = init.indexOf('createJsContext(sceneApi, wasmContext)')
+  assert.notEqual(created, -1)
+  assert.ok(created < init.indexOf('preloadModules(') && created < init.indexOf('runWithScope('), 'before any scene code')
 })

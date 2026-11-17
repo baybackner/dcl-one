@@ -55,10 +55,12 @@ anything secret: it must not be in the app process at all.
 engine's, kept apart for each scene, not the browser's. On web, before scene code runs,
 `sandbox_worker.js` removes the native `fetch`, `WebTransport` and `FontFace` from the whole
 prototype chain, and `scene_global.js` deletes the storage APIs, `XMLHttpRequest`, `EventSource`,
-`importScripts` and the granted-device APIs (`navigator.usb`, `hid`, `serial`).
-`createSceneFetch` sends every request with `credentials: "omit"` and `cache: "no-store"`, drops
-the `X-IPFS` header the service worker's content cache answers, and keeps its five-send limit on
-functions it captured at load. `WebSocket` and `WebSocketStream` stay outside it, and their
+`importScripts`, `Notification` and the granted-device APIs (`navigator.usb`, `hid`, `serial`).
+`createSceneFetch` builds every request it sends, direct or routed through the node, in one
+place: with `credentials: "omit"` and `cache: "no-store"`, and without the `X-IPFS` header the
+service worker's content cache answers. That path, its routing and its five-send limit use only
+functions captured at load, and its inits have a null prototype, so scene code that replaces
+built-ins or pollutes `Object.prototype` changes none of them. `WebSocket` and `WebSocketStream` stay outside it, and their
 handshake carries the target host's cookies. A dynamic `import()` does not go through it
 either, and a same-origin one carries the origin's cookies. On native the runtime registers no
 storage extension besides that `localStorage`. Any other state a scene must keep goes through

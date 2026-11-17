@@ -65,8 +65,9 @@ const TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"];
 // The scene's globalThis over `context`, and the preamble that declares each name it offers.
 export function createSceneScope(context) {
   // A WebIDL timer called as `globalThis.setTimeout(...)` would get the proxy as `this` and throw.
+  // Writable, so a scene may still install its own (`globalThis.setTimeout = ...`).
   for (const name of TIMERS) {
-    Object.defineProperty(context, name, { configurable: false, value: self[name].bind(self) });
+    Object.defineProperty(context, name, { configurable: false, writable: true, value: self[name].bind(self) });
   }
   const proxy = new Proxy(context, {
     has() {
@@ -160,6 +161,8 @@ export function scrubSceneGlobal() {
   deleteFromPrototypeChain(self, "EventSource");
   // A module worker's importScripts only throws, but it is still a way to load a url.
   deleteFromPrototypeChain(self, "importScripts");
+  // A granted Notification fetches its icon, image and badge outside the scene fetch.
+  deleteFromPrototypeChain(self, "Notification");
   // Older persistent stores, where a browser still exposes them to workers.
   for (const name of [
     "webkitRequestFileSystem",
