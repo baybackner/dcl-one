@@ -51,20 +51,22 @@ describe('OverviewTab', () => {
       expect(shownValue('Total Playtime')).toBe('-');
     });
 
-    it('should place it after Peak Concurrent Users, in the traffic card', () => {
+    it('should pair it with Total Visits on the traffic card first row, adding no row', () => {
       render(<OverviewTab overview={OVERVIEW} />);
 
-      const labels = [...document.querySelectorAll('.MetricsCard')].map(card =>
-        [...card.querySelectorAll('.MetricLabel .Label')].map(label => label.textContent),
+      const [traffic] = document.querySelectorAll('.MetricsCard');
+      const cells = [...traffic.children].flatMap(child =>
+        child.classList.contains('MetricsGrid') ? [...child.children] : [child],
       );
-      expect(labels[0]).toEqual([
+      expect(cells.map(cell => cell.querySelector('.MetricLabel .Label')?.textContent)).toEqual([
         'Total Visits',
+        'Total Playtime',
         'Unique Visits',
         'New Decentraland Players',
         'Concurrent Users',
         'Peak Concurrent Users',
-        'Total Playtime',
       ]);
+      expect(cells.every(cell => cell.parentElement?.classList.contains('MetricsGrid'))).toBe(true);
     });
   });
 });

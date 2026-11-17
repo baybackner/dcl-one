@@ -43,12 +43,17 @@ export function OverviewTab({ overview }: Props) {
       />
       <Box className="Cards">
         <MetricsCard
-          headline={{
-            label: t('analytics.metrics.total_visits.label'),
-            tooltip: t('analytics.metrics.total_visits.tooltip'),
-            value: formatCount(overview.totalVisits),
-          }}
           metrics={[
+            {
+              label: t('analytics.metrics.total_visits.label'),
+              tooltip: t('analytics.metrics.total_visits.tooltip'),
+              value: formatCount(overview.totalVisits),
+            },
+            {
+              label: t('analytics.metrics.total_playtime.label'),
+              tooltip: t('analytics.metrics.total_playtime.tooltip'),
+              ...wholeMinutes(overview.totalPlaytime),
+            },
             {
               label: t('analytics.metrics.unique_visits.label'),
               tooltip: t('analytics.metrics.unique_visits.tooltip'),
@@ -68,11 +73,6 @@ export function OverviewTab({ overview }: Props) {
               label: t('analytics.metrics.peak_concurrent_users.label'),
               tooltip: t('analytics.metrics.peak_concurrent_users.tooltip'),
               value: formatCount(overview.peakConcurrentUsers),
-            },
-            {
-              label: t('analytics.metrics.total_playtime.label'),
-              tooltip: t('analytics.metrics.total_playtime.tooltip'),
-              ...wholeMinutes(overview.totalPlaytime),
             },
           ]}
         />
