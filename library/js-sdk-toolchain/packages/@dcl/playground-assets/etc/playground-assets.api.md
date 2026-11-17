@@ -1515,6 +1515,14 @@ export function getWorldPosition(engine: WorldTransformEngine, entity: Entity): 
 // @public
 export function getWorldRotation(engine: WorldTransformEngine, entity: Entity): QuaternionType;
 
+// @public (undocumented)
+export const enum GlideState {
+    GS_CLOSED = 0,
+    GS_CLOSING = 3,
+    GS_GLIDING = 2,
+    GS_OPENING = 1
+}
+
 // Warning: (ae-missing-release-tag) "GlobalDirectionRaycastOptions" is part of the package's API, but it is missing a release tag (@alpha, @beta, @public, or @internal)
 //
 // @public (undocumented)
@@ -1995,6 +2003,38 @@ export type LocalDirectionRaycastOptions = RaycastSystemOptions & LocalDirection
 export type LocalDirectionRaycastSystemOptions = {
     direction?: PBVector3;
 };
+
+// @public (undocumented)
+export const enum LocomotionGait {
+    // (undocumented)
+    LG_IDLE = 0,
+    // (undocumented)
+    LG_JOG = 2,
+    // (undocumented)
+    LG_RUN = 3,
+    // (undocumented)
+    LG_WALK = 1
+}
+
+// @public (undocumented)
+export interface LocomotionState {
+    // (undocumented)
+    gait: LocomotionGait;
+    // (undocumented)
+    glideState: GlideState;
+    grounded: boolean;
+    jumpCount: number;
+    sliding: boolean;
+    stunned: boolean;
+}
+
+// @public (undocumented)
+export namespace LocomotionState {
+    // (undocumented)
+    export function decode(input: _m0.Reader | Uint8Array, length?: number): LocomotionState;
+    // (undocumented)
+    export function encode(message: LocomotionState, writer?: _m0.Writer): _m0.Writer;
+}
 
 // Warning: (ae-missing-release-tag) "LwwComponentGetter" is part of the package's API, but it is missing a release tag (@alpha, @beta, @public, or @internal)
 //
@@ -2841,6 +2881,7 @@ export interface PBAvatarMovement {
     animation?: MovementAnimation | undefined;
     // (undocumented)
     groundDirection?: PBVector3 | undefined;
+    locomotion?: LocomotionState | undefined;
     orientation: number;
     tiltPitch?: number | undefined;
     tiltRoll?: number | undefined;

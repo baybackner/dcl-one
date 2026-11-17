@@ -12,14 +12,44 @@ message PBAvatarMovement {
   float orientation = 2;                                    // 0-360, yaw only; this is the authoritative facing (other clients read it, and physics treats the avatar as upright). Lean is expressed separately via tilt_pitch/tilt_roll.
   optional decentraland.common.Vector3 ground_direction = 3;
   optional bool walk_success = 4;                           // set for one frame when a walk_target ends: true = reached target, false = failed; absent = in progress or no walk
-  optional MovementAnimation animation = 5;                 // if set, the engine plays this animation instead of selecting one from velocity heuristics
+  optional MovementAnimation animation = 5;                 // if set, the engine plays this animation instead of selecting one from `locomotion` or velocity heuristics
   optional float tilt_pitch = 6;                            // render-only forward/back lean in degrees, applied on top of `orientation` (rotation about the avatar's local X axis). Does not affect the physics capsule (stays upright) or the facing other clients read. Defaults to 0.
   optional float tilt_roll = 7;                             // render-only sideways lean in degrees, applied on top of `orientation` (rotation about the avatar's local Z axis). Same constraints as tilt_pitch. Useful e.g. for glider banking. Defaults to 0.
+  optional LocomotionState locomotion = 8;                  // the movement model's state this frame. When `animation` is unset the engine animates the avatar from it; either way it is what other clients learn about the avatar's motion (gait, jumps, glide). When absent the engine infers these from velocity.
+}
+
+// The gait the movement model executes: the gait it was asked for, not one inferred from speed.
+enum LocomotionGait {
+  LG_IDLE = 0;
+  LG_WALK = 1;
+  LG_JOG = 2;
+  LG_RUN = 3;
+}
+
+// The glider's phase.
+enum GlideState {
+  GS_CLOSED = 0;                                            // no glider out
+  GS_OPENING = 1;                                           // the glider is opening
+  GS_GLIDING = 2;                                           // gliding
+  GS_CLOSING = 3;                                           // the glider is closing
+}
+
+// Facts of the movement model, published by the scene that controls movement. The engine derives
+// the presentation from them (the avatar's animation, the animation state other clients receive);
+// presentation never feeds back into the model. Falling and long falling are not listed: the engine
+// derives them from the vertical velocity.
+message LocomotionState {
+  LocomotionGait gait = 1;
+  bool grounded = 2;                                        // standing on ground the avatar can stand on (a slope too steep to stand on is not ground)
+  uint32 jump_count = 3;                                    // jumps since the avatar last stood on ground; an increase is the start of a jump
+  GlideState glide_state = 4;
+  bool stunned = 5;                                         // held in place after a hard landing
+  bool sliding = 6;                                         // sliding down a slope too steep to stand on
 }
 
 // Describes the animation the movement scene wants the avatar to play.
 // One GLB = one clip (following the scene-emote convention: single clip, or a clip named with `_Avatar` suffix).
-// When absent the engine falls back to its built-in velocity-based selection (walk/run/jump/idle).
+// When absent the engine animates the avatar from `locomotion` if set, otherwise from its built-in velocity-based selection (walk/run/jump/idle).
 message MovementAnimation {
   string src = 1;                                           // scene-relative path to the gltf/glb asset (resolved via the scene content map)
   bool loop = 2;                                            // whether the clip repeats once it reaches the end
