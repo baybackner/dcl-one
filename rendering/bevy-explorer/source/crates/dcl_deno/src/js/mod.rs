@@ -365,6 +365,17 @@ pub(crate) fn scene_thread(
             .borrow_mut()
             .take::<SceneResponseSender>()
             .try_send(SceneResponse::Error(format!("{e:?}")));
+        rt.block_on(async move {
+            drop(runtime);
+        });
+        return;
+    }
+
+    if kill_flag.killed() {
+        debug!("[{scene_id:?}] scene killed during onStart");
+        rt.block_on(async move {
+            drop(runtime);
+        });
         return;
     }
 
