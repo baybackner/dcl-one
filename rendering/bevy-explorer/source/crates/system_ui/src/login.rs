@@ -19,10 +19,11 @@ use common::{
         ActiveDialog, AppConfig, ChainLink, CurrentRealm, PreviewMode, PreviousLogin, SystemAudio,
         WorldHold, ZOrder, TERMS_VERSION,
     },
-    util::{TaskCompat, TaskExt},
+    util::{AsH160, TaskCompat, TaskExt},
 };
 use comms::profile::{
-    get_default_look, get_remote_profile, CurrentUserProfile, UserProfile, DEFAULT_LOOKS,
+    get_default_look, get_remote_profile, CatalystProfile, CurrentUserProfile, OfficialWallets,
+    UserProfile, DEFAULT_LOOKS,
 };
 use ipfs::{IpfsAssetServer, IpfsIo};
 use scene_runner::Toaster;
@@ -268,7 +269,8 @@ fn update_profile_for_realm(
     realm: Res<CurrentRealm>,
     wallet: Res<Wallet>,
     mut current_profile: ResMut<CurrentUserProfile>,
-    mut task: Local<Option<Task<Result<Option<UserProfile>, anyhow::Error>>>>,
+    mut official: ResMut<OfficialWallets>,
+    mut task: Local<Option<Task<Result<Option<CatalystProfile>, anyhow::Error>>>>,
     ipfas: IpfsAssetServer,
 ) {
     if realm.is_changed() && !wallet.is_guest() {
@@ -281,7 +283,10 @@ fn update_profile_for_realm(
 
     if let Some(mut t) = task.take() {
         match t.complete() {
-            Some(Ok(Some(profile))) => current_profile.adopt_server_profile(profile),
+            Some(Ok(Some(answer))) => {
+                record_official(&mut official, &answer);
+                current_profile.adopt_server_profile(answer.profile)
+            }
             Some(Ok(None)) | Some(Err(_)) => {
                 // keep existing profile
             }
@@ -353,11 +358,18 @@ fn parse_auth_identity(payload: &str) -> Result<(Address, EphemeralKey, Vec<Chai
 /// resolving when login runs (on web the page can fire `/login_identity` at boot), which
 /// reads as a fetch failure. Errors carry the PROFILE_FETCH_FAILED prefix so UIs can
 /// offer retrying with `default_on_error`.
+/// Take the catalyst's word on whether the wallet of the profile it answered is official.
+fn record_official(official: &mut ResMut<OfficialWallets>, answer: &CatalystProfile) {
+    if let Some(address) = answer.profile.content.eth_address.as_h160() {
+        OfficialWallets::record(official, address, answer.official);
+    }
+}
+
 async fn get_profile_with_retry(
     address: Address,
     ipfs: std::sync::Arc<IpfsIo>,
     default_on_error: bool,
-) -> Result<Option<UserProfile>, String> {
+) -> Result<Option<CatalystProfile>, String> {
     const ATTEMPTS: u32 = 5;
     let mut last_error = String::default();
     for attempt in 0..ATTEMPTS {
@@ -379,7 +391,7 @@ async fn get_profile_with_retry(
 /// The profile a login lands with.
 enum LoginProfile {
     /// On the server.
-    Deployed(UserProfile),
+    Deployed(CatalystProfile),
     /// Built here for an account with none; deployed on entry, or by the welcome page.
     New(UserProfile),
 }
@@ -587,6 +599,7 @@ fn process_login_bridge(
         >,
     >,
     mut wallet: ResMut<Wallet>,
+    mut official: ResMut<OfficialWallets>,
     mut segment_config: ResMut<SegmentConfig>,
     mut login_events: ResMut<client_login::ClientLoginDelivery>,
     mut current_profile: ResMut<CurrentUserProfile>,
@@ -888,7 +901,10 @@ fn process_login_bridge(
                 segment_config
                     .update_identity(format!("{:#x}", wallet.address().unwrap()), guest_account);
                 let (profile, deployed) = match profile {
-                    LoginProfile::Deployed(profile) => (profile, true),
+                    LoginProfile::Deployed(answer) => {
+                        record_official(&mut official, &answer);
+                        (answer.profile, true)
+                    }
                     LoginProfile::New(profile) => (profile, false),
                 };
                 current_profile.profile = Some(profile);

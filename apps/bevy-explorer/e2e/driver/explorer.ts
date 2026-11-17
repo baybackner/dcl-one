@@ -185,6 +185,8 @@ export interface NametagState {
   /** The glyph atlas' distance-field and colour page sizes, in pixels. */
   atlas: [number, number]
   bubbles: 'All' | 'NearbyOnly' | 'None'
+  /** Wallets the catalyst's profile answers have marked official this session. */
+  officialWallets: number
   tags: NametagTag[]
 }
 

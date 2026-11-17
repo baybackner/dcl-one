@@ -100,8 +100,12 @@ scene draws none.
   last four characters of its address in lower case, and anything after a `#` in the name itself
   is dropped. The verified seal needs a claimed name on a profile that says it has a connected
   wallet. Both flags are the peer's word: nothing confirms them against the catalyst yet.
-- **The foundation badge has an input and no source.** `OfficialWallets` lists the wallets that
-  show it. Nothing fills it yet.
+- **The foundation badge is the catalyst's word.** `OfficialWallets` lists the wallets that
+  show it: those whose `/lambdas/profiles` answer carries `isOfficial: true` beside `timestamp`
+  and `avatars`. The node sets it for the wallets its explorer flags name official, the list its
+  social API marks community posts from. The key is outside the profile, so no client sends it
+  to peers or deploys it, and a profile a peer sends of itself marks no one. A catalyst that
+  sends no such key leaves every tag without the badge.
 - **Observable through the console.** `/nametag_state` reports every shown tag without message
   text, `/nametag_bubble` raises a test bubble, and the runtime debug panel has a *Nametags*
   section. The end-to-end driver reads the same commands.
@@ -182,8 +186,6 @@ them, which halves the work in the frame.
 
 ## Follow-ups
 
-- Fill `OfficialWallets` with the profile data the dcl-one services send: the social service
-  already marks official wallets on community messages.
 - Confirm a claimed name against the catalyst before drawing the verified seal.
 - The SDK's nametag plate (`AvatarNametag`).
 - A fallback font for CJK names.

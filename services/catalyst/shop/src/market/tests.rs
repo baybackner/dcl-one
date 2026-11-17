@@ -890,6 +890,54 @@ async fn profiles_metadata_answers_a_failed_read_with_what_was_found_on_both_pat
 }
 
 #[tokio::test]
+async fn an_official_wallets_profile_says_so_beside_its_avatars() {
+    let Some(state) = state_with_db(Settings::for_tests()).await else {
+        return;
+    };
+    let t = tag();
+    let official = format!("0x{}00000001", &t[..32]);
+    let other = format!("0x{}00000002", &t[..32]);
+    for (address, kind) in [(&official, "official"), (&other, "other")] {
+        seed_profile(
+            &state.pool,
+            address,
+            &format!("bafy{kind}{t}"),
+            json!({ "avatars": [{ "name": kind, "isOfficial": true }] }),
+        )
+        .await;
+    }
+    use crate::shared::feature_flags::{OFFICIAL_WALLETS, Snapshot};
+    assert!(
+        state.attach_explorer_flags(Arc::new(Snapshot::from_document(json!({
+            "flags": { OFFICIAL_WALLETS: true },
+            "variants": { OFFICIAL_WALLETS: {
+                "name": "wallets",
+                "payload": { "type": "csv", "value": official.to_uppercase().replace("0X", "0x") }
+            } }
+        }))))
+    );
+
+    let (status, body) = post_json(
+        router(state.clone()),
+        "/lambdas/profiles",
+        json!({ "ids": [official, other] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["isOfficial"], json!(true), "{body}");
+    assert!(
+        body[1].get("isOfficial").is_none(),
+        "what a profile deployed of itself names no one official: {body}"
+    );
+    let (_, by_id) = get_json(
+        router(state.clone()),
+        &format!("/lambdas/profiles/{official}"),
+    )
+    .await;
+    assert_eq!(by_id["isOfficial"], json!(true), "{by_id}");
+}
+
+#[tokio::test]
 async fn a_synced_profile_is_served_shaped_and_cached() {
     let Some(state) = state_with_db(Settings::for_tests()).await else {
         return;

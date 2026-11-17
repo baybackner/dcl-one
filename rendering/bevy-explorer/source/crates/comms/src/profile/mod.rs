@@ -6,7 +6,7 @@ use alloy_core::primitives::Address;
 use anyhow::anyhow;
 use bevy::{
     ecs::system::SystemParam,
-    platform::collections::HashMap,
+    platform::collections::{HashMap, HashSet},
     prelude::*,
     tasks::{IoTaskPool, Task},
 };
@@ -99,6 +99,7 @@ impl Plugin for UserProfilePlugin {
             });
         app.insert_resource(CurrentUserProfile::default());
         app.init_resource::<ProfileCache>()
+            .init_resource::<OfficialWallets>()
             .add_event::<ProfileDeployedEvent>();
     }
 }
@@ -134,6 +135,50 @@ enum ProfileTier {
     Compact,
     /// The whole profile: an avatar to render, a passport
     Full,
+}
+
+/// A profile as the catalyst answered it.
+#[derive(Clone, Debug)]
+pub struct CatalystProfile {
+    pub profile: UserProfile,
+    /// The answer marks the profile's wallet official (`isOfficial` beside its avatars).
+    pub official: bool,
+}
+
+/// The wallets whose nametags carry the official badge: the ones the catalyst's profile answer
+/// marks official. Only that answer is recorded; a profile a peer sends of itself changes
+/// nothing here, and a catalyst that marks none leaves it empty.
+#[derive(Resource, Default)]
+pub struct OfficialWallets(HashSet<Address>);
+
+impl OfficialWallets {
+    pub fn contains(&self, address: &Address) -> bool {
+        self.0.contains(address)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn set(&mut self, address: Address, official: bool) {
+        if official {
+            self.0.insert(address);
+        } else {
+            self.0.remove(&address);
+        }
+    }
+
+    /// Take the catalyst's answer for a wallet, marking the resource changed only when the
+    /// answer differs from what is held.
+    pub fn record(wallets: &mut ResMut<Self>, address: Address, official: bool) {
+        if wallets.contains(&address) != official {
+            wallets.set(address, official);
+        }
+    }
 }
 
 fn profile_is_guest(profile: &UserProfile) -> bool {
@@ -298,7 +343,7 @@ impl ProfileEntry {
     }
 }
 
-type ProfileBatch = Task<Vec<(Address, Result<Option<UserProfile>, anyhow::Error>)>>;
+type ProfileBatch = Task<Vec<(Address, Result<Option<CatalystProfile>, anyhow::Error>)>>;
 type CompactAnswer = Result<Vec<(Address, Option<CompactProfile>)>, CompactFetchError>;
 
 struct CompactBatch {
@@ -926,7 +971,11 @@ impl CurrentUserProfile {
 /// lives here — the fetchers themselves are dumb HTTP. Entries nobody has asked about
 /// recently are dropped here too, so departed peers and one-off lookups (unknown addresses
 /// especially, which never satisfy) stop being re-fetched for the rest of the session.
-fn drive_profile_fetches(mut manager: ProfileManager, wallet: Res<Wallet>) {
+fn drive_profile_fetches(
+    mut manager: ProfileManager,
+    wallet: Res<Wallet>,
+    mut official: ResMut<OfficialWallets>,
+) {
     let ProfileManager { cache, ipfs } = &mut manager;
 
     // apply landed compact batches; a catalyst without the route turns every fetch full
@@ -973,8 +1022,9 @@ fn drive_profile_fetches(mut manager: ProfileManager, wallet: Res<Wallet>) {
             };
             entry.fetching = None;
             match result {
-                Ok(Some(profile)) => {
-                    entry.apply(profile, ProfileSource::Catalyst);
+                Ok(Some(answer)) => {
+                    OfficialWallets::record(&mut official, address, answer.official);
+                    entry.apply(answer.profile, ProfileSource::Catalyst);
                 }
                 Ok(None) => debug!("catalyst has no profile for {address:#x}"),
                 Err(e) => {
@@ -1576,7 +1626,7 @@ async fn fetch_profiles(
     lambdas: String,
     addresses: Vec<Address>,
     ipfs: Arc<IpfsIo>,
-) -> Vec<(Address, Result<Option<UserProfile>, anyhow::Error>)> {
+) -> Vec<(Address, Result<Option<CatalystProfile>, anyhow::Error>)> {
     let url = format!("{}/profiles", lambdas.trim_end_matches('/'));
     let ids = addresses
         .iter()
@@ -1622,29 +1672,36 @@ async fn fetch_profiles(
 /// The asked addresses, in order, each with the profile the response holds for it. A
 /// profile is matched by its deployed metadata, which is written by whoever deployed it,
 /// so only asked-for addresses are kept and a later entry never displaces an earlier one.
+/// Whether the wallet is official is the answer's own word, read from beside the avatars.
 fn profiles_from_lambdas(
     batches: Vec<LambdaProfiles>,
     addresses: Vec<Address>,
     base_url: &str,
-) -> Vec<(Address, Option<UserProfile>)> {
-    let mut found = HashMap::<Address, SerializedProfile>::default();
+) -> Vec<(Address, Option<CatalystProfile>)> {
+    let mut found = HashMap::<Address, (SerializedProfile, bool)>::default();
     for batch in batches {
+        let official = batch.is_official;
         let Some(content) = batch.avatars.into_iter().next() else {
             continue;
         };
         let Some(address) = content.eth_address.as_h160() else {
             continue;
         };
-        found.entry(address).or_insert(content);
+        found.entry(address).or_insert((content, official));
     }
     addresses
         .into_iter()
         .map(|address| {
-            let profile = found.remove(&address).map(|content| UserProfile {
-                version: content.version as u32,
-                content,
-                base_url: base_url.to_owned(),
-            });
+            let profile = found
+                .remove(&address)
+                .map(|(content, official)| CatalystProfile {
+                    profile: UserProfile {
+                        version: content.version as u32,
+                        content,
+                        base_url: base_url.to_owned(),
+                    },
+                    official,
+                });
             (address, profile)
         })
         .collect()
@@ -1791,7 +1848,7 @@ pub async fn get_default_look(
 pub async fn get_remote_profile(
     address: Address,
     ipfs: Arc<IpfsIo>,
-) -> Result<Option<UserProfile>, anyhow::Error> {
+) -> Result<Option<CatalystProfile>, anyhow::Error> {
     fetch_profiles(lambdas_url(), vec![address], ipfs)
         .await
         .pop()
@@ -2251,6 +2308,7 @@ mod tests {
                 version,
                 ..Default::default()
             }],
+            is_official: false,
         };
         let batches = vec![lambdas(2, 7), lambdas(1, 3), lambdas(9, 1), lambdas(1, 4)];
 
@@ -2261,7 +2319,7 @@ mod tests {
         );
         let versions: Vec<_> = found
             .iter()
-            .map(|(address, profile)| (*address, profile.as_ref().map(|p| p.version)))
+            .map(|(address, found)| (*address, found.as_ref().map(|p| p.profile.version)))
             .collect();
         assert_eq!(
             versions,
@@ -2272,9 +2330,56 @@ mod tests {
             ]
         );
         assert_eq!(
-            found[0].1.as_ref().unwrap().base_url,
+            found[0].1.as_ref().unwrap().profile.base_url,
             "https://peer.example/content/contents/"
         );
+    }
+
+    #[test]
+    fn the_catalyst_names_a_wallet_official_beside_its_avatars() {
+        let (official, other) = (Address::repeat_byte(1), Address::repeat_byte(2));
+        let avatar = |address: Address| {
+            let mut avatar = serde_json::to_value(profile_of(address, 1, "x").content).unwrap();
+            avatar["ethAddress"] = format!("{address:#x}").into();
+            avatar
+        };
+        // the second profile says it of itself, where a deployed profile could
+        let mut claiming = avatar(other);
+        claiming["isOfficial"] = true.into();
+        let body = serde_json::json!([
+            { "timestamp": 1, "isOfficial": true, "avatars": [avatar(official)] },
+            { "timestamp": 1, "avatars": [claiming] },
+        ]);
+        let batches: Vec<LambdaProfiles> = serde_json::from_value(body).unwrap();
+        let found = profiles_from_lambdas(batches, vec![official, other], "");
+        let answers: Vec<_> = found
+            .iter()
+            .map(|(_, found)| found.as_ref().unwrap().official)
+            .collect();
+        assert_eq!(answers, vec![true, false]);
+        // the mark is no part of the profile that is sent to peers and deployed
+        let sent = serde_json::to_value(&found[0].1.as_ref().unwrap().profile.content).unwrap();
+        assert!(sent.get("isOfficial").is_none());
+    }
+
+    #[test]
+    fn a_peers_profile_names_no_wallet_official() {
+        let wallet = Address::repeat_byte(1);
+        let mut wallets = OfficialWallets::default();
+        let mut claim = profile_of(wallet, 2, "peer");
+        claim
+            .content
+            .extra_fields
+            .insert("isOfficial".to_owned(), serde_json::Value::Bool(true));
+        // a peer's profile reaches the cache, which holds no such mark
+        assert!(ProfileCache::default().update_from_peer(wallet, claim));
+        assert!(wallets.is_empty());
+
+        wallets.set(wallet, true);
+        assert!(wallets.contains(&wallet) && wallets.len() == 1);
+        // the catalyst's later answer without the mark takes it away
+        wallets.set(wallet, false);
+        assert!(!wallets.contains(&wallet));
     }
 
     #[test]

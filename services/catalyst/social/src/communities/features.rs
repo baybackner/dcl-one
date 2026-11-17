@@ -12,37 +12,7 @@ pub const AI_COMPLIANCE: &str = "communities_ai_compliance";
 pub const DEV_AI_COMPLIANCE: &str = "dev_communities_ai_compliance";
 pub const GLOBAL_MODERATORS: &str = "communities_global_moderators";
 pub const REFERRAL_REGISTRATION_DISABLED: &str = "referral_registration_disabled";
-/// The explorer flag whose `wallets` variant names the official wallets.
-pub const OFFICIAL_WALLETS: &str = "explorer-alfa-official-wallets";
-
-/// The official wallets in an explorer flags document, lowercased: while the flag is on, its
-/// variant named `wallets` with a `csv` payload, of which only the first line counts (as the
-/// Explorer clients read it). Anything else names none.
-pub fn official_wallets_in(doc: &serde_json::Value) -> HashSet<String> {
-    if doc["flags"][OFFICIAL_WALLETS].as_bool() != Some(true) {
-        return HashSet::new();
-    }
-    let variant = &doc["variants"][OFFICIAL_WALLETS];
-    let payload = &variant["payload"];
-    let csv = payload["type"]
-        .as_str()
-        .is_some_and(|t| t.eq_ignore_ascii_case("csv"));
-    let (Some("wallets"), true, Some(value)) =
-        (variant["name"].as_str(), csv, payload["value"].as_str())
-    else {
-        return HashSet::new();
-    };
-    let first = value
-        .split('\n')
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('\r');
-    first
-        .split(',')
-        .filter(|a| !a.is_empty())
-        .map(str::to_lowercase)
-        .collect()
-}
+pub use crate::shared::feature_flags::{OFFICIAL_WALLETS, official_wallets_in};
 
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -140,31 +110,6 @@ impl super::State {
 #[cfg(test)]
 mod official_wallet_tests {
     use super::*;
-    use serde_json::json;
-
-    fn doc(on: bool, name: &str, kind: &str, value: &str) -> serde_json::Value {
-        json!({
-            "flags": { OFFICIAL_WALLETS: on },
-            "variants": { OFFICIAL_WALLETS: { "name": name, "payload": { "type": kind, "value": value } } }
-        })
-    }
-
-    #[test]
-    fn reads_the_first_csv_line_lowercased_while_the_flag_is_on() {
-        let wallets = official_wallets_in(&doc(true, "wallets", "CSV", "0xAA,,0xbb\r\n0xcc"));
-        assert_eq!(
-            wallets,
-            HashSet::from(["0xaa".to_string(), "0xbb".to_string()])
-        );
-    }
-
-    #[test]
-    fn names_none_when_off_or_malformed() {
-        assert!(official_wallets_in(&doc(false, "wallets", "csv", "0xaa")).is_empty());
-        assert!(official_wallets_in(&doc(true, "other", "csv", "0xaa")).is_empty());
-        assert!(official_wallets_in(&doc(true, "wallets", "json", "0xaa")).is_empty());
-        assert!(official_wallets_in(&json!({ "flags": {}, "variants": {} })).is_empty());
-    }
 
     #[test]
     fn the_bundled_explorer_document_names_official_wallets() {

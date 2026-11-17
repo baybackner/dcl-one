@@ -72,7 +72,7 @@ fn a_long_name_is_cut() {
 #[test]
 fn the_official_badge_follows_the_wallet_set() {
     let mut official = OfficialWallets::default();
-    official.0.insert(ADDRESS.as_h160().unwrap());
+    official.set(ADDRESS.as_h160().unwrap(), true);
     assert!(NametagContent::from_profile(&profile("Ada", true), &official).official);
 }
 

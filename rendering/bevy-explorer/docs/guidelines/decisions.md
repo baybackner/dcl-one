@@ -300,6 +300,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   when its author is in the explorer feature flags' `alfa-official-wallets` list (`wallets`
   variant, first CSV line), which unity-explorer reads itself. Against the Foundation's social
   API, which sends no such field, no post shows the official mark.
+- **A nametag's official badge is the catalyst's word.** This node's `/lambdas/profiles` answer
+  carries `isOfficial: true` beside `timestamp` and `avatars` for a wallet in the same
+  `alfa-official-wallets` list. The engine records the wallets so marked and draws the badge for
+  them. The key sits outside the profile so that it is never sent to peers or deployed with it,
+  and a profile a peer sends of itself marks no one. Against a catalyst that sends no such key, no
+  nametag shows the badge.
 - **One answer to "banned or blocked?".** The `ban_block` crate is a facade: it reads the
   social client's block sets and comms' scene admission and scene-room lists through one
   `BanBlock` system parameter and owns only the platform-ban check, where unity-explorer keeps

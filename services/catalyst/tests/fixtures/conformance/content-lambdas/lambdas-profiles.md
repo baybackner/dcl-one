@@ -66,7 +66,7 @@ dcl-one: `ids` must deserialize as `Option<Vec<String>>`. Every id is lowercased
 |---|---|---|---|
 | entities without metadata | filtered out `profiles.ts:350` | `None`, skipped `profiles.rs:340` | MATCH |
 | `timestamp` | always overwritten with `entity.timestamp` `profiles.ts:175` | the entity's `timestamp` `profiles.rs:470-479` | MATCH |
-| top-level shape | only `{ timestamp, avatars }`; every other metadata key is dropped `profiles.ts:276-279` | `{ timestamp, avatars }` `profiles.rs:470-479` | MATCH |
+| top-level shape | only `{ timestamp, avatars }`; every other metadata key is dropped `profiles.ts:276-279` | `{ timestamp, avatars }`, and `isOfficial: true` beside them for a wallet the explorer flags name official (`explorer-alfa-official-wallets`); no other profile carries the key `profiles.rs` (`process_profiles_positional`) | MATCH, with a local extension for official wallets |
 | missing `avatars` | `metadata.avatars.flatMap` throws, caught; the whole batch answers `[]` `profiles.ts:157-158,381-389` | `avatars: []` `profiles.rs:473-477` | DIVERGENT (edge) |
 | `userId`/`ethAddress` | set to `entity.pointers[0]` unless the pointer starts with `default` `profiles.ts:171-172,259` | same, lowercased pointer `profiles.rs:319-335,350-352` | MATCH |
 | `links` | each url kept if `LinkUrl.validate` passes, else `decodeURIComponent` and revalidate, else dropped; `undefined`/`[]` returned as is `profiles.ts:84-106` | the regex `(?i)^(?:https?)://[^\s/$.?#].[^\s]*$`, then the decoded retry; no host check `services/catalyst/shop/src/market/profiles.rs` (`sanitize_links`) | MATCH as far as read: the regex is `LinkUrl`'s in a local `@dcl/schemas` 23.1.0 (`dist/platform/profile/avatar.js`); lamb2 pins `^26.5.0`, not read (LP-18) |

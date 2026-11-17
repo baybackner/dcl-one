@@ -391,8 +391,10 @@ fn prepare_profile(state: &MarketplaceState, entity: &Value) -> Option<(String, 
 
 /// One slot per entity (`None` without metadata): the pure passes, then one
 /// ownership batch and one names batch per chunk of 128. Each profile is
-/// `{ timestamp, avatars }` (`profiles.ts`), the entity's timestamp. `Err`
-/// is a reader failure.
+/// `{ timestamp, avatars }` (`profiles.ts`), the entity's timestamp, and
+/// for an official wallet (`MarketplaceState::official_wallets`) `isOfficial:
+/// true` beside them: a local key, kept out of `avatars` so that no client
+/// deploys it back with its profile. `Err` is a reader failure.
 pub async fn process_profiles_positional(
     state: &MarketplaceState,
     entities: &[Value],
@@ -403,6 +405,7 @@ pub async fn process_profiles_positional(
             .iter()
             .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string)),
     );
+    let official = state.official_wallets();
     let mut profiles = Vec::with_capacity(entities.len());
     for chunk in entities.chunks(128) {
         let mut prepared: Vec<Option<(String, Value)>> = chunk
@@ -503,19 +506,30 @@ pub async fn process_profiles_positional(
             apply_claimed_name(metadata, names);
         }
         profiles.extend(chunk.iter().zip(prepared).map(|(entity, p)| {
-            p.map(|(_, mut metadata)| {
-                json!({
-                    "timestamp": entity.get("timestamp").cloned().unwrap_or(Value::Null),
-                    "avatars": metadata
+            p.map(|(address, mut metadata)| {
+                profile_answer(
+                    entity.get("timestamp").cloned().unwrap_or(Value::Null),
+                    metadata
                         .get_mut("avatars")
                         .filter(|a| a.is_array())
                         .map(Value::take)
                         .unwrap_or_else(|| json!([])),
-                })
+                    official.contains(&address),
+                )
             })
         }));
     }
     Ok(profiles)
+}
+
+/// One profile of the answer: `{ timestamp, avatars }`, and `isOfficial: true`
+/// beside them for an official wallet alone.
+fn profile_answer(timestamp: Value, avatars: Value, official: bool) -> Value {
+    let mut profile = json!({ "timestamp": timestamp, "avatars": avatars });
+    if official {
+        profile["isOfficial"] = Value::Bool(true);
+    }
+    profile
 }
 
 /// The active entities on `pointers`, through the read-through when one is
@@ -941,6 +955,22 @@ pub async fn profile_alias(State(state): State<SharedState>, Path(id): Path<Stri
 
 #[cfg(test)]
 mod tests {
+    /// The official mark is a key of the answer, never of an avatar, and only
+    /// an official wallet's answer has it.
+    #[test]
+    fn only_an_official_wallets_answer_says_is_official() {
+        use serde_json::json;
+        let avatars = json!([{ "name": "ada", "isOfficial": true }]);
+        assert_eq!(
+            super::profile_answer(json!(5), avatars.clone(), false),
+            json!({ "timestamp": 5, "avatars": avatars })
+        );
+        assert_eq!(
+            super::profile_answer(json!(5), json!([]), true),
+            json!({ "timestamp": 5, "avatars": [], "isOfficial": true })
+        );
+    }
+
     /// Only an address or a curated `default<n>` look is looked up by the
     /// uncapped routes: anything else cannot name a profile.
     #[test]

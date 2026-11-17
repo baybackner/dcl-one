@@ -251,15 +251,15 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   (Nearby only, as received: blocks and scene bans are not applied), `/dm_history <address|community:<id>> [count]` (a DM partner's or a community's
   stored lines), `/community_state` (community chat's router, channels and counters),
   `/nametag_state` (the nametags: `visible`, `shown`, `sceneAvatars` and `hidden` counts, the glyph `atlas` page
-  sizes, the chat `bubbles` setting, and each shown tag's `player`, `sceneAvatar`, `name`, `suffix`, `verified`,
+  sizes, the chat `bubbles` setting, the `officialWallets` count, and each shown tag's `player`, `sceneAvatar`, `name`, `suffix`, `verified`,
   `official`, `voice`, `distance`, `opacity`, `scale`, `position`, `headOffset` and `bubble`, which is its
   `kind`, `mention` and `length`, never the message),
   `/nametag_bubble <local|all|address> <nearby|community|dm> <message>` (shows a message in a chat
   bubble over the shown nametags it names, on this client only; replies with the number asked for
   as `bubbles`), `/chat_bubble_text <message id> <message>` (replaces the text of the bubble
   showing that message; replies with nothing), `/nametag_official <address> [bool]` (reads or
-  sets, for the session, whether a wallet's nametag carries the official badge; replies with
-  `address` and `official`),
+  sets whether a wallet's nametag carries the official badge, until the catalyst next answers
+  for that wallet; replies with `address` and `official`),
   `/voice_state` (the nearby mic, with `sceneBlocked` while the scene the player stands in turns
   nearby voice off, the nearby voice rooms and, as `call`, the private call or community stream the
   player is in: `status`, `kind`, `peer`, `communityId`, `connection`, `participants`,

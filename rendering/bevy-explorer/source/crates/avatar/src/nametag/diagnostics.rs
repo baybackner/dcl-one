@@ -7,7 +7,7 @@ use common::{
     structs::{AppConfig, PrimaryCamera},
     util::AsH160,
 };
-use comms::global_crdt::ForeignPlayer;
+use comms::{global_crdt::ForeignPlayer, profile::OfficialWallets};
 use console::{DebugInput, DebugInputKind, DebugSection};
 use scene_runner::update_world::text_shape::Page;
 use serde_json::{json, Value};
@@ -17,7 +17,7 @@ use super::{
     layout::Voice,
     tag_opacity, tag_scale,
     text::TextShaper,
-    ChatBubble, Nametag, NametagContent, NametagVoice, OfficialWallets, SceneAvatarNametag,
+    ChatBubble, Nametag, NametagContent, NametagVoice, SceneAvatarNametag,
 };
 use crate::dynamic_nametag::{NametagHeadOffset, NametagsVisible};
 
@@ -30,24 +30,40 @@ pub const SECTION: DebugSection = DebugSection {
         ("Hidden", "hidden"),
         ("Glyph atlas (distance field / colour px)", "atlas"),
         ("Chat bubbles", "bubbles"),
+        ("Official wallets known", "officialWallets"),
     ],
     actions: &[(
         "Show a test bubble",
         "/nametag_bubble all nearby A test message from the debug panel",
     )],
-    inputs: &[DebugInput {
-        label: "Show nametags",
-        field: "visible",
-        command: "/nametags {value}",
-        kind: DebugInputKind::Toggle,
-    }],
+    inputs: &[
+        DebugInput {
+            label: "Show nametags",
+            field: "visible",
+            command: "/nametags {value}",
+            kind: DebugInputKind::Toggle,
+        },
+        DebugInput {
+            label: "Mark official (wallet address)",
+            field: "",
+            command: "/nametag_official {value} true",
+            kind: DebugInputKind::Text,
+        },
+        DebugInput {
+            label: "Unmark official (wallet address)",
+            field: "",
+            command: "/nametag_official {value} false",
+            kind: DebugInputKind::Text,
+        },
+    ],
 };
 
 /// Report the nametags as JSON: `visible` (the nametags toggle), `shown`, `sceneAvatars` (of
 /// those shown, the ones over a scene's avatars) and `hidden` (the tags that don't show: out
 /// of range, blocked, or hidden by the scene or a setting), `atlas` (the glyph atlas'
 /// distance-field and colour page sizes in pixels, 0 for a page not made), `bubbles` (the chat
-/// bubble setting) and `tags`, one per shown tag: `player` (an address, or `local`, or null
+/// bubble setting), `officialWallets` (how many wallets the catalyst's profile answers have
+/// marked official this session) and `tags`, one per shown tag: `player` (an address, or `local`, or null
 /// for an avatar with no wallet), `sceneAvatar` (the tag is over an avatar a scene made),
 /// `name`, `suffix`, `verified`, `official`, `voice` (`off`, `idle`, `speaking`, `hushed`),
 /// `distance` in metres from the camera, `opacity` (0 to 1), `scale` (metres per tag unit),
@@ -76,6 +92,7 @@ pub fn nametag_state(
         Has<SceneAvatarNametag>,
     )>,
     local: Res<common::structs::PrimaryPlayerRes>,
+    official: Res<OfficialWallets>,
 ) {
     let Some(Ok(_)) = cmd.take() else {
         return;
@@ -153,6 +170,7 @@ pub fn nametag_state(
             "hidden": hidden,
             "atlas": atlas,
             "bubbles": format!("{:?}", config.chat_bubble_visibility),
+            "officialWallets": official.len(),
             "tags": shown,
         })
         .to_string(),
@@ -249,8 +267,9 @@ pub fn chat_bubble_text(
     cmd.reply_ok("");
 }
 
-/// Read or set whether a wallet's nametag carries the official badge, for this session.
-/// Replies with `address` and `official`.
+/// Read or set whether a wallet's nametag carries the official badge. The catalyst's profile
+/// answers fill the list; a value set here lasts until the catalyst next answers for that
+/// wallet. Replies with `address` and `official`.
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/nametag_official")]
 pub struct NametagOfficialCommand {
@@ -269,19 +288,13 @@ pub fn nametag_official(
         cmd.reply_failed("not an address");
         return;
     };
-    match command.official {
-        Some(true) => {
-            wallets.0.insert(address);
-        }
-        Some(false) => {
-            wallets.0.remove(&address);
-        }
-        None => {}
+    if let Some(official) = command.official {
+        wallets.set(address, official);
     }
     cmd.reply_ok(
         json!({
             "address": format!("{address:#x}"),
-            "official": wallets.0.contains(&address),
+            "official": wallets.contains(&address),
         })
         .to_string(),
     );

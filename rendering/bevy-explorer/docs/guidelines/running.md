@@ -237,7 +237,8 @@ State, in every build:
 - `/nametag_state`: the nametags, as JSON: `visible` (the `/nametags [bool]` toggle), `shown`,
   `sceneAvatars` (of those shown, the tags over a scene's avatars) and `hidden` (the tags that
   don't show), `atlas` (the glyph atlas' distance-field and colour page sizes, in
-  pixels), `bubbles` (the chat bubble setting) and `tags`, one per shown tag: `player` (an
+  pixels), `bubbles` (the chat bubble setting), `officialWallets` (how many wallets the catalyst's
+  profile answers have marked official this session) and `tags`, one per shown tag: `player` (an
   address, `local`, or null for an avatar with no wallet), `sceneAvatar` (the tag is over an
   avatar a scene made with `AvatarShape`), `name`, `suffix`, `verified`,
   `official`, `voice` (`off`, `idle`, `speaking`, `hushed`), `distance` from the camera in metres,
@@ -248,7 +249,9 @@ State, in every build:
   bubble over the nametags it names, locally only; `/chat_bubble_text <message id> <message>`
   replaces the text of the bubble showing that message, for tests (the HUD's translations come
   through `SystemApi::SetChatBubbleText`); `/nametag_official <address> [bool]`
-  reads or sets, for the session, whether a wallet's nametag carries the official badge.
+  reads or sets whether a wallet's nametag carries the official badge; the catalyst's profile
+  answers fill that list, and a value set here lasts until the catalyst next answers for the
+  wallet.
 - `/nearby_mutes`: the wallets whose nearby voice the account muted (`muted`, the first 32 of
   `count`), the `account` and where its saved list stands (`load`: `idle` signed out, `loading`,
   `loaded`, `failed`). `/nearby_mute on|off <address>` mutes or unmutes one, as the profile

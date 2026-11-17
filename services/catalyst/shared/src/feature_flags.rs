@@ -3,7 +3,7 @@
 //! (`explore_api.feature_flags_local`) and one fetch from the flags service.
 //! Explore mirrors and serves the documents.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Context as _;
 use parking_lot::RwLock;
@@ -28,6 +28,38 @@ pub fn validate(doc: &Value) -> anyhow::Result<()> {
         .and_then(Value::as_object)
         .context("document has no `variants` object")?;
     Ok(())
+}
+
+/// The explorer flag whose `wallets` variant names the official wallets.
+pub const OFFICIAL_WALLETS: &str = "explorer-alfa-official-wallets";
+
+/// The official wallets in an explorer flags document, lowercased: while the flag is on, its
+/// variant named `wallets` with a `csv` payload, of which only the first line counts (as the
+/// Explorer clients read it). Anything else names none.
+pub fn official_wallets_in(doc: &Value) -> HashSet<String> {
+    if doc["flags"][OFFICIAL_WALLETS].as_bool() != Some(true) {
+        return HashSet::new();
+    }
+    let variant = &doc["variants"][OFFICIAL_WALLETS];
+    let payload = &variant["payload"];
+    let csv = payload["type"]
+        .as_str()
+        .is_some_and(|t| t.eq_ignore_ascii_case("csv"));
+    let (Some("wallets"), true, Some(value)) =
+        (variant["name"].as_str(), csv, payload["value"].as_str())
+    else {
+        return HashSet::new();
+    };
+    let first = value
+        .split('\n')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r');
+    first
+        .split(',')
+        .filter(|a| !a.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 pub struct Snapshot {
@@ -204,5 +236,34 @@ mod application_tests {
                 .variant_values("dapps", "communities_global_moderators")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod official_wallet_tests {
+    use super::*;
+
+    fn doc(on: bool, name: &str, kind: &str, value: &str) -> Value {
+        json!({
+            "flags": { OFFICIAL_WALLETS: on },
+            "variants": { OFFICIAL_WALLETS: { "name": name, "payload": { "type": kind, "value": value } } }
+        })
+    }
+
+    #[test]
+    fn reads_the_first_csv_line_lowercased_while_the_flag_is_on() {
+        let wallets = official_wallets_in(&doc(true, "wallets", "CSV", "0xAA,,0xbb\r\n0xcc"));
+        assert_eq!(
+            wallets,
+            HashSet::from(["0xaa".to_string(), "0xbb".to_string()])
+        );
+    }
+
+    #[test]
+    fn names_none_when_off_or_malformed() {
+        assert!(official_wallets_in(&doc(false, "wallets", "csv", "0xaa")).is_empty());
+        assert!(official_wallets_in(&doc(true, "other", "csv", "0xaa")).is_empty());
+        assert!(official_wallets_in(&doc(true, "wallets", "json", "0xaa")).is_empty());
+        assert!(official_wallets_in(&json!({ "flags": {}, "variants": {} })).is_empty());
     }
 }

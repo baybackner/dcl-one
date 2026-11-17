@@ -68,6 +68,11 @@ pub struct AvatarWireFormat {
 #[derive(Deserialize)]
 pub struct LambdaProfiles {
     pub avatars: Vec<SerializedProfile>,
+    /// The catalyst's word that the profile's wallet is an official one. It sits beside the
+    /// avatars, never in one: a profile is sent to peers and deployed as it was read, and this
+    /// is not the player's to send.
+    #[serde(default, rename = "isOfficial")]
+    pub is_official: bool,
 }
 
 /// The compact profile tier: what a list row shows of a person, in the shape of the

@@ -539,6 +539,10 @@ pub struct MarketplaceState {
     /// `/profile-images`, attached once the social states exist: the faces a
     /// response points at are warmed there.
     pub(crate) profile_images: std::sync::OnceLock<Arc<dyn ProfileFaces>>,
+    /// The explorer flags document, attached by `serve`: its official wallets
+    /// (`feature_flags::official_wallets_in`) mark their profiles `isOfficial`.
+    /// Unattached, no profile is official.
+    pub(crate) explorer_flags: std::sync::OnceLock<Arc<crate::shared::feature_flags::Snapshot>>,
     /// decentraland.org's `dapps` rollout flags as this node enforces them (`features`); every flag off until read.
     pub(crate) dapps_flags: Arc<features::DappsFlags>,
     /// Where `dapps_flags` is read from (`SHOP_FEATURE_FLAGS_*`).
@@ -584,6 +588,7 @@ impl MarketplaceState {
             read_through: None,
             denylist: Arc::default(),
             profile_images: std::sync::OnceLock::new(),
+            explorer_flags: std::sync::OnceLock::new(),
             dapps_flags: Arc::new(features::DappsFlags::new()),
             flags_source: features::Source::default(),
             settings,
@@ -619,6 +624,23 @@ impl MarketplaceState {
     /// responses warm; `false` when one is already attached.
     pub fn attach_profile_images(&self, images: Arc<dyn ProfileFaces>) -> bool {
         self.profile_images.set(images).is_ok()
+    }
+
+    /// Attaches the explorer flags document that names the official wallets;
+    /// `false` when one is already attached.
+    pub fn attach_explorer_flags(
+        &self,
+        flags: Arc<crate::shared::feature_flags::Snapshot>,
+    ) -> bool {
+        self.explorer_flags.set(flags).is_ok()
+    }
+
+    /// The wallets whose profiles answer `isOfficial`, lowercased.
+    pub(crate) fn official_wallets(&self) -> std::collections::HashSet<String> {
+        self.explorer_flags
+            .get()
+            .map(|flags| crate::shared::feature_flags::official_wallets_in(&flags.document()))
+            .unwrap_or_default()
     }
 
     /// Whether a face the profile never uploaded is served: by the CDN, or by

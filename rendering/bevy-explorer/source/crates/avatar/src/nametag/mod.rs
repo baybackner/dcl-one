@@ -13,11 +13,10 @@ pub mod layout;
 mod material;
 mod text;
 
-use alloy_core::primitives::Address;
 use ban_block::BanBlock;
 use bevy::{
-    color::Mix, ecs::system::SystemParam, math::Vec3A, pbr::NotShadowCaster,
-    platform::collections::HashSet, prelude::*, render::primitives::Aabb,
+    color::Mix, ecs::system::SystemParam, math::Vec3A, pbr::NotShadowCaster, prelude::*,
+    render::primitives::Aabb,
 };
 use common::{
     sets::{PostUpdateSets, SceneSets},
@@ -30,7 +29,7 @@ use common::{
 use comms::{
     global_crdt::ForeignPlayer,
     nearby_mutes::NearbyMutes,
-    profile::{name_color::name_color, CurrentUserProfile, UserProfile},
+    profile::{name_color::name_color, CurrentUserProfile, OfficialWallets, UserProfile},
     speaking::Speaking,
 };
 use console::{AddDebugSection, DoAddConsoleCommand};
@@ -111,7 +110,6 @@ impl Plugin for NametagPlugin {
             shadows_enabled: false,
             ..default()
         })
-        .init_resource::<OfficialWallets>()
         .add_event::<ChatBubbleRequest>()
         .add_event::<ChatBubbleRetext>()
         .add_systems(Startup, load_assets)
@@ -155,10 +153,6 @@ impl Plugin for NametagPlugin {
             .add_debug_section(diagnostics::SECTION);
     }
 }
-
-/// The wallets whose names carry the official badge. Empty until something fills it.
-#[derive(Resource, Default)]
-pub struct OfficialWallets(pub HashSet<Address>);
 
 #[derive(Resource)]
 pub struct NametagAssets {
@@ -229,7 +223,7 @@ impl NametagContent {
             verified: claimed,
             official: address
                 .as_h160()
-                .is_some_and(|address| official.0.contains(&address)),
+                .is_some_and(|address| official.contains(&address)),
         }
     }
 
