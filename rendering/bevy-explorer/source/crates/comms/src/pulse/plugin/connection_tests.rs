@@ -906,8 +906,6 @@ fn nothing_is_sent_from_outside_the_parcel_grid() {
     assert!(sent.is_empty(), "{sent:?}");
 }
 
-/// A teleport skipped outside the grid goes once the player is back inside, from where they are
-/// then and in the realm current then, and only once.
 impl Harness {
     /// The player stands at `position` (Bevy world space).
     fn stand_at(&mut self, position: Vec3) {
@@ -957,6 +955,19 @@ fn a_realm_change_outside_the_grid_goes_from_the_edge() {
     harness.reenter_at(12.0);
     assert_eq!(teleported_parcels(&harness.sent()), [parcel_index(3)]);
     assert!(!harness.session().teleport_owed);
+}
+
+/// A realm change can drop a queued edge teleport, so no realm counts as placed until one goes.
+#[test]
+fn a_realm_change_forgets_the_placed_realm() {
+    let mut harness = Harness::established(10.0);
+    harness.session_mut().placed_realm = Some(HOME.to_owned());
+    harness.leave_world();
+
+    harness.world.insert_resource(realm("away"));
+    harness.follow_realm();
+
+    assert_eq!(harness.session().placed_realm, None);
 }
 
 /// Behind the loading screen the position is provisional: an owed teleport waits for the player to
@@ -1012,6 +1023,8 @@ fn an_owed_teleport_survives_a_reconnect() {
     assert!(!harness.session().teleport_owed);
 }
 
+/// A teleport skipped outside the grid goes once the player is back inside, from where they are
+/// then and in the realm current then, and only once.
 #[test]
 fn a_teleport_skipped_outside_the_grid_goes_on_reentry() {
     let mut harness = Harness::established(10.0);

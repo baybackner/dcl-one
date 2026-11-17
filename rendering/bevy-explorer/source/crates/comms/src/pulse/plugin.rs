@@ -834,6 +834,8 @@ fn follow_realm(
     // flight, or as the bucket refills, it would put the player back there.
     if realm_changed {
         session.pacer.drop_waiting(FrameKind::Teleport);
+        // The dropped teleport may be the edge placement; the server never saw that realm.
+        session.placed_realm = None;
     }
     // Already up (a later realm) → re-teleport now, unless out of world (position provisional behind
     // the loading screen); the spawn `PlayerTeleported` re-announces realm + position. Otherwise the
