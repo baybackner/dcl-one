@@ -86,6 +86,19 @@ a system in this set); see the
 while in flight, broken, or blocked (unless it is the system scene), and is not sent twice in
 one frame. A scene that has not replied for ten seconds is marked broken and its slot freed.
 
+The movement controller scene (`priority_scenes["movement_controller"]`) has one exception
+(`movement_redispatch`). Its reply to the tick dispatched at the start of a frame moves the
+player in that frame; a reply that lands after the frame's deadline is applied a frame late,
+and the scene, still in flight when the next frame queues its scenes, would skip that frame's
+dispatch. When `receive_scene_updates` takes such a late reply, it puts the scene at the front
+of the queue with an extra slot, so the loop's next pass dispatches it again with the current
+frame's input, if the time left before the deadline covers the 90th percentile of the scene's
+last 32 ticks from dispatch to reply (a reply first seen at a loop's first poll counts as
+arriving when the previous loop ended). At most one tick stays in flight, so this happens at
+most once per frame and the loop still ends at its deadline. A re-dispatch's reply that is late
+too is applied in the next frame. The movement scene tells a reply the engine has not applied
+yet from a takeover by the requested velocity it receives.
+
 Everything downstream of the loop reads bevy components. A system that needs scene data never
 reads the CRDT store directly; it queries the component the `UpdateWorld` system wrote.
 

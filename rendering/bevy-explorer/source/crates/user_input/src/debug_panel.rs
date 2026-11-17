@@ -87,6 +87,11 @@ pub(super) fn register(app: &mut App) {
                     "late",
                 ),
                 ("Reply late: frames to apply (mean / max)", "lateFrames"),
+                (
+                    "Late reply dispatched again in its frame (frames) (dispatched / reply in time / held back)",
+                    "redispatch",
+                ),
+                ("Movement scene tick, 90th percentile (ms)", "tickP90"),
             ],
             inputs: &[],
             actions: &[],
@@ -105,6 +110,10 @@ struct ReplySample {
     /// A reply was applied this frame: frames since its dispatch, ms after its dispatch frame's
     /// deadline (negative: before it).
     reply: Option<(u32, f32)>,
+    /// This frame's dispatch answered a late reply in the frame it landed.
+    redispatch: bool,
+    /// A late reply landed this frame and too little of the frame was left to dispatch again.
+    held_back: bool,
 }
 
 /// The movement scene's last [`REPLY_WINDOW`] frames, sampled whether or not the panel is open.
@@ -149,6 +158,10 @@ fn reply_sample(context: &RendererSceneContext, frame: u32) -> ReplySample {
             .reply
             .filter(|reply| reply.frame == frame)
             .map(|reply| (reply.frames(), reply.after_deadline_ms())),
+        redispatch: timing
+            .sent
+            .is_some_and(|sent| sent.frame == frame && sent.redispatch),
+        held_back: timing.held_back == Some(frame),
     }
 }
 
@@ -171,7 +184,8 @@ fn spread(values: impl Iterator<Item = f32>) -> Value {
 
 /// The panel's figures over the sampled frames. A frame misses when no reply dispatched in it
 /// was applied in it: its reply came after the deadline, or the scene was not dispatched (its
-/// previous tick was still in flight).
+/// previous tick was still in flight). A re-dispatch is in time when its reply lands in its
+/// frame.
 fn summarize_replies(frames: &VecDeque<ReplySample>) -> Value {
     let on_time = |f: &&ReplySample| f.reply.is_some_and(|(n, _)| n == 0);
     let late = frames
@@ -194,6 +208,11 @@ fn summarize_replies(frames: &VecDeque<ReplySample>) -> Value {
         "onTime": spread(replies().filter(|(n, _)| *n == 0).map(|(_, ms)| -ms)),
         "late": spread(replies().filter(|(n, _)| *n > 0).map(|(_, ms)| ms)),
         "lateFrames": late_frames.as_array().map(|a| json!([a[1], a[2]])),
+        "redispatch": [
+            frames.iter().filter(|f| f.redispatch).count(),
+            frames.iter().filter(|f| f.redispatch && on_time(f)).count(),
+            frames.iter().filter(|f| f.held_back).count(),
+        ],
     })
 }
 
@@ -219,6 +238,10 @@ fn movement_scene_replies(
     report["frameTarget"] = json!(updates
         .frame_target
         .map(|d| (d.as_secs_f64() * 100_000.0).round() / 100.0));
+    report["tickP90"] = json!(updates
+        .movement_ticks
+        .p90()
+        .map(|d| (d.as_secs_f64() * 100_000.0).round() / 100.0));
     report["unavailable"] = json!({
         "": "No movement scene has controlled the player yet.",
         "frameTarget": "The frame rate is uncapped.",
@@ -228,6 +251,7 @@ fn movement_scene_replies(
         "onTime": "No reply arrived in its own frame.",
         "late": "No reply arrived after its frame's deadline.",
         "lateFrames": "No reply arrived after its frame's deadline.",
+        "tickP90": "The movement scene has not replied to a dispatch yet.",
     });
     cmd.reply_ok(report.to_string());
 }
@@ -362,16 +386,19 @@ mod tests {
         let on_time = ReplySample {
             sent: Some((1.0, 15.0)),
             reply: Some((0, -5.0)),
+            ..default()
         };
         // dispatched, its reply 2 ms after the deadline; applied in the next frame, which the
         // scene's tick still in flight kept from dispatching
         let late = ReplySample {
             sent: Some((3.0, 13.0)),
             reply: None,
+            ..default()
         };
         let applied_late = ReplySample {
             sent: None,
             reply: Some((1, 2.0)),
+            ..default()
         };
         let frames = VecDeque::from([on_time, late, applied_late, on_time]);
         let report = summarize_replies(&frames);
@@ -383,6 +410,32 @@ mod tests {
         assert_eq!(report["onTime"], json!([5.0, 5.0, 5.0]));
         assert_eq!(report["late"], json!([2.0, 2.0, 2.0]));
         assert_eq!(report["lateFrames"], json!([1.0, 1.0]));
+        assert_eq!(report["redispatch"], json!([0, 0, 0]));
+
+        // a late reply answered in its frame by a re-dispatch whose reply lands in time, then one
+        // whose reply is late too, then one held back
+        let redispatched = ReplySample {
+            sent: Some((0.5, 15.5)),
+            reply: Some((0, -4.0)),
+            redispatch: true,
+            held_back: false,
+        };
+        let redispatched_late = ReplySample {
+            sent: Some((0.5, 15.5)),
+            reply: Some((1, 1.0)),
+            redispatch: true,
+            held_back: false,
+        };
+        let held_back = ReplySample {
+            sent: None,
+            reply: Some((1, 6.0)),
+            redispatch: false,
+            held_back: true,
+        };
+        let frames = VecDeque::from([late, redispatched, redispatched_late, held_back]);
+        let report = summarize_replies(&frames);
+        assert_eq!(report["missed"], json!([2, 1]));
+        assert_eq!(report["redispatch"], json!([2, 1, 1]));
 
         let report = summarize_replies(&VecDeque::new());
         assert!(report["missRate"].is_null());

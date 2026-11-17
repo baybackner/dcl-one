@@ -64,7 +64,9 @@ use self::{
     initialize_scene::{
         LiveScenes, PointerResult, SceneLifecyclePlugin, SceneLoading, ScenePointers, PARCEL_SIZE,
     },
-    renderer_context::{RendererSceneContext, SceneState, SCENE_FIRST_DISPATCH_TICK},
+    renderer_context::{
+        RendererSceneContext, SceneState, SCENE_FIRST_DISPATCH_TICK, SCENE_FIRST_UPDATE_TICK,
+    },
     update_scene::SceneInputPlugin,
     update_world::{CrdtExtractors, SceneOutputPlugin},
 };
@@ -78,6 +80,7 @@ pub use common::bounds_calc;
 pub mod gltf_resolver;
 pub mod initialize_scene;
 pub mod load_timing;
+pub mod movement_redispatch;
 pub mod permissions;
 pub mod primary_entities;
 pub mod renderer_context;
@@ -115,6 +118,12 @@ pub struct SceneUpdates {
     /// movement controller). These scenes bypass the `scene_threads` limit
     /// but still occupy slots, preventing non-priority scenes from running.
     pub priority_scenes: HashMap<&'static str, Entity>,
+    /// The movement controller's recent tick times, for its re-dispatch on a late reply.
+    pub movement_ticks: movement_redispatch::MovementTickTimes,
+    /// When the previous frame's scene loop ended.
+    pub previous_loop_end: Instant,
+    /// Replies have been polled in this frame's scene loop.
+    loop_polled: bool,
 }
 
 // safety: struct is sync except for the receiver.
@@ -376,6 +385,9 @@ impl Plugin for SceneRunnerPlugin {
             loop_end_time: Instant::now(),
             frame_target: None,
             priority_scenes: Default::default(),
+            movement_ticks: Default::default(),
+            previous_loop_end: Instant::now(),
+            loop_polled: false,
             frames: 0,
             skipped_in_flight: 0,
             skipped_already_sent: 0,
@@ -512,6 +524,7 @@ fn run_scene_loop(world: &mut World) {
     updates.loop_start_time = start_loop_time;
     updates.loop_end_time = target_end_time;
     updates.frame_target = (fps != 0.0).then_some(frame_target_duration);
+    updates.loop_polled = false;
 
     // run at least once to collect updates even if no scenes are eligible
     let mut run_once = false;
@@ -525,6 +538,7 @@ fn run_scene_loop(world: &mut World) {
         schedule.run(world);
         run_once = true;
     }
+    world.resource_mut::<SceneUpdates>().previous_loop_end = Instant::now();
 
     let mut loop_schedule = world.resource_mut::<SceneLoopSchedule>();
     loop_schedule.schedule = schedule;
@@ -1407,6 +1421,8 @@ fn send_scene_updates(
 
     let now = time.elapsed_secs_f64();
     let dt = dispatch_dt(context.tick_number, context.last_sent, now);
+    // a scene already dispatched this frame is dispatched again only on a late reply
+    let redispatch = context.last_sent == now;
 
     let crdt = context.crdt_store.take_updates();
     if let Some(mut traffic) = traffic {
@@ -1426,6 +1442,7 @@ fn send_scene_updates(
             frame: engine_info.frame.0,
             loop_start: updates.loop_start_time,
             deadline: updates.loop_end_time,
+            redispatch,
         });
         dcl_assert!(!updates.jobs_in_flight.contains(&ent));
         updates.jobs_in_flight.insert(ent);
@@ -1446,8 +1463,13 @@ fn receive_scene_updates(
     mut snapshot_events: EventWriter<CrdtSnapshotEvent>,
     mut entity_allocated_events: EventWriter<EntityAllocatedEvent>,
     mut traffic: Query<&mut scene_traffic::SceneTraffic>,
+    time: Res<Time>,
 ) {
+    let first_poll = !std::mem::replace(&mut updates.loop_polled, true);
+    let movement_scene = updates.priority_scenes.get("movement_controller").copied();
     loop {
+        // the movement scene, to dispatch again on its late reply
+        let mut redispatch = None;
         let maybe_completed_job = match updates.receiver().try_recv() {
             Ok((scene_id, response)) => match response {
                 SceneResponse::CrdtSnapshot(crdt) => {
@@ -1552,6 +1574,17 @@ fn receive_scene_updates(
                                     frame: frame.0,
                                 }
                             });
+                            // with at most one tick in flight, this reply's tick is the last sent
+                            context.reply_sent = context.last_sent;
+                            if Some(root) == movement_scene {
+                                redispatch = movement_redispatch_due(
+                                    &mut updates,
+                                    &mut context,
+                                    first_poll,
+                                    time.elapsed_secs_f64(),
+                                )
+                                .then_some(root);
+                            }
                             // extend (not assign) so renderer-side births (the inspector's /new_entity
                             // adds the freshly-allocated ids straight to `nascent`) aren't clobbered by
                             // the scene's reported births. `nascent` is drained every lifecycle pass, so
@@ -1623,11 +1656,55 @@ fn receive_scene_updates(
         if let Some(completed_job) = maybe_completed_job {
             updates.jobs_in_flight.remove(&completed_job);
         }
+        if let Some(scene) = redispatch {
+            // ahead of the queue, in a slot of its own: the loop's next pass sends it
+            updates.scene_queue.push_front((scene, FloatOrd(0.0)));
+            updates.eligible_jobs += 1;
+        }
 
         if Instant::now() > updates.loop_end_time {
             return;
         }
     }
+}
+
+/// Records the movement scene's tick that just replied and tells whether to dispatch the scene
+/// again now ([`movement_redispatch`]): its reply came in a later frame than its dispatch, the
+/// scene can run and the time left in this frame's scene loop covers its recent ticks. A late
+/// reply left to the next frame marks `tick_timing.held_back`.
+fn movement_redispatch_due(
+    updates: &mut SceneUpdates,
+    context: &mut RendererSceneContext,
+    first_poll: bool,
+    now: f64,
+) -> bool {
+    let Some(reply) = context.tick_timing.reply else {
+        return false;
+    };
+    let late = reply.frame != reply.sent.frame;
+    updates
+        .movement_ticks
+        .record(movement_redispatch::tick_time(
+            reply.sent.at,
+            reply.at,
+            first_poll && late,
+            updates.previous_loop_end,
+        ));
+    if !late
+        || context.last_sent >= now
+        || !context.blocked.is_empty()
+        || context.tick_number < SCENE_FIRST_UPDATE_TICK
+    {
+        return false;
+    }
+    let left = updates
+        .loop_end_time
+        .saturating_duration_since(Instant::now());
+    let fits = updates.movement_ticks.redispatch_fits(left);
+    if !fits {
+        context.tick_timing.held_back = Some(reply.frame);
+    }
+    fits
 }
 
 // entities deleted this loop

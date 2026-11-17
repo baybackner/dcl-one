@@ -205,6 +205,13 @@ export var horizontalResync = false;
 // What we published last frame. Compared against prevRequestedVelocity in
 // initFrame to detect engine takeover (resync to prevActual when they differ).
 var lastPublished = Vector3.Zero();
+// The replies published before it, newest first. The engine answers a reply that lands after its frame with a tick on
+// the frame it lands on, so the frame before a tick can have applied one of these: that reply is late, not a takeover.
+const PUBLISHED_HISTORY = 2;
+const earlierPublished: Vector3.MutableVector3[] = [];
+for (let i = 0; i < PUBLISHED_HISTORY; i++) earlierPublished.push(Vector3.Zero());
+// Frames the last reply was still in flight after the frame before this tick (0: it was applied there).
+var replyLateFrames = 0;
 
 export function printvec(v: Vector3): string {
   return `(${v.x},${v.y},${v.z})`
@@ -228,7 +235,13 @@ function initFrame() {
     prevStepTime = movementInfo.previousStepTime;
   }
   tickTime = Math.min(prevStepTime > 0 ? prevStepTime : stepTime, MAX_TICK_TIME);
-  beginTick(tickTime, stepTime, prevStepTime);
+  // the applied velocity is the last reply's, or a late one's predecessor's (see earlierPublished)
+  replyLateFrames = -1;
+  if (Vector3.distance(lastPublished, prevRequestedVelocity) <= 0.1) replyLateFrames = 0;
+  else for (let i = 0; i < PUBLISHED_HISTORY && replyLateFrames < 0; i++) {
+    if (Vector3.distance(earlierPublished[i], prevRequestedVelocity) <= 0.1) replyLateFrames = i + 1;
+  }
+  beginTick(tickTime, stepTime, prevStepTime, Math.max(0, replyLateFrames));
   time += tickTime;
 
   initParameters(movementInfo?.activeAvatarLocomotionSettings, movementInfo?.activeInputModifier);
@@ -238,7 +251,7 @@ function initFrame() {
   // published), resync velocity to prevActual.
   // A missing requestedVelocity also means the engine applied zero, which is not a takeover
   // when we published zero ourselves; the horizontal model only resyncs on a real mismatch.
-  horizontalResync = Vector3.distance(lastPublished, prevRequestedVelocity) > 0.1;
+  horizontalResync = replyLateFrames < 0;
   const notInControl = horizontalResync || movementInfo?.requestedVelocity === undefined;
   if (notInControl) {
     Vector3.copyFrom(prevActualVelocity, velocity);
@@ -847,6 +860,8 @@ function writeMovement() {
     animation,
   })
 
+  for (let i = PUBLISHED_HISTORY - 1; i > 0; i--) Vector3.copyFrom(earlierPublished[i - 1], earlierPublished[i]);
+  Vector3.copyFrom(lastPublished, earlierPublished[0]);
   Vector3.copyFrom(velocity, lastPublished);
   logLocomotion();
 }

@@ -158,11 +158,15 @@ export const GROUND_PROBE_INTERVAL = 1 / 60;
 // Cap on the unrequested height gain that ground-snap will pull back down (see snapToGround).
 export const MAX_UNREQUESTED_LIFT = 1.0;
 // Step-up. The forward casts reach STEP_UP_LOOKAHEAD past the collider, so a riser is found before the capsule
-// reaches it. The climb starts when the riser would be reached before the next reply lands and ends as the centre
+// reaches it. The climb starts when the riser would be reached within STEP_UP_REACH_TIME and ends as the centre
 // comes within STEP_UP_END_DISTANCE of the riser, so the capsule passes over the riser's edge at gait speed instead of
 // stopping against it; a riser the capsule already touches is climbed within one frame.
 export const STEP_UP_LOOKAHEAD = 1.0; // m
 export const STEP_UP_END_DISTANCE = 0.04; // m
+// A riser is planned once the capsule would reach it within this time (s) plus twice the reply delay (the reply lands
+// that late and is held as long), and at least two frames: a climb that starts this early rises gently enough not to
+// stop the capsule at the riser when replies land in their own frame.
+export const STEP_UP_REACH_TIME = 0.1;
 
 
 // don't edit

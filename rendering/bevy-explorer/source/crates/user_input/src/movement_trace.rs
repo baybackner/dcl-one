@@ -508,9 +508,11 @@ fn horizontal_speed(v: Option<Vector3>) -> f32 {
 
 /// The controlling scene's tick timing in a frame's `extra`, each key followed by a comma:
 /// `scene_sent` (ms after the frame's scene loop started that the scene was dispatched; null when
-/// it was not dispatched this frame), `scene_reply_late` (for the reply applied this frame, ms
-/// after its dispatch frame's deadline that the engine received it, negative before it; null
-/// without one) and `scene_reply_frames` (frames from that reply's dispatch to this frame).
+/// it was not dispatched this frame), `scene_redispatch` (that dispatch answered a late reply
+/// in the frame it landed; null without a dispatch), `scene_reply_late` (for the reply applied
+/// this frame, ms after its dispatch frame's deadline that the engine received it, negative
+/// before it; null without one) and `scene_reply_frames` (frames from that reply's dispatch to
+/// this frame).
 fn tick_timing_json(timing: Option<&SceneTickTiming>, frame: u32) -> String {
     let sent = timing
         .and_then(|t| t.sent)
@@ -519,8 +521,9 @@ fn tick_timing_json(timing: Option<&SceneTickTiming>, frame: u32) -> String {
         .and_then(|t| t.reply)
         .filter(|reply| reply.frame == frame);
     format!(
-        "\"scene_sent\":{},\"scene_reply_late\":{},\"scene_reply_frames\":{},",
+        "\"scene_sent\":{},\"scene_redispatch\":{},\"scene_reply_late\":{},\"scene_reply_frames\":{},",
         sent.map_or("null".into(), |s| num(f64::from(s.after_start_ms()))),
+        sent.map_or("null".into(), |s| s.redispatch.to_string()),
         reply.map_or("null".into(), |r| num(f64::from(r.after_deadline_ms()))),
         reply.map_or("null".into(), |r| r.frames().to_string()),
     )
@@ -1622,6 +1625,7 @@ mod tests {
             frame,
             loop_start: ms(0),
             deadline: ms(16),
+            redispatch: false,
         };
         // dispatched in frame 7, 2 ms into the loop; frame 6's reply came 3 ms after its deadline
         let timing = SceneTickTiming {
@@ -1631,15 +1635,28 @@ mod tests {
                 at: ms(19),
                 frame: 7,
             }),
+            held_back: None,
         };
         assert_eq!(
             fields(tick_timing_json(Some(&timing), 7)),
-            serde_json::json!({"scene_sent": 2.0, "scene_reply_late": 3.0, "scene_reply_frames": 1})
+            serde_json::json!({"scene_sent": 2.0, "scene_redispatch": false, "scene_reply_late": 3.0, "scene_reply_frames": 1})
+        );
+        // the same late reply answered by a re-dispatch 3 ms into the loop
+        let timing = SceneTickTiming {
+            sent: Some(SentTiming {
+                redispatch: true,
+                ..sent(7, 3)
+            }),
+            ..timing
+        };
+        assert_eq!(
+            fields(tick_timing_json(Some(&timing), 7)),
+            serde_json::json!({"scene_sent": 3.0, "scene_redispatch": true, "scene_reply_late": 3.0, "scene_reply_frames": 1})
         );
         // a frame with neither
         assert_eq!(
             fields(tick_timing_json(Some(&timing), 8)),
-            serde_json::json!({"scene_sent": null, "scene_reply_late": null, "scene_reply_frames": null})
+            serde_json::json!({"scene_sent": null, "scene_redispatch": null, "scene_reply_late": null, "scene_reply_frames": null})
         );
         // a reply 5 ms before the deadline of the frame it was dispatched in
         let timing = SceneTickTiming {
@@ -1649,14 +1666,15 @@ mod tests {
                 at: ms(11),
                 frame: 7,
             }),
+            held_back: None,
         };
         assert_eq!(
             fields(tick_timing_json(Some(&timing), 7)),
-            serde_json::json!({"scene_sent": 2.0, "scene_reply_late": -5.0, "scene_reply_frames": 0})
+            serde_json::json!({"scene_sent": 2.0, "scene_redispatch": false, "scene_reply_late": -5.0, "scene_reply_frames": 0})
         );
         assert_eq!(
             fields(tick_timing_json(None, 7)),
-            serde_json::json!({"scene_sent": null, "scene_reply_late": null, "scene_reply_frames": null})
+            serde_json::json!({"scene_sent": null, "scene_redispatch": null, "scene_reply_late": null, "scene_reply_frames": null})
         );
     }
 

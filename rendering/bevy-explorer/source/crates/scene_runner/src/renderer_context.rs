@@ -140,6 +140,9 @@ pub struct RendererSceneContext {
     /// When the scene's last tick was dispatched and its last reply arrived, against the frame's
     /// scene loop.
     pub tick_timing: SceneTickTiming,
+    /// Engine time the tick of the last reply was dispatched (`last_sent` then). A scene
+    /// dispatched again in the frame its reply landed has a later `last_sent`.
+    pub reply_sent: f64,
 }
 
 /// A scene tick's dispatch: when it left and the frame's scene loop it left in.
@@ -151,6 +154,9 @@ pub struct SentTiming {
     pub loop_start: web_time::Instant,
     /// When the frame's scene loop ends: a reply that arrives later is applied in a later frame.
     pub deadline: web_time::Instant,
+    /// A second dispatch in its frame, answering the movement scene's late reply
+    /// ([`crate::movement_redispatch`]).
+    pub redispatch: bool,
 }
 
 impl SentTiming {
@@ -193,6 +199,9 @@ impl ReplyTiming {
 pub struct SceneTickTiming {
     pub sent: Option<SentTiming>,
     pub reply: Option<ReplyTiming>,
+    /// The last frame a late reply of the movement scene was not answered by a re-dispatch: too
+    /// little of the frame's scene loop was left ([`crate::movement_redispatch`]).
+    pub held_back: Option<u32>,
 }
 
 /// `a - b` in milliseconds, negative when `a` is earlier.
@@ -320,6 +329,7 @@ impl RendererSceneContext {
             counter_sample_time: None,
             crdt_bytes_per_second: None,
             tick_timing: SceneTickTiming::default(),
+            reply_sent: 0.0,
         };
 
         new_context.live_entities[SceneEntityId::ROOT.id as usize] =

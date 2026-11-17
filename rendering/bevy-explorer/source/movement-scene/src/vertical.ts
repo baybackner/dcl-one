@@ -7,7 +7,7 @@ import {
   FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
   LANDING_STUN_DROP, LANDING_STUN_TIME, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
-  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, VEC3_ZERO,
+  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
   VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
 import { engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
@@ -19,6 +19,7 @@ const G = -GRAVITY.y;
 
 export function updateVerticalVelocity() {
   followsGround = false;
+  leftEdge = false;
   if (engineDriven) {
     // Hold the grounded state while the engine drives us (see engineDriven): a lerp lifting
     // us off the ground must not read as a fall, nor arrive as a landing. A jump press still
@@ -45,6 +46,8 @@ export function updateVerticalVelocity() {
 // once: it goes on at air speed and falls (a jog released at a ledge carries on past it), where a slower one stays on
 // the edge until then. Standing on an edge, the capsule settles onto the corner (snapToGround).
 export var onEdge = false;
+// The avatar leaves the edge this tick.
+export var leftEdge = false;
 // vertical velocity of the previous reply, still applied until this tick's reply lands
 var edgeLastVy = 0;
 const EDGE_REACH = PLAYER_COLLIDER_RADIUS * Math.sin(GROUNDED_ANGLE * Math.PI / 180);
@@ -55,7 +58,10 @@ function leaveEdge() {
   if (!onEdge || h < 1e-3) return;
   const out = (velocity.x * groundNormal.x + velocity.z * groundNormal.z) / h;
   const ahead = tickTime + replyDelay * frameTime;
-  if (out > 0 && PLAYER_COLLIDER_RADIUS * h + out * ahead > EDGE_REACH) setGrounded(false);
+  if (out > 0 && PLAYER_COLLIDER_RADIUS * h + out * ahead > EDGE_REACH) {
+    setGrounded(false);
+    leftEdge = true;
+  }
 }
 
 // ---------------------------------------------------------------- jump and gravity
@@ -693,14 +699,14 @@ const facing: Vector3.MutableVector3 = Vector3.create(0, 0, 0);
 
 // Risers ahead on the landing probes' height profile. A riser is a rise between neighbouring probes of more than
 // MIN_STEP_HEIGHT beyond the slope of the ground on either side, up to MAX_STEP_HEIGHT (higher is a wall: nothing past
-// it counts). For each riser the capsule reaches before the next tick's reply lands, plus a frame (this reply lands
-// replyDelay frames from now, the next one replyDelay + 1 frames later), the speed that puts the feet on its tread by
-// the time the centre comes within STEP_UP_END_DISTANCE of it. Returns the highest such speed (-Infinity: nothing to
+// it counts). For each riser the capsule reaches within STEP_UP_REACH_TIME plus twice the reply delay (this reply lands
+// replyDelay frames from now and is held about as long), the speed that puts the feet on its tread by the time the
+// centre comes within STEP_UP_END_DISTANCE of it. Returns the highest such speed (-Infinity: nothing to
 // climb yet) and sets planTargetY.
 function planStepUp(speed: number): number {
   planTargetY = -Infinity;
   const frame = frameTime > 0 ? frameTime : FIXED_STEP;
-  const reach = (2 * replyDelay + 2) * frame; // one frame of margin: frame times jitter
+  const reach = 2 * replyDelay * frame + Math.max(2 * frame, STEP_UP_REACH_TIME);
   const r = PLAYER_COLLIDER_RADIUS;
   let need = -Infinity;
   let prev = -Math.max(0, groundDistance); // the ground under the feet, relative to them

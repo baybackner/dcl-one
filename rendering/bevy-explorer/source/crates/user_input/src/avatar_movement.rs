@@ -450,7 +450,7 @@ impl<C: Component + Clone + FromConfig> ActivePlayerComponent<C> {
                 scene_last_update: ctx.last_update_frame,
                 scene_start_tick: ctx.start_tick,
                 scene_is_portable: ctx.is_portable,
-                initiated_at: ctx.last_sent,
+                initiated_at: ctx.reply_sent,
                 component: update.clone(),
             };
 
@@ -512,7 +512,7 @@ impl<C: Component + Clone + FromConfig> ActivePlayerComponent<C> {
                 scene_last_update: ctx.last_update_frame,
                 scene_start_tick: ctx.start_tick,
                 scene_is_portable: ctx.is_portable,
-                initiated_at: ctx.last_sent,
+                initiated_at: ctx.reply_sent,
                 component: update.clone(),
             };
 

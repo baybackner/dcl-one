@@ -9,7 +9,7 @@ import {
 import { horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
 import { grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayNormal } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, steepAhead, stunEndStep, wallContact } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, leftEdge, predictedLandFrame, steepAhead, stunEndStep, wallContact } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -244,7 +244,10 @@ export function updateHorizontalVelocity() {
   state.ex += prevExternalVelocity.x;
   state.ez += prevExternalVelocity.z;
 
-  // Cover the time up to the end of this frame with the previous tick's input.
+  // Cover the time up to the end of this frame with the previous tick's input. Off an edge this tick, those steps are in
+  // the air: the keys reach the model a tick late, leaving the edge does not (a release a frame before an edge is a
+  // release in the air past it).
+  if (leftEdge) prevInput.grounded = false;
   pending = advance(state, INPUT_DELAY_TICKS > 0 ? prevInput : input, pending + tickAdvance);
 
   // The engine holds the reply from the frame it lands on until the next reply lands; reply
