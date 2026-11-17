@@ -3,7 +3,7 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, snapSpeed, updateVerticalVelocity } from './vertical';
+import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
@@ -256,8 +256,8 @@ var prevJumpPhase: JumpPhase = 'none';
 var jumpVariation: JumpVariation = 'idle';
 // Chosen touchdown clip (a *_Jump_End or Hard_Landing), held across the landing.
 var landingClip: string | undefined = undefined;
-// True when the current landing came from a stunning drop (> stunDrop): the
-// clip plays out fully since input is locked. Non-stunning landings are
+// True when the current landing stuns (vertical model): the clip plays out
+// fully since the avatar is held in place. Other landings are
 // skippable/abortable by movement input.
 var landingLocked = false;
 // Scene time the current landing clip started, for the moving-landing blend-out.
@@ -276,15 +276,6 @@ export var glideTurnRate = 0;
 // glideTurnRate while gliding and back to 0 otherwise. Published as AvatarMovement.tiltRoll
 // so the engine banks the whole avatar — replaces the old discrete left/right lean clips.
 export var glideTilt = 0;
-
-// --- Hard-landing recovery (stun) ---
-// Movement input is suppressed
-// for settings.landRecoverTime after landing a drop > settings.stunDrop.
-// Tracked separately from maxUngroundedY because the stun
-// fall-height resets continuously while gliding — a controlled glide
-// touchdown only counts the drop after the glide ended, so it never stuns.
-export var landRecoverUntil = -Infinity;
-var stunTopY = -Infinity;
 
 // Glide animation phase (mirrors the old glider.ts prop state machine, now expressed as
 // avatar-clip selection): 'deploy' plays the Start clip (glider opens) once on entry,
@@ -408,19 +399,15 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
   if (settings.playLanding === 0) {
     requestingLanding = false;
     jumpPhase = 'none';
-    if (justLanded) {
-      if (stunTopY - playerPosition.y > settings.stunDrop) landRecoverUntil = time + settings.landRecoverTime;
-      stunTopY = -Infinity;
-      maxUngroundedY = -Infinity;
-    }
+    if (justLanded) maxUngroundedY = -Infinity;
     return null;
   }
 
   // Landing while moving (and not stunned) shows the touchdown briefly, then
   // blends out into locomotion after landRunBlend seconds instead of holding
   // the planted-feet clip to completion (which reads as a sliding crouch).
-  // Only stunning drops (> stunDrop) play out compulsorily — there the input
-  // lockout holds the player in place anyway.
+  // Only stunning landings play out compulsorily — there the stun
+  // holds the player in place anyway.
   const moving = Vector3.lengthSquared(movementAxis) > 0;
 
   if (justLanded) {
@@ -442,13 +429,9 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
       landingSoft = soft;
       landingSpeed = soft ? settings.softLandSpeed : 1;
     }
-    landingLocked = stunTopY - playerPosition.y > settings.stunDrop;
+    // a landing stun (vertical model) holds the avatar in place: the clip plays out
+    landingLocked = stunned();
     landingStartTime = time;
-    // Stun: lock movement input after big drops (stunDrop 10 m,
-    // landRecoverTime 0.75 s). Uses the glide-aware stun tracker, so the
-    // hard-landing *clip* (drop > hardLandingDrop) can play without stunning.
-    if (landingLocked) landRecoverUntil = time + settings.landRecoverTime;
-    stunTopY = -Infinity;
     maxUngroundedY = -Infinity;
     jumpPhase = 'none';
     prevJumpPhase = 'none';
@@ -532,9 +515,6 @@ function selectAnimation(): MovementAnimation {
 
   if (jumpingOrFalling) {
     maxUngroundedY = Math.max(maxUngroundedY, playerPosition.y);
-    // Gliding keeps resetting the stun height: only free-fall
-    // after the glide ends counts toward the stun drop.
-    stunTopY = isGliding ? playerPosition.y : Math.max(stunTopY, playerPosition.y);
   }
   // Ungrounded -> grounded transition: the frame the landing sound may fire.
   const justLanded = wasJumpingOrFalling && !jumpingOrFalling;

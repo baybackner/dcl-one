@@ -92,12 +92,6 @@ export const settings = {
   // Phased-jump thresholds (metres fallen):
   // drop past which touchdown plays Hard_Landing instead of the normal *_Jump_End.
   hardLandingDrop: 3.0,
-  // Landing stun: a drop over 10 m locks movement input for 0.75 s.
-  // Drop (m) past which touchdown locks movement input; while gliding the drop
-  // tracker keeps resetting, so controlled glide landings never stun.
-  stunDrop: 10,
-  // Movement-input lockout duration (s) for the stun.
-  landRecoverTime: 0.75,
   // Soft-landing bob: every landing (even small jumps) plays the Hard_Landing
   // clip, but small drops start it at softLandStart (s) — skipping the deep
   // crouch — and play it at softLandSpeed, so it reads as a quick absorb-bob.
@@ -176,12 +170,10 @@ export const TUNABLE_GROUPS: { group: string; items: Tunable[] }[] = [
       { key: 'jumpStartSkip', label: 'jump start skip (s)', step: 0.05, min: 0, max: 5, decimals: 2 },
       { key: 'hardLandingDrop', label: 'hard-land drop (m)', step: 0.5, min: 0, max: 100, decimals: 2 },
       { key: 'longFallDrop', label: 'long-fall drop (m)', step: 0.5, min: 0, max: 100, decimals: 2 },
-      { key: 'stunDrop', label: 'stun drop (m)', step: 1, min: 0, max: 200, decimals: 1 },
       { key: 'landRunBlend', label: 'land->run blend (s)', step: 0.05, min: 0, max: 5, decimals: 2 },
       { key: 'softLandStart', label: 'soft land start (s)', step: 0.05, min: 0, max: 5, decimals: 2 },
       { key: 'softLandSpeed', label: 'soft land speed', step: 0.1, min: 0.1, max: 10, decimals: 2 },
       { key: 'softLandTime', label: 'soft land time (s)', step: 0.05, min: 0, max: 5, decimals: 2 },
-      { key: 'landRecoverTime', label: 'stun time (s)', step: 0.1, min: 0, max: 20, decimals: 2 },
     ],
   },
   {

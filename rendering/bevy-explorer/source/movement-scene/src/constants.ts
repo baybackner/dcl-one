@@ -111,6 +111,14 @@ export const JUMP_TO_GLIDE_TIME = 0.52; // s from the latest jump's press (26 st
 export const GLIDE_COOLDOWN = 0.22; // s after a glide ends (11 steps)
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
+// Landing stun: a landing more than LANDING_STUN_DROP below the top of the airtime (the highest point since the ground;
+// a glide restarts it from the glide's height) stops horizontal movement for LANDING_STUN_TIME. Jumping is still allowed.
+export const LANDING_STUN_DROP = 8; // m
+export const LANDING_STUN_TIME = 0.76; // s from the landing step (38 steps)
+// 1: the keys held through the stun still accelerate the move, so the gait speed is back on the first step after it
+// (in the air the move then builds up from 0 at the air acceleration); 0: the input is ignored and the speed builds up
+// again after the stun.
+export const LANDING_STUN_KEEP_INPUT: number = 1;
 
 export const TURN_MAX_DEGREES_SEC = 1040; // max degrees to turn (set to inf for TURN_FULL_TIME to apply)
 export const TURN_FULL_TIME = 0.1; // time to turn fully towards target

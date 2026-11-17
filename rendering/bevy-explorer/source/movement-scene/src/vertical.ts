@@ -6,7 +6,7 @@ import {
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS, EXTERNAL_UP_DAMP_TIME, EXTERNAL_UP_DECEL,
   FIXED_STEP, GLIDE_COOLDOWN, GLIDE_MIN_GROUND_DISTANCE, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
-  LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  LANDING_STUN_DROP, LANDING_STUN_TIME, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
   PLAYER_COLLIDER_RADIUS, POSITION_CORRECTION_TIME, RAMP_GUARD, STEP_CLEARANCE_EXCESS, VEC3_ZERO,
   VERTICAL_PREDICT, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
@@ -26,6 +26,8 @@ export function updateVerticalVelocity() {
     setGrounded(isLaunched() ? false : prevGrounded);
     unrequestedLift = 0;
     applyJumpAndGravity(true);
+    // a fall from where the engine put us counts from there
+    vstate.topY = playerPosition.y;
     return;
   }
   stepUp();
@@ -60,12 +62,14 @@ type VState = {
   airLaunchStep: number; // step the air jump launches on (held height before it); NEVER: none in this airtime
   airLaunched: boolean; // an air jump launched during the last advance
   heldSincePress: boolean; // the key has stayed down since the latest jump press
+  topY: number; // height a landing stun measures the drop from: the ground, then the avatar's highest since
+  stunEndStep: number; // first step after a landing stun
 };
 const NEVER = -1e9;
 const vstate: VState = {
   vy: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false,
   gliding: false, glideEndStep: NEVER, launched: false, y: 0, airPressStep: NEVER, airLaunchStep: NEVER, airLaunched: false,
-  heldSincePress: false,
+  heldSincePress: false, topY: -Infinity, stunEndStep: NEVER,
 };
 const vprobe: VState = { ...vstate };
 var vpending = 0;
@@ -87,13 +91,14 @@ function copyVState(from: VState, to: VState) {
   to.consumedStep = from.consumedStep; to.jumpCount = from.jumpCount; to.glideWanted = from.glideWanted;
   to.gliding = from.gliding; to.glideEndStep = from.glideEndStep; to.launched = from.launched; to.y = from.y;
   to.airPressStep = from.airPressStep; to.airLaunchStep = from.airLaunchStep; to.airLaunched = from.airLaunched;
-  to.heldSincePress = from.heldSincePress;
+  to.heldSincePress = from.heldSincePress; to.topY = from.topY; to.stunEndStep = from.stunEndStep;
 }
 
 // Ground height under the avatar this tick (-Infinity: none in range). An air jump needs the model above it.
 var groundY = -Infinity;
 // Steps between an air press and its launch: the height is held on every step in between.
 const AIR_HOVER_STEPS = Math.round(AIR_JUMP_HOVER_TIME / FIXED_STEP);
+const STUN_STEPS = Math.round(LANDING_STUN_TIME / FIXED_STEP);
 
 function airJumpAllowed(s: VState, h: number): boolean {
   return maxAirJumps > 0 && s.jumpCount >= 1 && Math.max(s.jumpCount, 1) <= maxAirJumps
@@ -117,6 +122,9 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   let justJumped = false;
   const onGround = onGroundTick && s.vy <= 0;
   if (onGround) {
+    // a landing more than LANDING_STUN_DROP below the top of the airtime stuns
+    if (s.lastGroundedStep !== s.step - 1 && s.topY - s.y > LANDING_STUN_DROP) s.stunEndStep = s.step + STUN_STEPS;
+    s.topY = s.y;
     s.lastGroundedStep = s.step;
     s.jumpCount = 0;
     s.airLaunchStep = NEVER; // the landing cancels an air jump that has not launched
@@ -261,6 +269,8 @@ function applyJumpAndGravity(noGravity: boolean) {
   const onGround = (grounded || launchPending) && !isLaunched();
   // on the ground the model stands where the avatar stands
   if (onGround && vstate.vy <= 0) vstate.y = playerPosition.y - Math.max(0, groundDistance);
+  // in the air the stun's top is the avatar's highest point since the ground, or its height while gliding
+  if (!onGround) vstate.topY = vstate.gliding ? playerPosition.y : Math.max(vstate.topY, playerPosition.y);
   const stepPressed = INPUT_DELAY_TICKS > 0 ? prevJumpPressed : pressed;
   const stepRunning = INPUT_DELAY_TICKS > 0 ? prevRunning : running;
   vstate.launched = false;
@@ -411,6 +421,12 @@ var jumpTracked = false;
 var airPublishedStep = NEVER;
 // The step the committed air jump launches on (NEVER: none), for the horizontal launch push.
 export function airLaunchStep(): number { return vstate.airLaunchStep; }
+// Landing stun: horizontal movement stops on steps up to stunEndStep() (exclusive) of the committed model. Before the
+// committed model reaches the ground, landingStuns() tells whether that landing will stun (the drop from the top to
+// the ground under the avatar is over LANDING_STUN_DROP); once landed the top is the ground and it is false.
+export function stunEndStep(): number { return vstate.stunEndStep; }
+export function stunned(): boolean { return vstate.step < vstate.stunEndStep; }
+export function landingStuns(): boolean { return vstate.topY - groundY > LANDING_STUN_DROP; }
 // The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
 var landedNow = false;
 // Vertical velocity of the last reply and whether it was airborne (ramp guard).

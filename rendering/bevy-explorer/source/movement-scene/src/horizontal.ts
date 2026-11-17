@@ -2,14 +2,14 @@ import { engine, InputAction, inputSystem, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
   AIR_JUMP_IMPULSE, AIR_JUMP_STOP_WITHOUT_KEYS, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
-  FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, MAX_EXTERNAL_SPEED,
+  FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, LANDING_STUN_KEEP_INPUT, MAX_EXTERNAL_SPEED,
   MAX_FIXED_STEPS, RAMP_GUARD, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
-import { horizontalResync, landRecoverUntil, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, time, velocity } from '.';
+import { horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
 import { grounded } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, launchAhead, predictedLandFrame } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, stunEndStep } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -24,11 +24,12 @@ export var horizontalVelocity = Vector3.Zero();
 // Camera-relative basis (horizontal, unit) and input of one tick.
 var fwd = Vector3.Zero();
 var right = Vector3.Zero();
-type StepInput = { x: number; z: number; limit: number; grounded: boolean };
-const input: StepInput = { x: 0, z: 0, limit: 0, grounded: true };
+// stun: a landing stun holds from the first step (the steps after a predicted touchdown)
+type StepInput = { x: number; z: number; limit: number; grounded: boolean; stun: boolean };
+const input: StepInput = { x: 0, z: 0, limit: 0, grounded: true, stun: false };
 // Input of the previous tick: the steps that cover the time up to this tick's frame use it.
-const prevInput: StepInput = { x: 0, z: 0, limit: 0, grounded: true };
-const landInput: StepInput = { x: 0, z: 0, limit: 0, grounded: true };
+const prevInput: StepInput = { x: 0, z: 0, limit: 0, grounded: true, stun: false };
+const landInput: StepInput = { x: 0, z: 0, limit: 0, grounded: true, stun: false };
 
 function readInput() {
   const camera = Transform.get(engine.CameraEntity);
@@ -52,9 +53,8 @@ function readInput() {
     Vector3.normalizeToRef(movementAxis, movementAxis);
   }
 
-  const stunned = time < landRecoverUntil;
-  input.x = stunned ? 0 : snap(Vector3.dot(movementAxis, right));
-  input.z = stunned ? 0 : snap(Vector3.dot(movementAxis, fwd));
+  input.x = snap(Vector3.dot(movementAxis, right));
+  input.z = snap(Vector3.dot(movementAxis, fwd));
   input.limit = isGliding ? glidingSpeed
     : inputSystem.isPressed(InputAction.IA_MODIFIER) ? sprintSpeed
     : inputSystem.isPressed(InputAction.IA_WALK) ? walkSpeed
@@ -85,6 +85,11 @@ var launchStep = -1;
 var pending = 0;
 // Horizontal velocity of the last reply (ramp guard).
 var lastReplyX = 0, lastReplyZ = 0;
+// First step after the committed landing stun (vertical model), read once per tick.
+var stunEnd = -1;
+// Step the last reply was predicted for, and whether that step was stunned.
+var lastReplyStep = -1;
+var lastReplyStun = false;
 
 function copyState(from: State, to: State) {
   to.ax = from.ax; to.az = from.az; to.adx = from.adx; to.adz = from.adz; to.weight = from.weight;
@@ -123,21 +128,23 @@ function smoothDamp(current: number, target: number, rate: number, smoothTime: n
 
 function step(s: State, c: StepInput, h: number) {
   s.n++;
-  const xTarget = c.limit * c.x;
-  const zTarget = c.limit * c.z;
+  const stun = c.stun || s.n < stunEnd;
+  const ignore = stun && !LANDING_STUN_KEEP_INPUT;
+  const xTarget = ignore ? 0 : c.limit * c.x;
+  const zTarget = ignore ? 0 : c.limit * c.z;
   s.weight = moveTowards(s.weight, xTarget !== 0 || zTarget !== 0 ? 1 : 0, h / Math.max(1e-3, settings.accelTimeGround));
   const k = accelCurve(s.weight);
   const accel = c.grounded ? GROUND_ACCEL + (GROUND_MAX_ACCEL - GROUND_ACCEL) * k : AIR_ACCEL + (AIR_MAX_ACCEL - AIR_ACCEL) * k;
 
   // A held axis keeps its speed when its key flips sign (strafe A/D, W/S reversal), then moves
   // toward the target; a released axis settles to 0 over the stop time.
-  if (c.x !== 0) {
+  if (c.x !== 0 && !ignore) {
     s.ax = moveTowards(Math.sign(xTarget) * Math.abs(s.ax), xTarget, accel * h);
   } else {
     s.ax = smoothDamp(s.ax, 0, s.adx, settings.dampTimeGround, h);
     s.adx = rateOut[0];
   }
-  if (c.z !== 0) {
+  if (c.z !== 0 && !ignore) {
     s.az = moveTowards(Math.sign(zTarget) * Math.abs(s.az), zTarget, accel * h);
   } else {
     s.az = smoothDamp(s.az, 0, s.adz, settings.dampTimeGround, h);
@@ -169,6 +176,8 @@ function step(s: State, c: StepInput, h: number) {
       s.vx *= f; s.vz *= f;
     }
   }
+  // a landing stun stops the move velocity (external pushes still apply)
+  if (stun) { s.vx = 0; s.vz = 0; }
 
   const damping = c.grounded ? EXTERNAL_ENV_DRAG + EXTERNAL_GROUND_FRICTION : EXTERNAL_ENV_DRAG;
   const ef = Math.max(0, 1 - damping * h);
@@ -201,6 +210,7 @@ function advance(s: State, c: StepInput, time: number): number {
 export function updateHorizontalVelocity() {
   readInput();
   launchStep = airLaunchStep();
+  stunEnd = stunEndStep();
 
   if (horizontalResync) {
     // the engine moved us at another velocity: continue from what it applied
@@ -218,6 +228,7 @@ export function updateHorizontalVelocity() {
   // The engine holds the reply from the frame it lands on until the next reply lands; reply
   // with the state predicted (on this tick's input) for the last of those frames.
   let ox = state.vx + state.ex, oz = state.vz + state.ez;
+  let replyStep = state.n, replyStun = false;
   if (replyDelay > 0 && frameTime > 0) {
     copyState(state, probe);
     const frames = 2 * replyDelay;
@@ -228,18 +239,31 @@ export function updateHorizontalVelocity() {
       // frames keeps the air velocity, so the touchdown frame still moves at air speed.
       copyInput(input, landInput);
       landInput.grounded = true;
+      landInput.stun = landingStuns();
       const rest = advance(probe, input, pending + predictedLandFrame * frameTime);
       advance(probe, landInput, rest + (frames - predictedLandFrame) * frameTime);
+      replyStun = landInput.stun;
     } else {
       advance(probe, input, pending + frames * frameTime);
     }
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
+    replyStep = probe.n;
   } else if (launchAhead) {
     // the vertical reply already carries a launch the committed steps reach after this frame: so does this one,
     // with this tick's input for the launch step (a ground move), so a jump with the keys released goes straight up
     copyState(state, probe);
     advance(probe, input, Math.max(pending, FIXED_STEP));
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
+    replyStep = probe.n;
+  }
+  // A reply from a stunned step: the guard below does not hold the speed from before the stun, only the end of the
+  // stun once a reply has already passed it.
+  replyStun = replyStun || replyStep < stunEnd;
+  // a stun a reply has published holds: until the committed landing, a later reply that does not reach the touchdown
+  // keeps it
+  if (!replyStun && lastReplyStun && landingStuns()) {
+    ox = state.ex; oz = state.ez;
+    replyStun = true;
   }
 
   // Ramp guard. The delay estimate follows the previous reply's delay, which does not predict
@@ -248,7 +272,7 @@ export function updateHorizontalVelocity() {
   // (0.5-0.9 m/s), which the rigidly attached camera shows as a jerk. While the same input is
   // held on the ground and the model is still accelerating, a reply never slows below the last
   // one; the committed state catches up within a tick or two.
-  if ((RAMP_GUARD & 1) && !horizontalResync && (input.x !== 0 || input.z !== 0) && input.grounded && prevInput.grounded
+  if ((RAMP_GUARD & 1) && !horizontalResync && !(replyStun && lastReplyStep < stunEnd) && (input.x !== 0 || input.z !== 0) && input.grounded && prevInput.grounded
     && input.x === prevInput.x && input.z === prevInput.z && input.limit === prevInput.limit
     && state.ex === 0 && state.ez === 0) {
     const committed = Math.sqrt(state.vx * state.vx + state.vz * state.vz);
@@ -265,7 +289,7 @@ export function updateHorizontalVelocity() {
       }
     }
   }
-  lastReplyX = ox; lastReplyZ = oz;
+  lastReplyX = ox; lastReplyZ = oz; lastReplyStep = replyStep; lastReplyStun = replyStun;
   copyInput(input, prevInput);
 
   velocity.x = ox;
