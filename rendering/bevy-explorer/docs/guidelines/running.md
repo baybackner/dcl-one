@@ -253,6 +253,22 @@ State, in every build:
   The reply carries `screen`, `count`, `scene` (`hash`, `title`) and `truncated` past `--limit`
   (200). `--stack` other than `sdk` is refused: the client's own UI is `/hud_list`. Scene-UI ids
   can change when the scene rebuilds its UI: find an element again by its `center` and `kind`.
+- `/ui_click <crdtId> [--device] [--force] [--button pointer|primary|secondary]
+  [--timeout-seconds S]`: clicks a scene-UI element `/ui_list` lists. Without `--device` an aim
+  holds the pointer on the element, as a cursor resting on it would, and presses the button's
+  real binding; with `--device` the cursor is parked at the element's `center` and the real
+  button pressed there, so whatever is drawn at that point takes the click. Refused before
+  anything is pressed (`{"refused", "cause"}`) when the element is not shown, is a disabled
+  input or dropdown, or something takes the pointer at its centre (`cause.blockedBy`: `the
+  scene's UI (crdtId N)` or `the client's UI (name)`); `--force` clicks anyway (the plain click
+  still reaches the element, a device click reaches the cover). Once the click is done it waits
+  (up to 180 frames) for the scene to be sent its events, then answers `ok`, `path` (`sdk` or
+  `device`), `delivered` {`enter`, `down`, `up`}, each `consumed` (sent to the scene, which ticked
+  past it), `not_declared` (the element has no handler for it), `not_sent` (declared, never
+  written: the press went elsewhere) or `not_drained`, an `info` when only the press or only the
+  release had a handler, the click's `hit`, `events` and `rootBroadcast`, and the element's
+  `crdtId`, `kind`, `screenRect`, `center`, `coveredBy` and `screen`, on refusals too. A click the
+  scene consumed neither the press nor the release of fails with that reply and a `reason`.
 - `/avatar_state [all|<address>]`: avatars as selected (body shape, wearables, emotes, forced
   slots), as rendered (built or not, wearables by category, hidden categories) and the emote
   each plays (with `idle`: whether a triggered emote may take over, which a scene's non-idle

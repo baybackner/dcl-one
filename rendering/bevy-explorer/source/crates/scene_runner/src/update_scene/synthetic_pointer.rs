@@ -50,6 +50,7 @@ impl SyntheticAim {
                 anchor_point(target, anchor, transforms, meshes, children)
             }
             AimAt::Point(point) => Some(point),
+            AimAt::Ui { .. } => None,
         }
     }
 }
@@ -67,6 +68,13 @@ pub enum AimAt {
     },
     /// a world point: the ray reaches whatever a cursor over that point would
     Point(Vec3),
+    /// a screen scene-UI element: the pointer is over it as a cursor hovering it would be,
+    /// whatever is drawn above it (the caller checks the cover first)
+    Ui {
+        entity: SceneEntityId,
+        /// the scene entity (not its UI node)
+        target: Entity,
+    },
 }
 
 /// Where on the entity the aim points

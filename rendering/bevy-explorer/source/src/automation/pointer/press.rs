@@ -179,6 +179,7 @@ fn press_request(
             hold_seconds,
             hold_frames,
         }),
+        ui: false,
     }))
 }
 

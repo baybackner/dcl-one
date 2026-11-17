@@ -91,6 +91,15 @@ describe('Explorer', () => {
     assert.deepEqual(fake.lines, ['/reload --current --wait --timeout-seconds 60', '/scene_state'])
   })
 
+  test('uiClick passes the path flags and reads the verdicts', async () => {
+    const reply = { ok: true, path: 'device', crdtId: 619, delivered: { enter: 'not_declared', down: 'consumed', up: 'not_declared' } }
+    const fake = new FakeConsole({ ui_click: JSON.stringify(reply) })
+    const explorer = new Explorer(fake)
+    assert.equal((await explorer.uiClick(619, { device: true, force: true })).delivered.down, 'consumed')
+    await explorer.uiClick(620, { button: 'primary' })
+    assert.deepEqual(fake.lines, ['/ui_click 619 --device --force', '/ui_click 620 --button primary'])
+  })
+
   test('uiList passes the kind and limit and reads the elements', async () => {
     const element = {
       crdtId: 66133,

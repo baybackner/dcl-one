@@ -635,6 +635,28 @@ export interface UiElement {
   selectedIndex?: number
 }
 
+/** What the scene made of one event of a `/ui_click`: consumed (sent to the scene, which then
+ *  ticked past it), not_declared (the element has no handler for it), not_sent (declared but
+ *  never written: the press went elsewhere), not_drained (written, not yet sent). */
+export type UiVerdict = 'consumed' | 'not_declared' | 'not_sent' | 'not_drained'
+
+/** `/ui_click`'s reply. A click the scene consumed nothing of fails, with this as its JSON. */
+export interface UiClickReply {
+  ok: boolean
+  path: 'sdk' | 'device'
+  crdtId: number
+  kind: UiElement['kind']
+  screenRect: UiElement['screenRect']
+  center: UiElement['center']
+  coveredBy: UiElement['coveredBy']
+  screen: Screen
+  delivered: { enter: UiVerdict; down: UiVerdict; up: UiVerdict }
+  info?: string
+  reason?: string
+  warning?: string
+  rootBroadcast?: boolean
+}
+
 export interface UiList {
   stack: 'sdk'
   scene: { hash: string; title: string } | null
@@ -960,6 +982,14 @@ export class Explorer {
   /** The parcel scene under the player: its id, state and whether it is ready. */
   sceneState(): Promise<SceneStateReport> {
     return this.json<SceneStateReport>('/scene_state')
+  }
+
+  /** Click a scene-UI element by its `crdtId` (`/ui_click`): through an aim at the element, or
+   *  with `device` by parking the cursor at its centre and pressing the real button. A covered
+   *  (unless `force`) or disabled element is refused; a click the scene consumed nothing of fails. */
+  uiClick(crdtId: number, options: { device?: boolean; force?: boolean; button?: 'pointer' | 'primary' | 'secondary' } = {}): Promise<UiClickReply> {
+    const flags = `${options.device ? ' --device' : ''}${options.force ? ' --force' : ''}${options.button ? ` --button ${options.button}` : ''}`
+    return this.json<UiClickReply>(`/ui_click ${crdtId}${flags}`)
   }
 
   /** The parcel scene's UI elements on screen (`/ui_list`); labels only with `kind: 'text'`. */

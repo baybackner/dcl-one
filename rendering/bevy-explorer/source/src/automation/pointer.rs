@@ -70,6 +70,7 @@ const BOUNDS_MARGIN: f32 = 0.05;
 
 mod machine;
 mod press;
+mod ui;
 pub use machine::{
     binding_error, check_hover_frames, classify_point, press_out_of_reach, refuse_while_held,
     undeclared_warning, ClickKind, ClickMachine, Effect, Observed, TargetSeen,
@@ -84,9 +85,11 @@ impl Plugin for AutomationPointerPlugin {
             .add_console_command::<HoverEntityCommand, _>(hover_entity_cmd)
             .add_console_command::<ClickEntityCommand, _>(click_entity_cmd)
             .add_console_command::<press::PressInputCommand, _>(press::press_input_cmd)
+            .add_console_command::<ui::UiClickCommand, _>(ui::ui_click_cmd)
+            .init_resource::<ui::UiClickJob>()
             .add_systems(
                 Update,
-                (settle_release, drive_pointer_job)
+                (settle_release, drive_pointer_job, ui::drive_ui_click)
                     .chain()
                     .after(SceneSets::Input),
             );
@@ -643,6 +646,8 @@ struct Request<'a> {
     unaimed: bool,
     /// a `/press_input`: its hold
     press: Option<PressInput>,
+    /// aim at the entity's scene-UI node, not into the world (`/ui_click`)
+    ui: bool,
 }
 
 impl PointerControl<'_, '_> {
@@ -718,6 +723,7 @@ impl PointerControl<'_, '_> {
                 (Some(point), ..) => {
                     AimAt::Point(DclTranslation(point.to_array()).to_bevy_translation())
                 }
+                (None, Some(entity), Some(target)) if request.ui => AimAt::Ui { entity, target },
                 (None, Some(entity), Some(target)) => {
                     let bounds = request.bounds
                         && anchor_point(
@@ -852,6 +858,7 @@ fn hover_request(
         hud_holds: false,
         unaimed: false,
         press: None,
+        ui: false,
     }))
 }
 
@@ -924,6 +931,7 @@ fn click_request(
         hud_holds,
         unaimed: false,
         press: None,
+        ui: false,
     }))
 }
 

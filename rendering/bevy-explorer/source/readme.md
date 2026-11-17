@@ -350,7 +350,11 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   `crdtId`, `kind` (`input`, `dropdown`, `scroll`, `pointerTarget`; labels with `--kind text`),
   `screenRect` in logical pixels, a normalized `center` that `/click_at --normalized` takes as it
   is, `disabled`, `pointerEventTypes`, the text, value or options, and `coveredBy` (a scene element
-  or the engine's own UI over its centre), with `screen`.
+  or the engine's own UI over its centre), with `screen`. `/ui_click <crdtId> [--device]
+  [--force]` clicks one: refused, naming the cover (`blockedBy`), when something covers its centre,
+  or when it is disabled; it answers once the scene has been sent the click, with `delivered`
+  (`enter`, `down`, `up`: `consumed`, `not_declared`, `not_sent` or `not_drained`), and fails
+  when the scene consumed neither the press nor the release.
 - Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and

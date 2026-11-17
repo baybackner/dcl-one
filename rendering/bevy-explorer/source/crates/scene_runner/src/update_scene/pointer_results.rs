@@ -17,7 +17,7 @@ use console::DoAddConsoleCommand;
 use system_bridge::{HoverAction, HoverEvent, ProximityEvent, SystemApi};
 
 use super::synthetic_pointer::{
-    aim_ray, cursor_entries, expire_synthetic_aim, ui_gate_passes, LoggedPointerEvent,
+    aim_ray, cursor_entries, expire_synthetic_aim, ui_gate_passes, AimAt, LoggedPointerEvent,
     PointerEventLog, SyntheticPointer,
 };
 use crate::{
@@ -886,40 +886,59 @@ fn resolve_pointer_target(
         }
     }
 
-    match &ui_target.0 {
-        UiPointerTargetValue::Primary(e, mesh) => {
-            target.0 = Some(PointerTargetInfo {
-                container: *e,
-                distance: FloatOrd(0.0),
-                camera_distance: FloatOrd(0.0),
-                in_scene: true,
-                mesh_name: mesh.clone(),
-                position: None,
-                normal: None,
-                face: None,
-                ty: PointerTargetType::Ui,
-            });
-        }
-        UiPointerTargetValue::World(e, mesh) => {
-            let (distance, camera_distance, in_scene) = world_target
-                .0
-                .as_ref()
-                .map(|t| (t.distance, t.camera_distance, t.in_scene))
-                .unwrap_or((FloatOrd(0.0), FloatOrd(0.0), false));
+    // a synthetic aim at a scene-UI element holds the pointer on it, as the cursor's hover would
+    let aimed_ui = synthetic.0.as_ref().and_then(|aim| match aim.at {
+        AimAt::Ui { target, .. } => Some(target),
+        _ => None,
+    });
+    if let Some(e) = aimed_ui {
+        target.0 = Some(PointerTargetInfo {
+            container: e,
+            distance: FloatOrd(0.0),
+            camera_distance: FloatOrd(0.0),
+            in_scene: true,
+            mesh_name: None,
+            position: None,
+            normal: None,
+            face: None,
+            ty: PointerTargetType::Ui,
+        });
+    } else {
+        match &ui_target.0 {
+            UiPointerTargetValue::Primary(e, mesh) => {
+                target.0 = Some(PointerTargetInfo {
+                    container: *e,
+                    distance: FloatOrd(0.0),
+                    camera_distance: FloatOrd(0.0),
+                    in_scene: true,
+                    mesh_name: mesh.clone(),
+                    position: None,
+                    normal: None,
+                    face: None,
+                    ty: PointerTargetType::Ui,
+                });
+            }
+            UiPointerTargetValue::World(e, mesh) => {
+                let (distance, camera_distance, in_scene) = world_target
+                    .0
+                    .as_ref()
+                    .map(|t| (t.distance, t.camera_distance, t.in_scene))
+                    .unwrap_or((FloatOrd(0.0), FloatOrd(0.0), false));
 
-            target.0 = Some(PointerTargetInfo {
-                container: *e,
-                distance,
-                camera_distance,
-                in_scene,
-                mesh_name: mesh.clone(),
-                position: None,
-                normal: None,
-                face: None,
-                ty: PointerTargetType::Ui,
-            });
+                target.0 = Some(PointerTargetInfo {
+                    container: *e,
+                    distance,
+                    camera_distance,
+                    in_scene,
+                    mesh_name: mesh.clone(),
+                    position: None,
+                    normal: None,
+                    face: None,
+                    ty: PointerTargetType::Ui,
+                });
+            }
+            UiPointerTargetValue::None => target.0.clone_from(&world_target.0),
         }
-        UiPointerTargetValue::None => target.0.clone_from(&world_target.0),
     }
 
     let new = target.0.as_ref().map(|t| t.container);
