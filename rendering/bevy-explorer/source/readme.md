@@ -340,6 +340,12 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   for the gait, and answers once the player has settled with `startPosition`, `endPosition`,
   `distance`, `parcel`, the held `seconds` and whether an `InputModifier` was active
   (`modifierActive`, `modifier`); `docs/guidelines/running.md` has the details.
+- Scenes: `/teleport x y [realm] --wait [--timeout-seconds S]` and `/reload --current --wait`
+  answer once the player has landed and the parcel's scene runs, has ticked twice and a frame with
+  it was presented (`settled`, `sceneState`, `ticksWaited`, `renderedFrames`, `settleMs`; a
+  teleport adds `arrived`, `sceneReady`, `sceneHash`), or with `settled:false` and a `warning`
+  naming what it waited for. `/scene_state` reads the parcel scene under the player: `sceneId`
+  (its hash), `title`, `parcel`, `state`, `isReady`, `loadingStage`, `sdkVersion`.
 - Camera: `/camera_look <dx> <dy> [--seconds S]` turns the camera in degrees per second as a held
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and

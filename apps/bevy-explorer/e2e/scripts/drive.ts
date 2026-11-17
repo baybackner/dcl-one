@@ -97,7 +97,9 @@ async function main(): Promise<void> {
   console.error(`[drive] realm ${realm.realm}: ${scenes.map((scene) => scene.entity.pointers[0]).join(' ')}`)
   try {
     const { explorer } = await openSession({ realm: realm.realm, position, signIn: 'guest' }, target)
-    console.error(`[drive] in world at ${position}; reading commands from stdin`)
+    const scene = await explorer.sceneState()
+    const ready = scene.isReady ? 'ready' : `not ready (${scene.loadingStage})`
+    console.error(`[drive] in world at ${position}, scene ${scene.sceneId ?? 'none'} ${ready}; reading commands from stdin`)
     const results = await runLines(createInterface({ input: process.stdin, crlfDelay: Infinity }), explorer, (result) => {
       process.stdout.write(`${JSON.stringify(result)}\n`)
       console.error(`[drive] ${result.ok ? 'ok' : 'FAILED'} ${result.ms}ms ${result.line}: ${short(result.reply)}`)
