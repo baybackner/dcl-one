@@ -5346,7 +5346,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/scene_fetch.js",
-      "sha256": "a3fd68c0d07343b2c17a9e0606c80e6efea13e6b90f10ef54a1809a0e09c65bb"
+      "sha256": "48a0530f7bebf98423321576caa601fe89ede6dd7b997ddce80dbaa17d55cc9f"
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/package.json",
