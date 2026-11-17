@@ -5,7 +5,8 @@ use std::f32::consts::PI;
 /// scene's grounded angle). A steeper contact is a wall or a slope it slides down; the avatar
 /// walking on the ground does not climb it.
 pub const MAX_GROUND_INCLINE: f32 = 46.5 * PI / 180.0;
-pub const MAX_STEP_HEIGHT: f32 = 0.5;
+/// Highest riser the avatar walking on the ground steps onto.
+pub const MAX_STEP_HEIGHT: f32 = 0.45;
 /// How far below its slope the ground may fall away under a walking avatar that the avatar
 /// still follows it down (a step down); a larger drop is an edge it walks off.
 pub const GROUND_SNAP_DROP: f32 = 0.15;

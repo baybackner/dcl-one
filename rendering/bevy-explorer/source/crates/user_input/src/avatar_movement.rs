@@ -8,8 +8,8 @@ use bevy::{
 };
 use common::{
     dynamics::{
-        GROUND_SNAP_DROP, MAX_GROUND_INCLINE, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS,
-        PLAYER_GROUND_THRESHOLD,
+        GROUND_SNAP_DROP, MAX_GROUND_INCLINE, MAX_STEP_HEIGHT, PLAYER_COLLIDER_OVERLAP,
+        PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD,
     },
     sets::{PostUpdateSets, SceneSets},
     structs::{
@@ -607,6 +607,7 @@ pub fn apply_movement(
     mut info: ResMut<AvatarMovementInfo>,
     mut last_step: ResMut<LastMovementStep>,
     mut jumping: Local<bool>,
+    mut step_push: Local<f64>,
     movement_control: Res<EngineMovementControl>,
     central: Res<CentralCollisions>,
 ) {
@@ -647,6 +648,10 @@ pub fn apply_movement(
     let mut time = time_res.delta_secs_f64();
     let mut velocity = movement.component.velocity.as_dvec3();
     let mut steps = 0;
+    // the steepest walkable slope the move was turned along (ground following), for the snap
+    let mut followed = 0.0_f64;
+    // a slow move held at a riser this step (step offset)
+    let mut held_at_riser = false;
     // on the ground at the end of the last step: the assists below hold for a walking avatar
     let grounded = dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
 
@@ -680,6 +685,31 @@ pub fn apply_movement(
 
         position += velocity * step_time + contact_normal * PLAYER_COLLIDER_OVERLAP as f64;
         time -= step_time;
+        let horizontal = velocity.with_y(0.0);
+        if grounded
+            && contact_normal != DVec3::ZERO
+            && !walkable(contact_normal)
+            && horizontal != DVec3::ZERO
+            && velocity.y <= horizontal.length() * f64::from(MAX_GROUND_INCLINE.tan())
+            && movement_control.suppress_clipping.is_empty()
+        {
+            // step offset: a riser up to MAX_STEP_HEIGHT is stepped onto, keeping the move. A move
+            // slower than step_reach() a frame first pushes against it for STEP_PUSH.
+            let speed = horizontal.length();
+            if speed * time_res.delta_secs_f64() < step_reach()
+                && speed * time + *step_push < STEP_PUSH
+            {
+                *step_push += speed * time;
+                held_at_riser = true;
+            } else if let Some((stepped, used)) =
+                step_up(&mut scenes, disabled, position, horizontal, time)
+            {
+                position = stepped;
+                time -= used;
+                *step_push = 0.0;
+                continue;
+            }
+        }
         if grounded && contact_normal != DVec3::ZERO && !walkable(contact_normal) {
             // slope limit: on the ground, a surface too steep to stand on stops the move into it
             // as a wall does, so the avatar does not walk up it
@@ -689,13 +719,19 @@ pub fn apply_movement(
             // ground following: on ground it can stand on, the move keeps its horizontal speed,
             // turned along the ground, instead of losing the part into it
             velocity.y -= velocity.dot(contact_normal) / contact_normal.y;
+            followed = followed.max(contact_normal.with_y(0.0).length() / contact_normal.y);
             continue;
         }
         velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
     }
 
+    if !held_at_riser {
+        *step_push = 0.0;
+    }
+
     // ground snap: a walking step that asked for no rise follows the ground down when it falls
-    // away by at most GROUND_SNAP_DROP beyond the ground's own slope over the distance moved
+    // away by at most GROUND_SNAP_DROP beyond the slope of that ground or of the ground it
+    // followed, over the distance moved
     if grounded
         && movement.component.velocity.y <= 0.0
         && !movement_control.deliberate_penetration
@@ -709,7 +745,7 @@ pub fn apply_movement(
             let slope = normal.with_y(0.0).length() / normal.y;
             if walkable(normal)
                 && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
-                && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope
+                && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope.max(followed)
             {
                 position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
             }
@@ -786,6 +822,51 @@ fn cast_avatar(
 
 /// Height over the ground below which an avatar standing still is not settled onto it.
 const SETTLE_HEIGHT: f32 = 1e-3;
+
+/// Forward distance a step offset covers at least: from touching a riser's face to resting on its
+/// corner within [`MAX_GROUND_INCLINE`], plus a margin. The step takes the avatar that far at once.
+fn step_reach() -> f64 {
+    f64::from(PLAYER_COLLIDER_RADIUS) * (1.0 - f64::from(MAX_GROUND_INCLINE.sin())) + 0.01
+}
+/// How far a move slower than [`step_reach`] a frame pushes against a riser before it steps onto
+/// it: a walk pauses at each riser about as long as the reference client's.
+const STEP_PUSH: f64 = 0.15;
+
+/// Step offset from a riser too steep to stand on: up by at most [`MAX_STEP_HEIGHT`] (less under a
+/// ceiling), on along the horizontal move for the rest of the step's `time` and at least
+/// [`step_reach`], down onto the ground. The new position and the time it used; None unless it
+/// lands higher, on ground it can stand on, with the riser's top no higher than the step.
+fn step_up(
+    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    disabled: &HashMap<Entity, HashSet<ColliderId>>,
+    position: DVec3,
+    horizontal: DVec3,
+    time: f64,
+) -> Option<(DVec3, f64)> {
+    const MIN_RISE: f64 = 1e-3;
+    let overlap = f64::from(PLAYER_COLLIDER_OVERLAP);
+    let height = f64::from(MAX_STEP_HEIGHT);
+    let radius = f64::from(PLAYER_COLLIDER_RADIUS);
+    let lift = cast_avatar(scenes, disabled, position, DVec3::Y, height, false)
+        .map_or(height, |(toi, _)| (toi - overlap).max(0.0));
+    if lift <= MIN_RISE {
+        return None;
+    }
+    let raised = position + DVec3::Y * lift;
+    let reach = time.max(step_reach() / horizontal.length());
+    let (ahead, wall) = cast_avatar(scenes, disabled, raised, horizontal, reach, false)
+        .unwrap_or((reach, DVec3::ZERO));
+    if horizontal.length() * ahead < 1e-4 {
+        return None;
+    }
+    let moved = raised + horizontal * ahead + wall * overlap;
+    let (drop, ground) = cast_avatar(scenes, disabled, moved, DVec3::NEG_Y, lift, false)?;
+    let landed = moved - DVec3::Y * (drop - overlap);
+    // where the capsule's bottom sphere touches the riser's top
+    let top = landed.y + radius * (1.0 - ground.y);
+    (walkable(ground) && landed.y - position.y > MIN_RISE && top - position.y <= height + MIN_RISE)
+        .then_some((landed, ahead.min(time)))
+}
 
 /// A contact normal of a surface the avatar can stand on ([`MAX_GROUND_INCLINE`]).
 fn walkable(normal: DVec3) -> bool {
@@ -1267,6 +1348,32 @@ mod tests {
     fn an_avatar_standing_just_over_the_ground_settles_onto_it() {
         let end = walk(&[], Vec3::new(0.0, 0.03, 0.0), Vec3::ZERO);
         assert!(end.y < 1e-3, "hovers at {end}");
+    }
+
+    /// A riser of `height` whose face is at x 1.
+    fn riser(height: f32) -> (Vec3, Vec3, Quat) {
+        (
+            Vec3::new(6.0, height * 0.5, 0.0),
+            Vec3::new(5.0, height * 0.5, 5.0),
+            Quat::IDENTITY,
+        )
+    }
+
+    #[test]
+    fn walking_into_a_riser_up_to_the_step_height_steps_onto_it() {
+        for (height, speed) in [(0.2, 1.5), (0.45, 1.5), (0.3, 8.0)] {
+            let end = walk(&[riser(height)], Vec3::ZERO, Vec3::new(speed, 0.0, 0.0));
+            assert!(
+                (end.y - height).abs() < 0.01,
+                "{height} m at {speed} m/s: {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_riser_higher_than_the_step_height_stops_the_avatar() {
+        let end = walk(&[riser(0.5)], Vec3::ZERO, Vec3::new(8.0, 0.0, 0.0));
+        assert!(end.y < 0.01 && end.x < 1.0, "climbed to {end}");
     }
 
     #[test]

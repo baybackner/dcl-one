@@ -155,8 +155,9 @@ var positionAdjust = Vector3.Zero();
 // What the engine's collide-and-slide does for the avatar on the ground (explorer configuration avatarMovementAssist,
 // comma-separated); the model leaves each of these to it. An engine that announces none gets the model's own.
 // slopeLimit: a surface too steep to stand on stops the move into it. snap: the move follows walkable ground, up a slope
-// at its horizontal speed and down a slope or a step of up to GROUND_SNAP_STEP_DROP.
-export const engineAssist = { slopeLimit: false, snap: false };
+// at its horizontal speed and down a slope or a step of up to GROUND_SNAP_STEP_DROP. step: a riser up to MAX_STEP_HEIGHT
+// is stepped onto.
+export const engineAssist = { slopeLimit: false, snap: false, step: false };
 export function main() {
   getExplorerConfiguration({}).then((config) => {
     positionAdjust = {
@@ -167,6 +168,7 @@ export function main() {
     const assist = (config.configurations?.['avatarMovementAssist'] ?? '').split(',');
     engineAssist.slopeLimit = assist.includes('slopeLimit');
     engineAssist.snap = assist.includes('snap');
+    engineAssist.step = assist.includes('step');
   })
 
   // Pre-load every movement clip up front so playback never hitches on first use.

@@ -44,11 +44,12 @@ module.exports.getCurrentRealm = async function (body) {
 // `avatarMovementAssist`: what the engine's collide-and-slide does for the avatar on the ground,
 // comma-separated, so the movement controller scene leaves it to the engine (`slopeLimit`: a
 // surface too steep to stand on stops the move into it; `snap`: the move follows walkable ground,
-// up a slope at its horizontal speed and down a slope or a low step)
+// up a slope at its horizontal speed and down a slope or a low step; `step`: a riser up to 0.45m
+// is stepped onto)
 module.exports.getExplorerConfiguration = async function (body) {
     return {
         clientUri: 'bevy-explorer',
-        configurations: { avatarMovementAssist: 'slopeLimit,snap' }
+        configurations: { avatarMovementAssist: 'slopeLimit,snap,step' }
     }
 }
 module.exports.getDecentralandTime = async function (body) {

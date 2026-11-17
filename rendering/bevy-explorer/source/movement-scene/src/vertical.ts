@@ -677,7 +677,7 @@ export function steepAhead(): { x: number, z: number, distance: number } | null 
 // step) while no step-up climbs: the horizontal unit normal pointing away from it; null if none.
 const wallFace = { x: 0, z: 0 };
 export function wallContact(): { x: number, z: number } | null {
-  if (fwdDistance > WALL_CONTACT_DISTANCE || fwdWalkable || stepping) return null;
+  if (fwdDistance > WALL_CONTACT_DISTANCE || fwdWalkable || stepping || engineStepAhead()) return null;
   const h = Math.hypot(fwdNormal.x, fwdNormal.z);
   if (h < 1e-6) return null;
   wallFace.x = fwdNormal.x / h;
@@ -685,6 +685,16 @@ export function wallContact(): { x: number, z: number } | null {
   return wallFace;
 }
 const WALL_CONTACT_DISTANCE = 0.02; // m of capsule travel to the face
+
+// With the engine's step (engineAssist.step), the face along the facing is a riser it steps onto: the landing probe just
+// past the face finds walkable ground no higher than MAX_STEP_HEIGHT above the feet.
+function engineStepAhead(): boolean {
+  if (!engineAssist.step) return false;
+  const i = Math.max(0, Math.ceil((fwdDistance - LANDING_CAST_INSET) / LANDING_CAST_SPACING - 1e-3));
+  return i < LANDING_CAST_COUNT && landingWalkables[i]
+    && landingHeights[i] + Math.max(0, groundDistance) >= MIN_STEP_HEIGHT
+    && landingHeights[i] + Math.max(0, groundDistance) <= MAX_STEP_HEIGHT + 1e-3;
+}
 
 var stepping = false;
 // feet height the current step episode is ascending to: the highest tread planned so far
@@ -744,7 +754,7 @@ function stepUp() {
   facing.y = 0;
   Vector3.normalizeToRef(facing, facing);
   const speed = Math.hypot(velocity.x, velocity.z);
-  const plan = speed > 0.1 && Vector3.dot(facing, movementAxis) > 0.9
+  const plan = !engineAssist.step && speed > 0.1 && Vector3.dot(facing, movementAxis) > 0.9
     && (stepping || grounded || lastGroundTime > time - JUMP_COYOTE_TIME) // step from (near-)ground only
     ? planStepUp(speed) : -Infinity;
   if (plan > -Infinity) {

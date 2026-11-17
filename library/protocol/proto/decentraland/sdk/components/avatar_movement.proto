@@ -55,6 +55,12 @@ message MovementAnimation {
 //   grounded = the feet were within 0.05m of walkable ground (normal within 46.5 degrees of up) after the last step
 //   shapecast avatar from position to position + velocity * timestep
 //   on impact:
+//       if grounded, the surface is not walkable and velocity.y <= horizontal speed * tan(46.5 degrees) (step offset):
+//           if the horizontal speed covers less than 0.092m a frame, first push against it for 0.15m of movement
+//           shapecast up by at most 0.45m, then along the horizontal velocity for the residual time (at least
+//           0.092m), then down as far as it went up; if that lands higher, on a walkable surface whose
+//           contact is no more than 0.45m above the start, move there and continue with the same velocity
+//           and the time left
 //       if grounded and the surface is not walkable (slope limit):
 //           velocity = velocity - (horizontal normal * min(0, dot(velocity, horizontal normal)))
 //       else if grounded and dot(velocity, normal) < 0 (ground following, keeps the horizontal speed):
@@ -65,7 +71,8 @@ message MovementAnimation {
 //       repeat continue with residual velocity and residual time
 //   if grounded and velocity.y <= 0 (ground snap):
 //       shapecast avatar down by 0.15m + horizontal distance moved * tan(46.5 degrees)
-//       on a walkable surface no further down than 0.15m + horizontal distance moved * its slope:
+//       on a walkable surface no further down than 0.15m + horizontal distance moved * its slope (or the
+//       steepest slope the move followed, if steeper):
 //           move down onto it
 // 7: provide AvatarMovementInfo values
 //      actual velocity = (final - P3+N) / timestep
