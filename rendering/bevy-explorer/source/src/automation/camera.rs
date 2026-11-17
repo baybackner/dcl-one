@@ -1,5 +1,6 @@
-//! `/camera_look`, `/look_at` and `/player_state`: turn the player's camera as the mouse does, aim
-//! it at a world point, and read the player's and the camera's pose. The turns go through
+//! `/camera_look`, `/look_at`, `/move_to`, `/set_camera_mode` and `/player_state`: turn the
+//! player's camera as the mouse does, aim it at a world point, move the player, switch between first
+//! and third person, and read the player's and the camera's pose. The turns go through
 //! [`SyntheticLook`], which `update_camera` adds to the mouse's turn, so a scene camera, the pitch
 //! clamp and a cinematic camera's ranges hold them back as they hold back a person's. `drive_camera`
 //! follows a turn frame by frame and answers once it is done:
@@ -8,6 +9,9 @@
 //!   "cameraRotationEuler", "warning"?}`
 //! - `/look_at`: `{"target", "aimErrorDegrees", "cameraRotationEuler", "cameraPosition", "mode",
 //!   "settled", "frames", "warning"?}`
+//! - `/move_to`: `{"position", "rotationEuler", "parcel", "settled", "cameraRotationEuler",
+//!   "cameraPosition"}`, with `--look-at` also `"lookAt", "aimErrorDegrees", "aimSettled", "frames",
+//!   "mode", "warning"?`
 //!
 //! Euler angles are Decentraland's (as a scene reads them): degrees from 0 to 360, `x` the pitch,
 //! looking down positive, `y` the yaw clockwise from north, `z` the roll.
@@ -15,7 +19,7 @@
 use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
 use common::{
-    rpc::{RpcResultReceiver, RpcResultSender},
+    rpc::{RpcCall, RpcCallEvent, RpcResultReceiver, RpcResultSender},
     sets::SceneSets,
     structs::{
         AvatarDynamicState, CameraOverride, CameraView, CursorLocks, OutOfWorld, PhotoMode,
@@ -26,7 +30,14 @@ use console::{
     reply::{self, refusal},
     DoAddConsoleCommand, PendingConsoleResponses,
 };
+use dcl_component::{
+    proto_components::sdk::components::common::CameraType, transform_and_parent::DclTranslation,
+};
 use input_manager::{InputPriorities, InputPriority, InputType};
+use scene_runner::{
+    renderer_context::RendererSceneContext,
+    update_world::camera_mode_area::{CameraHold, CameraModeHold},
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use user_input::camera::{update_camera, SyntheticLook, PITCH_LIMIT};
@@ -45,6 +56,12 @@ const STEADY_FRAMES: u32 = 5;
 const AIM_TOLERANCE_DEGREES: f32 = 2.0;
 /// How far below the player's ground height counts as standing on it.
 const GROUNDED_METRES: f32 = 0.2;
+/// How far the player may move in a frame and count as still.
+const STILL_METRES: f32 = 0.005;
+/// Frames in a row the player must be still after a move to have settled.
+const STILL_FRAMES: u32 = 3;
+/// How long the player may take to settle after a move.
+const SETTLE_SECONDS: f32 = 3.0;
 
 pub(crate) struct AutomationCameraPlugin;
 
@@ -54,6 +71,8 @@ impl Plugin for AutomationCameraPlugin {
             .add_console_command::<CameraLookCommand, _>(camera_look_cmd)
             .add_console_command::<LookAtCommand, _>(look_at_cmd)
             .add_console_command::<PlayerStateCommand, _>(player_state_cmd)
+            .add_console_command::<MoveToCommand, _>(move_to_cmd)
+            .add_console_command::<SetCameraModeCommand, _>(set_camera_mode_cmd)
             .add_systems(
                 Update,
                 drive_camera.in_set(SceneSets::Input).before(update_camera),
@@ -98,9 +117,40 @@ pub struct LookAtCommand {
     timeout_seconds: f32,
 }
 
+/// Move the player straight to a world point (Decentraland coordinates), as a scene's movePlayerTo
+/// does, wait for it to settle, and with --look-at x y z face the player that way and aim the
+/// camera at the point as /look_at does. Answers, as JSON, with the pose (position, rotationEuler,
+/// parcel, settled, cameraRotationEuler, cameraPosition) and, with --look-at, aimErrorDegrees
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/move_to")]
+pub struct MoveToCommand {
+    #[arg(allow_negative_numbers = true)]
+    x: f32,
+    #[arg(allow_negative_numbers = true)]
+    y: f32,
+    #[arg(allow_negative_numbers = true)]
+    z: f32,
+    /// A world point to face and aim the camera at
+    #[arg(long, num_args = 3, value_names = ["X", "Y", "Z"], allow_negative_numbers = true)]
+    look_at: Option<Vec<f32>>,
+    /// How long the aim may take to settle
+    #[arg(long, default_value_t = 3.0)]
+    timeout_seconds: f32,
+}
+
+/// Switch the player's camera to first_person or third_person, as zooming in or out does. Refused,
+/// naming it, while a scene's CameraModeArea or VirtualCamera holds the camera; drone and free are
+/// not modes of this client. Answers, as JSON, with the mode before and after
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/set_camera_mode")]
+pub struct SetCameraModeCommand {
+    /// first_person, third_person, drone or free
+    mode: String,
+}
+
 /// The player's and the camera's pose, as JSON: position, rotationEuler, parcel, velocity,
-/// grounded, outOfWorld, camera {mode, position, rotationEuler, fov, modeChangeAllowed} and
-/// pointerLocked. Positions are Decentraland world coordinates; euler angles are Decentraland's
+/// grounded, outOfWorld, camera {mode, position, rotationEuler, fov, modeChangeAllowed, heldBy,
+/// pointerLocked} and pointerLocked. Positions are Decentraland world coordinates; euler angles are Decentraland's
 /// (x pitch, looking down positive; y yaw clockwise from north; degrees 0 to 360)
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/player_state")]
@@ -152,6 +202,58 @@ pub(crate) fn aim_error_degrees(forward: Vec3, to_point: Vec3) -> f32 {
     forward.angle_between(to_point).to_degrees()
 }
 
+fn forced_mode(mode: CameraType) -> &'static str {
+    match mode {
+        CameraType::CtFirstPerson => "first_person",
+        CameraType::CtThirdPerson => "third_person",
+        CameraType::CtCinematic => "cinematic",
+    }
+}
+
+/// What holds the camera, as a refusal names it: the text and the cause.
+fn hold_cause(hold: &CameraHold, scenes: &Query<&RendererSceneContext>) -> (String, Value) {
+    let crdt = hold.entity.as_proto_u32().unwrap_or_default();
+    let (scene, parcel) = scenes.get(hold.scene).map_or_else(
+        |_| (String::new(), [0, 0]),
+        |ctx| (ctx.hash.to_string(), [ctx.base.x, ctx.base.y]),
+    );
+    match &hold.area {
+        Some(area) => {
+            let size = area.area.unwrap_or_default();
+            let forced = forced_mode(area.mode());
+            (
+                format!(
+                    "camera mode is locked by a CameraModeArea of scene '{scene}' (base parcel \
+                     {},{}; entity crdtId {crdt}; forces {forced}; area ({:.2}, {:.2}, {:.2})); \
+                     leave the area to change modes",
+                    parcel[0], parcel[1], size.x, size.y, size.z
+                ),
+                json!({
+                    "kind": "CameraModeArea",
+                    "sceneId": scene,
+                    "parcel": parcel,
+                    "crdtEntityId": crdt,
+                    "forcedMode": forced,
+                    "size": Point::from(Vec3::new(size.x, size.y, size.z)),
+                }),
+            )
+        }
+        None => (
+            format!(
+                "the view is held by the VirtualCamera (entity crdtId {crdt}) of scene '{scene}' \
+                 (base parcel {},{}); the scene must hand the camera back",
+                parcel[0], parcel[1]
+            ),
+            json!({
+                "kind": "VirtualCamera",
+                "sceneId": scene,
+                "parcel": parcel,
+                "crdtEntityId": crdt,
+            }),
+        ),
+    }
+}
+
 fn mode_name(camera: &PrimaryCamera, photo: bool) -> &'static str {
     if photo {
         return "free";
@@ -185,11 +287,23 @@ enum Gesture {
         last_error: Option<f32>,
         steady: u32,
     },
+    Move {
+        /// answers once the engine has moved the player
+        moved: RpcResultReceiver<bool>,
+        /// `None` until it has; then the frame the player has been still since, in frames
+        still: Option<u32>,
+        settle: f32,
+        last: Vec3,
+        /// the point to aim at once the player has settled, and the aim's timeout
+        look_at: Option<(Vec3, f32)>,
+    },
 }
 
 struct Job {
     reply: RpcResultSender<Result<String, String>>,
     gesture: Gesture,
+    /// a `/move_to`'s pose, answered with its aim
+    moved: Option<Value>,
 }
 
 #[derive(Resource, Default)]
@@ -339,8 +453,143 @@ fn look_at_cmd(
 
 fn start_job(job: &mut CameraJob, gesture: Gesture) -> RpcResultReceiver<Result<String, String>> {
     let (reply, rx) = RpcResultSender::channel();
-    job.0 = Some(Job { reply, gesture });
+    job.0 = Some(Job {
+        reply,
+        gesture,
+        moved: None,
+    });
     rx
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_to_cmd(
+    mut input: ConsoleCommand<MoveToCommand>,
+    mut job: ResMut<CameraJob>,
+    mut pending: ResMut<PendingConsoleResponses>,
+    mut events: EventWriter<RpcCallEvent>,
+    priorities: Res<InputPriorities>,
+    camera: Query<(&PrimaryCamera, Has<PhotoMode>)>,
+    player: Query<(&GlobalTransform, Has<OutOfWorld>), With<PrimaryUser>>,
+) {
+    let Some(Ok(command)) = input.take() else {
+        return;
+    };
+    let timeout = command.timeout_seconds;
+    if !timeout.is_finite() || timeout <= 0.0 || timeout > 30.0 {
+        input.reply_failed(format!(
+            "--timeout-seconds takes more than 0 and at most 30; got {timeout}"
+        ));
+        return;
+    }
+    let look_at = command
+        .look_at
+        .as_deref()
+        .map(|v| Vec3::new(v[0], v[1], v[2]));
+    let numbers = [command.x, command.y, command.z]
+        .into_iter()
+        .chain(look_at.iter().flat_map(|v| v.to_array()));
+    if !numbers.into_iter().all(f32::is_finite) {
+        input.reply_failed("the coordinates must be numbers");
+        return;
+    }
+    let Ok((transform, out_of_world)) = player.single() else {
+        input.reply_failed("no player");
+        return;
+    };
+    let refused = match look_at {
+        Some(_) => refuse_turn(&job, camera.single().ok(), out_of_world, &priorities, true),
+        None => job.0.is_some().then(|| {
+            refusal(
+                "a camera turn or move is still running; wait for its reply",
+                None,
+            )
+        }),
+    };
+    if let Some(refused) = refused {
+        input.reply_failed(refused);
+        return;
+    }
+    let to = DclTranslation([command.x, command.y, command.z]).to_bevy_translation();
+    let look_at = look_at.map(|v| DclTranslation(v.to_array()).to_bevy_translation());
+    let (response, moved) = RpcResultSender::<bool>::channel();
+    events.write(RpcCallEvent::engine(RpcCall::MovePlayer {
+        to,
+        looking_at: look_at,
+        duration: None,
+        camera_rotation: None,
+        response: Some(response),
+    }));
+    let rx = start_job(
+        &mut job,
+        Gesture::Move {
+            moved,
+            still: None,
+            settle: 0.0,
+            last: transform.translation(),
+            look_at: look_at.map(|point| (point, timeout)),
+        },
+    );
+    pending.push_receiver(rx, |r| r, input.take_responder());
+}
+
+fn set_camera_mode_cmd(
+    mut input: ConsoleCommand<SetCameraModeCommand>,
+    mut camera: Query<(&mut PrimaryCamera, Has<PhotoMode>)>,
+    hold: Res<CameraModeHold>,
+    scenes: Query<&RendererSceneContext>,
+) {
+    let Some(Ok(command)) = input.take() else {
+        return;
+    };
+    let first_person = match command.mode.as_str() {
+        "first_person" => true,
+        "third_person" => false,
+        "drone" | "free" => {
+            input.reply_failed(refusal(
+                format!(
+                    "this client has no {} camera mode: its modes are first_person and \
+                     third_person (photo mode, opened from the HUD, is its free camera)",
+                    command.mode
+                ),
+                None,
+            ));
+            return;
+        }
+        other => {
+            input.reply_failed(format!(
+                "unknown mode `{other}`: use first_person, third_person, drone or free"
+            ));
+            return;
+        }
+    };
+    let Ok((mut camera, photo)) = camera.single_mut() else {
+        input.reply_failed(refusal("no camera", None));
+        return;
+    };
+    if photo {
+        input.reply_failed(refusal("photo mode holds the camera", None));
+        return;
+    }
+    if let Some(hold) = &hold.0 {
+        let (reason, cause) = hold_cause(hold, &scenes);
+        input.reply_failed(refusal(reason, Some(cause)));
+        return;
+    }
+    if camera.scene_override.is_some() {
+        input.reply_failed(refusal("a scene camera holds the camera", None));
+        return;
+    }
+    let before = mode_name(&camera, photo);
+    if first_person {
+        camera.distance = 0.0;
+    } else if camera.distance <= PrimaryCamera::FIRST_PERSON_DISTANCE {
+        // the default follow distance; a player's own third-person zoom is kept
+        camera.distance = 1.0;
+    }
+    let after = mode_name(&camera, photo);
+    input.reply_ok(
+        json!({ "before": before, "after": after, "changed": before != after }).to_string(),
+    );
 }
 
 /// Follows the turn each frame, before `update_camera`: asks the camera for this frame's share of
@@ -352,6 +601,7 @@ fn drive_camera(
     mut look: ResMut<SyntheticLook>,
     time: Res<Time>,
     camera: Query<(&Transform, &PrimaryCamera, Has<PhotoMode>)>,
+    player: Query<&GlobalTransform, With<PrimaryUser>>,
 ) {
     let Some(current) = job.0.as_mut() else {
         return;
@@ -363,6 +613,7 @@ fn drive_camera(
         return;
     };
     let dt = time.delta_secs();
+    let mut next = None;
     let answer = match &mut current.gesture {
         Gesture::Look {
             rate,
@@ -373,9 +624,9 @@ fn drive_camera(
             done,
         } => {
             if *done {
-                Some(look_reply(
+                Some(Ok(look_reply(
                     *rate, *seconds, *applied, *start, transform, camera,
-                ))
+                )))
             } else {
                 *elapsed = (*elapsed + dt).min(*seconds);
                 let want = *rate * *elapsed;
@@ -405,9 +656,13 @@ fn drive_camera(
             *elapsed += dt;
             let settled = *steady >= STEADY_FRAMES;
             if settled || *elapsed >= *timeout {
-                Some(aim_reply(
+                let aim = aim_reply(
                     *target, error, settled, *frames, *timeout, transform, camera, photo,
-                ))
+                );
+                Some(match current.moved.take() {
+                    Some(moved) => Ok(with_aim(moved, aim)),
+                    None => Ok(aim),
+                })
             } else {
                 let (yaw, pitch) = aim_angles(to_point);
                 // `update_camera` turns right by decreasing the yaw
@@ -417,12 +672,100 @@ fn drive_camera(
                 None
             }
         }
+        Gesture::Move {
+            moved,
+            still,
+            settle,
+            last,
+            look_at,
+        } => {
+            let position = player.single().map_or(*last, GlobalTransform::translation);
+            let still_now = position.distance(*last) < STILL_METRES;
+            *last = position;
+            match *still {
+                None => match moved.poll_once() {
+                    Ok(None) => None,
+                    Ok(Some(true)) => {
+                        *still = Some(0);
+                        None
+                    }
+                    Ok(Some(false)) | Err(()) => {
+                        Some(Err(refusal("the engine cancelled the move", None)))
+                    }
+                },
+                Some(frames) => {
+                    let frames = if still_now { frames + 1 } else { 0 };
+                    *still = Some(frames);
+                    *settle += dt;
+                    let settled = frames >= STILL_FRAMES;
+                    if settled || *settle >= SETTLE_SECONDS {
+                        let pose = move_pose(position, player.single().ok(), settled);
+                        match *look_at {
+                            Some((target, timeout)) => {
+                                current.moved = Some(pose);
+                                next = Some(Gesture::Aim {
+                                    target,
+                                    timeout,
+                                    elapsed: 0.0,
+                                    frames: 0,
+                                    last_error: None,
+                                    steady: 0,
+                                });
+                                None
+                            }
+                            None => {
+                                let mut pose = pose;
+                                pose["cameraRotationEuler"] = json!(dcl_euler(transform.rotation));
+                                pose["cameraPosition"] =
+                                    json!(Point::from_bevy(transform.translation));
+                                Some(Ok(pose.to_string()))
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
     };
+    if let Some(gesture) = next {
+        current.gesture = gesture;
+    }
     if let Some(answer) = answer {
         if let Some(job) = job.0.take() {
-            job.reply.send(Ok(answer));
+            job.reply.send(answer);
         }
     }
+}
+
+/// Where a move left the player.
+fn move_pose(position: Vec3, transform: Option<&GlobalTransform>, settled: bool) -> Value {
+    let rotation = transform.map_or(Quat::IDENTITY, |t| t.to_scale_rotation_translation().1);
+    let [x, _, z] = DclTranslation::from_bevy_translation(position).0;
+    json!({
+        "position": Point::from_bevy(position),
+        "rotationEuler": dcl_euler(rotation),
+        "parcel": parcel_of(x, z),
+        "settled": settled,
+    })
+}
+
+/// A move's pose with its aim: the aim's camera pose and error, its target as `lookAt` and its
+/// `settled` as `aimSettled`.
+fn with_aim(mut moved: Value, aim: String) -> String {
+    if let (Some(moved), Ok(Value::Object(aim))) =
+        (moved.as_object_mut(), serde_json::from_str::<Value>(&aim))
+    {
+        for (key, value) in aim {
+            let key = match key.as_str() {
+                "target" => "lookAt".to_owned(),
+                "settled" => "aimSettled".to_owned(),
+                _ => key,
+            };
+            moved.insert(key, value);
+        }
+    }
+    moved.to_string()
 }
 
 fn look_reply(
@@ -531,6 +874,8 @@ fn player_state_cmd(
         Has<PhotoMode>,
     )>,
     locks: Res<CursorLocks>,
+    hold: Res<CameraModeHold>,
+    scenes: Query<&RendererSceneContext>,
 ) {
     let Some(Ok(_)) = input.take() else {
         return;
@@ -567,6 +912,8 @@ fn player_state_cmd(
             "rotationEuler": dcl_euler(rotation),
             "fov": fov,
             "modeChangeAllowed": camera.scene_override.is_none(),
+            "heldBy": hold.0.as_ref().map(|hold| hold_cause(hold, &scenes).1),
+            "pointerLocked": locks.0.contains("camera"),
         });
     }
     input.reply_ok(reply.to_string());

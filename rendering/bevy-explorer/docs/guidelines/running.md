@@ -417,7 +417,30 @@ The HUD and input:
   looking down positive, `y` the yaw clockwise from north. The camera commands refuse
   (`{"refused", "cause"}`) while another turn runs, in photo mode, out of world, while the HUD
   holds input, and under a scene's cinematic camera (`/camera_look` only when it allows no manual
-  rotation). `/world_state` stays the arrival and position read.
+  rotation). `/world_state` stays the arrival and position read. `camera.heldBy` names what
+  holds the camera (as `/set_camera_mode`'s refusal does) and `camera.pointerLocked` repeats
+  `pointerLocked`.
+- `/move_to x y z [--look-at x y z] [--timeout-seconds S]`: move the player straight to a world
+  point through the engine's own `movePlayerTo` path (as a console request, so it is not bound to
+  a scene's parcels, and the height is kept at 0 or more), then wait until the player has been
+  still for 3 frames (at most 3 s: `settled:false`). It answers with `position`, `rotationEuler`,
+  `parcel`, `settled`, `cameraRotationEuler` and `cameraPosition`. With `--look-at` the player
+  faces the point and the camera is aimed at it as `/look_at` aims it; the reply adds `lookAt`,
+  `aimErrorDegrees`, `aimSettled`, `frames`, `mode` and a rig-limit `warning`.
+- `/set_camera_mode first_person|third_person`: switch the player's camera, as zooming all the way
+  in or back out does (third person keeps the player's own zoom, or the default distance coming
+  from first person); JSON `before`, `after`, `changed`. Refused (`{"refused", "cause"}`) while a
+  scene holds the camera, naming it: a `CameraModeArea` with `sceneId`, `parcel`, `crdtEntityId`,
+  `forcedMode` and `size`, or a `VirtualCamera` with its `crdtEntityId`; in photo mode; and for
+  `drone` and `free`, which this client does not have.
+- `/get_reticle` (`src/automation/reticle.rs`): what the pointer ray reaches now, read from the
+  pointer pipeline without pressing or hovering: `available`, `cursorLocked` (the window holds the
+  cursor), `rayFromScreenCenter`, `aimedByCommand` (a pointer command's aim steers the ray),
+  `pointerLocked` (the scene's lock), `cursor` (`x`, `y` in logical pixels, `normalized`,
+  `onScreen`), `screen`, `ray` (`origin`, `direction`), `kind` (`scene_entity`, `ui`, `avatar`,
+  `world` or `nothing`), `crdtEntityId`, `scene`, `hitPoint`, `distanceToPlayer`,
+  `distanceToCamera`, `hasPointerEvents`, `withinRange` (an entry the cursor reaches),
+  `hoverQualified` (a hover-enter entry within range), `hoverText` and the cursor `entries`.
 - `/raycast_stats` (JSON: the capped tier's `budgetMs`, `ran`, `deferred` and `spentMs`, and the
   uncapped tier's `uncappedRan` and `uncappedSpentMs`, each for its last frame with raycasts to
   cast) and `/raycast_budget [ms|auto]` (show the capped budget, a tenth of the target frame, or

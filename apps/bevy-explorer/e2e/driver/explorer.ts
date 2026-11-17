@@ -150,9 +150,63 @@ export interface PlayerState {
     fov: number | null
     /** false while a CameraModeArea or VirtualCamera holds the camera */
     modeChangeAllowed: boolean
+    /** what holds the camera, as /set_camera_mode's refusal names it */
+    heldBy: CameraHold | null
+    pointerLocked: boolean
   } | null
   /** the scene's pointer lock */
   pointerLocked: boolean
+}
+
+/** The scene camera holding the player's camera. */
+export interface CameraHold {
+  kind: 'CameraModeArea' | 'VirtualCamera'
+  sceneId: string
+  parcel: [number, number]
+  crdtEntityId: number
+  forcedMode?: 'first_person' | 'third_person' | 'cinematic'
+  size?: { x: number; y: number; z: number }
+}
+
+/** What `/move_to` reports once the player has settled (and, with `lookAt`, the aim too). */
+export interface MoveToReport {
+  position: { x: number; y: number; z: number }
+  rotationEuler: Euler
+  parcel: [number, number]
+  /** the player was still for 3 frames within 3 s */
+  settled: boolean
+  cameraRotationEuler: Euler
+  cameraPosition: { x: number; y: number; z: number }
+  lookAt?: { x: number; y: number; z: number }
+  aimErrorDegrees?: number
+  aimSettled?: boolean
+  frames?: number
+  mode?: CameraMode
+  warning?: string
+}
+
+/** What `/get_reticle` reports: what the pointer ray reaches now. */
+export interface ReticleReport {
+  available: boolean
+  cursorLocked: boolean
+  rayFromScreenCenter: boolean
+  /** a pointer command's aim steers the ray */
+  aimedByCommand: boolean
+  pointerLocked: boolean
+  cursor: { x: number; y: number; normalized: { x: number; y: number }; onScreen: boolean } | null
+  screen: { width: number; height: number; scale: number }
+  ray: { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } } | null
+  kind: 'scene_entity' | 'ui' | 'avatar' | 'world' | 'nothing'
+  crdtEntityId: number | null
+  scene: string | null
+  hitPoint: { x: number; y: number; z: number } | null
+  distanceToPlayer: number | null
+  distanceToCamera: number | null
+  hasPointerEvents: boolean
+  withinRange: boolean
+  hoverQualified: boolean
+  hoverText: string | null
+  entries: { button: string; event: string; hoverText: string | null; enabled: boolean; tooFar: boolean }[]
 }
 
 /** The scene input actions `/press_input` takes, by their SDK names. */
@@ -1208,6 +1262,28 @@ export class Explorer {
 
   playerState(): Promise<PlayerState> {
     return this.json<PlayerState>('/player_state')
+  }
+
+  /** Moves the player straight to a world point; with `lookAt`, faces it and aims the camera there. */
+  moveTo(
+    x: number,
+    y: number,
+    z: number,
+    options: { lookAt?: [number, number, number]; timeoutSeconds?: number } = {}
+  ): Promise<MoveToReport> {
+    let line = `/move_to ${x} ${y} ${z}`
+    if (options.lookAt) line += ` --look-at ${options.lookAt.join(' ')}`
+    if (options.timeoutSeconds !== undefined) line += ` --timeout-seconds ${options.timeoutSeconds}`
+    return this.json<MoveToReport>(line)
+  }
+
+  /** Switches the camera; rejects with the refusal while a scene holds it. */
+  setCameraMode(mode: 'first_person' | 'third_person'): Promise<{ before: CameraMode; after: CameraMode; changed: boolean }> {
+    return this.json(`/set_camera_mode ${mode}`)
+  }
+
+  getReticle(): Promise<ReticleReport> {
+    return this.json<ReticleReport>('/get_reticle')
   }
 
   raycastStats(): Promise<RaycastStats> {

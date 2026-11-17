@@ -344,8 +344,14 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   mouse would, `/look_at x y z` aims it at a world point and answers with `aimErrorDegrees` (and a
   `warning` when the pitch clamp or the third-person orbit keeps the point off), and
   `/player_state` reads the player's pose, velocity, `grounded`, the camera's mode and pose,
-  `modeChangeAllowed` and `pointerLocked`. Euler angles are Decentraland's
-  (`cameraRotationEuler.x` is the pitch, looking down positive).
+  `modeChangeAllowed` (with `heldBy` naming the `CameraModeArea` or `VirtualCamera`) and
+  `pointerLocked`. `/move_to x y z [--look-at x y z]` moves the player straight there, as a
+  scene's `movePlayerTo` does, and answers once it has settled, with the aim's `aimErrorDegrees`
+  when it looks at a point. `/set_camera_mode first_person|third_person` switches the view and is
+  refused, naming the area or camera, while a scene holds it. `/get_reticle` says what the pointer
+  ray reaches now (`kind`, `crdtEntityId`, `hitPoint`, `withinRange`, `hoverText`) and through
+  which cursor (`cursorLocked`, `rayFromScreenCenter`, `cursor` with `screen`). Euler angles are
+  Decentraland's (`cameraRotationEuler.x` is the pitch, looking down positive).
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the
   uncapped tier's `uncappedRan`, `uncappedSpentMs`) and `/raycast_budget [ms|auto]` (override the
   capped budget, a tenth of the target frame, from 0 to 10 ms). On the web, these and the pointer commands go

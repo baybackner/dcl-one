@@ -100,12 +100,14 @@ impl Plugin for AutomationPlugin {
             pointer::AutomationPointerPlugin,
             walk::AutomationWalkPlugin,
             camera::AutomationCameraPlugin,
+            reticle::AutomationReticlePlugin,
         ));
     }
 }
 
 pub(crate) mod camera;
 pub(crate) mod pointer;
+pub(crate) mod reticle;
 pub(crate) mod walk;
 
 pub(crate) mod input {

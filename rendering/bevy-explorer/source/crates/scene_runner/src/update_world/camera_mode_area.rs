@@ -53,6 +53,21 @@ impl From<PbVirtualCamera> for VirtualCamera {
 #[derive(Component, Debug)]
 pub struct MainSceneCamera(pub PbMainCamera);
 
+/// The scene camera holding the player's camera: the `CameraModeArea` or `VirtualCamera` whose
+/// override applies now, `None` while the player's own camera is free. For the console's
+/// `/set_camera_mode` refusal and `/player_state`.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct CameraModeHold(pub Option<CameraHold>);
+
+#[derive(Debug, Clone)]
+pub struct CameraHold {
+    /// the scene's root entity
+    pub scene: Entity,
+    pub entity: SceneEntityId,
+    /// the area, `None` for a `VirtualCamera`
+    pub area: Option<PbCameraModeArea>,
+}
+
 impl From<PbMainCamera> for MainSceneCamera {
     fn from(value: PbMainCamera) -> Self {
         Self(value)
@@ -76,6 +91,7 @@ impl Plugin for CameraModeAreaPlugin {
             ComponentPosition::EntityOnly,
         );
 
+        app.init_resource::<CameraModeHold>();
         app.add_systems(Update, update_camera_mode_area.in_set(SceneSets::PostLoop));
     }
 }
@@ -102,6 +118,7 @@ pub fn update_camera_mode_area(
     mut camera: Query<&mut PrimaryCamera>,
     mut perms: Permission<Entity>,
     mut toaster: Toaster,
+    mut hold: ResMut<CameraModeHold>,
 ) {
     let Ok(mut camera) = camera.single_mut() else {
         return;
@@ -224,6 +241,11 @@ pub fn update_camera_mode_area(
             }
         };
 
+        hold.0 = permitted.then(|| CameraHold {
+            scene: scene_ent.root,
+            entity: scene_ent.id,
+            area: maybe_area.map(|area| area.0.clone()),
+        });
         if permitted {
             match maybe_area.map(|area| area.0.mode()) {
                 Some(CameraType::CtFirstPerson) => {
@@ -295,6 +317,7 @@ pub fn update_camera_mode_area(
     } else {
         // no camera areas
         camera.scene_override = None;
+        hold.0 = None;
     }
 
     if current_areas.is_empty() {
