@@ -122,6 +122,9 @@ export const LANDING_STUN_KEEP_INPUT: number = 1;
 // 1: placing the avatar (a teleport) keeps the top: a fall from where it was placed counts from the ground it stood on
 // before or from a top it rises to later, so a teleport high up never stuns; 0: the drop counts from where it was placed.
 export const LANDING_STUN_TOP_KEPT_ON_PLACEMENT: number = 1;
+// 1: the hard landing clips play only on a stunning landing out of the long fall loop (other stunning landings play the
+// usual landing clip); 0: on every stunning landing. Animation only.
+export const HARD_LANDING_ONLY_FROM_LONG_FALL: number = 1;
 
 export const TURN_MAX_DEGREES_SEC = 1040; // max degrees to turn (set to inf for TURN_FULL_TIME to apply)
 export const TURN_FULL_TIME = 0.1; // time to turn fully towards target

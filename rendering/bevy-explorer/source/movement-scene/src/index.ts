@@ -3,10 +3,10 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, sliding, updateGroundAdjust, updateGroundProbes } from './ground';
 import { gait, movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
+import { initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
-import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
+import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, HARD_LANDING_ONLY_FROM_LONG_FALL, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
 import { beginTick } from './clock';
 // Debug/tuning infrastructure — kept in the tree but disconnected so it has no
@@ -94,6 +94,21 @@ const CLIP_HARD_LANDING = ANIM + 'Hard_Landing.glb';
 // gliding so the glider stows as part of the landing (plays from 0, not soft-sliced).
 const CLIP_GLIDE_LANDING = ANIM + 'Hard_Landing_GliderRig.glb';
 const CLIP_JOG_STOP = ANIM + 'Jog_Stop.glb';
+// Hard landing on a stunning touchdown (the vertical model's stunned()): Enter once, Loop while the stun lasts, then
+// Exit, cut short at HARD_LANDING_EXIT_END of its length into whatever plays next. Only after the long fall loop
+// unless HARD_LANDING_ONLY_FROM_LONG_FALL is 0; other stunning landings play the usual landing clip. The engine's
+// network state reads a stun from a `Hard_Landing` clip played at speed 1 or slower: Enter and Loop, not Exit.
+const HARD_LANDING = {
+  enter: ANIM + 'Hard_Landing_Enter.glb',
+  loop: ANIM + 'Hard_Landing_Loop.glb',
+  exit: ANIM + 'Hard_Landing_Exit.glb',
+};
+const HARD_LANDING_ENTER_BLEND = 0.0585; // s, from the long fall
+const HARD_LANDING_LOOP_BLEND = 0.15; // s, from the end of Enter; the stun's end waits for it
+const HARD_LANDING_EXIT_BLEND = 0.05; // s, from Loop
+const HARD_LANDING_EXIT_SPEED = 1.2;
+const HARD_LANDING_EXIT_END = 0.2; // fraction of Exit
+const HARD_LANDING_AFTER_BLEND = 0.14; // s, from Exit to the next clip
 
 // Double-jump avatar clips, per take-off locomotion variation: each air jump picks the plain or the right variant at
 // random, half each. The clips play at DOUBLE_JUMP_SPEED, blended in over DOUBLE_JUMP_BLEND; once the clip reaches
@@ -127,6 +142,7 @@ const PRELOAD_CLIPS: string[] = [
   CLIP_IDLE, CLIP_WALK, CLIP_JOG, CLIP_RUN,
   ...Object.values(JUMP_SETS).flatMap((s) => [s.start, s.rise, s.mid, s.fall, s.end]),
   CLIP_LONG_FALL, CLIP_HARD_LANDING, CLIP_GLIDE_LANDING, CLIP_JOG_STOP,
+  ...Object.values(HARD_LANDING),
   ...Object.values(DOUBLE_JUMP).flatMap((d) => [d.plain, d.right]),
   ...Object.values(GLIDE_AVATAR),
 ];
@@ -279,6 +295,17 @@ var doubleJumpClip: string | undefined = undefined;
 // True once that clip reached DOUBLE_JUMP_EXIT: the fall loop plays for the rest of the airtime.
 var doubleJumpFalling = false;
 
+// --- Hard landing ---
+type HardLandingPhase = 'none' | 'enter' | 'loop' | 'exit';
+var hardLanding: HardLandingPhase = 'none';
+var prevHardLanding: HardLandingPhase = 'none';
+// Scene time Loop started.
+var hardLandingLoopFrom = 0;
+// True when the last airborne frame played the long fall loop.
+var longFallShown = false;
+// Blend of the next frame's clip, set when the hard landing hands over.
+var nextBlend: number | undefined = undefined;
+
 // --- Glide turn rate ---
 // Smoothed avatar turn rate (deg/s), used to pick the left/right glide lean.
 // Computed each frame in applyMovement from the change in facing.
@@ -389,6 +416,7 @@ function jumpPhaseAnimation(newJump: boolean, horizontalSpeed: number): Movement
     case 'mid': src = set.mid; loop = false; break;
     default: src = useLongFall ? CLIP_LONG_FALL : set.fall; loop = true; break;
   }
+  longFallShown = src === CLIP_LONG_FALL;
 
   // Seek to 0 on the first frame of a new phase so one-shots play in full.
   const phaseChanged = jumpPhase !== prevJumpPhase;
@@ -435,6 +463,9 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
     // crouch) and sped up (softLandSpeed), so it reads as a quick head-bob
     // dip; big drops (> hardLandingDrop) play the clip in full from 0.
     const soft = drop <= settings.hardLandingDrop;
+    // the model may count the touchdown a frame after this one: landingStuns() tells it before
+    const stun = stunned() || landingStuns();
+    hardLanding = 'none';
     if (landingFromGlide) {
       // Stow the glider as we land: the close-embedded clip, played from 0 (not
       // soft-sliced) so the glider close plays in full.
@@ -442,6 +473,11 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
       landingSoft = false;
       landingSpeed = 1;
       landingFromGlide = false;
+    } else if (stun && (longFallShown || !HARD_LANDING_ONLY_FROM_LONG_FALL)) {
+      hardLanding = 'enter';
+      landingClip = HARD_LANDING.enter;
+      landingSoft = false;
+      landingSpeed = 1;
     } else {
       landingClip = CLIP_HARD_LANDING;
       landingSoft = soft;
@@ -453,16 +489,19 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
     maxUngroundedY = -Infinity;
     jumpPhase = 'none';
     prevJumpPhase = 'none';
+    prevHardLanding = hardLanding;
     return {
       src: landingClip,
       speed: landingSpeed,
       loop: false,
       idle: true,
-      transitionSeconds: settings.transAir,
+      transitionSeconds: hardLanding === 'enter' ? HARD_LANDING_ENTER_BLEND : settings.transAir,
       playbackTime: landingSoft ? settings.softLandStart : 0,
       sounds: drop > 0.5 ? [pickRandom(LAND_SOUNDS)] : [],
     };
   }
+
+  if (hardLanding !== 'none') return hardLandingAnimation();
 
   const clip = landingClip ?? JUMP_SETS[jumpVariation].end;
   // Moving + non-stunning: let the touchdown show for landRunBlend seconds,
@@ -486,6 +525,35 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
     return null;
   }
   return { src: clip, speed: landingSpeed, loop: false, idle: true, transitionSeconds: settings.transAir, sounds: [] };
+}
+
+// Hard landing after the touchdown frame: Enter to its end, Loop until the stun is over (and at least its blend-in),
+// Exit to HARD_LANDING_EXIT_END, then null to let what follows blend in over HARD_LANDING_AFTER_BLEND.
+function hardLandingAnimation(): MovementAnimation | null {
+  if (hardLanding === 'enter' && clipFinished(HARD_LANDING.enter)) {
+    hardLanding = 'loop';
+    hardLandingLoopFrom = time;
+  } else if (hardLanding === 'loop' && !stunned() && time - hardLandingLoopFrom >= HARD_LANDING_LOOP_BLEND) {
+    hardLanding = 'exit';
+  } else if (hardLanding === 'exit' && clipReached(HARD_LANDING.exit, HARD_LANDING_EXIT_END)) {
+    hardLanding = 'none';
+    requestingLanding = false;
+    landingClip = undefined;
+    nextBlend = HARD_LANDING_AFTER_BLEND;
+    return null;
+  }
+  const changed = hardLanding !== prevHardLanding;
+  prevHardLanding = hardLanding;
+  const exit = hardLanding === 'exit';
+  return {
+    src: HARD_LANDING[hardLanding as 'enter' | 'loop' | 'exit'],
+    speed: exit ? HARD_LANDING_EXIT_SPEED : 1,
+    loop: hardLanding === 'loop',
+    idle: true,
+    transitionSeconds: hardLanding === 'enter' ? HARD_LANDING_ENTER_BLEND : exit ? HARD_LANDING_EXIT_BLEND : HARD_LANDING_LOOP_BLEND,
+    playbackTime: changed ? 0 : undefined,
+    sounds: [],
+  };
 }
 
 // Detects whether the clip's playback time crossed any of the given trigger
@@ -553,6 +621,8 @@ function selectAnimation(): MovementAnimation {
   if (jumpingOrFalling) {
     requestingLanding = true;
     stopping = false;
+    hardLanding = 'none';
+    longFallShown = false;
 
     if (isGliding) {
       jumpPhase = 'none';
@@ -761,6 +831,10 @@ function footstepsFor(src: string, triggers: number[], pool: string[]): string[]
 
 function writeMovement() {
   const animation = selectAnimation();
+  if (nextBlend !== undefined) {
+    animation.transitionSeconds = nextBlend;
+    nextBlend = undefined;
+  }
   publishedAnimation = animation;
   AvatarMovement.createOrReplace(engine.PlayerEntity, {
     velocity,
