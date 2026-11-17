@@ -588,7 +588,10 @@ The HUD and input:
   were down), `kind`, `jump`, `keys`, `modifierActive`, `modifier` (what the active
   `InputModifier` disabled during the walk: `all`, `walk`, `jog`, `run`, `jump`, ..., or `null`;
   reported with the bypass too) and `ignoreInputModifiers`. A second walk, a gamepad binding or
-  input the HUD holds is refused. `/walk_player_to` walks to a point instead.
+  input the HUD holds is refused. `/walk_player_to` walks to a point instead. To walk a straight
+  line in third person, aim along it at a far point first (`/move_to <x> 0 <z> --look-at <x> 1
+  <z + 300>` walks due north): the third-person camera sits beside and behind the avatar, so a
+  near point it is aimed at turns the walk a few degrees off the avatar's line to that point.
 - `/camera_look <dx> <dy> [--seconds S]` (`src/automation/camera.rs`): turn the camera as a held
   mouse would for `--seconds` (0.5 by default, at most 10): `dx` right (+) or left (-), `dy` up
   (+) or down (-), in degrees per second, timed by the frame clock so the turn is `rate × seconds`
