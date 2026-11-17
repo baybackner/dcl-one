@@ -129,6 +129,29 @@ time, a feed cannot make two commands overlap, so a refusal of a command that ar
 another holds the same resource (a second `/screenshot` during a capture) needs another
 transport.
 
+### Run a workspace of test scenes
+
+`pnpm run scene-run` runs several scenes of an SDK7 test-scene workspace (a folder of scene
+folders, such as `scenes/` of the `sdk7-test-scenes` repository) in one client, each from its own
+command file:
+
+```sh
+pnpm run scene-run --scenes <root> --commands <dir> [--scene <folder> ...] [--report <dir>] [--web-app <dir>]
+```
+
+Every direct child of `<root>` that holds `scene.json` and its built `main` bundle goes into one
+loopback realm, so a scene's neighbours load as they would in the world; folders without a bundle
+are counted and left out. A scene runs when `<dir>/<folder>.txt` exists (`--scene` keeps the named
+folders only), in folder order: the runner teleports to the scene's base parcel and waits for it
+to settle, then runs the file's lines as the drive tool runs stdin. For each scene
+`<report>/<folder>/` gets `final.png` and `result.json`: `scene`, `title`, `parcel`, `arrival`
+(the teleport's `sceneState` and `settled`, or its error), `commands` (`{line, ok, reply, ms}`
+each) and `logs` (every line the client keeps of the scene under the player at the end,
+`/scene_logs --since 0`, parsed). A scene that does not arrive runs no commands and still gets its
+`result.json`. stdout carries one summary line per scene, stderr the progress. The report folder
+is `report/scene-run` by default. Build the scenes first with their own SDK
+(`npx sdk-commands build`); the runner reaches them only through `--scenes`.
+
 ## How a spec is written
 
 One file per explorer-automation fixture under `specs/`, headed by a table of its test cases
@@ -391,6 +414,7 @@ change on the left updates what is on the right in the same change, then runs th
 | `/audio_state` (its flag or its reply) | `audioState` in `driver/explorer.ts`, `test/explorer.test.ts` | `pnpm test` |
 | `/screenshot` (bare reply or options), `/capture_sequence` or `/capture_frame` | `screenshot`, `captureSequence`, `captureFrame` and `saveCaptureFrames` in `driver/explorer.ts`, `test/explorer.test.ts`; `runLines` in `scripts/drive.ts` and `test/drive.test.ts`; the Creator Hub's `BevyRenderer.ts` and the editor host read the bare reply | `pnpm test`; a Visual scenario for the bare frame, e.g. `pnpm run e2e --visual --filter 'core matches its reference'` (it writes `frame.png`; the comparison needs the CI references) |
 | `scripts/drive.ts`: its flags, its stdin lines or its JSON lines | "Drive a scene by hand or by agent" above, the Explorer readme's "Agents and tests", `test/drive.test.ts` | `pnpm test` |
+| `scripts/scene-run.ts`: its flags, the folders it picks or `result.json` | "Run a workspace of test scenes" above, the Explorer readme's "Agents and tests", `test/scene-run.test.ts` | `pnpm test` |
 | A path moved under `apps/bevy-explorer/e2e`, `tooling/bevy-e2e-*.py` or the workflow | The workflow's `paths` filters, `tooling/bevy-ci.py` and `tooling/tests/test_bevy_ci.py`, the LFS patterns in `.gitattributes`, the links in this README | the tooling tests |
 | The CI workflow's name, its job names, the `bevy-explorer-web-<sha>` artifact or the status comment's sections | `tooling/bevy-e2e-inputs.py`, `tooling/bevy-e2e-report.py` and their tests; the e2e workflow's `workflow_run` | the tooling tests |
 | A scenario the HUD can no longer run, or a Gap whose feature landed | A `todo` with the reason, or the todo back into a scenario; its header row and the scenario map | the scenarios in CI |

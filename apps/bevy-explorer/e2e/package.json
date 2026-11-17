@@ -14,6 +14,7 @@
     "e2e": "node scripts/e2e.ts",
     "build-scenes": "node scripts/build-scenes.ts",
     "drive": "node scripts/drive.ts",
+    "scene-run": "node scripts/scene-run.ts",
     "gpu-probe": "node scripts/gpu-probe.ts",
     "check:environment": "node scripts/check-environment.ts"
   },

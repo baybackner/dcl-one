@@ -451,6 +451,13 @@ it keeps the last frame as `final.png` when stdin closes, and writes the frames 
 `/capture_sequence` under `captures/` in its report folder. The e2e README's "Run it" has the
 flags.
 
+**Running a workspace of test scenes.** `pnpm run scene-run --scenes <root> --commands <dir>` in
+`apps/bevy-explorer/e2e` serves every built scene folder under the root as one realm and, for each
+folder with a `<dir>/<folder>.txt`, teleports to its base parcel, waits for it to settle and runs
+the file's console lines, writing `result.json` (arrival, every command's reply, the scene's
+logs) and `final.png` per scene. The e2e README's "Run a workspace of test scenes" has the
+details.
+
 ## CI and release channels
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the most accurate source of build information — it covers fmt, clippy, the test matrix, a headless smoke test, and the web build/deploy.
