@@ -125,7 +125,15 @@ export const TURN_FULL_TIME = 0.1; // time to turn fully towards target
 export const GLIDER_TURN_MAX_DEGREES_SEC = 200; // max degrees to turn (set to inf for TURN_FULL_TIME to apply)
 
 export const GROUNDED_HEIGHT = 0.05; // distance from surface at which player is considered "grounded"
-export const GROUNDED_ANGLE = 47.5; // angle (0-90) from flat at which ground is considered ground (can jump / won't slide)
+// Angle (0-90) from flat up to which ground is ground (can jump / won't slide): a 46 degree slope is walkable, 47 is
+// steep (the half degree absorbs single-precision normals).
+export const GROUNDED_ANGLE = 46.5;
+// Speed on a slope: on the ground the gait speed is scaled by 1 - SLOPE_SPEED_FACTOR * angle / SLOPE_SPEED_MAX_ANGLE,
+// with the angle of the ground along the move (positive uphill, clamped to +-SLOPE_SPEED_MAX_ANGLE): uphill slower,
+// downhill faster, across unchanged. It scales the horizontal speed; on the ground the reply adds the vertical speed
+// that keeps the avatar on the slope. In the air the factor of the last ground holds.
+export const SLOPE_SPEED_FACTOR = 0.35;
+export const SLOPE_SPEED_MAX_ANGLE = 55; // degrees
 export const MAX_STEP_HEIGHT = 0.45; // highest step player can walk up (player may still walk up slightly higher steps if approached at an angle)
 export const MIN_STEP_HEIGHT = 0.05; // rises up to this need no step (the capsule slides over them)
 export const GROUND_SNAP_HEIGHT = 0.40 // height below which we snap to ground (if previously grounded)

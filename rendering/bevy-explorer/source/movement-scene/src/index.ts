@@ -3,7 +3,7 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
+import { initStepCasts, isDoubleJump, isGliding, jumpStartHeight, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
@@ -744,6 +744,7 @@ function writeMovement() {
 function applyMovement() {
   updateVerticalVelocity();
   updateHorizontalVelocity();
+  velocity.y += slopeFollowSpeed(velocity.x, velocity.z);
 
   // Track smoothed turn rate (deg/s) from the change in facing, for glide lean.
   const turnDelta = relativeDegrees(0, orientation - glidePrevOrientation);

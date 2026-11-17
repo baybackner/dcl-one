@@ -130,6 +130,9 @@ type GroundProbe = { entity: Entity, hitTick: number, x: number, z: number, grou
 var groundProbes: GroundProbe[] = [];
 // ground height under the avatar at the end of the previous tick, if it was grounded
 var prevGroundY = NaN;
+// slope (tangent of the angle) of the ground under the centre at the end of the previous tick
+var prevGroundSlope = 0;
+const slopeOf = (n: Vector3) => (n.y > 0 ? Math.sqrt(Math.max(0, 1 - n.y * n.y)) / n.y : Infinity);
 
 export function initGroundProbes() {
     for (let i = 1; i <= GROUND_PROBE_COUNT; i++) {
@@ -167,6 +170,7 @@ export function initGroundProbes() {
 // they start from.
 export function updateGroundProbes(velocity: Vector3) {
     prevGroundY = grounded ? playerPosition.y - groundDistance : NaN;
+    prevGroundSlope = slopeOf(groundRayNormal);
     for (let i = 0; i < groundProbes.length; i++) {
         const t = (i + 1) * GROUND_PROBE_INTERVAL;
         const position = Transform.getMutable(groundProbes[i].entity).position;
@@ -199,13 +203,12 @@ export function probesAllowSnap(maxRise: number): boolean {
 }
 
 // STEP_DOWN_FALLS: snap follows the ground under the centre down from where the feet stood last tick by at most
-// GROUND_SNAP_STEP_DROP beyond what the slope of that ground accounts for over the distance moved since; past a larger
-// drop (a step edge) the avatar falls.
+// GROUND_SNAP_STEP_DROP beyond what the slope of the ground (then or now) accounts for over the distance moved since;
+// past a larger drop (a step edge) the avatar falls.
 export function stepDropAllowsSnap(): boolean {
     if (!STEP_DOWN_FALLS || Number.isNaN(prevGroundY)) return true;
     if (groundRayDistance === Infinity) return false;
-    const ny = groundRayNormal.y;
-    const slope = ny > 0 ? Math.sqrt(Math.max(0, 1 - ny * ny)) / ny : Infinity;
+    const slope = Math.max(slopeOf(groundRayNormal), prevGroundSlope);
     const travelled = Math.hypot(playerPosition.x - prevPlayerPosition.x, playerPosition.z - prevPlayerPosition.z);
     return prevGroundY - (playerPosition.y - groundRayDistance) <= GROUND_SNAP_STEP_DROP + travelled * slope;
 }

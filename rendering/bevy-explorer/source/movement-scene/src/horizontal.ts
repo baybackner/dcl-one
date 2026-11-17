@@ -3,13 +3,13 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
   AIR_JUMP_IMPULSE, AIR_JUMP_STOP_WITHOUT_KEYS, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
   FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, LANDING_STUN_KEEP_INPUT, MAX_EXTERNAL_SPEED,
-  MAX_FIXED_STEPS, RAMP_GUARD, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
+  MAX_FIXED_STEPS, RAMP_GUARD, SLOPE_SPEED_FACTOR, SLOPE_SPEED_MAX_ANGLE, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
 import { horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
-import { grounded } from './ground';
+import { grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayNormal } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, stunEndStep } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, steepAhead, stunEndStep } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -60,6 +60,22 @@ function readInput() {
     : inputSystem.isPressed(InputAction.IA_WALK) ? walkSpeed
     : jogSpeed;
   input.grounded = grounded;
+  if (!isGliding) input.limit *= slopeSpeedFactor();
+}
+
+// Gait speed factor of the slope along the move (SLOPE_SPEED_FACTOR), from the walkable ground the capsule rests on (on
+// a step edge, the edge's slope), else the ground under the centre; the factor of the last ground holds in the air.
+var slopeFactor = 1;
+function slopeSpeedFactor(): number {
+  const n = groundNormal.y >= GROUNDED_ANGLE_Y_LEN ? groundNormal : groundRayNormal;
+  if (grounded && n.y >= GROUNDED_ANGLE_Y_LEN && Vector3.lengthSquared(movementAxis) > 0) {
+    // the move direction projected onto the ground plane: its angle above the horizontal
+    const un = movementAxis.x * n.x + movementAxis.z * n.z;
+    const angle = Math.atan2(-un * n.y, Math.hypot(movementAxis.x - un * n.x, movementAxis.z - un * n.z)) * 180 / Math.PI;
+    const clamped = Math.max(-SLOPE_SPEED_MAX_ANGLE, Math.min(SLOPE_SPEED_MAX_ANGLE, angle));
+    slopeFactor = 1 - SLOPE_SPEED_FACTOR * clamped / SLOPE_SPEED_MAX_ANGLE;
+  }
+  return slopeFactor;
 }
 
 // Removes float noise from an axis so an unpressed axis is exactly 0.
@@ -289,6 +305,18 @@ export function updateHorizontalVelocity() {
       }
     }
   }
+  // A slope ahead too steep to walk (steeper than GROUNDED_ANGLE) stops the move into it at the contact, where the
+  // engine would slide the avatar up it: the speed toward it is cut to reach it no sooner than the next reply lands.
+  const steep = input.grounded ? steepAhead() : null;
+  if (steep !== null) {
+    const into = -(ox * steep.x + oz * steep.z);
+    const allowed = steep.distance / ((2 * replyDelay + 1) * (frameTime > 0 ? frameTime : FIXED_STEP));
+    if (into > allowed) {
+      ox += (into - allowed) * steep.x;
+      oz += (into - allowed) * steep.z;
+    }
+  }
+
   lastReplyX = ox; lastReplyZ = oz; lastReplyStep = replyStep; lastReplyStun = replyStun;
   copyInput(input, prevInput);
 
