@@ -7299,9 +7299,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
@@ -9995,16 +9995,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "draco-oxide-core"
-version = "0.1.0-alpha.9"
-source = "git+https://github.com/decentraland/dcl-one?rev=ffbc6f625b3da35793a7ed3e3666f62e746ce2be#ffbc6f625b3da35793a7ed3e3666f62e746ce2be"
-
-[[patch.unused]]
-name = "draco-oxide-decoder"
-version = "0.1.0-alpha.9"
-source = "git+https://github.com/decentraland/dcl-one?rev=ffbc6f625b3da35793a7ed3e3666f62e746ce2be#ffbc6f625b3da35793a7ed3e3666f62e746ce2be"
-
-[[patch.unused]]
 name = "copypwasmta"
 version = "0.1.0"
 source = "git+https://github.com/decentraland/dcl-one?rev=b56757323a5f73eb4a373fef69c4e840f76f98f2#b56757323a5f73eb4a373fef69c4e840f76f98f2"
@@ -10013,3 +10003,13 @@ source = "git+https://github.com/decentraland/dcl-one?rev=b56757323a5f73eb4a373f
 name = "bevy_ecss"
 version = "0.7.0"
 source = "git+https://github.com/decentraland/dcl-one?rev=da37b8fbfd7d2561257254f4ae9370ca33a71acb#da37b8fbfd7d2561257254f4ae9370ca33a71acb"
+
+[[patch.unused]]
+name = "draco-oxide-core"
+version = "0.1.0-alpha.9"
+source = "git+https://github.com/decentraland/dcl-one?rev=ffbc6f625b3da35793a7ed3e3666f62e746ce2be#ffbc6f625b3da35793a7ed3e3666f62e746ce2be"
+
+[[patch.unused]]
+name = "draco-oxide-decoder"
+version = "0.1.0-alpha.9"
+source = "git+https://github.com/decentraland/dcl-one?rev=ffbc6f625b3da35793a7ed3e3666f62e746ce2be#ffbc6f625b3da35793a7ed3e3666f62e746ce2be"
