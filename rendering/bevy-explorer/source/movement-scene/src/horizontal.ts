@@ -9,7 +9,7 @@ import {
 import { horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
 import { grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayNormal } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, steepAhead, stunEndStep } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, predictedLandFrame, steepAhead, stunEndStep, wallContact } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -315,6 +315,16 @@ export function updateHorizontalVelocity() {
       ox += (into - allowed) * steep.x;
       oz += (into - allowed) * steep.z;
     }
+  }
+
+  // Against a wall on the ground the move slows with how squarely it meets the wall: by 1 - |cos| of the angle between
+  // the move and the wall's normal, so head-on it stops and at 45 degrees it slides along the wall at 0.29 x 0.71 of
+  // the speed. In the air a wall only blocks the move.
+  const wall = input.grounded ? wallContact() : null;
+  if (wall !== null) {
+    const speed = Math.hypot(ox, oz);
+    const into = speed > 0 ? -(ox * wall.x + oz * wall.z) / speed : 0;
+    if (into > 0) { ox *= 1 - into; oz *= 1 - into; }
   }
 
   lastReplyX = ox; lastReplyZ = oz; lastReplyStep = replyStep; lastReplyStun = replyStun;

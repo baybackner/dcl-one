@@ -656,6 +656,19 @@ export function steepAhead(): { x: number, z: number, distance: number } | null 
   return steepFace;
 }
 
+// A face too steep to walk that the capsule touches along the facing (a wall, a steep slope, a riser higher than a
+// step) while no step-up climbs: the horizontal unit normal pointing away from it; null if none.
+const wallFace = { x: 0, z: 0 };
+export function wallContact(): { x: number, z: number } | null {
+  if (fwdDistance > WALL_CONTACT_DISTANCE || fwdWalkable || stepping) return null;
+  const h = Math.hypot(fwdNormal.x, fwdNormal.z);
+  if (h < 1e-6) return null;
+  wallFace.x = fwdNormal.x / h;
+  wallFace.z = fwdNormal.z / h;
+  return wallFace;
+}
+const WALL_CONTACT_DISTANCE = 0.02; // m of capsule travel to the face
+
 var stepping = false;
 // feet height the current step episode is ascending to: the highest tread planned so far
 var stepTargetY = 0;
