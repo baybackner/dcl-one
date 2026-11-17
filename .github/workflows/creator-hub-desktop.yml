@@ -46,15 +46,20 @@ on:
         type: boolean
       inspector_s3_bucket_key:
         description: 'S3 bucket key for the inspector package'
-        required: true
+        required: false
         type: string
       inspector_version:
         description: 'Version of the inspector package'
-        required: true
+        required: false
         type: string
       inspector_changed:
         description: 'Whether the version of the inspector package has changed'
-        required: true
+        required: false
+        type: boolean
+      workspace-inspector:
+        description: 'Build against the inspector that the build workflow made, not a published one'
+        default: false
+        required: false
         type: boolean
       macos-windows:
         description: 'Build the macOS and Windows installers'
@@ -133,6 +138,10 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
+      # The workspace links @dcl/inspector to packages/inspector; this fills in its build.
+      - uses: ./.github/actions/creator-hub-download-build
+        if: inputs.workspace-inspector
+
       - name: install inspector
         working-directory: apps/creator-hub/packages/creator-hub
         env:
@@ -142,7 +151,11 @@ jobs:
           # If the inspector version hasn't changed or we are on main branch, we need to install the latest version
           # Otherwise, we need to install the version from the S3 bucket
 
-          if [[ "${{ github.ref }}" == "refs/heads/main" || ${{ inputs.inspector_changed }} == "false" ]]; then
+          if [[ "${{ inputs.workspace-inspector }}" == true ]]; then
+            # A restored node_modules can hold the package an earlier run installed here.
+            pnpm add --config.blockExoticSubdeps=false "file:../inspector"
+            node -e "const {realpathSync: r} = require('fs'); if (r('node_modules/@dcl/inspector') !== r('../inspector')) { console.error('@dcl/inspector is not the workspace package'); process.exit(1) }"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" || ${{ inputs.inspector_changed }} == "false" ]]; then
             echo "Installing latest inspector version: ${{ inputs.inspector_version }}"
             # The registry lists a just-published inspector after up to 12 minutes, then caches the old list for 300s.
             for ((i = 1; i <= 50; i++)); do
