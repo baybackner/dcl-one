@@ -11,8 +11,8 @@ name: Creator Hub / CI
 # label, and for Linux alone with the `ci:linux` label: add the label, then push or reopen. Main
 # builds all three; a manual run on another branch builds macOS and Windows.
 #
-# A pull request's test builds do not wait for the checks: its packages start after `changes` and
-# its desktop build after `build`, against the workspace inspector. Main and manual runs publish
+# A pull request's test builds do not wait for the checks: its packages start after `changes`, and
+# its desktop build after its inspector package. Main and manual runs publish
 # to npm and can release, so there the packages and the desktop build wait for the checks and the
 # pre-release drop. Job dependencies cannot change with the event, so each path has its own jobs.
 #
@@ -260,9 +260,8 @@ jobs:
       inspector_changed: ${{ needs.inspector.outputs.changed == 'true' }}
       macos-windows: true
       linux: ${{ github.ref == 'refs/heads/main' }}
-  # The pull request path (see the top). The asset-packs and inspector jobs publish the test
-  # packages; the desktop build uses the inspector that `build` made, not the package. The
-  # `ci:desktop` label builds macOS, Windows and Linux; the `ci:linux` label builds Linux alone.
+  # The pull request path (see the top). The `ci:desktop` label builds macOS, Windows and Linux;
+  # the `ci:linux` label builds Linux alone.
   asset-packs-pr:
     name: asset-packs
     needs: [ changes ]
@@ -286,7 +285,7 @@ jobs:
       asset_packs_changed: ${{ needs.asset-packs-pr.outputs.changed == 'true' }}
   creator-hub-pr:
     name: creator-hub
-    needs: [ build ]
+    needs: [ inspector-pr ]
     if: github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'ci:desktop') || contains(github.event.pull_request.labels.*.name, 'ci:linux'))
     uses: ./.github/workflows/creator-hub-desktop.yml
     secrets:
@@ -300,7 +299,9 @@ jobs:
       VITE_SEGMENT_INSPECTOR_API_KEY: ${{ secrets.VITE_SEGMENT_INSPECTOR_API_KEY }}
     with:
       dry-run: true
-      workspace-inspector: true
+      inspector_s3_bucket_key: ${{ needs.inspector-pr.outputs.s3_bucket_key }}
+      inspector_version: ${{ needs.inspector-pr.outputs.version }}
+      inspector_changed: ${{ needs.inspector-pr.outputs.changed == 'true' }}
       macos-windows: ${{ contains(github.event.pull_request.labels.*.name, 'ci:desktop') }}
       linux: true
   # Older finished pre-releases go only once the new one is fully published, which is kept. A run
