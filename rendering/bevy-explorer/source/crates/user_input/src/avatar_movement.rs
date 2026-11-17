@@ -7,7 +7,10 @@ use bevy::{
     prelude::*,
 };
 use common::{
-    dynamics::{PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD},
+    dynamics::{
+        MAX_GROUND_INCLINE, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS,
+        PLAYER_GROUND_THRESHOLD,
+    },
     sets::{PostUpdateSets, SceneSets},
     structs::{
         avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, PrimaryPlayerRes,
@@ -639,6 +642,8 @@ pub fn apply_movement(
     let mut time = time_res.delta_secs_f64();
     let mut velocity = movement.component.velocity.as_dvec3();
     let mut steps = 0;
+    // on the ground at the end of the last step: the assists below hold for a walking avatar
+    let grounded = dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
 
     // deliberately penetrating (placed here by movePlayerTo): don't move deeper into
     // whatever we're inside, but otherwise let the scene walk us out
@@ -676,8 +681,14 @@ pub fn apply_movement(
         }
 
         position += velocity * step_time + contact_normal * PLAYER_COLLIDER_OVERLAP as f64;
-        velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
         time -= step_time;
+        if grounded && contact_normal != DVec3::ZERO && !walkable(contact_normal) {
+            // slope limit: on the ground, a surface too steep to stand on stops the move into it
+            // as a wall does, so the avatar does not walk up it
+            let across = contact_normal.with_y(0.0).normalize_or_zero();
+            velocity -= velocity.dot(across).min(0.0) * across;
+        }
+        velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
     }
 
     debug!(
@@ -712,6 +723,11 @@ pub fn apply_movement(
     }
     (dynamic_state.ground_height, dynamic_state.contact_height) =
         ground_heights(&mut scenes, transform.translation);
+}
+
+/// A contact normal of a surface the avatar can stand on ([`MAX_GROUND_INCLINE`]).
+fn walkable(normal: DVec3) -> bool {
+    normal.y >= f64::from(MAX_GROUND_INCLINE.cos())
 }
 
 /// The feet's heights above ground the player stands on and above the first surface below, ground
@@ -1070,5 +1086,101 @@ fn accumulate_movement_periods(
             period.collision_push += push;
             period.collision_push_time += dt;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::time::{TimePlugin, TimeUpdateStrategy};
+    use common::structs::EngineMovementControl;
+    use scene_runner::update_world::mesh_collider::ColliderId;
+
+    /// `apply_movement` over the floor (top at y 0) and the given boxes (centre, half extents,
+    /// rotation), 50 steps of 20 ms at a constant scene velocity from `start`.
+    fn walk(boxes: &[(Vec3, Vec3, Quat)], start: Vec3, velocity: Vec3) -> Vec3 {
+        let mut app = App::new();
+        app.add_plugins(TimePlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(20),
+            ))
+            .init_resource::<AvatarMovementInfo>()
+            .init_resource::<LastMovementStep>()
+            .init_resource::<CentralCollisions>()
+            .insert_resource(EngineMovementControl {
+                accept_movement_after: -1.0,
+                ..default()
+            })
+            .add_systems(PostUpdate, apply_movement);
+        let mut colliders = SceneColliderData::default();
+        let floor = (
+            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(50.0, 0.5, 50.0),
+            Quat::IDENTITY,
+        );
+        for (index, (centre, half, rotation)) in [floor].iter().chain(boxes).enumerate() {
+            let id = ColliderId::new(SceneEntityId::ROOT, None, index as u32);
+            colliders.set_wall(&id, *centre, *half, *rotation);
+        }
+        app.world_mut().spawn(colliders);
+        let mut movement = ActivePlayerComponent::<AvatarMovement>::from_config(&default());
+        movement.component.velocity = velocity;
+        let player = app
+            .world_mut()
+            .spawn((
+                PrimaryUser::default(),
+                movement,
+                // over the floor, as the last step left it
+                AvatarDynamicState {
+                    ground_height: start.y,
+                    ..default()
+                },
+                Transform::from_translation(start),
+            ))
+            .id();
+        for _ in 0..50 {
+            app.update();
+        }
+        app.world().get::<Transform>(player).unwrap().translation
+    }
+
+    /// A ramp rising along +x at `degrees`, its surface from x 1 at y 0.
+    fn ramp(degrees: f32) -> (Vec3, Vec3, Quat) {
+        let a = degrees.to_radians();
+        let (half_length, half_thickness) = (5.0, 0.5);
+        let centre = Vec3::new(
+            1.0 + half_length * a.cos() + half_thickness * a.sin(),
+            half_length * a.sin() - half_thickness * a.cos(),
+            0.0,
+        );
+        (
+            centre,
+            Vec3::new(half_length, half_thickness, 5.0),
+            Quat::from_rotation_z(a),
+        )
+    }
+
+    #[test]
+    fn walking_into_a_slope_too_steep_to_stand_on_stops_at_it() {
+        let end = walk(&[ramp(60.0)], Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0));
+        assert!(end.y < 0.05, "climbed to {end}");
+        assert!(end.x < 1.0, "went through to {end}");
+    }
+
+    #[test]
+    fn walking_into_a_walkable_slope_climbs_it() {
+        let end = walk(&[ramp(30.0)], Vec3::ZERO, Vec3::new(5.0, 0.0, 0.0));
+        assert!(end.y > 0.5, "stayed at {end}");
+    }
+
+    #[test]
+    fn a_steep_slope_still_deflects_an_avatar_in_the_air() {
+        // a jump into it: not on the ground, the slope turns the move up it
+        let end = walk(
+            &[ramp(60.0)],
+            Vec3::new(0.0, 0.5, 0.0),
+            Vec3::new(5.0, 0.0, 0.0),
+        );
+        assert!(end.y > 1.0, "stopped at {end}");
     }
 }

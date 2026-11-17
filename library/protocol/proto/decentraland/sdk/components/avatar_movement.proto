@@ -52,8 +52,11 @@ message MovementAnimation {
 //   while position !~= previous position
 // 6: apply velocity (collide and slide)
 //   disable anything we are initially colliding with
+//   grounded = the feet were within 0.05m of walkable ground (normal within 46.5 degrees of up) after the last step
 //   shapecast avatar from position to position + velocity * timestep
 //   on impact:
+//       if grounded and the surface is not walkable (slope limit):
+//           velocity = velocity - (horizontal normal * min(0, dot(velocity, horizontal normal)))
 //       project velocity onto slide plane (standard "Collide & Slide")
 //       velocity = old velocity - (normal * dot(velocity, normal))
 //       repeat continue with residual velocity and residual time
