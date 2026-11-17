@@ -21,6 +21,7 @@ use collectibles::{
     Emote, EmoteExtraData, EmoteUrn,
 };
 use common::{
+    locomotion::{self, GaitSpeeds, SceneLocomotion},
     rpc::{RpcCall, RpcCallEvent, RpcEventSender, RpcOrigin},
     sets::SceneSets,
     structs::{
@@ -65,6 +66,120 @@ static URN_GLIDE: std::sync::LazyLock<EmoteUrn> =
 pub struct AvatarAnimState {
     damped_velocity: Vec3,
     current_emote_min_velocity: f32,
+    /// `LocomotionState.jump_count` last frame: an increase starts a jump
+    jump_count: u32,
+}
+
+/// Walk clip playback speed per m/s forward.
+const WALK_CLIP_SPEED: f32 = 1.0 / 1.5;
+/// Run clip playback speed per m/s forward.
+const RUN_CLIP_SPEED: f32 = 1.0 / 4.5;
+
+fn idle_emote() -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_IDLE.clone(),
+            repeat: true,
+            ..Default::default()
+        },
+        speed: 1.0,
+        transition_seconds: 0.4,
+        ..Default::default()
+    }
+}
+
+/// The walk clip at `forward_speed` m/s (negative plays it backwards).
+fn walk_emote(forward_speed: f32) -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_WALK.clone(),
+            repeat: true,
+            ..Default::default()
+        },
+        speed: forward_speed * WALK_CLIP_SPEED,
+        transition_seconds: 0.4,
+        ..Default::default()
+    }
+}
+
+/// The run clip at `forward_speed` m/s (negative plays it backwards).
+fn run_emote(forward_speed: f32) -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_RUN.clone(),
+            repeat: true,
+            ..Default::default()
+        },
+        speed: forward_speed * RUN_CLIP_SPEED,
+        transition_seconds: 0.4,
+        ..Default::default()
+    }
+}
+
+/// The looping jump clip at `speed`, from the top when `restart`; `audio_mark` skips the take-off
+/// sound when the avatar did not jump.
+fn jump_emote(speed: f32, restart: bool, audio_mark: Option<f32>) -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_JUMP.clone(),
+            repeat: true,
+            restart,
+            ..Default::default()
+        },
+        speed,
+        transition_seconds: 0.1,
+        initial_audio_mark: audio_mark,
+        ..Default::default()
+    }
+}
+
+fn double_jump_emote(restart: bool) -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_DOUBLE_JUMP.clone(),
+            restart,
+            ..Default::default()
+        },
+        speed: 1.0,
+        transition_seconds: 0.1,
+        ..Default::default()
+    }
+}
+
+/// The glide pose, frozen at the neutral (straight) frame: no bank input reaches it.
+fn glide_emote() -> ActiveEmote {
+    ActiveEmote {
+        playback: EmotePlayback {
+            urn: URN_GLIDE.clone(),
+            repeat: true,
+            ..Default::default()
+        },
+        speed: 0.0,
+        transition_seconds: 0.1,
+        pending_seek: Some(2.0 / 24.0),
+        ..Default::default()
+    }
+}
+
+/// The engine clip for a move kind derived from the movement model's state
+/// ([`locomotion::move_kind`]). `forward_speed` drives the walk and run clips, `jump_speed` the jump
+/// clip; `jump_started` (the model's jump count rose this frame) plays a jump from the top.
+fn locomotion_emote(
+    kind: MoveKind,
+    forward_speed: f32,
+    jump_speed: f32,
+    jump_started: bool,
+) -> ActiveEmote {
+    match kind {
+        MoveKind::Idle | MoveKind::Emote => idle_emote(),
+        MoveKind::Walk => walk_emote(forward_speed),
+        MoveKind::Jog | MoveKind::Run => run_emote(forward_speed),
+        MoveKind::Jump | MoveKind::Falling | MoveKind::LongFalling => {
+            jump_emote(jump_speed, jump_started, (!jump_started).then_some(0.1))
+        }
+        MoveKind::DoubleJump => double_jump_emote(jump_started),
+        MoveKind::Glide => glide_emote(),
+    }
 }
 
 /// The avatar graph's mask group holding the hips and legs: an upper-body emote clip is added
@@ -599,14 +714,17 @@ fn animate(
         Option<&ForeignPlayer>,
         Option<&mut LastEmoteCommand>,
         Option<Ref<SceneDrivenAnim>>,
+        Option<&SceneLocomotion>,
     )>,
     time: Res<Time>,
     player: Query<(&PrimaryUser, Option<&PlayerModifiers>)>,
     mut lifecycle: EventWriter<EmoteLifecycleEvent>,
 ) {
-    let (gravity, jump_height) = player
+    let user = player
         .single()
-        .map(|(p, m)| m.map(|m| m.combine(p)).unwrap_or(p.clone()))
+        .map(|(p, m)| m.map(|m| m.combine(p)).unwrap_or(p.clone()));
+    let speeds = user.as_ref().map(GaitSpeeds::of).unwrap_or_default();
+    let (gravity, jump_height) = user
         .map(|p| (-10.0f32, p.jump_height))
         .unwrap_or((-20.0, 1.25));
     let gravity = gravity.min(-0.1);
@@ -621,6 +739,7 @@ fn animate(
         maybe_foreign,
         last_emote,
         maybe_scene_anim,
+        maybe_locomotion,
     ) in avatars.iter_mut()
     {
         let Some((mut active_emote, mut anim_state, mut masked)) = active_emote else {
@@ -657,6 +776,16 @@ fn animate(
         // silent — e.g. a stunned hard landing); the local player's scene rewrites it every frame.
         let scene_anim_changed = maybe_scene_anim.as_ref().is_some_and(|a| a.is_changed());
         let scene_anim = maybe_scene_anim.as_deref().and_then(|a| a.active.as_ref());
+
+        // The movement model's state, when the scene publishes one: it replaces the velocity
+        // heuristics below, and names the move kind (which the broadcast reads) even while a
+        // scene animation plays.
+        let locomotion_state = maybe_locomotion.and_then(|l| l.0.as_ref());
+        let jump_count = locomotion_state.map_or(0, |state| state.jump_count);
+        let jump_started = jump_count > anim_state.jump_count;
+        anim_state.jump_count = jump_count;
+        let locomotion_kind = locomotion_state
+            .map(|state| locomotion::move_kind(state, dynamic_state.velocity, speeds));
 
         // A scene emote's urn ends `-{loop}`. That trailing token is the only loop signal
         // reaching a foreign avatar — rfc4 `PlayerEmote` has no loop field, so
@@ -786,125 +915,59 @@ fn animate(
         let time_to_peak = (jump_height * -gravity * 2.0).sqrt() / -gravity;
         let just_jumped = dynamic_state.jump_time
             > (time.elapsed_secs_f64() - time_to_peak as f64 / 2.0).max(0.0);
-        let (velocity_emote, velocity_move_kind) =
-            if dynamic_state.move_kind == MoveKind::DoubleJump {
-                // Set on foreign avatars from rfc4::Movement.jump_count >= 2 (see foreign_dynamics).
-                (
-                    ActiveEmote {
-                        playback: EmotePlayback {
-                            urn: URN_DOUBLE_JUMP.clone(),
-                            ..Default::default()
-                        },
-                        speed: 1.0,
-                        transition_seconds: 0.1,
-                        ..Default::default()
-                    },
-                    MoveKind::DoubleJump,
-                )
-            } else if dynamic_state.move_kind == MoveKind::Glide {
-                // Set on foreign avatars from rfc4::Movement.glide_state ∈ {OPENING_PROP, GLIDING}.
-                // Frozen at the neutral (straight) pose since we have no tilt input available.
-                (
-                    ActiveEmote {
-                        playback: EmotePlayback {
-                            urn: URN_GLIDE.clone(),
-                            repeat: true,
-                            ..Default::default()
-                        },
-                        speed: 0.0,
-                        transition_seconds: 0.1,
-                        pending_seek: Some(2.0 / 24.0),
-                        ..Default::default()
-                    },
-                    MoveKind::Glide,
-                )
-            } else if dynamic_state.ground_height > 0.2
-                || (dynamic_state.velocity.y > 0.0 && just_jumped)
-            {
-                let move_kind = if just_jumped {
-                    MoveKind::Jump
-                } else {
-                    MoveKind::Falling
-                };
-                (
-                    ActiveEmote {
-                        playback: EmotePlayback {
-                            urn: URN_JUMP.clone(),
-                            repeat: true,
-                            restart: dynamic_state.jump_time
-                                > time.elapsed_secs_f64() - time.delta_secs_f64(),
-                            ..Default::default()
-                        },
-                        speed: time_to_peak.recip() * 0.5,
-                        transition_seconds: 0.1,
-                        initial_audio_mark: if !just_jumped { Some(0.1) } else { None },
-                        ..Default::default()
-                    },
-                    move_kind,
-                )
-            } else if active_emote.urn == *URN_JUMP && !active_emote.finished {
-                (
-                    ActiveEmote {
-                        playback: EmotePlayback {
-                            urn: URN_JUMP.clone(),
-                            ..Default::default()
-                        },
-                        speed: 1.5,
-                        transition_seconds: 0.1,
-                        initial_audio_mark: Some(0.1),
-                        ..Default::default()
-                    },
-                    dynamic_state.move_kind,
-                )
+        let jump_speed = time_to_peak.recip() * 0.5;
+        let directional_velocity_len =
+            (damped_velocity * (Vec3::X + Vec3::Z)).dot(gt.forward().as_vec3());
+        let (velocity_emote, velocity_move_kind) = if let Some(kind) = locomotion_kind {
+            (
+                locomotion_emote(kind, directional_velocity_len, jump_speed, jump_started),
+                kind,
+            )
+        } else if dynamic_state.move_kind == MoveKind::DoubleJump {
+            // Set on foreign avatars from rfc4::Movement.jump_count >= 2 (see foreign_dynamics).
+            (double_jump_emote(false), MoveKind::DoubleJump)
+        } else if dynamic_state.move_kind == MoveKind::Glide {
+            // Set on foreign avatars from rfc4::Movement.glide_state in {OPENING_PROP, GLIDING}.
+            (glide_emote(), MoveKind::Glide)
+        } else if dynamic_state.ground_height > 0.2
+            || (dynamic_state.velocity.y > 0.0 && just_jumped)
+        {
+            let move_kind = if just_jumped {
+                MoveKind::Jump
             } else {
-                let directional_velocity_len =
-                    (damped_velocity * (Vec3::X + Vec3::Z)).dot(gt.forward().as_vec3());
-                if damped_velocity_len.abs() > 0.1 {
-                    if damped_velocity_len.abs() <= 2.6 {
-                        (
-                            ActiveEmote {
-                                playback: EmotePlayback {
-                                    urn: URN_WALK.clone(),
-                                    repeat: true,
-                                    ..Default::default()
-                                },
-                                speed: directional_velocity_len / 1.5,
-                                transition_seconds: 0.4,
-                                ..Default::default()
-                            },
-                            MoveKind::Walk,
-                        )
-                    } else {
-                        (
-                            ActiveEmote {
-                                playback: EmotePlayback {
-                                    urn: URN_RUN.clone(),
-                                    repeat: true,
-                                    ..Default::default()
-                                },
-                                speed: directional_velocity_len / 4.5,
-                                transition_seconds: 0.4,
-                                ..Default::default()
-                            },
-                            MoveKind::Jog,
-                        )
-                    }
-                } else {
-                    (
-                        ActiveEmote {
-                            playback: EmotePlayback {
-                                urn: URN_IDLE.clone(),
-                                repeat: true,
-                                ..Default::default()
-                            },
-                            speed: 1.0,
-                            transition_seconds: 0.4,
-                            ..Default::default()
-                        },
-                        MoveKind::Idle,
-                    )
-                }
+                MoveKind::Falling
             };
+            (
+                jump_emote(
+                    jump_speed,
+                    dynamic_state.jump_time > time.elapsed_secs_f64() - time.delta_secs_f64(),
+                    if !just_jumped { Some(0.1) } else { None },
+                ),
+                move_kind,
+            )
+        } else if active_emote.urn == *URN_JUMP && !active_emote.finished {
+            (
+                ActiveEmote {
+                    playback: EmotePlayback {
+                        urn: URN_JUMP.clone(),
+                        ..Default::default()
+                    },
+                    speed: 1.5,
+                    transition_seconds: 0.1,
+                    initial_audio_mark: Some(0.1),
+                    ..Default::default()
+                },
+                dynamic_state.move_kind,
+            )
+        } else if damped_velocity_len.abs() > 0.1 {
+            if damped_velocity_len.abs() <= 2.6 {
+                (walk_emote(directional_velocity_len), MoveKind::Walk)
+            } else {
+                (run_emote(directional_velocity_len), MoveKind::Jog)
+            }
+        } else {
+            (idle_emote(), MoveKind::Idle)
+        };
 
         // play requested emote
         *active_emote = if let Some(requested_emote) = requested_emote {
@@ -930,10 +993,10 @@ fn animate(
             scene_anim.and_then(|req| EmoteUrn::new(req.urn.as_str()).ok().map(|urn| (req, urn)))
         {
             let (req, urn) = scene_anim_req;
-            dynamic_state.move_kind = if req.idle {
-                MoveKind::Idle
-            } else {
-                MoveKind::Walk
+            dynamic_state.move_kind = match locomotion_kind {
+                Some(kind) => kind,
+                None if req.idle => MoveKind::Idle,
+                None => MoveKind::Walk,
             };
             // Detect anim change via URN (stable across local/remote sources) rather than src,
             // which is empty for requests received over the network.
@@ -2271,6 +2334,8 @@ fn play_scene_driven_sounds(
 mod tests {
     use super::*;
     use bevy::animation::graph::AnimationNodeIndex;
+    use common::structs::SceneDrivenAnimationRequest;
+    use dcl_component::proto_components::sdk::components::{LocomotionGait, LocomotionState};
 
     fn paused(app: &App, entity: Entity) -> Vec<bool> {
         app.world()
@@ -2279,6 +2344,153 @@ mod tests {
             .playing_animations()
             .map(|(_, active)| active.is_paused())
             .collect()
+    }
+
+    #[test]
+    fn the_model_state_picks_the_engine_clip() {
+        let clip = |kind, jump_started| {
+            let emote = locomotion_emote(kind, 3.0, 0.8, jump_started);
+            (emote.urn.clone(), emote.repeat, emote.restart, emote.speed)
+        };
+        assert_eq!(
+            clip(MoveKind::Idle, false),
+            (URN_IDLE.clone(), true, false, 1.0)
+        );
+        assert_eq!(
+            clip(MoveKind::Walk, false),
+            (URN_WALK.clone(), true, false, 3.0 * WALK_CLIP_SPEED)
+        );
+        assert_eq!(
+            clip(MoveKind::Jog, false),
+            (URN_RUN.clone(), true, false, 3.0 * RUN_CLIP_SPEED)
+        );
+        assert_eq!(
+            clip(MoveKind::Run, false),
+            (URN_RUN.clone(), true, false, 3.0 * RUN_CLIP_SPEED)
+        );
+        // a jump starts the clip from the top on the frame the count rises, then plays on
+        assert_eq!(
+            clip(MoveKind::Jump, true),
+            (URN_JUMP.clone(), true, true, 0.8)
+        );
+        assert_eq!(
+            clip(MoveKind::Jump, false),
+            (URN_JUMP.clone(), true, false, 0.8)
+        );
+        assert_eq!(clip(MoveKind::Falling, false).0, URN_JUMP.clone());
+        assert_eq!(clip(MoveKind::LongFalling, false).0, URN_JUMP.clone());
+        assert_eq!(
+            clip(MoveKind::DoubleJump, true),
+            (URN_DOUBLE_JUMP.clone(), false, true, 1.0)
+        );
+        assert_eq!(
+            clip(MoveKind::Glide, false),
+            (URN_GLIDE.clone(), true, false, 0.0)
+        );
+        // the take-off sound plays only for a jump that starts
+        assert_eq!(
+            locomotion_emote(MoveKind::Jump, 0.0, 0.8, true).initial_audio_mark,
+            None
+        );
+        assert_eq!(
+            locomotion_emote(MoveKind::Falling, 0.0, 0.8, false).initial_audio_mark,
+            Some(0.1)
+        );
+    }
+
+    /// Runs `animate` for one avatar moving at `velocity` and returns what its full-body slot plays
+    /// and the move kind it leaves.
+    fn animated(
+        velocity: Vec3,
+        scene_anim: Option<SceneDrivenAnimationRequest>,
+        locomotion: Option<LocomotionState>,
+    ) -> (EmoteUrn, ActiveEmoteSource, Option<EmoteUrn>, MoveKind) {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .add_event::<EmoteLifecycleEvent>()
+            .add_systems(Update, animate);
+        let avatar = app
+            .world_mut()
+            .spawn((
+                AvatarDynamicState {
+                    velocity,
+                    ..Default::default()
+                },
+                GlobalTransform::default(),
+                SceneDrivenAnim { active: scene_anim },
+                SceneLocomotion(locomotion),
+            ))
+            .id();
+        // the first run gives the avatar its animation state, the second animates it
+        app.update();
+        app.update();
+        let world = app.world();
+        let emote = world.get::<ActiveEmote>(avatar).unwrap();
+        (
+            emote.urn.clone(),
+            emote.source,
+            emote.fallback.as_ref().map(|fallback| fallback.urn.clone()),
+            world.get::<AvatarDynamicState>(avatar).unwrap().move_kind,
+        )
+    }
+
+    fn scene_walk() -> SceneDrivenAnimationRequest {
+        SceneDrivenAnimationRequest {
+            src: "assets/walk.glb".into(),
+            urn: "urn:decentraland:off-chain:scene-emote:bafyscene-bafywalk-false".into(),
+            r#loop: true,
+            speed: 1.0,
+            transition_seconds: 0.2,
+            ..Default::default()
+        }
+    }
+
+    fn jogging() -> LocomotionState {
+        LocomotionState {
+            gait: LocomotionGait::LgJog as i32,
+            grounded: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_scene_animation_plays_and_the_model_state_names_the_move() {
+        let moving = Vec3::new(0.0, 0.0, -6.0);
+        let (urn, source, fallback, kind) = animated(moving, Some(scene_walk()), Some(jogging()));
+        assert_eq!(urn.as_str(), scene_walk().urn);
+        assert_eq!(source, ActiveEmoteSource::SceneMovementAnim);
+        // should the clip fail to load, the model state's clip stands in
+        assert_eq!(fallback, Some(URN_RUN.clone()));
+        assert_eq!(kind, MoveKind::Jog);
+
+        // without a model state the scene animation's idle flag names the move
+        let (_, source, _, kind) = animated(moving, Some(scene_walk()), None);
+        assert_eq!(source, ActiveEmoteSource::SceneMovementAnim);
+        assert_eq!(kind, MoveKind::Walk);
+    }
+
+    #[test]
+    fn without_a_scene_animation_the_model_state_drives_the_clip_else_the_velocity() {
+        let moving = Vec3::new(0.0, 0.0, -6.0);
+        let (urn, source, _, kind) = animated(moving, None, Some(jogging()));
+        assert_eq!(urn, *URN_RUN);
+        assert_eq!(source, ActiveEmoteSource::VelocitySelected);
+        assert_eq!(kind, MoveKind::Jog);
+
+        let airborne = LocomotionState {
+            jump_count: 2,
+            ..Default::default()
+        };
+        let (urn, _, _, kind) = animated(Vec3::new(0.0, 3.0, 0.0), None, Some(airborne));
+        assert_eq!(urn, *URN_DOUBLE_JUMP);
+        assert_eq!(kind, MoveKind::DoubleJump);
+
+        // no model state: the velocity heuristics, whose damped velocity has not moved yet with
+        // no time passing
+        let (urn, source, _, kind) = animated(moving, None, None);
+        assert_eq!(urn, *URN_IDLE);
+        assert_eq!(source, ActiveEmoteSource::VelocitySelected);
+        assert_eq!(kind, MoveKind::Idle);
     }
 
     #[test]

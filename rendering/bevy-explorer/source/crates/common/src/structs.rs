@@ -1470,7 +1470,7 @@ pub struct EngineMovementControl {
     pub penetration_bounds: (DVec3, DVec3),
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MoveKind {
     #[default]
     Idle,

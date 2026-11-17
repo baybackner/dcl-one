@@ -40,7 +40,10 @@ use common::{
     },
 };
 use console::{AddDebugSection, DebugSection, DoAddConsoleCommand};
-use dcl_component::proto_components::common::Vector3;
+use dcl_component::proto_components::{
+    common::Vector3,
+    sdk::components::{GlideState, LocomotionGait, LocomotionState},
+};
 use input_manager::{InputManager, InputPriority};
 use scene_runner::{
     initialize_scene::PARCEL_SIZE, renderer_context::RendererSceneContext, ContainingScene,
@@ -531,6 +534,32 @@ fn sdk_vector(v: Option<Vector3>) -> String {
     vector(Vec3::new(v.x, v.y, v.z))
 }
 
+/// The movement model's state as JSON: `null` when the controlling scene publishes none.
+fn locomotion_json(state: Option<&LocomotionState>) -> String {
+    let Some(state) = state else {
+        return "null".into();
+    };
+    let gait = match state.gait() {
+        LocomotionGait::LgIdle => "idle",
+        LocomotionGait::LgWalk => "walk",
+        LocomotionGait::LgJog => "jog",
+        LocomotionGait::LgRun => "run",
+    };
+    let glide = match state.glide_state() {
+        GlideState::GsClosed => "closed",
+        GlideState::GsOpening => "opening",
+        GlideState::GsGliding => "gliding",
+        GlideState::GsClosing => "closing",
+    };
+    format!(
+        concat!(
+            "{{\"gait\":\"{}\",\"grounded\":{},\"jump_count\":{},\"glide\":\"{}\",",
+            "\"stunned\":{},\"sliding\":{}}}"
+        ),
+        gait, state.grounded, state.jump_count, glide, state.stunned, state.sliding,
+    )
+}
+
 fn utc_now() -> String {
     let now = web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
@@ -673,9 +702,10 @@ impl Run {
     ///   and `jump` when the scenario has a jump),
     ///   `pos` (after this frame's movement), `vel` (this frame's displacement over its delta),
     ///   `grounded`, `yaw_avatar`, `yaw_camera`, and `extra`: the `kind` (gait), `vel_requested`
-    ///   (by the movement scene), `vel_external` (SDK forces and impulses) and `scene_tick` (1
+    ///   (by the movement scene), `vel_external` (SDK forces and impulses), `scene_tick` (1
     ///   when the controlling scene's reply landed this frame, 0 when the frame reused its last
-    ///   one).
+    ///   one) and `locomotion` (the movement model's state the scene published: `gait`,
+    ///   `grounded`, `jump_count`, `glide`, `stunned`, `sliding`; `null` when it publishes none).
     /// - footer: `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
     ///   and `extra.input_mismatch_frames` (frames whose input differs from the scenario's) and
     ///   `extra.scene_tick_frames`.
@@ -1284,7 +1314,8 @@ fn record_frame(
                 "{{\"type\":\"frame\",\"i\":{},\"t\":{},\"dt\":{},\"in\":{},",
                 "\"pos\":{},\"vel\":{},\"grounded\":{},",
                 "\"yaw_avatar\":{},\"yaw_camera\":{},\"extra\":{{\"kind\":\"{}\",",
-                "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{}}}}}"
+                "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{},",
+                "\"locomotion\":{}}}}}"
             ),
             i,
             num(t),
@@ -1299,6 +1330,7 @@ fn record_frame(
             sdk_vector(step.requested_velocity),
             sdk_vector(step.external_velocity),
             scene_tick as u8,
+            locomotion_json(movement.component.locomotion.as_ref()),
         ));
         run.last_position = position;
         run.last_t = t;
@@ -1681,6 +1713,27 @@ mod tests {
         let header: serde_json::Value =
             serde_json::from_str(run.finish().lines().next().unwrap()).unwrap();
         assert_eq!(header["extra"]["start"], "placed");
+    }
+
+    #[test]
+    fn the_frame_shows_the_movement_models_state_or_null() {
+        assert_eq!(locomotion_json(None), "null");
+        let state = LocomotionState {
+            gait: LocomotionGait::LgJog as i32,
+            grounded: false,
+            jump_count: 2,
+            glide_state: GlideState::GsOpening as i32,
+            stunned: false,
+            sliding: true,
+        };
+        let json: serde_json::Value = serde_json::from_str(&locomotion_json(Some(&state))).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "gait": "jog", "grounded": false, "jump_count": 2, "glide": "opening",
+                "stunned": false, "sliding": true
+            })
+        );
     }
 
     #[test]

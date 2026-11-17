@@ -8,6 +8,7 @@ use bevy::{
 };
 use common::{
     dynamics::{PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD},
+    locomotion::SceneLocomotion,
     sets::{PostUpdateSets, SceneSets},
     structs::{
         avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, PrimaryPlayerRes,
@@ -18,9 +19,9 @@ use dcl_component::{
     proto_components::{
         common::Vector3,
         sdk::components::{
-            AvatarAnimationState, ColliderLayer, MovementAnimation, PbAvatarLocomotionSettings,
-            PbAvatarMovement, PbAvatarMovementInfo, PbPhysicsCombinedForce,
-            PbPhysicsCombinedImpulse,
+            AvatarAnimationState, ColliderLayer, LocomotionState, MovementAnimation,
+            PbAvatarLocomotionSettings, PbAvatarMovement, PbAvatarMovementInfo,
+            PbPhysicsCombinedForce, PbPhysicsCombinedImpulse,
         },
     },
     DclReader, DclWriter, SceneComponentId, SceneEntityId,
@@ -130,7 +131,8 @@ fn update_priority_scene(
 
 // Resolves the active scene's `MovementAnimation.src` against the scene content map
 // (path -> content hash) and writes a ready-to-play request onto the primary player's
-// `SceneDrivenAnim` component for the avatar animation system to consume.
+// `SceneDrivenAnim` component for the avatar animation system to consume. The scene's model
+// state (`locomotion`) goes onto the player's `SceneLocomotion` beside it.
 fn update_scene_driven_animation(
     mut commands: Commands,
     player: Query<(Entity, &ActivePlayerComponent<AvatarMovement>), With<PrimaryUser>>,
@@ -207,9 +209,10 @@ fn update_scene_driven_animation(
         })
     })();
 
-    commands
-        .entity(primary)
-        .try_insert(SceneDrivenAnim { active: request });
+    commands.entity(primary).try_insert((
+        SceneDrivenAnim { active: request },
+        SceneLocomotion(active.component.locomotion.clone()),
+    ));
 }
 
 #[derive(Component, Clone, Debug)]
@@ -225,6 +228,8 @@ pub struct AvatarMovement {
     /// or the yaw broadcast to other clients. 0 = upright.
     pub tilt_pitch: f32,
     pub tilt_roll: f32,
+    /// the movement model's state; if absent, the engine infers the avatar's state from velocity
+    pub locomotion: Option<LocomotionState>,
 }
 
 impl Default for AvatarMovement {
@@ -237,6 +242,7 @@ impl Default for AvatarMovement {
             animation: None,
             tilt_pitch: 0.0,
             tilt_roll: 0.0,
+            locomotion: None,
         }
     }
 }
@@ -281,6 +287,7 @@ impl From<PbAvatarMovement> for AvatarMovement {
             animation: value.animation,
             tilt_pitch: value.tilt_pitch.unwrap_or_default(),
             tilt_roll: value.tilt_roll.unwrap_or_default(),
+            locomotion: value.locomotion,
         }
     }
 }
