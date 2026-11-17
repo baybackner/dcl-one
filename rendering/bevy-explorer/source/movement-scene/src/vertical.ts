@@ -260,8 +260,9 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
       s.vy = Math.max(s.vy, -glidingFallingSpeed);
     }
   }
-  // height: gravity is constant within a step, so the step moves the mean of its start and end velocity
-  s.y += 0.5 * (vy0 + s.vy) * h;
+  // height: gravity is constant within a step, so the step moves the mean of its start and end velocity, and what
+  // scene pushes add
+  s.y += (0.5 * (vy0 + s.vy) + externalY) * h;
 
   if (airPress && s.y <= groundY) {
     // the press step reaches the ground: the landing cancels the air jump
