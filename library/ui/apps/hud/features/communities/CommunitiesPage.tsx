@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Avatar, Button, Chip, CountBadge, EmptyState, SearchField, Spinner, SwapLabel, Tooltip } from '../../design'
 import { nameColor } from '@explorer-core/lib/identity'
 import { MainMenuShell } from '../menu/MainMenuShell'
+import { MenuBackdrop } from '../menu/MenuBackdrop'
 import { confirmRejectInvite, MemberRow, openCommunityModal, SECTION_LOAD_ERROR } from './CommunityModal'
 import { RequestRowActions, type RequestAnswer } from './RequestRowActions'
 import { openProfileCard } from '../profileCard/ProfileCard'
@@ -20,6 +21,9 @@ import type { Community, CommunityInvitesMessage, CommunityRequestMember, Commun
 import type { CommunitiesState, ProfileState, VoiceChatSession } from '../session/useEngineSession'
 import { streamLive } from '../voiceChat/callGate'
 import styles from './CommunitiesPage.module.css'
+import { LoadMore } from './LoadMore'
+import { getHudScale } from '@explorer-core/lib/hudScale'
+import { Mark } from '../../design/Glyphs'
 
 /** The wait after the last keystroke before searching, so typing sends one read. */
 export const SEARCH_DELAY_MS = 1000
@@ -103,8 +107,8 @@ function CommunityCard({ c, live, onOpen, ...actions }: CardActions & { c: Commu
   return (
     // named by its whole text, as the e2e suite reads it (apps/bevy-explorer/e2e/specs/communities.test.ts)
     <div className={styles.card} onClick={onOpen} role="button" tabIndex={0}>
-      <div className={styles.cover} style={{ background: showImg ? undefined : nameColor(c.id) }}>
-        {live && <span className={styles.live} role="img" aria-label="Live stream">● LIVE</span>}
+      <div className={styles.cover} data-community-cover style={{ background: showImg ? undefined : nameColor(c.id) }}>
+        {live && <span className={styles.live} role="img" aria-label="Live stream"><Mark name="dot" /> LIVE</span>}
         {showImg ? (
           <img className={styles.coverImg} src={c.thumbnail} alt="" onError={() => setFailed(true)} />
         ) : (
@@ -135,30 +139,11 @@ function CommunityCard({ c, live, onOpen, ...actions }: CardActions & { c: Commu
   )
 }
 
-// Reads the next page when the grid's end comes into view. The observer is made again whenever the
-// grid grows, so a page that leaves the end still in view reads the next one too. jsdom has no
-// IntersectionObserver: the grid then shows the first page only.
-function LoadMore({ count, onVisible }: { count: number; onVisible: () => void }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  const visible = useRef(onVisible)
-  visible.current = onVisible
-  useEffect(() => {
-    const el = ref.current
-    if (el == null || typeof IntersectionObserver === 'undefined') return
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) visible.current()
-    }, { rootMargin: '0px 0px 200px 0px' })
-    io.observe(el)
-    return () => io.disconnect()
-  }, [count])
-  return <div ref={ref} className={styles.loadMore} aria-hidden="true" />
-}
-
 /** The ⋮ menu on a request's row: the member menu without owner actions (View Profile, Chat,
  *  Call, Block, Report, Invite to Community). */
 function openRequestMenu(member: CommunityRequestMember, anchor: HTMLElement, onClose: () => void): void {
   const r = anchor.getBoundingClientRect()
-  openProfileCard(member.address, r.left + r.width / 2 + 5, r.top + r.height / 2 - 10, { above: true, context: 'community', onClose })
+  openProfileCard(member.address, r.left + r.width / 2 + 5 * (getHudScale() || 1), r.top + r.height / 2 - 10 * (getHudScale() || 1), { above: true, context: 'community', onClose })
 }
 
 function RequestsGroup({
@@ -377,13 +362,18 @@ export function CommunitiesPage({
       profileClaimed={p?.hasClaimedName}
       onNavigate={onNavigate}
       onClose={communities.toggle}
+      transparentBody
     >
+      <div className={styles.page}>
+      <MenuBackdrop />
       <div className={styles.head}>
         <h1 className={styles.title}>Communities</h1>
-        <div className={styles.search}>
-          <SearchField value={query} onChange={onQuery} onSubmit={runSearch} clearable onClear={clearSearch} placeholder="Search" />
+        <div className={styles.streaming}>
+          <Chip label="Streaming" selected={streaming} onClick={() => setStreaming((s) => !s)} />
         </div>
-        <Chip label="Streaming" selected={streaming} onClick={() => setStreaming((s) => !s)} />
+        <div className={styles.search}>
+          <SearchField variant="light" value={query} onChange={onQuery} onSubmit={runSearch} clearable onClear={clearSearch} placeholder="Search" />
+        </div>
       </div>
 
       <div className={styles.layout}>
@@ -404,6 +394,7 @@ export function CommunitiesPage({
           >
             <span className={styles.invitesLabel}>Invites &amp; Requests</span>
             <CountBadge count={pendingCount} />
+            <span className={styles.invitesChevron} aria-hidden="true">›</span>
           </button>
           <div className={styles.myHead}>
             <span className={styles.sideHead}>My Communities</span>
@@ -470,6 +461,7 @@ export function CommunitiesPage({
           </>
           )}
         </section>
+      </div>
       </div>
     </MainMenuShell>
   )
