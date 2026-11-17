@@ -1811,9 +1811,9 @@
           "d3_retention": "D3 留存率",
           "d3_retention_info_label": "关于 D3 留存率",
           "playtime": "总游戏时长",
-          "playtime_info": "过去 30 天内每位玩家在你的地点停留的平均时长。",
+          "playtime_info": "过去 30 天内玩家在你的地点停留的总时长。",
           "playtime_info_label": "关于总游玩时长",
-          "minutes": "{value} 分钟",
+          "minutes": "{value} {minutes, plural, other {分钟}}",
           "no_data": "无数据"
         },
         "empty_body": "发布场景后，它会显示在这里，并附上本周期的表现。",
