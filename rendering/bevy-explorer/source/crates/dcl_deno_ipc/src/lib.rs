@@ -205,17 +205,20 @@ pub fn init_runtime() -> anyhow::Result<()> {
     init_rx.blocking_recv()?
 }
 
-/// A kernel OOM kill shows as signal 9 here.
+/// A kernel OOM kill shows as signal 9 without a core dump; a crash usually dumps core.
 fn log_sidecar_exit(status: std::process::ExitStatus) {
     #[cfg(unix)]
-    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    let (signal, core_dumped) = {
+        use std::os::unix::process::ExitStatusExt;
+        (status.signal(), status.core_dumped())
+    };
     #[cfg(not(unix))]
-    let signal: Option<i32> = None;
+    let (signal, core_dumped): (Option<i32>, bool) = (None, false);
     if status.success() {
         debug!("JS sidecar exited: {status}");
     } else {
         error!(
-            "JS sidecar exited: {status} (code {:?}, signal {:?})",
+            "JS sidecar exited: {status} (code {:?}, signal {:?}, core dumped {core_dumped})",
             status.code(),
             signal
         );

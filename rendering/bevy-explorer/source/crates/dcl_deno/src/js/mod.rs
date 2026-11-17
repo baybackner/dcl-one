@@ -320,12 +320,22 @@ pub(crate) fn scene_thread(
     });
 
     let script = match script {
+        Err(_) if kill_flag.killed() => {
+            debug!("[{scene_id:?}] scene killed during script load");
+            rt.block_on(async move {
+                drop(runtime);
+            });
+            return;
+        }
         Err(e) => {
             error!("[scene thread {scene_id:?}] script load error: {}", e);
             let _ = state
                 .borrow_mut()
                 .take::<SceneResponseSender>()
                 .try_send(SceneResponse::Error(format!("{e:?}")));
+            rt.block_on(async move {
+                drop(runtime);
+            });
             return;
         }
         Ok(script) => script,
@@ -358,6 +368,15 @@ pub(crate) fn scene_thread(
         state.borrow().borrow::<RpcCalls>().len()
     );
 
+    // checked first: a killed scene's call fails, and the engine has already unloaded it
+    if kill_flag.killed() {
+        debug!("[{scene_id:?}] scene killed during onStart");
+        rt.block_on(async move {
+            drop(runtime);
+        });
+        return;
+    }
+
     if let Err(e) = result {
         // ignore failure to send failure
         error!("[{scene_id:?}] onStart err: {e:?}");
@@ -365,14 +384,6 @@ pub(crate) fn scene_thread(
             .borrow_mut()
             .take::<SceneResponseSender>()
             .try_send(SceneResponse::Error(format!("{e:?}")));
-        rt.block_on(async move {
-            drop(runtime);
-        });
-        return;
-    }
-
-    if kill_flag.killed() {
-        debug!("[{scene_id:?}] scene killed during onStart");
         rt.block_on(async move {
             drop(runtime);
         });
@@ -537,15 +548,6 @@ fn thread_cpu_us() -> u64 {
     }
 }
 
-// how often a pending script call checks whether its scene was killed
-const KILL_POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-async fn killed(kill_flag: &KillFlag) {
-    while !kill_flag.killed() {
-        tokio::time::sleep(KILL_POLL_INTERVAL).await;
-    }
-}
-
 // helper to setup, acquire, run and return results from a script function
 pub(crate) async fn run_script(
     runtime: &mut JsRuntime,
@@ -600,7 +602,7 @@ pub(crate) async fn run_script(
             result = runtime.with_event_loop_promise(f, PollEventLoopOptions::default()) => {
                 result.map(|_| ())
             }
-            _ = killed(kill_flag) => Err(anyhow!("scene killed during {fn_name}")),
+            _ = kill_flag.wait() => Err(anyhow!("scene killed during {fn_name}")),
         }
     } else {
         timeout(

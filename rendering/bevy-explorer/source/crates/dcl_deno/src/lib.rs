@@ -30,7 +30,7 @@ static TERMINATED: Lazy<Mutex<HashMap<SceneId, std::time::Instant>>> = Lazy::new
 
 /// interrupt the scene's isolate even if it is stuck in a JS loop, so the scene
 /// thread unwinds and exits. no-op if the scene thread has already exited. a
-/// scene parked on an async op is released by the scene loop's kill poll; one
+/// scene parked on an async op is released at once by the kill flag; one
 /// blocked inside a synchronous rust op runs on until control returns to JS
 /// (see [`zombie_scene_count`]). the kill flag must be set as well as terminating:
 /// v8's termination request is consumed once the stack unwinds, and the scene

@@ -291,7 +291,15 @@ async fn a_pending_scene_call_keeps_waiting_while_the_scene_is_alive() {
     let call = crate::js::run_script(&mut runtime, &script, "onUpdate", &kill_flag, |_| {
         Vec::new()
     });
-    assert!(timeout(Duration::from_millis(1500), call).await.is_err());
+    assert!(timeout(Duration::from_millis(200), call).await.is_err());
+}
+
+fn assert_killed_during_on_update(result: Result<(), AnyError>) {
+    let message = format!("{:?}", result.unwrap_err());
+    assert!(
+        message.contains("scene killed during onUpdate"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test]
@@ -299,16 +307,31 @@ async fn killing_a_scene_ends_a_call_parked_on_a_pending_op() {
     let mut runtime = client_runtime();
     let script = parked_scene(&mut runtime);
     let kill_flag = dcl_js::KillFlag::default();
-    let killer = kill_flag.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
-        killer.kill();
+    let call = crate::js::run_script(&mut runtime, &script, "onUpdate", &kill_flag, |_| {
+        Vec::new()
     });
+    // the call parks on its first poll; the kill lands only after that
+    let kill = async {
+        tokio::task::yield_now().await;
+        kill_flag.kill();
+    };
+    let (result, ()) = timeout(Duration::from_secs(5), async { tokio::join!(call, kill) })
+        .await
+        .expect("the kill should end the pending call");
+    assert_killed_during_on_update(result);
+}
+
+#[tokio::test]
+async fn a_kill_set_before_the_call_starts_still_ends_it() {
+    let mut runtime = client_runtime();
+    let script = parked_scene(&mut runtime);
+    let kill_flag = dcl_js::KillFlag::default();
+    kill_flag.kill();
     let call = crate::js::run_script(&mut runtime, &script, "onUpdate", &kill_flag, |_| {
         Vec::new()
     });
     let result = timeout(Duration::from_secs(5), call)
         .await
-        .expect("the kill should end the pending call");
-    assert!(result.is_err());
+        .expect("an earlier kill should end the call");
+    assert_killed_during_on_update(result);
 }
