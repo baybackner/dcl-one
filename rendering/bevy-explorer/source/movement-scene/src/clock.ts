@@ -1,7 +1,7 @@
 // Step clock shared by the horizontal and vertical models. Both integrate in fixed steps
 // (FIXED_STEP); this module turns the engine's tick timing into the time each tick covers
 // and the reply delay to predict over.
-import { DELAY_ROUNDING, FRAME_TIME_SMOOTHING, MAX_TICK_TIME, PREDICT_MODE } from './constants';
+import { DELAY_ROUNDING, FRAME_TIME_SMOOTHING, MAX_TICK_TIME } from './constants';
 
 // Time to add to the step accumulators this tick: from the end of the previous tick's frame
 // to the end of this tick's frame.
@@ -28,14 +28,13 @@ export function beginTick(tickTime: number, stepTime: number, previousStepTime: 
   // previousStepTime spans the previous dispatch frame through the frame its reply landed on,
   // so its ratio to the frame time is 1 + that reply's delay. An engine that answers a late reply
   // with a tick on the frame it lands on dispatches every frame: there the delay shows as
-  // lateFrames instead. Frame times jitter, so the frame time is smoothed (mode 1), or the ratio
-  // itself is (mode 2).
+  // lateFrames instead. Frame times jitter, so the frame time is smoothed; the smoothed ratio gives
+  // replyDelaySmooth.
   replyDelay = 0;
-  if (PREDICT_MODE === 0 || frameTime <= 0 || previousStepTime <= 0) return;
+  if (frameTime <= 0 || previousStepTime <= 0) return;
   meanFrameTime = meanFrameTime > 0 ? meanFrameTime + (frameTime - meanFrameTime) * FRAME_TIME_SMOOTHING : frameTime;
   const ratio = Math.min(previousStepTime, MAX_TICK_TIME) / meanFrameTime + lateFrames;
   meanRatio += (ratio - meanRatio) * FRAME_TIME_SMOOTHING;
-  const r = PREDICT_MODE === 2 ? meanRatio : ratio;
-  replyDelay = Math.max(0, Math.min(2, Math.round(r - DELAY_ROUNDING) - 1));
+  replyDelay = Math.max(0, Math.min(2, Math.round(ratio - DELAY_ROUNDING) - 1));
   replyDelaySmooth = Math.max(0, Math.min(2, meanRatio - 1));
 }

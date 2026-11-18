@@ -6,7 +6,7 @@ import { gait, movementAxis, orientation, relativeDegrees, updateHorizontalVeloc
 import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
-import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, HARD_LANDING_ONLY_FROM_LONG_FALL, VEC3_DOWN, VEC3_ZERO } from './constants';
+import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
 import { beginTick } from './clock';
 // Debug/tuning infrastructure — kept in the tree but disconnected so it has no
@@ -95,9 +95,9 @@ const CLIP_HARD_LANDING = ANIM + 'Hard_Landing.glb';
 const CLIP_GLIDE_LANDING = ANIM + 'Hard_Landing_GliderRig.glb';
 const CLIP_JOG_STOP = ANIM + 'Jog_Stop.glb';
 // Hard landing on a stunning touchdown (the vertical model's stunned()): Enter once, Loop while the stun lasts, then
-// Exit, cut short at HARD_LANDING_EXIT_END of its length into whatever plays next. Only after the long fall loop
-// unless HARD_LANDING_ONLY_FROM_LONG_FALL is 0; other stunning landings play the usual landing clip. The engine's
-// network state reads a stun from a `Hard_Landing` clip played at speed 1 or slower: Enter and Loop, not Exit.
+// Exit, cut short at HARD_LANDING_EXIT_END of its length into whatever plays next. Only after the long fall loop;
+// other stunning landings play the usual landing clip. The engine's network state reads a stun from a `Hard_Landing`
+// clip played at speed 1 or slower: Enter and Loop, not Exit.
 const HARD_LANDING = {
   enter: ANIM + 'Hard_Landing_Enter.glb',
   loop: ANIM + 'Hard_Landing_Loop.glb',
@@ -484,7 +484,7 @@ function landingAnimation(justLanded: boolean): MovementAnimation | null {
       landingSoft = false;
       landingSpeed = 1;
       landingFromGlide = false;
-    } else if (stun && (longFallShown || !HARD_LANDING_ONLY_FROM_LONG_FALL)) {
+    } else if (stun && longFallShown) {
       hardLanding = 'enter';
       landingClip = HARD_LANDING.enter;
       landingSoft = false;

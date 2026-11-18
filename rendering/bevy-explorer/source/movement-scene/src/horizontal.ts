@@ -1,9 +1,9 @@
 import { engine, InputAction, inputSystem, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
-  AIR_JUMP_IMPULSE, AIR_JUMP_STOP_WITHOUT_KEYS, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
-  FIXED_STEP, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, LANDING_STUN_KEEP_INPUT, MAX_EXTERNAL_SPEED,
-  MAX_FIXED_STEPS, RAMP_GUARD, SLOPE_SPEED_FACTOR, SLOPE_SPEED_MAX_ANGLE, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
+  AIR_JUMP_IMPULSE, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
+  FIXED_STEP, GROUND_ACCEL, GROUND_MAX_ACCEL, MAX_EXTERNAL_SPEED,
+  MAX_FIXED_STEPS, SLOPE_SPEED_FACTOR, SLOPE_SPEED_MAX_ANGLE, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
 import { engineAssist, horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
@@ -158,22 +158,21 @@ function smoothDamp(current: number, target: number, rate: number, smoothTime: n
 function step(s: State, c: StepInput, h: number) {
   s.n++;
   const stun = c.stun || s.n < stunEnd;
-  const ignore = stun && !LANDING_STUN_KEEP_INPUT;
-  const xTarget = ignore ? 0 : c.limit * c.x;
-  const zTarget = ignore ? 0 : c.limit * c.z;
+  const xTarget = c.limit * c.x;
+  const zTarget = c.limit * c.z;
   s.weight = moveTowards(s.weight, xTarget !== 0 || zTarget !== 0 ? 1 : 0, h / Math.max(1e-3, settings.accelTimeGround));
   const k = accelCurve(s.weight);
   const accel = c.grounded ? GROUND_ACCEL + (GROUND_MAX_ACCEL - GROUND_ACCEL) * k : AIR_ACCEL + (AIR_MAX_ACCEL - AIR_ACCEL) * k;
 
   // A held axis keeps its speed when its key flips sign (strafe A/D, W/S reversal), then moves
   // toward the target; a released axis settles to 0 over the stop time.
-  if (c.x !== 0 && !ignore) {
+  if (c.x !== 0) {
     s.ax = moveTowards(Math.sign(xTarget) * Math.abs(s.ax), xTarget, accel * h);
   } else {
     s.ax = smoothDamp(s.ax, 0, s.adx, settings.dampTimeGround, h);
     s.adx = rateOut[0];
   }
-  if (c.z !== 0 && !ignore) {
+  if (c.z !== 0) {
     s.az = moveTowards(Math.sign(zTarget) * Math.abs(s.az), zTarget, accel * h);
   } else {
     s.az = smoothDamp(s.az, 0, s.adz, settings.dampTimeGround, h);
@@ -205,7 +204,8 @@ function step(s: State, c: StepInput, h: number) {
       s.vx *= f; s.vz *= f;
     }
   }
-  // a landing stun stops the move velocity (external pushes still apply)
+  // a landing stun stops the move velocity (external pushes still apply); the keys held through it keep moving the
+  // axes, so the gait speed is back on the first step after it
   if (stun) { s.vx = 0; s.vz = 0; }
 
   const damping = c.grounded ? EXTERNAL_ENV_DRAG + EXTERNAL_GROUND_FRICTION : EXTERNAL_ENV_DRAG;
@@ -218,9 +218,8 @@ function step(s: State, c: StepInput, h: number) {
 
 // Air jump launch: the move velocity turns to the keys held on this step, each held axis at least AIR_JUMP_IMPULSE
 // fast. A diagonal launches sqrt(2) faster; above the gait's speed, air drag and acceleration take the excess back
-// within about 0.1 s.
+// within about 0.1 s. With no movement key held the launch stops the move.
 function airLaunch(s: State, c: StepInput) {
-  if (!AIR_JUMP_STOP_WITHOUT_KEYS && c.x === 0 && c.z === 0) return;
   const v = Math.max(AIR_JUMP_IMPULSE, Math.sqrt(s.vx * s.vx + s.vz * s.vz));
   s.ax = v * c.x; s.az = v * c.z; s.adx = 0; s.adz = 0;
   s.vx = right.x * s.ax + fwd.x * s.az;
@@ -257,7 +256,7 @@ export function updateHorizontalVelocity() {
   // the air: the keys reach the model a tick late, leaving the edge does not (a release a frame before an edge is a
   // release in the air past it).
   if (leftEdge) prevInput.grounded = false;
-  pending = advance(state, INPUT_DELAY_TICKS > 0 ? prevInput : input, pending + tickAdvance);
+  pending = advance(state, prevInput, pending + tickAdvance);
 
   // The engine holds the reply from the frame it lands on until the next reply lands; reply
   // with the state predicted (on this tick's input) for the last of those frames.
@@ -311,7 +310,7 @@ export function updateHorizontalVelocity() {
   // (0.5-0.9 m/s), which the rigidly attached camera shows as a jerk. While the same input is
   // held on the ground and the model is still accelerating, a reply never slows below the last
   // one; the committed state catches up within a tick or two.
-  if ((RAMP_GUARD & 1) && !horizontalResync && !(replyStun && lastReplyStep < stunEnd) && (input.x !== 0 || input.z !== 0) && input.grounded && prevInput.grounded
+  if (!horizontalResync && !(replyStun && lastReplyStep < stunEnd) && (input.x !== 0 || input.z !== 0) && input.grounded && prevInput.grounded
     && input.x === prevInput.x && input.z === prevInput.z && input.limit === prevInput.limit
     && state.ex === 0 && state.ez === 0) {
     const committed = Math.sqrt(state.vx * state.vx + state.vz * state.vz);

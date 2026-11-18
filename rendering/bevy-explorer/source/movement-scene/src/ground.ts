@@ -1,7 +1,7 @@
 import { ColliderLayer, engine, Entity, Material, MeshRenderer, RaycastQueryType, RaycastShape, raycastSystem, Transform, VisibilityComponent } from '@dcl/sdk/ecs'
 import { Color4, Vector3 } from '@dcl/sdk/math';
 import { playerPosition, prevActualVelocity, prevExternalVelocity, prevPlayerPosition, printvec, tick, time } from '.';
-import { GROUND_PROBE_COUNT, GROUND_PROBE_INTERVAL, GROUND_SNAP_HEIGHT, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, PLAYER_COLLIDER_RADIUS, STEP_DOWN_FALLS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
+import { GROUND_PROBE_COUNT, GROUND_PROBE_INTERVAL, GROUND_SNAP_HEIGHT, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, PLAYER_COLLIDER_RADIUS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
 
 // updated in raycast update
 export var groundNormal = Vector3.Zero();
@@ -212,19 +212,19 @@ export function probesAllowSnap(maxRise: number): boolean {
 }
 
 // Walkable ground under the centre, no further below the capsule's contact than the ground snap follows (a step of
-// GROUND_SNAP_STEP_DROP, see stepDropAllowsSnap; with STEP_DOWN_FALLS off, GROUND_SNAP_HEIGHT). False on an edge: only
-// the rim of the capsule rests on the corner of a ledge, a riser or a steep crest.
+// GROUND_SNAP_STEP_DROP, see stepDropAllowsSnap). False on an edge: only the rim of the capsule rests on the corner of a
+// ledge, a riser or a steep crest.
 export function centreSupported(): boolean {
     if (groundRayDistance === Infinity || groundRayNormal.y < GROUNDED_ANGLE_Y_LEN) return false;
     const drop = groundRayDistance - Math.max(0, groundDistance);
-    return STEP_DOWN_FALLS ? drop <= GROUND_SNAP_STEP_DROP && stepDropAllowsSnap() : drop <= GROUND_SNAP_HEIGHT;
+    return drop <= GROUND_SNAP_STEP_DROP && stepDropAllowsSnap();
 }
 
-// STEP_DOWN_FALLS: snap follows the ground under the centre down from where the feet stood last tick by at most
+// Snap follows the ground under the centre down from where the feet stood last tick by at most
 // GROUND_SNAP_STEP_DROP beyond what the slope of the ground (then or now) accounts for over the distance moved since;
 // past a larger drop (a step edge) the avatar falls.
 export function stepDropAllowsSnap(): boolean {
-    if (!STEP_DOWN_FALLS || Number.isNaN(prevGroundY)) return true;
+    if (Number.isNaN(prevGroundY)) return true;
     if (groundRayDistance === Infinity) return false;
     const slope = Math.max(slopeOf(groundRayNormal), prevGroundSlope);
     const travelled = Math.hypot(playerPosition.x - prevPlayerPosition.x, playerPosition.z - prevPlayerPosition.z);

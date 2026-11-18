@@ -2,14 +2,13 @@ import { ColliderLayer, engine, Entity, InputAction, inputSystem, RaycastQueryTy
 import { Vector3 } from '@dcl/sdk/math';
 import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayDistance, groundRayNormal, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
 import {
-  AIR_JUMP_COOLDOWN, AIR_JUMP_HOLD_ANY_PRESS, AIR_JUMP_HOLD_FROM_PRESS, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
-  AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS,
-  FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
-  GLIDE_OPENS_ON_TAP, GRAVITY,
-  GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
-  JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
-  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
-  VERTICAL_DAMP_TIME, VERTICAL_PREDICT, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
+  AIR_JUMP_COOLDOWN, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
+  FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_TIME,
+  GRAVITY,
+  GROUND_SNAP_HEIGHT, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
+  JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
+  VERTICAL_DAMP_TIME, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
 import { engineAssist, engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
@@ -30,9 +29,9 @@ export function updateVerticalVelocity() {
     unrequestedLift = 0;
     const top = vstate.topY;
     applyJumpAndGravity(true);
-    // a fall from where the engine put us counts from there, or (LANDING_STUN_TOP_KEPT_ON_PLACEMENT) from the top
-    // before, raised only by heights above the placement
-    if (LANDING_STUN_TOP_KEPT_ON_PLACEMENT) { vstate.topY = top; placedY = playerPosition.y; } else vstate.topY = playerPosition.y;
+    // a fall from where the engine put us counts from the top before, raised only by heights above the placement, so a
+    // placement high up never stuns
+    vstate.topY = top; placedY = playerPosition.y;
     return;
   }
   stepUp();
@@ -107,7 +106,6 @@ type VState = {
   airPressStep: number; // step of this airtime's air-jump press
   airLaunchStep: number; // step the air jump launches on (held height before it); NEVER: none in this airtime
   airLaunched: boolean; // an air jump launched during the last advance
-  heldSincePress: boolean; // the key has stayed down since the latest jump press
   topY: number; // height a landing stun measures the drop from: the ground, then the avatar's highest since
   stunEndStep: number; // first step after a landing stun
 };
@@ -116,7 +114,7 @@ const vstate: VState = {
   vy: 0, vg: 0, ve: 0, step: 0, lastGroundedStep: NEVER, triggerStep: NEVER, consumedStep: NEVER, jumpCount: 0, glideWanted: false,
   prop: GlideProp.CLOSED, propStep: NEVER, glideOpenStep: NEVER, glideClosedStep: NEVER, launched: false, y: 0,
   airPressStep: NEVER, airLaunchStep: NEVER, airLaunched: false,
-  heldSincePress: false, topY: -Infinity, stunEndStep: NEVER, pressBack: 0,
+  topY: -Infinity, stunEndStep: NEVER, pressBack: 0,
 };
 const vprobe: VState = { ...vstate };
 var vpending = 0;
@@ -137,7 +135,7 @@ function copyVState(from: VState, to: VState) {
   to.prop = from.prop; to.propStep = from.propStep; to.glideOpenStep = from.glideOpenStep;
   to.glideClosedStep = from.glideClosedStep; to.launched = from.launched; to.y = from.y;
   to.airPressStep = from.airPressStep; to.airLaunchStep = from.airLaunchStep; to.airLaunched = from.airLaunched;
-  to.heldSincePress = from.heldSincePress; to.topY = from.topY; to.stunEndStep = from.stunEndStep;
+  to.topY = from.topY; to.stunEndStep = from.stunEndStep;
   to.pressBack = from.pressBack;
 }
 
@@ -181,8 +179,6 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     s.jumpCount = 0;
     s.airLaunchStep = NEVER; // the landing cancels an air jump that has not launched
   }
-  if (!pressed) s.heldSincePress = false;
-
   // an air jump holds the height until its launch step; no other jump starts meanwhile
   const hover = s.airLaunchStep !== NEVER && s.step < s.airLaunchStep;
   if (hover) {
@@ -194,7 +190,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     s.airLaunched = true;
   }
 
-  let airPress = false, prevTrigger = NEVER, prevConsumed = NEVER;
+  let airPress = false;
   if (!hover) {
     // the grace window both buffers an early press and allows a late jump off an edge
     const grace = s.vy > 0 || s.step < JUMP_GRACE_STEPS ? 0 : JUMP_GRACE_STEPS;
@@ -211,19 +207,15 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
       s.jumpCount++;
       s.triggerStep = NEVER;
       s.consumedStep = s.step;
-      s.heldSincePress = true;
-    } else if ((wants || (s.vy > 0 && s.step <= s.triggerStep + AIR_JUMP_RISE_BUFFER_STEPS)) && !onGround && airJumpAllowed(s, h)) {
+    } else if (wants && !onGround && airJumpAllowed(s, h)) {
       // air jump: gravity still acts on this step, the height is held from the next one
       airPress = true;
       vb0 = keepPush(s);
-      prevTrigger = s.triggerStep;
-      prevConsumed = s.consumedStep;
       s.jumpCount++;
       s.triggerStep = NEVER;
       s.consumedStep = s.step;
       s.airPressStep = s.step;
       s.airLaunchStep = s.step + AIR_HOVER_STEPS + 1;
-      s.heldSincePress = true;
     }
   }
 
@@ -245,11 +237,10 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   // glide: a fresh press in the air once the jumps are spent opens the glider's prop, held to keep gliding
   // the model's own height above the ground (the avatar's lags it by the reply delay)
   const canGlide = glideEnabled && s.jumpCount > maxAirJumps && !onGround && s.y - groundY > GLIDE_MIN_GROUND_DISTANCE;
-  // the prop's clips run on their own time: an open prop glides, a shut one starts the cooldown
-  const open = s.step - s.propStep >= GLIDE_OPEN_STEPS;
-  if (s.prop === GlideProp.OPENING
-    && (open || (!GLIDE_OPENS_ON_TAP && !pressed) || (!GLIDE_OPEN_THROUGH_LANDING && onGround))) {
-    s.prop = open ? GlideProp.GLIDING : GlideProp.CLOSING;
+  // the prop's clips run on their own time: an open prop glides, a shut one starts the cooldown. Once it starts opening
+  // it opens fully, through a release (a tap) or a landing, and closes from there on the next step.
+  if (s.prop === GlideProp.OPENING && s.step - s.propStep >= GLIDE_OPEN_STEPS) {
+    s.prop = GlideProp.GLIDING;
     s.propStep = s.step;
   } else if (s.prop === GlideProp.CLOSING && s.step - s.propStep >= GLIDE_CLOSE_STEPS) {
     s.prop = GlideProp.CLOSED;
@@ -294,15 +285,9 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   s.y += (0.5 * (vy0 + s.vy) + s.ve) * h;
 
   if (airPress && s.y <= groundY) {
-    // the press step reaches the ground: the landing cancels the air jump
+    // the press step reaches the ground: the landing cancels the air jump, and the press is spent
     s.airLaunchStep = NEVER;
     s.airPressStep = NEVER;
-    if (!AIR_JUMP_LOST_ON_TOUCHDOWN) {
-      // keep the press for a jump on landing instead
-      s.jumpCount--;
-      s.triggerStep = prevTrigger;
-      s.consumedStep = prevConsumed;
-    }
   }
 }
 
@@ -315,14 +300,13 @@ function keepPush(s: VState): number {
   return s.ve;
 }
 
-// A held key scales the player's own vertical acceleration for JUMP_HOLD_TIME after a jump's press (an air jump: see
-// AIR_JUMP_HOLD_*).
+// A held key scales the player's own vertical acceleration for JUMP_HOLD_TIME after a jump's press. For an air jump the
+// window counts from the air press, so the hover uses part of it, and any jump key held in it counts (a later, ignored
+// press too).
 function heldWindow(s: VState, pressed: boolean, h: number): boolean {
   if (!pressed) return false;
   if (s.airLaunchStep === NEVER || s.consumedStep !== s.airPressStep) return (s.step - s.consumedStep) * h < JUMP_HOLD_TIME;
-  if (!AIR_JUMP_HOLD_ANY_PRESS && !s.heldSincePress) return false;
-  const from = AIR_JUMP_HOLD_FROM_PRESS ? s.airPressStep : s.airLaunchStep;
-  return s.step >= from && (s.step - from) * h < JUMP_HOLD_TIME;
+  return s.step >= s.airPressStep && (s.step - s.airPressStep) * h < JUMP_HOLD_TIME;
 }
 
 function vadvance(s: VState, pressed: boolean, running: boolean, onGround: boolean, noGravity: boolean, t: number): number {
@@ -369,12 +353,11 @@ function applyJumpAndGravity(noGravity: boolean) {
   // height while gliding
   if (onGround && !noGravity) placedY = -Infinity;
   else if (!onGround) vstate.topY = vstate.prop === GlideProp.GLIDING ? playerPosition.y : playerPosition.y > placedY ? Math.max(vstate.topY, playerPosition.y) : vstate.topY;
-  const stepPressed = INPUT_DELAY_TICKS > 0 ? prevJumpPressed : pressed;
-  const stepRunning = INPUT_DELAY_TICKS > 0 ? prevRunning : running;
   vstate.launched = false;
   vstate.airLaunched = false;
   const pressBefore = vstate.airPressStep;
-  vpending = vadvance(vstate, stepPressed, stepRunning, onGround, noGravity, vpending + tickAdvance);
+  // the committed steps up to the end of this frame run on the previous tick's keys
+  vpending = vadvance(vstate, prevJumpPressed, prevRunning, onGround, noGravity, vpending + tickAdvance);
   // this tick's scene pushes (externalVelocity sums impulses and force * time since the last tick); on the ground one
   // too weak to lift the avatar (isLaunched) is held by the ground
   if (!onGround || vstate.launched || isLaunched()) {
@@ -414,7 +397,7 @@ function applyJumpAndGravity(noGravity: boolean) {
   const frames = frameTime > 0 ? 2 * replyDelay : 0;
   // the smoothed horizon once the committed model is airborne; a launch from the ground keeps the per-tick
   // delay (a smoothed horizon would publish a launch before the press frame's reply is due)
-  const smooth = VERTICAL_PREDICT === 2 && frameTime > 0 && (vstate.vy !== 0 || vstate.launched || vstate.airLaunchStep !== NEVER);
+  const smooth = frameTime > 0 && (vstate.vy !== 0 || vstate.launched || vstate.airLaunchStep !== NEVER);
   const ahead = smooth ? 1.5 * replyDelaySmooth * frameTime : 0;
   if (vstate.launched) jumpTracked = true;
   const airAhead = airPublishedStep > vstate.step ? (airPublishedStep - vstate.step) * FIXED_STEP : 0;
@@ -478,8 +461,8 @@ function applyJumpAndGravity(noGravity: boolean) {
     const err = vstate.y + vstate.vy * (vpending - frameTime) - playerPosition.y;
     let c = Math.max(-VERTICAL_TRACK_MAX, Math.min(VERTICAL_TRACK_MAX, err / VERTICAL_TRACK_TIME));
     if (hoverReply) {
-      // an air jump's held height: drift to the model's height, or keep the reply flat
-      if (!AIR_JUMP_HOVER_TRACK) c = 0;
+      // an air jump's held height: the reply stays flat (tracking resumes at the launch)
+      c = 0;
     } else {
       // never against the model's direction: no hop while it falls, no dip while it rises
       if (vy + c > 0 && vy <= 0) c = -vy;
@@ -514,10 +497,10 @@ function applyJumpAndGravity(noGravity: boolean) {
   // Vertical ramp guard: in the air gravity only lowers vy, but the switching delay estimate
   // makes consecutive replies alternate between the committed and the predicted state. Between
   // two airborne replies without a launch, glide, landing or push, a reply never rises above
-  // the last one.
+  // the last one. It runs after the height tracking: a correction can slow a fall but never makes vy rise in the air.
   const inAir = !grounded && !vstate.launched && !launchPending && !isGliding && vstate.ve === 0
     && !horizontalResync && !stepping && predictedLandFrame < 0 && !airJump;
-  if ((RAMP_GUARD & 2) && inAir && lastReplyAir) vy = Math.min(vy, lastReplyVy);
+  if (inAir && lastReplyAir) vy = Math.min(vy, lastReplyVy);
   lastReplyVy = vy;
   lastReplyAir = inAir;
 
@@ -541,7 +524,8 @@ export function jumpCount(): number { return vstate.jumpCount; }
 export function landingStuns(): boolean { return vstate.topY - groundY > LANDING_STUN_DROP; }
 // The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
 var landedNow = false;
-// Height the engine last placed the avatar at, while it has not touched the ground since (LANDING_STUN_TOP_KEPT_ON_PLACEMENT).
+// Height the engine last placed the avatar at, while it has not touched the ground since (a landing stun's top ignores
+// heights up to it).
 var placedY = -Infinity;
 // Vertical velocity of the last reply and whether it was airborne (ramp guard).
 var lastReplyVy = 0;
@@ -621,7 +605,7 @@ function snapToGround() {
     && !stepping // not stepping
     && (prevGrounded || landedNow) // was grounded last frame, or a jump just landed (within the grounded height)
     && (groundDistance < GROUND_SNAP_HEIGHT + unrequestedLift || probesAllowSnap(GROUND_SNAP_HEIGHT + unrequestedLift)) // close enough
-    && stepDropAllowsSnap() // not down a step (STEP_DOWN_FALLS)
+    && stepDropAllowsSnap() // not down a step (GROUND_SNAP_STEP_DROP)
     && groundRayNormal.y >= GROUNDED_ANGLE_Y_LEN // not onto a slope too steep to walk (off a crest the avatar falls)
     && !onEdge // not onto the corner of an edge (below)
   ) {

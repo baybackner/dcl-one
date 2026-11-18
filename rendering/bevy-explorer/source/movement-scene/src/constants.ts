@@ -30,26 +30,18 @@ export const AIR_DRAG = 0.2;
 export const EXTERNAL_ENV_DRAG = 1.5;
 export const EXTERNAL_GROUND_FRICTION = 4;
 export const MAX_EXTERNAL_SPEED = 50;
-// Steps up to the current frame use the input of the previous tick (1) or of this tick (0).
-export const INPUT_DELAY_TICKS = 1;
-// Reply prediction: the engine applies a reply from the frame it lands on until the next one.
-// 0 = reply with the state at the dispatch frame; 1 = estimate the reply delay in frames from
-// previousStepTime / stepTime and reply with the state predicted for the last frame it is held;
-// 2 = as 1, with the ratio smoothed over ticks.
-export const PREDICT_MODE: number = 1;
+// Steps up to the current frame use the input of the previous tick.
+// Reply prediction: the engine applies a reply from the frame it lands on until the next one. The reply delay in frames
+// is estimated from previousStepTime / stepTime, and the reply carries the state predicted for the last frame it is held.
 export const FRAME_TIME_SMOOTHING = 0.1; // weight of the newest sample in the frame-time average
 export const DELAY_ROUNDING = 0; // subtracted from the frame ratio before rounding
 export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
-// Ramp guard (bit flags), against the prediction switching between ticks:
-// 1 = while the same input is held on the ground and the model accelerates, a reply never
-//     slows below the previous one;
-// 2 = between two airborne replies (no launch, glide, landing or push), vy never rises.
-// Bit 2 applies after the height tracking below: a correction can slow the fall but never make vy rise in the air.
-export const RAMP_GUARD: number = 3;
-// Vertical reply in the air: 1 = the mean predicted velocity over the frames the reply is held, from the per-tick
-// delay estimate; 2 = the velocity predicted 1.5 x the smoothed delay ahead (replyDelaySmooth), which only falls
-// between replies. A launch from the ground always uses the per-tick estimate.
-export const VERTICAL_PREDICT: number = 2;
+// Ramp guard, against the prediction switching between ticks: while the same input is held on the ground and the model
+// accelerates, a reply never slows below the previous one; between two airborne replies (no launch, glide, landing or
+// push), vy never rises.
+// Vertical reply in the air: the velocity predicted 1.5 x the smoothed delay ahead (replyDelaySmooth), which only falls
+// between replies. A launch from the ground uses the mean predicted velocity over the frames the reply is held, from
+// the per-tick delay estimate.
 // Height tracking during a jump: the engine integrates whatever velocity it is sent, so a reply that lands earlier
 // or later than estimated leaves a height error that adds up over the jump. Each reply adds the error between the
 // model's height and the avatar's, divided by VERTICAL_TRACK_TIME (s), at most VERTICAL_TRACK_MAX (m/s). 0 = off.
@@ -86,30 +78,18 @@ export const JUMP_HOLD_SCALE = 0.5;
 export const JUMP_GRACE_STEPS = 8;
 export const JUMP_COYOTE_TIME = 0.16; // s, the same window for the step-up check
 // Air jump: one per airtime, by a fresh press in the air after the ground jump (or once the grace window of a fall
-// off an edge has passed). The avatar holds its height for AIR_JUMP_HOVER_TIME, then launches to DOUBLE_JUMP_HEIGHT
-// (any gait). Scenes turn it off with InputModifier disableDoubleJump.
+// off an edge has passed). The avatar holds its height for AIR_JUMP_HOVER_TIME (a flat hover, no height tracking),
+// then launches to DOUBLE_JUMP_HEIGHT (any gait). A press whose step reaches the ground is lost: the landing cancels
+// the air jump. The held-key window (JUMP_HOLD_TIME) counts from the air press, so the hover uses part of it, and any
+// jump key held in it counts. Scenes turn it off with InputModifier disableDoubleJump.
 export const DOUBLE_JUMP_HEIGHT = 2; // in-air jump height (m), overridden by the locomotion settings
 export const AIR_JUMP_COUNT = 1; // air jumps per airtime
 export const AIR_JUMP_COOLDOWN = 0.32; // s from the previous jump's press before an air jump can start (16 steps)
 export const AIR_JUMP_HOVER_TIME = 0.2; // s the height is held between the press and the launch (whole steps)
 export const AIR_JUMP_HOVER_SPEED = 0; // vertical speed during the hover (m/s)
-// Horizontal speed at the launch (m/s): max(AIR_JUMP_IMPULSE, current speed) along the keys held on the launch step.
-// 0 keeps the current speed (turned toward the keys).
+// Horizontal speed at the launch (m/s): max(AIR_JUMP_IMPULSE, current speed) along the keys held on the launch step;
+// no movement key held stops the horizontal move. 0 keeps the current speed (turned toward the keys).
 export const AIR_JUMP_IMPULSE = 8;
-// Behaviour switches:
-// 1: a press whose step reaches the ground is lost (the landing cancels the air jump); 0: it is buffered to the ground.
-export const AIR_JUMP_LOST_ON_TOUCHDOWN: number = 1;
-// 1: no movement key on the launch step stops horizontal motion; 0: the horizontal velocity is kept.
-export const AIR_JUMP_STOP_WITHOUT_KEYS: number = 1;
-// 1: the held-key window (JUMP_HOLD_TIME) counts from the air press, so the hover uses part of it; 0: from the launch.
-export const AIR_JUMP_HOLD_FROM_PRESS: number = 1;
-// 1: any jump key held in that window counts as held (a later, ignored press too); 0: only the air press held throughout.
-export const AIR_JUMP_HOLD_ANY_PRESS: number = 1;
-// Steps a press made while rising stays wanted for an air jump (0: a press before the cooldown while rising is dropped).
-export const AIR_JUMP_RISE_BUFFER_STEPS: number = 0;
-// Height tracking during the hover: 1 = both ways (the avatar drifts to the model's hover height), 0 = none (a flat hover;
-// tracking resumes at the launch).
-export const AIR_JUMP_HOVER_TRACK: number = 0;
 // Glide: a fresh press in the air once the jumps are spent (the air jump included) opens the glider's prop, once long
 // enough after the latest jump's press, above the ground and with the prop shut. The fall goes on while the prop opens;
 // once open, the glide holds the fall while the key is held. Released, or near the ground, the prop closes.
@@ -125,28 +105,20 @@ export const GLIDE_COOLDOWN = 0.22; // s after the prop has closed (11 steps)
 // later)
 export const GLIDE_OPEN_TIME = 0.36;
 export const GLIDE_CLOSE_TIME = 0.28; // s the prop takes to close (14 steps: the 0.283 s closing clip)
-// Behaviour switches:
-// 1: a tap opens the prop all the same: it opens, then closes without gliding; 0: a release while it opens closes it.
-export const GLIDE_OPENS_ON_TAP: number = 1;
-// 1: a landing while the prop opens lets it open (it closes on the next step); 0: the landing closes it.
-export const GLIDE_OPEN_THROUGH_LANDING: number = 1;
+// A prop that starts opening opens fully: a tap opens it, then it closes without gliding; a landing while it opens lets
+// it open, and it closes on the next step.
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
 // Landing stun: a landing more than LANDING_STUN_DROP below the top of the airtime (the highest point since the ground;
 // a glide restarts it from the glide's height) stops horizontal movement for the scene's hardLandingCooldown
-// (AvatarLocomotionSettings), LANDING_STUN_TIME when no scene sets it. Jumping is still allowed.
+// (AvatarLocomotionSettings), LANDING_STUN_TIME when no scene sets it. Jumping is still allowed. The keys held through
+// the stun still accelerate the move, so the gait speed is back on the first step after it (in the air the move then
+// builds up from 0 at the air acceleration). Placing the avatar (a teleport) keeps the top: a fall from where it was
+// placed counts from the ground it stood on before or from a top it rises to later, so a teleport high up never stuns.
+// The hard landing clips play only on a stunning landing out of the long fall loop (other stunning landings play the
+// usual landing clip).
 export const LANDING_STUN_DROP = 8; // m
 export const LANDING_STUN_TIME = 0.76; // s from the landing step (38 steps)
-// 1: the keys held through the stun still accelerate the move, so the gait speed is back on the first step after it
-// (in the air the move then builds up from 0 at the air acceleration); 0: the input is ignored and the speed builds up
-// again after the stun.
-export const LANDING_STUN_KEEP_INPUT: number = 1;
-// 1: placing the avatar (a teleport) keeps the top: a fall from where it was placed counts from the ground it stood on
-// before or from a top it rises to later, so a teleport high up never stuns; 0: the drop counts from where it was placed.
-export const LANDING_STUN_TOP_KEPT_ON_PLACEMENT: number = 1;
-// 1: the hard landing clips play only on a stunning landing out of the long fall loop (other stunning landings play the
-// usual landing clip); 0: on every stunning landing. Animation only.
-export const HARD_LANDING_ONLY_FROM_LONG_FALL: number = 1;
 
 export const TURN_MAX_DEGREES_SEC = 1040; // max degrees to turn (set to inf for TURN_FULL_TIME to apply)
 export const TURN_FULL_TIME = 0.1; // time to turn fully towards target
@@ -164,11 +136,9 @@ export const SLOPE_SPEED_MAX_ANGLE = 55; // degrees
 export const MAX_STEP_HEIGHT = 0.45; // highest step player can walk up (player may still walk up slightly higher steps if approached at an angle)
 export const MIN_STEP_HEIGHT = 0.05; // rises up to this need no step (the capsule slides over them)
 export const GROUND_SNAP_HEIGHT = 0.40 // height below which we snap to ground (if previously grounded)
-// Behaviour switch, ground snap down a step: 1 = the snap follows the ground under the centre down at most
-// GROUND_SNAP_STEP_DROP beyond the ground's slope, so a 0.1 m riser keeps the avatar on the stairs, while from 0.2 m
-// walk falls tread by tread and jog/run fly over the whole staircase; 0 = it follows any drop within
-// GROUND_SNAP_HEIGHT, so stairs up to that riser keep the avatar on them at any gait.
-export const STEP_DOWN_FALLS: number = 1;
+// Ground snap down a step: the snap follows the ground under the centre down at most GROUND_SNAP_STEP_DROP beyond the
+// ground's slope, so a 0.1 m riser keeps the avatar on the stairs, while from 0.2 m walk falls tread by tread and
+// jog/run fly over the whole staircase.
 export const GROUND_SNAP_STEP_DROP = 0.15; // m
 // Sub-step ground probes: downward casts placed along the velocity at multiples of
 // GROUND_PROBE_INTERVAL from the avatar. When a tick covers more ground than one 60fps step
