@@ -92,10 +92,14 @@ player in that frame; a reply that lands after the frame's deadline is applied a
 and the scene, still in flight when the next frame queues its scenes, would skip that frame's
 dispatch. When `receive_scene_updates` takes such a late reply, it puts the scene at the front
 of the queue with an extra slot, so the loop's next pass dispatches it again with the current
-frame's input, if the time left before the deadline covers the 90th percentile of the scene's
-last 32 ticks from dispatch to reply (a reply first seen at a loop's first poll counts as
-arriving when the previous loop ended). At most one tick stays in flight, so this happens at
-most once per frame and the loop still ends at its deadline. A re-dispatch's reply that is late
+frame's input. A late reply seen at the loop's first poll is answered while the loop has time
+left: the re-dispatch leaves where the frame's regular dispatch would have, with as much of the
+loop left. One seen later in the loop is answered only if the time left before the deadline
+covers the 90th percentile of the scene's last 32 ticks from dispatch to reply. A reply first
+seen at a loop's first poll counts as arriving when the previous loop ended, so when more than
+a tenth of the ticks miss, that percentile is a whole loop and holds back every re-dispatch
+later in a loop. At most one tick stays in flight, so this happens at most once per frame and
+the loop still ends at its deadline. A re-dispatch's reply that is late
 too is applied in the next frame. The movement scene tells a reply the engine has not applied
 yet from a takeover by the requested velocity it receives.
 

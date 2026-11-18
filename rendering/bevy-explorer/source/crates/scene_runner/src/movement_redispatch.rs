@@ -2,8 +2,9 @@
 //! reply to the tick dispatched at the start of the frame; a reply that lands after the frame's
 //! scene loop deadline is applied a frame late, and the scene, still in flight when the next frame
 //! queues its scenes, skips that frame's dispatch. When such a late reply lands, the scene is
-//! dispatched again at once with the frame's input, ahead of the queue, if the time left before
-//! the deadline covers the 90th percentile of its recent ticks.
+//! dispatched again at once with the frame's input, ahead of the queue. A reply seen at the
+//! loop's first poll is always answered; one seen later in the loop only if the time left
+//! before the deadline covers the 90th percentile of the scene's recent ticks.
 
 use std::{collections::VecDeque, time::Duration};
 
@@ -37,10 +38,15 @@ impl MovementTickTimes {
         Some(sorted[rank.max(1) - 1])
     }
 
-    /// A re-dispatch is worth it when the time left in the frame's scene loop covers the
-    /// percentile; with no ticks recorded yet, always.
-    pub fn redispatch_fits(&self, left: Duration) -> bool {
-        self.p90().is_none_or(|p90| left >= p90)
+    /// A re-dispatch is worth it while the frame's scene loop has time left and, for a late
+    /// reply seen after the loop's first poll, the time left covers the percentile (with no
+    /// ticks recorded yet, always). A re-dispatch at the first poll goes out where the frame's
+    /// regular dispatch would, with as much of the loop left, so it is as likely to land in time.
+    /// The percentile cannot judge it there: a tick that missed its frame counts as lasting
+    /// until its loop ended, so once over a tenth of the recent ticks miss, the percentile is at
+    /// least a whole loop, more than any loop has left after its first poll.
+    pub fn redispatch_fits(&self, left: Duration, first_poll: bool) -> bool {
+        !left.is_zero() && (first_poll || self.p90().is_none_or(|p90| left >= p90))
     }
 }
 
@@ -66,26 +72,96 @@ pub fn tick_time(
 mod tests {
     use super::*;
 
+    use crate::renderer_context::{ReplyTiming, SceneTickTiming, SentTiming};
+
     fn ms(v: u64) -> Duration {
         Duration::from_millis(v)
+    }
+
+    fn us(v: u64) -> Duration {
+        Duration::from_micros(v)
     }
 
     #[test]
     fn p90_is_the_nearest_rank_over_the_last_samples() {
         let mut times = MovementTickTimes::default();
         assert_eq!(times.p90(), None);
-        assert!(times.redispatch_fits(ms(0)));
         for v in 1..=10 {
             times.record(ms(v));
         }
         assert_eq!(times.p90(), Some(ms(9)));
-        assert!(times.redispatch_fits(ms(9)));
-        assert!(!times.redispatch_fits(ms(8)));
         // older samples drop out
         for _ in 0..TICK_SAMPLES {
             times.record(ms(2));
         }
         assert_eq!(times.p90(), Some(ms(2)));
+    }
+
+    #[test]
+    fn a_late_reply_seen_later_in_the_loop_needs_the_percentile_left() {
+        let mut times = MovementTickTimes::default();
+        assert!(times.redispatch_fits(ms(1), false));
+        for v in 1..=10 {
+            times.record(ms(v));
+        }
+        assert!(times.redispatch_fits(ms(9), false));
+        assert!(!times.redispatch_fits(ms(8), false));
+    }
+
+    /// A web frame at 60 Hz: the scene loop has 3.1 ms before its deadline, the movement scene
+    /// is dispatched 0.2 ms into it, and a quarter of its ticks miss the deadline.
+    #[test]
+    fn a_late_reply_seen_at_the_first_poll_is_answered_while_the_loop_has_time_left() {
+        let mut times = MovementTickTimes::default();
+        let loop_start = Instant::now();
+        let sent = loop_start + us(200);
+        let loop_end = loop_start + us(3100);
+        for i in 0..TICK_SAMPLES {
+            let tick = if i % 4 == 0 {
+                // missed: seen at the next loop's first poll, 14 ms after the deadline
+                tick_time(sent, loop_end + ms(14), true, loop_end)
+            } else {
+                tick_time(sent, sent + us(1500), false, loop_end)
+            };
+            times.record(tick);
+        }
+        // the missed ticks count as lasting until the loop ended: the percentile is the loop
+        assert_eq!(times.p90(), Some(us(2900)));
+        // the next frame's first poll, 0.3 ms into the same 3.1 ms loop
+        let left = us(2800);
+        assert!(times.redispatch_fits(left, true));
+        assert!(!times.redispatch_fits(left, false));
+        // nothing is dispatched once the loop is past its deadline
+        assert!(!times.redispatch_fits(Duration::ZERO, true));
+        assert!(!times.redispatch_fits(Duration::ZERO, false));
+    }
+
+    #[test]
+    fn a_dispatch_in_the_frame_a_late_reply_landed_is_a_redispatch() {
+        let at = Instant::now();
+        let sent = |frame| SentTiming {
+            at,
+            frame,
+            loop_start: at,
+            deadline: at,
+            redispatch: false,
+        };
+        let replied = |sent_frame, frame| SceneTickTiming {
+            sent: Some(sent(sent_frame)),
+            reply: Some(ReplyTiming {
+                sent: sent(sent_frame),
+                at,
+                frame,
+            }),
+            held_back: None,
+        };
+        // the reply of frame 6's tick landed in frame 7
+        assert!(replied(6, 7).late_reply_in(7));
+        // it is no reason to call frame 8's dispatch one
+        assert!(!replied(6, 7).late_reply_in(8));
+        // a reply in its own frame is not late
+        assert!(!replied(7, 7).late_reply_in(7));
+        assert!(!SceneTickTiming::default().late_reply_in(7));
     }
 
     #[test]

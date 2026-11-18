@@ -1421,8 +1421,8 @@ fn send_scene_updates(
 
     let now = time.elapsed_secs_f64();
     let dt = dispatch_dt(context.tick_number, context.last_sent, now);
-    // a scene already dispatched this frame is dispatched again only on a late reply
-    let redispatch = context.last_sent == now;
+    // only the movement scene's re-dispatch goes out in the frame its late reply landed
+    let redispatch = context.tick_timing.late_reply_in(engine_info.frame.0);
 
     let crdt = context.crdt_store.take_updates();
     if let Some(mut traffic) = traffic {
@@ -1670,8 +1670,9 @@ fn receive_scene_updates(
 
 /// Records the movement scene's tick that just replied and tells whether to dispatch the scene
 /// again now ([`movement_redispatch`]): its reply came in a later frame than its dispatch, the
-/// scene can run and the time left in this frame's scene loop covers its recent ticks. A late
-/// reply left to the next frame marks `tick_timing.held_back`.
+/// scene can run and, unless the reply is seen at this loop's first poll, the time left in this
+/// frame's scene loop covers its recent ticks. A late reply left to the next frame marks
+/// `tick_timing.held_back`.
 fn movement_redispatch_due(
     updates: &mut SceneUpdates,
     context: &mut RendererSceneContext,
@@ -1700,7 +1701,7 @@ fn movement_redispatch_due(
     let left = updates
         .loop_end_time
         .saturating_duration_since(Instant::now());
-    let fits = updates.movement_ticks.redispatch_fits(left);
+    let fits = updates.movement_ticks.redispatch_fits(left, first_poll);
     if !fits {
         context.tick_timing.held_back = Some(reply.frame);
     }

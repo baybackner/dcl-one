@@ -154,7 +154,7 @@ pub struct SentTiming {
     pub loop_start: web_time::Instant,
     /// When the frame's scene loop ends: a reply that arrives later is applied in a later frame.
     pub deadline: web_time::Instant,
-    /// A second dispatch in its frame, answering the movement scene's late reply
+    /// A dispatch answering the movement scene's late reply in the frame it landed
     /// ([`crate::movement_redispatch`]).
     pub redispatch: bool,
 }
@@ -202,6 +202,16 @@ pub struct SceneTickTiming {
     /// The last frame a late reply of the movement scene was not answered by a re-dispatch: too
     /// little of the frame's scene loop was left ([`crate::movement_redispatch`]).
     pub held_back: Option<u32>,
+}
+
+impl SceneTickTiming {
+    /// The last reply landed in `frame` and answered a tick dispatched in an earlier frame. The
+    /// scene was in flight when `frame` queued its scenes, so a dispatch in `frame` is the
+    /// movement scene's re-dispatch ([`crate::movement_redispatch`]).
+    pub fn late_reply_in(&self, frame: u32) -> bool {
+        self.reply
+            .is_some_and(|reply| reply.frame == frame && reply.frames() > 0)
+    }
 }
 
 /// `a - b` in milliseconds, negative when `a` is earlier.

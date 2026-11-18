@@ -322,7 +322,8 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   `redispatch` (`[dispatched, in time, held back]`: frames a late reply was answered by a dispatch
   in the frame it landed, those whose reply then landed in time, and frames too little of the
   scene loop was left for it, see [scheduling](scheduling.md)), `tickP90` (ms, the 90th
-  percentile of the scene's last 32 ticks from dispatch to reply that gates it), `frameTarget`
+  percentile of the scene's last 32 ticks from dispatch to reply, which gates a late reply seen
+  after the loop's first poll; a missed tick counts until its loop ended), `frameTarget`
   (ms) and the `scene` title. The debug panel's "Movement Scene Replies" section shows it.
 
 The HUD and input:
