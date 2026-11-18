@@ -35,6 +35,19 @@ describe("schemas / parsers", () => {
     expect(parseCollections(null)).toEqual([]);
     expect(parseOrphanItems(undefined)).toEqual([]);
   });
+
+  it("reads the node's ISO-8601 timestamps as epoch milliseconds", () => {
+    const [collection] = parseCollections([
+      { ...(COLLECTIONS[0] as object), created_at: "2023-12-01T00:00:00.000Z", updated_at: "2024-03-01T00:00:00.000Z", reviewed_at: null },
+    ]);
+    expect([collection.created_at, collection.updated_at, collection.reviewed_at]).toEqual([1701388800000, 1709251200000, null]);
+    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), createdAt: "2023-12-01T00:00:00.000Z", updatedAt: null }]);
+    expect([item.createdAt, item.updatedAt]).toEqual([1701388800000, null]);
+  });
+
+  it("refuses a timestamp that is not an ISO-8601 string", () => {
+    expect(parseCollections([{ ...(COLLECTIONS[0] as object), created_at: 1701388800000 }])).toEqual([]);
+  });
 });
 
 describe("URL readers", () => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { getJSON } from "../client";
 import type { GetOptions } from "../client";
+import { isoMillis } from "./collections-schema";
 
 const RARITIES = [
   "unique",
@@ -222,8 +223,8 @@ const CollectionMetaSchema = z.object({
   is_approved: z.boolean().nullish(),
   contract_address: nullableStr,
   urn: nullableStr,
-  created_at: z.number().nullish(),
-  updated_at: z.number().nullish(),
+  created_at: isoMillis,
+  updated_at: isoMillis,
 });
 
 export type CollectionMeta = {
@@ -294,9 +295,9 @@ const OnchainCollectionRowSchema = z.object({
   is_approved: z.boolean().nullish(),
   contract_address: nullableStr,
   urn: nullableStr,
-  created_at: z.number().nullish(),
-  updated_at: z.number().nullish(),
-  reviewed_at: z.number().nullish(),
+  created_at: isoMillis,
+  updated_at: isoMillis,
+  reviewed_at: isoMillis,
 });
 
 const OnchainItemRowSchema = z.object({

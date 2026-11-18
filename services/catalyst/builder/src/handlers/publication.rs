@@ -1,6 +1,5 @@
 use axum::Json;
-use axum::extract::{OriginalUri, Path, State};
-use axum::http::{HeaderMap, Uri};
+use axum::extract::{Path, State};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -9,7 +8,7 @@ use crate::http::{ApiData, ApiError};
 use crate::publication_chain::PublicationChain;
 use crate::publication_store::PublicationState;
 
-use super::drafts::signer;
+use crate::auth::Signed;
 
 #[derive(Deserialize)]
 pub struct BeginPublication {
@@ -30,13 +29,10 @@ fn rpc_url(state: &SharedState) -> Result<&str, ApiError> {
 
 pub async fn begin(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<BeginPublication>,
 ) -> Result<Json<ApiData<PublicationState>>, ApiError> {
-    let owner = signer(&state, &headers, "post", &original, &uri).await?;
     rpc_url(&state)?;
     Ok(Json(ApiData::ok(
         state
@@ -48,12 +44,9 @@ pub async fn begin(
 
 pub async fn status(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<Option<PublicationState>>>, ApiError> {
-    let owner = signer(&state, &headers, "get", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state.items.publication_state(owner.as_str(), id).await?,
     )))
@@ -61,13 +54,10 @@ pub async fn status(
 
 pub async fn transaction(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<PublicationTransaction>,
 ) -> Result<Json<ApiData<PublicationState>>, ApiError> {
-    let owner = signer(&state, &headers, "put", &original, &uri).await?;
     let chain = PublicationChain {
         http: &state.http,
         url: rpc_url(&state)?,
@@ -81,25 +71,19 @@ pub async fn transaction(
 
 pub async fn cancel(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
-    let owner = signer(&state, &headers, "delete", &original, &uri).await?;
     state.items.cancel_publication(owner.as_str(), id).await?;
     Ok(Json(ApiData::ok(true)))
 }
 
 pub async fn claim(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<BeginPublication>,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
-    let owner = signer(&state, &headers, "patch", &original, &uri).await?;
     rpc_url(&state)?;
     state
         .items

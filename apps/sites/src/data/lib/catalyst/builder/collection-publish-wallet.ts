@@ -36,7 +36,7 @@ export function collectionPublishWallet(getSession: () => Session, timing: Timin
       body: body === undefined ? undefined : JSON.stringify(body), signal,
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(typeof result.message === "string" ? result.message : "Builder could not update the publication. Retry to resume it.");
+    if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Builder could not update the publication. Retry to resume it.");
     return result.data as unknown;
   }
   async function status(id: string, signal?: AbortSignal): Promise<PublicationState | null> {

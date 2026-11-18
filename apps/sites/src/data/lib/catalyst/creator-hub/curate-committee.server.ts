@@ -21,9 +21,8 @@ const BackendListSchema = CurationCollectionsOutSchema;
 type BackendRow = z.infer<typeof BackendListSchema>["collections"][number];
 type BackendMember = z.infer<typeof BackendListSchema>["committee"][number];
 
-function toIso(ts: number | null): string {
-  if (ts == null) return new Date(0).toISOString();
-  return new Date(ts).toISOString();
+function toIso(ts: string | null): string {
+  return ts ?? new Date(0).toISOString();
 }
 
 function shortAddr(a: string | null | undefined): string | null {

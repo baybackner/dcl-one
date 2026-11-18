@@ -73,8 +73,9 @@ async fn with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer(
             let (status, retry_after, body) = send(&app, method, &path).await;
             let refused = status == StatusCode::SERVICE_UNAVAILABLE
                 && retry_after.is_some()
-                && serde_json::from_str::<serde_json::Value>(&body)
-                    .is_ok_and(|v| v["ok"] == false && v["message"] == DISABLED_MESSAGE);
+                && serde_json::from_str::<serde_json::Value>(&body).is_ok_and(|v| {
+                    v == serde_json::json!({ "ok": false, "data": {}, "error": DISABLED_MESSAGE })
+                });
             if !refused {
                 answered.push(format!("{method} {path}: {status} {body}"));
             }

@@ -14,4 +14,4 @@ blockchain_item_id: string | null, category: string | null, collection_id: strin
 /**
  * The collection's contract: on-chain rows are keyed by it, so it equals `collection_id`.
  */
-contract_address: string | null, createdAt: number | null, grad: string | null, id: string, image: string | null, is_published: boolean, max_supply: number | null, name: string, network: string | null, price: string | null, rarity: string | null, status: CollectionStatus, total_supply: number | null, type: ItemKind, updatedAt: number | null, urn: string | null, };
+contract_address: string | null, createdAt: string | null, grad: string | null, id: string, image: string | null, is_published: boolean, max_supply: number | null, name: string, network: string | null, price: string | null, rarity: string | null, status: CollectionStatus, total_supply: number | null, type: ItemKind, updatedAt: string | null, urn: string | null, };

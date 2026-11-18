@@ -17,7 +17,9 @@ use serde_json::{Value, json};
 use crate::chain_index::ChainIndex;
 use crate::chain_index::graph::{THE_GRAPH_PAGE_SIZE, any_collections_reader, graph_query};
 
-use super::http::ApiError;
+use chrono::{DateTime, Utc};
+
+use super::http::{ApiError, iso_timestamp_opt};
 
 /// Collection/item sync status served on curation and on-chain rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -80,8 +82,9 @@ pub struct BuilderCollectionOut {
     pub chain_id: Option<i64>,
     pub contract_address: String,
     pub count: i32,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub created_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub created_at: Option<DateTime<Utc>>,
     pub creator: Option<String>,
     pub id: String,
     pub is_approved: bool,
@@ -90,15 +93,17 @@ pub struct BuilderCollectionOut {
     pub network: Option<String>,
     pub owner: Option<String>,
     pub pending: bool,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub reviewed_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub reviewed_at: Option<DateTime<Utc>>,
     pub status: CollectionStatus,
     pub third_party_id: Option<String>,
     pub thumbs: Vec<String>,
     #[serde(rename = "type")]
     pub kind: CollectionType,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub updated_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub updated_at: Option<DateTime<Utc>>,
     pub urn: Option<String>,
 }
 
@@ -116,20 +121,23 @@ pub struct CommitteeMemberOut {
 pub struct ReviewCurationOut {
     pub assignee: String,
     pub collection_id: String,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub created_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub created_at: Option<DateTime<Utc>>,
     pub id: String,
     pub status: CurationStatus,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub updated_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// Row of the `collections` list in `GET /v1/collections/curation`.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
 pub struct ReviewRowOut {
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub created_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub created_at: Option<DateTime<Utc>>,
     pub curation: Option<ReviewCurationOut>,
     pub has_reviews: bool,
     pub id: String,
@@ -138,8 +146,9 @@ pub struct ReviewRowOut {
     pub item_count: i32,
     pub name: String,
     pub owner: Option<String>,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub reviewed_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub reviewed_at: Option<DateTime<Utc>>,
     pub status: CollectionStatus,
     #[serde(rename = "type")]
     pub kind: CollectionType,
@@ -158,8 +167,9 @@ pub struct OrphanItemOut {
     /// The collection's contract: on-chain rows are keyed by it, so it equals `collection_id`.
     pub contract_address: Option<String>,
     #[serde(rename = "createdAt")]
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub created_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub created_at: Option<DateTime<Utc>>,
     pub grad: Option<String>,
     pub id: String,
     pub image: Option<String>,
@@ -176,8 +186,9 @@ pub struct OrphanItemOut {
     #[serde(rename = "type")]
     pub kind: ItemKind,
     #[serde(rename = "updatedAt")]
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub updated_at: Option<i64>,
+    #[serde(serialize_with = "iso_timestamp_opt")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub updated_at: Option<DateTime<Utc>>,
     pub urn: Option<String>,
 }
 
@@ -599,11 +610,9 @@ pub async fn collections_under_review(market: &ChainIndex) -> Result<Vec<ReviewR
     Ok(rows.into_iter().map(review_row_out).collect())
 }
 
-fn to_ms(secs: Option<i64>) -> Option<i64> {
-    match secs {
-        Some(s) if s > 0 => Some(s.saturating_mul(1000)),
-        _ => None,
-    }
+fn to_time(secs: Option<i64>) -> Option<DateTime<Utc>> {
+    secs.filter(|s| *s > 0)
+        .and_then(|s| DateTime::from_timestamp(s, 0))
 }
 
 fn status_of(is_published: bool, is_approved: bool) -> CollectionStatus {
@@ -623,7 +632,7 @@ fn collection_out(c: DbCollection) -> BuilderCollectionOut {
         chain_id: c.chain_id,
         contract_address: c.id.clone(),
         count: c.items_count.unwrap_or(0),
-        created_at: to_ms(c.created_at),
+        created_at: to_time(c.created_at),
         creator: c.creator,
         id: c.id,
         is_approved,
@@ -632,12 +641,12 @@ fn collection_out(c: DbCollection) -> BuilderCollectionOut {
         network: c.network,
         owner: c.owner,
         pending: false,
-        reviewed_at: to_ms(c.reviewed_at),
+        reviewed_at: to_time(c.reviewed_at),
         status: status_of(is_published, is_approved),
         third_party_id: None,
         thumbs: Vec::new(),
         kind: CollectionType::Standard,
-        updated_at: to_ms(c.updated_at),
+        updated_at: to_time(c.updated_at),
         urn: c.urn,
     }
 }
@@ -664,20 +673,20 @@ fn review_row_out(r: DbReviewRow) -> ReviewRowOut {
         (Some(cid), Some(addr)) => Some(ReviewCurationOut {
             assignee: addr,
             collection_id,
-            created_at: to_ms(r.cur_timestamp),
+            created_at: to_time(r.cur_timestamp),
             id: cid.clone(),
             status: if r.cur_is_approved.unwrap_or(false) {
                 CurationStatus::Approved
             } else {
                 CurationStatus::Rejected
             },
-            updated_at: to_ms(r.cur_timestamp),
+            updated_at: to_time(r.cur_timestamp),
         }),
         _ => None,
     };
 
     ReviewRowOut {
-        created_at: to_ms(r.created_at),
+        created_at: to_time(r.created_at),
         curation,
         has_reviews: r.cur_id.is_some(),
         id: r.id,
@@ -686,7 +695,7 @@ fn review_row_out(r: DbReviewRow) -> ReviewRowOut {
         item_count: r.items_count.unwrap_or(0),
         name: r.name.unwrap_or_default(),
         owner: r.creator,
-        reviewed_at: to_ms(r.reviewed_at),
+        reviewed_at: to_time(r.reviewed_at),
         status: status_of(is_completed, is_approved),
         kind: CollectionType::Standard,
     }
@@ -719,7 +728,7 @@ fn item_out(i: DbItem) -> OrphanItemOut {
         category: i.category,
         contract_address: i.collection_id.clone(),
         collection_id: i.collection_id,
-        created_at: to_ms(i.created_at),
+        created_at: to_time(i.created_at),
         grad: None,
         id: i.id,
         image: i.image,
@@ -732,7 +741,7 @@ fn item_out(i: DbItem) -> OrphanItemOut {
         status: CollectionStatus::Synced,
         total_supply: i.total_supply,
         kind: mapped,
-        updated_at: to_ms(i.updated_at),
+        updated_at: to_time(i.updated_at),
         urn: i.urn,
     }
 }
@@ -797,10 +806,13 @@ mod tests {
         }
     }
 
-    fn old_to_ms(secs: Option<i64>) -> Value {
+    fn iso_of(secs: Option<i64>) -> Value {
         match secs {
-            Some(s) if s > 0 => json!(s.saturating_mul(1000)),
-            _ => Value::Null,
+            Some(1_700_000_000) => json!("2023-11-14T22:13:20.000Z"),
+            Some(1_700_000_100) => json!("2023-11-14T22:15:00.000Z"),
+            Some(1_700_000_200) => json!("2023-11-14T22:16:40.000Z"),
+            None => Value::Null,
+            Some(other) => panic!("no fixture date for {other}"),
         }
     }
 
@@ -815,9 +827,9 @@ mod tests {
             "type": "standard",
             "is_published": true,
             "is_approved": false,
-            "reviewed_at": old_to_ms(c.reviewed_at),
-            "created_at": old_to_ms(c.created_at),
-            "updated_at": old_to_ms(c.updated_at),
+            "reviewed_at": iso_of(c.reviewed_at),
+            "created_at": iso_of(c.created_at),
+            "updated_at": iso_of(c.updated_at),
             "contract_address": c.id,
             "third_party_id": Value::Null,
             "urn": c.urn,
@@ -879,8 +891,8 @@ mod tests {
             "name": i.name,
             "type": "smart_wearable",
             "status": "synced",
-            "createdAt": old_to_ms(i.created_at),
-            "updatedAt": old_to_ms(i.updated_at),
+            "createdAt": iso_of(i.created_at),
+            "updatedAt": iso_of(i.updated_at),
             "grad": Value::Null,
             "rarity": i.rarity,
             "category": i.category,
@@ -912,15 +924,15 @@ mod tests {
             "has_reviews": true,
             "item_count": r.items_count.unwrap_or(0),
             "owner": r.creator,
-            "created_at": old_to_ms(r.created_at),
-            "reviewed_at": old_to_ms(r.reviewed_at),
+            "created_at": iso_of(r.created_at),
+            "reviewed_at": iso_of(r.reviewed_at),
             "curation": {
                 "id": "cur-1",
                 "collection_id": r.id,
                 "assignee": "0xcurator",
                 "status": "rejected",
-                "created_at": old_to_ms(r.cur_timestamp),
-                "updated_at": old_to_ms(r.cur_timestamp),
+                "created_at": iso_of(r.cur_timestamp),
+                "updated_at": iso_of(r.cur_timestamp),
             },
         });
         assert_eq!(

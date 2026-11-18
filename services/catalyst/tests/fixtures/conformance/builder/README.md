@@ -27,7 +27,18 @@ the kept headers and `body_json` or `body_bytes_b64`; `captured_from`,
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a
 `<<REDACTED` string anywhere, or a `<<VOLATILE>>` that none of its
-`volatile_paths` reaches, refuses the capture.
+`volatile_paths` reaches, refuses the capture. A capture whose signature is the point of the case
+carries `sign`, the one defect it was signed with (below); the replay
+signs it again at replay time with the same defect, so the node's
+refusal comes from the check the case names. A capture of literal headers
+is marked `"auth": "recorded"` and replayed with its own `x-identity-*`
+headers. A capture carries one or the other, `sign` must name a recorded
+signer and only the fields below, and `auth` takes no other value. `sign`
+names a defect: a non-zero `offset`, a `path`, a `method` or a
+`sentMetadata` (with the signed `metadata`), or `untimestamped`, which
+takes no `path`, `offset`, `metadata` or `sentMetadata`; `withHeaders` goes
+only with `untimestamped`. The capture script refuses a case that breaks
+these rules, as the ledger test refuses such a capture.
 
 ## Parity ledger
 
@@ -44,6 +55,11 @@ or `Todo`. Its schema is the social family's (`../social/parity.json`): each ope
 - `reviewed`: it cites at least one capture and every capture it cites
   replays with no difference. It covers the cases those captures exercise,
   not every input.
+
+`deliberate_gaps` states, once each, a difference the node keeps on
+purpose, by name. An operation lists it among its `gaps` as
+`deliberate:<name>`. Every reference must name a stated gap, and every
+stated gap must be referenced.
 
 An evidence entry whose path is in this folder must be a capture directly in
 `source/` or `live/` whose request method and path match the operation (a
@@ -77,7 +93,9 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
   name order and requires each one's notes to equal its `replay` list. A
   `GET` or `HEAD` capture is also replayed under `/builder-api` and must
   produce the same notes. A signed capture is signed again for the replay by
-  the same wallet, over the path it is sent to, with a fresh timestamp. It
+  the same wallet, over the path it is sent to, with its recorded metadata,
+  a delegated key valid until 2099 and a timestamp of now, plus its `sign`
+  defect; one marked `"auth": "recorded"` is sent as recorded. It
   needs `CATALYST_TEST_DATABASE_URL` and does nothing without it. The outer
   layers `serve` adds around every service are not part of the replay.
   The builder replay compares every key, `id` and `url` included (the
@@ -145,7 +163,16 @@ Then it:
    value; the replay test holds committed captures to the same rule. The
    capture fails if upstream's answer or the request already holds a
    marker, and records which volatile values were equal before masking.
-6. Signs requests with test wallets derived from the public labels
+6. Signs a case with a `signer` over the timestamped payload and its
+   `metadata` (`{}` by default), with the one defect its `sign` names:
+   `offset` moves the timestamp by that many milliseconds, `path` or
+   `method` signs another one, `sentMetadata` sends other metadata than was
+   signed, and `untimestamped` signs only the method and the path below
+   `/v1`, with no timestamp or metadata header, or with both when
+   `withHeaders` is set. The capture keeps `sign`, with the signed
+   `metadata` for a timestamped case. A case's `headers` sends literal
+   headers and marks the capture `"auth": "recorded"`. The wallets are
+   derived from the public labels
    `dcl-one builder conformance <role>` and `... <role> ephemeral`
    (keccak-256 of the label is the private key). `seed.json` records each
    role's address and both the script and the replay check it. Anyone can
@@ -184,7 +211,8 @@ order.
 
 1. Add the case to `CASES` in `tooling/builder-server-capture.cjs`: a
    `name` with the next number prefix, a `description`, `method`, `path`,
-   optional `query`, `signer` (a `seed.json` role), `body` and `volatile`.
+   optional `query`, `signer` (a `seed.json` role), `metadata`, `sign`,
+   `headers`, `body` and `volatile`.
    Add any rows it needs to `seed.json`, and teach both seeders (the
    script's `seedDatabase` and `SEED_KEYS`, the test's `Seed` and `seed`)
    the new field. If upstream asks the fake for a new subgraph field, add
@@ -203,7 +231,9 @@ Record a difference where the replay shows it.
 
 1. Copy the replay's notes into the capture's `replay` list unchanged.
 2. Set the operation's `status` to `known_gap` and state each difference in
-   `gaps`: what upstream answers and what the node answers.
+   `gaps`: what upstream answers and what the node answers. A difference the
+   node keeps on purpose is stated in `deliberate_gaps` and referenced as
+   `deliberate:<name>`.
 3. When a change makes the node match, the replay test fails on that
    capture; empty its `replay` list and update the status in the same
    change.

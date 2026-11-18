@@ -293,3 +293,21 @@ test('an uncaught error drops the scratch database and reports redacted', async 
   assert.doesNotMatch(result.stdout + result.stderr, /example-secret-123/)
   assert.match(fs.readFileSync(queries, 'utf8'), /^CREATE DATABASE "(builder_capture_\S+)"\nDROP DATABASE IF EXISTS "\1" WITH \(FORCE\)\n$/)
 })
+
+test('a case cannot record a signature defect the replay would drop', () => {
+  const { recordedSign } = require(script)
+  assert.deepEqual(recordedSign({ name: 'a', sign: { path: '/v1/other' } }), { path: '/v1/other', metadata: '{}' })
+  assert.deepEqual(recordedSign({ name: 'a', sign: { untimestamped: true, withHeaders: true } }), { untimestamped: true, withHeaders: true })
+  assert.equal(recordedSign({ name: 'a' }), undefined)
+  for (const [sign, problem] of [
+    [{}, 'names no defect'],
+    [{ offset: 0 }, 'offset 0 is no defect'],
+    [{ withHeaders: true, path: '/v1/other' }, 'withHeaders needs untimestamped'],
+    [{ untimestamped: true, path: '/v1/other' }, 'untimestamped takes no path, offset, metadata or sentMetadata'],
+    [{ untimestamped: true, offset: 1 }, 'untimestamped takes no path, offset, metadata or sentMetadata'],
+    [{ untimestamped: true, sentMetadata: '{}' }, 'untimestamped takes no path, offset, metadata or sentMetadata']
+  ]) {
+    assert.throws(() => recordedSign({ name: 'a', sign }), new RegExp(`a: sign ${problem}`), JSON.stringify(sign))
+  }
+  assert.throws(() => recordedSign({ name: 'a', metadata: '{"x":1}', sign: { untimestamped: true } }), /a: sign untimestamped takes no path, offset, metadata or sentMetadata/)
+})

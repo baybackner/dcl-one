@@ -253,43 +253,67 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     cleanup(&store, &[id], &hashes).await;
 }
 
-/// Without `BUILDER_FOUNDATION_URL` (every posture but mirror) verification
-/// answers 503 before anything is sent; with one, the signer check runs.
+/// Without `BUILDER_FOUNDATION_URL` (every posture but mirror) a signed
+/// verification answers 503 before anything is sent; an unsigned one is
+/// refused first, whatever is configured.
 #[tokio::test]
 async fn verify_answers_503_while_no_foundation_is_named() {
     use tower::ServiceExt;
     let id = Uuid::new_v4();
-    let status = |state: crate::SharedState| async move {
-        crate::router(state)
-            .oneshot(
-                axum::http::Request::post(format!(
-                    "/v1/collections/{id}/linked-publication/verify"
-                ))
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    r#"{"collection":{},"items":{},"curations":{}}"#,
-                ))
-                .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
+    let path = format!("/v1/collections/{id}/linked-publication/verify");
+    let status = |state: crate::SharedState, signed: bool| {
+        let path = path.clone();
+        async move {
+            let mut request =
+                axum::http::Request::post(&path).header("content-type", "application/json");
+            if signed {
+                for (name, value) in &crate::shared::signed_fetch::test_support::signed_headers(
+                    "post", &path, "{}", true,
+                )
+                .await
+                {
+                    request = request.header(name, value);
+                }
+            }
+            crate::router(state)
+                .oneshot(
+                    request
+                        .body(axum::body::Body::from(
+                            r#"{"collection":{},"items":{},"curations":{}}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
     };
     let open = crate::Settings {
         writes_enabled: true,
         ..crate::Settings::default()
     };
     assert_eq!(
-        status(super::support::state_with_settings(open.clone()).await).await,
+        status(
+            super::support::state_with_settings(open.clone()).await,
+            true
+        )
+        .await,
         axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        status(
+            super::support::state_with_settings(open.clone()).await,
+            false
+        )
+        .await,
+        axum::http::StatusCode::UNAUTHORIZED
     );
     let named = crate::Settings {
         foundation_url: Some("https://foundation.example.org".into()),
         ..open
     };
-    // The signer check runs: an unsigned request has no auth chain (400).
     assert_eq!(
-        status(super::support::state_with_settings(named).await).await,
-        axum::http::StatusCode::BAD_REQUEST
+        status(super::support::state_with_settings(named).await, false).await,
+        axum::http::StatusCode::UNAUTHORIZED
     );
 }

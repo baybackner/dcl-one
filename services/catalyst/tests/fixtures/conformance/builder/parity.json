@@ -10,6 +10,11 @@
     "created_at",
     "updated_at"
   ],
+  "deliberate_gaps": {
+    "timestamped-signatures-only": "Every signed operation: upstream also accepts a request whose auth chain signs only its method and its path below /v1 (lowercased), whatever x-identity-timestamp or x-identity-metadata header the request carries or omits, valid until the delegated key expires. The node accepts only the timestamped payload over its own method and path, at most five minutes old and one minute ahead, and refuses such a request with upstream's 401 {ok:false, data:{message}, error:'Unauthenticated'}.",
+    "signature-window": "Every signed operation: upstream accepts a timestamp up to 30 minutes old or ahead; the node accepts at most five minutes old and one minute ahead, and refuses the rest with the same 401.",
+    "unauthenticated-message": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message."
+  },
   "operations": [
     {
       "id": "api_http:GET:/v1/info",
@@ -138,14 +143,13 @@
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's read, the unsigned refusal and a stranger's refusal were compared; all three differ.",
+      "result": "The owner's read, the unsigned refusal, a stranger's refusal and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. The refusals answer upstream's status and envelope; the owner's read differs in its fields, and a request signed over method and path alone is refused where upstream serves it.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
           "scope": "Signed GET by the owner of a draft standard collection.",
           "replay": [
             "data.contract_address value",
-            "data.created_at value",
             "data.forum_id missing",
             "data.forum_link missing",
             "data.is_mapping_complete missing",
@@ -158,7 +162,6 @@
             "data.reviewed_at missing",
             "data.salt missing",
             "data.third_party_id extra",
-            "data.updated_at value",
             "data.urn value"
           ]
         },
@@ -166,25 +169,132 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/03-collection-unsigned.json",
           "scope": "GET without an auth chain.",
           "replay": [
-            "status: fixture=401 candidate=400",
-            "data missing",
-            "error value",
-            "message extra"
+            "data.message value"
           ]
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/04-collection-stranger.json",
           "scope": "Signed GET by a wallet with no role on the draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/07-collection-malformed-chain.json",
+          "scope": "GET whose first auth chain header is not JSON; replayed with its recorded headers.",
           "replay": [
-            "data missing",
-            "message extra"
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/08-collection-expired-signature.json",
+          "scope": "GET signed by the owner 40 minutes before the request; re-signed at replay time 40 minutes before the replay, so the window check refuses it.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/09-collection-future-signature.json",
+          "scope": "GET signed by the owner 40 minutes after the request; re-signed at replay time 40 minutes ahead, so the future bound refuses it.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/10-collection-signature-for-another-path.json",
+          "scope": "GET signed by the owner over another collection path; re-signed at replay time over that path, so the signature check refuses it.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/11-collection-metadata-mismatch.json",
+          "scope": "GET whose x-identity-metadata is not the metadata the owner signed; re-signed at replay time with the same mismatch, so the signature check refuses it.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/12-collection-scene-signer.json",
+          "scope": "GET signed by the owner with {\"signer\":\"decentraland-kernel-scene\"} metadata; re-signed for the replay.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/13-collection-non-canonical-signer.json",
+          "scope": "GET signed by the owner with {\"Signer\":\"dcl:explorer\"} metadata; re-signed for the replay.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/14-collection-untimestamped-read.json",
+          "scope": "GET signed by the owner over get:/collections/{id} alone, with no timestamp or metadata header, as the old builder web signs; re-signed at replay time with a live delegated key.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address missing",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.id missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.message extra",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/17-collection-signature-for-another-method.json",
+          "scope": "GET signed by the owner as a PUT; re-signed at replay time with the other method, so the signature check refuses it.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/18-collection-untimestamped-with-headers.json",
+          "scope": "GET signed by the owner over get:/collections/{id} alone but sent with a current timestamp and {} metadata; re-signed at replay time with a live delegated key.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address missing",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.id missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.message extra",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
           ]
         }
       ],
       "gaps": [
-        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, answers created_at and updated_at as epoch milliseconds instead of ISO strings, and answers contract_address and urn as null: its schema cannot store the contract address upstream computes for a draft.",
-        "Unsigned request: upstream answers 401 with {ok:false, data:{message}, error:'Unauthenticated'}; the node answers 400 with {ok:false, error, message} and no data.",
-        "Stranger: both answer 401, but upstream's body is {ok:false, data:{id, eth_address}, error:'Unauthorized'} and the node's is {ok:false, error:'Unauthorized', message:'Unauthorized'}."
+        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers contract_address and urn as null: its schema cannot store the contract address upstream computes for a draft.",
+        "deliberate:timestamped-signatures-only",
+        "deliberate:signature-window",
+        "deliberate:unauthenticated-message"
       ],
       "remaining_verification": "Capture reads by the committee, an on-chain manager, a third-party manager and any signer of a published collection, and a missing id."
     },
@@ -237,7 +347,7 @@
       "id": "api_http:PUT:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's creation of a standard draft was compared; the node creates it and answers a different body.",
+      "result": "The owner's creation of a standard draft, the same creation signed over method and path alone, a body upstream's schema refuses, and an unsigned request with such a body were compared. The node creates the draft with a different body, refuses the untimestamped request, refuses the invalid body with upstream's status and error, and refuses the unsigned one before reading its body, as upstream does.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/05-collection-create.json",
@@ -258,10 +368,57 @@
             "data.third_party_id extra",
             "data.urn value"
           ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/15-collection-untimestamped-write.json",
+          "scope": "PUT signed by the owner over put:/collections/{id} alone, with no timestamp or metadata header, as the old builder web signs; re-signed at replay time with a live delegated key.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address missing",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.id missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.message extra",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/16-collection-invalid-body.json",
+          "scope": "Signed PUT by the owner whose collection name is a number; re-signed for the replay.",
+          "replay": [
+            "data value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/19-collection-unsigned-invalid-body.json",
+          "scope": "PUT without a signature whose collection name is a number: both refuse it as unauthenticated before validating the body.",
+          "replay": [
+            "data.message value"
+          ]
         }
       ],
       "gaps": [
-        "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id."
+        "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id.",
+        "Invalid body: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema errors, the node's is {}.",
+        "deliberate:timestamped-signatures-only",
+        "deliberate:unauthenticated-message"
       ],
       "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use, a stranger's write and mismatched body and URL ids."
     },

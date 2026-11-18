@@ -3,11 +3,16 @@ import { deleteWearableDraft, listItemDrafts, loadWearableDraft, saveWearableDra
 
 const id = "fd84234c-55d4-40a8-afbc-ea5a6fe00761";
 it("surfaces a refused deletion and never treats an invalid id as a path", async () => {
-  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ message: "Collection is publishing" }, { status: 403 }));
+  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: false, data: {}, error: "Collection is publishing" }, { status: 403 }));
   await expect(deleteWearableDraft(id, { fetch })).rejects.toThrow("Collection is publishing");
   expect(fetch.mock.calls[0][1]).toMatchObject({ method: "DELETE", cache: "no-store" });
   await expect(deleteWearableDraft("../collections", { fetch })).rejects.toThrow("Invalid wearable draft id");
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+it("shows the node's explanation when its creator writes are off", async () => {
+  const message = "creator writes are disabled on this node (CREATE_WRITES_ENABLED=false)";
+  const fetch = vi.fn(async () => Response.json({ ok: false, data: {}, error: message }, { status: 503 }));
+  await expect(deleteWearableDraft(id, { fetch })).rejects.toThrow(message);
 });
 it("lists local drafts through the signed owner endpoint", async () => {
   const item = { id, name: "My draft", type: "wearable", collection_id: null };

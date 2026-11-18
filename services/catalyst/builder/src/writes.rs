@@ -1,4 +1,3 @@
-// from: src/social/writes.rs (the gate, its 503 envelope and its tests, with the creator-plane switch and message)
 //! `CREATE_WRITES_ENABLED`: the one switch in front of every creator-plane
 //! write (the builder drafts, uploads, curation, publication state and the
 //! newsletter opt-in; the camera-reel uploads, visibility and moderation
@@ -26,7 +25,7 @@ pub use crate::shared::writes::{Gate, guard_with, is_gated};
 /// The 503 the gate answers: the builder error envelope with a `Retry-After`
 /// so a client does not hammer a node that will not change its mind soon.
 pub fn disabled_response() -> Response {
-    let body = serde_json::json!({ "ok": false, "error": "Service Unavailable", "message": DISABLED_MESSAGE });
+    let body = serde_json::json!({ "ok": false, "data": {}, "error": DISABLED_MESSAGE });
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [
@@ -87,13 +86,9 @@ mod tests {
         let (status, body) = call(&app, "PUT", "/v1/collections/x").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["ok"], false);
-        assert_eq!(v["error"], "Service Unavailable");
-        assert!(
-            v["message"]
-                .as_str()
-                .unwrap()
-                .contains("CREATE_WRITES_ENABLED=false")
+        assert_eq!(
+            v,
+            serde_json::json!({ "ok": false, "data": {}, "error": DISABLED_MESSAGE })
         );
         let (status, _) = call(&app, "POST", "/builder-api/v1/newsletter").await;
         assert_eq!(

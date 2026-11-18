@@ -306,33 +306,21 @@ fn api_routes() -> Router<SharedState> {
                 .post(handlers::linked_publication::begin)
                 .patch(handlers::linked_publication::claim)
                 .put(handlers::linked_publication::authorize)
-                .delete(handlers::linked_publication::cancel)
-                .layer(axum::middleware::map_response(http::private_response)),
+                .delete(handlers::linked_publication::cancel),
         )
         .route(
             "/v1/collections/{id}/linked-publication/status",
-            get(handlers::linked_publication::status)
-                .layer(axum::middleware::map_response(http::private_response)),
+            get(handlers::linked_publication::status),
         )
         .route(
             "/v1/collections/{id}/linked-publication/verify",
-            post(handlers::linked_publication::verify)
-                .layer(axum::middleware::map_response(http::private_response)),
+            post(handlers::linked_publication::verify),
         )
         .route(
             "/v1/drafts/collections",
-            get(handlers::drafts::get_collection_drafts)
-                .layer(axum::middleware::map_response(http::private_response)),
+            get(handlers::drafts::get_collection_drafts),
         )
-        .route(
-            "/v1/drafts/items",
-            get(handlers::drafts::get_item_drafts)
-                .layer(axum::middleware::map_response(http::private_response)),
-        )
-        .route(
-            "/v1/collections",
-            get(handlers::collections::get_collections),
-        )
+        .route("/v1/drafts/items", get(handlers::drafts::get_item_drafts))
         .route("/v1/items", get(handlers::collections::get_items))
         .route(
             "/v1/items/{id}",
@@ -361,6 +349,19 @@ fn api_routes() -> Router<SharedState> {
             get(handlers::collections::get_address_items),
         )
         .route(
+            "/v1/collections/{id}/items/{item}/status",
+            patch(handlers::curation::patch_item_status),
+        )
+        .route(
+            "/v1/collections/{id}/items/status",
+            patch(handlers::curation::patch_items_status_bulk),
+        )
+        .route_layer(axum::middleware::map_response(http::private_response))
+        .route(
+            "/v1/collections",
+            get(handlers::collections::get_collections),
+        )
+        .route(
             "/v1/storage/contents/{hash}",
             get(handlers::storage::get_storage_content)
                 .head(handlers::storage::get_storage_content),
@@ -373,19 +374,12 @@ fn api_routes() -> Router<SharedState> {
             "/v1/newsletter",
             post(handlers::newsletter::post_newsletter),
         )
-        .route(
-            "/v1/collections/{id}/items/{item}/status",
-            patch(handlers::curation::patch_item_status),
-        )
-        .route(
-            "/v1/collections/{id}/items/status",
-            patch(handlers::curation::patch_items_status_bulk),
-        )
 }
 
 fn finish(routes: Router<SharedState>, state: SharedState) -> Router {
     let writes_enabled = state.settings.writes_enabled;
     let router = routes
+        .route_layer(axum::middleware::map_response(http::enveloped))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
     writes::guard(router, writes_enabled)

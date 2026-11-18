@@ -1,9 +1,12 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::SharedState;
+use crate::http::ApiError;
 use dcl_auth::is_canonical_cid;
 
 #[derive(Debug, Default, Deserialize)]
@@ -42,8 +45,8 @@ pub async fn get_storage_content(
                 let head = match opened.read_range(0, 7).await {
                     Ok(head) => head,
                     Err(e) => {
-                        tracing::error!(error = %e, hash, "builder upload read failed");
-                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        return ApiError::internal(format!("reading upload {hash}: {e}"))
+                            .into_response();
                     }
                 };
                 let mime = if head.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -91,12 +94,15 @@ fn is_valid_content_hash(hash: &str) -> bool {
     is_canonical_cid(hash) || is_legacy_storage_key(hash)
 }
 
+/// builder-server's `handleExists`: the status says whether the file
+/// exists and the body is always `{"ok":true}`.
 fn exists_status(ok: bool) -> Response {
-    if ok {
-        StatusCode::OK.into_response()
+    let status = if ok {
+        StatusCode::OK
     } else {
-        StatusCode::NOT_FOUND.into_response()
-    }
+        StatusCode::NOT_FOUND
+    };
+    (status, Json(json!({ "ok": true }))).into_response()
 }
 
 /// `200`/`404`: the local acceptance record first, then a HEAD against the
@@ -108,7 +114,7 @@ pub async fn head_storage_content_exists(
     Query(params): Query<ContentParams>,
 ) -> Response {
     if !is_valid_content_hash(&hash) || state.denylist.contains(&hash) {
-        return StatusCode::NOT_FOUND.into_response();
+        return exists_status(false);
     }
 
     match state.items.uploaded_content_exists(&hash).await {
@@ -211,5 +217,18 @@ mod tests {
             content_url("https://bucket.test", "Qm1", &ContentParams::default()),
             "https://bucket.test/contents/Qm1"
         );
+    }
+
+    #[tokio::test]
+    async fn the_exists_probe_answers_upstreams_ok_body_with_its_status() {
+        for (found, status) in [(true, StatusCode::OK), (false, StatusCode::NOT_FOUND)] {
+            let resp = exists_status(found);
+            assert_eq!(resp.status(), status);
+            let bytes = axum::body::to_bytes(resp.into_body(), 64).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                serde_json::json!({ "ok": true })
+            );
+        }
     }
 }

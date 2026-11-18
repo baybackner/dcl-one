@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,7 +20,7 @@ use uuid::Uuid;
 use crate::storage::OpenedContent;
 use dcl_auth::{hash_bytes_v1, is_canonical_cid, is_eth_address};
 
-use super::http::ApiError;
+use super::http::{ApiError, iso};
 use super::items::{CollectionMetaOut, CollectionMetaRow, ItemsComponent};
 
 #[derive(Debug, sqlx::FromRow)]
@@ -208,11 +209,15 @@ pub fn valid_filename(file: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-/// The item's `contents` document with the timestamps rendered as the old
-/// timestamptz columns were (`+00:00`), the item's own row otherwise.
-pub(super) const ITEM_DRAFT_PROJECTION: &str = "to_jsonb(i) || jsonb_build_object('urn', i.urn_suffix, \
-    'created_at', i.created_at AT TIME ZONE 'UTC', 'updated_at', i.updated_at AT TIME ZONE 'UTC', 'contents', \
-    COALESCE((SELECT jsonb_object_agg(file, hash) FROM builder.item_contents WHERE item_id = i.id), '{}'::jsonb))";
+const ITEM_DRAFT_PROJECTION: &str = "(to_jsonb(i) - 'created_at' - 'updated_at') || jsonb_build_object('urn', i.urn_suffix, 'contents', \
+    COALESCE((SELECT jsonb_object_agg(file, hash) FROM builder.item_contents WHERE item_id = i.id), '{}'::jsonb)), \
+    i.created_at, i.updated_at";
+
+fn with_timestamps((mut row, created, updated): (Value, NaiveDateTime, NaiveDateTime)) -> Value {
+    row["created_at"] = iso(&created.and_utc()).into();
+    row["updated_at"] = iso(&updated.and_utc()).into();
+    row
+}
 
 const FK_VIOLATION: &str = "23503";
 
@@ -340,13 +345,14 @@ impl ItemsComponent {
     }
 
     pub async fn item_draft(&self, signer: &str, id: Uuid) -> Result<Value, ApiError> {
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {ITEM_DRAFT_PROJECTION} FROM builder.items i WHERE i.id = $1 AND i.eth_address = $2"
         )))
         .bind(id)
         .bind(signer)
         .fetch_optional(&self.pool)
         .await?
+        .map(with_timestamps)
         .ok_or_else(|| ApiError::not_found("Item not found"))
     }
 

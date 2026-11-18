@@ -4,8 +4,8 @@
 //! the collection items listing with its `count(*) OVER ()` total and the
 //! committee's curation status writes, and the newsletter opt-in
 //! ([`NewsletterComponent`]). Every timestamp column is `timestamp without
-//! time zone` in UTC (the schema convention), rendered as the old
-//! `DateTime<Utc>` was.
+//! time zone` in UTC (the schema convention), written as
+//! [`crate::http::iso`] writes it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::storage::Storage;
 
-use super::http::ApiError;
+use super::http::{ApiError, iso_timestamp};
 
 #[derive(Debug, Default)]
 pub struct ItemQuery {
@@ -95,8 +95,12 @@ pub struct FullItemOut {
     pub content_hash: Option<String>,
     pub local_content_hash: Option<String>,
     pub catalyst_content_hash: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    #[serde(serialize_with = "iso_timestamp")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub created_at: DateTime<Utc>,
+    #[serde(serialize_with = "iso_timestamp")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl ItemRow {
@@ -127,8 +131,8 @@ impl ItemRow {
             content_hash: self.content_hash.clone(),
             local_content_hash: self.local_content_hash.clone(),
             catalyst_content_hash: self.catalyst_content_hash.clone(),
-            created_at: self.created_at.to_rfc3339(),
-            updated_at: self.updated_at.to_rfc3339(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         }
     }
 }
@@ -353,8 +357,12 @@ pub struct CollectionMetaOut {
     pub third_party_id: Option<String>,
     pub is_published: bool,
     pub is_approved: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
+    #[serde(serialize_with = "iso_timestamp")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub created_at: DateTime<Utc>,
+    #[serde(serialize_with = "iso_timestamp")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl From<&CollectionMetaRow> for CollectionMetaOut {
@@ -368,8 +376,8 @@ impl From<&CollectionMetaRow> for CollectionMetaOut {
             third_party_id: r.third_party_id.clone(),
             is_published: r.is_published,
             is_approved: r.is_approved,
-            created_at: r.created_at.and_utc().timestamp_millis(),
-            updated_at: r.updated_at.and_utc().timestamp_millis(),
+            created_at: r.created_at.and_utc(),
+            updated_at: r.updated_at.and_utc(),
         }
     }
 }
@@ -432,13 +440,13 @@ mod tests {
             "third_party_id": r.third_party_id,
             "is_published": r.is_published,
             "is_approved": r.is_approved,
-            "created_at": r.created_at.and_utc().timestamp_millis(),
-            "updated_at": r.updated_at.and_utc().timestamp_millis(),
+            "created_at": "2023-11-14T22:13:20.000Z",
+            "updated_at": "2023-11-14T22:15:00.000Z",
         })
     }
 
     #[test]
-    fn collection_meta_wire_bytes_match_the_old_json_macro() {
+    fn collection_meta_wire_bytes_carry_iso_timestamps() {
         for with_opts in [true, false] {
             let r = meta_row(with_opts);
             assert_eq!(
@@ -574,26 +582,23 @@ mod tests {
         );
         m.insert(
             "created_at".into(),
-            Value::String(i.created_at.to_rfc3339()),
+            Value::String("2023-11-14T22:13:20.000Z".into()),
         );
         m.insert(
             "updated_at".into(),
-            Value::String(i.updated_at.to_rfc3339()),
+            Value::String("2023-11-14T22:13:20.000Z".into()),
         );
         Value::Object(m)
     }
 
     #[test]
-    fn full_item_wire_bytes_match_the_old_json_macro() {
+    fn full_item_wire_bytes_carry_iso_timestamps() {
         for with_video in [true, false] {
             let i = item_row(with_video);
             let out = serde_json::to_value(i.to_out()).unwrap();
             assert_eq!(out, old_full_item(&i));
             assert_eq!(out.get("video").is_some(), with_video);
-            assert_eq!(
-                out["created_at"], "2023-11-14T22:13:20+00:00",
-                "the old timestamptz rendering"
-            );
+            assert_eq!(out["created_at"], "2023-11-14T22:13:20.000Z");
         }
     }
 }

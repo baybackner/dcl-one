@@ -60,11 +60,11 @@ function fixture() {
         state.publication ??= {preparation,status:"prepared",tx_hash:null,contract_address:null};
         return Response.json({data:state.publication});
       case "PATCH":
-        if (state.publication?.status !== "prepared") return Response.json({message:"Another wallet request is active"}, {status:409});
+        if (state.publication?.status !== "prepared") return Response.json({ok:false,data:{},error:"Another wallet request is active"}, {status:409});
         state.publication.status="signing"; return Response.json({data:true});
       case "DELETE": state.cancels++; state.publication=null; return Response.json({data:true});
       case "PUT": {
-        if (state.offline) return Response.json({message:"Builder offline"}, {status:503});
+        if (state.offline) return Response.json({ok:false,data:{},error:"creator writes are disabled on this node (CREATE_WRITES_ENABLED=false)"}, {status:503});
         const tx = sent[Number(BigInt(body.tx_hash))-1];
         expect(tx.to).toBe(COLLECTION_MANAGER);
         expect(decodeFunctionData({abi:collectionManagerAbi,data:tx.data}).functionName).toBe("createCollection");
@@ -123,7 +123,7 @@ describe("collection wallet publication", () => {
   it("retains a broadcast hash across backend failure and reload without requesting another payment", async () => {
     const {adapter,state,sent}=fixture(); const wallet=adapter(); const quote=await wallet.quote({id:preparation.id});
     state.offline=true;
-    await expect(wallet.publish({id:preparation.id,quote})).rejects.toThrow("Builder offline");
+    await expect(wallet.publish({id:preparation.id,quote})).rejects.toThrow("creator writes are disabled on this node");
     await expect(wallet.cancel(preparation.id)).rejects.toThrow("submitted");
     state.offline=false;
     await adapter().publish({id:preparation.id});

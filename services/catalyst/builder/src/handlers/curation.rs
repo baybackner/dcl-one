@@ -1,11 +1,10 @@
 use axum::Json;
-use axum::extract::{OriginalUri, Path, State};
-use axum::http::{HeaderMap, Uri};
+use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::SharedState;
-use crate::auth::{authorize_admin, signed_path};
+use crate::auth::Admin;
 use crate::http::{ApiData, ApiError};
 use crate::onchain::{self, CommitteeMemberOut, ReviewRowOut};
 
@@ -43,24 +42,6 @@ pub struct BulkItemStatusPatchOut {
 const CURATION_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
 const MAX_BULK_ITEMS: usize = 1000;
 
-async fn admin(
-    state: &SharedState,
-    headers: &HeaderMap,
-    method: &str,
-    original: &Uri,
-    local: &Uri,
-) -> Result<(), ApiError> {
-    authorize_admin(
-        state.settings.admin_token.as_deref(),
-        &state.settings.admin_addresses,
-        state.eip1654.as_deref(),
-        headers,
-        method,
-        &signed_path(original, local),
-    )
-    .await
-}
-
 fn validate_status(status: &str) -> Result<(), ApiError> {
     if CURATION_STATUSES.contains(&status) {
         Ok(())
@@ -78,12 +59,8 @@ fn parse_uuid(raw: &str) -> Result<Uuid, ApiError> {
 /// lists without a reader, as the old node answered without its side pool.
 pub async fn get_curation_collections(
     State(state): State<SharedState>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
+    _: Admin,
 ) -> Result<Json<ApiData<CurationCollectionsOut>>, ApiError> {
-    admin(&state, &headers, "get", &original, &uri).await?;
-
     let (committee, collections) = match state
         .market
         .as_deref()
@@ -115,13 +92,10 @@ pub struct ItemStatusBody {
 
 pub async fn patch_item_status(
     State(state): State<SharedState>,
+    _: Admin,
     Path((id, item)): Path<(String, String)>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<ItemStatusBody>,
 ) -> Result<Json<ApiData<ItemStatusPatchOut>>, ApiError> {
-    admin(&state, &headers, "patch", &original, &uri).await?;
     validate_status(&body.status)?;
 
     let collection_id = parse_uuid(&id)?;
@@ -153,13 +127,10 @@ pub struct BulkItemStatusBody {
 
 pub async fn patch_items_status_bulk(
     State(state): State<SharedState>,
+    _: Admin,
     Path(id): Path<String>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<BulkItemStatusBody>,
 ) -> Result<Json<ApiData<BulkItemStatusPatchOut>>, ApiError> {
-    admin(&state, &headers, "patch", &original, &uri).await?;
     validate_status(&body.status)?;
 
     if body.item_ids.is_empty() {

@@ -43,6 +43,8 @@ struct Ledger {
     schema_version: u32,
     #[serde(default)]
     volatile_fields: Vec<String>,
+    #[serde(default)]
+    deliberate_gaps: BTreeMap<String, String>,
     operations: Vec<Operation>,
 }
 
@@ -65,6 +67,20 @@ struct Evidence {
     scope: String,
     #[serde(default)]
     replay: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Defect {
+    offset: Option<i64>,
+    path: Option<String>,
+    method: Option<String>,
+    metadata: Option<String>,
+    sent_metadata: Option<String>,
+    #[serde(default)]
+    untimestamped: bool,
+    #[serde(default)]
+    with_headers: bool,
 }
 
 #[derive(Deserialize)]
@@ -298,7 +314,51 @@ fn capture_errors(relative: &str, raw: &Value, volatile_fields: &[String]) -> Ve
             ));
         }
     }
+    if let Some(sign) = raw.get("sign") {
+        match serde_json::from_value::<Defect>(sign.clone()) {
+            Ok(defect) => errors.extend(
+                defect_problems(&defect)
+                    .into_iter()
+                    .map(|problem| format!("{relative}: sign {problem}")),
+            ),
+            Err(e) => errors.push(format!("{relative}: sign: {e}")),
+        }
+        if raw.get("auth").is_some() {
+            errors.push(format!(
+                "{relative}: a capture is re-signed with its defect or replayed as recorded, not both"
+            ));
+        }
+        if signer_of(raw).is_none() {
+            errors.push(format!("{relative}: sign names no signer"));
+        }
+    }
+    match raw.get("auth") {
+        None => {}
+        Some(Value::String(mode)) if mode == "recorded" => {
+            if recorded_auth(raw).is_empty() {
+                errors.push(format!(
+                    "{relative}: auth is recorded but the request carries no x-identity- header"
+                ));
+            }
+        }
+        Some(other) => errors.push(format!(
+            "{relative}: auth must be \"recorded\", not {other}"
+        )),
+    }
     errors
+}
+
+fn recorded_auth(raw: &Value) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in raw["request"]["headers"].as_object().into_iter().flatten() {
+        if name.starts_with("x-identity-") {
+            headers.insert(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value.as_str().unwrap_or_default()).unwrap(),
+            );
+        }
+    }
+    headers
 }
 
 fn values_at<'a>(value: &'a Value, parts: &[&str]) -> Vec<&'a Value> {
@@ -351,8 +411,15 @@ fn ledger_errors(
     }
     let replayed = captures(files);
     let mut cited = BTreeMap::new();
+    let mut deliberate = BTreeSet::new();
     for op in &ledger.operations {
         let id = &op.id;
+        for name in op.gaps.iter().filter_map(|g| g.strip_prefix("deliberate:")) {
+            if !ledger.deliberate_gaps.contains_key(name) {
+                errors.push(format!("{id}: no deliberate gap named {name}"));
+            }
+            deliberate.insert(name);
+        }
         if !STATUSES.contains(&op.status.as_str()) {
             errors.push(format!("{id}: status {}", op.status));
         }
@@ -423,6 +490,11 @@ fn ledger_errors(
             .any(|e| e.replay.is_some() && replayed.contains(&e.path));
         if op.status == "reviewed" && !replays_a_capture {
             errors.push(format!("{id}: reviewed without a replayed capture"));
+        }
+    }
+    for name in ledger.deliberate_gaps.keys() {
+        if !deliberate.contains(name.as_str()) {
+            errors.push(format!("deliberate gap {name}: no operation references it"));
         }
     }
     for path in files {
@@ -781,6 +853,147 @@ fn a_marker_written_into_a_capture_is_refused() {
 }
 
 #[test]
+fn a_deliberate_gap_is_stated_once_and_referenced_by_name() {
+    let mut op = operation("known_gap", serde_json::json!([]));
+    op["gaps"] = serde_json::json!(["deliberate:unknown"]);
+    let mut ledger = ledger_value(serde_json::json!([op]));
+    ledger
+        .deliberate_gaps
+        .insert("unused".into(), "a decision nothing cites".into());
+    let routes = BTreeSet::from([INFO.to_string()]);
+    let errors = ledger_errors(&ledger, &routes, &BTreeSet::new(), &BTreeMap::new());
+    refused(
+        &errors,
+        "api_http:GET:/v1/info: no deliberate gap named unknown",
+    );
+    refused(&errors, "deliberate gap unused: no operation references it");
+}
+
+#[test]
+fn a_capture_replays_its_recorded_headers_only_when_it_has_some() {
+    let mode = |auth: Value| {
+        one_capture(
+            serde_json::json!({
+                "request": {"method": "GET", "path": "/v1/info", "headers": {}},
+                "response": {"status": 200, "body_json": {"ok": true}},
+                "auth": auth
+            }),
+            &[],
+        )
+    };
+    refused(
+        &mode("fresh".into()),
+        "source/01-info.json: auth must be \"recorded\", not \"fresh\"",
+    );
+    refused(
+        &mode("recorded".into()),
+        "source/01-info.json: auth is recorded but the request carries no x-identity- header",
+    );
+}
+
+#[test]
+fn a_capture_signature_defect_is_one_the_replay_reproduces() {
+    let chain = serde_json::json!({"x-identity-auth-chain-0": r#"{"type":"SIGNER","payload":"0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e","signature":""}"#});
+    let defect = |headers: Value, extra: Value| {
+        let mut fx = serde_json::json!({
+            "request": {"method": "GET", "path": "/v1/info", "headers": headers},
+            "response": {"status": 401, "body_json": {"ok": false}}
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            fx[key] = value.clone();
+        }
+        one_capture(fx, &[])
+    };
+    refused(
+        &defect(chain.clone(), serde_json::json!({"sign": {"skew": 1}})),
+        "source/01-info.json: sign: unknown field `skew`",
+    );
+    refused(
+        &defect(
+            chain.clone(),
+            serde_json::json!({"sign": {"offset": 1}, "auth": "recorded"}),
+        ),
+        "source/01-info.json: a capture is re-signed with its defect or replayed as recorded, not both",
+    );
+    refused(
+        &defect(
+            serde_json::json!({}),
+            serde_json::json!({"sign": {"offset": 1}}),
+        ),
+        "source/01-info.json: sign names no signer",
+    );
+    assert_eq!(
+        defect(
+            chain,
+            serde_json::json!({"sign": {"untimestamped": true, "withHeaders": true}})
+        ),
+        Vec::<String>::new()
+    );
+}
+
+fn defect_errors(sign: Value) -> Vec<String> {
+    one_capture(
+        serde_json::json!({
+            "request": {"method": "GET", "path": "/v1/info", "headers": {
+                "x-identity-auth-chain-0": r#"{"type":"SIGNER","payload":"0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e","signature":""}"#
+            }},
+            "response": {"status": 401, "body_json": {"ok": false}},
+            "sign": sign
+        }),
+        &[],
+    )
+}
+
+#[test]
+fn a_sign_without_a_defect_is_refused() {
+    refused(
+        &defect_errors(serde_json::json!({})),
+        "source/01-info.json: sign names no defect",
+    );
+    refused(
+        &defect_errors(serde_json::json!({"metadata": "{}"})),
+        "source/01-info.json: sign names no defect",
+    );
+}
+
+#[test]
+fn a_zero_offset_is_refused() {
+    refused(
+        &defect_errors(serde_json::json!({"offset": 0, "metadata": "{}"})),
+        "source/01-info.json: sign offset 0 is no defect",
+    );
+}
+
+#[test]
+fn with_headers_without_untimestamped_is_refused() {
+    refused(
+        &defect_errors(
+            serde_json::json!({"withHeaders": true, "path": "/v1/other", "metadata": "{}"}),
+        ),
+        "source/01-info.json: sign withHeaders needs untimestamped",
+    );
+}
+
+#[test]
+fn untimestamped_with_a_timestamped_defect_is_refused() {
+    for field in [
+        serde_json::json!({"path": "/v1/other"}),
+        serde_json::json!({"offset": 1}),
+        serde_json::json!({"metadata": "{}"}),
+        serde_json::json!({"sentMetadata": "{}"}),
+    ] {
+        let mut sign = serde_json::json!({"untimestamped": true});
+        sign.as_object_mut()
+            .unwrap()
+            .extend(field.as_object().unwrap().clone());
+        refused(
+            &defect_errors(sign),
+            "source/01-info.json: sign untimestamped takes no path, offset, metadata or sentMetadata",
+        );
+    }
+}
+
+#[test]
 fn a_capture_that_matches_two_operations_is_refused() {
     let by_id = "api_http:GET:/v1/collections/:id";
     let by_address = "api_http:GET:/v1/:address/items";
@@ -875,9 +1088,7 @@ impl Wallet {
         format!("{:#x}", self.root.address())
     }
 
-    async fn sign(&self, method: &str, path: &str, metadata: &str) -> HeaderMap {
-        let timestamp = chrono::Utc::now().timestamp_millis().to_string();
-        let payload = build_payload_v6(method, path, &timestamp, metadata);
+    async fn chain(&self, payload: &str) -> HeaderMap {
         let ephemeral_payload = format!(
             "Decentraland Login\nEphemeral address: {:#x}\nExpiration: 2099-01-01T00:00:00.000Z",
             self.ephemeral.address()
@@ -908,18 +1119,10 @@ impl Wallet {
                         .unwrap()
                         .to_string(),
                 ),
-                payload,
+                payload: payload.to_string(),
             },
         ];
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTH_TIMESTAMP_HEADER,
-            HeaderValue::from_str(&timestamp).unwrap(),
-        );
-        headers.insert(
-            AUTH_METADATA_HEADER,
-            HeaderValue::from_str(metadata).unwrap(),
-        );
         for (i, link) in chain.iter().enumerate() {
             headers.insert(
                 HeaderName::from_bytes(format!("{AUTH_CHAIN_HEADER_PREFIX}{i}").as_bytes())
@@ -931,30 +1134,93 @@ impl Wallet {
     }
 }
 
+fn defect_problems(defect: &Defect) -> Vec<&'static str> {
+    let mut problems = Vec::new();
+    let timestamped = defect.offset.is_some()
+        || defect.path.is_some()
+        || defect.metadata.is_some()
+        || defect.sent_metadata.is_some();
+    if !defect.untimestamped
+        && defect.offset.is_none_or(|offset| offset == 0)
+        && defect.path.is_none()
+        && defect.method.is_none()
+        && defect.sent_metadata.is_none()
+    {
+        problems.push(if defect.offset == Some(0) {
+            "offset 0 is no defect"
+        } else {
+            "names no defect"
+        });
+    }
+    if defect.with_headers && !defect.untimestamped {
+        problems.push("withHeaders needs untimestamped");
+    }
+    if defect.untimestamped && timestamped {
+        problems.push("untimestamped takes no path, offset, metadata or sentMetadata");
+    }
+    problems
+}
+
+fn signer_of(raw: &Value) -> Option<String> {
+    let first = raw["request"]["headers"][format!("{AUTH_CHAIN_HEADER_PREFIX}0")].as_str()?;
+    let link: Value = serde_json::from_str(first).ok()?;
+    link["payload"].as_str().map(str::to_lowercase)
+}
+
 async fn fresh_signature(
+    raw: &Value,
     fx: &Fixture,
     wallets: &BTreeMap<String, Wallet>,
     prefix: &str,
 ) -> HeaderMap {
-    let Some(first) = fx
-        .request
-        .headers
-        .get(&format!("{AUTH_CHAIN_HEADER_PREFIX}0"))
-    else {
+    let Some(signer) = signer_of(raw) else {
         return HeaderMap::new();
     };
-    let link: Value = serde_json::from_str(first).unwrap();
-    let signer = link["payload"].as_str().unwrap().to_lowercase();
     let wallet = wallets
         .get(&signer)
         .unwrap_or_else(|| panic!("{signer} is not a seed.json wallet"));
-    let metadata = fx
+    let recorded = fx
         .request
         .headers
         .get(AUTH_METADATA_HEADER)
         .map_or("{}", String::as_str);
-    let path = format!("{prefix}{}", fx.request.path);
-    wallet.sign(&fx.request.method, &path, metadata).await
+    let defect: Defect = raw
+        .get("sign")
+        .map(|sign| serde_json::from_value(sign.clone()).unwrap())
+        .unwrap_or_default();
+    let method = defect.method.as_deref().unwrap_or(&fx.request.method);
+    let now = chrono::Utc::now().timestamp_millis();
+    if defect.untimestamped {
+        let route = fx
+            .request
+            .path
+            .strip_prefix("/v1")
+            .unwrap_or(&fx.request.path);
+        let mut headers = wallet
+            .chain(&format!("{method}:{route}").to_lowercase())
+            .await;
+        if defect.with_headers {
+            headers.insert(AUTH_TIMESTAMP_HEADER, HeaderValue::from(now));
+            headers.insert(AUTH_METADATA_HEADER, HeaderValue::from_static("{}"));
+        }
+        return headers;
+    }
+    let path = format!(
+        "{prefix}{}",
+        defect.path.as_deref().unwrap_or(&fx.request.path)
+    );
+    let signed = defect.metadata.as_deref().unwrap_or(recorded);
+    let timestamp = (now + defect.offset.unwrap_or(0)).to_string();
+    let mut headers = wallet
+        .chain(&build_payload_v6(method, &path, &timestamp, signed))
+        .await;
+    headers.insert(
+        AUTH_TIMESTAMP_HEADER,
+        HeaderValue::from_str(&timestamp).unwrap(),
+    );
+    let sent = defect.sent_metadata.as_deref().unwrap_or(signed);
+    headers.insert(AUTH_METADATA_HEADER, HeaderValue::from_str(sent).unwrap());
+    headers
 }
 
 const DRAFT_CONTRACT_REFUSED: &str = "collections_contract_published_check";
@@ -1066,7 +1332,11 @@ async fn replay_setup() -> Option<Replay> {
 async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec<String> {
     let fx: Fixture = serde_json::from_value(raw.clone()).unwrap_or_else(|e| panic!("{path}: {e}"));
     let name = Path::new(path).file_stem().unwrap().to_str().unwrap();
-    let auth = fresh_signature(&fx, &replay.wallets, prefix).await;
+    let auth = if raw.get("auth").is_some() {
+        recorded_auth(raw)
+    } else {
+        fresh_signature(raw, &fx, &replay.wallets, prefix).await
+    };
     let every_key = Volatility::default().with_ignored_fields(&[]);
     let (mut notes, body) = replay_with(&replay.app, prefix, name, &fx, &auth, &every_key).await;
     notes.extend(volatile_notes(raw, &body));

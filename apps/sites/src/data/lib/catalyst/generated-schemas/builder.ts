@@ -34,7 +34,7 @@ export const BuilderCollectionOutSchema = z.object({
   chain_id: z.number().nullable(),
   contract_address: z.string(),
   count: z.number(),
-  created_at: z.number().nullable(),
+  created_at: z.string().nullable(),
   creator: z.string().nullable(),
   id: z.string(),
   is_approved: z.boolean(),
@@ -43,12 +43,12 @@ export const BuilderCollectionOutSchema = z.object({
   network: z.string().nullable(),
   owner: z.string().nullable(),
   pending: z.boolean(),
-  reviewed_at: z.number().nullable(),
+  reviewed_at: z.string().nullable(),
   status: CollectionStatusSchema,
   third_party_id: z.string().nullable(),
   thumbs: z.array(z.string()),
   type: CollectionTypeSchema,
-  updated_at: z.number().nullable(),
+  updated_at: z.string().nullable(),
   urn: z.string().nullable(),
 });
 
@@ -109,8 +109,8 @@ export const CollectionListingOutSchema = z.object({
   third_party_id: z.string().nullable(),
   is_published: z.boolean(),
   is_approved: z.boolean(),
-  created_at: z.coerce.bigint(),
-  updated_at: z.coerce.bigint(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const CollectionMetaOutSchema = z.object({
@@ -122,8 +122,8 @@ export const CollectionMetaOutSchema = z.object({
   third_party_id: z.string().nullable(),
   is_published: z.boolean(),
   is_approved: z.boolean(),
-  created_at: z.coerce.bigint(),
-  updated_at: z.coerce.bigint(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const CommitteeMemberOutSchema = z.object({
@@ -136,14 +136,14 @@ export const CurationStatusSchema = z.enum(["approved", "rejected"]);
 export const ReviewCurationOutSchema = z.object({
   assignee: z.string(),
   collection_id: z.string(),
-  created_at: z.number().nullable(),
+  created_at: z.string().nullable(),
   id: z.string(),
   status: CurationStatusSchema,
-  updated_at: z.number().nullable(),
+  updated_at: z.string().nullable(),
 });
 
 export const ReviewRowOutSchema = z.object({
-  created_at: z.number().nullable(),
+  created_at: z.string().nullable(),
   curation: ReviewCurationOutSchema.nullable(),
   has_reviews: z.boolean(),
   id: z.string(),
@@ -152,7 +152,7 @@ export const ReviewRowOutSchema = z.object({
   item_count: z.number(),
   name: z.string(),
   owner: z.string().nullable(),
-  reviewed_at: z.number().nullable(),
+  reviewed_at: z.string().nullable(),
   status: CollectionStatusSchema,
   type: CollectionTypeSchema,
 });
@@ -205,7 +205,7 @@ export const OrphanItemOutSchema = z.object({
   category: z.string().nullable(),
   collection_id: z.string().nullable(),
   contract_address: z.string().nullable(),
-  createdAt: z.number().nullable(),
+  createdAt: z.string().nullable(),
   grad: z.string().nullable(),
   id: z.string(),
   image: z.string().nullable(),
@@ -218,7 +218,7 @@ export const OrphanItemOutSchema = z.object({
   status: CollectionStatusSchema,
   total_supply: z.number().nullable(),
   type: ItemKindSchema,
-  updatedAt: z.number().nullable(),
+  updatedAt: z.string().nullable(),
   urn: z.string().nullable(),
 });
 

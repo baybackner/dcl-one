@@ -384,7 +384,7 @@ describe("creations and sale state", () => {
             rarity: "common",
             total_supply: 2,
             is_published: true,
-            createdAt: 1_700_000_000_000,
+            createdAt: "2023-11-14T22:13:20.000Z",
             image: "https://peer.test/thumbnail",
           },
         ],

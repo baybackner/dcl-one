@@ -4,7 +4,8 @@ import type { OrphanItemOut as RsOrphanItemOut } from "@catalyst-api/builder/Orp
 import type { BuilderCollectionOut as RsBuilderCollectionOut } from "@catalyst-api/builder/BuilderCollectionOut";
 
 const nullableStr = z.string().nullish().transform((v) => v ?? null);
-const nullableNum = z.number().nullish().transform((v) => v ?? null);
+/** A builder timestamp (ISO-8601, as the node writes it) as epoch milliseconds. */
+export const isoMillis = z.iso.datetime().nullish().transform((v) => (v ? Date.parse(v) : null));
 
 export const COLLECTION_TYPES = ["standard", "third_party"] as const;
 export type CollectionType = (typeof COLLECTION_TYPES)[number];
@@ -34,9 +35,9 @@ export const BuilderCollectionSchema = z.object({
   type: z.enum(COLLECTION_TYPES),
   is_published: z.boolean(),
   is_approved: z.boolean(),
-  reviewed_at: nullableNum,
-  created_at: nullableNum,
-  updated_at: nullableNum,
+  reviewed_at: isoMillis,
+  created_at: isoMillis,
+  updated_at: isoMillis,
   contract_address: nullableStr,
   third_party_id: nullableStr,
   urn: nullableStr,
@@ -62,8 +63,8 @@ export const OrphanItemSchema = z.object({
   name: z.string(),
   type: z.enum(ORPHAN_ITEM_TYPES),
   status: z.enum(ORPHAN_ITEM_STATUSES),
-  createdAt: nullableNum,
-  updatedAt: nullableNum,
+  createdAt: isoMillis,
+  updatedAt: isoMillis,
   grad: nullableStr,
   image: nullableStr,
   collection_id: nullableStr,

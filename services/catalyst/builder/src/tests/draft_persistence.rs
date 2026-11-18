@@ -230,8 +230,8 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
     assert_eq!(reopened["name"], "Edited wearable");
     assert_eq!(reopened["metrics"], json!({ "triangles": 42, "meshes": 1 }));
     assert!(
-        reopened["created_at"].as_str().unwrap().ends_with("+00:00"),
-        "the draft document keeps the old timestamptz rendering: {}",
+        is_iso(reopened["created_at"].as_str().unwrap()),
+        "{}",
         reopened["created_at"]
     );
     item.metrics = Some(json!({ "triangles": -1 }));
@@ -316,4 +316,39 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
     linked.urn = Some(format!("{provider}:bad suffix"));
     assert!(linked.validate(linked_id, OWNER).is_err());
     cleanup(&store, &[collection, linked_id], &[hash]).await;
+}
+
+#[tokio::test]
+async fn an_item_draft_answers_iso_timestamps() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let collection = Uuid::new_v4();
+    let draft: CollectionDraft =
+        serde_json::from_value(json!({ "id": collection, "name": "Timestamps" })).unwrap();
+    let saved =
+        serde_json::to_value(store.save_collection_draft(OWNER, &draft).await.unwrap()).unwrap();
+    let item: ItemDraft = serde_json::from_value(json!({
+        "id": Uuid::new_v4(), "name": "Stamped", "type": "wearable", "collection_id": collection,
+        "data": { "category": "upper_body" },
+    }))
+    .unwrap();
+    let written = store.save_item_draft(OWNER, &item).await.unwrap();
+    let read = store.item_draft(OWNER, item.id).await.unwrap();
+    for (what, body) in [
+        ("collection", &saved),
+        ("saved item", &written),
+        ("read item", &read),
+    ] {
+        for field in ["created_at", "updated_at"] {
+            let value = body[field].as_str().unwrap_or_default();
+            assert!(is_iso(value), "{what} {field}: {}", body[field]);
+        }
+    }
+    cleanup(&store, &[collection], &[]).await;
+}
+
+fn is_iso(value: &str) -> bool {
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.3fZ").is_ok()
+        && value.len() == "2026-01-01T00:00:00.000Z".len()
 }

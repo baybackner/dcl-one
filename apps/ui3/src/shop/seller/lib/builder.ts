@@ -28,9 +28,9 @@ type RawItem = {
   is_published?: boolean;
   is_approved?: boolean;
   total_supply?: string | number;
-  created_at?: number | string;
-  /** The node's on-chain rows (`/{address}/items`) send these instead of `created_at` (ms here) and `thumbnail`. */
-  createdAt?: number | null;
+  created_at?: string;
+  /** The node's on-chain rows (`/{address}/items`) send these instead of `created_at` and `thumbnail`. */
+  createdAt?: string | null;
   image?: string | null;
   rarity?: string;
   type?: "wearable" | "emote";
@@ -104,6 +104,11 @@ async function getJson<T>(path: string, opts: BuilderOptions): Promise<T> {
   return ((json as { data?: T }).data ?? json) as T;
 }
 
+function epochMillis(iso: string | null | undefined): number | undefined {
+  const ms = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
 function categoryOf(item: RawItem): string {
   return item.data?.wearable?.category ?? item.data?.emote?.category ?? item.data?.category ?? item.type ?? "wearable";
 }
@@ -157,7 +162,7 @@ function toPublishableItem(raw: RawItem, collection: CreatorCollection, base?: s
     totalSupply: total,
     maxSupply: max,
     remainingSupply: Math.max(0, max - total),
-    createdAt: raw.created_at ? Number(raw.created_at) * 1000 : (raw.createdAt ?? undefined),
+    createdAt: epochMillis(raw.created_at ?? raw.createdAt),
     minters: collection.minters,
   };
 }

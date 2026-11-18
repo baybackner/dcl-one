@@ -6,4 +6,4 @@ import type { CollectionType } from "./CollectionType";
  * Row of `GET /v1/{address}/collections` (consumed by the sites creator-hub
  * collections list and metrics).
  */
-export type BuilderCollectionOut = { chain_id: number | null, contract_address: string, count: number, created_at: number | null, creator: string | null, id: string, is_approved: boolean, is_published: boolean, name: string, network: string | null, owner: string | null, pending: boolean, reviewed_at: number | null, status: CollectionStatus, third_party_id: string | null, thumbs: Array<string>, type: CollectionType, updated_at: number | null, urn: string | null, };
+export type BuilderCollectionOut = { chain_id: number | null, contract_address: string, count: number, created_at: string | null, creator: string | null, id: string, is_approved: boolean, is_published: boolean, name: string, network: string | null, owner: string | null, pending: boolean, reviewed_at: string | null, status: CollectionStatus, third_party_id: string | null, thumbs: Array<string>, type: CollectionType, updated_at: string | null, urn: string | null, };

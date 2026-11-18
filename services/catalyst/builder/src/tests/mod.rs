@@ -11,4 +11,5 @@ mod linked_publication;
 mod publication_preparation;
 mod publication_transactions;
 mod upstream_routes;
+mod wire_contract;
 mod write_gate;

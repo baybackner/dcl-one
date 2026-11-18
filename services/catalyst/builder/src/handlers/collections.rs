@@ -1,21 +1,20 @@
-// from: catalyrst/crates/catalyrst-builder/src/handlers/collections.rs (the by-id routes); the listing rule from builder-server's Collection.router.ts getCollections/getAddressCollections and Item.router.ts getItems/getAddressItems
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{OriginalUri, Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::SharedState;
-use crate::auth::{signed_path, try_extract_signer};
+use crate::auth::{Signed, signed_path, try_extract_signer};
 use crate::http::{ApiData, ApiError};
 use crate::items::{CollectionMetaOut, FullItemOut, ItemQuery};
 use crate::onchain;
+use crate::shared::signed_fetch::{AUTH_CHAIN_HEADER_PREFIX, Signer};
 
-use super::drafts::signer;
 use super::onchain::ItemsParams;
 
 const CURATION_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
@@ -47,13 +46,9 @@ fn should_paginate(page: Option<i64>, limit: Option<i64>) -> bool {
 /// The owner or an admin address reads a collection by id.
 pub async fn get_collection(
     State(state): State<SharedState>,
+    Signed(signer): Signed,
     Path(id): Path<String>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<CollectionMetaOut>>, ApiError> {
-    let signer = signer(&state, &headers, "get", &original, &uri).await?;
-
     let collection_id = Uuid::parse_str(id.trim()).map_err(|_| ApiError::not_found("Not found"))?;
 
     let meta = state
@@ -68,7 +63,8 @@ pub async fn get_collection(
         .iter()
         .any(|a| a == signer.as_str());
     if signer.as_str() != meta.eth_address.to_ascii_lowercase() && !is_admin {
-        return Err(ApiError::unauthorized("Unauthorized"));
+        return Err(ApiError::unauthorized("Unauthorized")
+            .with_data(json!({ "id": id, "eth_address": signer.as_str() })));
     }
 
     Ok(Json(ApiData::ok(CollectionMetaOut::from(&meta))))
@@ -90,14 +86,10 @@ pub struct CollectionItemsParams {
 /// are both truthy and `limit` is below the upstream default.
 pub async fn get_collection_items(
     State(state): State<SharedState>,
+    Signed(signer): Signed,
     Path(id): Path<String>,
     Query(params): Query<CollectionItemsParams>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<CollectionItemsOut>>, ApiError> {
-    let signer = signer(&state, &headers, "get", &original, &uri).await?;
-
     if let Some(status) = &params.status
         && !CURATION_STATUSES.contains(&status.as_str())
     {
@@ -118,7 +110,7 @@ pub async fn get_collection_items(
         .iter()
         .any(|a| a == signer.as_str());
     if signer.as_str() != owner && !is_admin {
-        return Err(ApiError::unauthorized("Unauthorized"));
+        return Err(unauthorized_for(signer.as_str()));
     }
 
     let paginate = should_paginate(params.page, params.limit);
@@ -159,15 +151,9 @@ pub async fn get_collection_items(
 
 /// builder-server's `HTTPError('Unauthorized', { eth_address }, 401)`: a
 /// listing refusal names the wallet the request was about (the path's
-/// address, the signer's, `""` anonymously), with no `message` key.
-fn unauthorized_for(eth_address: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(
-            json!({ "ok": false, "data": { "eth_address": eth_address }, "error": "Unauthorized" }),
-        ),
-    )
-        .into_response()
+/// address, the signer's, `""` anonymously).
+fn unauthorized_for(eth_address: &str) -> ApiError {
+    ApiError::unauthorized("Unauthorized").with_data(json!({ "eth_address": eth_address }))
 }
 
 /// The curation committee (builder-server's `isCommitteeMember`):
@@ -208,21 +194,17 @@ pub(super) async fn is_committee(state: &SharedState, address: &str) -> bool {
     }
 }
 
-/// `Some(refusal)` unless the request is signed by `address` itself or by
-/// the committee; an unsigned or unverifiable chain is the signer's own
-/// error (400/401/503, as every signed builder route).
-async fn refusal_unless_own_or_committee(
+/// Admits a request signed by `address` itself or by the committee; an
+/// unsigned or unverifiable chain is upstream's 401 `Unauthenticated`.
+async fn own_or_committee(
     state: &SharedState,
-    headers: &HeaderMap,
-    original: &Uri,
-    local: &Uri,
+    signer: &Signer,
     address: &str,
-) -> Result<Option<Response>, ApiError> {
-    let signer = signer(state, headers, "get", original, local).await?;
+) -> Result<(), ApiError> {
     if signer.as_str().eq_ignore_ascii_case(address) || is_committee(state, signer.as_str()).await {
-        return Ok(None);
+        return Ok(());
     }
-    Ok(Some(unauthorized_for(address)))
+    Err(unauthorized_for(address))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -242,6 +224,24 @@ pub async fn get_collections(
     OriginalUri(original): OriginalUri,
     uri: Uri,
     headers: HeaderMap,
+) -> Response {
+    let signed = headers.contains_key(format!("{AUTH_CHAIN_HEADER_PREFIX}0"));
+    let answer = list_collections(&state, params, &original, &uri, &headers)
+        .await
+        .into_response();
+    if signed {
+        crate::http::private_response(answer).await
+    } else {
+        answer
+    }
+}
+
+async fn list_collections(
+    state: &SharedState,
+    params: CollectionsParams,
+    original: &Uri,
+    uri: &Uri,
+    headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
     let q = params.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     if let Some(q) = q
@@ -253,19 +253,19 @@ pub async fn get_collections(
         .into_response());
     }
     match try_extract_signer(
-        &headers,
+        headers,
         "get",
-        &signed_path(&original, &uri),
+        &signed_path(original, uri),
         state.eip1654.as_deref(),
     )
     .await
     {
-        Some(signer) if is_committee(&state, signer.as_str()).await => Ok(Json(ApiData::ok(
+        Some(signer) if is_committee(state, signer.as_str()).await => Ok(Json(ApiData::ok(
             state.items.collection_drafts_of_everyone().await?,
         ))
         .into_response()),
-        Some(signer) => Ok(unauthorized_for(signer.as_str())),
-        None => Ok(unauthorized_for("")),
+        Some(signer) => Err(unauthorized_for(signer.as_str())),
+        None => Err(unauthorized_for("")),
     }
 }
 
@@ -273,13 +273,10 @@ pub async fn get_collections(
 /// drafts; a signed wallet that is not on it is refused with its address.
 pub async fn get_items(
     State(state): State<SharedState>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
+    Signed(signer): Signed,
 ) -> Result<Response, ApiError> {
-    let signer = signer(&state, &headers, "get", &original, &uri).await?;
     if !is_committee(&state, signer.as_str()).await {
-        return Ok(unauthorized_for(signer.as_str()));
+        return Err(unauthorized_for(signer.as_str()));
     }
     Ok(Json(ApiData::ok(state.items.item_drafts_of_everyone().await?)).into_response())
 }
@@ -289,16 +286,10 @@ pub async fn get_items(
 /// address. The set is the on-chain reader's (`onchain::get_address_collections`).
 pub async fn get_address_collections(
     State(state): State<SharedState>,
+    Signed(signer): Signed,
     Path(address): Path<String>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(refused) =
-        refusal_unless_own_or_committee(&state, &headers, &original, &uri, &address).await?
-    {
-        return Ok(refused);
-    }
+    own_or_committee(&state, &signer, &address).await?;
     Ok(
         super::onchain::get_address_collections(State(state), Path(address))
             .await?
@@ -310,17 +301,11 @@ pub async fn get_address_collections(
 /// on-chain items (`onchain::get_address_items`).
 pub async fn get_address_items(
     State(state): State<SharedState>,
+    Signed(signer): Signed,
     Path(address): Path<String>,
     Query(params): Query<ItemsParams>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(refused) =
-        refusal_unless_own_or_committee(&state, &headers, &original, &uri, &address).await?
-    {
-        return Ok(refused);
-    }
+    own_or_committee(&state, &signer, &address).await?;
     Ok(
         super::onchain::get_address_items(State(state), Path(address), Query(params))
             .await?
@@ -334,7 +319,7 @@ mod tests {
 
     use axum::Router;
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{Request, StatusCode};
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -386,11 +371,12 @@ mod tests {
             .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap();
+        let cache = response.headers().get(axum::http::header::CACHE_CONTROL);
         if path.starts_with("/v1/drafts/") {
-            assert_eq!(
-                response.headers()[axum::http::header::CACHE_CONTROL],
-                "private, no-store"
-            );
+            assert_eq!(cache.unwrap(), "private, no-store");
+        }
+        if path.starts_with("/v1/collections?") && key.is_none() {
+            assert_eq!(cache, None, "an unsigned search stays cacheable");
         }
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), 1 << 20)
@@ -489,11 +475,14 @@ mod tests {
                     "local drafts are always signer-scoped: {body}"
                 );
             }
-            let (status, _) = get(&app, &path, None).await;
+            let (status, body) = get(&app, &path, None).await;
             assert_eq!(
-                status,
-                StatusCode::BAD_REQUEST,
-                "missing signed-fetch headers are malformed"
+                (status, body),
+                (
+                    StatusCode::UNAUTHORIZED,
+                    json!({ "ok": false, "data": { "message": "Invalid auth chain" }, "error": "Unauthenticated" })
+                ),
+                "missing signed-fetch headers are upstream's Unauthenticated"
             );
         }
 

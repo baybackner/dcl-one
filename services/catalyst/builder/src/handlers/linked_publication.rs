@@ -1,6 +1,5 @@
 use axum::Json;
-use axum::extract::{OriginalUri, Path, State};
-use axum::http::{HeaderMap, Uri};
+use axum::extract::{Path, State};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -10,7 +9,7 @@ use crate::linked_publication::LinkedPublicationCheque;
 use crate::linked_publication_review::{FoundationLinkedReview, FoundationReviewSignatures};
 use crate::linked_publication_store::{LinkedPublicationPreparation, LinkedPublicationState};
 
-use super::drafts::signer;
+use crate::auth::Signed;
 
 #[derive(Deserialize)]
 pub struct Revision {
@@ -19,12 +18,9 @@ pub struct Revision {
 
 pub async fn prepare(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<LinkedPublicationPreparation>>, ApiError> {
-    let owner = signer(&state, &headers, "get", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state
             .items
@@ -35,12 +31,9 @@ pub async fn prepare(
 
 pub async fn status(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<Option<LinkedPublicationState>>>, ApiError> {
-    let owner = signer(&state, &headers, "get", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state
             .items
@@ -51,13 +44,10 @@ pub async fn status(
 
 pub async fn begin(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<Revision>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
-    let owner = signer(&state, &headers, "post", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state
             .items
@@ -68,13 +58,10 @@ pub async fn begin(
 
 pub async fn claim(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<Revision>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
-    let owner = signer(&state, &headers, "patch", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state
             .items
@@ -85,13 +72,10 @@ pub async fn claim(
 
 pub async fn authorize(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<LinkedPublicationCheque>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
-    let owner = signer(&state, &headers, "put", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         state
             .items
@@ -102,12 +86,9 @@ pub async fn authorize(
 
 pub async fn cancel(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
-    let owner = signer(&state, &headers, "delete", &original, &uri).await?;
     state
         .items
         .cancel_linked_publication(owner.as_str(), id)
@@ -117,10 +98,8 @@ pub async fn cancel(
 
 pub async fn verify(
     State(state): State<SharedState>,
+    Signed(owner): Signed,
     Path(id): Path<Uuid>,
-    OriginalUri(original): OriginalUri,
-    uri: Uri,
-    headers: HeaderMap,
     Json(body): Json<FoundationReviewSignatures>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
     let Some(verifier) = FoundationLinkedReview::new(
@@ -131,7 +110,6 @@ pub async fn verify(
             "Foundation review is off on this node: BUILDER_FOUNDATION_URL names no Foundation",
         ));
     };
-    let owner = signer(&state, &headers, "post", &original, &uri).await?;
     Ok(Json(ApiData::ok(
         verifier
             .verify(&state.items, owner.as_str(), id, &body)
