@@ -2,8 +2,8 @@
 // it generates itself (the app is down or timed out, rate limits, `return 404`, oversized bodies). The
 // app's own 4xx/5xx render StatusPage (library/ui/apps/sites/status), whose copy, CSS Module and art
 // these pages share. 404 is the app's own NotFoundPage (src/features/not-found), rendered from its
-// component with the CSS Modules its markup uses, the app's Inter faces (apps/ui3/src/atoms/inter.css)
-// for the weights and scripts its text uses, and AnimatedBackground's animation (animate.ts, bundled
+// component with the CSS Modules its markup uses, the shared Inter faces (library/ui/foundations/typography)
+// for the scripts its text uses, and AnimatedBackground's animation (animate.ts, bundled
 // into an inline script) over the still image it renders on the server.
 //
 // Every page inlines its CSS, the --dcl-* tokens that CSS reads (from library/ui/foundations), the logo,
@@ -29,9 +29,8 @@ const artDir = join(oneUi, "apps/sites/assets/errors");
 const notFoundEntry = join(sites, "src/features/not-found/NotFoundPage.tsx");
 const foundations = join(oneUi, "foundations");
 const animatedBackground = join(oneUi, "apps/sites/shared/AnimatedBackground");
-// The app's Inter faces and the files they name under /fonts/ (apps/ui3/public, copied into Sites' public/).
-const interCss = fileURLToPath(new URL("../../ui3/src/atoms/inter.css", import.meta.url));
-const ui3Public = fileURLToPath(new URL("../../ui3/public/", import.meta.url));
+// The shared Inter faces (variable Inter, one face per script spanning every weight) and their files.
+const interCss = join(foundations, "typography/inter.css");
 const outDir = process.env.ERROR_PAGES_OUT || join(sites, "public/errors");
 const check = process.argv.includes("--check");
 
@@ -183,24 +182,15 @@ const woff2Uri = (path: string) => {
   const file = relative(join(oneUi, "../.."), path);
   const bytes = readFileSync(path);
   if (bytes.subarray(0, LFS_POINTER.length).toString("latin1") === LFS_POINTER) {
-    throw new Error(`gen-error-pages: ${file} is a Git LFS pointer, not the font`);
+    throw new Error(
+      `gen-error-pages: ${file} is a Git LFS pointer, not the font. From the repository root run: git lfs pull --include="library/ui/foundations/typography/fonts/**"`,
+    );
   }
   if (!path.endsWith(".woff2") || bytes.subarray(0, 4).toString("latin1") !== "wOF2") throw new Error(`gen-error-pages: ${file} is not a woff2 font`);
   return `data:font/woff2;base64,${bytes.toString("base64")}`;
 };
 
-/** The weight of `declared` a browser picks for `wanted` (CSS Fonts 4, font-weight matching). */
-function matchWeight(wanted: number, declared: number[]): number {
-  if (declared.includes(wanted)) return wanted;
-  const below = declared.filter((w) => w < wanted).sort((a, b) => b - a);
-  const above = declared.filter((w) => w > wanted).sort((a, b) => a - b);
-  const order = wanted > 500 ? [...above, ...below]
-    : wanted < 400 ? [...below, ...above]
-    : [...above.filter((w) => w <= 500), ...below, ...above.filter((w) => w > 500)];
-  return order[0]!;
-}
-
-/** Text code points that are in the CSS unicode-range `range`. */
+/** Whether the CSS unicode-range `range` holds any of `points`. */
 const inRange = (range: string, points: Set<number>) =>
   range.split(",").some((part) => {
     const [lo, hi = lo] = part.trim().replace(/^U\+/i, "").split("-").map((h) => parseInt(h!, 16));
@@ -208,30 +198,31 @@ const inRange = (range: string, points: Set<number>) =>
   });
 
 /**
- * The app's Inter @font-face rules for the weights `css` sets (and 400, the initial weight) and the scripts the
- * markup's text uses, with their files inlined. A code point no selected face covers is an error: it would render
- * in the fallback font.
+ * The shared Inter @font-face rules (library/ui/foundations/typography/inter.css) for the scripts the markup's text
+ * uses, with their files inlined. A code point no selected face covers, or a weight `css` sets outside a face's
+ * range, is an error: it would render in the fallback font or a synthesized weight.
  */
 function interFaces(css: string, markup: string): string {
   const faces = [...readFileSync(interCss, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/@font-face\s*\{([^}]*)\}/g)].map((m) => {
     const body = m[1]!.trim();
     const prop = (name: string) => new RegExp(`${name}\\s*:\\s*([^;]+)`).exec(body)?.[1]!.trim() ?? "";
-    return { body, weight: Number(prop("font-weight")), range: prop("unicode-range"), url: /url\(\s*["']?(\/fonts\/[^"')]+)["']?\s*\)/.exec(body)?.[1] };
+    const [lo, hi = lo] = prop("font-weight").split(/\s+/).map(Number);
+    return { body, weights: [lo!, hi!], range: prop("unicode-range"), url: /url\(\s*["']?(\.\/fonts\/[^"')]+)["']?\s*\)/.exec(body)?.[1] };
   });
-  if (!faces.length || faces.some((face) => !face.url || !face.weight || !face.range)) throw new Error(`gen-error-pages: cannot read the faces of ${relative(sites, interCss)}`);
-  const declared = [...new Set(faces.map((face) => face.weight))];
-  const weights = new Set([400, ...[...css.matchAll(/font-weight\s*:\s*(\d+)/g)].map((m) => Number(m[1]))].map((w) => matchWeight(w, declared)));
+  if (!faces.length || faces.some((face) => !face.url || !face.weights[0] || !face.range)) throw new Error(`gen-error-pages: cannot read the faces of ${relative(sites, interCss)}`);
   const text = markup.replace(/<[^>]*>/g, "")
     .replace(/&#x([\da-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
     .replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const points = new Set([...text.replace(/\s+/g, " ")].map((c) => c.codePointAt(0)!));
-  const used = faces.filter((face) => weights.has(face.weight) && inRange(face.range, points));
-  for (const weight of weights) {
-    const missing = [...points].filter((p) => !used.some((face) => face.weight === weight && inRange(face.range, new Set([p]))));
-    if (missing.length) throw new Error(`gen-error-pages: no Inter face of weight ${weight} covers ${missing.map((p) => `U+${p.toString(16).toUpperCase()}`).join(", ")}`);
+  const used = faces.filter((face) => inRange(face.range, points));
+  const missing = [...points].filter((p) => !used.some((face) => inRange(face.range, new Set([p]))));
+  if (missing.length) throw new Error(`gen-error-pages: no Inter face covers ${missing.map((p) => `U+${p.toString(16).toUpperCase()}`).join(", ")}`);
+  for (const weight of new Set([400, ...[...css.matchAll(/font-weight\s*:\s*(\d+)/g)].map((m) => Number(m[1]))])) {
+    const outside = used.filter((face) => weight < face.weights[0] || weight > face.weights[1]);
+    if (outside.length) throw new Error(`gen-error-pages: font-weight ${weight} is outside the Inter face of ${outside[0]!.url}`);
   }
-  return used.map((face) => `@font-face{${face.body.replace(face.url!, woff2Uri(join(ui3Public, face.url!))).replace(/\s*([:;])\s*/g, "$1")}}`).join("");
+  return used.map((face) => `@font-face{${face.body.replace(face.url!, woff2Uri(join(interCss, "..", face.url!))).replace(/\s*([:;,])\s*/g, "$1")}}`).join("");
 }
 
 /**

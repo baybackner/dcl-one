@@ -328,8 +328,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Fetch the pinned docs integration-test diagram and the error-page art
-        run: git lfs pull --include='apps/sites/content/docs/creator/images/wearables-and-emotes/creating-wearables/19_skin_uv.webp,library/ui/apps/sites/assets/errors/**' --exclude=''
+      - name: Fetch the pinned docs integration-test diagram and the error-page art, background and Inter files the static pages embed
+        run: git lfs pull --include='apps/sites/content/docs/creator/images/wearables-and-emotes/creating-wearables/19_skin_uv.webp,library/ui/apps/sites/assets/errors/**,library/ui/apps/sites/assets/custom-welcome-background.webp,library/ui/apps/sites/assets/logo-pattern.webp,library/ui/foundations/typography/fonts/**' --exclude=''
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:

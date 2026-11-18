@@ -14,7 +14,7 @@ const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "gen-error-pages-"));
 const run = (...args: string[]) =>
   spawnSync(process.execPath, [SCRIPT, ...args], { cwd: SITES, env: { ...process.env, ERROR_PAGES_OUT: OUT }, encoding: "utf8" });
 const ASSETS = fileURLToPath(new URL("../../../library/ui/apps/sites/assets/", import.meta.url));
-const FONTS = fileURLToPath(new URL("../../ui3/public/fonts/", import.meta.url));
+const FONTS = fileURLToPath(new URL("../../../library/ui/foundations/typography/fonts/", import.meta.url));
 const STATUS_PAGES = STATIC_ERROR_STATUSES.filter((s) => s !== 404);
 const webpUri = (file: string) => `data:image/webp;base64,${fs.readFileSync(path.join(ASSETS, file)).toString("base64")}`;
 const escape = (text: string) =>
@@ -73,21 +73,18 @@ it("renders 404 as the Sites not-found page: its heading, copy, links, avatar ar
   expect(html).not.toContain("Go to homepage");
 });
 
-it("embeds the app's Inter faces for the weights the 404 sets, latin subset only, as real woff2 bytes", () => {
+it("embeds the shared Inter variable face for the latin text only, as real woff2 bytes", () => {
   const html = fs.readFileSync(path.join(OUT, "404.html"), "utf8");
   const faces = [...html.matchAll(/@font-face\s*\{([^}]*)\}/g)].map((m) => m[1]!);
-  const latin = fs.readFileSync(path.join(FONTS, "Inter-v20-latin.woff2"));
-  const weights = faces.map((face) => {
-    expect(face).toMatch(/font-family:\s*"?Inter"?/);
-    const data = /src:\s*url\(["']?data:font\/woff2;base64,([^"')]+)["']?\)/.exec(face);
-    expect(data, face.slice(0, 120)).not.toBeNull();
-    const bytes = Buffer.from(data![1]!, "base64");
-    expect(bytes.subarray(0, 4).toString("latin1")).toBe("wOF2");
-    expect(bytes.equals(latin)).toBe(true);
-    return Number(/font-weight:\s*(\d+)/.exec(face)?.[1]);
-  });
-  // 500 (the description) falls back to the 400 face, as in the app, which declares 400, 600 and 700.
-  expect(weights.sort()).toEqual([400, 600, 700]);
+  expect(faces).toHaveLength(1);
+  const face = faces[0]!;
+  expect(face).toMatch(/font-family:\s*['"]?Inter['"]?/);
+  expect(face).toMatch(/font-weight:\s*100 900/);
+  const data = /src:\s*url\(["']?data:font\/woff2;base64,([^"')]+)["']?\)/.exec(face);
+  expect(data).not.toBeNull();
+  const bytes = Buffer.from(data![1]!, "base64");
+  expect(bytes.subarray(0, 4).toString("latin1")).toBe("wOF2");
+  expect(bytes.equals(fs.readFileSync(path.join(FONTS, "inter-latin-wght-normal.woff2")))).toBe(true);
   for (const status of STATUS_PAGES) {
     expect(fs.readFileSync(path.join(OUT, `${status}.html`), "utf8"), String(status)).not.toContain("@font-face");
   }
@@ -127,14 +124,15 @@ it("fails on a Git LFS pointer in place of the art, naming the file and the comm
   expect(fs.readFileSync(art).equals(bytes)).toBe(true);
 }, 60_000);
 
-it("fails on a Git LFS pointer in place of an Inter file the 404 embeds, naming the file", () => {
-  const font = path.join(FONTS, "Inter-v20-latin.woff2");
+it("fails on a Git LFS pointer in place of the Inter file the 404 embeds, naming the file and the command that fetches it", () => {
+  const font = path.join(FONTS, "inter-latin-wght-normal.woff2");
   const bytes = fs.readFileSync(font);
   fs.writeFileSync(font, "version https://git-lfs.github.com/spec/v1\noid sha256:0000\nsize 1\n");
   try {
     const result = run("--check");
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("apps/ui3/public/fonts/Inter-v20-latin.woff2 is a Git LFS pointer");
+    expect(result.stderr).toContain("library/ui/foundations/typography/fonts/inter-latin-wght-normal.woff2 is a Git LFS pointer");
+    expect(result.stderr).toContain('git lfs pull --include="library/ui/foundations/typography/fonts/**"');
   } finally {
     fs.writeFileSync(font, bytes);
   }
