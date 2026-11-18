@@ -1,16 +1,18 @@
-// Toon (cel) shading for avatars.
+// Toon (cel) shading for avatars: Unity's avatar shader, DCL_Toon, as the avatar material sets it
+// up, in this client's light units. The formulas are
+// unity-shared:Runtime/Shaders/Avatar/DCL_Toon/DCL_ToonBodyDoubleShadeWithFeather.hlsl (line
+// numbers below are that file's).
 //
-// A 3-band cel ramp. The cast shadow selects which pair of bands is in play,
-// and a half-lambert angle picks within that pair:
-//   - lit (out of cast shadow): HIGH vs MID by the dominant light's angle
-//   - shadowed (in cast shadow): MID vs LOW by an assumed overhead light, so
-//     indoors/full-shade shading stays stable instead of swinging with the
-//     hidden sun direction
-// Light COLOUR is ignored so avatars read consistently day and night; only
-// overall scene brightness is tracked (and capped, so bright daylight doesn't
-// wash them out). A fresnel backlight rim glows on the silhouette when the
-// light is behind the avatar.
+// - the sun (the brightest directional light) gives a half-Lambert, scaled down to half in its
+//   cast shadow, that picks the base colour or one of two grey shades in two feathered steps;
+// - the light colour is the sun in light units, saturated, and floored by the ambient light
+//   times _Unlit_Intensity, so avatars dim at night but stay visible;
+// - a white rim light on the silhouette, in the same light colour.
+// No point or spot light reaches the avatar, as in Unity (decisions.md).
 //
+// The constants are scene_material::toon's, carried as defs by its toon_shader_defs: a float is
+// its bit pattern, read with bitcast<f32>. scene_material::toon also holds the CPU twin of the
+// functions below, expression for expression.
 // Avatars still CAST shadows (that is the shadow pass's job, not this shading).
 
 #import bevy_pbr::{
@@ -20,39 +22,80 @@
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 }
+#import bevy_render::maths::PI
 
-// --- baked params (edit + rebuild to tune) ---
-// the 3 cel bands (albedo brightness multiplier).
-const BAND_HIGH: f32 = 1.0; // lit and unshadowed
-const BAND_MID: f32 = 0.85; // one darkening source (angle OR cast shadow)
-const BAND_LOW: f32 = 0.725; // both angle-shaded AND cast-shadowed
-// half-lambert split between the lit and angle-shaded bands (0.5 = terminator).
-const ANGLE_STEP: f32 = 0.5;
-const ANGLE_FEATHER: f32 = 0.05;
-// cast-shadow split (sun_shadow: 1 = lit, lower = shadowed).
-const SHADOW_STEP: f32 = 0.95;
-const SHADOW_FEATHER: f32 = 0.04;
-// shadowed MID/LOW split: dot(N, up) threshold. A surface counts as lit-from-
-// above (MID) only when it faces up by more than this; below it -> LOW. Lower
-// (negative) to shrink LOW so only clearly down-facing surfaces darken in shade.
-const DOWN_STEP: f32 = -0.1;
-const DOWN_FEATHER: f32 = 0.1;
-// fresnel backlight rim on the silhouette.
-const RIM_POWER: f32 = 5.0;
-const RIM_STRENGTH: f32 = 0.2;
+#ifdef ENVIRONMENT_MAP
+#import bevy_pbr::{clustered_forward, clustered_forward::ClusterableObjectIndexRanges, environment_map, lighting}
+#endif
+
 // multiplier on emissive wearables so they glow.
 const EMISSIVE_BOOST: f32 = 2.0;
-// the (light-colour-derived, illuminance-premultiplied ~thousands of lux)
-// brightness avatars are lit at, regardless of the scene light.
-const BRIGHTNESS: f32 = 2000.0;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
+// the shadow mask (1 in the shades) and the shades term (the first shade blending into the
+// second) for a half-Lambert from n_dot_l and the sun's cast-shadow term (1 lit): lines 115 and
+// 125-129, with _Set_SystemShadowsToBase 1 and _Tweak_SystemShadowsLevel 0
+fn toon_mask_and_shades(n_dot_l: f32, shadow: f32) -> vec2<f32> {
+    let base_step = bitcast<f32>(#{TOON_BASE_COLOR_STEP}u);
+    let base_feather = bitcast<f32>(#{TOON_BASE_SHADE_FEATHER}u);
+    let shade_step = bitcast<f32>(#{TOON_SHADE_COLOR_STEP}u);
+    let shades_feather = bitcast<f32>(#{TOON_SHADES_FEATHER}u);
+
+    let half_lambert = 0.5 * n_dot_l + 0.5;
+    let shadowed = half_lambert * saturate(shadow * 0.5 + 0.5);
+    let mask = saturate(1.0 - (shadowed - (base_step - base_feather)) / base_feather);
+    let second = saturate(1.0 - (half_lambert - (shade_step - shades_feather)) / shades_feather);
+    let shades = mix(bitcast<f32>(#{TOON_FIRST_SHADE}u), bitcast<f32>(#{TOON_SECOND_SHADE}u), second);
+    return vec2(mask, shades);
+}
+
+// the lit multiplier on the base colour under the light colour: the shade colours are taken from
+// the already lit base colour and lit again (_Use_BaseAs1st, _Is_LightColor_1st_Shade,
+// _Is_LightColor_2nd_Shade; lines 105-129)
+fn toon_diffuse(n_dot_l: f32, shadow: f32, light: vec3<f32>) -> vec3<f32> {
+    let mask_and_shades = toon_mask_and_shades(n_dot_l, shadow);
+    return light * mix(vec3(1.0), light * mask_and_shades.y, mask_and_shades.x);
+}
+
+// Unity's lightColor (lines 93 and 98, _Is_Filter_LightColor 1): the sun in light units,
+// saturated, floored by the ambient light times _Unlit_Intensity and by a minimum
+fn toon_light(sun_lux: vec3<f32>, ambient_unity: vec3<f32>) -> vec3<f32> {
+    let unlit = bitcast<f32>(#{TOON_UNLIT_INTENSITY}u);
+    let unlit_floor = bitcast<f32>(#{TOON_UNLIT_FLOOR}u);
+    let default_light = saturate(max(ambient_unity, vec3(unlit_floor)) * unlit);
+    return max(default_light, saturate(sun_lux / bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u)));
+}
+
+// Unity's max(ShadeSH9(0), ShadeSH9(down)) (line 93) from the diffuse irradiance of a white
+// surface facing up and down: the spherical harmonics' constant term, the mean irradiance over
+// every direction, is approximated by the mean of the two
+fn toon_ambient(up: vec3<f32>, down: vec3<f32>) -> vec3<f32> {
+    return max(0.5 * (up + down), down);
+}
+
+#ifdef ENVIRONMENT_MAP
+// the diffuse irradiance the pbr path's environment map lookup gives a surface facing `normal`
+// at `world_position`: the sky envmap's Trilight ambient, through the top-level shader's
+// compute_radiances override (sky_envmap_lookup.wgsl). Only its irradiance is read, so the
+// reflection sample is dead code
+fn toon_irradiance(normal: vec3<f32>, world_position: vec3<f32>, clusterable_object_index_ranges: ptr<function, ClusterableObjectIndexRanges>) -> vec3<f32> {
+    let input = lighting::LayerLightingInput(normal, normal, 1.0, 1.0, 1.0);
+    return environment_map::compute_radiances(input, clusterable_object_index_ranges, world_position, false).irradiance;
+}
+#endif
+
 fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
     let base_color = pbr_input.material.base_color;
+    // the bands take the vertex normal and the rim the normal-mapped one (_Is_NormalMapToBase 0,
+    // _Is_NormalMapToRimLight 1)
+    let vertex_n = pbr_input.world_normal;
     let n = pbr_input.N;
     let v = pbr_input.V;
     let world_position = pbr_input.world_position;
+    // Unity's light colour 1 in this client's pre-tonemap units: a white pbr surface facing a sun
+    // of one light unit
+    let unit = bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u) * view.exposure / PI;
 
     let view_z = dot(vec4<f32>(
         view.view_from_world[0].z,
@@ -61,60 +104,61 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
         view.view_from_world[3].z
     ), world_position);
 
-    // dominant (brightest) directional light drives the band; the rim takes the
-    // strongest backlight contribution across lights.
-    var scene_lum: f32 = 0.0;
-    var sun_shadow: f32 = 1.0;
-    var sun_half_lambert: f32 = 1.0;
-    var rim: f32 = 0.0;
-
+    // the sun is the brightest directional light. Unity keeps a light's direction even when it
+    // is black, and with no light at all lights from between the camera's up and back with no
+    // colour, leaving the ambient floor (lines 92 and 95)
+    var sun_lux = vec3(0.0);
+    var sun_luma: f32 = 0.0;
+    var sun = 0u;
+    var l = normalize(view.world_from_view[1].xyz + view.world_from_view[2].xyz);
     let n_lights = min(lights.n_directional_lights, 4u);
+    if n_lights > 0u {
+        l = lights.directional_lights[0].direction_to_light;
+    }
     for (var i = 0u; i < n_lights; i += 1u) {
         let light = &lights.directional_lights[i];
-        let l = (*light).direction_to_light;
-        let lum_i = dot((*light).color.rgb, LUMA);
-
-        var shadow: f32 = 1.0;
-        if ((*light).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u
-            && (pbr_input.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u {
-            shadow = fetch_directional_shadow(i, world_position, n, view_z);
+        let luma = dot((*light).color.rgb, LUMA);
+        if luma > sun_luma {
+            sun_luma = luma;
+            sun = i;
+            sun_lux = (*light).color.rgb;
+            l = (*light).direction_to_light;
         }
-
-        if lum_i > scene_lum {
-            scene_lum = lum_i;
-            sun_shadow = shadow;
-            sun_half_lambert = 0.5 * dot(n, l) + 0.5;
-        }
-
-        // fresnel silhouette edge (1 - n·v), strongest when the light is behind
-        // the avatar (backlit: light direction opposite the view).
-        let edge = pow(1.0 - max(dot(n, v), 0.0), max(RIM_POWER, 0.0001));
-        let backlit = smoothstep(0.0, 0.5, -dot(l, v));
-        rim = max(rim, edge * backlit * RIM_STRENGTH);
     }
 
-    // 1 where lit, 0 where darkened, per source
-    let angle_lit = smoothstep(ANGLE_STEP - ANGLE_FEATHER, ANGLE_STEP + ANGLE_FEATHER, sun_half_lambert);
-    let shadow_lit = smoothstep(SHADOW_STEP - SHADOW_FEATHER, SHADOW_STEP + SHADOW_FEATHER, sun_shadow);
+    var shadow: f32 = 1.0;
+    if sun_luma > 0.0
+        && (lights.directional_lights[sun].flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u
+        && (pbr_input.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u {
+        shadow = fetch_directional_shadow(sun, world_position, vertex_n, view_z);
+    }
 
-    // when lit, the sun's angle picks HIGH vs MID. When in cast shadow (e.g.
-    // indoors) the sun is irrelevant / unseen, so an assumed overhead light
-    // (straight down, direction-to-light +Y) picks MID vs LOW instead, giving
-    // stable top-lit shading that doesn't swing with the hidden sun.
-    let down_up = dot(n, vec3<f32>(0.0, 1.0, 0.0));
-    let down_lit = smoothstep(DOWN_STEP - DOWN_FEATHER, DOWN_STEP + DOWN_FEATHER, down_up);
+    // the ambient light in light units: the diffuse ambient the pbr path gives a white surface
+    // facing up and down here, so a scene's ambient override and the ambient brightness setting
+    // reach avatars as they reach the world. Without the environment map there is none, leaving
+    // the floor
+    var ambient_unity = vec3(0.0);
+#ifdef ENVIRONMENT_MAP
+    let cluster_index = clustered_forward::fragment_cluster_index(pbr_input.frag_coord.xy, view_z, pbr_input.is_orthographic);
+    var clusterable_object_index_ranges = clustered_forward::unpack_clusterable_object_index_ranges(cluster_index);
+    let up = toon_irradiance(vec3(0.0, 1.0, 0.0), world_position.xyz, &clusterable_object_index_ranges);
+    let down = toon_irradiance(vec3(0.0, -1.0, 0.0), world_position.xyz, &clusterable_object_index_ranges);
+    ambient_unity = toon_ambient(up * view.exposure / unit, down * view.exposure / unit);
+#endif
+    let light = toon_light(sun_lux, ambient_unity);
 
-    let band_lit = mix(BAND_MID, BAND_HIGH, angle_lit);
-    let band_shadowed = mix(BAND_LOW, BAND_MID, down_lit);
-    let band = mix(band_shadowed, band_lit, shadow_lit);
-    rim *= shadow_lit; // rim drops out in cast shadow
+    let diffuse = toon_diffuse(dot(vertex_n, l), shadow, light);
 
-    // light colour and level ignored: avatars are lit at a fixed brightness so
-    // they neither go dark at night nor wash out at midday. the scene light
-    // still drives the bands above.
-    let brightness = BRIGHTNESS * view.exposure;
+    // the rim light (lines 148-157, _RimLight 1, _RimLight_FeatherOff 0, _LightDirection_MaskOn 0,
+    // no antipodean rim, white _RimLightColor in the light colour)
+    let rim_inside = bitcast<f32>(#{TOON_RIM_INSIDE_MASK}u);
+    let rim_area = abs(1.0 - dot(n, v));
+    let rim_power = pow(rim_area, exp2(mix(3.0, 0.0, bitcast<f32>(#{TOON_RIM_POWER}u))));
+    let rim = saturate((rim_power - rim_inside) / (1.0 - rim_inside))
+        * saturate(1.0 + bitcast<f32>(#{TOON_RIM_MASK_LEVEL}u));
 
-    var color = (base_color.rgb * band + vec3(rim)) * brightness;
+    // Unity adds the rim to the lit colours (line 157)
+    var color = (base_color.rgb * diffuse + rim * light) * unit;
     color += pbr_input.material.emissive.rgb * view.exposure * EMISSIVE_BOOST;
 
     return vec4<f32>(color, base_color.a);

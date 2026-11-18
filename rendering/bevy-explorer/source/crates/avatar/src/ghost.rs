@@ -690,8 +690,10 @@ mod tests {
 
     /// The ghost's shader, and the avatar shaders with the reveal clip, compile on this machine's
     /// adapter, in a renderer with no window: a dressed ghost (the skinned body in the ghost
-    /// material), a revealed scene-material mesh and a revealed mask mesh in front of a camera
-    /// with the prepasses and a shadowing light. Needs a GPU, so `#[ignore]`d and skipped by CI:
+    /// material), a revealed toon scene-material mesh and a revealed mask mesh in front of two
+    /// cameras with the prepasses, one with an environment map (as the sky envmap gives every
+    /// camera that draws the sky, so the toon ambient lookup compiles) and one without (as the
+    /// avatar preview's), and a shadowing light. Needs a GPU, so `#[ignore]`d and skipped by CI:
     ///
     /// ```text
     /// cargo test -p avatar ghost_and_reveal_shaders -- --ignored --nocapture
@@ -706,10 +708,11 @@ mod tests {
             render::{
                 camera::RenderTarget,
                 render_resource::{
-                    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor,
-                    TextureViewDimension,
+                    CachedPipelineState, Extent3d, PipelineCache, PipelineDescriptor, ShaderDefVal,
+                    TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
                 },
                 storage::ShaderStorageBuffer,
+                RenderApp,
             },
         };
         use pipeline_test::{compile_pipelines, headless_app, render_target};
@@ -731,6 +734,7 @@ mod tests {
         load_ghost_body_in(&mut app);
 
         let target = render_target(&mut app);
+        let bare_target = render_target(&mut app);
         let world = app.world_mut();
         // the unbounded scene's cell table, as SceneBoundPlugin inserts it
         world.resource_mut::<Assets<ShaderStorageBuffer>>().insert(
@@ -801,6 +805,18 @@ mod tests {
             },
             Transform::from_xyz(0.0, 1.0, 4.0).looking_at(Vec3::Y, Vec3::Y),
         ));
+        // no environment map: the toon light falls back to its floor. The camera above also
+        // draws without one until its cube map is uploaded; this one keeps the variant drawn
+        world.spawn((
+            Camera3d::default(),
+            Camera {
+                target: RenderTarget::Image(bare_target.into()),
+                ..default()
+            },
+            DepthPrepass,
+            NormalPrepass,
+            Transform::from_xyz(0.0, 1.0, 4.0).looking_at(Vec3::Y, Vec3::Y),
+        ));
         world.spawn((
             DirectionalLight {
                 shadows_enabled: true,
@@ -849,5 +865,41 @@ mod tests {
         // the skinned ghost, the scene material's main, prepass and shadow passes, the mask
         // material
         assert!(ok >= 5, "only {ok} pipelines compiled");
+
+        // the scene material's main pass compiled with the toon defs, both with and without the
+        // environment map (the toon ambient lookup only exists with it)
+        let has = |defs: &[ShaderDefVal], name: &str| {
+            defs.iter().any(|def| match def {
+                ShaderDefVal::Bool(def_name, true) | ShaderDefVal::UInt(def_name, _) => {
+                    def_name == name
+                }
+                _ => false,
+            })
+        };
+        let shader = app
+            .world()
+            .resource::<AssetServer>()
+            .get_handle::<Shader>("embedded://shaders/bound_material.wgsl")
+            .expect("bound_material.wgsl loaded")
+            .id();
+        let cache = app.sub_app(RenderApp).world().resource::<PipelineCache>();
+        let toon_variants = cache
+            .pipelines()
+            .filter(|pipeline| matches!(pipeline.state, CachedPipelineState::Ok(_)))
+            .filter_map(|pipeline| match &pipeline.descriptor {
+                PipelineDescriptor::RenderPipelineDescriptor(descriptor) => {
+                    descriptor.fragment.as_ref()
+                }
+                _ => None,
+            })
+            .filter(|fragment| {
+                fragment.shader.id() == shader && has(&fragment.shader_defs, "TOON_LIGHT_UNIT_LUX")
+            })
+            .map(|fragment| has(&fragment.shader_defs, "ENVIRONMENT_MAP"))
+            .collect::<Vec<_>>();
+        assert!(
+            toon_variants.contains(&true) && toon_variants.contains(&false),
+            "toon main pass variants by environment map: {toon_variants:?}"
+        );
     }
 }

@@ -10,6 +10,18 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Toon MASK wearables.** Unity alpha-blends after the cutoff, so thin masked lines look
   fine there and fat and black here. Bevy stays glTF-spec-correct (MASK is binary). We don't
   match.
+- **Toon avatars are fogged.** They are fogged like everything else; Unity's
+  `DCL_ToonBody.hlsl` computes a fog factor that its fragment
+  (`DCL_ToonBodyDoubleShadeWithFeather.hlsl`) never applies.
+- **Toon avatars take only the sun.** No point or spot light reaches them, as in Unity's shader
+  (its additional-light loop is commented out); the sun is the brightest directional light, so a
+  scene's `GlobalLight` reaches them.
+- **Toon avatars' ambient floor.** Unity floors the light colour with
+  `max(ShadeSH9(0), ShadeSH9(down))` (`DCL_ToonBodyDoubleShadeWithFeather.hlsl:93`). Here the
+  ambient is the sky envmap's diffuse irradiance, the Trilight ambient the world gets, read for a
+  white surface facing up and down; the constant spherical harmonics term `ShadeSH9(0)` is
+  approximated by the mean of the two. Without the sky envmap (the avatar preview) there is no
+  ambient and the floor is `0.05 * _Unlit_Intensity`.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest
