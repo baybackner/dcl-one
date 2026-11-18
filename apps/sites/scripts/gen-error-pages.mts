@@ -2,11 +2,12 @@
 // it generates itself (the app is down or timed out, rate limits, `return 404`, oversized bodies). The
 // app's own 4xx/5xx render StatusPage (library/ui/apps/sites/status), whose copy, CSS Module and art
 // these pages share. 404 is the app's own NotFoundPage (src/features/not-found), rendered from its
-// component with the CSS Modules its markup uses; its AnimatedBackground renders the still image, as
-// the app does under reduced motion, since a static page runs no WebGL.
+// component with the CSS Modules its markup uses, the app's Inter faces (apps/ui3/src/atoms/inter.css)
+// for the weights and scripts its text uses, and AnimatedBackground's animation (animate.ts, bundled
+// into an inline script) over the still image it renders on the server.
 //
-// Every page inlines its CSS, the --dcl-* tokens that CSS reads (from library/ui/foundations), the logo
-// and the art (as a data: URI), so it renders even when nothing behind nginx is reachable.
+// Every page inlines its CSS, the --dcl-* tokens that CSS reads (from library/ui/foundations), the logo,
+// the art, fonts and scripts (as data: URIs or inline), so it renders even when nothing behind nginx is reachable.
 //
 // The output is not committed: scripts/sync-ui3-public.mts runs this after it fills public/ (predev,
 // prebuild, the Nix sites package), so every build renders the pages from the current sources.
@@ -19,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { createServer, type ModuleNode } from "vite";
+import { build, createServer, type ModuleNode, type Rollup } from "vite";
 
 const sites = fileURLToPath(new URL("../", import.meta.url));
 const oneUi = fileURLToPath(new URL("../../../library/ui/", import.meta.url));
@@ -27,6 +28,10 @@ const status = join(oneUi, "apps/sites/status");
 const artDir = join(oneUi, "apps/sites/assets/errors");
 const notFoundEntry = join(sites, "src/features/not-found/NotFoundPage.tsx");
 const foundations = join(oneUi, "foundations");
+const animatedBackground = join(oneUi, "apps/sites/shared/AnimatedBackground");
+// The app's Inter faces and the files they name under /fonts/ (apps/ui3/public, copied into Sites' public/).
+const interCss = fileURLToPath(new URL("../../ui3/src/atoms/inter.css", import.meta.url));
+const ui3Public = fileURLToPath(new URL("../../ui3/public/", import.meta.url));
 const outDir = process.env.ERROR_PAGES_OUT || join(sites, "public/errors");
 const check = process.argv.includes("--check");
 
@@ -54,6 +59,7 @@ let moduleCss: string;
 let icons: typeof import("../../../library/ui/foundations/icons/index.ts");
 let notFoundMarkup: string;
 let notFoundCss: string;
+let backgroundStyles: Record<string, string>;
 try {
   copyModule = await vite.ssrLoadModule(join(status, "statusCopy.ts")) as typeof copyModule;
   styles = (await vite.ssrLoadModule(join(status, "StatusPage.module.css"))).default as Record<string, string>;
@@ -64,6 +70,7 @@ try {
   notFoundMarkup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(NotFoundPage)))
     .replace(/<link rel="preload" as="image"[^>]*>/g, "");
   notFoundCss = await usedModuleCss(vite, notFoundEntry, notFoundMarkup);
+  backgroundStyles = (await vite.ssrLoadModule(join(animatedBackground, "AnimatedBackground.module.css"))).default as Record<string, string>;
 } finally {
   await vite.close();
 }
@@ -172,13 +179,105 @@ const assetUri = (url: string) => {
   return webpUri(path.startsWith("/@fs/") ? path.slice("/@fs".length) : join(sites, path));
 };
 
+const woff2Uri = (path: string) => {
+  const file = relative(join(oneUi, "../.."), path);
+  const bytes = readFileSync(path);
+  if (bytes.subarray(0, LFS_POINTER.length).toString("latin1") === LFS_POINTER) {
+    throw new Error(`gen-error-pages: ${file} is a Git LFS pointer, not the font`);
+  }
+  if (!path.endsWith(".woff2") || bytes.subarray(0, 4).toString("latin1") !== "wOF2") throw new Error(`gen-error-pages: ${file} is not a woff2 font`);
+  return `data:font/woff2;base64,${bytes.toString("base64")}`;
+};
+
+/** The weight of `declared` a browser picks for `wanted` (CSS Fonts 4, font-weight matching). */
+function matchWeight(wanted: number, declared: number[]): number {
+  if (declared.includes(wanted)) return wanted;
+  const below = declared.filter((w) => w < wanted).sort((a, b) => b - a);
+  const above = declared.filter((w) => w > wanted).sort((a, b) => a - b);
+  const order = wanted > 500 ? [...above, ...below]
+    : wanted < 400 ? [...below, ...above]
+    : [...above.filter((w) => w <= 500), ...below, ...above.filter((w) => w > 500)];
+  return order[0]!;
+}
+
+/** Text code points that are in the CSS unicode-range `range`. */
+const inRange = (range: string, points: Set<number>) =>
+  range.split(",").some((part) => {
+    const [lo, hi = lo] = part.trim().replace(/^U\+/i, "").split("-").map((h) => parseInt(h!, 16));
+    return [...points].some((p) => p >= lo! && p <= hi!);
+  });
+
+/**
+ * The app's Inter @font-face rules for the weights `css` sets (and 400, the initial weight) and the scripts the
+ * markup's text uses, with their files inlined. A code point no selected face covers is an error: it would render
+ * in the fallback font.
+ */
+function interFaces(css: string, markup: string): string {
+  const faces = [...readFileSync(interCss, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/@font-face\s*\{([^}]*)\}/g)].map((m) => {
+    const body = m[1]!.trim();
+    const prop = (name: string) => new RegExp(`${name}\\s*:\\s*([^;]+)`).exec(body)?.[1]!.trim() ?? "";
+    return { body, weight: Number(prop("font-weight")), range: prop("unicode-range"), url: /url\(\s*["']?(\/fonts\/[^"')]+)["']?\s*\)/.exec(body)?.[1] };
+  });
+  if (!faces.length || faces.some((face) => !face.url || !face.weight || !face.range)) throw new Error(`gen-error-pages: cannot read the faces of ${relative(sites, interCss)}`);
+  const declared = [...new Set(faces.map((face) => face.weight))];
+  const weights = new Set([400, ...[...css.matchAll(/font-weight\s*:\s*(\d+)/g)].map((m) => Number(m[1]))].map((w) => matchWeight(w, declared)));
+  const text = markup.replace(/<[^>]*>/g, "")
+    .replace(/&#x([\da-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const points = new Set([...text.replace(/\s+/g, " ")].map((c) => c.codePointAt(0)!));
+  const used = faces.filter((face) => weights.has(face.weight) && inRange(face.range, points));
+  for (const weight of weights) {
+    const missing = [...points].filter((p) => !used.some((face) => face.weight === weight && inRange(face.range, new Set([p]))));
+    if (missing.length) throw new Error(`gen-error-pages: no Inter face of weight ${weight} covers ${missing.map((p) => `U+${p.toString(16).toUpperCase()}`).join(", ")}`);
+  }
+  return used.map((face) => `@font-face{${face.body.replace(face.url!, woff2Uri(join(ui3Public, face.url!))).replace(/\s*([:;])\s*/g, "$1")}}`).join("");
+}
+
+/**
+ * AnimatedBackground's animation (animate.ts), bundled with its shaders and the overlay texture inlined, started on
+ * the root AnimatedBackground rendered into the 404 markup.
+ */
+async function backgroundScript(markup: string): Promise<string> {
+  const root = backgroundStyles.root;
+  const canvas = backgroundStyles.canvas;
+  if (!root || !canvas || !markup.includes(`class="${root}"`)) throw new Error("gen-error-pages: the 404 markup has no AnimatedBackground root");
+  const entry = "\0static-404-background";
+  const output = await build({
+    configFile: false,
+    root: sites,
+    logLevel: "silent",
+    publicDir: false,
+    plugins: [{
+      name: "static-404-background",
+      enforce: "pre",
+      resolveId: (id) => (id === entry ? entry : null),
+      load(id) {
+        if (id === entry) {
+          return `import { animateBackground } from ${JSON.stringify(join(animatedBackground, "animate.ts"))};
+const root = document.querySelector(${JSON.stringify(`.${root}`)});
+if (root) animateBackground(root, ${JSON.stringify(canvas)});`;
+        }
+        // Through the same checks as the art: real webp bytes, not a Git LFS pointer.
+        if (id.endsWith(".webp")) return `export default ${JSON.stringify(webpUri(id))};`;
+        return null;
+      },
+    }],
+    build: { write: false, minify: true, modulePreload: false, copyPublicDir: false, rollupOptions: { input: entry, output: { format: "iife" } } },
+  }) as Rollup.RollupOutput | Rollup.RollupOutput[];
+  const files = (Array.isArray(output) ? output : [output]).flatMap((o) => o.output);
+  const chunk = files.find((file): file is Rollup.OutputChunk => file.type === "chunk");
+  if (!chunk || files.length !== 1) throw new Error(`gen-error-pages: the background bundle is ${files.map((f) => f.fileName).join(", ")}, not one script`);
+  return chunk.code.trim().replace(/<\/script/gi, "<\\/script");
+}
+
 const minify = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s*\n\s*/g, "");
 const SHELL_CSS = "html,body{margin:0;background:#0d0c11}";
 const css = minify(moduleCss);
 const style = `${tokenBlock(css)}${SHELL_CSS}${css}`;
 const notFoundStyleCss = minify(notFoundCss).replace(/url\(\s*(['"]?)(\/[^'")]+)\1\s*\)/g, (_, _q, url: string) => `url(${assetUri(url)})`);
-const notFoundStyle = `${tokenBlock(notFoundStyleCss)}${SHELL_CSS}${notFoundStyleCss}`;
-const notFoundBody = notFoundMarkup.replace(/ src="(\/[^"]+)"/g, (_, url: string) => ` src="${assetUri(url)}"`);
+const notFoundStyle = `${interFaces(notFoundStyleCss, notFoundMarkup)}${tokenBlock(notFoundStyleCss)}${SHELL_CSS}${notFoundStyleCss}`;
+const notFoundBody = `${notFoundMarkup.replace(/ src="(\/[^"]+)"/g, (_, url: string) => ` src="${assetUri(url)}"`)}\n<script>${await backgroundScript(notFoundMarkup)}</script>`;
 const logo = renderToStaticMarkup(
   createElement(icons.GeneralDecentraland, { className: styles.logoMark, size: 28, viewBox: LOGOMARK_VIEW_BOX, "aria-hidden": "true" }),
 );

@@ -127,6 +127,20 @@ it("fails on a Git LFS pointer in place of the art, naming the file and the comm
   expect(fs.readFileSync(art).equals(bytes)).toBe(true);
 }, 60_000);
 
+it("fails on a Git LFS pointer in place of an Inter file the 404 embeds, naming the file", () => {
+  const font = path.join(FONTS, "Inter-v20-latin.woff2");
+  const bytes = fs.readFileSync(font);
+  fs.writeFileSync(font, "version https://git-lfs.github.com/spec/v1\noid sha256:0000\nsize 1\n");
+  try {
+    const result = run("--check");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("apps/ui3/public/fonts/Inter-v20-latin.woff2 is a Git LFS pointer");
+  } finally {
+    fs.writeFileSync(font, bytes);
+  }
+  expect(fs.readFileSync(font).equals(bytes)).toBe(true);
+}, 60_000);
+
 it("is self-contained: no external stylesheet, script, font or image, and every custom property it reads is defined", () => {
   for (const status of STATIC_ERROR_STATUSES) {
     const html = fs.readFileSync(path.join(OUT, `${status}.html`), "utf8");
