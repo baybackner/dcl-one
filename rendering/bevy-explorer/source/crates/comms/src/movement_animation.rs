@@ -1,18 +1,17 @@
 //! The animation state other clients receive with the player's rfc4 `Movement`, derived from what
-//! the engine knows: the movement blend from the horizontal speed, ground from the engine's ground
-//! test, falls from the vertical speed, and jumps, the glider and hard landings from the file name
-//! of the clip the scene controlling movement plays (`AvatarMovement.animation.src`).
+//! the engine knows: the movement blend from the horizontal speed (`gait`), ground from the
+//! engine's ground test, falls from the vertical speed, and jumps, the glider and hard landings
+//! from the file name of the clip the scene controlling movement plays
+//! (`AvatarMovement.animation.src`).
 
 use bevy::prelude::*;
-use common::structs::MoveKind;
+use common::structs::{LocomotionSpeeds, MoveKind};
 use dcl_component::proto_components::kernel::comms::rfc4::movement::GlideState;
 
-/// Vertical speed (m/s, up positive) below which an avatar off the ground is falling.
-const FALLING_SPEED: f32 = -3.0;
+use crate::gait;
+
 /// Vertical speed (m/s, up positive) below which an avatar off the ground is falling far.
 const LONG_FALLING_SPEED: f32 = -8.0;
-/// A movement blend below this is idle.
-const MIN_MOVEMENT_BLEND: f32 = 0.01;
 
 /// What the file name of a movement clip says about the avatar's motion. The naming convention,
 /// matched case-insensitively on the file name without its folder and extension:
@@ -99,38 +98,20 @@ impl ClipMotion {
     }
 }
 
-/// Jumps since the avatar last stood on ground: reset on the ground, raised by the clips. Updated
-/// every frame, so a jump clip shorter than the broadcast interval still counts.
+/// Jumps since the avatar last stood on ground: reset on the ground, raised by the clips and by a
+/// jump the engine has in flight (`AvatarDynamicState::jump_time`). Updated every frame, so a jump
+/// clip shorter than the broadcast interval still counts.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct JumpCount(u32);
 
 impl JumpCount {
-    pub fn update(&mut self, grounded: bool, motion: ClipMotion) -> u32 {
+    pub fn update(&mut self, grounded: bool, motion: ClipMotion, jump_in_flight: bool) -> u32 {
         if grounded {
             self.0 = 0;
         }
-        self.0 = self.0.max(motion.jumps());
+        let engine_jumps = u32::from(!grounded && jump_in_flight);
+        self.0 = self.0.max(motion.jumps()).max(engine_jumps);
         self.0
-    }
-}
-
-/// The movement blend, 0 (idle) to 3 (run): piecewise-linear in the horizontal speed through
-/// idle 0 at rest, walk 1, jog 2 and run 3 at the gait speeds `[walk, jog, run]`, 3 above the run
-/// speed; below 0.01 it is 0. The target before any smoothing, which belongs to the receiver.
-pub fn movement_blend(horizontal_speed: f32, gait_speeds: [f32; 3]) -> f32 {
-    let mut from = (0.0, 0.0);
-    let mut blend = 3.0;
-    for (to, place) in gait_speeds.into_iter().zip([1.0, 2.0, 3.0]) {
-        if horizontal_speed < to && to > from.0 {
-            blend = from.1 + (horizontal_speed - from.0) / (to - from.0) * (place - from.1);
-            break;
-        }
-        from = (to.max(from.0), place);
-    }
-    if blend < MIN_MOVEMENT_BLEND {
-        0.0
-    } else {
-        blend
     }
 }
 
@@ -151,14 +132,14 @@ impl WireAnimation {
     /// `is_jumping` (deprecated) marks a jump in the air not yet falling.
     pub fn new(
         velocity: Vec3,
-        gait_speeds: [f32; 3],
+        speeds: &LocomotionSpeeds,
         grounded: bool,
         motion: ClipMotion,
         jump_count: u32,
     ) -> Self {
-        let is_falling = !grounded && velocity.y < FALLING_SPEED;
+        let is_falling = gait::is_falling(grounded, velocity.y);
         Self {
-            movement_blend_value: movement_blend(velocity.xz().length(), gait_speeds),
+            movement_blend_value: gait::movement_blend(velocity.xz().length(), speeds),
             is_grounded: grounded,
             is_jumping: !grounded && jump_count > 0 && !is_falling,
             is_falling,
@@ -174,7 +155,11 @@ impl WireAnimation {
 mod tests {
     use super::*;
 
-    const GAITS: [f32; 3] = [1.5, 8.0, 10.0];
+    const GAITS: LocomotionSpeeds = LocomotionSpeeds {
+        walk: 1.5,
+        jog: 8.0,
+        run: 10.0,
+    };
 
     #[test]
     fn the_movement_scenes_clips_name_their_motion() {
@@ -223,42 +208,33 @@ mod tests {
     fn the_jump_count_holds_in_the_air_and_resets_on_the_ground() {
         let mut count = JumpCount::default();
         // the start clip may begin before the feet leave the ground
-        assert_eq!(count.update(true, ClipMotion::Jump), 1);
-        assert_eq!(count.update(false, ClipMotion::Jump), 1);
+        assert_eq!(count.update(true, ClipMotion::Jump, false), 1);
+        assert_eq!(count.update(false, ClipMotion::Jump, false), 1);
         // the fall loop keeps the jump
-        assert_eq!(count.update(false, ClipMotion::None), 1);
-        assert_eq!(count.update(false, ClipMotion::DoubleJump), 2);
-        assert_eq!(count.update(false, ClipMotion::Gliding), 2);
-        assert_eq!(count.update(false, ClipMotion::GlideClosing), 2);
-        assert_eq!(count.update(true, ClipMotion::GlideClosing), 0);
+        assert_eq!(count.update(false, ClipMotion::None, false), 1);
+        assert_eq!(count.update(false, ClipMotion::DoubleJump, false), 2);
+        assert_eq!(count.update(false, ClipMotion::Gliding, false), 2);
+        assert_eq!(count.update(false, ClipMotion::GlideClosing, false), 2);
+        assert_eq!(count.update(true, ClipMotion::GlideClosing, false), 0);
         // walking off a ledge is no jump
-        assert_eq!(count.update(false, ClipMotion::None), 0);
+        assert_eq!(count.update(false, ClipMotion::None, false), 0);
     }
 
     #[test]
-    fn the_blend_runs_from_idle_0_through_the_gait_speeds_to_run_3() {
-        for (speed, blend) in [
-            (0.0, 0.0),
-            (0.01, 0.0),
-            (0.75, 0.5),
-            (1.5, 1.0),
-            (4.75, 1.5),
-            (8.0, 2.0),
-            (9.0, 2.5),
-            (10.0, 3.0),
-            (14.0, 3.0),
-        ] {
-            assert_eq!(movement_blend(speed, GAITS), blend, "{speed} m/s");
-        }
-        // equal gait speeds skip a place instead of dividing by zero
-        assert_eq!(movement_blend(5.0, [1.5, 5.0, 5.0]), 3.0);
-        assert_eq!(movement_blend(3.0, [0.0, 0.0, 0.0]), 3.0);
+    fn a_jump_the_engine_has_in_flight_counts_one_until_the_ground() {
+        let mut count = JumpCount::default();
+        // a clip that names no jump, or none at all, while the engine's jump is in the air
+        assert_eq!(count.update(false, ClipMotion::None, true), 1);
+        assert_eq!(count.update(false, ClipMotion::DoubleJump, true), 2);
+        assert_eq!(count.update(true, ClipMotion::None, true), 0);
+        // falling without a jump
+        assert_eq!(count.update(false, ClipMotion::None, false), 0);
     }
 
     #[test]
     fn falls_come_from_the_vertical_speed_off_the_ground() {
         let wire = |velocity, grounded, motion, jumps| {
-            WireAnimation::new(velocity, GAITS, grounded, motion, jumps)
+            WireAnimation::new(velocity, &GAITS, grounded, motion, jumps)
         };
         let rising = wire(Vec3::new(0.0, 4.0, 8.0), false, ClipMotion::Jump, 1);
         assert!(rising.is_jumping && !rising.is_falling && !rising.is_grounded);

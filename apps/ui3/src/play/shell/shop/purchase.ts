@@ -1,4 +1,4 @@
-// The web shell's side of the in-world Shop purchase (lib/shopProtocol). The HUD asks to buy items (one,
+// The web shell's side of the in-world Shop purchase (library/ui/apps/shop/shopProtocol). The HUD asks to buy items (one,
 // or its cart's); this reads their listings, the server's offers and the buyer's Credits balance itself,
 // shows the buyer the design's dialog over the app (./overlay), and on BUY ITEM settles the purchase
 // through the web Shop's own checkout (cart partition, review, the per-group executor and its rails), with
@@ -13,7 +13,6 @@
 // watchGroup: its receipt, or the server's record of its credit) until it settles, across dialogs and
 // reloads. Buying an item again while one of it is unresolved shows that one instead.
 
-import type { AuthIdentity as SignerIdentity } from '../../../data/auth/identity'
 import { fetchProfile } from '../../../data/catalyst/profile'
 import type { Eip1193Provider } from '../../../data/auth/wallet'
 import { createShopClient, type ShopClient } from '@shop/api/shop'
@@ -42,7 +41,7 @@ import { creditsCeil, creditsFloor, type UsdCents } from '@shop/model/money'
 import type { CartLine, GroupProgress, GroupStatus, PurchaseOffer, PurchaseState } from '@shop/model/purchase'
 import type { Session } from '@shop/model/settlement'
 import { loginExpired, rootAddress, type StoredLogin } from '@explorer-core/features/auth/sso'
-import type { ShopPurchaseItem, ShopPurchaseStep } from '../../features/shop/ui'
+import type { ShopPurchaseItem, ShopPurchaseStep } from '@dcl/one-ui/apps/shop/ui'
 import { siteUrl } from '../../lib/baseDomain'
 import {
   parseBuyRequest,
@@ -66,13 +65,15 @@ import {
   type ShopNamesMode,
   type ShopOperationState,
   type ShopWalletKind
-} from '../../lib/shopProtocol'
+} from '@dcl/one-ui/apps/shop/shopProtocol'
 import { withUtm } from '@explorer-core/lib/utm'
 import { trustedCreditsManager, type TrustedManager } from './config'
 import { createLedger, type OperationRecord } from './ledger'
 import { createNamePurchase, nameBuild, namesModeFor, type NameStanding } from './namePurchase'
 import { assertWalletAccount, guardedProvider, WalletRefusal, type PurchaseIntent } from './walletGuard'
-import { hostApiOptions, identitySigner } from '../../../shop/api/host'
+import { hostApiOptions } from '../../../shop/api/host'
+import { loginSigner } from '../loginSigner'
+import { webLock } from '../webLock'
 import { shopFlags } from '../../../shop/discovery/flags'
 
 /** The buyer's wallet, as the page hosting the shell resolves it (Sites: its sign-in session). */
@@ -160,7 +161,7 @@ export interface ShellShopServices {
   balance(account: string, client: ShopClient): Promise<UsdBalance>
   resolvers(client: ShopClient): SettlementResolvers
   reader(): ChainReader
-  /** The creator-sales rollout, which the listing reads from its module (see features/shop/flagsQuery). */
+  /** The creator-sales rollout, which the listing reads from its module (see library/ui/apps/shop/flagsQuery). */
   primeFlags(): Promise<void>
   run(deps: CheckoutDeps, group: CartGroup, resolved: Resolved): Promise<GroupResult>
   watch(deps: CheckoutDeps, progress: GroupProgress): Promise<GroupResult>
@@ -205,6 +206,8 @@ export interface ShellShopDeps {
   openExternal(url: string): void
   /** Leaves for the sign-in, as the HUD's own sign-in does. */
   signIn(): void
+  /** Whether another dialog (Donate's) is up over the app: a purchase waits its turn. */
+  otherDialogOpen?(): boolean
   services?: Partial<ShellShopServices>
 }
 
@@ -224,18 +227,7 @@ const WATCH_BACKOFF_MS = [5_000, 10_000, 20_000, 40_000, 60_000]
  * purchase, so the answer is null: no purchase runs.
  */
 export function claimLock(locks: LockManager | undefined, id: string, wait = false): Promise<(() => void) | null> {
-  return new Promise((resolve) => {
-    if (!locks) return resolve(null)
-    locks
-      .request(`dcl-inworld-shop:operation:${id}`, wait ? {} : { ifAvailable: true }, (lock) => {
-        if (!lock) {
-          resolve(null)
-          return undefined
-        }
-        return new Promise<void>((release) => resolve(() => release()))
-      })
-      .catch(() => resolve(null))
-  })
+  return webLock(locks, `dcl-inworld-shop:operation:${id}`, wait)
 }
 /** A credit the server reports expired and unused, with no receipt for the hash, is read again this much later
  *  before the purchase is taken as never gone through: past the index's lag, an expired credit can't be spent. */
@@ -305,20 +297,6 @@ const NO_WALLET: Eip1193Provider = {
   request: async () => {
     throw new WalletRefusal('Nothing is signed while a purchase is followed.', 4200)
   }
-}
-
-/** The shell's request signer for a login: its ephemeral key over its auth chain (ADR-44 headers). */
-export function loginSigner(login: StoredLogin | null): ShopSigner | null {
-  const key = login?.identity.ephemeralIdentity.privateKey
-  if (!login || !key || loginExpired(login)) return null
-  const { identity } = login
-  return identitySigner({
-    signer: rootAddress(identity),
-    ephemeral: { address: identity.ephemeralIdentity.address, privateKey: key as `0x${string}` },
-    expiration: String(identity.expiration),
-    // The stored chain is the auth site's JSON; its link types are the signer's own.
-    authChain: identity.authChain as SignerIdentity['authChain']
-  })
 }
 
 /** One login, as signed: a new sign-in (or its renewal) is another, even for the same account. */
@@ -435,6 +413,8 @@ type Operation = OperationRecord & {
 export interface ShellShop {
   /** Answers a `shop.*` request from the app frame. */
   request(method: string, params: unknown): Promise<unknown>
+  /** Whether the Shop's dialog is up over the app. */
+  dialogOpen(): boolean
 }
 
 export function createShellShop(deps: ShellShopDeps): ShellShop {
@@ -537,7 +517,7 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
     session: nameSession,
     client: (key) => confirmedClient(key),
     slot,
-    busy: () => starting || running,
+    busy: () => starting || running || deps.otherDialogOpen?.() === true,
     post: deps.post,
     openExternal: deps.openExternal,
     services: {
@@ -698,7 +678,8 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
         if (record === 'expired') {
           op.expiredSince ??= svc.now()
           if (svc.now() - op.expiredSince >= EXPIRY_CONFIRM_MS) {
-            settled(op, 'failed', {}, 'This purchase never went through, and its Credits expired unused: nothing was bought.', 'one of its transactions never went through, and its Credits expired unused.')
+            // Expiry with no consumption indexed past it: it can no longer land, not proof it was never sent.
+            settled(op, 'failed', {}, 'This purchase expired before its Credits were spent on chain: nothing was bought.', 'one of its transactions expired before its Credits were spent on chain.')
             return true
           }
         } else op.expiredSince = undefined
@@ -1178,12 +1159,16 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
       store.clear()
       store.restore(lines)
     }
-    // The relay gets the signed purchase only once its hand-off is kept; refused here, it was never sent.
+    // The relay gets the signed purchase only once its hand-off is kept; refused here, it was never sent,
+    // and the answer carries the relay's own evidence of that (`not_sent`).
     const rail = svc.rail()
     const send = rail.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a))
     const relay = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       if ((init?.method ?? 'GET').toUpperCase() === 'POST' && !durable(op, 'handedOff')) {
-        return new Response(JSON.stringify({ ok: false, message: "This browser couldn't keep a record of the purchase, so it wasn't sent." }), { status: 409, headers: { 'content-type': 'application/json' } })
+        return new Response(JSON.stringify({ ok: false, not_sent: true, message: "This browser couldn't keep a record of the purchase, so it wasn't sent." }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' }
+        })
       }
       return send(input, init)
     }) as typeof fetch
@@ -1245,7 +1230,7 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
 
   const buy = async (params: unknown): Promise<ShopOperation> => {
     const req = parseBuyRequest(params)
-    if (starting || running || slot.open()) throw shopBusy()
+    if (starting || running || slot.open() || deps.otherDialogOpen?.()) throw shopBusy()
     starting = true
     try {
       const who = signedIn()
@@ -1332,6 +1317,8 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
         default:
           throw new Error(`unknown request ${method}`)
       }
-    }
+    },
+    // A purchase still starting (before its dialog shows) counts: Donate must not open over it.
+    dialogOpen: () => starting || running || slot.holder() != null
   }
 }

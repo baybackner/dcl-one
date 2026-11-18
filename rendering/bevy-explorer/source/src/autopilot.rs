@@ -29,6 +29,8 @@ use wallet::Wallet;
 
 use crate::world_state::{Arrivals, WorldState};
 
+pub(crate) mod walk;
+
 /// Added only when [`Autopilot`] exists. It reads the player's [`Arrivals`], so the app needs
 /// `WorldStatePlugin`, which the client adds in every run.
 pub struct AutopilotPlugin;
@@ -37,11 +39,12 @@ impl Plugin for AutopilotPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(RunControlPlugin)
             .add_console_command::<AutopilotFailCommand, _>(autopilot_fail);
+        app.add_plugins(walk::AutopilotWalkPlugin);
     }
 }
 
 /// The phase machine, apart from the console command so a test can build it alone.
-struct RunControlPlugin;
+pub(crate) struct RunControlPlugin;
 
 impl Plugin for RunControlPlugin {
     fn build(&self, app: &mut App) {

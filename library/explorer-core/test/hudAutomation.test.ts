@@ -76,6 +76,21 @@ describe('finding controls', () => {
     ])
   })
 
+  it('names a button by the label that wraps it', () => {
+    const root = render('<label>Auto <button role="switch" aria-checked="true"></button></label>')
+    place(root.querySelector('button')!, 0, 0)
+    expect(listControls()).toEqual([{ role: 'switch', name: 'Auto' }])
+  })
+
+  it('reads adjacent text nodes as one run, and an element boundary as a space', () => {
+    const root = render('<button><span>Genesis Plaza</span><span class="rating"><svg aria-hidden="true"></svg></span></button>')
+    const rating = root.querySelector('.rating')!
+    // what JSX's `{rating}%` renders: two text nodes side by side
+    rating.append(document.createTextNode('97'), document.createTextNode('%'))
+    place(root.querySelector('button')!, 0, 0)
+    expect(listControls()).toEqual([{ role: 'button', name: 'Genesis Plaza 97%' }])
+  })
+
   it('matches a name exactly, ignoring case, unless exact is false', () => {
     const root = render('<button>Explore as guest</button><a href="#">Explore</a>')
     for (const el of Array.from(root.children)) place(el, 0, 0)
@@ -936,16 +951,18 @@ describe('without a test runner', () => {
     const w = window as Window & { __dclPageCommands?: Record<string, unknown>; __dclTrustedInputDone?: unknown }
     expect(typeof w.__dclTrustedInputDone).toBe('function')
     expect(Object.keys(w.__dclPageCommands ?? {})).toEqual(Object.keys(PAGE_COMMANDS))
-    // the sign-in command is a test runner's: a page nobody drives gets none
+    // the sign-in commands are a test runner's: a page nobody drives gets neither
     expect(w.__dclPageCommands).not.toHaveProperty('/hud_login')
+    expect(w.__dclPageCommands).not.toHaveProperty('/hud_logout')
     delete w.__dclPageCommands
     delete w.__dclTrustedInputDone
   })
 
-  it('a test runner driving the browser gets the sign-in command as well', () => {
+  it('a test runner driving the browser gets the sign-in commands as well', () => {
     const w = window as Window & { __dclPageCommands?: Record<string, unknown>; __dclTrustedInput?: unknown }
     w.__dclTrustedInput = () => undefined
     installHudAutomation()
+    expect(Object.keys(LOGIN_COMMANDS)).toEqual(['/hud_login', '/hud_logout'])
     expect(Object.keys(w.__dclPageCommands ?? {})).toEqual([...Object.keys(PAGE_COMMANDS), ...Object.keys(LOGIN_COMMANDS)])
     delete w.__dclPageCommands
     delete w.__dclTrustedInput

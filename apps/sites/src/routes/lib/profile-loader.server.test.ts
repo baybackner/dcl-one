@@ -2,29 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const net = vi.hoisted(() => ({
   fetchProfile: vi.fn(),
-  fetchCreations: vi.fn(),
+  fetchProfileCreations: vi.fn(),
+  fetchProfileAssets: vi.fn(),
   fetchProfilePlaces: vi.fn(),
   fetchUserPhotos: vi.fn(),
-  fetchOwnedWearables: vi.fn(),
-  fetchOwnedNames: vi.fn(),
+  fetchUserBadges: vi.fn(),
 }));
+vi.mock("@/data/lib/catalyst/social/badges", () => ({ fetchUserBadges: net.fetchUserBadges }));
 vi.mock("@/data/lib/catalyst/social/profile", async (original) => ({
   ...(await original<typeof import("@/data/lib/catalyst/social/profile")>()),
   fetchProfile: net.fetchProfile,
 }));
-vi.mock("@/data/lib/catalyst/marketplace/index", async (original) => ({
-  ...(await original<typeof import("@/data/lib/catalyst/marketplace/index")>()),
-  fetchCreations: net.fetchCreations,
+vi.mock("@/data/lib/catalyst/marketplace/profile-collectibles", async (original) => ({
+  ...(await original<typeof import("@/data/lib/catalyst/marketplace/profile-collectibles")>()),
+  fetchProfileCreations: net.fetchProfileCreations,
+  fetchProfileAssets: net.fetchProfileAssets,
 }));
-vi.mock("@/data/lib/catalyst/places/index", async (original) => ({
-  ...(await original<typeof import("@/data/lib/catalyst/places/index")>()),
+vi.mock("@/data/lib/catalyst/places/profile-places", async (original) => ({
+  ...(await original<typeof import("@/data/lib/catalyst/places/profile-places")>()),
   fetchProfilePlaces: net.fetchProfilePlaces,
 }));
 vi.mock("@/data/lib/catalyst/social/photos", () => ({ fetchUserPhotos: net.fetchUserPhotos }));
-vi.mock("@/data/lib/catalyst/marketplace/account", () => ({
-  fetchOwnedWearables: net.fetchOwnedWearables,
-  fetchOwnedNames: net.fetchOwnedNames,
-}));
 
 import { createStaticHandler, RouterContextProvider } from "react-router";
 
@@ -32,7 +30,13 @@ import { markPublicResponse, requestSessionContext } from "@/core/lib/telemetry/
 import { CatalystError } from "@/data/lib/catalyst/client";
 import { profileKeys } from "@/data/lib/profile/queries";
 
-import { legacyAccountsRedirect, ownProfileRedirect, profileLoader, type ProfileLoaderData } from "./profile-loader.server";
+import {
+  legacyAccountsRedirect,
+  OPTIONAL_READS_BUDGET_MS,
+  ownProfileRedirect,
+  profileLoader,
+  type ProfileLoaderData,
+} from "./profile-loader.server";
 
 const A = "0x4e9c4a2502fdf71e93ed8ed6ca9ddbd891d6f295";
 const B = "0x1111111111111111111111111111111111111111";
@@ -77,7 +81,7 @@ const keysOf = (data: ProfileLoaderData) => data.dehydratedState.queries.map((q)
 
 beforeEach(() => {
   net.fetchProfile.mockImplementation(async (address: string) => avatar(address === A ? "Alice" : "Bob"));
-  net.fetchCreations.mockResolvedValue({ wearables: [], emotes: [] });
+  net.fetchProfileCreations.mockResolvedValue({ items: [], received: 0, total: 0 });
 });
 afterEach(() => vi.resetAllMocks());
 
@@ -124,13 +128,71 @@ describe("profile loader, dehydrated state", () => {
   it("dehydrates the profile and the active tab's data only", async () => {
     const out = await run(`/profile/${A}/creations`, { address: A, tab: "creations" });
 
-    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A), profileKeys.creations(A)]);
+    // Creations opens on wearables: only that list's first page is read.
+    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A), profileKeys.creations(A, "wearable")]);
+    expect(net.fetchProfileCreations).toHaveBeenCalledTimes(1);
+    expect(net.fetchProfileCreations.mock.calls[0]?.[1]).toMatchObject({ category: "wearable", skip: 0 });
     expect(net.fetchProfilePlaces).not.toHaveBeenCalled();
     expect(net.fetchUserPhotos).not.toHaveBeenCalled();
   });
 
+  it("does not hand a wallet with no profile its badges", async () => {
+    net.fetchProfile.mockResolvedValue(null);
+    net.fetchUserBadges.mockResolvedValue([{ id: "x", name: "X" }]);
+
+    const out = await run(`/profile/${A}`, { address: A });
+
+    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A)]);
+  });
+
+  describe("when an optional read outlasts the budget", () => {
+    let settled: boolean;
+    let result: ReturnType<typeof run>;
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      settled = false;
+      net.fetchProfileCreations.mockReturnValue(new Promise(() => {}));
+      result = run(`/profile/${A}/creations`, { address: A, tab: "creations" });
+      void result.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(OPTIONAL_READS_BUDGET_MS - 1);
+    });
+    afterEach(() => vi.useRealTimers());
+    it("should still wait before the deadline", () => {
+      expect(settled).toBe(false);
+    });
+    it("should render only the profile at the deadline", async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      const out = await result;
+      expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A)]);
+    });
+  });
+
+  describe("when a wallet has no profile and badges never finish", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      net.fetchProfile.mockResolvedValue(null);
+      net.fetchUserBadges.mockReturnValue(new Promise(() => {}));
+    });
+    afterEach(() => vi.useRealTimers());
+    it("should return without consuming the optional budget", async () => {
+      let settled = false;
+      const result = run(`/profile/${A}`, { address: A }).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      await result;
+    });
+  });
+
+  it("dehydrates the badges with the profile on Overview", async () => {
+    net.fetchUserBadges.mockResolvedValue([]);
+
+    const out = await run(`/profile/${A}`, { address: A });
+
+    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A), profileKeys.badges(A)]);
+  });
+
   it("leaves a failed optional read to the browser and still renders", async () => {
-    net.fetchCreations.mockRejectedValue(new Error("marketplace down"));
+    net.fetchProfileCreations.mockRejectedValue(new Error("marketplace down"));
 
     const out = await run(`/profile/${A}/creations`, { address: A, tab: "creations" });
 
@@ -142,21 +204,28 @@ describe("profile loader, dehydrated state", () => {
 
     expect(out.ok).toBe(false);
     expect(locationOf(out.ok ? null : out.thrown)).toBe(`/profile/${A}`);
-    expect(net.fetchOwnedWearables).not.toHaveBeenCalled();
+    expect(net.fetchProfileAssets).not.toHaveBeenCalled();
   });
 
-  it("reads the signed-in member's own assets", async () => {
-    net.fetchOwnedWearables.mockResolvedValue({ elements: [], total: 0 });
-    net.fetchOwnedNames.mockResolvedValue({ elements: [], total: 0 });
+  it("reads the signed-in member's own assets, every category, first page", async () => {
+    net.fetchProfileAssets.mockResolvedValue({ items: [], received: 0, total: 0 });
 
     const out = await run(`/profile/${A}/assets`, { address: A, tab: "assets" }, A);
 
     expect(out.ok && out.data.own).toBe(true);
-    expect(out.ok && keysOf(out.data)).toEqual([
-      profileKeys.profile(A),
-      profileKeys.ownedWearables(A),
-      profileKeys.ownedNames(A),
-    ]);
+    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A), profileKeys.assets(A, null)]);
+    expect(net.fetchProfileAssets.mock.calls[0]?.[1]).toMatchObject({ category: undefined, skip: 0 });
+  });
+
+  it("reads the public gallery's first page on Photos, unsigned even for the owner", async () => {
+    net.fetchUserPhotos.mockResolvedValue({ items: [], received: 0, total: 0 });
+
+    const out = await run(`/profile/${A}/photos`, { address: A, tab: "photos" }, A);
+
+    expect(out.ok && keysOf(out.data)).toEqual([profileKeys.profile(A), profileKeys.photos(A)]);
+    expect(net.fetchUserPhotos).toHaveBeenCalledTimes(1);
+    expect(net.fetchUserPhotos.mock.calls[0]?.[1]).toEqual({ limit: 24, offset: 0 });
+    expect(net.fetchUserPhotos.mock.calls[0]?.[2]).not.toHaveProperty("identity");
   });
 
   it("keeps two interleaved requests for different profiles apart", async () => {
@@ -250,8 +319,7 @@ describe("profile loader, canonical paths", () => {
   });
 
   it("opens a browser-wallet member's own-only tab from a deep link", async () => {
-    net.fetchOwnedWearables.mockResolvedValue({ elements: [], total: 0 });
-    net.fetchOwnedNames.mockResolvedValue({ elements: [], total: 0 });
+    net.fetchProfileAssets.mockResolvedValue({ items: [], received: 0, total: 0 });
 
     const out = await run(`/profile/${A}/assets`, { address: A, tab: "assets" }, A);
 

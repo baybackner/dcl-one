@@ -20,8 +20,8 @@ use common::{
     rpc::{RpcCall, RpcCallEvent, RpcOrigin},
     sets::{SceneLoopSets, SceneSets},
     structs::{
-        AppConfig, AppError, CurrentRealm, DebugInfo, EditorMode, NoRenderApp, PreviewMode,
-        PrimaryCamera, PrimaryUser, SessionGraphics, TimeOfDay,
+        AppConfig, AppError, CurrentRealm, DebugInfo, EditorMode, MicState, NearbyVoiceDisabled,
+        NoRenderApp, PreviewMode, PrimaryCamera, PrimaryUser, SessionGraphics, TimeOfDay,
     },
     util::{dcl_assert, TryPushChildrenEx},
 };
@@ -74,6 +74,7 @@ use dcl_component::ComponentNameRegistry;
 
 pub mod asset_preload;
 pub mod automatic_testing;
+pub mod visible_content_bytes;
 /// Region decomposition, in `common` so `comms` can reach it too; re-exported here because this is
 /// where it has always lived for callers.
 pub use common::bounds_calc;
@@ -82,9 +83,11 @@ pub mod initialize_scene;
 pub mod load_timing;
 pub mod movement_redispatch;
 pub mod permissions;
+pub mod portables;
 pub mod primary_entities;
 pub mod renderer_context;
 pub mod scene_partition;
+pub mod scene_spawn_slice;
 mod scene_traffic;
 #[cfg(test)]
 pub mod test;
@@ -251,6 +254,19 @@ pub struct Toast {
 
 // plugin which creates and runs scripts
 pub struct SceneRunnerPlugin;
+
+/// What the scene loop did in the frame.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct SceneLoopTiming {
+    /// From the loop's start until its deadline passed or no scene work remained.
+    pub scene_loop_ms: f32,
+    /// The frame limiter's sleep after the loop (native only; 0 on web).
+    pub frame_limiter_sleep_ms: f32,
+    /// Runs of the scene schedule in the loop.
+    pub scene_schedule_run_count: u32,
+    /// Scenes still eligible for a tick when the loop ended.
+    pub eligible_scene_jobs_left_count: u32,
+}
 
 #[derive(Resource)]
 pub struct SceneLoopSchedule {
@@ -421,6 +437,7 @@ impl Plugin for SceneRunnerPlugin {
         );
 
         app.add_plugins(SceneLifecyclePlugin);
+        app.add_plugins(portables::PortableExperiencesPlugin);
 
         app.add_systems(
             Update,
@@ -462,12 +479,16 @@ impl Plugin for SceneRunnerPlugin {
         app.add_plugins(SceneUtilPlugin);
         if app.world().get_resource::<NoRenderApp>().is_none() {
             app.add_systems(Update, scene_traffic::track_parcel.in_set(SceneSets::Input));
-            debug_panel::register(app);
+            app.add_plugins(debug_panel::SceneDebugPanelPlugin);
             app.add_plugins(LightsPlugin);
         }
         app.add_plugins(AssetPreloadPlugin);
+        app.add_plugins(scene_spawn_slice::SceneSpawnSlicePlugin);
 
-        app.add_systems(Update, update_scene_room.in_set(SceneSets::PostLoop));
+        app.add_systems(
+            Update,
+            (update_scene_room, update_scene_voice_block).in_set(SceneSets::PostLoop),
+        );
         app.init_resource::<load_timing::FirstRingTiming>();
         app.add_systems(
             Update,
@@ -535,6 +556,7 @@ fn run_scene_loop(world: &mut World) {
 
     // run at least once to collect updates even if no scenes are eligible
     let mut run_once = false;
+    let mut scene_schedule_run_count = 0u32;
 
     // run until time elapsed or all scenes are updated
     while !run_once
@@ -544,8 +566,11 @@ fn run_scene_loop(world: &mut World) {
     {
         schedule.run(world);
         run_once = true;
+        scene_schedule_run_count += 1;
     }
-    world.resource_mut::<SceneUpdates>().previous_loop_end = Instant::now();
+    let loop_end_time = Instant::now();
+    let eligible_scene_jobs_left_count = world.resource::<SceneUpdates>().eligible_jobs as u32;
+    world.resource_mut::<SceneUpdates>().previous_loop_end = loop_end_time;
 
     let mut loop_schedule = world.resource_mut::<SceneLoopSchedule>();
     loop_schedule.schedule = schedule;
@@ -556,6 +581,13 @@ fn run_scene_loop(world: &mut World) {
             loop_schedule.sleeper.sleep(sleep_time);
         }
     }
+    let frame_limiter_sleep_ms = loop_end_time.elapsed().as_secs_f32() * 1000.0;
+    world.insert_resource(SceneLoopTiming {
+        scene_loop_ms: (loop_end_time - start_loop_time).as_secs_f32() * 1000.0,
+        frame_limiter_sleep_ms,
+        scene_schedule_run_count,
+        eligible_scene_jobs_left_count,
+    });
 }
 
 fn update_scene_priority(
@@ -584,12 +616,13 @@ fn update_scene_priority(
     // mark scenes that have been in-flight past the timeout as broken and free their
     // slot, so a wedged scene worker can't hold a scene thread forever
     let elapsed = time.elapsed_secs_f64();
-    for (ent, _, mut context, _) in scenes.iter_mut() {
-        if context.in_flight()
-            && !context.inspected
-            && elapsed - context.last_sent
-                > renderer_context::SCENE_NOT_RESPONDING_TIMEOUT.as_secs_f64()
-        {
+    for (ent, _, mut context, maybe_super) in scenes.iter_mut() {
+        if not_responding(
+            context.in_flight(),
+            context.inspected,
+            maybe_super.is_some(),
+            elapsed - context.last_sent,
+        ) {
             warn!(
                 "scene {} ({} @ {}) has not responded for {:.0}s, marking broken",
                 context.hash,
@@ -709,6 +742,12 @@ pub fn vec3_to_parcel(position: Vec3) -> IVec2 {
     (position.xz() * Vec2::new(1.0, -1.0) / PARCEL_SIZE)
         .floor()
         .as_ivec2()
+}
+
+/// The parcels within Chebyshev ring `ring` of `center`, `center` included: a square `2 * ring + 1`
+/// parcels a side. A negative ring gives none.
+pub fn ring_parcels(center: IVec2, ring: i32) -> impl Iterator<Item = IVec2> {
+    (-ring..=ring).flat_map(move |x| (-ring..=ring).map(move |y| center + IVec2::new(x, y)))
 }
 
 pub fn parcel_to_vec3(parcel: IVec2) -> Vec3 {
@@ -1101,9 +1140,21 @@ mod get_ray_tests {
 #[derive(Default)]
 struct RealmInfoCache {
     disconnected: Vec<u8>,
-    connected: Option<(String, Vec<u8>)>,
+    // the client's one scene room, for each scene it carries
+    connected: Option<Vec<u8>>,
     // server mode holds N rooms in ServerSceneRooms (empty on clients), keyed by scene hash
     server: HashMap<String, Vec<u8>>,
+}
+
+impl RealmInfoCache {
+    /// The realm info a scene reads. `connected` is whether the scene room that carries the
+    /// scene is connected: until then `isConnectedSceneRoom` is false.
+    fn for_scene(&self, hash: &str, connected: bool) -> &[u8] {
+        connected
+            .then(|| self.server.get(hash).or(self.connected.as_ref()))
+            .flatten()
+            .unwrap_or(&self.disconnected)
+    }
 }
 
 /// The realm's base url and name as scenes are told them (`PbRealmInfo`).
@@ -1125,6 +1176,42 @@ pub fn realm_base_url_and_name(realm: &CurrentRealm) -> (String, String) {
     (base_url.to_owned(), realm_name)
 }
 
+/// Whether an in-flight scene has gone past its not-responding timeout, to be marked broken. A
+/// super-user scene (the client's own: the HUD's bridge scene) gets the longer
+/// `SUPER_USER_SCENE_NOT_RESPONDING_TIMEOUT`: the client does not work without it, and its first
+/// tick on a cold, busy page can take longer than the ordinary timeout, but a wedged one must
+/// still give its thread slot back.
+fn not_responding(in_flight: bool, inspected: bool, super_user: bool, since_sent: f64) -> bool {
+    let limit = if super_user {
+        renderer_context::SUPER_USER_SCENE_NOT_RESPONDING_TIMEOUT
+    } else {
+        renderer_context::SCENE_NOT_RESPONDING_TIMEOUT
+    };
+    in_flight && !inspected && since_sent > limit.as_secs_f64()
+}
+
+#[cfg(test)]
+mod not_responding_tests {
+    use super::*;
+
+    #[test]
+    fn a_super_user_scene_gets_the_longer_limit() {
+        let past = renderer_context::SCENE_NOT_RESPONDING_TIMEOUT.as_secs_f64() + 1.0;
+        let past_super =
+            renderer_context::SUPER_USER_SCENE_NOT_RESPONDING_TIMEOUT.as_secs_f64() + 1.0;
+        assert!(past < past_super);
+        assert!(not_responding(true, false, false, past));
+        assert!(!not_responding(true, false, true, past));
+        assert!(not_responding(true, false, true, past_super));
+        // within the timeout, inspected, or not in flight: nobody is
+        assert!(!not_responding(true, false, false, 1.0));
+        assert!(!not_responding(true, true, false, past));
+        assert!(!not_responding(true, true, true, past_super));
+        assert!(!not_responding(false, false, false, past));
+        assert!(!not_responding(false, false, true, past_super));
+    }
+}
+
 /// Engine time since a scene's previous dispatch, sent with this dispatch as the scene's next
 /// tick dt. 0 for the first dispatch: before it, `last_sent` is the initialization stamp.
 fn dispatch_dt(tick_number: u32, last_sent: f64, now: f64) -> f64 {
@@ -1132,6 +1219,31 @@ fn dispatch_dt(tick_number: u32, last_sent: f64, now: f64) -> f64 {
         now - last_sent
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod realm_info_tests {
+    use super::*;
+
+    #[test]
+    fn a_scene_reads_a_connected_room_only_while_one_carries_it() {
+        let client = RealmInfoCache {
+            disconnected: vec![0],
+            connected: Some(vec![1]),
+            server: HashMap::default(),
+        };
+        // dialed, or another scene's room
+        assert_eq!(client.for_scene("bafyscene", false), [0]);
+        assert_eq!(client.for_scene("bafyscene", true), [1]);
+
+        let server = RealmInfoCache {
+            disconnected: vec![0],
+            connected: None,
+            server: HashMap::from_iter([("bafyscene".to_owned(), vec![2])]),
+        };
+        assert_eq!(server.for_scene("bafyscene", false), [0]);
+        assert_eq!(server.for_scene("bafyscene", true), [2]);
     }
 }
 
@@ -1167,8 +1279,11 @@ fn send_scene_updates(
     config: Res<AppConfig>,
     window: Query<&Window, With<PrimaryWindow>>,
     realm: Res<CurrentRealm>,
-    data_channel: Res<SceneRoomConnection>,
-    server_rooms: Res<comms::ServerSceneRooms>,
+    (data_channel, server_rooms, scene_rooms): (
+        Res<SceneRoomConnection>,
+        Res<comms::ServerSceneRooms>,
+        comms::scene_rooms::SceneRooms,
+    ),
     scene_realms: Res<comms::global_crdt::SceneRealms>,
     screen_areas: ScreenAreas,
     preview_mode: Res<PreviewMode>,
@@ -1208,12 +1323,12 @@ fn send_scene_updates(
         };
         realm_info_cache.disconnected.clear();
         DclWriter::new(&mut realm_info_cache.disconnected).write(&realm_info);
-        realm_info_cache.connected = data_channel.0.as_ref().map(|(scene, addr, _)| {
+        realm_info_cache.connected = data_channel.0.as_ref().map(|(_, addr, _)| {
             realm_info.room = Some(addr.clone());
             realm_info.is_connected_scene_room = Some(true);
             let mut bytes = Vec::new();
             DclWriter::new(&mut bytes).write(&realm_info);
-            (scene.scene_id.clone(), bytes)
+            bytes
         });
         // Server-mode room adapter is `livekit:...?access_token=<JWT>` minted by the
         // orchestrator for THIS scene. Redact the token: RealmInfo is exposed to scene
@@ -1314,14 +1429,8 @@ fn send_scene_updates(
     }
 
     // add realm info
-    let realm_bytes = match realm_info_cache.connected.as_ref() {
-        Some((hash, bytes)) if **hash == *context.hash => bytes.as_slice(),
-        _ => realm_info_cache
-            .server
-            .get(&*context.hash)
-            .map(Vec::as_slice)
-            .unwrap_or(realm_info_cache.disconnected.as_slice()),
-    };
+    let connected = scene_rooms.connected(&context.hash);
+    let realm_bytes = realm_info_cache.for_scene(&context.hash, connected);
     context.crdt_store.update_if_different(
         SceneComponentId::REALM_INFO,
         CrdtType::LWW_ANY,
@@ -1809,6 +1918,26 @@ fn update_scene_room(
     *last = Some(ev.clone());
     debug!("set scene room {ev:?}");
     writer.write(ev);
+}
+
+/// Only the parcel scene under the player counts: a portable experience never blocks.
+fn update_scene_voice_block(
+    mic_state: Option<ResMut<MicState>>,
+    containing_scene: ContainingScene,
+    player: Query<Entity, With<PrimaryUser>>,
+    disabling_scenes: Query<(), With<NearbyVoiceDisabled>>,
+) {
+    let Some(mut mic_state) = mic_state else {
+        return;
+    };
+    let disabled = player
+        .single()
+        .ok()
+        .and_then(|player| containing_scene.get_parcel(player))
+        .is_some_and(|scene| disabling_scenes.contains(scene));
+    if mic_state.scene_disabled() != disabled {
+        mic_state.set_scene_disabled(disabled);
+    }
 }
 
 fn log_app_errors(mut toaster: Toaster, mut errors: EventReader<AppError>, frame: Res<FrameCount>) {

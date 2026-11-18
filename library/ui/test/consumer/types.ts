@@ -1,5 +1,5 @@
-import { createRef } from 'react'
-import type { NavBarProps, NavBarSection } from '@dcl/one-ui'
+import { createElement, createRef } from 'react'
+import type { ButtonProps, NavBarProps, NavBarSection } from '@dcl/one-ui'
 
 const sections: NavBarSection[] = [
   { label: 'Discover', items: [{ label: 'Jump in', href: '/play/' }] },
@@ -16,6 +16,34 @@ const signedIn: NavBarProps = {
     { label: 'Profile', href: '/profile' },
     { label: 'Sign out', onSelect: () => {} }
   ]
+}
+// App-owned controls retain their own native semantics through the public props type.
+const composition: NavBarProps = {
+  sections,
+  signIn: { href: '/sign-in' },
+  balanceAction: createElement('a', { href: '/credits' }, 'Get credits'),
+  accountControl: createElement('button', { type: 'button' }, 'Connect wallet'),
+  mobileSecondaryNavigation: ({ closeDrawer }) =>
+    createElement('a', { href: '/profile', onClick: closeDrawer }, 'Profile')
+}
+const callbackSlot: NavBarProps = {
+  sections,
+  signIn: { href: '/sign-in' },
+  // @ts-expect-error Controls are React nodes, not render callbacks.
+  balanceAction: () => 'Credits'
+}
+// @ts-expect-error The generic balance action does not introduce a credits-only alias.
+const creditsAlias: NavBarProps = { sections, signIn: { href: '/sign-in' }, creditsAction: null }
+const overlayNavigation: NavBarProps = {
+  sections,
+  signIn: { href: '/sign-in' },
+  surface: 'overlay'
+}
+const invalidSurface: NavBarProps = {
+  sections,
+  signIn: { href: '/sign-in' },
+  // @ts-expect-error Only the documented solid and overlay surfaces are supported.
+  surface: 'transparent'
 }
 // @ts-expect-error Sections are required: the library holds no navigation data of its own.
 const missingSections: NavBarProps = { signIn: { href: '/sign-in' } }
@@ -45,6 +73,11 @@ const inertAction: NavBarProps = {
 }
 
 void [
+  overlayNavigation,
+  invalidSurface,
+  composition,
+  callbackSlot,
+  creditsAlias,
   signedOut,
   signedOutLink,
   signedIn,
@@ -134,3 +167,15 @@ const rendererAppearanceButton: import('@dcl/one-ui').ButtonProps = {
   appearance: 'inverse'
 }
 void rendererAppearanceButton
+
+const html = { __html: 'replace' }
+// @ts-expect-error Button owns its content; native HTML cannot replace it.
+const buttonHtml: ButtonProps = { children: 'Save', dangerouslySetInnerHTML: html }
+// @ts-expect-error Link-mode Button owns the same content structure.
+const linkHtml: ButtonProps = { href: '/save', children: 'Save', dangerouslySetInnerHTML: html }
+const htmlSpread = { children: 'Save', dangerouslySetInnerHTML: html }
+// @ts-expect-error HTML remains unsupported when supplied through a typed spread.
+const spreadButtonHtml: ButtonProps = { ...htmlSpread }
+// @ts-expect-error Link-mode spreads cannot override owned content either.
+const spreadLinkHtml: ButtonProps = { href: '/save', ...htmlSpread }
+void [buttonHtml, linkHtml, spreadButtonHtml, spreadLinkHtml]

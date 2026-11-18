@@ -7,10 +7,13 @@ export type ChromeAuth = {
   name: string;
   committee: boolean;
   avatarUrl?: string;
+  /** The avatar disc's background once the profile loads; the CSS default before. */
+  avatarColor?: string;
   onSignIn?: () => void;
   onSignOut?: () => void;
   onSwitchAccount?: () => void;
-  fetchNotifications?: () => Promise<unknown>;
+  notificationsReady?: boolean;
+  fetchNotifications?: (signal?: AbortSignal) => Promise<unknown>;
 };
 
 const LOGGED_OUT: ChromeAuth = {
@@ -20,6 +23,7 @@ const LOGGED_OUT: ChromeAuth = {
   name: "",
   committee: false,
   avatarUrl: undefined,
+  avatarColor: undefined,
   onSignIn: undefined,
   onSignOut: undefined,
   onSwitchAccount: undefined,

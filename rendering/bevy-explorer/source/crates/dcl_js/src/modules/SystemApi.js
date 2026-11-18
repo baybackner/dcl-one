@@ -227,6 +227,7 @@ module.exports.consoleCommand = async function(cmd, args) {
 //     title: string,
 //     parcels: [Vector2],
 //     isPortable: bool,
+//     isSmartWearable: bool,
 //     isBroken: bool,
 //     isBlocked: bool,
 //     isSuper: bool,
@@ -250,6 +251,12 @@ module.exports.getHomeScene = async function() {
 // }
 module.exports.setHomeScene = async function(args) {
     await Deno.core.ops.op_set_home_scene(args.realm, args.parcel)
+}
+
+// { preset: string, layer: number, feet: Vector3 } draws the lobby's stage around the preview
+// avatar for the camera on that layer; null takes it down. Bridge (super-user) scene only.
+module.exports.setLobbyStage = async function(stage) {
+    Deno.core.ops.op_set_lobby_stage(stage ?? null)
 }
 
 // { [service web param]: base url } for every service the web build can redirect, resolved by
@@ -282,6 +289,11 @@ module.exports.acceptTerms = async function() {
 // }
 module.exports.getSatelliteView = async function() {
     return await Deno.core.ops.op_get_satellite_view()
+}
+
+// 'allowed' | 'invited' | 'denied' | 'password' | 'failed'
+module.exports.getWorldAccess = async function(world) {
+    return await Deno.core.ops.op_get_world_access(world)
 }
 
 // get system actions as a stream
@@ -333,6 +345,11 @@ module.exports.sendChat = async function(message, channel) {
     Deno.core.ops.op_send_chat(message, channel ?? "Nearby")
 }
 
+// replace the text of the chat bubble still showing a message (its translation, or the original back)
+module.exports.setChatBubbleText = function(messageId, message) {
+    Deno.core.ops.op_set_chat_bubble_text(messageId, message)
+}
+
 // get reactions to chat messages (the local user's included) as a stream
 // type ChatReaction = {
 //   channel: string, // "Nearby" or the DM partner's wallet
@@ -370,6 +387,24 @@ module.exports.getPermissionRequestStream = async function() {
   async function* streamGenerator() {
     while (true) {
       const next = await Deno.core.ops.op_read_permission_request_stream(rid);
+      if (next === null) break;
+      yield next;
+    }
+  }
+
+  return streamGenerator();
+}
+
+// stream of the portables the player can see and stop, as a whole list on subscribe and on every
+// change: [{ hash?, pid, name, kind: 'scene' | 'smartWearable',
+//   state: 'loading' | 'running' | 'failed' | 'blocked' | 'stopped', reason?,
+//   source?: 'equipped' | 'console' | 'preview' }]
+module.exports.getPortablesStream = async function() {
+  const rid = await Deno.core.ops.op_get_portables_stream();
+
+  async function* streamGenerator() {
+    while (true) {
+      const next = await Deno.core.ops.op_read_portables_stream(rid);
       if (next === null) break;
       yield next;
     }
@@ -444,6 +479,26 @@ module.exports.getVoiceStream = async function() {
   return streamGenerator();
 }
 
+// mute or unmute a wallet's nearby voice for the local user; saved per account
+module.exports.setNearbyMuted = async function(address, muted) {
+  await Deno.core.ops.op_set_nearby_muted(address, muted);
+}
+
+// the wallets whose nearby voice is muted (string[]): the list now, then again on every change
+module.exports.getNearbyMuteStream = async function() {
+  const rid = await Deno.core.ops.op_get_nearby_mute_stream();
+
+  async function* streamGenerator() {
+    while (true) {
+      const next = await Deno.core.ops.op_read_nearby_mute_stream(rid);
+      if (next === null) break;
+      yield next;
+    }
+  }
+
+  return streamGenerator();
+}
+
 // get hover events as a stream
 // type HoverAction = {
 //   enabled: bool,
@@ -486,9 +541,47 @@ module.exports.getWorldAccessStream = async function() {
   return streamGenerator();
 }
 
+// the signed-in wallet's platform ban: now, then again on every change
+// type PlatformBanNotice = { banned: bool, reason: string, customMessage: string | null, expiresAt: string | null }
+module.exports.getPlatformBanStream = async function() {
+  const rid = await Deno.core.ops.op_get_platform_ban_stream();
+
+  async function* streamGenerator() {
+    while (true) {
+      const next = await Deno.core.ops.op_read_platform_ban_stream(rid);
+      if (next === null) break;
+      yield next;
+    }
+  }
+
+  return streamGenerator();
+}
+
 // answer the password prompt; password null = the player gave up
 module.exports.setWorldPassword = function(body) {
     Deno.core.ops.op_set_world_password(body.password ?? null);
+}
+
+module.exports.getConnectivityStream = async function() {
+  const rid = await Deno.core.ops.op_get_connectivity_stream();
+  async function* streamGenerator() {
+    try {
+      while (true) {
+        const next = await Deno.core.ops.op_read_connectivity_stream(rid);
+        if (next === null) break;
+        yield next;
+      }
+    } finally {
+      Deno.core.ops.op_close_connectivity_stream(rid);
+    }
+  }
+  const stream = streamGenerator();
+  stream.close = () => Deno.core.ops.op_close_connectivity_stream(rid);
+  return stream;
+}
+
+module.exports.retryConnectivity = function() {
+  Deno.core.ops.op_retry_connectivity();
 }
 
 // get proximity events as a stream
@@ -744,9 +837,10 @@ module.exports.social = {
     return streamGenerator();
   },
 
-  // the community channels the local user listens to (community ids); replaces the previous set
-  setCommunityChannels: function(ids) {
-    Deno.core.ops.op_set_community_channels(ids);
+  // the communities whose chat channels the local user listens to ({ id, name });
+  // replaces the previous set
+  setCommunityChannels: function(communities) {
+    Deno.core.ops.op_set_community_channels(communities);
   }
 }
 
@@ -820,6 +914,29 @@ module.exports.getAnalyticsEventStream = async function() {
   async function* streamGenerator() {
     while (true) {
       const next = await Deno.core.ops.op_read_analytics_event_stream(rid);
+      if (next === null) break;
+      yield next;
+    }
+  }
+
+  return streamGenerator();
+}
+
+// the preview server's texture import status for the previewed scene (preview mode only)
+// type TextureOptimizationStatus = {
+//   sceneId: string,
+//   state: 'running' | 'ready' | 'failed',
+//   done: number, total: number, failed: number,
+//   bytesBefore: number, bytesAfter: number,
+//   enabled: boolean,
+//   replay: boolean, // the server's last status, replayed as the socket connected
+// }
+module.exports.getTextureOptimizationStream = async function() {
+  const rid = await Deno.core.ops.op_get_texture_optimization_stream();
+
+  async function* streamGenerator() {
+    while (true) {
+      const next = await Deno.core.ops.op_read_texture_optimization_stream(rid);
       if (next === null) break;
       yield next;
     }

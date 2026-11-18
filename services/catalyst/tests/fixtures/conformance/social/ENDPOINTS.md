@@ -275,7 +275,7 @@ the moderator role.
 | --- | --- | --- | --- | --- |
 | GET | `/status` | | yes | `status` |
 | GET | `/notifications` | `from` (ms), `limit` 1-50 (default 20), `onlyUnread` (presence); signed | yes (signed) | `notifications-unauth` (400, the body `auth-error-production.json` pins), `-signed`, `-signed-filters`, `-expired-timestamp` (401), `-bad-signature` (401) |
-| POST | `/notifications` | bearer `NOTIFICATIONS_GOVERNANCE_TOKEN` (`governance_*` types) or `NOTIFICATIONS_REWARDS_TOKEN` (`reward_*` types), unset = producer disabled; `[{type, address?, eventKey, metadata, timestamp, optOutScope?}]` -> 204, body up to 16 MiB, at most 10,000 items, `metadata` up to 16 KiB serialized, `timestamp` at most 5 minutes ahead of the server clock; 400 in the upstream Joi words (another prefix's or an unknown type: `Invalid notification type: <type>`), 401 `Authorization header is missing` / `Invalid authorization header`, 413, 503 while social writes are off. Id = v5 (namespace `3f8a52d4-9c1e-4b07-a62d-71e05c9318bb`) over the JSON `["<type>","<lowercased address>","<eventKey>"]`: a repeat updates `metadata` and `timestamp`, keeps the read state and emails only on first insert. Only `governance_announcement` may omit `address` (else `"[i].address" is required`), and then without `optOutScope`: a broadcast stored once (`social.broadcast_notifications`, id over `["<type>",null,"<eventKey>"]`), listed by `GET /notifications` for every wallet with `address: null` and per-wallet read state while younger than `NOTIFICATIONS_BROADCAST_HORIZON_DAYS` (90; pruned after, unlike upstream), never emailed | no: write | |
+| POST | `/notifications` | bearer `NOTIFICATIONS_GOVERNANCE_TOKEN` (`governance_*` types) or `NOTIFICATIONS_REWARDS_TOKEN` (`reward_*` types), unset = producer disabled; `[{type, address?, eventKey, metadata, timestamp, optOutScope?}]` -> 204, body up to 16 MiB, `metadata` up to 16 KiB serialized, `timestamp` at most 5 minutes ahead of the server clock; 400 in the upstream Joi words (another prefix's or an unknown type: `Invalid notification type: <type>`), 401 `Authorization header is missing` / `Invalid authorization header`, 413, 503 while social writes are off. Id = v5 (namespace `3f8a52d4-9c1e-4b07-a62d-71e05c9318bb`) over the JSON `["<type>","<lowercased address>","<eventKey>"]`: a repeat updates `metadata` and `timestamp`, keeps the read state and emails only on first insert. Only `governance_announcement` may omit `address` (else `"[i].address" is required`), and then without `optOutScope`: a broadcast stored once (`social.broadcast_notifications`, id over `["<type>",null,"<eventKey>"]`), listed by `GET /notifications` for every wallet with `address: null` and per-wallet read state kept forever as upstream, unless `NOTIFICATIONS_BROADCAST_HORIZON_DAYS` (default 0, off) is set: then listed while younger and pruned after, never emailed | no: write | |
 | PUT | `/notifications/read` | signed; a broadcast id records this wallet's read (`social.broadcast_reads`), counted in `updated` | no: write | |
 | POST | `/notifications/email` | bearer `NOTIFICATION_SERVICE_TOKEN`; `{email, subject, content, title?, titleHighlight?}` -> 204 | no: write | |
 | GET | `/subscription` | signed | yes (signed) | `subscription-unauth`, `-signed` (the default document; `address` volatile) |
@@ -400,11 +400,77 @@ and port 5461 with the environment (bounded outfits/emote sync from
 
 | service | passed | expected failures | divergences to look at |
 | --- | --- | --- | --- |
-| gatekeeper | 10/35 | 6 signed fixtures "Expired signature"; `scene-participants` 404 (no Pulse/archipelago room state) | unauthenticated scene routes answer `{"error":"Invalid Auth Chain"}` where production answers 400 `{"ok":false,"message":"Invalid Auth Chain"}`; `get-scene-adapter-unauth` 400 vs 401; bearer routes (`voice-chat-status`, `community-voice-chat/*`, `world ban-status`, `private-messages/token`) 503 vs 401/400 (Catalyst has no social-service token configured); `/cast/*` and `/scene-stream-access` 404 (G18 gap, unimplemented at the recorded revision); `ping` body 22 B vs `pong`; `user-bans-bad-address` 400 vs 200; preflight allow-origin reflected vs `*` |
+| gatekeeper | 10/35 | 6 signed fixtures "Expired signature"; `scene-participants` 404 (no Pulse/archipelago room state) | unauthenticated scene routes answer `{"error":"Invalid Auth Chain"}` where production answers 400 `{"ok":false,"message":"Invalid Auth Chain"}`; `get-scene-adapter-unauth` 400 vs 401; bearer routes (`voice-chat-status`, `community-voice-chat/*`, `world ban-status`, `private-messages/token`) 503 vs 401/400 (Catalyst has no social-service token configured); `/cast/*` and `/scene-stream-access` 404 (G18 gap, unimplemented at the recorded revision); `ping` body 22 B vs `pong`; `user-bans-bad-address` 400 vs 200; preflight allow-origin reflected vs `*`; the current answers are recorded in "In-process replay of the gatekeeper" below |
 | notifications | 1/14 | 4 signed fixtures 401 | `/status` 404 (route unimplemented at the recorded revision); `/unsubscribe/{address}` 404 (unimplemented at the recorded revision; now served, replayed in-process by `notifications::tests::the_unsigned_unsubscribe_capture_replays`); `?limit=5&onlyUnread&from=0` 400 (valueless `onlyUnread` rejected); opt-outs unknown scope 404 vs 400; every auth error body differs ("Unauthenticated: Expired signature" / "Invalid Auth Chain" vs the ADR-44 message pair); preflight 200 with `*` vs 204 with the requested headers |
 | badges | 5/13 | user badges achieved 0 vs 3/5 (empty tables); `badge-tiers` 404 vs 200 empty | `/categories` lists 3 categories, production 5 (Explorer, Collector, Creator, Socializer, Builder); asset URLs: production `https://assets-cdn.decentraland.org/<id>/2d/normal.png`, Catalyst serves `/badges/assets/{path}` under `DEFAULT_ASSET_BASE_URL` `https://badges.decentraland.org`; preflight 200 `*` vs 204 |
 | profile-images | 1/20 | the 19 image fixtures: production is a 301 to the bucket, Catalyst renders in process and answered 404 with no profile entities synced (`SYNC_ENTITY_TYPES=outfits,emote`) | structural: an edge redirect versus a direct `image/png`; `face-bad-cid` 400 vs 301; preflight 204 with every method vs the edge's 301 |
-| camera-reel | 12/21 | `image-*` 404 (photo not in the local table) | `/api/wearables/{item}/images` 404 (camera-reel-service #62 unimplemented at the recorded revision); preflight `OPTIONS /api/users/{address}` 405 (no CORS layer under `/camera-reel-service`); `docs-openapi` 33 schema differences; `unknown-path-404` body "Not Found" vs empty; `user-images-bad-limit` message text |
+| camera-reel | 12/21 | `image-*` 404 (photo not in the local table) | the current answers are recorded in "In-process replay of camera-reel" below |
 
 Logs: `replay-<service>.log` in the run's scratchpad; the node and its
 database were stopped and dropped after the run.
+
+## In-process replay of camera-reel
+
+`camera-reel/src/tests/captures.rs`, test
+`the_camera_reel_host_answers_as_its_captures`, mounts the router under
+`/camera-reel-service` as `serve` does and replays all 21 captures through
+`social::test_fixtures::replay` (status, recorded headers and body).
+It seeds the captured photos from their recorded documents, place ids,
+public flag, original filenames and `created_at` from `dateTime`. Filler
+rows bring the corpus place to its 523 public photos and the item gallery
+to its 12. The API and bucket origins come from the captures; requests stay
+in process and never contact those origins.
+
+The replay passed with PostgreSQL on 2026-11-13: 20 of 21 captures match.
+Only `docs-openapi` differs from the 2026-09-25 capture: the `ScreenRect`
+schema and nullable `User.screenRect` property were added in upstream
+`3e8bd0b`. Both redirects match their captured status, headers and empty
+body. The shared diff skips `id` and `url` leaves, so the test separately
+checks exact photo ids, order, original URLs and thumbnail URLs for all five
+photo answers.
+
+`docs::tests::the_spec_is_the_captured_one_plus_the_later_upstream_screen_rect`
+compares the whole pinned document with the capture under those two
+additions. `GalleryImageWithPlace` remains undefined, as in the pinned
+upstream document. The companion test checks the wire fields and every
+path parameter. All three regressions passed in the 134-test Camera suite.
+
+## In-process replay of the gatekeeper
+
+`comms/src/gatekeeper/capture_replay_tests.rs`, test
+`the_gatekeeper_answers_its_stateless_captures_as_production`, sends 23 of
+the 35 captures through `comms::gatekeeper::router` with their recorded
+method, path, query and headers, and compares status, recorded headers
+(`content-type` by media type) and body with
+`catalyst_testing::conformance::compare`. The node runs with
+`COMMS_GATEKEEPER_AUTH_TOKEN` and the moderator token set, as production
+does, against an empty scratch database.
+
+Replayed, all matching the capture: `cast-stream-info-invalid-key`,
+`cast-presenters-unauth`, `bans-401-unauth`,
+`community-voice-chat-active-401-no-token`,
+`community-voice-chat-status-401-no-token`, `get-scene-adapter-unauth`,
+`get-server-scene-adapter-unauth`, `ping`, `private-messages-token-unauth`,
+`scene-admin-unauth`, `scene-bans-addresses-unauth`, `scene-bans-unauth`,
+`scene-participants-400-no-params`, `scene-participants-world`,
+`scene-stream-access-unauth`, `status-head`, `user-bans`,
+`user-bans-bad-address`, `user-bans-unknown-address`,
+`user-warnings-401-unauth`, `voice-chat-status-401-no-token`,
+`world-ban-status-no-token`. `user-bans` and `scene-participants-world`
+captured the empty state (no ban, no participant), which the scratch
+database reproduces.
+
+`preflight-get-scene-adapter` is replayed with its four recorded header
+differences. DIVERGENCE: the node's one CORS layer (`shared::cors`) reflects
+the origin (`https://decentraland.org` for `*`) and answers its own method
+order, `max-age` 86400 (production 36000) and `vary: Origin` (production
+`Access-Control-Request-Headers`).
+
+Not replayed: the eight signed captures (`get-scene-adapter-signed`,
+`-signed-no-realm-name`, `scene-admin-signed-scene`, `-signed-wrong-signer`,
+`scene-bans-signed-scene`, `-signed-wrong-signer`,
+`scene-bans-addresses-signed-scene`, `user-warnings-signed-not-moderator`),
+whose auth chains have expired; `scene-participants` and
+`scene-participants-default-realm`, which list production's live
+participants; `status`, which carries production's version and commit; and
+`unknown-path-404`, which `serve`'s fallback answers, not this router.

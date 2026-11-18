@@ -1,8 +1,10 @@
+import type { DehydratedState } from "@tanstack/react-query";
 import type { EntryContext } from "react-router";
 
-import type { DehydratedState } from "@tanstack/react-query";
+import { eventsAgentData, eventsAgentDetail } from "../catalyst/places/events-page";
 
-import { LEGAL_DOCS } from "@ui/data/legalPageConfig";
+import { LEGAL_DOCS, isLegalKey } from "../../legal";
+import { toAgentLegalDoc } from "../../legal/agent";
 
 import { placesFromDehydrated } from "../catalyst/places/discover";
 import { emptyProfile, type ProfileVM } from "../catalyst/social/profile";
@@ -11,7 +13,6 @@ import { profileKeys } from "../profile/queries";
 import {
   blogIndexToMarkdown,
   blogPostToMarkdown,
-  communityToMarkdown,
   discoverToMarkdown,
   eventDetailToMarkdown,
   legalDocToMarkdown,
@@ -20,7 +21,6 @@ import {
   profileToMarkdown,
   shopPageToMarkdown,
   whatsOnToMarkdown,
-  type AgentLegalDoc,
   type AgentMarkdownKey,
 } from "./markdown";
 
@@ -36,8 +36,9 @@ const SERIALIZERS: Record<AgentMarkdownKey, (data: unknown) => string | null> = 
   },
   legalDoc: (data) => {
     const d = data as { doc?: string } | undefined;
-    const doc = d?.doc ? (LEGAL_DOCS as Record<string, AgentLegalDoc>)[d.doc] : undefined;
-    return doc ? legalDocToMarkdown(doc) : null;
+    return d?.doc && isLegalKey(d.doc)
+      ? legalDocToMarkdown(toAgentLegalDoc(LEGAL_DOCS[d.doc]))
+      : null;
   },
   placesIndex: (data) => {
     const d = data as { dehydratedState?: DehydratedState } | undefined;
@@ -48,8 +49,12 @@ const SERIALIZERS: Record<AgentMarkdownKey, (data: unknown) => string | null> = 
     return d?.place ? placeToMarkdown(d.place) : null;
   },
   whatsOn: (data) => {
-    const d = data as Parameters<typeof whatsOnToMarkdown>[0] | undefined;
-    return d ? whatsOnToMarkdown(d) : null;
+    const d = data as { tab?: "my" | null; dehydratedState?: DehydratedState | null } | undefined;
+    if (!d) return null;
+    if (d.tab === "my") return whatsOnToMarkdown({ tab: "my" });
+    // An event link (`?id=`) describes that event, as its old `/whats-on/:id` page did.
+    const event = eventsAgentDetail(d.dehydratedState);
+    return event ? eventDetailToMarkdown(event) : whatsOnToMarkdown(eventsAgentData(d.dehydratedState));
   },
   eventDetail: (data) => {
     const d = data as { event?: Parameters<typeof eventDetailToMarkdown>[0] | null } | undefined;
@@ -75,10 +80,6 @@ const SERIALIZERS: Record<AgentMarkdownKey, (data: unknown) => string | null> = 
   discover: (data) => {
     const d = data as { content?: Parameters<typeof discoverToMarkdown>[0] | null } | undefined;
     return d?.content ? discoverToMarkdown(d.content) : null;
-  },
-  communityDetail: (data) => {
-    const d = data as { detail?: Parameters<typeof communityToMarkdown>[0] | null } | undefined;
-    return d?.detail && d.detail.source === "live" ? communityToMarkdown(d.detail) : null;
   },
 };
 

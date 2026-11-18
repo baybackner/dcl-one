@@ -68,14 +68,17 @@ Component.figma.ts     Figma-to-component mapping for the tooling
 
 Define component-owned props and types in the component file by default. Use a
 separate types file for a substantial contract shared across components.
-Export the component and its public prop types from `library/ui/index.ts`
-(created with the first shared component).
+Export the component and its public prop types from `library/ui/index.ts`.
 The mapping is used by the Figma tooling and is not imported by browser code.
 The template is not a production component. Replace the Figma mapping
-placeholder with the actual component's node and properties when its tooling
-contract is established. The sample test is a smoke test; configure React
-Testing Library, jest-dom matchers and CSS Module handling for the package, and
-add the component-specific interaction and accessibility tests before use.
+placeholder with a mapping in the contract the tooling reads
+(`library/ui/figma/src/contract/mapping-file.ts`, described in
+`library/ui/figma/MAINTENANCE.md`): header comments `url`, `source`,
+`component` and `contract=1`, then the component's Figma properties.
+`components/NavBar/NavBar.figma.ts` is a working example. The sample test is a
+smoke test; React Testing Library, jest-dom matchers and CSS Module handling
+are already configured in `library/ui` (`vitest.config.ts`, `test/setup.ts`),
+so add the component-specific interaction and accessibility tests before use.
 
 ### Design tokens
 
@@ -88,8 +91,8 @@ portals.
 
 ### Global CSS boundary
 
-Shared foundations and components belong in `library/ui` once it is
-implemented; until then each surface keeps its existing ones (see
+Shared foundations and components belong in `library/ui`; a surface keeps
+its existing ones until they are migrated there (see
 [Shared UI](#shared-ui-libraryui)). Global stylesheets
 contain only token definitions, font faces, resets, and application-wide base
 and accessibility rules. Each app keeps its own global entry point and loads
@@ -121,9 +124,12 @@ progress, position or a computed size. Pass them as a narrowly scoped custom
 property and let the module consume it; fixed appearance stays in the module.
 
 ```tsx
-import type { CSSProperties } from 'react'
+import type { CSSProperties } from "react";
 
-;<div className={styles.track} style={{ '--progress': `${pct}%` } as CSSProperties} />
+<div
+  className={styles.track}
+  style={{ "--progress": `${pct}%` } as CSSProperties}
+/>;
 ```
 
 Shared components expose runtime geometry through typed props mapped to custom
@@ -156,6 +162,14 @@ Components need visible focus, keyboard interaction, labels, sufficient
 contrast and reduced-motion support. Do not override reduced-motion rules
 from a component module.
 
+A component that cannot meet one of these rules records a named exception
+here, with its measurement, reason, scope and the change that removes it.
+Each exception covers only its stated scope.
+
+| Exception                    | Measurement                                                                                                                                                                                                                                       | Reason                                                                                                                                           | Scope                                                                                                                                              | Removed by                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `titlebar-selected-contrast` | Snow (#fcfcfc, Figma `neutrals/snow`) label and icon on #ff7439 (Figma `color/action-secondary`, `--dcl-primary-alt-primary-alt` here; `--dcl-action-secondary` names the same value): 2.62:1 at 16px/600, below 4.5:1 (AA) and 3:1 (large text). | The design system's Explorer selected-state pair from Figma title bar 16959:168 ("explorer (orange when selected)"), chosen by the design owner. | The selected TitleBar section, Explorer variant only. On web pages, the Figma web variant (white when selected, dark label) is the compliant path. | A Figma palette change for that state. |
+
 ### Migrating existing styles
 
 A migration covers one bounded component and its consumers, and is scheduled
@@ -185,6 +199,15 @@ migration. Do not rewrite unrelated components or tokens in the same change.
   SDK toolchain's
   `apps/dcl-scene-cli/scripts/`, `src/templates/` and `testdata/`. It is a
   best-effort check: a pass does not prove the change follows this standard.
+- `make check` and CI also run `tooling/ui_standards.py --token-floor`. For
+  each stylesheet of the surfaces that use the shared foundations (the
+  `FLOOR_PATHS` of the script) it fails when the `var(--dcl-` uses drop
+  below, or the uses of an `apps/ui3` `atoms/primitives.css` property rise
+  above, the counts in `tooling/ui-token-floor.json`, and when that file
+  records a stylesheet that is not there. After a deliberate change (a moved
+  or removed stylesheet, a count that must change), run
+  `python3 tooling/ui_standards.py --write-token-floor` and commit the file
+  with the change.
 - Report checks that could not run or failed. Documentation-only changes need
   link, structure and content checks, not an application build.
 
@@ -211,13 +234,12 @@ consumer, and verify a change to it in every app that imports it.
   app.
 - Each app keeps its own global entry point for its resets and base rules.
 - When a second app or the Bevy HUD needs the same component or foundation,
-  move it from `library/ui/apps/<app>/` (or from the app, until `library/ui` is
-  implemented) to the shared `components/` or `foundations/`, update its
+  move it from `library/ui/apps/<app>/` (or from the app) to the shared `components/` or `foundations/`, update its
   consumers and remove the old copy.
 
 ## Shared UI: `library/ui`
 
-The shared foundations are implemented in `library/ui/foundations`, with bundled fonts and typed browser exports. Runtime component and consumer integration are separate work. Keep each surface's existing tokens and components until its integration has been reviewed. The decision is recorded in the [shared UI library ADR](adr/2026-10-30-shared-ui-library.md).
+The shared foundations are implemented in `library/ui/foundations`, with bundled fonts and typed browser exports. Shared components live in `library/ui/components`, written from the component template above, and are exported from `library/ui/index.ts`. A surface keeps its existing tokens and components until its migration to the shared ones has been reviewed. The decision is recorded in the [shared UI library ADR](adr/2026-10-30-shared-ui-library.md).
 
 `library/ui` is the home of the shared UI foundation:
 
@@ -236,7 +258,7 @@ UI.
 
 Use the public `@dcl/one-ui/foundations` entry for foundation-only consumers. The Explorer HUD imports tokens and icons from this entry and keeps generated components outside its compiled source and build fingerprint. The root `@dcl/one-ui` entry remains the public foundation and component surface. Shared foundation CSS continues to use the existing CSS subpaths.
 
-The Explorer HUD records its computed shared-library import closure in `rendering/bevy-explorer/source/react-web/shared-inputs.json`. The owned root inventory contains every tracked file under `rendering/bevy-explorer/source/react-web/src` plus `app.html` and `index.html`. Any edit, addition, deletion or rename of those roots, including comment-only edits, requires regenerating this manifest before CI planning or strict artifact acceptance. Other owned files, including bridge-scene and web-engine sources, become controls only when the actual compiler or Vite graph reaches them; changes to those recorded controls, shared imports or resolver configuration also require regeneration. Unreached owned files remain covered by the separate Explorer source fingerprint. From the repository root, run `npm --prefix rendering/bevy-explorer/source/react-web run gen:shared-inputs` with locked dependencies and canonical Rust-generated bindings available. Local Vite/Vitest configuration still supports ordinary owned-source edits, and native staleness still invokes the existing rebuild without updating the manifest. `npm run check:shared-inputs` recomputes the compiler, web/native bundle and CSS-processor graphs in CI. The manifest binds all tracked HUD roots and resolver/font identity controls separately from the actually reached UI, Shop and Catalyst API source files. Selection and artifact checks validate each revision's own hashes, reject stale head metadata and conservatively rebuild when a historical revision has no contract. Vite, native stale checks and the pure Nix fileset read the same checked graph. The engine-generated bindings (`library/explorer-core/engine/generated`) are not in it: the engine build produces them and the Sites import compares the tracked copy with its own.
+The Explorer HUD records its computed shared-library import closure in `rendering/bevy-explorer/source/react-web/shared-inputs.json`. The owned root inventory contains every tracked file under `rendering/bevy-explorer/source/react-web/src` plus `app.html` and `index.html`. Any edit, addition, deletion or rename of those roots, including comment-only edits, requires regenerating this manifest before CI planning or strict artifact acceptance. Other owned files, including bridge-scene and web-engine sources, become controls only when the actual compiler or Vite graph reaches them; changes to those recorded controls, shared imports or resolver configuration also require regeneration. Unreached owned files remain covered by the separate Explorer source fingerprint. From the repository root, run `pnpm --dir rendering/bevy-explorer/source/react-web run gen:shared-inputs` with locked dependencies and canonical Rust-generated bindings available. Local Vite/Vitest configuration still supports ordinary owned-source edits, and native staleness still invokes the existing rebuild without updating the manifest. `pnpm run check:shared-inputs` recomputes the compiler, web/native bundle and CSS-processor graphs in CI. The manifest binds all tracked HUD roots and resolver/font identity controls separately from the actually reached UI, Shop and Catalyst API source files. Selection and artifact checks validate each revision's own hashes, reject stale head metadata and conservatively rebuild when a historical revision has no contract. Vite, native stale checks and the pure Nix fileset read the same checked graph. The engine-generated bindings (`library/explorer-core/engine/generated`) are not in it: the engine build produces them and the Sites import compares the tracked copy with its own.
 
 The manifest also witnesses the immediate names and kinds in the finite ancestor directories of actually reached shared files. Adding, removing or renaming a candidate can change import resolution and requires regeneration even when no recorded body changed; editing an unconsumed existing body does not. Git readers compare exact tracked and physical namespaces. Nix checks the original source before filtering; filtered archives allow only an expected namespace subset while requiring every selected file/control and refusing new names. Installed and named private output directories are separate; similarly prefixed regular files remain witnessed. Unsupported historical contracts rebuild conservatively; current heads require a contract produced by the canonical command.
 
@@ -258,7 +280,7 @@ library/ui/
       Button.figma.ts   Figma mapping, read by the tooling only
   apps/
     <app>/              app-specific UI: components and styles used by one app
-  index.ts              public foundation exports; components when installed
+  index.ts              public foundation and component exports
   figma/                Node-only Figma MCP server and CLI, config, verified cache
 ```
 
@@ -369,11 +391,11 @@ Each consumer keeps its own independent build and imports the shared code as
 source:
 
 ```tsx
-import { theme } from '@dcl/one-ui/foundations'
-import '@dcl/one-ui/foundations.css'
+import { theme } from "@dcl/one-ui/foundations";
+import "@dcl/one-ui/foundations.css";
 ```
 
-`@dcl/one-ui` exposes the shared source and foundation styles. Before using these imports, each application configures the package name and CSS subpaths in both its TypeScript paths and bundler aliases, allows access to shared sources and deduplicates React and React DOM. Assets must work in every supported target, including native CEF.
+`@dcl/one-ui` exposes the shared source and foundation styles ([ADR](adr/2026-11-09-shared-ui-import-name.md)). Before using these imports, each application configures the package name and CSS subpaths in both its TypeScript paths and bundler aliases, allows access to shared sources and deduplicates React and React DOM. Assets must work in every supported target, including native CEF.
 
 Build inputs, dependency resolution, HUD provenance and CI selection must
 include the shared sources so that changes invalidate the affected artifacts.
@@ -394,7 +416,9 @@ include the shared sources so that changes invalidate the affected artifacts.
   (`src/test/sharedUi.test.tsx` checks them).
 
 The Sites host maps `@hud`, `@explorer-core` and `@hud-host` the same way,
-with React deduplicated and both folders allowed to its dev servers:
+and also `@shop-host`, the in-world Shop's host (`library/ui/apps/shop/hostContract.ts`,
+implemented by `apps/ui3/src/play/shopHost.ts`), with React and TanStack Query
+deduplicated and both folders allowed to its dev servers:
 `apps/ui3/tsconfig.json` and `apps/ui3/vitest.config.ts` for the `/play`
 type check and tests, `apps/sites/tsconfig.json` and
 `apps/sites/vite.config.ts` for the Sites build.

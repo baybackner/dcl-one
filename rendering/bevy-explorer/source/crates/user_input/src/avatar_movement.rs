@@ -13,8 +13,9 @@ use common::{
     },
     sets::{PostUpdateSets, SceneLoopSets, SceneSets},
     structs::{
-        avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, PrimaryPlayerRes,
-        PrimaryUser, SceneDrivenAnim, SceneDrivenAnimationFeedback, SceneDrivenAnimationRequest,
+        avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, LocomotionSpeeds,
+        PlayerModifiers, PrimaryPlayerRes, PrimaryUser, SceneDrivenAnim,
+        SceneDrivenAnimationFeedback, SceneDrivenAnimationRequest,
     },
 };
 use dcl_component::{
@@ -70,6 +71,7 @@ impl Plugin for AvatarMovementPlugin {
 
         app.init_resource::<AvatarMovementInfo>();
         app.init_resource::<LastMovementStep>();
+        app.register_required_components::<PrimaryUser, LocomotionSpeeds>();
         app.register_required_components::<RendererSceneContext, MovementPeriod>();
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
@@ -86,6 +88,8 @@ impl Plugin for AvatarMovementPlugin {
                 ActivePlayerComponent::<AvatarMovement>::pick_latest_frame_only_by_priority,
                 ActivePlayerComponent::<AvatarLocomotionSettings>::pick_by_priority,
                 ActivePlayerComponent::<InputModifier>::pick_by_priority,
+                update_locomotion_speeds
+                    .after(ActivePlayerComponent::<AvatarLocomotionSettings>::pick_by_priority),
                 update_priority_scene.after(
                     ActivePlayerComponent::<AvatarMovement>::pick_latest_frame_only_by_priority,
                 ),
@@ -111,6 +115,38 @@ impl Plugin for AvatarMovementPlugin {
                 .chain()
                 .in_set(PostUpdateSets::PlayerUpdate),
         );
+    }
+}
+
+/// The speeds the active locomotion settings give; a speed they leave unset is the player's own
+/// (configured speed with area modifiers).
+fn locomotion_speeds(
+    base: &PrimaryUser,
+    settings: Option<&PbAvatarLocomotionSettings>,
+) -> LocomotionSpeeds {
+    LocomotionSpeeds {
+        walk: settings
+            .and_then(|s| s.walk_speed)
+            .unwrap_or(base.walk_speed),
+        jog: settings.and_then(|s| s.jog_speed).unwrap_or(base.jog_speed),
+        run: settings.and_then(|s| s.run_speed).unwrap_or(base.run_speed),
+    }
+}
+
+/// Keeps the player's [`LocomotionSpeeds`] in step with the active locomotion settings.
+#[allow(clippy::type_complexity)]
+fn update_locomotion_speeds(
+    mut player: Query<(
+        &PrimaryUser,
+        Option<&PlayerModifiers>,
+        Option<&ActivePlayerComponent<AvatarLocomotionSettings>>,
+        &mut LocomotionSpeeds,
+    )>,
+) {
+    for (user, modifiers, active, mut speeds) in player.iter_mut() {
+        let base = modifiers.map_or_else(|| user.clone(), |m| m.combine(user));
+        let settings = active.map(|a| &a.component.0);
+        speeds.set_if_neq(locomotion_speeds(&base, settings));
     }
 }
 
@@ -662,6 +698,7 @@ pub fn apply_movement(
     if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
         dynamic_state.velocity = Vec3::ZERO;
         dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
+        end_jump_on_landing(&mut dynamic_state);
         *last_step = LastMovementStep {
             requested_velocity: Some(Vector3::world_vec_from_vec3(&movement.component.velocity)),
             actual_velocity: Some(Vector3::world_vec_from_vec3(&Vec3::ZERO)),
@@ -814,6 +851,7 @@ pub fn apply_movement(
         *jumping = false;
     }
     dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
+    end_jump_on_landing(&mut dynamic_state);
 }
 
 /// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
@@ -887,7 +925,7 @@ fn step_reach() -> f64 {
     f64::from(PLAYER_COLLIDER_RADIUS) * (1.0 - f64::from(MAX_GROUND_INCLINE.sin())) + 0.01
 }
 /// How far a move slower than [`step_reach`] a frame pushes against a riser before it steps onto
-/// it: a walk pauses at each riser about as long as the reference client's.
+//// it: a walk pauses at each riser about as long as the reference client's.
 const STEP_PUSH: f64 = 0.15;
 
 /// Step offset from a riser too steep to stand on: up by at most [`MAX_STEP_HEIGHT`] (less under a
@@ -934,9 +972,24 @@ fn walkable(normal: DVec3) -> bool {
 /// The feet's height above ground the player stands on, over every scene's colliders; at most the
 /// height above the world floor.
 fn ground_height(scenes: &mut Query<(Entity, &mut SceneColliderData)>, feet: Vec3) -> f32 {
-    scenes.iter_mut().fold(feet.y, |ground, (_, mut collider_data)| {
-        ground.min(collider_data.get_ground(feet).map_or(f32::INFINITY, |(h, _)| h))
-    })
+    scenes
+        .iter_mut()
+        .fold(feet.y, |ground, (_, mut collider_data)| {
+            ground.min(
+                collider_data
+                    .get_ground(feet)
+                    .map_or(f32::INFINITY, |(h, _)| h),
+            )
+        })
+}
+
+/// Forget the take-off time once the player is back on the ground and no longer rising, so that
+/// `jump_time` marks a jump in flight (`<= 0.0` for none): the animation's take-off window and the
+/// `jump_count` this client broadcasts both read it.
+fn end_jump_on_landing(dynamic_state: &mut AvatarDynamicState) {
+    if dynamic_state.ground_height < 0.2 && dynamic_state.velocity.y <= 0.0 {
+        dynamic_state.jump_time = -1.0;
+    }
 }
 
 // (scene entity, collider id) of collider player is standing on
@@ -1609,5 +1662,69 @@ mod tests {
                 .all(|(sent, applied)| (sent - 45.0).abs() < 1e-3 && (applied - 45.0).abs() < 1e-3),
             "{frames:?}"
         );
+    }
+
+    #[test]
+    fn unset_locomotion_speeds_use_the_players_own() {
+        let base = PrimaryUser {
+            walk_speed: 3.0,
+            jog_speed: 7.0,
+            run_speed: 9.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            locomotion_speeds(&base, None),
+            LocomotionSpeeds {
+                walk: 3.0,
+                jog: 7.0,
+                run: 9.0
+            }
+        );
+        let settings = PbAvatarLocomotionSettings {
+            walk_speed: Some(1.0),
+            run_speed: Some(20.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            locomotion_speeds(&base, Some(&settings)),
+            LocomotionSpeeds {
+                walk: 1.0,
+                jog: 7.0,
+                run: 20.0
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    fn state(ground_height: f32, vertical_velocity: f32) -> AvatarDynamicState {
+        AvatarDynamicState {
+            velocity: Vec3::new(0.0, vertical_velocity, 0.0),
+            ground_height,
+            jump_time: 5.0,
+            ..default()
+        }
+    }
+
+    #[test]
+    fn landing_ends_the_jump_in_flight() {
+        let mut landed = state(0.0, 0.0);
+        end_jump_on_landing(&mut landed);
+        assert!(landed.jump_time <= 0.0);
+    }
+
+    #[test]
+    fn the_take_off_frame_and_the_flight_keep_the_jump() {
+        // still within the grounded height on the frame the jump starts, but rising
+        let mut taking_off = state(0.1, 11.0);
+        end_jump_on_landing(&mut taking_off);
+        assert_eq!(taking_off.jump_time, 5.0);
+
+        let mut airborne = state(1.5, -3.0);
+        end_jump_on_landing(&mut airborne);
+        assert_eq!(airborne.jump_time, 5.0);
     }
 }

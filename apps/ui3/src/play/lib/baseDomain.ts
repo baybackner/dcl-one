@@ -75,8 +75,16 @@ const GATEWAY_PREFIXES: Readonly<Record<string, string>> = {
   'camera-reel-service': '/camera-reel-service',
   badges: '/badges',
   notifications: '/notifications',
-  'assets-cdn': '/assets-cdn'
+  'assets-cdn': '/assets-cdn',
+  'dcl-lists': '/dcl-lists',
+  'archipelago-ea-stats': '/archipelago-ea-stats',
+  'builder-api': '/builder-api'
 }
+// Services the gateway cannot serve yet, reached on Decentraland's public host instead: abgen's
+// CDN (Bevy variants), whose `/ab-cdn` route serves the asset-bundle CDN and refuses `bevy/` paths
+// (decentraland/dcl-one#631). Behind the gateway they compose from decentraland.org, never from
+// the page's own host, as the engine does (`Gateway::segment` → its default base domain).
+const NOT_THROUGH_GATEWAY: ReadonlySet<string> = new Set(['abgen-cdn'])
 
 /** The domain a url without ?baseDomain= means here: derived from the hosting origin, else this host. */
 export const DEFAULT_BASE_DOMAIN =
@@ -92,6 +100,16 @@ export function siteUrl(path: string): string {
 
 export const BASE_DOMAIN =
   normaliseBaseDomain(new URLSearchParams(window.location.search).get('baseDomain')) ?? DEFAULT_BASE_DOMAIN
+
+// Pulse is UDP, which an HTTP front cannot carry: behind the gateway the deployment names its host.
+const PULSE_SERVER = BASE_DOMAIN === ONE_GATEWAY_HOST ? configuredPulseServer() : null
+
+function configuredPulseServer(): string | null {
+  const raw = window.__DCL_PUBLIC__?.pulseServer || null
+  const host = normaliseServiceUrl(service('pulseServer'), raw)
+  if (raw != null && host == null) console.warn('[play] PUBLIC_PULSE_SERVER is not host[:port], ignored:', raw)
+  return host
+}
 
 declare global {
   interface Window {
@@ -137,14 +155,17 @@ export function normaliseServiceUrl(s: ServiceDef, raw: string | null): string |
   }
 }
 
+/** The entry url's override; a `pulseServer` equal to this page's host is a stale engine write-back once Pulse is named. */
+export function entryServiceUrl(s: ServiceDef): string | null {
+  const url = normaliseServiceUrl(s, new URLSearchParams(window.location.search).get(s.name))
+  return s.name === 'pulseServer' && PULSE_SERVER != null && url === ONE_GATEWAY_HOST ? null : url
+}
+
 /** The explicit overrides in the ENTRY url, by service name — also the engine's, via the boot config. */
 export const SERVICE_OVERRIDES: Readonly<Record<string, string>> = {}
-{
-  const q = new URLSearchParams(window.location.search)
-  for (const s of SERVICES) {
-    const url = normaliseServiceUrl(s, q.get(s.name))
-    if (url != null) (SERVICE_OVERRIDES as Record<string, string>)[s.name] = url
-  }
+for (const s of SERVICES) {
+  const url = entryServiceUrl(s)
+  if (url != null) (SERVICE_OVERRIDES as Record<string, string>)[s.name] = url
 }
 
 /**
@@ -153,18 +174,30 @@ export const SERVICE_OVERRIDES: Readonly<Record<string, string>> = {}
  * "https://places.decentraland.org".
  */
 export function serviceUrl(name: string): string {
+  return SERVICE_OVERRIDES[name] ?? derivedServiceUrl(name)
+}
+
+/**
+ * The url this deployment composes for a service on its own, ignoring the entry url's override:
+ * what the Explorer uses when the link says nothing. The engine writes its effective options back
+ * into the address bar (deploy/web/engine/boot.js set_url_params), so a reloaded or copied link
+ * carries every service explicitly; one that merely repeats this value changes nothing.
+ */
+export function derivedServiceUrl(name: string): string {
   const s = service(name)
-  const override = SERVICE_OVERRIDES[name]
-  if (override != null) return override
-  if (BASE_DOMAIN === ONE_GATEWAY_HOST) {
+  if (BASE_DOMAIN === ONE_GATEWAY_HOST && !NOT_THROUGH_GATEWAY.has(s.sub)) {
     const prefix = GATEWAY_PREFIXES[s.sub]
     if (prefix == null) throw new Error(`serviceUrl: '${name}' (${s.sub}) has no gateway prefix`)
+    if (s.name === 'pulseServer' && PULSE_SERVER != null) return PULSE_SERVER
     if (s.value === 'authority') return ONE_GATEWAY_HOST
     const secure = window.location.protocol === 'https:'
     const scheme = s.value === 'websocket' ? (secure ? 'wss' : 'ws') : secure ? 'https' : 'http'
     return `${scheme}://${ONE_GATEWAY_HOST}${prefix}${s.path}`
   }
-  const host = s.sub === '' ? BASE_DOMAIN : `${s.sub}.${BASE_DOMAIN}`
+  // on the gateway host no ?baseDomain= was given, so an ungated service takes the upstream default
+  const domain =
+    BASE_DOMAIN === ONE_GATEWAY_HOST && NOT_THROUGH_GATEWAY.has(s.sub) ? TRUSTED_BASE_DOMAINS[0] : BASE_DOMAIN
+  const host = s.sub === '' ? domain : `${s.sub}.${domain}`
   return s.value === 'authority' ? host : `${s.scheme}://${host}${s.path}`
 }
 window.__serviceUrl = serviceUrl

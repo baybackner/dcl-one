@@ -20,7 +20,7 @@
 
 use axum::http::HeaderMap;
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::auth::admin_bearer::Refusal;
 use crate::auth::eip1654::Eip1654Validator;
@@ -31,7 +31,8 @@ use crate::auth::signed_fetch::{
 use crate::auth::{AuthChain, AuthError, AuthLinkType};
 use crate::shared::signed_fetch::{
     self, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, FIVE_MINUTES,
-    SignedFetchError as ChainError, SignedPath, candidate_paths, check_symmetric_skew, header_str,
+    SignedFetchError as ChainError, SignedPath, candidate_paths, check_timestamp_window,
+    header_str,
 };
 use crate::{Address, AuthorityNotEstablished};
 
@@ -118,49 +119,9 @@ fn signer_gate_permits(metadata: &Value, rejected: &[&str]) -> bool {
         && !own_string(metadata, "signer").is_some_and(|s| rejected.contains(&s))
 }
 
-fn objects_to_inspect<'a>(value: &'a Value, out: &mut Vec<&'a Map<String, Value>>) {
-    match value {
-        Value::Array(items) => items.iter().for_each(|item| objects_to_inspect(item, out)),
-        Value::Object(object) => out.push(object),
-        _ => {}
-    }
-}
-
-/// Refuses legacy-signed metadata whose declared keys are not delivered in
-/// their declared spelling (keys only; values such as `sceneId` are
-/// case-sensitive CIDs).
+/// Only legacy-signed metadata requires canonical declared key spelling.
 fn legacy_metadata_keys_are_canonical(metadata: &Value, canonical_keys: &[&str]) -> bool {
-    for declared_path in canonical_keys {
-        let mut containers: Vec<&Value> = vec![metadata];
-        for segment in declared_path.split('.') {
-            let folded = segment.to_lowercase();
-            let mut objects: Vec<&Map<String, Value>> = Vec::new();
-            for container in &containers {
-                objects_to_inspect(container, &mut objects);
-            }
-            let mut next: Vec<&Value> = Vec::new();
-            for object in objects {
-                let delivered: Vec<&String> = object
-                    .keys()
-                    .filter(|key| key.to_lowercase() == folded)
-                    .collect();
-                if delivered.is_empty() {
-                    continue;
-                }
-                if delivered.len() > 1 || delivered[0].as_str() != segment {
-                    return false;
-                }
-                if let Some(value) = object.get(segment) {
-                    next.push(value);
-                }
-            }
-            if next.is_empty() {
-                break;
-            }
-            containers = next;
-        }
-    }
-    true
+    crate::signed_fetch::first_metadata_key_mismatch(metadata, canonical_keys).is_none()
 }
 
 enum Verdict {
@@ -245,7 +206,7 @@ async fn verify_with_keys(
     let chain = signed_fetch::extract_auth_chain(headers).map_err(map_chain_error)?;
     let ts = timestamp_or_zero(header_str(headers, AUTH_TIMESTAMP_HEADER));
     let now = chrono::Utc::now().timestamp();
-    check_symmetric_skew(ts, now, tolerance_secs).map_err(map_chain_error)?;
+    check_timestamp_window(ts, now, tolerance_secs).map_err(map_chain_error)?;
 
     // Upstream's `verifyMetadata`: unparseable or non-object refused, `null`
     // reads as an empty object.
@@ -320,9 +281,9 @@ pub async fn verify_signed_fetch(
     .await
 }
 
-/// A wallet's own signed fetch (the player-report routes): any `signer`
-/// but the scene's (a re-spelled key refused too, 400), so a scene-signed
-/// chain is never filed as the wallet that signed it.
+/// A wallet's own signed fetch (player reports, scene adapter, island
+/// refresh): any `signer` but the scene's (a re-spelled key refused too,
+/// 400), so a scene-signed chain never acts as the wallet that signed it.
 pub async fn verify_wallet_signed_fetch(
     headers: &HeaderMap,
     method: &str,
@@ -336,6 +297,29 @@ pub async fn verify_wallet_signed_fetch(
         &[],
         &[SCENE_SIGNER],
         CANONICAL_METADATA_KEYS,
+        DEFAULT_EXPIRATION_SECS,
+        validator,
+    )
+    .await
+}
+
+/// Upstream's `authWatcher` (`/cast/watcher-token`): a wallet's own signed
+/// fetch, any `signer` but the scene's, and deliberately strict: no
+/// `canonicalMetadataKeys`, so the pre-6.0.0 payload is refused (the cast web
+/// app signs all-lowercase metadata, for which both payloads are the same).
+pub async fn verify_viewer_signed_fetch(
+    headers: &HeaderMap,
+    method: &str,
+    path: &SignedPath,
+    validator: Option<&dyn Eip1654Validator>,
+) -> Result<SignedFetch, SignedFetchError> {
+    verify_with_keys(
+        headers,
+        method,
+        path,
+        &[],
+        &[SCENE_SIGNER],
+        &[],
         DEFAULT_EXPIRATION_SECS,
         validator,
     )
@@ -362,31 +346,8 @@ pub async fn verify_server_signed_fetch(
     .await
 }
 
-/// The bare signer of a request (the authoritative server's route): the five
-/// minute window, either payload shape, no metadata gate.
-pub async fn require_signer(
-    headers: &HeaderMap,
-    method: &str,
-    path: &SignedPath,
-    validator: Option<&dyn Eip1654Validator>,
-) -> Result<Address, SignedFetchError> {
-    let chain = signed_fetch::extract_auth_chain(headers).map_err(map_chain_error)?;
-    let ts = timestamp_or_zero(header_str(headers, AUTH_TIMESTAMP_HEADER));
-    let now = chrono::Utc::now().timestamp();
-    check_symmetric_skew(ts, now, FIVE_MINUTES).map_err(map_chain_error)?;
-    let request = SignedRequest {
-        method,
-        paths: &candidate_paths(headers, path),
-        timestamp: ts,
-        metadata: header_str(headers, AUTH_METADATA_HEADER).unwrap_or("{}"),
-    };
-    let outcome = verify_signature(&chain, &request, now, LegacyPayload::Accepted, validator).await;
-    match verdict(outcome, &chain) {
-        Verdict::Signer(signer) => Ok(signer),
-        Verdict::InvalidSignature => Err(SignedFetchError::new(401, "Invalid signature")),
-        Verdict::Other(e) => Err(e),
-    }
-}
+/// The refusal detail of a request without an `Authorization` header.
+const NO_AUTHORIZATION_HEADER: &str = "no authorization header";
 
 /// The platform service token in front of the voice routes and the world
 /// ban-status route: unset is a misconfiguration (503), a missing or wrong
@@ -401,21 +362,35 @@ pub fn require_service_token(
             environment_variable: "COMMS_GATEKEEPER_AUTH_TOKEN",
         }),
         Err(Refusal::Mismatch) => Err(AuthorityNotEstablished::PresentedSharedSecretDidNotMatch),
-        Err(Refusal::NoBearer) => Err(AuthorityNotEstablished::AuthenticationMissingOrInvalid {
-            detail: "no bearer token",
-        }),
+        Err(Refusal::NoBearer) => {
+            let absent = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .is_none_or(|v| v.is_empty());
+            Err(AuthorityNotEstablished::AuthenticationMissingOrInvalid {
+                detail: if absent {
+                    NO_AUTHORIZATION_HEADER
+                } else {
+                    "no bearer token"
+                },
+            })
+        }
     }
 }
 
-/// The wire text of every service-token refusal (the old gate answered 401
-/// "Authentication required" for both the missing and the wrong bearer).
+/// The wire text of every service-token refusal, as upstream's
+/// `bearerTokenMiddleware` (`@dcl/http-commons`) words it: 401 "Authorization
+/// header is missing" without the header (capture
+/// `voice-chat-status-401-no-token`), else 401 "Invalid authorization header".
 pub fn service_token_error(why: AuthorityNotEstablished) -> ApiError {
     match why {
         AuthorityNotEstablished::CredentialNotConfigured { .. } => ApiError::http(
             503,
             "This route is unavailable: COMMS_GATEKEEPER_AUTH_TOKEN is not configured, so the platform service token cannot be verified",
         ),
-        _ => ApiError::http(401, "Authentication required"),
+        AuthorityNotEstablished::AuthenticationMissingOrInvalid {
+            detail: NO_AUTHORIZATION_HEADER,
+        } => ApiError::http(401, "Authorization header is missing"),
+        _ => ApiError::http(401, "Invalid authorization header"),
     }
 }
 
@@ -490,12 +465,13 @@ pub async fn authorize_moderator(
     }
 }
 
+/// The client address recorded with a connection: the forwarding headers the
+/// server pins to the socket peer unless it is a trusted proxy
+/// ([`client_ip`](crate::shared::client_ip::client_ip)), the same address the
+/// handlers rate-limit on. A client-set header such as `CF-Connecting-IP` is
+/// never read.
 pub fn get_request_ip(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("cf-connecting-ip")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    Some(crate::shared::client_ip::client_ip(headers)).filter(|ip| !ip.is_empty())
 }
 
 pub fn device_identifier(metadata: &Value) -> Option<String> {
@@ -678,10 +654,10 @@ mod tests {
             "the gatekeeper window is 60 s"
         );
         assert!(
-            require_signer(&headers, "post", &SignedPath::local(PATH), None)
+            verify_server_signed_fetch(&headers, "post", &SignedPath::local(PATH), None)
                 .await
                 .is_ok(),
-            "the bare signer route keeps the five minute window"
+            "the authoritative server route keeps the five minute window"
         );
     }
 
@@ -902,6 +878,18 @@ mod tests {
         ));
         headers.insert("authorization", HeaderValue::from_static("Bearer t"));
         assert!(require_service_token(Some("t"), &headers).is_ok());
+        let message = |headers: &HeaderMap| {
+            service_token_error(require_service_token(Some("t"), headers).unwrap_err()).message
+        };
+        assert_eq!(
+            message(&HeaderMap::new()),
+            "Authorization header is missing"
+        );
+        for value in ["Bearer nope", "Basic t", "t"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", HeaderValue::from_str(value).unwrap());
+            assert_eq!(message(&headers), "Invalid authorization header", "{value}");
+        }
         assert_eq!(
             service_token_error(AuthorityNotEstablished::PresentedSharedSecretDidNotMatch).code,
             401
@@ -1122,7 +1110,6 @@ mod tests {
                 .reason,
             "spam"
         );
-        assert_eq!(get_request_ip(&HeaderMap::new()), None);
         assert_eq!(
             device_identifier(&serde_json::json!({"deviceIdentifier": "d1"})).as_deref(),
             Some("d1")
@@ -1131,5 +1118,15 @@ mod tests {
             device_identifier(&serde_json::json!({"deviceIdentifier": ""})),
             None
         );
+    }
+
+    #[test]
+    fn request_ip_comes_from_the_pinned_forwarding_headers() {
+        assert_eq!(get_request_ip(&HeaderMap::new()), None);
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "203.0.113.9".parse().unwrap());
+        assert_eq!(get_request_ip(&headers), None);
+        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
+        assert_eq!(get_request_ip(&headers).as_deref(), Some("198.51.100.7"));
     }
 }

@@ -11,6 +11,7 @@ use analytics::{
     data_definition::{SegmentEvent, SegmentEventChatMessageSent},
     segment_system::{SegmentConfig, SegmentMetricsEvents},
 };
+use avatar::nametag::bubble::{BubbleKind, ChatBubbleRequest};
 use bevy::{color::palettes::css, prelude::*};
 
 use bevy_console::{ConsoleCommand, ConsoleCommandEntered, ConsoleConfiguration, PrintConsoleLine};
@@ -364,6 +365,7 @@ fn append_chat_messages(
     mut chatbox: Query<&mut ChatBox>,
     users: Query<&UserProfile>,
     #[cfg(feature = "livekit")] ban_block: ban_block::BanBlock,
+    #[cfg(feature = "livekit")] primary_player: Res<PrimaryPlayerRes>,
 ) {
     let Ok(mut chatbox) = chatbox.single_mut() else {
         return;
@@ -385,7 +387,12 @@ fn append_chat_messages(
         };
 
         #[cfg(feature = "livekit")]
-        if sender.is_some_and(|address| ban_block.is_blocked_either_way(address)) {
+        if sender.is_some_and(|address| {
+            ban_block.is_blocked_either_way(address)
+                || (ev.channel == "Nearby"
+                    && ev.sender != primary_player.0
+                    && ban_block.is_addr_banned_in_scene(address))
+        }) {
             continue;
         }
 
@@ -732,12 +739,28 @@ fn pipe_chats_to_scene(
         comms::private_chat::CommunityChatReceived,
     >,
     #[cfg(feature = "livekit")] ban_block: ban_block::BanBlock,
+    #[cfg(feature = "livekit")] community_channels: Res<comms::private_chat::CommunityChannels>,
     mut requests: EventReader<SystemApi>,
     mut senders: Local<Vec<RpcStreamSender<ChatMessage>>>,
-    players: Query<&ForeignPlayer>,
+    mut bubbles: EventWriter<ChatBubbleRequest>,
+    players: Query<(Entity, &ForeignPlayer)>,
     primary_player: Res<PrimaryPlayerRes>,
     wallet: Res<Wallet>,
 ) {
+    // a community's name for the bubble of one of its messages
+    #[cfg(feature = "livekit")]
+    let community =
+        |id: &str| BubbleKind::Community(community_channels.name(id).map(str::to_owned));
+    #[cfg(not(feature = "livekit"))]
+    let community = |_: &str| BubbleKind::Community(None);
+    #[cfg(feature = "livekit")]
+    let player_of = |address: Address| {
+        players
+            .iter()
+            .find(|(_, player)| player.address == address)
+            .map(|(entity, _)| entity)
+    };
+
     senders.extend(requests.read().filter_map(|ev| {
         if let SystemApi::GetChatStream(sender) = ev {
             Some(sender.clone())
@@ -762,7 +785,7 @@ fn pipe_chats_to_scene(
             let player_address = players
                 .get(chat_event.sender)
                 .ok()
-                .map(|fp| fp.address)
+                .map(|(_, fp)| fp.address)
                 .or_else(|| {
                     if chat_event.sender == primary_player.0 {
                         wallet.address()
@@ -782,8 +805,36 @@ fn pipe_chats_to_scene(
                 continue;
             }
 
+            #[cfg(feature = "livekit")]
+            if chat_event.channel == "Nearby"
+                && chat_event.sender != primary_player.0
+                && ban_block.is_addr_banned_in_scene(player_address)
+            {
+                continue;
+            }
+
             let message_id = chat_message_id(player_address, chat_event.timestamp);
             debug!("chat {message_id}: {}", chat_event.message);
+
+            // the message shows over its author: a nearby one, or the local user's own in a
+            // DM (whose channel is the partner's wallet) or a community
+            let bubble = if chat_event.channel == "Nearby" {
+                Some(BubbleKind::Nearby)
+            } else if let Some(recipient) = chat_event.channel.as_h160() {
+                Some(BubbleKind::Dm {
+                    recipient: Some(recipient),
+                })
+            } else {
+                comms::community_chat::community_id(&chat_event.channel).map(community)
+            };
+            if let Some(kind) = bubble {
+                bubbles.write(ChatBubbleRequest {
+                    sender: chat_event.sender,
+                    kind,
+                    message: chat_event.message.clone(),
+                    message_id: message_id.clone(),
+                });
+            }
             (format!("{player_address:#x}"), message_id)
         };
 
@@ -807,6 +858,14 @@ fn pipe_chats_to_scene(
         let partner = format!("{:#x}", dm.from);
         let message_id = chat_message_id(dm.from, dm.timestamp);
         debug!("dm {message_id}: {}", dm.message);
+        if let Some(sender) = player_of(dm.from) {
+            bubbles.write(ChatBubbleRequest {
+                sender,
+                kind: BubbleKind::Dm { recipient: None },
+                message: dm.message.clone(),
+                message_id: message_id.clone(),
+            });
+        }
         for sender in senders.iter() {
             let _ = sender.send(ChatMessage {
                 sender_address: partner.clone(),
@@ -827,6 +886,14 @@ fn pipe_chats_to_scene(
         let channel = comms::community_chat::channel_for(&chat.community_id);
         let message_id = chat_message_id(chat.from, chat.timestamp);
         debug!("{channel} {message_id}: {}", chat.message);
+        if let Some(sender) = player_of(chat.from) {
+            bubbles.write(ChatBubbleRequest {
+                sender,
+                kind: community(&chat.community_id),
+                message: chat.message.clone(),
+                message_id: message_id.clone(),
+            });
+        }
         for sender in senders.iter() {
             let _ = sender.send(ChatMessage {
                 sender_address: format!("{:#x}", chat.from),
@@ -911,10 +978,12 @@ fn broadcast_nearby_reactions(
     }
 }
 
-/// Every reaction, the local user's included, except from blocked users.
+/// Every reaction, the local user's included, except from blocked users and, in Nearby, from
+/// other players the scene room bans.
 fn pipe_chat_reactions_to_scene(
     mut reactions: EventReader<ChatReactionEvent>,
     #[cfg(feature = "livekit")] ban_block: ban_block::BanBlock,
+    #[cfg(feature = "livekit")] wallet: Res<Wallet>,
     mut requests: EventReader<SystemApi>,
     mut senders: Local<Vec<RpcStreamSender<ChatReactionData>>>,
 ) {
@@ -929,7 +998,11 @@ fn pipe_chat_reactions_to_scene(
 
     for ev in reactions.read() {
         #[cfg(feature = "livekit")]
-        if ban_block.is_blocked_either_way(ev.from) {
+        if ban_block.is_blocked_either_way(ev.from)
+            || (ev.channel == "Nearby"
+                && Some(ev.from) != wallet.address()
+                && ban_block.is_addr_banned_in_scene(ev.from))
+        {
             continue;
         }
         debug!("reaction {ev:?}");

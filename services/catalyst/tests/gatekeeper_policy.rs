@@ -792,6 +792,216 @@ mod tests {
         );
         media_server.abort();
     }
+
+    /// A world scene published through this node's deploy path advertises
+    /// its realm name without `.dcl.eth` in `/about`; the explorer signs that
+    /// name with the realm URL `<host>/world/<name>`, and the Admin Toolkit's
+    /// moderation reads resolve that signed scene in the world.
+    #[tokio::test]
+    async fn a_scene_published_here_moderates_under_the_realm_name_its_about_advertises() {
+        use catalyst::comms::world_identity::{Parcel, ParcelSet, WorldName};
+        use catalyst::worlds::core::store::{self, SceneDeployment};
+        use catalyst::worlds::policy::Deploy;
+
+        let Some(pool) = scratch().await else { return };
+        let state = state_with(pool.clone(), Settings::for_tests());
+        let label = format!("direct{}", tag());
+        let world = WorldName::parse(&format!("{label}.dcl.eth")).unwrap();
+        let scene_id = format!("DirectScene{}", tag());
+        let owner = Address::parse(&address_of(KEY)).unwrap();
+        let entity = serde_json::json!({
+            "type": "scene",
+            "timestamp": 1000,
+            "pointers": ["0,0"],
+            "metadata": {
+                "display": { "title": "Direct" },
+                "scene": { "base": "0,0", "parcels": ["0,0"] },
+                "worldConfiguration": { "name": world.display() },
+            },
+        });
+        let dir = std::env::temp_dir().join(format!("catalyst-gk-direct-{}", tag()));
+        let storage = catalyst::storage::Storage::from_config(&dir).await.unwrap();
+        let parcels: ParcelSet = [Parcel::parse("0,0").unwrap()].into_iter().collect();
+        store::deploy_scene(
+            &pool,
+            &storage,
+            SceneDeployment {
+                world: &world,
+                name_owner: Some(&owner),
+                entity_id: &scene_id,
+                deployer: &owner,
+                deployment_auth_chain: &serde_json::json!([{ "type": "SIGNER", "payload": owner.as_str() }]),
+                entity: &entity,
+                parcels: &parcels,
+                size: 1,
+                replacement: &Deploy::Owner,
+                forward_to: None,
+                quota: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let about = catalyst::worlds::about::build_about(
+            &catalyst::worlds::Settings::for_tests("https://node.example"),
+            world.display(),
+            catalyst::worlds::queries::world_about(&pool, world.display())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let realm_name = about.configurations.realm_name.clone();
+        assert_eq!(realm_name, label, "a world published here strips .dcl.eth");
+
+        state
+            .moderation
+            .add_admin(&scene_id, &owner, &owner)
+            .await
+            .unwrap();
+        // What the explorer signs for a scene of that realm
+        // (`restricted_actions::SignedFetchMeta`).
+        let metadata = serde_json::json!({
+            "signer": "decentraland-kernel-scene",
+            "sceneId": scene_id,
+            "parcel": "0,0",
+            "realm": {
+                "hostname": format!("node.example/world/{}", world.display()),
+                "protocol": "v3",
+                "serverName": realm_name,
+            },
+        })
+        .to_string();
+        let Json(admins) = moderation::handlers::list_admins(
+            State(state.clone()),
+            at("/scene-admin"),
+            signed(KEY, "get", "/scene-admin", &metadata).await,
+            Query(moderation::handlers::PlaceQuery {
+                place_id: None,
+                admin: None,
+            }),
+        )
+        .await
+        .expect("the signed scene resolves in its world");
+        assert!(
+            admins
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["admin"].as_str() == Some(owner.as_str()))
+        );
+        let Json(bans) = moderation::handlers::list_bans(
+            State(state.clone()),
+            at("/scene-bans"),
+            signed(KEY, "get", "/scene-bans", &metadata).await,
+            Query(moderation::handlers::BanQuery {
+                place_id: None,
+                banned_address: None,
+                limit: None,
+                offset: None,
+            }),
+        )
+        .await
+        .expect("the owner's admin lists the world scene's bans");
+        assert_eq!(bans.total, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Both ban listings take the authority the ban writes take: the world's
+    /// owner and an explicit scene admin read them, anyone else gets the
+    /// upstream 401 on both routes.
+    #[tokio::test]
+    async fn listing_scene_bans_requires_the_scene_owner_or_an_admin() {
+        use catalyst::shared::test_keys::random_key;
+        let Some(pool) = scratch().await else { return };
+        let state = state_with(pool.clone(), Settings::for_tests());
+        let place_id = format!("BanListScene{}", tag());
+        let world = format!("banlist{}.dcl.eth", tag());
+        seed_world_scene(&pool, &world, &place_id, &["10,20"]).await;
+        let (owner_key, admin_key, stranger_key) = (random_key(), random_key(), random_key());
+        let owner = Address::parse(&address_of(&owner_key)).unwrap();
+        let admin = Address::parse(&address_of(&admin_key)).unwrap();
+        sqlx::query("UPDATE worlds.worlds SET owner = $2 WHERE name = $1")
+            .bind(&world)
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        state
+            .moderation
+            .add_admin(&place_id, &admin, &owner)
+            .await
+            .unwrap();
+        let banned = wallet();
+        state
+            .moderation
+            .scene_ban(&format!("{world}:10,20"), &banned, &owner, &[], "Scene")
+            .await
+            .unwrap();
+        let metadata = serde_json::json!({ "signer": "decentraland-kernel-scene", "realmName": world, "sceneId": place_id, "parcel": "10,20" }).to_string();
+        let query = || {
+            Query(moderation::handlers::BanQuery {
+                place_id: None,
+                banned_address: None,
+                limit: None,
+                offset: None,
+            })
+        };
+        let list = |key: String| {
+            let (state, metadata) = (state.clone(), metadata.clone());
+            async move {
+                let headers = signed(&key, "get", "/scene-bans", &metadata).await;
+                moderation::handlers::list_bans(State(state), at("/scene-bans"), headers, query())
+                    .await
+                    .map(|Json(page)| page)
+            }
+        };
+        let list_addresses = |key: String| {
+            let (state, metadata) = (state.clone(), metadata.clone());
+            async move {
+                let headers = signed(&key, "get", "/scene-bans/addresses", &metadata).await;
+                moderation::handlers::list_ban_addresses(
+                    State(state),
+                    at("/scene-bans/addresses"),
+                    headers,
+                    query(),
+                )
+                .await
+                .map(|Json(page)| page)
+            }
+        };
+
+        for (who, key) in [("owner", &owner_key), ("admin", &admin_key)] {
+            let page = list(key.clone()).await.expect(who);
+            assert_eq!(
+                (page.total, page.results[0]["bannedAddress"].as_str()),
+                (1, Some(banned.as_str())),
+                "{who}"
+            );
+            let page = list_addresses(key.clone()).await.expect(who);
+            assert_eq!(page.results, vec![banned.as_str().to_string()], "{who}");
+        }
+
+        let refused = list(stranger_key.clone()).await.map(|_| ()).unwrap_err();
+        assert_eq!(
+            (refused.code, refused.message.as_str()),
+            (401, "User does not have permission to list scene bans")
+        );
+        let refused = list_addresses(stranger_key).await.map(|_| ()).unwrap_err();
+        assert_eq!(
+            (refused.code, refused.message.as_str()),
+            (401, "User does not have permission to list scene bans")
+        );
+        let body = axum::body::to_bytes(
+            axum::response::IntoResponse::into_response(refused).into_body(),
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "error": "User does not have permission to list scene bans" })
+        );
+    }
 }
 
 /// From `gatekeeper/streaming.rs`: the stream key lifecycle over a place
@@ -819,6 +1029,31 @@ mod stream_access {
     use catalyst::shared::test_keys::{address_of, random_key, signed};
     use catalyst::worlds::policy::{PersonalWorldsPolicy, Policy};
     use catalyst::worlds::rooms::SceneResolver;
+
+    /// An active Genesis scene on one parcel.
+    async fn deploy_scene(pool: &sqlx::PgPool, entity_id: &str, parcel: &str) {
+        sqlx::query(
+            "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, \
+             entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
+             VALUES ('0x0000000000000000000000000000000000000001', 'v3', 'scene', $1, $2, timezone('UTC', now()), $3, \
+             timezone('UTC', now()), '[]'::json)",
+        )
+        .bind(entity_id)
+        .bind(sqlx::types::Json(serde_json::json!({ "scene": { "base": parcel, "parcels": [parcel] } })))
+        .bind(vec![parcel.to_string()])
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO content.active_pointers (pointer, entity_id, entity_type) VALUES ($1, $2, 'scene') \
+             ON CONFLICT (pointer) DO UPDATE SET entity_id = EXCLUDED.entity_id",
+        )
+        .bind(parcel)
+        .bind(entity_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
     /// A stub LiveKit Ingress service: `ListIngress` answers empty,
     /// `CreateIngress` mints `IN_<n>`/`sk_<n>`, `DeleteIngress` records the id.
@@ -978,7 +1213,9 @@ mod stream_access {
             .add_admin(&place_id, &admin, &admin)
             .await
             .unwrap();
-        let metadata = serde_json::json!({ "signer": SCENE_SIGNER, "realmName": "main", "parcel": parcel, "sceneId": "bafkreistreamscene" }).to_string();
+        let scene_id = format!("bafkreistream{}", Uuid::new_v4().simple());
+        deploy_scene(&pool, &scene_id, &parcel).await;
+        let metadata = serde_json::json!({ "signer": SCENE_SIGNER, "realmName": "main", "parcel": parcel, "sceneId": scene_id }).to_string();
 
         let (status, body) = call(&app, &admin_key, "GET", &metadata).await;
         assert_eq!(
@@ -1012,7 +1249,25 @@ mod stream_access {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(room, "scene:main:bafkreistreamscene");
+        assert_eq!(room, format!("scene:main:{scene_id}"));
+
+        // A scene deployed elsewhere cannot be streamed into from this parcel.
+        let victim_parcel = format!("{},{}", if x < 0 { x + 151 } else { x - 151 }, y);
+        let victim_scene = format!("bafkreivictim{}", Uuid::new_v4().simple());
+        deploy_scene(&pool, &victim_scene, &victim_parcel).await;
+        let foreign = serde_json::json!({ "signer": SCENE_SIGNER, "realmName": "main", "parcel": parcel, "sceneId": victim_scene }).to_string();
+        for method in ["GET", "POST", "PUT"] {
+            let (status, body) = call(&app, &admin_key, method, &foreign).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method}: {body}");
+        }
+        let victim_rows: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM social.scene_stream_access WHERE room_id = $1",
+        )
+        .bind(format!("scene:main:{victim_scene}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(victim_rows, 0);
 
         let event = serde_json::to_vec(&serde_json::json!({
             "id": Uuid::new_v4().to_string(), "createdAt": chrono::Utc::now().timestamp(),
@@ -1072,6 +1327,69 @@ mod stream_access {
             (status, body["error"].as_str()),
             (StatusCode::FORBIDDEN, Some(NOT_AUTHORIZED_TO_STREAM_MSG))
         );
+        // Overlapping catalogue rows (one based elsewhere, one disabled) never authorize.
+        let stranger_address = Address::parse(&address_of(&stranger)).unwrap();
+        for (base, positions, disabled) in [
+            (
+                victim_parcel.clone(),
+                vec![parcel.clone(), victim_parcel.clone()],
+                false,
+            ),
+            (parcel.clone(), vec![parcel.clone()], true),
+        ] {
+            let stale = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO explore.place (id, base_position, raw, disabled) VALUES ($1, $2, $3::jsonb, $4)",
+            )
+            .bind(&stale)
+            .bind(&base)
+            .bind(serde_json::json!({ "world": false, "positions": positions }))
+            .bind(disabled)
+            .execute(&pool)
+            .await
+            .unwrap();
+            state
+                .moderation
+                .add_admin(&stale, &stranger_address, &stranger_address)
+                .await
+                .unwrap();
+        }
+        let (status, body) = call(&app, &stranger, "POST", &metadata).await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::FORBIDDEN, Some(NOT_AUTHORIZED_TO_STREAM_MSG))
+        );
+        // A redeploy the catalogue has not caught up with: no place is based on
+        // the new scene's base, so another scene's admins are never lent to it.
+        let moved_parcel = format!("{},{}", x, if y < 0 { y + 151 } else { y - 151 });
+        let moved_scene = format!("bafkreimoved{}", Uuid::new_v4().simple());
+        deploy_scene(&pool, &moved_scene, &moved_parcel).await;
+        let old_place = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO explore.place (id, base_position, raw) VALUES ($1, $2, $3::jsonb)",
+        )
+        .bind(&old_place)
+        .bind(&victim_parcel)
+        .bind(serde_json::json!({ "world": false, "positions": [moved_parcel, victim_parcel] }))
+        .execute(&pool)
+        .await
+        .unwrap();
+        state
+            .moderation
+            .add_admin(&old_place, &admin, &admin)
+            .await
+            .unwrap();
+        let moved = serde_json::json!({ "signer": SCENE_SIGNER, "realmName": "main", "parcel": moved_parcel, "sceneId": moved_scene }).to_string();
+        let (status, body) = call(&app, &admin_key, "POST", &moved).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        let moved_rows: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM social.scene_stream_access WHERE room_id = $1",
+        )
+        .bind(format!("scene:main:{moved_scene}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(moved_rows, 0);
 
         let device = format!("stream-device-{}", Uuid::new_v4().simple());
         state
@@ -1103,7 +1421,9 @@ mod stream_access {
                 "{method}"
             );
         }
-        let (status, _) = call(&app, &admin_key, "DELETE", &metadata).await;
+        // Remove needs only the place: a scene id no longer deployed still revokes.
+        let stale_scene = serde_json::json!({ "signer": SCENE_SIGNER, "realmName": "main", "parcel": parcel, "sceneId": "bafkreinolongerdeployed" }).to_string();
+        let (status, _) = call(&app, &admin_key, "DELETE", &stale_scene).await;
         assert_eq!(
             status,
             StatusCode::NO_CONTENT,
@@ -1125,6 +1445,211 @@ mod stream_access {
         let (status, _) = call(&app, &admin_key, "DELETE", &metadata).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         land_server.abort();
+    }
+
+    /// `method` on any gatekeeper route, signed by `key` with `metadata`.
+    async fn call_at(
+        app: &axum::Router,
+        key: &str,
+        method: &str,
+        path: &str,
+        metadata: &str,
+    ) -> (StatusCode, Value) {
+        let full = format!("/comms-gatekeeper{path}");
+        let headers = signed(key, &method.to_ascii_lowercase(), &full, metadata).await;
+        let mut req = Request::builder().method(method).uri(&full);
+        for (k, v) in headers.iter() {
+            req = req.header(k, v);
+        }
+        let resp = app
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// A world scene published through this node's deploy path advertises
+    /// its realm name without `.dcl.eth` in `/about`; the explorer signs that
+    /// name beside the realm URL `<host>/world/<name>`. Every gatekeeper route
+    /// the Admin Toolkit and Cast call with that metadata resolves the world
+    /// scene: stream access (the bound and the revocation branch), the Cast
+    /// stream link and the scene adapter. Each case is checked, then all
+    /// refusals are reported together.
+    #[tokio::test]
+    async fn a_world_published_here_answers_every_scene_route_under_its_stripped_realm_name() {
+        use catalyst::comms::world_identity::{Parcel, ParcelSet, WorldName};
+        use catalyst::worlds::core::store::{self, SceneDeployment};
+        use catalyst::worlds::policy::Deploy;
+
+        let Some(pool) = catalyst::db::scratch::pool(4).await else {
+            return;
+        };
+        let admin_key = random_key();
+        let admin = Address::parse(&address_of(&admin_key)).unwrap();
+        let (host, _deleted) = ingress_stub().await;
+        let settings = Settings {
+            livekit: LiveKit {
+                api_url: host,
+                ..Settings::for_tests().livekit
+            },
+            ..Settings::for_tests()
+        };
+        let state: SharedState = Arc::new(CommsState::new(
+            pool.clone(),
+            Outbound::for_tests(),
+            settings,
+            None,
+            None,
+            Arc::new(Policy::new(
+                pool.clone(),
+                PersonalWorldsPolicy::disabled(),
+                None,
+            )),
+            Arc::new(SceneResolver::new(pool.clone())),
+            Arc::new(catalyst::comms::presence::Presence::new()),
+            Arc::new(catalyst::comms::interfaces::test_support::StubDirectory::default()),
+        ));
+        let app = axum::Router::new().nest("/comms-gatekeeper", router(state.clone()));
+
+        let tag = Uuid::new_v4().simple().to_string()[..10].to_string();
+        let label = format!("strip{tag}");
+        let world = WorldName::parse(&format!("{label}.dcl.eth")).unwrap();
+        let scene_id = format!("StrippedScene{tag}");
+        let entity = serde_json::json!({
+            "type": "scene",
+            "timestamp": 1000,
+            "pointers": ["0,0"],
+            "metadata": {
+                "display": { "title": "Stripped" },
+                "scene": { "base": "0,0", "parcels": ["0,0"] },
+                "worldConfiguration": { "name": world.display() },
+            },
+        });
+        let dir = std::env::temp_dir().join(format!("catalyst-gk-stripped-{tag}"));
+        let storage = catalyst::storage::Storage::from_config(&dir).await.unwrap();
+        let parcels: ParcelSet = [Parcel::parse("0,0").unwrap()].into_iter().collect();
+        store::deploy_scene(
+            &pool,
+            &storage,
+            SceneDeployment {
+                world: &world,
+                name_owner: Some(&admin),
+                entity_id: &scene_id,
+                deployer: &admin,
+                deployment_auth_chain: &serde_json::json!([{ "type": "SIGNER", "payload": admin.as_str() }]),
+                entity: &entity,
+                parcels: &parcels,
+                size: 1,
+                replacement: &Deploy::Owner,
+                forward_to: None,
+                quota: None,
+            },
+        )
+        .await
+        .unwrap();
+        let about = catalyst::worlds::about::build_about(
+            &catalyst::worlds::Settings::for_tests("https://node.example"),
+            world.display(),
+            catalyst::worlds::queries::world_about(&pool, world.display())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let realm_name = about.configurations.realm_name.clone();
+        assert_eq!(realm_name, label, "a world published here strips .dcl.eth");
+
+        // The world's catalogue place, as Places lists it.
+        let place_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO explore.place (id, base_position, raw) VALUES ($1, '0,0', $2::jsonb)",
+        )
+        .bind(&place_id)
+        .bind(serde_json::json!({ "world": true, "world_name": world.display(), "positions": ["0,0"] }))
+        .execute(&pool)
+        .await
+        .unwrap();
+        state
+            .moderation
+            .add_admin(&place_id, &admin, &admin)
+            .await
+            .unwrap();
+
+        // What the explorer signs for a scene of that realm
+        // (`restricted_actions::SignedFetchMeta`), as the scene and as the wallet.
+        let realm = serde_json::json!({
+            "hostname": format!("node.example/world/{}", world.display()),
+            "protocol": "v3",
+            "serverName": realm_name,
+        });
+        let scene_meta = serde_json::json!({
+            "signer": SCENE_SIGNER, "sceneId": scene_id, "parcel": "0,0", "realm": realm,
+        })
+        .to_string();
+        let wallet_meta = serde_json::json!({
+            "signer": "dcl:explorer", "realmName": realm_name, "sceneId": scene_id, "realm": realm,
+        })
+        .to_string();
+
+        let scene_room = catalyst::comms::rooms::worlds_service_scene_room(
+            &world,
+            &catalyst::comms::world_identity::SceneId::parse(&scene_id).unwrap(),
+        );
+        let mut refused = Vec::new();
+        for (method, path, metadata, expected) in [
+            ("POST", PATH, &scene_meta, StatusCode::OK),
+            ("GET", PATH, &scene_meta, StatusCode::OK),
+            ("DELETE", PATH, &scene_meta, StatusCode::NO_CONTENT),
+            (
+                "GET",
+                "/cast/generate-stream-link",
+                &scene_meta,
+                StatusCode::OK,
+            ),
+            ("POST", "/get-scene-adapter", &wallet_meta, StatusCode::OK),
+        ] {
+            let mut answer = call_at(&app, &admin_key, method, path, metadata).await;
+            // A revocation racing the mint's cleanup intent answers 409 "try again".
+            for _ in 0..40 {
+                if answer.0 != StatusCode::CONFLICT {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                answer = call_at(&app, &admin_key, method, path, metadata).await;
+            }
+            let (status, body) = answer;
+            if status != expected {
+                refused.push(format!("{method} {path}: {status} {body}"));
+            }
+            if let Some(adapter) = body["adapter"].as_str() {
+                let claims = catalyst::shared::livekit::decode_jwt_payload(
+                    adapter.split("access_token=").nth(1).unwrap(),
+                );
+                if claims["video"]["room"] != scene_room.as_str() {
+                    refused.push(format!("{method} {path}: room {}", claims["video"]["room"]));
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(refused.is_empty(), "{refused:#?}");
+        let room: String = sqlx::query_scalar(
+            "SELECT room_id FROM social.scene_stream_access WHERE place_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(&place_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            room, scene_room,
+            "the credential is for the world scene's room"
+        );
     }
 }
 
@@ -1600,6 +2125,105 @@ mod world_mint {
             "{body}"
         );
         assert_eq!(body["message"], adr44["message"]);
+    }
+
+    /// Upstream `isWorldValid` asks `checkNameDenyList` first (`logic/worlds/component.ts:71-74`):
+    /// a world whose label is on the DAO `banned-names` list, or whose whole name is in
+    /// `BLOCKED_WORLD_NAMES`, is an invalid world on all three mints, while a world on neither
+    /// is admitted.
+    #[tokio::test]
+    async fn the_mints_answer_404_for_a_deny_listed_world_name() {
+        let Some(pool) = catalyst::db::scratch::pool(4).await else {
+            return;
+        };
+        let label = format!("d{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let listed = WorldName::parse(&format!("{label}.dcl.eth")).unwrap();
+        let (blocked, open) = (world(), world());
+        let policy = Policy::new(pool.clone(), PersonalWorldsPolicy::disabled(), None)
+            .with_name_deny_list(Arc::new(catalyst::worlds::core::names::NameDenyList::new(
+                &format!("{}, other.eth", blocked.display()),
+            )));
+        let state = Arc::new(CommsState::new(
+            pool.clone(),
+            Outbound::for_tests(),
+            Settings::for_tests(),
+            None,
+            None,
+            Arc::new(policy),
+            Arc::new(SceneResolver::new(pool.clone())),
+            Arc::new(Presence::new()),
+            Arc::new(catalyst::comms::interfaces::test_support::StubDirectory::default()),
+        ));
+        let app = Router::new().merge(router(state.clone()));
+        for world in [&listed, &blocked, &open] {
+            sqlx::query("INSERT INTO worlds.worlds (name) VALUES ($1)")
+                .bind(world.key())
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO worlds.world_scenes (world_name, entity_id, deployment_auth_chain, entity, deployer, parcels, size) \
+                 VALUES ($1, 'bafydeny', '[]'::json, '{}'::jsonb, $2, ARRAY['0,0'], 1)",
+            )
+            .bind(world.key())
+            .bind(catalyst::shared::identity::ZERO_ADDRESS)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        catalyst::explore::api::lists::set_local(&pool, "banned-names", &label, true)
+            .await
+            .unwrap();
+        let visitor = random_key();
+        let handshake = r#"{"signer":"dcl:explorer","intent":"dcl:explorer:comms-handshake"}"#;
+        for world in [&listed, &blocked] {
+            let name = world.display();
+            let invalid = format!("World \"{name}\" is invalid or blocked.");
+            for path in [
+                format!("/worlds/{name}/comms"),
+                format!("/worlds/{name}/scenes/bafydeny/comms"),
+            ] {
+                state.presence.complete_empty_fixture();
+                let (status, body, _) = post(&app, &visitor, &path, "{}").await;
+                assert_eq!(
+                    (status, body),
+                    (
+                        StatusCode::NOT_FOUND,
+                        serde_json::json!({"error": invalid, "message": invalid})
+                    ),
+                    "{path}"
+                );
+            }
+            state.presence.complete_empty_fixture();
+            let (status, body, _) = post(
+                &app,
+                &visitor,
+                &format!("/get-comms-adapter/world-{name}"),
+                handshake,
+            )
+            .await;
+            assert_eq!(
+                (status, body),
+                (
+                    StatusCode::NOT_FOUND,
+                    serde_json::json!({
+                        "error": "Not Found",
+                        "message": format!("World \"{name}\" was not found.")
+                    })
+                ),
+                "{name}"
+            );
+        }
+        let name = open.display();
+        for (path, metadata) in [
+            (format!("/worlds/{name}/comms"), "{}"),
+            (format!("/worlds/{name}/scenes/bafydeny/comms"), "{}"),
+            (format!("/get-comms-adapter/world-{name}"), handshake),
+        ] {
+            state.presence.complete_empty_fixture();
+            let (status, body, _) = post(&app, &visitor, &path, metadata).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        }
     }
 
     /// A browser explorer preflights the handshake (it carries `x-identity-*`
