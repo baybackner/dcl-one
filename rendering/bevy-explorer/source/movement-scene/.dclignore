@@ -1,0 +1,17 @@
+.*
+bin/*.map
+package.json
+package-lock.json
+pnpm-lock.yaml
+yarn-lock.json
+tsconfig.json
+node_modules
+src
+*.ts
+*.tsx
+*.md
+*.blend
+*.blend1
+*.fbx
+*.zip
+*.rar
