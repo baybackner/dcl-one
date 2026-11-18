@@ -1,0 +1,17 @@
+{
+  "wallets": {
+    "owner": "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e",
+    "stranger": "0xcd6884d4258edc833f31ac773e24affe6a7d3154"
+  },
+  "collections": [
+    {
+      "id": "c011ec71-0000-4000-8000-000000000001",
+      "name": "Conformance draft",
+      "owner": "owner",
+      "salt": "0x72d18e0bfa67ba8dce8e9463c8953dce9bd7e4bd88f9149e54b63f974fabefea",
+      "contract_address": "0x00cc1666ebe7da593c2a77d5bb9686e923f44e26",
+      "created_at": "2025-12-01T00:00:00.000Z",
+      "updated_at": "2025-12-01T00:00:00.000Z"
+    }
+  ]
+}

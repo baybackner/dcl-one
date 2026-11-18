@@ -1,0 +1,295 @@
+'use strict'
+
+const assert = require('node:assert/strict')
+const { test } = require('node:test')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { execFileSync, spawn, spawnSync } = require('node:child_process')
+
+const script = path.resolve(__dirname, '../builder-server-capture.cjs')
+const guard = path.resolve(__dirname, '../builder-server-offline.cjs')
+
+function scratch(t) {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'builder-capture-test-')))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  return directory
+}
+
+function checkout(t) {
+  const directory = scratch(t)
+  const git = (...args) => execFileSync('git', ['-C', directory, ...args], { stdio: 'ignore' })
+  git('init', '--quiet')
+  fs.mkdirSync(path.join(directory, 'src'))
+  fs.writeFileSync(path.join(directory, 'src/server.ts'), 'throw Error("upstream code ran")\n')
+  git('add', '.')
+  git('-c', 'user.name=Capture Test', '-c', 'user.email=capture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'not the pin')
+  const preload = path.join(scratch(t), 'node-24.cjs')
+  fs.writeFileSync(preload, "Object.defineProperty(process.versions, 'node', { value: '24.0.0' })\n")
+  return { root: directory, preload }
+}
+
+function capture({ root, preload }, output, databaseUrl = 'postgres://capture@127.0.0.1:1/postgres') {
+  const env = { ...process.env, NODE_OPTIONS: `--require=${JSON.stringify(preload)}`, CATALYST_TEST_DATABASE_URL: databaseUrl }
+  return spawnSync(process.execPath, [script, root, output], { encoding: 'utf8', env })
+}
+
+function pinnedCheckout(t) {
+  const source = checkout(t)
+  const preload = path.join(scratch(t), 'pinned.cjs')
+  fs.writeFileSync(preload, `
+const cp = require('node:child_process')
+const exec = cp.execFileSync
+cp.execFileSync = function (command, args, ...rest) {
+  if (command === 'git' && args.includes('--verify') && args.at(-1) === 'HEAD') return '98897af692f26063a088aebb2ea5bb3f683168a2\\n'
+  return exec.call(this, command, args, ...rest)
+}
+require(${JSON.stringify(source.preload)})
+`)
+  return { ...source, preload }
+}
+
+function serialAdmin(log, { createDelay = 0, dropDelay = 0 } = {}) {
+  let queue = Promise.resolve()
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+  return {
+    query(sql) {
+      queue = queue.then(async () => {
+        if (sql.startsWith('CREATE')) await wait(createDelay)
+        if (sql.startsWith('DROP')) await wait(dropDelay)
+        log(sql)
+      })
+      return queue
+    },
+    async end() {}
+  }
+}
+
+function fakeAdmin(log) {
+  return {
+    async query(sql) { log.push(sql) },
+    async end() { log.push('end') }
+  }
+}
+
+test('a checkout at another revision is refused before anything runs', t => {
+  const source = checkout(t)
+  const output = path.join(source.root, 'out')
+  const result = capture(source, output)
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /decentraland\/builder-server at pinned revision 98897af692f26063a088aebb2ea5bb3f683168a2/)
+  assert.equal(fs.existsSync(output), false)
+})
+
+test('a directory inside a checkout is refused', t => {
+  const source = checkout(t)
+  const result = capture({ ...source, root: path.join(source.root, 'src') }, path.join(source.root, 'out'))
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /must be the Git working tree root/)
+})
+
+test('a run that fails a check leaves the published fixtures untouched', t => {
+  const { finish } = require(script)
+  const output = path.join(scratch(t), 'source')
+  fs.mkdirSync(output)
+  fs.writeFileSync(path.join(output, '01-case.json'), 'committed\n')
+  const fixtures = [['01-case.json', 'recaptured\n'], ['02-case.json', 'new\n']]
+  assert.throws(() => finish(output, fixtures, ['example.org']), /does not fake: example.org/)
+  assert.deepEqual(fs.readdirSync(output), ['01-case.json'])
+  assert.equal(fs.readFileSync(path.join(output, '01-case.json'), 'utf8'), 'committed\n')
+  finish(output, fixtures, [])
+  assert.equal(fs.readFileSync(path.join(output, '01-case.json'), 'utf8'), 'recaptured\n')
+  assert.equal(fs.readFileSync(path.join(output, '02-case.json'), 'utf8'), 'new\n')
+  assert.deepEqual(fs.readdirSync(path.dirname(output)), ['source'])
+})
+
+test('the scratch database is dropped when closing upstream fails', async () => {
+  const { withScratchDatabase } = require(script)
+  const log = []
+  await assert.rejects(
+    withScratchDatabase(fakeAdmin(log), 'postgres://capture@127.0.0.1:1/postgres', async url => {
+      log.push(new URL(url).pathname)
+      throw Error('db.close failed')
+    }),
+    /db.close failed/
+  )
+  const [create, used, drop, end] = log
+  const name = create.match(/^CREATE DATABASE "(builder_capture_\d+_[0-9a-f]{12})"$/)[1]
+  assert.equal(used, `/${name}`)
+  assert.equal(drop, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`)
+  assert.equal(end, 'end')
+})
+
+async function interrupt(t, { createDelay = 0, dropDelay = 0, signals = 1, readyAfterCreate = true }) {
+  const queries = path.join(scratch(t), 'queries')
+  const program = `
+    const fs = require('node:fs')
+    const { withScratchDatabase } = require(${JSON.stringify(script)})
+    let queue = Promise.resolve()
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+    const admin = {
+      query(sql) {
+        if (sql.startsWith('CREATE') && !${readyAfterCreate}) process.stdout.write('ready\\n')
+        queue = queue.then(async () => {
+          await wait(sql.startsWith('CREATE') ? ${createDelay} : ${dropDelay})
+          fs.appendFileSync(${JSON.stringify(queries)}, sql + '\\n')
+        })
+        return queue
+      },
+      async end() {}
+    }
+    withScratchDatabase(admin, 'postgres://capture@127.0.0.1:1/postgres', () => {
+      if (${readyAfterCreate}) process.stdout.write('ready\\n')
+      return new Promise(() => setInterval(() => {}, 1000))
+    })
+  `
+  const child = spawn(process.execPath, ['-e', program], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await new Promise(resolve => child.stdout.once('data', resolve))
+  for (let i = 0; i < signals; i++) {
+    if (i) await new Promise(resolve => setTimeout(resolve, 100))
+    child.kill('SIGINT')
+  }
+  const exit = await new Promise(resolve => child.on('exit', (...args) => resolve(args)))
+  return { exit, queries: fs.existsSync(queries) ? fs.readFileSync(queries, 'utf8') : '' }
+}
+
+const createThenDrop = /^CREATE DATABASE "(builder_capture_\S+)"\nDROP DATABASE IF EXISTS "\1" WITH \(FORCE\)\n$/
+
+test('a second interrupt waits for the drop', async t => {
+  const { exit, queries } = await interrupt(t, { dropDelay: 300, signals: 2 })
+  assert.deepEqual(exit, [130, null])
+  assert.match(queries, createThenDrop)
+})
+
+test('an interrupt while the database is being created drops it', async t => {
+  const { exit, queries } = await interrupt(t, { createDelay: 300, readyAfterCreate: false })
+  assert.deepEqual(exit, [130, null])
+  assert.match(queries, createThenDrop)
+})
+
+test('a case may mask only the allowed fields, and only where they are recorded', () => {
+  const { scrubVolatile } = require(script)
+  const allowed = ['created_at', 'updated_at']
+  const body = () => ({ data: { id: 'c1', created_at: '2026-11-18T00:00:00.000Z' } })
+  assert.deepEqual(scrubVolatile({ name: 'a', volatile: ['data.created_at'] }, body(), allowed), { data: { id: 'c1', created_at: '<<VOLATILE>>' } })
+  assert.throws(() => scrubVolatile({ name: 'a', volatile: ['data'] }, body(), allowed), /a: volatile path data is not one of the volatile_fields/)
+  assert.throws(() => scrubVolatile({ name: 'a', volatile: ['data.updated_at'] }, body(), allowed), /a: volatile path data.updated_at matches nothing/)
+})
+
+test('the migration process loads the guard from a path with a space', t => {
+  const tooling = path.join(scratch(t), 'tool dir', 'tooling')
+  fs.mkdirSync(tooling, { recursive: true })
+  for (const file of ['builder-server-capture.cjs', 'builder-server-offline.cjs', 'social-capture-common.cjs']) {
+    fs.copyFileSync(path.resolve(__dirname, '..', file), path.join(tooling, file))
+  }
+  const upstream = path.join(scratch(t), 'upstream dir')
+  fs.mkdirSync(path.join(upstream, 'migrations'), { recursive: true })
+  fs.writeFileSync(path.join(upstream, 'migrations/node-pg-migrate'), `
+setTimeout(() => process.exit(4), 2000).unref()
+require('node:net').connect({ host: '192.0.2.10', port: 80 }).on('error', error => {
+  if (error.message !== 'capture is offline: 192.0.2.10:80') process.exit(3)
+  process.exitCode = 0
+})
+`)
+  const { migrate } = require(path.join(tooling, 'builder-server-capture.cjs'))
+  assert.throws(() => migrate(upstream, {}), error => /offline capture refused: 192\.0\.2\.10:80/.test(String(error.stderr)))
+})
+
+test('an interrupted capture drops its database', async t => {
+  const queries = path.join(scratch(t), 'queries')
+  const program = `
+    const fs = require('node:fs')
+    const { withScratchDatabase } = require(${JSON.stringify(script)})
+    const admin = { async query(sql) { fs.appendFileSync(${JSON.stringify(queries)}, sql + '\\n') }, async end() {} }
+    withScratchDatabase(admin, 'postgres://capture@127.0.0.1:1/postgres', () => {
+      process.stdout.write('ready\\n')
+      return new Promise(() => setInterval(() => {}, 1000))
+    })
+  `
+  const child = spawn(process.execPath, ['-e', program], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await new Promise(resolve => child.stdout.once('data', resolve))
+  child.kill('SIGINT')
+  const [code, signal] = await new Promise(resolve => child.on('exit', (...args) => resolve(args)))
+  assert.deepEqual([code, signal], [130, null])
+  assert.match(fs.readFileSync(queries, 'utf8'), /^CREATE DATABASE "(builder_capture_\S+)"\nDROP DATABASE IF EXISTS "\1" WITH \(FORCE\)\n$/)
+})
+
+test('the offline guard refuses addresses, names and proxies outside loopback', () => {
+  const program = `
+    const net = require('node:net'), dns = require('node:dns')
+    const report = {}
+    report.proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy ?? null
+    const server = net.createServer(socket => socket.end()).listen(0, '127.0.0.1', () => {
+      const local = net.connect(server.address().port, '127.0.0.1', () => {
+        report.loopback = 'connected'
+        local.destroy()
+        net.connect({ host: '192.0.2.10', port: 80 }).on('error', error => {
+          report.address = error.message
+          dns.lookup('builder-api.example.org', error => {
+            report.name = error.message
+            server.close()
+            console.log(JSON.stringify(report))
+          })
+        })
+      })
+    })
+  `
+  const env = { ...process.env, HTTPS_PROXY: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', NODE_OPTIONS: `--require=${guard}` }
+  const result = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', env })
+  assert.equal(result.status, 1, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), {
+    proxy: null,
+    loopback: 'connected',
+    address: 'capture is offline: 192.0.2.10:80',
+    name: 'capture is offline: builder-api.example.org'
+  })
+  assert.match(result.stderr, /offline capture refused: 192\.0\.2\.10:80, builder-api\.example\.org/)
+})
+
+test('an error report never carries the database password', t => {
+  const { redact } = require(script)
+  const url = 'postgres://capture:s3cr%2Fet@127.0.0.1:5432/postgres'
+  assert.equal(redact('failed for s3cr/et and s3cr%2Fet', url), 'failed for <redacted> and <redacted>')
+  const malformed = 'postgres://postgres:example-secret-123@localhost:notaport/postgres'
+  assert.equal(redact(`cannot reach ${malformed}`, malformed), 'cannot reach <redacted>')
+  assert.equal(redact('plain', 'postgres://capture:%E0%A4%A@127.0.0.1/postgres'), 'plain')
+  const result = capture(pinnedCheckout(t), path.join(scratch(t), 'out'), malformed)
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /CATALYST_TEST_DATABASE_URL is not a valid URL/)
+  assert.doesNotMatch(result.stdout + result.stderr, /example-secret-123/)
+})
+
+test('a recorded marker is refused before anything is published', () => {
+  const { refuseMarkers } = require(script)
+  refuseMarkers('a', { request: { headers: {} }, response: { body_json: { ok: true } } })
+  assert.throws(() => refuseMarkers('a', { response: { body_json: { data: '<<VOLATILE>>' } } }), /a: upstream recorded <<VOLATILE>> at response.body_json.data/)
+  assert.throws(() => refuseMarkers('a', { request: { headers: { authorization: 'x <<REDACTED:jwt>>' } } }), /a: upstream recorded <<REDACTED at request.headers.authorization/)
+})
+
+test('timestamps that were equal before masking are recorded as equal', () => {
+  const { volatileEqualities } = require(script)
+  const at = '2026-11-18T00:00:00.000Z'
+  assert.deepEqual(volatileEqualities({ volatile: ['data.created_at', 'data.updated_at'] }, { data: { created_at: at, updated_at: at } }), [['data.created_at', 'data.updated_at']])
+  assert.deepEqual(volatileEqualities({ volatile: ['data.created_at', 'data.updated_at'] }, { data: { created_at: at, updated_at: '2026-11-18T00:00:01.000Z' } }), [])
+  assert.deepEqual(volatileEqualities({ volatile: ['data.created_at'] }, { data: { created_at: at } }), [])
+})
+
+test('an uncaught error drops the scratch database and reports redacted', async t => {
+  const queries = path.join(scratch(t), 'queries')
+  const program = `
+    const fs = require('node:fs')
+    const { withScratchDatabase, installFailureHandlers } = require(${JSON.stringify(script)})
+    installFailureHandlers()
+    const admin = { async query(sql) { fs.appendFileSync(${JSON.stringify(queries)}, sql + '\\n') }, async end() {} }
+    withScratchDatabase(admin, 'postgres://capture@127.0.0.1:1/postgres', () => {
+      setTimeout(() => { throw Error('boom for example-secret-123') }, 10)
+      return new Promise(() => setInterval(() => {}, 1000))
+    })
+  `
+  const env = { ...process.env, CATALYST_TEST_DATABASE_URL: 'postgres://capture:example-secret-123@127.0.0.1:1/postgres' }
+  const result = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', env, timeout: 10000 })
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /builder capture failed: boom for <redacted>/)
+  assert.doesNotMatch(result.stdout + result.stderr, /example-secret-123/)
+  assert.match(fs.readFileSync(queries, 'utf8'), /^CREATE DATABASE "(builder_capture_\S+)"\nDROP DATABASE IF EXISTS "\1" WITH \(FORCE\)\n$/)
+})

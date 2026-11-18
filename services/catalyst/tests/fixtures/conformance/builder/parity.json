@@ -1,0 +1,542 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "repository": "github.com/decentraland/builder-server",
+    "revision": "98897af692f26063a088aebb2ea5bb3f683168a2",
+    "route_ledger": "services/catalyst/builder/src/tests/upstream_routes.rs"
+  },
+  "review_policy": "reviewed means every capture cited for the operation replays against the node with no difference and at least one is cited, for the cases those captures cover; it never means exhaustive equivalence. known_gap names a difference a replay observes, and the capture's replay lists it exactly. not_reviewed means the cited captures, if any, don't settle the operation, even if the node routes it.",
+  "volatile_fields": [
+    "created_at",
+    "updated_at"
+  ],
+  "operations": [
+    {
+      "id": "api_http:GET:/v1/info",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/items",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/:address/items",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/items/:id",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/published-collections/:address/items/:id/utility",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id/items",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:PUT:/v1/items/:idOrURN",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:DELETE:/v1/items/:id",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/items/:id/files",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/items/:id/videos",
+      "owner": "items",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/items/:collectionAddress/:itemId/contents",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "One case compared: an unsigned search of published collections, with the subgraph answering no collections, matches ({ok:true, data:[]}).",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/01-collections-public-search.json",
+          "scope": "Unsigned GET with q and is_published=true; the fake subgraph lists no collection and no committee member is the caller.",
+          "replay": []
+        }
+      ],
+      "gaps": [],
+      "remaining_verification": "Capture the committee listing, pagination (with page and limit, upstream answers {total, limit, pages, page, results}), the review, tag and type filters, and a search that finds published collections."
+    },
+    {
+      "id": "api_http:GET:/v1/:address/collections",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id",
+      "owner": "collections",
+      "status": "known_gap",
+      "result": "The owner's read, the unsigned refusal and a stranger's refusal were compared; all three differ.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
+          "scope": "Signed GET by the owner of a draft standard collection.",
+          "replay": [
+            "data.contract_address value",
+            "data.created_at value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.updated_at value",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/03-collection-unsigned.json",
+          "scope": "GET without an auth chain.",
+          "replay": [
+            "status: fixture=401 candidate=400",
+            "data missing",
+            "error value",
+            "message extra"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/04-collection-stranger.json",
+          "scope": "Signed GET by a wallet with no role on the draft.",
+          "replay": [
+            "data missing",
+            "message extra"
+          ]
+        }
+      ],
+      "gaps": [
+        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, answers created_at and updated_at as epoch milliseconds instead of ISO strings, and answers contract_address and urn as null: its schema cannot store the contract address upstream computes for a draft.",
+        "Unsigned request: upstream answers 401 with {ok:false, data:{message}, error:'Unauthenticated'}; the node answers 400 with {ok:false, error, message} and no data.",
+        "Stranger: both answer 401, but upstream's body is {ok:false, data:{id, eth_address}, error:'Unauthorized'} and the node's is {ok:false, error:'Unauthorized', message:'Unauthorized'}."
+      ],
+      "remaining_verification": "Capture reads by the committee, an on-chain manager, a third-party manager and any signer of a published collection, and a missing id."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/publish",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/owner/sync",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/tos",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/lock",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id/approvalData",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:PUT:/v1/collections/:id",
+      "owner": "collections",
+      "status": "known_gap",
+      "result": "The owner's creation of a standard draft was compared; the node creates it and answers a different body.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/05-collection-create.json",
+          "scope": "Signed PUT by the owner creating a new standard draft with a client-shaped body (eth_address set to the signer, data set). created_at and updated_at come from the database clock and are volatile.",
+          "replay": [
+            "data.contract_address value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.urn value"
+          ]
+        }
+      ],
+      "gaps": [
+        "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id."
+      ],
+      "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use, a stranger's write and mismatched body and URL ids."
+    },
+    {
+      "id": "api_http:DELETE:/v1/collections/:id",
+      "owner": "collections",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/addresses",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/curations",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id/itemCurations",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:PATCH:/v1/collections/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/curation/post",
+      "owner": "forum",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/items/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:PATCH:/v1/items/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/items/:id/curation",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/validations",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/curation/appeal",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/collections/:id/events",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/comments",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/validation-result",
+      "owner": "curation",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/committee",
+      "owner": "committee",
+      "status": "known_gap",
+      "result": "The unsigned committee read was compared; the node has no route for it.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/06-committee-unsigned.json",
+          "scope": "Unsigned GET; the fake subgraph lists no committee member.",
+          "replay": [
+            "status: fixture=200 candidate=404",
+            "header content-type: fixture=\"application/json; charset=utf-8\" candidate=<missing>",
+            "candidate body is not JSON: \"\""
+          ]
+        }
+      ],
+      "gaps": [
+        "Not routed: upstream answers 200 {ok:true, data:[]} for an empty committee; the node answers 404 with an empty body."
+      ],
+      "remaining_verification": "Compare a committee with members and an unavailable subgraph."
+    },
+    {
+      "id": "api_http:GET:/v1/thirdParties",
+      "owner": "third-parties",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/thirdParties/:id/slots",
+      "owner": "third-parties",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/thirdParties/:id",
+      "owner": "third-parties",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:DELETE:/v1/thirdParties/:id",
+      "owner": "third-parties",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:PATCH:/v1/thirdParties/:id",
+      "owner": "third-parties",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/rarities",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/rarities/:name",
+      "owner": "small-reads",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/post",
+      "owner": "forum",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/storage/contents/:filename",
+      "owner": "item-files",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:HEAD:/v1/storage/contents/:filename",
+      "owner": "item-files",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:GET:/v1/storage/contents/:filename/exists",
+      "owner": "item-files",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    },
+    {
+      "id": "api_http:POST:/v1/newsletter",
+      "owner": "newsletter",
+      "status": "not_reviewed",
+      "result": "Registered upstream; no answer has been compared in this ledger.",
+      "evidence": [],
+      "gaps": [],
+      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+    }
+  ]
+}

@@ -45,6 +45,21 @@ pub async fn replay_signed(
     fx: &Fixture,
     auth: &HeaderMap,
 ) -> Vec<String> {
+    replay_with(app, prefix, name, fx, auth, &Volatility::default())
+        .await
+        .0
+}
+
+/// [`replay_signed`] under `volatility` (which also names the keys the
+/// differ never compares), returning the candidate's body with the notes.
+pub async fn replay_with(
+    app: &Router,
+    prefix: &str,
+    name: &str,
+    fx: &Fixture,
+    auth: &HeaderMap,
+    volatility: &Volatility,
+) -> (Vec<String>, Vec<u8>) {
     let mut uri = format!("{prefix}{}", fx.request.path);
     if let Some(query) = query_string(&fx.request.query, None) {
         uri = format!("{uri}?{query}");
@@ -76,13 +91,12 @@ pub async fn replay_signed(
             .get(key)
             .and_then(|v| v.to_str().ok())
             .map(str::to_string)
-            // hyper writes the length of a sized body on the wire, not here
             .or_else(|| {
                 key.eq_ignore_ascii_case(header::CONTENT_LENGTH.as_str())
                     .then(|| bytes.len().to_string())
             })
     });
-    let diffs = match compare_body(fx, name, &bytes, &Volatility::default()) {
+    let diffs = match compare_body(fx, name, &bytes, volatility) {
         compare::Body::Json(diffs) => diffs,
         compare::Body::Bytes { expected, same } => {
             if !same {
@@ -92,18 +106,18 @@ pub async fn replay_signed(
                     String::from_utf8_lossy(&bytes)
                 ));
             }
-            return notes;
+            return (notes, bytes.to_vec());
         }
         compare::Body::NotJson(_) => {
             notes.push(format!(
                 "candidate body is not JSON: {:?}",
                 String::from_utf8_lossy(&bytes)
             ));
-            return notes;
+            return (notes, bytes.to_vec());
         }
         compare::Body::BadFixture(note) => {
             notes.push(note);
-            return notes;
+            return (notes, bytes.to_vec());
         }
     };
     let mut fields: Vec<String> = diffs
@@ -135,5 +149,5 @@ pub async fn replay_signed(
     fields.sort();
     fields.dedup();
     notes.extend(fields);
-    notes
+    (notes, bytes.to_vec())
 }

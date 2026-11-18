@@ -1588,6 +1588,7 @@ dependencies = [
  "catalyst-shop",
  "catalyst-social",
  "catalyst-storage",
+ "catalyst-testing",
  "catalyst-worlds",
  "chrono",
  "clap",
