@@ -604,11 +604,6 @@ impl SceneColliderData {
     /// drop under the avatar's centre, so beside a wall in the air it is the height above the
     /// floor, and on a steep slope the feet stand clear of the slope under the centre.
     pub fn get_ground(&mut self, origin: Vec3) -> Option<(f32, ColliderId)> {
-        self.get_ground_contact(origin).ground
-    }
-
-    /// [`Self::get_ground`], with the ball's drop to its first contact of any steepness.
-    pub fn get_ground_contact(&mut self, origin: Vec3) -> GroundContact {
         self.update_bvh();
 
         let walkable = |normal: DVec3| normal.y >= f64::from(MAX_GROUND_INCLINE.cos());
@@ -664,12 +659,7 @@ impl SceneColliderData {
             };
         }
 
-        GroundContact {
-            ground: ground.map(|(toi, handle)| (toi as f32, self.get_id(handle).unwrap().clone())),
-            contact: first_steep
-                .or(ground.map(|(toi, _)| toi))
-                .map(|toi| toi as f32),
-        }
+        ground.map(|(toi, handle)| (toi as f32, self.get_id(handle).unwrap().clone()))
     }
 
     fn ground_filter<'a>(
@@ -1215,16 +1205,6 @@ impl SceneColliderData {
 }
 
 pub const GROUND_COLLISION_MASK: u32 = 1 << 31;
-
-/// What is below the avatar's feet ([`SceneColliderData::get_ground_contact`]).
-#[derive(Debug, Clone, PartialEq)]
-pub struct GroundContact {
-    /// The feet's height above ground the avatar stands on, and its collider.
-    pub ground: Option<(f32, ColliderId)>,
-    /// The drop to the first surface the avatar's ball touches, ground or too steep to stand on
-    /// (a slope it slides down, a wall it grazes).
-    pub contact: Option<f32>,
-}
 
 /// How far below the feet [`SceneColliderData::get_ground`] looks for ground (m).
 const GROUND_CAST_DISTANCE: f64 = 10.0;
@@ -1785,16 +1765,6 @@ mod tests {
             );
             let h = height(&mut colliders, Vec3::new(0.0, 1.5, 0.0));
             assert!((h - 1.5).abs() < 1e-3, "face {face}: {h}");
-            // the ball still touches the wall it penetrates (an exact touch may read either way)
-            let contact = colliders
-                .get_ground_contact(Vec3::new(0.0, 1.5, 0.0))
-                .contact;
-            if face < 0.3 {
-                assert!(
-                    contact.is_some_and(|c| c < 1e-3),
-                    "face {face}: {contact:?}"
-                );
-            }
             // standing on the floor against the wall is still grounded
             assert!(
                 height(&mut colliders, Vec3::ZERO) <= GROUNDED,
@@ -1817,12 +1787,6 @@ mod tests {
                 assert!(
                     (h - below).abs() < 1e-3,
                     "{degrees} degrees: {h} vs {below}"
-                );
-                // it rests on the slope it slides down
-                let contact = colliders.get_ground_contact(feet).contact;
-                assert!(
-                    contact.is_some_and(|c| (c - 0.01).abs() < 1e-4),
-                    "{contact:?}"
                 );
             }
         }

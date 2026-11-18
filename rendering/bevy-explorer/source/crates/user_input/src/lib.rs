@@ -1,7 +1,6 @@
 pub mod avatar_movement;
 pub mod camera;
 mod debug_panel;
-pub mod movement_trace;
 pub mod point_at;
 
 use bevy::{app::Propagate, ecs::query::Has, prelude::*, render::view::RenderLayers};
@@ -19,7 +18,6 @@ use console::DoAddConsoleCommand;
 use scene_runner::{update_scene::pointer_lock::update_pointer_lock, OutOfWorld};
 
 use crate::avatar_movement::AvatarMovementPlugin;
-use crate::movement_trace::MovementTracePlugin;
 use crate::point_at::PointAtPlugin;
 
 use self::camera::{update_camera, update_camera_position};
@@ -31,7 +29,7 @@ pub struct UserInputPlugin;
 
 impl Plugin for UserInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((AvatarMovementPlugin, PointAtPlugin, MovementTracePlugin));
+        app.add_plugins((AvatarMovementPlugin, PointAtPlugin));
         debug_panel::register(app);
         app.add_systems(
             Update,

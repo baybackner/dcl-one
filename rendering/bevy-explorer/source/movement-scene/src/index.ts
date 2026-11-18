@@ -1,9 +1,9 @@
 import { AssetLoad, AvatarAnimationState, AvatarMovement, AvatarMovementInfo, engine, MovementAnimation, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
-import { grounded, initGroundProbes, initGroundRaycast, sliding, updateGroundAdjust, updateGroundProbes } from './ground';
-import { gait, movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpCount, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
+import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
+import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
+import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
@@ -852,22 +852,6 @@ function writeMovement() {
   for (let i = PUBLISHED_HISTORY - 1; i > 0; i--) Vector3.copyFrom(earlierPublished[i - 1], earlierPublished[i]);
   Vector3.copyFrom(lastPublished, earlierPublished[0]);
   Vector3.copyFrom(velocity, lastPublished);
-  logLocomotion();
-}
-
-// The movement model's state for the engine's movement trace: one console line `LOCO {...}` (see the engine's
-// movement_trace.rs), printed only when the state changes; the trace keeps the latest.
-const GLIDE_NAMES: Record<GlideProp, string> = {
-  [GlideProp.CLOSED]: 'closed', [GlideProp.OPENING]: 'opening', [GlideProp.GLIDING]: 'gliding', [GlideProp.CLOSING]: 'closing',
-};
-const loco = { gait: '', grounded: false, jump_count: -1, glide: '', stunned: false, sliding: false };
-function logLocomotion() {
-  const jumps = jumpCount(), glide = GLIDE_NAMES[glideProp], stun = stunned();
-  if (loco.gait === gait && loco.grounded === grounded && loco.jump_count === jumps && loco.glide === glide
-    && loco.stunned === stun && loco.sliding === sliding) return;
-  loco.gait = gait; loco.grounded = grounded; loco.jump_count = jumps; loco.glide = glide; loco.stunned = stun;
-  loco.sliding = sliding;
-  console.log('LOCO ' + JSON.stringify({ t: tick, ...loco }));
 }
 
 function applyMovement() {

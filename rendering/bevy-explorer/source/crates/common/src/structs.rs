@@ -1496,8 +1496,6 @@ pub struct AvatarDynamicState {
     pub velocity: Vec3,
     /// Height of the feet above ground the avatar can stand on.
     pub ground_height: f32,
-    /// Height of the feet above the first surface below them, ground or too steep to stand on.
-    pub contact_height: f32,
     pub jump_time: f64,
     pub move_kind: MoveKind,
 }

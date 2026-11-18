@@ -519,8 +519,6 @@ export function airLaunchStep(): number { return vstate.airLaunchStep; }
 // the ground under the avatar is over LANDING_STUN_DROP); once landed the top is the ground and it is false.
 export function stunEndStep(): number { return vstate.stunEndStep; }
 export function stunned(): boolean { return vstate.step < vstate.stunEndStep; }
-// Jumps since the ground (falling past the grace window counts as one), for the movement trace.
-export function jumpCount(): number { return vstate.jumpCount; }
 export function landingStuns(): boolean { return vstate.topY - groundY > LANDING_STUN_DROP; }
 // The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
 var landedNow = false;

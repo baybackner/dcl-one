@@ -7,9 +7,6 @@ edition = "2021"
 
 [dependencies]
 serde_json = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-chrono = { workspace = true }
-web-time = { workspace = true }
 avatar = { workspace = true }
 common = { workspace = true }
 input_manager = { workspace = true }
@@ -25,3 +22,6 @@ bevy = { workspace = true }
 bevy_console = { workspace = true }
 rapier3d-f64 = { workspace = true }
 clap = { workspace = true }
+
+[dev-dependencies]
+web-time = { workspace = true }

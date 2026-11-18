@@ -12,8 +12,6 @@ export var groundRayDistance = Infinity;
 export var groundRayNormal = Vector3.Zero();
 // updated in recordGroundPosition @ 100000 - 2
 export var grounded = false;
-// off the ground, the capsule rests on ground too steep to walk (a steep slope or the corner of an edge) and slides off
-export var sliding = false;
 export var prevGrounded = false;
 export var lastGroundTime = -Infinity;
 
@@ -23,7 +21,6 @@ var groundCaster: Entity;
 var groundRayCaster: Entity;
 var groundHitTick = 0;
 var groundRayHitTick = 0;
-var steepHitTick = 0;
 
 export function updateGroundAdjust(h: number) {
     Transform.getMutable(groundCaster).position.y += h;
@@ -56,9 +53,7 @@ export function initGroundRaycast() {
             if (hit.hits.some((hit) => {
                 Vector3.copyFrom(hit.normalHit ?? VEC3_ZERO, groundNormal);
 
-                const near = hit.length < PLAYER_COLLIDER_RADIUS + GROUNDED_HEIGHT;
-                let groundTest = near && (hit.normalHit?.y ?? 0) >= GROUNDED_ANGLE_Y_LEN;
-                if (near && !groundTest && (hit.normalHit?.y ?? 0) > STEEP_MIN_Y) steepHitTick = tick;
+                let groundTest = (hit.length < PLAYER_COLLIDER_RADIUS + GROUNDED_HEIGHT) && (hit.normalHit?.y ?? 0) >= GROUNDED_ANGLE_Y_LEN;
                 Vector3.copyFrom(hit.position ?? VEC3_NEG_INF, groundPosition);
                 groundDistance = Math.min(hit.length - PLAYER_COLLIDER_RADIUS, playerPosition.y);
 
@@ -107,13 +102,9 @@ export function initGroundRaycast() {
     )
 }
 
-// a contact normal flatter than this (not a wall face) counts as ground too steep to walk
-const STEEP_MIN_Y = 0.05;
-
 function recordGroundState() {
     prevGrounded = grounded;
     grounded = ((groundHitTick == tick) || (groundRayHitTick == tick) || (playerPosition.y < 0.01));
-    sliding = !grounded && steepHitTick == tick;
     if (playerPosition.y < 0.01) {
         Vector3.copyFrom(VEC3_UP, groundNormal);
     }

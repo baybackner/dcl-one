@@ -661,8 +661,7 @@ pub fn apply_movement(
 
     if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
         dynamic_state.velocity = Vec3::ZERO;
-        (dynamic_state.ground_height, dynamic_state.contact_height) =
-            ground_heights(&mut scenes, transform.translation);
+        dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
         *last_step = LastMovementStep {
             requested_velocity: Some(Vector3::world_vec_from_vec3(&movement.component.velocity)),
             actual_velocity: Some(Vector3::world_vec_from_vec3(&Vec3::ZERO)),
@@ -814,8 +813,7 @@ pub fn apply_movement(
     } else {
         *jumping = false;
     }
-    (dynamic_state.ground_height, dynamic_state.contact_height) =
-        ground_heights(&mut scenes, transform.translation);
+    dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
 }
 
 /// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
@@ -933,19 +931,12 @@ fn walkable(normal: DVec3) -> bool {
     normal.y >= f64::from(MAX_GROUND_INCLINE.cos())
 }
 
-/// The feet's heights above ground the player stands on and above the first surface below, ground
-/// or too steep to stand on, over every scene's colliders; at most the height above the world floor.
-fn ground_heights(scenes: &mut Query<(Entity, &mut SceneColliderData)>, feet: Vec3) -> (f32, f32) {
-    scenes.iter_mut().fold(
-        (feet.y, feet.y),
-        |(ground, contact), (_, mut collider_data)| {
-            let below = collider_data.get_ground_contact(feet);
-            (
-                ground.min(below.ground.map_or(f32::INFINITY, |(h, _)| h)),
-                contact.min(below.contact.unwrap_or(f32::INFINITY)),
-            )
-        },
-    )
+/// The feet's height above ground the player stands on, over every scene's colliders; at most the
+/// height above the world floor.
+fn ground_height(scenes: &mut Query<(Entity, &mut SceneColliderData)>, feet: Vec3) -> f32 {
+    scenes.iter_mut().fold(feet.y, |ground, (_, mut collider_data)| {
+        ground.min(collider_data.get_ground(feet).map_or(f32::INFINITY, |(h, _)| h))
+    })
 }
 
 // (scene entity, collider id) of collider player is standing on
