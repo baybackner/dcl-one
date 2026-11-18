@@ -55,6 +55,7 @@ function Host({
   );
 }
 import * as React from "react";
+import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 beforeEach(() => {
   window.matchMedia = vi.fn().mockImplementation((query) => ({
     matches: false,
@@ -80,7 +81,7 @@ describe("Sites native chrome integration", () => {
     expect(logos).toHaveLength(1);
     expect(logos[0]!.getAttribute("alt")).toBe("");
     expect(logos[0]!.getAttribute("height")).toBe("40");
-    expect(logos[0]!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+    expect(logos[0]!.getAttribute("src")).toBe(sitesLogo);
   });
 
   it("renders one banner and keeps signed-out links and dropdown destinations", () => {

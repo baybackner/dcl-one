@@ -15,7 +15,7 @@ import "@dcl/one-ui/foundations/colors/colors.css";
 import "@dcl/one-ui/foundations/spacing/spacing.css";
 import "@dcl/one-ui/foundations/layout/layout.css";
 import "@ui/atoms/primitives.css";
-import logo from "@ui/atoms/assets/decentraland-logo.svg?url";
+import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
 import SignInModalHost from "@/features/components/auth/SignInModalHost";
 import { QUERY_CLIENT_CONFIG } from "@/core/lib/query/defaults";

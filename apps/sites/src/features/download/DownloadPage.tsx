@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { Button } from "@dcl/one-ui";
 import { asset } from "@ui/asset";
-import logo from "@ui/atoms/assets/decentraland-logo.svg?url";
+import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import { useChromeAuth } from "@ui/web/frames/chrome-auth";
 import SitesChrome from "@ui/web/frames/SitesChrome";
 

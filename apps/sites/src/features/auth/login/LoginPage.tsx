@@ -6,7 +6,7 @@
 // browser and phone wallets directly; every session lasts a month, as upstream's. Upstream's Fortmatic option goes
 // through decentraland-connect, which this site does not carry, so it is not wired yet.
 
-import logo from "@ui/atoms/assets/decentraland-logo.svg?url";
+import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import { useAuth } from "@/data/lib/auth/context";

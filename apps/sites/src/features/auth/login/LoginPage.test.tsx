@@ -8,6 +8,7 @@ import { getIdentity, setIdentity } from "@/data/lib/auth/session";
 
 import LoginPage from "./LoginPage";
 import { signInKindFor } from "@/data/lib/auth/signin-kind";
+import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
 vi.hoisted(() => {
   Object.assign(window, { __vite_plugin_react_preamble_installed__: true });
@@ -85,7 +86,7 @@ describe("the sign-in page", () => {
     page();
     const logo = screen.getByRole("img", { name: "Decentraland" });
     expect([logo.getAttribute("width"), logo.getAttribute("height")]).toEqual(["48", "48"]);
-    expect(logo.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+    expect(logo.getAttribute("src")).toBe(sitesLogo);
   });
 
   it("sends a reader who is already signed in straight on", async () => {
@@ -157,7 +158,7 @@ describe("the sign-in page", () => {
     const logo = screen.getByTestId("connection-modal").querySelector("img");
     expect(logo!.getAttribute("alt")).toBe("");
     expect([logo!.getAttribute("width"), logo!.getAttribute("height")]).toEqual(["48", "48"]);
-    expect(logo!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+    expect(logo!.getAttribute("src")).toBe(sitesLogo);
   });
 
   it("moves focus into the wallet modal and keeps Tab inside it", async () => {

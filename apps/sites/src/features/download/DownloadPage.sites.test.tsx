@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import DownloadPage from "./DownloadPage";
+import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
 vi.hoisted(() => Object.assign(window, { __vite_plugin_react_preamble_installed__: true }));
 vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
@@ -17,7 +18,7 @@ it("links home through the decorative 48px Decentraland logo", () => {
   const logo = home!.querySelector("img");
   expect(logo!.getAttribute("alt")).toBe("");
   expect([logo!.getAttribute("width"), logo!.getAttribute("height")]).toEqual(["48", "48"]);
-  expect(logo!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+  expect(logo!.getAttribute("src")).toBe(sitesLogo);
 });
 
 const WINDOWS = { os: "windows", arch: "amd64", url: "https://installers.test/Decentraland_installer.exe" } as const;
