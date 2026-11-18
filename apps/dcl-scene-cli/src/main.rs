@@ -209,7 +209,7 @@ enum Command {
         #[arg(
             short = 'b',
             long,
-            help = "Accepted for compatibility; this CLI opens a browser only for --talk, and this keeps it from doing so"
+            help = "Accepted for compatibility; this CLI opens a browser only for --web, and this keeps it from doing so"
         )]
         no_browser: bool,
         #[arg(long, help = CI_HELP)]
@@ -427,18 +427,6 @@ enum Command {
             help = "Do not attach the authoritative-server isolate a scene.json authoritativeMultiplayer flag would auto-start (--no-server is upstream's spelling)"
         )]
         no_host: bool,
-        #[arg(
-            long,
-            help = "Hands-free: open the web explorer with the Scene assistant listening, and let that explorer's origin reach this preview's /api/project without DCL_SCENE_CLI_ALLOWED_ORIGINS"
-        )]
-        talk: bool,
-        #[arg(
-            long,
-            value_name = "URL",
-            requires = "talk",
-            help = "The web explorer --talk opens; DCL_SCENE_CLI_WEB_EXPLORER otherwise, and the build's site player (<DCL_SCENE_CLI_SITE>/play) when neither is set"
-        )]
-        player: Option<String>,
         #[command(flatten)]
         textures: TextureFlags,
     },
@@ -1187,16 +1175,12 @@ async fn run(command: Command) -> Result<()> {
             tunnel_token,
             tunnel_token_file,
             no_host,
-            talk,
-            player,
             textures,
         } => {
             if tunnel.as_deref().map(str::trim) == Some("help") {
                 println!("{}", dcl_scene_cli::tunnel::tunnel_help());
                 return Ok(());
             }
-            // start has no result document: under --json its stdout is a
-            // stream of events and its text goes to stderr.
             if ux::json() {
                 ux::set_events(true);
             }
@@ -1220,8 +1204,8 @@ async fn run(command: Command) -> Result<()> {
             let launch_web = web && !no_browser && !ci && !no_client;
             for (given, note) in [
                 (
-                    no_browser && !talk && !web && !ci,
-                    "--no-browser has no effect without --talk or --web (dcl-scene-cli opens a browser only for those)",
+                    no_browser && !web && !ci,
+                    "--no-browser has no effect without --web (dcl-scene-cli opens a browser only for it)",
                 ),
                 (
                     no_client && !explorer_alpha && !web,
@@ -1232,7 +1216,7 @@ async fn run(command: Command) -> Result<()> {
                     "--explorer-alpha: not launching the desktop Explorer (--ci or --no-client); the deep link still prints",
                 ),
                 (
-                    web && !launch_web && !talk,
+                    web && !launch_web,
                     "--web: not opening a browser (--no-browser, --ci or --no-client); the web link still prints",
                 ),
                 (
@@ -1288,10 +1272,6 @@ async fn run(command: Command) -> Result<()> {
                 public_url,
                 tunnel_token,
                 no_host,
-                talk: talk.then_some(start::Talk {
-                    player,
-                    open_browser: !no_browser && !ci,
-                }),
                 textures: textures.overrides(),
                 dclenv,
                 realm,
@@ -1717,14 +1697,6 @@ mod tests {
         }
     }
 
-    /// (talk, player) of a parsed `start`.
-    fn talk_flags(args: &[&str]) -> (bool, Option<String>) {
-        match parse(args) {
-            Command::Start { talk, player, .. } => (talk, player),
-            _ => panic!("not a start command"),
-        }
-    }
-
     /// Every flag `@dcl/sdk-commands` documents parses here under the same
     /// spelling, so a script written for one CLI runs on the other.
     #[test]
@@ -1903,17 +1875,17 @@ mod tests {
     }
 
     #[test]
-    fn talk_is_off_by_default_and_player_rides_on_it() {
-        assert_eq!(talk_flags(&[]), (false, None));
-        assert_eq!(talk_flags(&["--talk"]), (true, None));
-        assert_eq!(
-            talk_flags(&["--talk", "--player", "https://example.org/play/"]),
-            (true, Some("https://example.org/play/".to_string()))
-        );
-        assert_eq!(
-            start_err(&["--player", "https://example.org/play/"]).kind(),
-            ErrorKind::MissingRequiredArgument
-        );
+    fn talk_and_player_are_unknown_arguments() {
+        for args in [
+            &["--talk"][..],
+            &["--player", "https://example.org/play/"][..],
+        ] {
+            assert_eq!(
+                start_err(args).kind(),
+                ErrorKind::UnknownArgument,
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
