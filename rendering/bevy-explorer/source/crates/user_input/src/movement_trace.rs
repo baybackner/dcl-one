@@ -15,7 +15,13 @@
 //! delivery is skipped. With `--input external` nothing is pressed: t = 0 is the first frame with
 //! movement input, so a driver's real keys can be recorded on the same timeline.
 //!
-//! The trace is JSON Lines: a header, one line per frame, a footer (see [`Run::finish`]).
+//! The camera's yaw is held at the scenario's `camera_yaw`, or follows the scenario's camera
+//! track by frame time. With `--camera free` nothing holds it: whoever plays turns it, and each
+//! frame records the camera's yaw and pitch, so a free play can be replayed as a scenario with a
+//! camera track.
+//!
+//! The trace is JSON Lines: a header, one line per frame, a footer (see [`Run::finish`]). A long
+//! run can hand its lines out while it records (`drain`), so it keeps only the frames since.
 //! Positions are the SDK's, relative to the scene's base parcel; yaw is degrees clockwise from
 //! north, in (-180, 180].
 
@@ -57,8 +63,15 @@ use crate::{
     camera::update_camera,
 };
 
-/// The trace format this module writes and the scenario format it reads.
+/// The trace format this module writes, and the scenario format without a camera track.
 pub const FORMAT: u32 = 1;
+/// The scenario format that may carry a camera track and last up to [`MAX_TRACK_DURATION`]. A
+/// client that reads only format 1 refuses it instead of holding the camera still.
+pub const CAMERA_TRACK_FORMAT: u32 = 2;
+/// The longest a format 1 scenario runs (s).
+const MAX_DURATION: f64 = 120.0;
+/// The longest a format 2 scenario runs (s): an hour of free play, handed out with `drain`.
+const MAX_TRACK_DURATION: f64 = 3600.0;
 /// A frame within this much before an event's time reaches it, so an event on a frame boundary
 /// (2.0 s at 60 fps) does not move between frames on rounding.
 const EVENT_EPSILON: f64 = 1e-4;
@@ -91,8 +104,7 @@ impl Plugin for MovementTracePlugin {
             .add_systems(PreUpdate, press_scenario_keys.before(InputSystem))
             .add_systems(
                 Update,
-                (read_consumed_input, hold_camera_yaw.after(update_camera))
-                    .in_set(SceneSets::Input),
+                (read_consumed_input, drive_camera.after(update_camera)).in_set(SceneSets::Input),
             )
             .add_systems(
                 PostUpdate,
@@ -112,7 +124,10 @@ impl Plugin for MovementTracePlugin {
                     ("Input mismatch frames", "inputMismatchFrames"),
                     ("Error", "error"),
                 ],
-                actions: &[("Stop", "/movement_trace stop")],
+                actions: &[
+                    ("Finish", "/movement_trace finish"),
+                    ("Stop", "/movement_trace stop"),
+                ],
                 inputs: &[],
             });
     }
@@ -129,9 +144,14 @@ pub struct Scenario {
     pub seed: i64,
     /// The frame rate to run at, unless the run gives its own
     pub fps: u32,
-    /// The camera's yaw for the whole run; movement keys are camera-relative
+    /// The camera's yaw for the whole run, without a camera track; movement keys are
+    /// camera-relative
     #[serde(default)]
     pub camera_yaw: f64,
+    /// Format 2: the camera's yaw (and pitch) by time, interpolated between samples and held
+    /// before the first and after the last
+    #[serde(default)]
+    pub camera: Vec<CameraSample>,
     /// Seconds still before t = 0
     #[serde(default = "default_settle")]
     pub settle: f64,
@@ -158,6 +178,23 @@ pub struct ScenarioEvent {
     pub sprint: bool,
     #[serde(default)]
     pub jump: bool,
+}
+
+/// A camera track sample: `yaw` in the SDK convention (degrees clockwise from north) and `pitch`
+/// in degrees, positive looking up. Pitch is on every sample of a track or on none.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct CameraSample {
+    pub t: f64,
+    pub yaw: f64,
+    #[serde(default)]
+    pub pitch: Option<f64>,
+}
+
+/// The camera's pose at a moment: SDK yaw in (-180, 180] and, when the track has it, pitch.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct CameraPose {
+    pub yaw: f64,
+    pub pitch: Option<f64>,
 }
 
 /// The keys held at a moment: `fwd` W (1) or S (-1), `right` D (1) or A (-1), the walk and
@@ -228,9 +265,15 @@ impl Scenario {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.format != FORMAT {
-            return Err(format!("scenario format {} is not {FORMAT}", self.format));
-        }
+        let max_duration = match self.format {
+            FORMAT => MAX_DURATION,
+            CAMERA_TRACK_FORMAT => MAX_TRACK_DURATION,
+            other => {
+                return Err(format!(
+                    "scenario format {other} is not {FORMAT} or {CAMERA_TRACK_FORMAT}"
+                ))
+            }
+        };
         if self.id.is_empty()
             || !self
                 .id
@@ -242,8 +285,11 @@ impl Scenario {
         if !(1..=1000).contains(&self.fps) {
             return Err(format!("fps {} is outside 1..=1000", self.fps));
         }
-        if !(self.duration > 0.0 && self.duration <= 120.0) {
-            return Err(format!("duration {} is outside (0, 120]", self.duration));
+        if !(self.duration > 0.0 && self.duration <= max_duration) {
+            return Err(format!(
+                "duration {} is outside (0, {max_duration}] for format {}",
+                self.duration, self.format
+            ));
         }
         if !(0.0..=30.0).contains(&self.settle) {
             return Err(format!("settle {} is outside [0, 30]", self.settle));
@@ -270,7 +316,59 @@ impl Scenario {
                 ));
             }
         }
+        if !self.camera.is_empty() && self.format != CAMERA_TRACK_FORMAT {
+            return Err(format!("a camera track needs format {CAMERA_TRACK_FORMAT}"));
+        }
+        let with_pitch = self.camera.first().is_some_and(|s| s.pitch.is_some());
+        let mut previous = 0.0;
+        for sample in &self.camera {
+            if sample.t.is_nan() || sample.t < previous {
+                return Err(format!(
+                    "camera sample times must be non-negative and in order: {} after {previous}",
+                    sample.t
+                ));
+            }
+            previous = sample.t;
+            if !sample.yaw.is_finite() {
+                return Err(format!(
+                    "camera yaw is not a number: sample at {}",
+                    sample.t
+                ));
+            }
+            match sample.pitch {
+                Some(pitch) if with_pitch && (-90.0..=90.0).contains(&pitch) => (),
+                None if !with_pitch => (),
+                _ => {
+                    return Err(format!(
+                        "camera pitch is in [-90, 90] on every sample or on none: sample at {}",
+                        sample.t
+                    ))
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The camera track's pose at `t`, interpolated the short way round between the samples
+    /// around it and held outside them; `None` without a track.
+    pub fn camera_at(&self, t: f64) -> Option<CameraPose> {
+        let pose = |s: &CameraSample| CameraPose {
+            yaw: normalize_yaw(s.yaw),
+            pitch: s.pitch,
+        };
+        let next = self.camera.iter().position(|s| s.t > t);
+        match next {
+            None => self.camera.last().map(pose),
+            Some(0) => self.camera.first().map(pose),
+            Some(i) => {
+                let (a, b) = (&self.camera[i - 1], &self.camera[i]);
+                let f = (t - a.t) / (b.t - a.t);
+                Some(CameraPose {
+                    yaw: normalize_yaw(a.yaw + yaw_difference(b.yaw, a.yaw) * f),
+                    pitch: a.pitch.zip(b.pitch).map(|(a, b)| a + (b - a) * f),
+                })
+            }
+        }
     }
 
     /// The keys held at `t`: the last event reached, else none.
@@ -619,6 +717,16 @@ impl StartCondition {
     }
 }
 
+/// Who turns the camera during a run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CameraControl {
+    /// The run: at the scenario's `camera_yaw`, or along its camera track
+    #[default]
+    Held,
+    /// Whoever plays; each frame records the camera's yaw and pitch
+    Free,
+}
+
 /// Whether a `--start placed` run starts in a frame `since_placed` seconds after the placement.
 /// The placement's own frame never does: its ground state may still be the old position's.
 /// `landed`: the player rests on ground or on a slope too steep to stand on.
@@ -665,6 +773,7 @@ struct Run {
     repeat: u32,
     input: InputSource,
     start: StartCondition,
+    camera: CameraControl,
     fixed_dt: bool,
     /// The session frame-rate setting to put back afterwards
     previous_fps: Option<usize>,
@@ -682,7 +791,12 @@ struct Run {
     started_utc: String,
     /// this frame's input as read in `Update`
     consumed: Option<ConsumedInput>,
+    /// the frame lines not yet handed out by `drain`
     frames: Vec<String>,
+    /// frames `drain` handed out
+    drained: usize,
+    /// whether `drain` handed out the header
+    header_drained: bool,
     dropped: u32,
     mismatches: u32,
     scene_ticks: u32,
@@ -737,19 +851,73 @@ impl Run {
     /// - footer: `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
     ///   and `extra.input_mismatch_frames` (frames whose input differs from the scenario's) and
     ///   `extra.scene_tick_frames`.
+    ///
+    /// A run whose camera is free or follows a camera track adds `extra.camera_control` (`free`
+    /// or `track`) to the header and `extra.cam` (`yaw` and `pitch`, the camera's own angles this
+    /// frame, set by whoever turned it or by the track) to each frame; a free run writes `in.jump`
+    /// on every frame. Lines `drain` handed out are not written again.
     fn finish(&self) -> String {
+        let footer = format!(
+            "{{\"type\":\"footer\",\"frames\":{},\"dropped\":{},\"extra\":{{\"input_mismatch_frames\":{},\"scene_tick_frames\":{}}}}}",
+            self.frame_count(),
+            self.dropped,
+            self.mismatches,
+            self.scene_ticks,
+        );
+        let mut text = String::with_capacity(400 * (self.frames.len() + 2));
+        if !self.header_drained {
+            text.push_str(&self.header());
+            text.push('\n');
+        }
+        for line in self.frames.iter().chain(std::iter::once(&footer)) {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text
+    }
+
+    /// The lines recorded since the last drain, the header first; empty before t = 0.
+    fn drain(&mut self) -> String {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return String::new();
+        }
+        let mut text = String::with_capacity(400 * (self.frames.len() + 1));
+        if !self.header_drained {
+            text.push_str(&self.header());
+            text.push('\n');
+            self.header_drained = true;
+        }
+        self.drained += self.frames.len();
+        for line in self.frames.drain(..) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    }
+
+    /// Frames recorded so far, drained or not.
+    fn frame_count(&self) -> usize {
+        self.drained + self.frames.len()
+    }
+
+    /// Whether frames carry the camera's angles: when the run does not hold it at one yaw.
+    fn records_camera(&self) -> bool {
+        self.camera == CameraControl::Free || !self.scenario.camera.is_empty()
+    }
+
+    fn header(&self) -> String {
         let s = &self.scenario;
         let animations = match self.animations {
             Some(enabled) => enabled.to_string(),
             None => "null".into(),
         };
-        let header = format!(
+        format!(
             concat!(
                 "{{\"type\":\"header\",\"format\":{},\"client\":\"bevy\",\"client_version\":{},",
                 "\"scenario\":{},\"seed\":{},\"fps_target\":{},\"animations\":{},\"position\":{},",
                 "\"started_utc\":{},\"extra\":{{\"repeat\":{},\"camera_yaw\":{},\"settle\":{},",
                 "\"duration\":{},\"input_seam\":\"{}\",\"dt_mode\":\"{}\",\"camera_mode\":\"{}\",",
-                "\"scene_base_parcel\":[{},{}],\"spawn\":{},\"spawn_yaw\":{},\"start_pos\":{}{}}}}}"
+                "\"scene_base_parcel\":[{},{}],\"spawn\":{},\"spawn_yaw\":{},\"start_pos\":{}{}{}}}}}"
             ),
             FORMAT,
             serde_json::Value::from(self.client_version.as_str()),
@@ -779,23 +947,13 @@ impl Run {
                 StartCondition::Still => "",
                 StartCondition::Placed => ",\"start\":\"placed\"",
             },
-        );
-        let footer = format!(
-            "{{\"type\":\"footer\",\"frames\":{},\"dropped\":{},\"extra\":{{\"input_mismatch_frames\":{},\"scene_tick_frames\":{}}}}}",
-            self.frames.len(),
-            self.dropped,
-            self.mismatches,
-            self.scene_ticks,
-        );
-        let mut text = String::with_capacity(400 * (self.frames.len() + 2));
-        for line in std::iter::once(&header)
-            .chain(self.frames.iter())
-            .chain(std::iter::once(&footer))
-        {
-            text.push_str(line);
-            text.push('\n');
-        }
-        text
+            // the earlier header form while the camera is held at one yaw
+            match (self.camera, s.camera.is_empty()) {
+                (CameraControl::Free, _) => ",\"camera_control\":\"free\"",
+                (CameraControl::Held, false) => ",\"camera_control\":\"track\"",
+                (CameraControl::Held, true) => "",
+            },
+        )
     }
 
     fn file_name(&self) -> String {
@@ -815,7 +973,7 @@ impl Run {
             "repeat": self.repeat,
             "fps": self.fps,
             "dtMode": if self.fixed_dt { "fixed" } else { "real" },
-            "frames": self.frames.len(),
+            "frames": self.frame_count(),
             "t": self.last_t,
             "dropped": self.dropped,
             "inputMismatchFrames": self.mismatches,
@@ -893,12 +1051,14 @@ impl MovementTrace {
 // --- console ---
 
 /// Play a movement scenario on the player and record each frame (`play`), report the run
-/// (`status`), return the last trace as JSON Lines (`fetch`) or abandon the run (`stop`). `play`
-/// answers once the run has started; poll `status` until `done` or `failed`
+/// (`status`), return the lines recorded since the last drain while it runs (`drain`), end it
+/// now and keep its trace (`finish`), return the last trace as JSON Lines, less what was
+/// drained (`fetch`), or abandon the run (`stop`). `play` answers once the run has started; poll
+/// `status` until `done` or `failed`
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/movement_trace")]
 struct MovementTraceCommand {
-    /// `play`, `status`, `fetch` or `stop`
+    /// `play`, `status`, `drain`, `finish`, `fetch` or `stop`
     action: String,
     /// play: the frame rate, instead of the scenario's
     #[arg(long)]
@@ -922,6 +1082,11 @@ struct MovementTraceCommand {
     /// slope `settle` seconds after the placement, wherever the player is then)
     #[arg(long)]
     start: Option<String>,
+    /// play: `hold` (the run turns the camera: to the scenario's `camera_yaw`, or along its
+    /// camera track) or `free` (whoever plays turns it; each frame records its yaw and pitch, and
+    /// the player faces as it does now unless `--spawn` gives a yaw)
+    #[arg(long)]
+    camera: Option<String>,
     /// play: the scenario as JSON
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
     json: Vec<String>,
@@ -966,6 +1131,20 @@ fn movement_trace_command(
             Some(Err(e)) => cmd.reply_failed(format!("the last run failed: {e}")),
             None => cmd.reply_failed("no finished run"),
         },
+        "drain" => match trace.run.as_mut() {
+            Some(run) => cmd.reply_ok(run.drain()),
+            None => cmd.reply_failed("no run in progress: fetch the rest of the last trace"),
+        },
+        "finish" => match trace.run.as_ref().map(|run| run.phase.name()) {
+            Some("running") => {
+                trace.end(Ok(()), session.as_deref_mut(), strategy.as_deref_mut());
+                cmd.reply_ok("finished");
+            }
+            Some(phase) => cmd.reply_failed(format!(
+                "the run is {phase}, not running: /movement_trace stop abandons it"
+            )),
+            None => cmd.reply_failed("no run in progress"),
+        },
         "stop" => {
             if trace.run.is_some() {
                 trace.end(
@@ -1009,6 +1188,14 @@ fn movement_trace_command(
                     Some("placed") => StartCondition::Placed,
                     Some(other) => return Err(format!("start `{other}`: use still or placed")),
                 };
+                let camera_control = match command.camera.as_deref() {
+                    None | Some("hold") => CameraControl::Held,
+                    Some("free") if !scenario.camera.is_empty() => {
+                        return Err("the scenario's camera track turns the camera: use hold".into())
+                    }
+                    Some("free") => CameraControl::Free,
+                    Some(other) => return Err(format!("camera `{other}`: use hold or free")),
+                };
                 let (player, transform, out_of_world) =
                     player.single().map_err(|_| "no player".to_string())?;
                 if out_of_world {
@@ -1039,15 +1226,22 @@ fn movement_trace_command(
                     Ok(_) => "third_person",
                     Err(_) => "none",
                 };
+                // a free camera leaves the player facing as it does; a held one faces it the
+                // camera's way at t = 0
+                let default_yaw = match camera_control {
+                    CameraControl::Free => sdk_yaw(transform.rotation),
+                    CameraControl::Held => scenario
+                        .camera_at(0.0)
+                        .map_or(scenario.camera_yaw, |pose| pose.yaw),
+                };
                 Ok(Run {
-                    spawn_yaw: spawn_yaw
-                        .map(normalize_yaw)
-                        .unwrap_or(normalize_yaw(scenario.camera_yaw)),
+                    spawn_yaw: normalize_yaw(spawn_yaw.unwrap_or(default_yaw)),
                     scenario,
                     fps,
                     repeat: command.repeat.unwrap_or(1),
                     input,
                     start,
+                    camera: camera_control,
                     fixed_dt,
                     previous_fps: session.as_ref().and_then(|s| s.fps_target),
                     base,
@@ -1067,6 +1261,8 @@ fn movement_trace_command(
                     started_utc: String::new(),
                     consumed: None,
                     frames: Vec::new(),
+                    drained: 0,
+                    header_drained: false,
                     dropped: 0,
                     mismatches: 0,
                     scene_ticks: 0,
@@ -1104,7 +1300,7 @@ fn movement_trace_command(
             }
         }
         other => cmd.reply_failed(format!(
-            "unknown action `{other}`: use play, status, fetch or stop"
+            "unknown action `{other}`: use play, status, drain, finish, fetch or stop"
         )),
     }
 }
@@ -1202,14 +1398,29 @@ fn read_consumed_input(mut trace: ResMut<MovementTrace>, input: InputManager) {
     );
 }
 
-/// Holds the camera at the scenario's yaw for the whole run, settling included.
-fn hold_camera_yaw(trace: Res<MovementTrace>, mut camera: Query<&mut PrimaryCamera>) {
+/// Turns the camera for the whole run, settling included, unless it is free: to the scenario's
+/// yaw, or along its camera track by frame time (held at the track's start before t = 0).
+fn drive_camera(trace: Res<MovementTrace>, time: Res<Time>, mut camera: Query<&mut PrimaryCamera>) {
     let Some(run) = trace.run.as_ref() else {
         return;
     };
+    if run.camera == CameraControl::Free {
+        return;
+    }
+    let t = match run.phase {
+        Phase::Running { t0 } => time.elapsed_secs_f64() - t0,
+        _ => 0.0,
+    };
+    let pose = run.scenario.camera_at(t).unwrap_or(CameraPose {
+        yaw: run.scenario.camera_yaw,
+        pitch: None,
+    });
     if let Ok(mut camera) = camera.single_mut() {
         // the camera faces its local -z: an SDK yaw is the negated engine yaw
-        camera.yaw = -(run.scenario.camera_yaw.to_radians() as f32);
+        camera.yaw = -(pose.yaw.to_radians() as f32);
+        if let Some(pitch) = pose.pitch {
+            camera.pitch = pitch.to_radians() as f32;
+        }
     }
 }
 
@@ -1228,7 +1439,7 @@ fn record_frame(
         ),
         With<PrimaryUser>,
     >,
-    camera: Query<&Transform, With<PrimaryCamera>>,
+    camera: Query<(&Transform, &PrimaryCamera)>,
     step: Res<LastMovementStep>,
     scenes: Query<&RendererSceneContext>,
     mut session: Option<ResMut<SessionGraphics>>,
@@ -1254,8 +1465,9 @@ fn record_frame(
     let grounded = dynamics.ground_height <= common::dynamics::PLAYER_GROUND_THRESHOLD;
     // resting on something, ground or a slope too steep to stand on
     let landed = dynamics.contact_height <= common::dynamics::PLAYER_GROUND_THRESHOLD;
-    let uses_jump = run.scenario.uses_jump();
-    // a scenario without jumps neither compares nor writes the jump key
+    // a scenario without jumps neither compares nor writes the jump key, unless the run records
+    // free play
+    let uses_jump = run.scenario.uses_jump() || run.camera == CameraControl::Free;
     let consumed = run.consumed.take().unwrap_or_default();
     let consumed = consumed.with_jump(uses_jump && consumed.jump);
 
@@ -1352,7 +1564,7 @@ fn record_frame(
     if let Phase::Running { t0 } = run.phase {
         let t = now - t0;
         let dt = time.delta_secs_f64();
-        let i = run.frames.len();
+        let i = run.frame_count();
         let expected = run.scenario.input_at(t);
         if i > 0 && dt > DROPPED_FRAME_FACTOR / run.fps as f64 {
             run.dropped += 1;
@@ -1363,17 +1575,25 @@ fn record_frame(
         let scene_ctx = scenes.get(movement.scene()).ok();
         let scene_tick = scene_ctx.is_some_and(|ctx| ctx.last_update_frame == frame.0);
         run.scene_ticks += scene_tick as u32;
-        let yaw_camera = camera
-            .single()
-            .map(|t| sdk_yaw(t.rotation))
-            .unwrap_or(f64::NAN);
+        let camera = camera.single().ok();
+        let yaw_camera = camera.map_or(f64::NAN, |(t, _)| sdk_yaw(t.rotation));
+        // the camera's own angles, as whoever turned it or the track left them this frame
+        let cam = match camera {
+            Some((_, camera)) if run.records_camera() => format!(
+                ",\"cam\":{{\"yaw\":{},\"pitch\":{}}}",
+                num(normalize_yaw(-(camera.yaw.to_degrees() as f64))),
+                num(camera.pitch.to_degrees() as f64),
+            ),
+            None if run.records_camera() => ",\"cam\":null".into(),
+            _ => String::new(),
+        };
         run.frames.push(format!(
             concat!(
                 "{{\"type\":\"frame\",\"i\":{},\"t\":{},\"dt\":{},\"in\":{},",
                 "\"pos\":{},\"vel\":{},\"grounded\":{},",
                 "\"yaw_avatar\":{},\"yaw_camera\":{},\"extra\":{{\"kind\":\"{}\",",
                 "\"vel_requested\":{},\"vel_external\":{},\"scene_tick\":{},{}",
-                "\"locomotion\":{}}}}}"
+                "\"locomotion\":{}{}}}}}"
             ),
             i,
             num(t),
@@ -1390,6 +1610,7 @@ fn record_frame(
             scene_tick as u8,
             tick_timing_json(scene_ctx.map(|ctx| &ctx.tick_timing), frame.0),
             run.locomotion.as_deref().unwrap_or("null"),
+            cam,
         ));
         run.last_position = position;
         run.last_t = t;
@@ -1446,7 +1667,8 @@ mod tests {
             json[field] = serde_json::from_str(value).unwrap();
             Scenario::parse(&json.to_string())
         };
-        assert!(with("format", "2").is_err());
+        assert!(with("format", "3").is_err());
+        assert!(with("duration", "120.5").is_err());
         assert!(with("id", "\"../x\"").is_err());
         assert!(with("fps", "0").is_err());
         assert!(with("duration", "0").is_err());
@@ -1723,6 +1945,7 @@ mod tests {
             repeat: 1,
             input: InputSource::Keys(keys),
             start: StartCondition::Still,
+            camera: CameraControl::Held,
             fixed_dt: true,
             previous_fps: None,
             base: IVec2::ZERO,
@@ -1739,6 +1962,8 @@ mod tests {
             started_utc: String::new(),
             consumed: None,
             frames: Vec::new(),
+            drained: 0,
+            header_drained: false,
             dropped: 0,
             mismatches: 0,
             scene_ticks: 0,
@@ -1844,6 +2069,249 @@ mod tests {
         let header: serde_json::Value =
             serde_json::from_str(run.finish().lines().next().unwrap()).unwrap();
         assert_eq!(header["extra"]["start"], "placed");
+        // a camera held at one yaw keeps the earlier header too
+        assert!(header["extra"].get("camera_control").is_none());
+        assert!(!run.records_camera());
+        run.camera = CameraControl::Free;
+        let header: serde_json::Value =
+            serde_json::from_str(run.finish().lines().next().unwrap()).unwrap();
+        assert_eq!(header["extra"]["camera_control"], "free");
+        assert!(run.records_camera());
+        run.camera = CameraControl::Held;
+        run.scenario = Scenario::parse(TRACK).unwrap();
+        let header: serde_json::Value =
+            serde_json::from_str(run.finish().lines().next().unwrap()).unwrap();
+        assert_eq!(header["extra"]["camera_control"], "track");
+        assert_eq!(header["format"], FORMAT);
+    }
+
+    #[test]
+    fn a_drained_run_hands_out_each_line_once() {
+        let mut run = test_run(
+            Scenario::parse(JOG).unwrap(),
+            MovementKeys::from_map(&InputMap::default()).unwrap(),
+        );
+        let frame = |i: usize| format!("{{\"type\":\"frame\",\"i\":{i}}}");
+        // nothing before t = 0
+        assert_eq!(run.drain(), "");
+        run.phase = Phase::Running { t0: 0.0 };
+        let whole = {
+            let mut whole = test_run(
+                Scenario::parse(JOG).unwrap(),
+                MovementKeys::from_map(&InputMap::default()).unwrap(),
+            );
+            whole.frames = (0..5).map(frame).collect();
+            whole.finish()
+        };
+        run.frames = (0..2).map(frame).collect();
+        let first = run.drain();
+        assert_eq!(first.lines().count(), 3);
+        assert_eq!(run.drain(), "");
+        run.frames = (2..5).map(frame).collect();
+        assert_eq!(run.frame_count(), 5);
+        assert_eq!(run.summary()["frames"], 5);
+        let second = run.drain();
+        let rest = run.finish();
+        assert_eq!(format!("{first}{second}{rest}"), whole);
+    }
+
+    const TRACK: &str = r#"{
+      "format": 2, "id": "free-play-1", "fps": 60, "settle": 1.0, "duration": 300,
+      "events": [{ "t": 0.0, "fwd": 1 }, { "t": 0.05 }],
+      "camera": [
+        { "t": 0.0, "yaw": 170, "pitch": -10 },
+        { "t": 0.05, "yaw": 190, "pitch": 10 },
+        { "t": 0.1, "yaw": -150, "pitch": 10 }
+      ]
+    }"#;
+
+    #[test]
+    fn a_camera_track_needs_format_2_which_runs_up_to_an_hour() {
+        let track = Scenario::parse(TRACK).unwrap();
+        assert_eq!(track.camera.len(), 3);
+        assert_eq!(Scenario::parse(JOG).unwrap().camera, vec![]);
+        let with = |field: &str, value: &str| {
+            let mut json: serde_json::Value = serde_json::from_str(TRACK).unwrap();
+            json[field] = serde_json::from_str(value).unwrap();
+            Scenario::parse(&json.to_string())
+        };
+        // format 1 neither carries a track nor runs past 120 s
+        assert!(with("format", "1").is_err());
+        assert!(with("camera", "[]").is_ok());
+        let mut json: serde_json::Value = serde_json::from_str(JOG).unwrap();
+        json["format"] = 2.into();
+        json["duration"] = 3600.into();
+        assert!(Scenario::parse(&json.to_string()).is_ok());
+        json["duration"] = 3600.5.into();
+        assert!(Scenario::parse(&json.to_string()).is_err());
+        // samples in order, a finite yaw, pitch on all or none and within a quarter turn
+        assert!(with("camera", r#"[{"t":1,"yaw":0},{"t":0.5,"yaw":0}]"#).is_err());
+        assert!(with("camera", r#"[{"t":0,"yaw":null}]"#).is_err());
+        assert!(with("camera", r#"[{"t":0,"yaw":0,"pitch":5},{"t":1,"yaw":0}]"#).is_err());
+        assert!(with("camera", r#"[{"t":0,"yaw":0},{"t":1,"yaw":0,"pitch":5}]"#).is_err());
+        assert!(with("camera", r#"[{"t":0,"yaw":0,"pitch":91}]"#).is_err());
+        assert!(with("camera", r#"[{"t":0,"yaw":720},{"t":1,"yaw":-30}]"#).is_ok());
+    }
+
+    #[test]
+    fn the_camera_track_is_interpolated_the_short_way_round() {
+        let track = Scenario::parse(TRACK).unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let at = |t: f64| track.camera_at(t).unwrap();
+        // held before the first sample and after the last
+        assert!(close(at(-1.0).yaw, 170.0) && at(-1.0).pitch == Some(-10.0));
+        assert!(close(at(9.0).yaw, -150.0));
+        // 170 to 190 crosses south, through 180, not back through north
+        assert!(close(at(0.025).yaw, 180.0));
+        assert!(close(at(0.0125).yaw, 175.0));
+        assert!(close(at(0.0375).yaw, -175.0));
+        assert!(close(at(0.025).pitch.unwrap(), 0.0));
+        // 190 (-170) to -150
+        assert!(close(at(0.075).yaw, -160.0));
+        assert_eq!(Scenario::parse(JOG).unwrap().camera_at(0.0), None);
+    }
+
+    /// Plays `scenario` from t = 0 for `frames` frames at its frame rate with a fixed clock, and
+    /// returns each frame's time, the input the keys held give and the camera's SDK yaw and
+    /// pitch (degrees).
+    fn replay(scenario: Scenario, frames: usize) -> Vec<(f64, ConsumedInput, f64, f64)> {
+        let fps = scenario.fps as f64;
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, InputPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / fps,
+            )))
+            .init_resource::<MovementTrace>()
+            .add_event::<RpcCallEvent>()
+            .add_systems(PreUpdate, press_scenario_keys.before(InputSystem))
+            .add_systems(Update, drive_camera);
+        app.world_mut().spawn(PrimaryCamera::default());
+        app.update();
+        let keys = MovementKeys::from_map(&InputMap::default()).unwrap();
+        app.world_mut().resource_mut::<MovementTrace>().run = Some(test_run(scenario, keys));
+        (0..frames)
+            .map(|_| {
+                app.update();
+                let world = app.world_mut();
+                let t = match world
+                    .resource::<MovementTrace>()
+                    .run
+                    .as_ref()
+                    .unwrap()
+                    .phase
+                {
+                    Phase::Running { t0 } => world.resource::<Time>().elapsed_secs_f64() - t0,
+                    _ => f64::NAN,
+                };
+                let down = |key| world.resource::<ButtonInput<KeyCode>>().pressed(key);
+                let input = ConsumedInput::from_actions(
+                    down(keys.forward),
+                    down(keys.backward),
+                    down(keys.left),
+                    down(keys.right),
+                    down(keys.walk),
+                    down(keys.sprint),
+                )
+                .with_jump(keys.jump.is_some_and(down));
+                let camera = world.query::<&PrimaryCamera>().single(world).unwrap();
+                (
+                    t,
+                    input,
+                    normalize_yaw(-(camera.yaw.to_degrees() as f64)),
+                    camera.pitch.to_degrees() as f64,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_camera_follows_the_track_by_frame_time() {
+        // 60 fps: W down in frames 0 to 2; the camera turns from 170 through 180 to -170 at
+        // t = 0.05 (frame 3), then on to -150
+        let frames = replay(Scenario::parse(TRACK).unwrap(), 7);
+        let w = |fwd| InputStep { fwd, ..default() };
+        for (i, (t, input, yaw, pitch)) in frames.iter().enumerate() {
+            let expected = Scenario::parse(TRACK).unwrap().camera_at(*t).unwrap();
+            // the clock steps in whole nanoseconds
+            assert!((t - i as f64 / 60.0).abs() < 1e-6, "frame {i} at {t}");
+            assert!(input.matches(&w((i < 3) as i8)), "frame {i}: {input:?}");
+            assert!(
+                yaw_difference(*yaw, expected.yaw).abs() < 1e-3,
+                "frame {i}: {yaw}"
+            );
+            assert!(
+                (pitch - expected.pitch.unwrap()).abs() < 1e-3,
+                "frame {i}: {pitch}"
+            );
+        }
+        assert!((frames[0].2 - 170.0).abs() < 1e-3);
+        assert!(yaw_difference(frames[3].2, -170.0).abs() < 1e-3);
+        // without a track the camera holds the scenario's yaw and leaves the pitch alone
+        let held = replay(Scenario::parse(JOG).unwrap(), 2);
+        assert!(held.iter().all(|f| f.2.abs() < 1e-6 && f.3 == 0.0));
+    }
+
+    /// Plays a scenario against the recorded trace it was made from and checks each frame's
+    /// keys and camera against the trace's: `MOVEMENT_TRACE_REPLAY_TRACE` (a `--camera free`
+    /// trace, its lines joined in order) and `MOVEMENT_TRACE_REPLAY_SCENARIO` (the scenario).
+    /// A frame expects the input of the last recorded frame at or before its time and the
+    /// camera interpolated between the recorded frames around it, within 0.1 degrees.
+    #[test]
+    #[ignore = "needs a recorded trace and its scenario"]
+    fn a_scenario_made_from_a_free_play_trace_replays_its_keys_and_camera() {
+        let read = |var: &str| {
+            std::fs::read_to_string(std::env::var(var).unwrap_or_else(|_| panic!("{var} unset")))
+                .unwrap()
+        };
+        let scenario = Scenario::parse(&read("MOVEMENT_TRACE_REPLAY_SCENARIO")).unwrap();
+        let recorded: Vec<serde_json::Value> = read("MOVEMENT_TRACE_REPLAY_TRACE")
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .filter(|l: &serde_json::Value| l["type"] == "frame")
+            .collect();
+        assert!(!recorded.is_empty(), "no frames in the trace");
+        let f = |v: &serde_json::Value| v.as_f64().unwrap();
+        let step = |frame: &serde_json::Value| {
+            let sign = |v: f64| (v > 0.5) as i8 - (v < -0.5) as i8;
+            let input = &frame["in"];
+            InputStep {
+                fwd: sign(f(&input["fwd"])),
+                right: sign(f(&input["right"])),
+                walk: input["walk"] == true,
+                sprint: input["sprint"] == true,
+                jump: input["jump"] == true,
+            }
+        };
+        let count = (scenario.duration * scenario.fps as f64).round() as usize + 1;
+        let mut wrong = Vec::new();
+        for (t, input, yaw, pitch) in replay(scenario, count) {
+            let next = recorded.partition_point(|r| f(&r["t"]) <= t + EVENT_EPSILON);
+            let at = &recorded[next.max(1) - 1];
+            if !input.matches(&step(at)) {
+                wrong.push(format!("t {t:.4}: keys {input:?}, recorded {}", at["in"]));
+            }
+            let b = &recorded[next.min(recorded.len() - 1)];
+            let (ta, tb) = (f(&at["t"]), f(&b["t"]));
+            let k = if tb > ta {
+                ((t - ta) / (tb - ta)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let (ca, cb) = (&at["extra"]["cam"], &b["extra"]["cam"]);
+            let want_yaw = f(&ca["yaw"]) + yaw_difference(f(&cb["yaw"]), f(&ca["yaw"])) * k;
+            let want_pitch = f(&ca["pitch"]) + (f(&cb["pitch"]) - f(&ca["pitch"])) * k;
+            if yaw_difference(yaw, want_yaw).abs() > 0.1 || (pitch - want_pitch).abs() > 0.1 {
+                wrong.push(format!(
+                    "t {t:.4}: camera {yaw:.3}/{pitch:.3}, recorded {want_yaw:.3}/{want_pitch:.3}"
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {count} frames differ:\n{}",
+            wrong.len(),
+            wrong[..wrong.len().min(20)].join("\n")
+        );
     }
 
     #[test]

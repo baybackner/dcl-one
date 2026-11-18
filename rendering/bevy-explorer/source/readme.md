@@ -235,7 +235,7 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   and `/click_at`, which need a DevTools client for real input. `docs/guidelines/interaction.md`
   has the options, replies and diagnoses.
 - Movement: `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat
-  <n>] [--input keys|external] [--start still|placed] <scenario JSON>` places the player in the
+  <n>] [--input keys|external] [--start still|placed] [--camera hold|free] <scenario JSON>` places the player in the
   scene it stands in, waits until it has stood still for the scenario's `settle` (`--start placed`:
   only the `settle` from the placement and a grounded frame, wherever the player is), then
   presses the scenario's movement and jump keys by frame time, as window keyboard events ahead of
@@ -244,7 +244,11 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   `/movement_trace status` reports the run,
   `/movement_trace fetch` returns the trace as JSON Lines and `/movement_trace stop` abandons the
   run. `--input external` presses nothing and starts on the first movement or jump input, for a
-  driver's real keys. `/avatar_animations [on|off]` holds the player's own avatar pose while off.
+  driver's real keys. The camera holds the scenario's yaw or follows its camera track (scenario
+  format 2, up to an hour); `--camera free` leaves it to the player and records its yaw and pitch
+  each frame, so free play converts to a replayable scenario. `/movement_trace drain` hands out
+  the lines recorded so far while a long run goes on, and `/movement_trace finish` ends a run and
+  keeps its trace. `/avatar_animations [on|off]` holds the player's own avatar pose while off.
   `/movement_state` reports the last movement step's velocities. `docs/guidelines/running.md` has
   the scenario and trace formats.
 - The preview-only commands (`/jump`, `/speed`, `/move_player_to`, the debug dumps) stay preview-only.

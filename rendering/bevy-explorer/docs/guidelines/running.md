@@ -251,14 +251,21 @@ State, in every build:
 Movement measurement (`crates/user_input/src/movement_trace.rs`):
 
 - `/movement_trace play [--fps <n>] [--dt real|fixed] [--spawn <x,y,z[,yaw]>] [--repeat <n>]
-  [--input keys|external] [--start still|placed] <scenario JSON>`: plays a keyboard scenario on
-  the player and records every frame. The scenario is `{"format": 1, "id", "seed", "fps",
-  "camera_yaw", "settle", "duration", "events"}`; each event `{"t", "fwd", "right", "walk", "sprint", "jump"}` holds its
+  [--input keys|external] [--start still|placed] [--camera hold|free] <scenario JSON>`: plays a
+  keyboard scenario on the player and records every frame. The scenario is `{"format": 1, "id",
+  "seed", "fps", "camera_yaw", "settle", "duration", "events"}`, `duration` at most 120 s; each event `{"t", "fwd", "right", "walk", "sprint", "jump"}` holds its
   keys (`fwd` W 1 or S -1, `right` D 1 or A -1, the walk and sprint modifiers, the jump key; a key
-  an event leaves out is up) until the next event's `t`. The run places the player at `--spawn`,
-  relative to the base parcel of the scene it stands in and facing `yaw` (the camera yaw by
+  an event leaves out is up) until the next event's `t`. Format 2 adds an optional camera track,
+  `"camera": [{"t", "yaw", "pitch"}]` (SDK yaw; pitch in degrees, positive up, on every sample or
+  on none), and allows a `duration` up to 3600 s; a client that reads only format 1 refuses it.
+  The run places the player at `--spawn`,
+  relative to the base parcel of the scene it stands in and facing `yaw` (the camera yaw at t = 0 by
   default), as `movePlayerTo` does, and waits until it has stood still, grounded and in place for
-  `settle` seconds; the next frame is t = 0. The camera's yaw is held at `camera_yaw`. Each frame
+  `settle` seconds; the next frame is t = 0. The camera's yaw is held at `camera_yaw`, or follows
+  the camera track: interpolated the short way round between the samples around the frame's t,
+  held at the first sample before t = 0 and at the last after it; a track's pitch is set too.
+  `--camera free` holds nothing: whoever plays turns the camera, each frame records its yaw and
+  pitch and the jump key, and without a yaw in `--spawn` the player keeps its facing. Each frame
   from t = 0 the keys bound to the movement actions (and to jump, which a scenario with a jump
   needs bound) are pressed or released to match the event reached (a frame within 0.1 ms of an
   event's `t` reaches it), as window keyboard events ahead of Bevy's input systems, so bindings,
@@ -279,14 +286,21 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   `inputMismatchFrames`, `sceneTickFrames`, the horizontal `distance` from t = 0 and the `file`
   name a driver gives the trace (`<id>__fps<fps>__r<repeat>.jsonl`). `/movement_trace fetch`
   returns the last finished trace; `/movement_trace stop` abandons the run and releases its keys.
-  The debug panel's "Movement trace" section shows the status.
+  `/movement_trace drain` returns the lines recorded since the last drain while the run goes on
+  (the header with the first frames; empty before t = 0) and drops them from memory, so a long
+  run keeps only its latest frames; `fetch` then returns the rest, footer included, and the
+  drained lines and the rest joined in order are the whole trace. `/movement_trace finish` ends a
+  running run now and keeps its trace, as reaching `duration` does.
+  The debug panel's "Movement trace" section shows the status and the finish and stop actions.
 - The trace is JSON Lines. The header holds `format`, `client` (`bevy`), `client_version`,
   `scenario`, `seed`, `fps_target`, `animations`, `position` (realm, scene, base parcel, spawn) and
   `started_utc`, with the repeat, scenario timings, `input_seam`, `dt_mode`, `camera_mode`,
   `scene_base_parcel`, `spawn`, `spawn_yaw`, `start_pos` (where the player stood before t = 0)
-  and, for a `--start placed` run, `start` (`placed`) under `extra`. Each frame holds `i`, `t`,
+  and, for a `--start placed` run, `start` (`placed`) under `extra`, and `camera_control` (`free`,
+  or `track` for a camera track) unless the camera is held at one yaw. Each frame holds `i`, `t`,
   `dt`, `in` (the movement input given to the scenes: `fwd` and `right`, normalised on a diagonal, and `walk`
-  and `sprint`, false without a direction, and `jump` when the scenario has a jump event), `pos`
+  and `sprint`, false without a direction, and `jump` when the scenario has a jump event or the
+  camera is free), `pos`
   (after the frame's movement, in SDK axes relative to the base parcel), `vel` (the frame's
   displacement over its delta), `grounded` (the feet within 0.05 m of ground the player can stand
   on: not a wall it grazes or a slope steeper than 46.5 degrees), `yaw_avatar` and `yaw_camera`
@@ -304,6 +318,9 @@ Movement measurement (`crates/user_input/src/movement_trace.rs`):
   the frame it was dispatched in that the engine received it, negative before it; a late reply
   is received at the next frame's first poll) and `scene_reply_frames`
   (frames from its dispatch, 0 when it landed in its own frame); both `null` without a reply.
+  A free or tracked camera adds `cam` under `extra`: the camera's own `yaw` (SDK) and `pitch`
+  (degrees, positive up) in the frame, as the player or the track turned it; `yaw_camera` is the
+  rendered camera's, after any transition.
   The footer holds `frames`, `dropped` (frames after the first longer than 1.5 target intervals)
   and, under `extra`, `input_mismatch_frames` (frames whose input, jump included, differs from the
   scenario's) and `scene_tick_frames`.
