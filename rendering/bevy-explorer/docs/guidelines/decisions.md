@@ -40,6 +40,15 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   hull does not draw; the crease is kept because the outline's look here relies on it. And
   Unity outlines a preview avatar at any distance (`avatarShape.IsPreview ||`,
   `AvatarShapeVisibilitySystem.cs:93`), where the preview here follows the same 8 m rule.
+- **A hovered avatar glows through the highlight pass.** Unity's values (`AvatarHighlight.asset`,
+  `AvatarHighlightSystem.cs`): sRGB `(0, 1, 0.52395105)` at opacity `0.8`, thickness `3.5`,
+  fading in and out over `0.1` s at a constant rate, on the opaque and alpha-tested meshes of
+  the wearables that are outline-compatible (`AvatarShapeComponent.CreateOutlineCompatibilityList`).
+  Differences kept: the glow is the pass scene entities use (`scene_material::highlight`), a
+  blurred silhouette, so its thickness is `3.5 / 1080` of the view's height where Unity's is
+  3.5 in its own pass. An alpha-tested mesh glows around its whole geometry, cut-out parts
+  included, since the pass draws silhouettes without the material's texture. The avatar
+  preview has no hover glow. A hovered avatar still fades by the camera dither.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest

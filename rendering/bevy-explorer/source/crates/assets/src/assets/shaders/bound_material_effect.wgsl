@@ -63,16 +63,6 @@ fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>,
 #endif
 #endif
 
-// the width in pixels of a line that is wider on nearer fragments, between 1 and 5 pixels; an
-// orthographic view takes its height in metres in place of the depth
-fn depth_outline_width_px(view_z: f32) -> f32 {
-    var depth = view_z;
-    if view.clip_from_view[3].w == 1.0 {
-        depth = 2.0 / view.clip_from_view[1].y;
-    }
-    return clamp(view.viewport.z / 640.0 / depth, 1.0, 5.0);
-}
-
 // draws a line on the fragments the prepass shows on an edge: a depth edge (the silhouette)
 // becomes outline_rgb, and a crease multiplies the surface by crease.
 // width_px: the line's width in pixels; below one pixel the line covers that fraction of the
@@ -269,3 +259,16 @@ fn discard_dither(ndc_position: vec2<f32>, world_position: vec3<f32>, depth: f32
 
     return Dither(1.0, 0.0);
 }
+
+// the camera-to-player dither of a tagged mesh, for the scene material's passes and the face
+// masks alike: skipped under the no-dithering tag, by the cone alone under the cone-only tag.
+// instance_index: the mesh, whose origin is the capsule's root
+// A pipeline importing this needs scene_material::avatar_style_shader_defs
+#ifdef NO_DITHERING_MESH_TAG
+fn camera_dither(mesh_tag: u32, frag_coord: vec2<f32>, world_position: vec3<f32>, instance_index: u32, base_opacity: f32, capsule: bool) -> Dither {
+    if (mesh_tag & #{NO_DITHERING_MESH_TAG}) != 0u {
+        return Dither(1.0, 0.0);
+    }
+    return discard_dither(frag_coord, world_position, view.user_value, (mesh_tag & #{CONE_ONLY_DITHER_MESH_TAG}) == 0u, base_opacity, mesh_functions::get_world_from_local(instance_index)[3].xyz, capsule);
+}
+#endif

@@ -13,7 +13,7 @@
 #import bevy_core_pipeline::tonemapping::approximate_inverse_tone_mapping
 
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
-#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, depth_outline_width_px, discard_dither, reveal_discard, toon_outline}
+#import "embedded://shaders/bound_material_effect.wgsl"::{camera_dither, reveal_discard, toon_outline}
 #import "embedded://shaders/toon.wgsl"::toon_lighting
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
@@ -70,13 +70,9 @@ fn fragment(
     let is_front_m = is_front;
 #endif
 
-    var cap_brightness: f32 = 0.0;
-    var dither_opacity: f32 = 1.0;
-    if (mesh_tag & (#{NO_DITHERING_MESH_TAG} | #{OUTLINE_RED_MESH_TAG})) == 0 {
-        let dither = discard_dither(in.position.xy, in.world_position.xyz, view.user_value, (mesh_tag & #{CONE_ONLY_DITHER_MESH_TAG}) == 0, scene_bounds.base_opacity, mesh_functions::get_world_from_local(in.instance_index)[3].xyz, (scene_bounds.flags & SCENE_DITHER_CAPSULE) != 0u);
-        cap_brightness = dither.transparency;
-        dither_opacity = dither.opacity;
-    }
+    let dither = camera_dither(mesh_tag, in.position.xy, in.world_position.xyz, in.instance_index, scene_bounds.base_opacity, (scene_bounds.flags & SCENE_DITHER_CAPSULE) != 0u);
+    let cap_brightness = dither.transparency;
+    let dither_opacity = dither.opacity;
 
     // generate a PbrInput struct from the StandardMaterial bindings
     var pbr_input = pbr_input_from_standard_material(in, is_front_m);
@@ -176,18 +172,7 @@ fn fragment(
 
     let view_z = -view_transformations::depth_ndc_to_view_z(in.position.z);
 
-    if (mesh_tag & #{OUTLINE_RED_MESH_TAG}) != 0 {
-        // the hover outline: red at any distance, wider on nearer fragments, with red creases
-        out.color = apply_outline(
-            in.position,
-            out.color,
-            vec3(10.0, 0.0, 0.0),
-            vec3(5.0, 0.5, 0.5),
-            depth_outline_width_px(view_z),
-            sample_index,
-            dither_opacity,
-        );
-    } else if (mesh_tag & #{OUTLINE_MESH_TAGS}) != 0 {
+    if (mesh_tag & #{OUTLINE_MESH_TAG}) != 0u {
         // the avatar outline
         out.color = toon_outline(
             in.position,

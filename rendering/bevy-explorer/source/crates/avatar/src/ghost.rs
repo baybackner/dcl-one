@@ -718,7 +718,7 @@ mod tests {
         use pipeline_test::{compile_pipelines, headless_app, render_target};
         use scene_material::{
             SceneBound, SceneBounds, EMPTY_SCENE_CELLS, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
-            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG, SCENE_MATERIAL_TOON_MESH_TAG,
+            SCENE_MATERIAL_OUTLINE_MESH_TAG, SCENE_MATERIAL_TOON_MESH_TAG,
         };
 
         let mut app = headless_app();
@@ -857,10 +857,7 @@ mod tests {
             Transform::from_xyz(-1.0, 0.5, 0.0),
         ));
         // a face mask with and without the avatar outline, which it reads from its tag
-        for (i, outline) in [SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG, 0]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, outline) in [SCENE_MATERIAL_OUTLINE_MESH_TAG, 0].into_iter().enumerate() {
             world.spawn((
                 Mesh3d(cube.clone()),
                 MeshMaterial3d(mask.clone()),

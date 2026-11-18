@@ -30,10 +30,9 @@ pub const SCENE_MATERIAL_NO_DITHERING_MESH_TAG: u32 = 0x02000000;
 pub const SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG: u32 = 0x04000000;
 // cel-shade this mesh (avatars) instead of standard PBR — see toon.wgsl
 pub const SCENE_MATERIAL_TOON_MESH_TAG: u32 = 0x08000000;
-pub const SCENE_MATERIAL_OUTLINE_MESH_TAGS: u32 = 0xF0000000;
-pub const SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG: u32 = 0x10000000;
-pub const SCENE_MATERIAL_OUTLINE_RED_MESH_TAG: u32 = 0x20000000;
-pub const SCENE_MATERIAL_OUTLINE_BLUE_MESH_TAG: u32 = 0x80000000;
+// the tone-on-tone avatar outline (bound_material.wgsl, mask_material.wgsl); a hovered avatar
+// glows through `highlight` instead of a tag
+pub const SCENE_MATERIAL_OUTLINE_MESH_TAG: u32 = 0x10000000;
 /// an avatar being revealed bottom-up from its ghost: the shaders discard fragments above the
 /// reveal height, carried in the tag's low byte: 0 is no reveal, and 1..=255 span the range from
 /// `SCENE_MATERIAL_REVEAL_HIDE_HEIGHT` to `SCENE_MATERIAL_REVEAL_FULL_HEIGHT` above the mesh
@@ -65,7 +64,7 @@ pub fn unrevealed_mesh_tag(tag: u32) -> u32 {
 }
 
 /// the tag bits an avatar's style is read from (the camera dither, the toon lighting and the
-/// outlines) and the toon constants, for the pipeline of every shader that styles an avatar's
+/// outline) and the toon constants, for the pipeline of every shader that styles an avatar's
 /// meshes: bound_material.wgsl and mask_material.wgsl
 pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
     [
@@ -78,16 +77,7 @@ pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
             SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
         ),
         ("TOON_MESH_TAG", SCENE_MATERIAL_TOON_MESH_TAG),
-        ("OUTLINE_MESH_TAGS", SCENE_MATERIAL_OUTLINE_MESH_TAGS),
-        (
-            "OUTLINE_BLACK_MESH_TAG",
-            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG,
-        ),
-        ("OUTLINE_RED_MESH_TAG", SCENE_MATERIAL_OUTLINE_RED_MESH_TAG),
-        (
-            "OUTLINE_BLUE_MESH_TAG",
-            SCENE_MATERIAL_OUTLINE_BLUE_MESH_TAG,
-        ),
+        ("OUTLINE_MESH_TAG", SCENE_MATERIAL_OUTLINE_MESH_TAG),
     ]
     .into_iter()
     .map(|(name, tag)| ShaderDefVal::UInt(name.to_owned(), tag))

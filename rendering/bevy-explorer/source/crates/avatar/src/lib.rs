@@ -32,9 +32,10 @@ use collectibles::{
 };
 #[cfg(feature = "explorer")]
 use console::DoAddConsoleCommand;
+use hover_glow::set_hover_glows;
 use scene_material::{
     SceneBound, SceneBounds, SceneMaterial, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
-    SCENE_MATERIAL_NO_DITHERING_MESH_TAG, SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG,
+    SCENE_MATERIAL_NO_DITHERING_MESH_TAG, SCENE_MATERIAL_OUTLINE_MESH_TAG,
     SCENE_MATERIAL_TOON_MESH_TAG,
 };
 
@@ -60,6 +61,7 @@ pub mod foreign_dynamics;
 #[cfg(feature = "explorer")]
 pub mod ghost;
 pub mod head_ik;
+pub mod hover_glow;
 #[cfg(feature = "explorer")]
 mod ik_debug;
 #[cfg(feature = "explorer")]
@@ -679,7 +681,7 @@ impl AvatarRenderDefinition {
     fn model_tag(&self, model: Option<&WearableModel>) -> u32 {
         let outline = self.avatar_outline && model.is_some_and(|model| model.outline_compatible);
         (if outline {
-            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG
+            SCENE_MATERIAL_OUTLINE_MESH_TAG
         } else {
             0
         }) | (if self.disable_dither {
@@ -688,6 +690,12 @@ impl AvatarRenderDefinition {
             0
         }) | SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG
             | SCENE_MATERIAL_TOON_MESH_TAG
+    }
+
+    /// Whether a mesh of `model` glows while its avatar is hovered: a wearable opts out with
+    /// `outlineCompatible: false`, whatever the outline setting.
+    fn hover_glows(&self, model: Option<&WearableModel>) -> bool {
+        model.is_none_or(|model| model.outline_compatible)
     }
 
     /// the body model is guaranteed by spawn_scenes
@@ -1585,10 +1593,12 @@ fn process_avatar(
                                 &mut scene_materials,
                             )
                         });
-                    commands.entity(scene_ent).try_insert((
+                    let mut mesh = commands.entity(scene_ent);
+                    mesh.try_insert((
                         MeshMaterial3d(instance_mat.clone()),
                         MeshTag(def.body_tag()),
                     ));
+                    set_hover_glows(&mut mesh, def.hover_glows(def.body.model.as_ref()));
                 }
             }
 
@@ -1942,10 +1952,12 @@ fn process_avatar(
                                     &mut scene_materials,
                                 )
                             });
-                        commands.entity(scene_ent).try_insert((
+                        let mut mesh = commands.entity(scene_ent);
+                        mesh.try_insert((
                             MeshMaterial3d(instance_mat.clone()),
                             MeshTag(def.model_tag(Some(model))),
                         ));
+                        set_hover_glows(&mut mesh, def.hover_glows(Some(model)));
                     }
                 }
             }

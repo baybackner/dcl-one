@@ -826,7 +826,7 @@ fn mask_tag_matches_the_body() {
     let outlined = render_definition(true, false);
     assert_eq!(
         outlined.mask_tag(),
-        SCENE_MATERIAL_TOON_MESH_TAG | SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG | dither
+        SCENE_MATERIAL_TOON_MESH_TAG | SCENE_MATERIAL_OUTLINE_MESH_TAG | dither
     );
     assert_eq!(outlined.mask_tag(), outlined.body_tag());
 
@@ -838,9 +838,30 @@ fn mask_tag_matches_the_body() {
     assert_eq!(
         undithered.mask_tag(),
         SCENE_MATERIAL_TOON_MESH_TAG
-            | SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG
+            | SCENE_MATERIAL_OUTLINE_MESH_TAG
             | SCENE_MATERIAL_NO_DITHERING_MESH_TAG
             | dither
     );
     assert_eq!(undithered.mask_tag(), undithered.body_tag());
+}
+
+/// a wearable opts out of the hover glow with `outlineCompatible: false`, with the outline
+/// setting on or off, and takes no outline tag either
+#[test]
+fn a_wearable_opts_out_of_the_hover_glow() {
+    let model = |outline_compatible| WearableModel {
+        gltf: default(),
+        outline_compatible,
+        spring_bones: None,
+    };
+    for avatar_outline in [true, false] {
+        let def = render_definition(avatar_outline, false);
+        assert!(def.hover_glows(def.body.model.as_ref()));
+        assert!(def.hover_glows(Some(&model(true))));
+        assert!(!def.hover_glows(Some(&model(false))));
+        assert_eq!(
+            def.model_tag(Some(&model(false))) & SCENE_MATERIAL_OUTLINE_MESH_TAG,
+            0
+        );
+    }
 }
