@@ -482,13 +482,11 @@ to browse larger listings.
 ```
 HTTP_SERVER_HOST=0.0.0.0 HTTP_SERVER_PORT=9000 TUNNEL_TOKENS=SECRET dcl-preview-tunnel  # public host
 dcl-scene-cli start --tunnel wss://tunnel.example:9000 --tunnel-token SECRET            # your machine
-dcl-scene-cli sync [--dir D] [--node URL] [--project ID] [--sign-key FILE] [--prefer local|remote] [--dry-run]
 ```
 
 The relay is configured by environment (`dcl-preview-tunnel --help`). It refuses to start without `TUNNEL_TOKENS` unless `TUNNEL_ALLOW_ANONYMOUS=true` (a local relay only). A trunk closed with 4401 had a wrong or missing token; 4409 means no free tunnel id or the relay is at `TUNNEL_MAX_AGENTS`.
 
-Prefer `--tunnel-token-file` or `DCL_SCENE_CLI_TUNNEL_TOKEN`. `sync` is a two-way content-hash sync
-with a catalyrst builder project (`.dcl-one/sync.json`).
+Prefer `--tunnel-token-file` or `DCL_SCENE_CLI_TUNNEL_TOKEN`.
 
 ## Publish it
 
@@ -507,7 +505,7 @@ dcl-scene-cli world access add|remove <name> --user U | --community C
 ```
 
 `deploy` signs in a browser on the preview server, or headlessly with `--sign-key FILE` or
-`DCL_PRIVATE_KEY` (the flag wins; every signing command, `unpublish`, `sync`, `storage` and the
+`DCL_PRIVATE_KEY` (the flag wins; every signing command, `unpublish`, `storage` and the
 `world` writes included, takes both). Worlds go to the worlds server, parcels to the first healthy
 public catalyst (`--target-server` / `DCL_SCENE_CLI_TARGET_SERVER` override); only content missing
 from `/available-content` is uploaded (`--force-upload` or `DCL_SCENE_CLI_UPLOAD_ALL=1` sends all).

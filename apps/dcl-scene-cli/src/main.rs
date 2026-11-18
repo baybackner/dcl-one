@@ -683,13 +683,6 @@ enum Command {
         #[command(subcommand)]
         command: dcl_scene_cli::storage_cli::StorageCommand,
     },
-    #[command(
-        about = "Mirror this folder with a project on a node, both ways, by content hash; stops on a path both sides changed"
-    )]
-    Sync {
-        #[command(flatten)]
-        opts: dcl_scene_cli::project_sync::SyncOptions,
-    },
     /// Generate main.crdt from a scene's composites into an arbitrary file, so
     /// the native generator's bytes can be diffed against a node data-layer dump.
     #[command(hide = true)]
@@ -1459,7 +1452,6 @@ async fn run(command: Command) -> Result<()> {
         }),
         Command::World { command } => run_world(command).await,
         Command::Storage { command } => dcl_scene_cli::storage_cli::run(command).await,
-        Command::Sync { opts } => dcl_scene_cli::project_sync::run(opts).await,
     }
 }
 
@@ -1894,6 +1886,20 @@ mod tests {
             Command::Start { position, .. } => assert_eq!(position, Some((3, -4))),
             _ => panic!("not a start command"),
         }
+    }
+
+    #[test]
+    fn sync_is_not_a_command() {
+        use clap::CommandFactory;
+        assert!(
+            Cli::command()
+                .get_subcommands()
+                .all(|command| command.get_name() != "sync")
+        );
+        let error = Cli::try_parse_from(["dcl-scene-cli", "sync"])
+            .err()
+            .expect("sync must not parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
     }
 
     #[test]
