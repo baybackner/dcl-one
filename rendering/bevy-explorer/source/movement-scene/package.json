@@ -6,16 +6,14 @@
     "@dcl/sdk": "7.27.1-33247605236.commit-732120a",
     "@dcl/js-runtime": "7.27.1-33247605236.commit-732120a"
   },
-  "overrides": {
-    "@dcl/asset-packs": "2.15.3"
-  },
   "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=6.0.0"
+    "node": ">=24",
+    "pnpm": ">=11.27"
   },
   "scripts": {
     "build": "sdk-commands build --skip-install",
     "deploy": "sdk-commands deploy",
     "start": "sdk-commands start"
-  }
+  },
+  "packageManager": "pnpm@12.21.0"
 }
