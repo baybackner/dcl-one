@@ -308,6 +308,17 @@ pub async fn op_get_compact_profiles(
 }
 
 #[wasm_bindgen]
+pub async fn op_avatar_nametag_height(
+    state: &WorkerContext,
+    entity: u32,
+) -> Result<JsValue, WasmError> {
+    dcl_js::system_api::op_avatar_nametag_height(state.rc(), entity)
+        .await
+        .map(|height| height.map_or(JsValue::NULL, |h| JsValue::from_f64(h as f64)))
+        .map_err(WasmError::from)
+}
+
+#[wasm_bindgen]
 pub fn op_quit(state: &WorkerContext) {
     dcl_js::system_api::op_quit(state.rc());
 }

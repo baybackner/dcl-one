@@ -69,6 +69,8 @@ const SEARCH_DEBOUNCE_MS = 350
 const THUMB_LENGTH = 203
 /** The stage image (assets/stage.jpg) is the design's 1920×1080 frame, its top 70px under the top bar. */
 const STAGE = { width: 1920, height: 1080, top: 70 }
+/** The avatar's window, the design's Avatar slot (.stage, .preview): 942px tall. */
+const AVATAR_WINDOW_HEIGHT = 942
 /** How long "1 Item Added to Cart" stays up. */
 const TOAST_MS = 3000
 type Rect = { x: number; y: number; width: number; height: number }
@@ -147,6 +149,8 @@ export default function InWorldShop({ shop, profile, onNavigate, setEngineViewpo
   const [nameFocused, setNameFocused] = useState(false)
   // A zoomed preview hides the nametag: it would sit over the avatar's head.
   const [zoomed, setZoomed] = useState(false)
+  // Names' nametag: on the engine's nametag anchor once it is known, else where the design puts it.
+  const nametagClass = shop.nametagTop != null ? `${styles.nametag} ${styles.nametagAnchored}` : styles.nametag
   // Each ADD TO CART shows the toast again (its key restarts it).
   const [toast, setToast] = useState(0)
   const cartArea = useRef<HTMLDivElement>(null)
@@ -618,7 +622,11 @@ export default function InWorldShop({ shop, profile, onNavigate, setEngineViewpo
           {toast > 0 && <ShopCartToast key={toast}>1 Item Added to Cart</ShopCartToast>}
         </div>
 
-        <div className={styles.stage}>
+        <div
+          className={styles.stage}
+          // Where the engine puts the avatar's nametag, over its head and what it wears: Names' nametag stands on it.
+          style={shop.nametagTop != null ? ({ '--nametag-anchor': `${shop.nametagTop * AVATAR_WINDOW_HEIGHT}px` } as React.CSSProperties) : undefined}
+        >
           {/* The engine draws the avatar preview here, seen through the backdrop's hole. */}
           <div className={styles.preview}>
             <EngineViewport region="avatarPreview" report={setEngineViewport} />
@@ -637,13 +645,13 @@ export default function InWorldShop({ shop, profile, onNavigate, setEngineViewpo
             !zoomed &&
             (namesTab === 'unique' ? (
               // The NAME being picked, over the avatar as it will read once claimed (in a claimed NAME's colour).
-              <AvatarNametag className={styles.nametag} name={nameDraft} typing={nameFocused} color={userNameColor(nameDraft, ownAddress, true)} />
+              <AvatarNametag className={nametagClass} name={nameDraft} typing={nameFocused} color={userNameColor(nameDraft, ownAddress, true)} />
             ) : (
               // The player's own name, as it reads today. None until the profile has one: the empty nametag's
               // placeholder and badge would show a claimed NAME the player may not have.
               own.base !== '' && (
                 <AvatarNametag
-                  className={styles.nametag}
+                  className={nametagClass}
                   name={own.base}
                   claimed={ownClaimed}
                   suffix={own.tag || addressSuffix(ownAddress)}

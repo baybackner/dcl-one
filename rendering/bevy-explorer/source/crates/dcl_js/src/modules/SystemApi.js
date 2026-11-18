@@ -143,6 +143,14 @@ module.exports.getCompactProfiles = async function(addresses) {
     return await Deno.core.ops.op_get_compact_profiles(addresses);
 }
 
+// how high one of this (system) scene's avatars has its nametag: the height of the nametag anchor of
+// an AvatarShape entity above the avatar's origin, in metres with the avatar's scale. The engine sets
+// that anchor over the head and what it wears.
+// -> number | null (null until the avatar's body is measured)
+module.exports.avatarNametagHeight = async function(entity) {
+    return await Deno.core.ops.op_avatar_nametag_height(entity);
+}
+
 // get the next key/button pressed by the user, identified as a string
 // -> string
 module.exports.getNativeInput = async function() {

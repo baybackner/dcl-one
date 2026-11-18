@@ -282,3 +282,8 @@
   left: 302.44px;
   top: 125.97px;
 }
+/* Over an avatar the engine has measured, the nametag's foot stands on the engine's nametag anchor (--nametag-anchor,
+   set on the stage): over the head and what the avatar wears, as in the world. The tag is 54.07px tall. */
+.nametagAnchored {
+  top: calc(var(--nametag-anchor) - 27.03px);
+}

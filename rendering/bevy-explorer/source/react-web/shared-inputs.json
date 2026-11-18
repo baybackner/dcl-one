@@ -5557,6 +5557,10 @@
           "kind": "regular"
         },
         {
+          "name": "shopNametag.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "sidebar.test.tsx",
           "kind": "regular"
         },
@@ -5840,7 +5844,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bevy-api.ts",
-      "sha256": "ab90de5410de6a52f811d1a6868a0edfa28c487f9c66be22feba11f50adf0c50"
+      "sha256": "6d0c8cfd1313ce193a7dfa13854058171a48efe489ac01e988d84d846bf961ad"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/destinations.ts",
@@ -5909,6 +5913,10 @@
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/places.ts",
       "sha256": "74d17cd39674e65fa7e3a98708738f3cfd40f8c77a8424ba0eaa145bea182007"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
+      "sha256": "41373d0706c2cc35de154c2b3279492847b2f82cd3e739e20d55ccc45dfe980e"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/profile.ts",
@@ -6139,6 +6147,10 @@
       "sha256": "6445a90de94e25b7801cfabf86bce94022ae27551f7d99b09f80d255b1827040"
     },
     {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",
+      "sha256": "f1badd2892ef79e56ef39a901ccfac8957c9c4f4f20c84c7bd943479e1386959"
+    },
+    {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",
       "sha256": "0aa0638ddd34ca4c07eb269dcc9691e5826fb9683554f6a73e33877bed95ba35"
     },
@@ -6344,6 +6356,7 @@
     "rendering/bevy-explorer/source/react-web/src/test/bridgeNearbyMutes.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeNotifications.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgePlaces.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizerTokens.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRelay.test.ts",
@@ -6473,7 +6486,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "ba104d8664eb0add00f5dfe98935a5f24b727d0ce2b968fc5f32818bff974cb3"
+      "sha256": "067a2da6ad99b6408564af4a8378d4213c02f28cb1cd42cca2becc3d4079a102"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -9985,7 +9998,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "1e6ff1dd98f4a6b48e15fc1bdcd1c63f3578fad3246eecbbb7977098804218ef"
+      "sha256": "6aee889c0bfb21dce6b67527164a02a181a083655160dfaddd821d87fb34cd16"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -10698,6 +10711,10 @@
     {
       "path": "library/ui/apps/hud/test/hosted/shop.test.tsx",
       "sha256": "85046b05b003befbf161f6b3c71cb8cdbee78cc3aacbc22233583a8111d57da0"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
+      "sha256": "2e3fb0f230e0b233b33d47a26e1c0fcd0c37c6c51350d9580235cdc51d70ae04"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebar.test.tsx",
@@ -42564,6 +42581,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/hosted/sidebar.test.tsx",
       "to": "library/explorer-core/lib/cancelLayers.ts",
       "kind": "native:runtime"
@@ -47751,6 +47783,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/shop.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
       "kind": "type"
     },
     {

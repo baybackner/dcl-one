@@ -142,6 +142,24 @@ afterEach(() => {
 })
 
 describe('the in-world Shop’s Names', () => {
+  it("stands its nametag where the engine puts the avatar's own, once known, else where the design does", async () => {
+    serve()
+    const { rerender } = renderShop()
+    await openNames()
+    const tag = nametag()!
+    const stage = tag.closest<HTMLElement>('[style*="--nametag-anchor"]')
+    // unknown: the design's place, no anchor on the stage
+    expect(stage).toBeNull()
+    expect(tag.className).not.toMatch(/nametagAnchored/)
+    // the engine's anchor, 12% down the 942px window: the tag's foot on it
+    rerender({ shop: { open: true, toggle: vi.fn(), nametagTop: 0.12 } })
+    expect(nametag()!.className).toMatch(/nametagAnchored/)
+    expect(nametag()!.closest<HTMLElement>('[style*="--nametag-anchor"]')!.style.getPropertyValue('--nametag-anchor')).toBe(`${0.12 * 942}px`)
+    // and back to the design's place once the engine has none
+    rerender({ shop: { open: true, toggle: vi.fn(), nametagTop: null } })
+    expect(nametag()!.className).not.toMatch(/nametagAnchored/)
+  })
+
   it('opens on UNIQUE NAME, the nametag over the avatar reading the placeholder until a NAME is typed', async () => {
     serve()
     renderShop()

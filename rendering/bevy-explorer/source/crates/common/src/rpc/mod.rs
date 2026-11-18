@@ -268,6 +268,14 @@ pub enum RpcCall {
         user: Option<String>,
         response: RpcResultSender<Result<SerializedProfile, ()>>,
     },
+    /// How high an avatar of the calling scene (its `AvatarShape` entity) has its nametag: the
+    /// nametag anchor's height above the avatar's origin, in world metres with the avatar's scale.
+    /// The engine sets that anchor over the head and what it wears; None until the avatar's body is
+    /// measured, or for an entity that isn't such an avatar.
+    AvatarNametagHeight {
+        entity: dcl_component::SceneEntityId,
+        response: RpcResultSender<Option<f32>>,
+    },
     /// The compact profiles of a list of addresses, in request order; an address that can't
     /// be resolved is left out.
     GetCompactProfiles {
