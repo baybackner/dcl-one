@@ -18,7 +18,11 @@ vi.mock("@/data/lib/auth/context", () => ({
   useAuth: () => ({ identity: auth.identity, isConnected: Boolean(auth.identity) }),
 }));
 const signIn = vi.hoisted(() => ({ openSignIn: vi.fn() }));
-vi.mock("../components/auth/signin-store", () => signIn);
+vi.mock("../components/auth/signin-store", async (original) => {
+  const real = await original<typeof import("../components/auth/signin-store")>();
+  signIn.openSignIn.mockImplementation(real.openSignIn);
+  return { ...real, openSignIn: signIn.openSignIn };
+});
 vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
 const http = vi.hoisted(() => ({ signedGetJSON: vi.fn(), postJSON: vi.fn() }));
 vi.mock("@/data/lib/catalyst/client", async (actual) => ({
@@ -100,7 +104,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ ok: true, data: [{ id: "up", name: "Watch Party", attending: false }] });
   http.postJSON.mockReset();
-  signIn.openSignIn.mockReset();
+  signIn.openSignIn.mockClear();
   // Creator faces: no profiles unless a test says otherwise, and never the real network.
   vi.stubGlobal(
     "fetch",
@@ -287,10 +291,14 @@ describe("EventsView", () => {
     expect(within(dialog).getByText("11 people here now")).toBeTruthy();
   });
 
-  it("should ask a signed-out visitor to sign in from Remind me and write nothing", async () => {
+  it("should send a signed-out visitor to the sign-in page from Remind me, to come back here, and write nothing", async () => {
     const { user } = setup("/events");
-    await user.click(await screen.findByRole("button", { name: "Remind me: Watch Party" }));
-    expect(signIn.openSignIn).toHaveBeenCalledWith({ inPlace: true });
+    const button = await screen.findByRole("button", { name: "Remind me: Watch Party" });
+    const assign = vi.fn();
+    vi.stubGlobal("location", { origin: "https://example.org", pathname: "/events", search: "?tab=all", hash: "", assign });
+    await user.click(button);
+    vi.unstubAllGlobals();
+    expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Fevents%3Ftab%3Dall");
     expect(http.signedGetJSON).not.toHaveBeenCalled();
     expect(http.postJSON).not.toHaveBeenCalled();
   });

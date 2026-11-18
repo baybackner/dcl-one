@@ -72,7 +72,7 @@ export function headers() {
 export default function JumpEvents({ loaderData }: Route.ComponentProps) {
   const { eventId, card, state, shareUrl, calendarHref, shareText, launch } = loaderData;
   const { identity } = useAuth();
-  const remind = useRemindMe(identity, eventId, () => openSignIn({ inPlace: true }), state === "upcoming");
+  const remind = useRemindMe(identity, eventId, () => openSignIn(), state === "upcoming");
   const [shareNotice, setShareNotice] = useState<string>();
 
   async function share() {

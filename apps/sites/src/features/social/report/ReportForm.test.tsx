@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("when a signed-out visitor fills the report form", () => {
-  it("should open the sign-in on the page and keep what was typed", async () => {
+  it("should send them to the sign-in page, to come back to this report, with no modal", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -42,11 +42,13 @@ describe("when a signed-out visitor fills the report form", () => {
         <SignInState />
       </MemoryRouter>,
     );
-    const description = screen.getByPlaceholderText("Write your description here...");
-    await user.type(description, "The player sent a phishing link");
-    await user.click(screen.getByRole("button", { name: "Sign In" }));
-    expect(screen.getByLabelText("Sign-in modal").textContent).toBe("open");
-    expect(description).toHaveProperty("value", "The player sent a phishing link");
+    const button = screen.getByRole("button", { name: "Sign In" });
+    const assign = vi.fn();
+    vi.stubGlobal("location", { pathname: "/report-user", search: "?player=0xab", hash: "", assign });
+    await user.click(button);
+    vi.unstubAllGlobals();
+    expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Freport-user%3Fplayer%3D0xab");
+    expect(screen.getByLabelText("Sign-in modal").textContent).toBe("closed");
   });
 });
 

@@ -302,7 +302,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
             {!isConnected && (
               <div className={styles.signIn}>
                 Please sign in with your wallet to submit a report.
-                <Button variant="text" size="sm" className={styles.signInButton} onClick={() => openSignIn({ inPlace: true })}>
+                <Button variant="text" size="sm" className={styles.signInButton} onClick={() => openSignIn()}>
                   Sign In
                 </Button>
               </div>

@@ -196,7 +196,7 @@ export function EventsView({ sid, platform, origin, initial }: EventsViewProps) 
   );
 
   const upcomingEvents = useMemo(() => upcoming.data ?? [], [upcoming.data]);
-  const reminders = useEventReminders(identity, () => openSignIn({ inPlace: true }));
+  const reminders = useEventReminders(identity, () => openSignIn());
 
   const [notice, setNotice] = useState<string>();
   useEffect(() => {

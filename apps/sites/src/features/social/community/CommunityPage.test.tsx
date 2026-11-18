@@ -551,7 +551,7 @@ describe("CommunityPage", () => {
     expect(await screen.findByText("Couldn't update your reminder. Try again.")).toBeTruthy();
   });
 
-  it("asks a signed-out visitor to sign in when a Remind me needs it", async () => {
+  it("sends a signed-out visitor to the sign-in page when a Remind me needs it", async () => {
     serve(community());
     show();
 
@@ -559,7 +559,8 @@ describe("CommunityPage", () => {
     await waitFor(() => expect(reminders.onSignIn).not.toBeNull());
     reminders.onSignIn!();
 
-    expect(signIn.openSignIn).toHaveBeenCalledWith({ inPlace: true });
+    // No options: the store sends the reader to /auth/login, to come back to this page (signin-store.test).
+    expect(signIn.openSignIn).toHaveBeenCalledWith();
   });
 
   it("switches between members and events with the tabs", async () => {

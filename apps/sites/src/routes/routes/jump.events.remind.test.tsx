@@ -9,7 +9,6 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const auth = vi.hoisted(() => ({ identity: null as unknown }));
-const signIn = vi.hoisted(() => ({ openSignIn: vi.fn() }));
 const remind = vi.hoisted(() => ({ toggle: vi.fn() }));
 
 vi.mock("@/data/lib/catalyst/jump/jump.server", () => ({
@@ -18,7 +17,6 @@ vi.mock("@/data/lib/catalyst/jump/jump.server", () => ({
   loadJumpPlace: vi.fn(),
 }));
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ identity: auth.identity }) }));
-vi.mock("@/features/components/auth/signin-store", () => signIn);
 vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
 vi.mock("@/features/jump/useRemindMe", () => ({
   useRemindMe: (identity: unknown, _eventId: string, onSignIn: () => void) => ({
@@ -64,7 +62,7 @@ const loaderData = {
 };
 
 function show() {
-  const router = createMemoryRouter([{ id: "jump", path: "/jump/events", Component: JumpEvents, loader: () => loaderData }], {
+  const router = createMemoryRouter([{ id: "jump", path: "/jump/events", Component: JumpEvents as unknown as () => null, loader: () => loaderData }], {
     initialEntries: ["/jump/events"],
     hydrationData: { loaderData: { jump: loaderData } },
   });
@@ -80,7 +78,6 @@ beforeEach(async () => {
   dom = await builtinEnvironments.jsdom.setup(globalThis, { jsdom: { url: "https://example.org/jump/events" } });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   auth.identity = null;
-  signIn.openSignIn.mockReset();
   remind.toggle.mockReset();
 });
 afterEach(async () => {
@@ -90,17 +87,22 @@ afterEach(async () => {
 });
 
 describe("Remind me on an event's jump page", () => {
-  it("asks a signed-out visitor to sign in", async () => {
+  it("sends a signed-out visitor to the sign-in page, to come back to this event", async () => {
     const view = show();
-    await userEvent.click(await view.findByRole("button", { name: /remind me/i }));
-    expect(signIn.openSignIn).toHaveBeenCalledWith({ inPlace: true });
+    const button = await view.findByRole("button", { name: /remind me/i });
+    const assign = vi.fn();
+    vi.stubGlobal("location", { pathname: "/jump/events", search: "?id=d275788c", hash: "", assign });
+    await userEvent.click(button);
+    expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Fjump%2Fevents%3Fid%3Dd275788c");
   });
 
   it("does not ask a signed-in member to sign in", async () => {
     auth.identity = { signer: "0xab" };
     const view = show();
+    const assign = vi.fn();
+    vi.stubGlobal("location", { pathname: "/jump/events", search: "", hash: "", assign });
     await userEvent.click(await view.findByRole("button", { name: /remind me/i }));
     expect(remind.toggle).toHaveBeenCalledOnce();
-    expect(signIn.openSignIn).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
   });
 });
