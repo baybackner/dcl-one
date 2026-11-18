@@ -147,8 +147,8 @@ origin's port (7743 when the origin names none), so Pulse listens there on every
 interface, presenting the given certificate and key (mkcert, or the front's
 own). Without them it presents its self-signed certificate for the host, and
 `status` prints the Chrome flags. `foundation-dev env` adds
-`FOUNDATION_DEV_PUBLIC_URL`. The API trusts the forwarded client address from
-the front, its loopback peer (`HTTP_TRUSTED_PROXY_CIDRS`, see
+`FOUNDATION_DEV_PUBLIC_URL`. The API trusts the forwarded client address and
+`x-original-path` from the front, its loopback peer (`HTTP_TRUSTED_PROXY_CIDRS`, see
 [the gateway](../infra/gateway/README.md)), so the `/contents` rate limit and the
 deploy and referral quotas count per client; a front that drops
 `X-Forwarded-For` leaves every client sharing one bucket.
