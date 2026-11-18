@@ -9,10 +9,10 @@ import wordmark from "@dcl/one-ui/apps/sites/assets/dcl_name.svg?url";
 import { siteHost } from "../../data/site";
 import { docsUrl } from "../../data/docs";
 import "./siteschrome.css";
-import SiteLayout from "./SiteLayout";
+import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import SiteSectionNavigation from "./SiteSectionNavigation";
 import { ProfileNavigationContext } from "./ProfileNavigation";
-import { SITES_LANGUAGES, SitesLocaleContext, saveSitesLocale, sitesLanguage, type SitesLocale } from "./sites-locale";
+import { SITES_LANGUAGES, SitesLocaleContext, saveSitesLocale, sitesLanguage, type SitesLocale } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 
 export type SitesNavId =
   | "play"
@@ -282,7 +282,7 @@ export default function SitesChrome({
       variant="sites" transparent={headerSurface === "overlay"} active={ACTIVE_MAP[active]} signedIn={isIn} account={acct}
       onSignIn={signIn} fetchNotifications={auth.fetchNotifications}
       balances={isIn && acct ? <SitesCreditsChip account={acct} /> : undefined}
-    /> : null} className={"site-layout--sites" + overlayClass} sections={profileNav ? closeMenu => <SiteSectionNavigation
+    /> : null} className={"ui2 site-layout--sites" + overlayClass} sections={profileNav ? closeMenu => <SiteSectionNavigation
       title="Profile" label="Profile sections" items={profileNav.tabs} active={profileNav.active}
       onSelect={profileNav.onTab} closeMenu={closeMenu}
     /> : secondaryNavigation ? closeMenu => <SiteSectionNavigation

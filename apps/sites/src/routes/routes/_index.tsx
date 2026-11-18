@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 
 import SitesChrome from "@ui/web/frames/SitesChrome";
-import { SitesLocaleContext, sitesLanguage } from "@ui/web/frames/sites-locale";
+import { SitesLocaleContext, sitesLanguage } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { homeCopy } from "@/features/home/locale";
 import { successCopy } from "@/features/download/success-copy";
 import { parseCookies } from "@/core/lib/telemetry/session";

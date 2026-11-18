@@ -31,7 +31,7 @@ import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { pageSid, parseCookies, publicResponseContext, sessionMiddleware } from "@/core/lib/telemetry/session";
-import { SitesLocaleContext, sitesLanguage, type SitesLocale } from "@ui/web/frames/sites-locale";
+import { SitesLocaleContext, sitesLanguage, type SitesLocale } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { readWallet } from "@/data/lib/auth/wallet-cookie";
 import { browserCatalystBase } from "@/data/lib/catalyst/bases";
 import { isCommitteeMember } from "@/data/lib/catalyst/creator-hub/committee-membership.server";

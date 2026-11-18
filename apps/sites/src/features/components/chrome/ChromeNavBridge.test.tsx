@@ -5,9 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 
 import SitesChrome from "@ui/web/frames/SitesChrome";
-import SiteLayout from "@ui/web/frames/SiteLayout";
+import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import DclTopBar from "@ui/web/frames/DclTopBar";
-import ChromeLink from "@ui/web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import { useChromeNav } from "@dcl/one-ui/components/chrome/chrome-nav";
 import ChromeNavBridge, { chromeHrefTarget, upstreamShopPath } from "./ChromeNavBridge";
 

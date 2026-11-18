@@ -4,7 +4,7 @@
    16px/1.5, 0.00938em, rgb(240,240,240) on #161518), the landing bar, the landing footer and the hero's #39055C.
    Values equal to a @dcl/one-ui token are written as that token. Font weight and line-height have no token: the
    text styles carry them with letter-spacing normal, and the reference inherits 0.00938em, so they stay literal. */
-.site-layout.site-layout--sites {
+[data-site-layout].site-layout--sites {
   --site-header-h: 92px;
   --site-nav-pad: 54px;
   --site-nav-bg: var(--dcl-bg-navbar);
@@ -18,11 +18,11 @@
   letter-spacing: 0.00938em;
 }
 @media (max-width: 991px) {
-  .site-layout.site-layout--sites { --site-header-h: 64px; --site-nav-pad: var(--dcl-space-16); --site-nav-bg: var(--dcl-bg-navbar-mobile); }
-  .site-layout--overlay-mobile > .site-layout__navigation { margin-bottom: calc(-1 * var(--site-header-h)); }
+  [data-site-layout].site-layout--sites { --site-header-h: 64px; --site-nav-pad: var(--dcl-space-16); --site-nav-bg: var(--dcl-bg-navbar-mobile); }
+  .site-layout--overlay-mobile > [data-site-layout-navigation] { margin-bottom: calc(-1 * var(--site-header-h)); }
 }
 /* The nav floats over the page's top (decentraland.org's is fixed): a page that asks for it starts under the nav. */
-.site-layout--overlay > .site-layout__navigation { margin-bottom: calc(-1 * var(--site-header-h)); }
+.site-layout--overlay > [data-site-layout-navigation] { margin-bottom: calc(-1 * var(--site-header-h)); }
 
 .site-layout--sites .dtb {
   gap: var(--dcl-space-48);

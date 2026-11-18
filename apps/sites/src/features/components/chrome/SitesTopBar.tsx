@@ -19,8 +19,8 @@ import {
 } from "@dcl/one-ui";
 import type { ChromeTopBarProps } from "@dcl/one-ui/components/chrome/chrome-nav";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
-import ChromeLink from "@ui/web/frames/ChromeLink";
-import { useSiteLayout } from "@ui/web/frames/SiteLayout";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
+import { useSiteLayout } from "@dcl/one-ui/components/chrome/SiteLayout";
 import {
   notificationBody,
   notificationLink,
@@ -31,7 +31,7 @@ import {
 import SitesNotificationsDialog from "@dcl/one-ui/apps/sites/chrome/SitesNotificationsDialog";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import wordmark from "@dcl/one-ui/apps/sites/assets/dcl_name.svg?url";
-import { SitesLocaleContext } from "@ui/web/frames/sites-locale";
+import { SitesLocaleContext } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { homeCopy } from "../../home/locale";
 import { useChromeNotifications } from "./useChromeNotifications";
 import styles from "./SitesTopBar.module.css";

@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
-import ChromeLink from "./ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import "./profilenavigation.css";
-import { useSiteLayout } from "./SiteLayout";
+import { useSiteLayout } from "@dcl/one-ui/components/chrome/SiteLayout";
 
 type ProfileTab = { id: string; label: ReactNode; href?: string };
 type ProfileNavigationProps = {

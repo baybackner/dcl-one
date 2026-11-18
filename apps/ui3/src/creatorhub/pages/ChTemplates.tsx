@@ -1,5 +1,5 @@
 import { PageHeader } from "../../components/Surface";
-import ChromeLink from "../../web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { preload } from "react-dom";
 import { CreatorHubChromeMaybe } from "../frames/CreatorHubChrome";

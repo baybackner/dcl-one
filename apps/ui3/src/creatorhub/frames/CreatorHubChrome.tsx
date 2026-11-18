@@ -2,12 +2,12 @@ import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import DclTopBar from "../../web/frames/DclTopBar";
-import ChromeLink from "../../web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import AccountMenu from "../../web/frames/AccountMenu";
 import CreatorHubSyncChip from "../components/CreatorHubSyncChip";
 import { CREATOR_HUB_HOME } from "../explorer-host";
 import "./creatorhubchrome.css";
-import SiteLayout from "../../web/frames/SiteLayout";
+import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import SiteSectionNavigation from "../../web/frames/SiteSectionNavigation";
 import { truncateAddress } from "../../data/format";
 
@@ -343,7 +343,7 @@ export default function CreatorHubChrome({
     </>
   );
   return (
-    <SiteLayout sections={renderNavigation} navigation={
+    <SiteLayout className="ui2" sections={renderNavigation} navigation={
       <DclTopBar active="create" signedIn={isIn} account={acct} onSignIn={doSignIn} onSignOut={doSignOut} signInHref={accountHref}
         accountControl={showAccount ? onAccount ? (
           <button type="button" className="ch__account" aria-label={accountLabel} onClick={onAccount}>{accountInner}</button>
@@ -352,7 +352,7 @@ export default function CreatorHubChrome({
           align="right" placement="below">{accountInner}</AccountMenu> : undefined}
       />
     }>
-      <div className="ch ui2" data-label="Creator Hub">
+      <div className="ch ui2" data-label="Creator Hub" data-site-layout-fill="">
         <ChromeLink className="ch__skip" href="#ch-main">Skip to content</ChromeLink>
         <main id="ch-main" className="ch__main">{children}</main>
       </div>

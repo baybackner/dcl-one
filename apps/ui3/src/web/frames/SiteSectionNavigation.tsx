@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import ChromeLink from "./ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import { flatIcon } from "../../atoms/MaskIcon";
 import type { ChromeNavigate } from "@dcl/one-ui/components/chrome/chrome-nav";
 import "../../components/sidenavitem.css";

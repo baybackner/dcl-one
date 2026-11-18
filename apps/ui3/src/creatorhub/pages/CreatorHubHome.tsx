@@ -1,6 +1,6 @@
 import Button from "../../atoms/Button";
 import { PageHeader } from "../../components/Surface";
-import ChromeLink from "../../web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import type { ReactNode } from "react";
 import { CreatorHubChromeMaybe } from "../frames/CreatorHubChrome";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";

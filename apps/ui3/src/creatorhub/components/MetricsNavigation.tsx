@@ -1,4 +1,4 @@
-import ChromeLink from "../../web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import "../../components/surface.css";
 import "./metricsnavigation.css";
 import { suffixLabel } from "../../components/labelSuffix";

@@ -165,7 +165,7 @@
   },
   "apps/ui3/src/web/frames/dcltopbar.css": {
     "primitives": 25,
-    "tokens": 42
+    "tokens": 43
   },
   "apps/ui3/src/web/frames/profilenavigation.css": {
     "primitives": 3,
@@ -174,10 +174,6 @@
   "apps/ui3/src/web/frames/profiletablayout.css": {
     "primitives": 12,
     "tokens": 0
-  },
-  "apps/ui3/src/web/frames/sitelayout.css": {
-    "primitives": 2,
-    "tokens": 7
   },
   "apps/ui3/src/web/frames/siteschrome.css": {
     "primitives": 4,
@@ -334,5 +330,9 @@
   "library/ui/components/TitleBar/TitleBar.module.css": {
     "primitives": 0,
     "tokens": 13
+  },
+  "library/ui/components/chrome/SiteLayout.module.css": {
+    "primitives": 0,
+    "tokens": 6
   }
 }

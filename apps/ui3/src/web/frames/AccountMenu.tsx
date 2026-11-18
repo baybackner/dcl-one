@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { ChromeNavigate } from "@dcl/one-ui/components/chrome/chrome-nav";
-import ChromeLink from "./ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import "./accountmenu.css";
 import { truncateAddress } from "../../data/format";
 

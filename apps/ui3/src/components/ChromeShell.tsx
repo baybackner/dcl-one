@@ -1,9 +1,9 @@
 import { useId, type ReactNode } from "react";
 import DappFooter from "./DappFooter";
 import type { ChromeNavigate } from "@dcl/one-ui/components/chrome/chrome-nav";
-import ChromeLink from "../web/frames/ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import DclTopBar from "../web/frames/DclTopBar";
-import SiteLayout from "../web/frames/SiteLayout";
+import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import SiteSectionNavigation from "../web/frames/SiteSectionNavigation";
 import "./chromeshell.css";
 
@@ -39,7 +39,7 @@ export default function ChromeShell<Id extends string = string>({
 }: ChromeShellProps<Id>) {
   const mainId = useId();
   return (
-    <SiteLayout navigation={topbar ?? <DclTopBar active="" />}
+    <SiteLayout className="ui2" navigation={topbar ?? <DclTopBar active="" />}
       sections={(subnav && tabs.length) || extraNavigation ? closeMenu => <>
         {subnav && tabs.length ? <SiteSectionNavigation
           title={sectionTitle === undefined ? (brand ? (brandHref ? <ChromeLink href={brandHref} onNavigate={onNavigate}>{brand}</ChromeLink> : brand) : ariaLabel ?? "Sections") : sectionTitle}
@@ -48,7 +48,7 @@ export default function ChromeShell<Id extends string = string>({
         <div onClick={event => { if ((event.target as Element).closest("button, a")) closeMenu(); }}>{extraNavigation}</div>
       </> : undefined}
     >
-      <div className={"cs ui2" + (className ? " " + className : "")} data-label={ariaLabel}>
+      <div className={"cs ui2" + (className ? " " + className : "")} data-label={ariaLabel} data-site-layout-fill="">
         <ChromeLink className="cs__skip" href={"#" + mainId}>Skip to content</ChromeLink>
         {right ? <div className="cs__tools">{right}</div> : null}
         <main className="cs__body" id={mainId} tabIndex={-1}>

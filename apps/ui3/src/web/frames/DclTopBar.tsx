@@ -19,11 +19,12 @@ import {
 } from "@web-core/notifications/notificationsView";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { useChromeNav, type ChromeTopBarProps } from "@dcl/one-ui/components/chrome/chrome-nav";
-import ChromeLink from "./ChromeLink";
+import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import AccountMenu from "./AccountMenu";
 import "../../atoms/maskicon.css";
+import "../../components/site-navigation.css";
 import "./dcltopbar.css";
-import { useSiteLayout } from "./SiteLayout";
+import { useSiteLayout } from "@dcl/one-ui/components/chrome/SiteLayout";
 import { getAvatarBackgroundColor, getDisplayName } from "@web-core/profile/avatarColor";
 
 
@@ -415,7 +416,7 @@ function LegacyDclTopBar({
                 ) : top;
               })}
             </nav>
-            {renderMobileNavigation ? <div className="site-layout__mobile-sections">{renderMobileNavigation(() => setMenuOpen(false))}</div> : null}
+            {renderMobileNavigation ? <div className="dtb__mobile-sections">{renderMobileNavigation(() => setMenuOpen(false))}</div> : null}
           </>
         ) : null}
       </div>
