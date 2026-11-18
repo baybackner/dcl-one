@@ -255,19 +255,6 @@ Movement:
   The reply is `enabled` and the count of `clips` still playing. Foot IK (`/footik`) is separate.
 - `/movement_state`: the active locomotion settings and the last completed movement step's
   `requested`, `actual` and `external` velocities, in SDK axes.
-- `/movement_scene_replies`: over the last 256 frames the movement scene controlled the player,
-  sampled whether or not anything reads them: `frames`, `missRate` (% of frames that applied no
-  reply dispatched in the same frame) and `missed` (`[late, not dispatched]`: frames whose reply
-  came after the frame's deadline, and frames the scene's previous tick was still in flight), and
-  `[min, mean, max]` ms of `sent` (dispatch after the frame's scene loop started),
-  `sentBeforeDeadline`, `onTime` (replies before their frame's deadline, ms before it) and `late`
-  (replies after it, ms after it), `lateFrames` (`[mean, max]` frames a late reply waited),
-  `redispatch` (`[dispatched, in time, held back]`: frames a late reply was answered by a dispatch
-  in the frame it landed, those whose reply then landed in time, and frames too little of the
-  scene loop was left for it, see [scheduling](scheduling.md)), `tickP90` (ms, the 90th
-  percentile of the scene's last 32 ticks from dispatch to reply, which gates a late reply seen
-  after the loop's first poll; a missed tick counts until its loop ended), `frameTarget`
-  (ms) and the `scene` title. The debug panel's "Movement Scene Replies" section shows it.
 
 The HUD and input:
 
