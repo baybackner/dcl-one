@@ -2,14 +2,14 @@ import { engine, InputAction, inputSystem, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import {
   AIR_JUMP_IMPULSE, AIR_JUMP_STOP_WITHOUT_KEYS, ACCEL_CURVE_END, ACCEL_CURVE_START, AIR_ACCEL, AIR_DRAG, AIR_MAX_ACCEL, EXTERNAL_ENV_DRAG, EXTERNAL_GROUND_FRICTION,
-  FIXED_STEP, GLIDER_TURN_MAX_DEGREES_SEC, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, LANDING_STUN_KEEP_INPUT, MAX_EXTERNAL_SPEED,
+  FIXED_STEP, GROUND_ACCEL, GROUND_MAX_ACCEL, INPUT_DELAY_TICKS, LANDING_STUN_KEEP_INPUT, MAX_EXTERNAL_SPEED,
   MAX_FIXED_STEPS, RAMP_GUARD, SLOPE_SPEED_FACTOR, SLOPE_SPEED_MAX_ANGLE, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
 import { engineAssist, horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
 import { grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayNormal } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, landingStuns, launchAhead, leftEdge, predictedLandFrame, steepAhead, stunEndStep, wallContact } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, leftEdge, predictedLandFrame, steepAhead, stunEndStep, stunned, wallContact } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -253,6 +253,8 @@ export function updateHorizontalVelocity() {
   // The engine holds the reply from the frame it lands on until the next reply lands; reply
   // with the state predicted (on this tick's input) for the last of those frames.
   let ox = state.vx + state.ex, oz = state.vz + state.ez;
+  // the move velocity of that state alone, without pushes and before the cuts below: the avatar faces its heading
+  let mx = state.vx, mz = state.vz;
   let replyStep = state.n, replyStun = false;
   if (replyDelay > 0 && frameTime > 0) {
     copyState(state, probe);
@@ -272,6 +274,7 @@ export function updateHorizontalVelocity() {
       advance(probe, input, pending + frames * frameTime);
     }
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
+    mx = probe.vx; mz = probe.vz;
     replyStep = probe.n;
   } else if (launchAhead) {
     // the vertical reply already carries a launch the committed steps reach after this frame: so does this one,
@@ -279,6 +282,7 @@ export function updateHorizontalVelocity() {
     copyState(state, probe);
     advance(probe, input, Math.max(pending, FIXED_STEP));
     ox = probe.vx + probe.ex; oz = probe.vz + probe.ez;
+    mx = probe.vx; mz = probe.vz;
     replyStep = probe.n;
   }
   // A reply from a stunned step: the guard below does not hold the speed from before the stun, only the end of the
@@ -288,6 +292,7 @@ export function updateHorizontalVelocity() {
   // keeps it
   if (!replyStun && lastReplyStun && landingStuns()) {
     ox = state.ex; oz = state.ez;
+    mx = 0; mz = 0;
     replyStun = true;
   }
 
@@ -343,63 +348,78 @@ export function updateHorizontalVelocity() {
   velocity.x = ox;
   velocity.z = oz;
   Vector3.multiplyToRef(velocity, VEC3_HORIZONTAL_MASK, horizontalVelocity);
-  setOrientation();
+  setOrientation(mx, mz, replyStun || stunned());
 }
 
 // ---------------------------------------------------------------- orientation
 
 export var targetOrientation = 0;
-var scratch: Vector3 = Vector3.Zero();
+var scratch: Vector3.MutableVector3 = Vector3.Zero();
 var targetFacing = Quaternion.Identity();
+// The heading the avatar turns toward, kept when the keys are released so a turn under way finishes; null until the
+// keys move the avatar, and again after the engine sets the facing itself.
+var heading: number | null = null;
+// Facings of the last replies, newest first. The engine applies a reply from the frame it lands on, possibly a frame
+// late, so the facing a tick reads is one of these unless the engine set it itself (a movePlayerTo target, a teleport,
+// a rotating platform).
+const publishedOrientation: number[] = [NaN, NaN, NaN];
 
 // returns equivalent angle within 180 degrees of center
 export function relativeDegrees(center: number, angle: number): number {
   return center + ((angle - center + 180) % 360 + 360) % 360 - 180;
 }
 
-function setOrientation() {
+// Turns the avatar toward the heading of its own move velocity (moveX, moveZ: without scene pushes and before the reply's
+// cuts at slopes and walls), in every state: on the ground, in the air, while the glider opens, glides and closes. The
+// heading follows the move while the keys are held; on release the avatar keeps turning to the last one. A landing stun
+// holds the facing.
+function setOrientation(moveX: number, moveZ: number, stun: boolean) {
   // Always adopt the current avatar transform as the orientation baseline, even when
   // locked, so an engine-imposed facing (e.g. a movePlayerTo cameraTarget) takes effect
   // instead of freezing at the pre-teleport orientation.
   orientation = Quaternion.toEulerAngles(playerRotation).y;
+  // a facing the engine set itself drops the kept heading, so finishing a turn does not undo it
+  let published = false;
+  for (const o of publishedOrientation) if (Math.abs(relativeDegrees(0, orientation - o)) < 0.1) published = true;
+  if (!published) heading = null;
   if (disableOrientation) {
+    heading = null;
     targetOrientation = orientation;
+    publishOrientation();
     return;
   }
 
-  let turnSpeed = isGliding ? GLIDER_TURN_MAX_DEGREES_SEC : TURN_MAX_DEGREES_SEC;
-
-  // While gliding, face the direction of travel rather than raw input, so a glider banks
-  // instead of snapping to face the stick. Falls back to input direction when nearly stopped.
-  let faceDir = movementAxis;
-  if (isGliding) {
-    Vector3.multiplyToRef(velocity, VEC3_HORIZONTAL_MASK, scratch);
-    if (Vector3.lengthSquared(scratch) > 0.25) {
-      Vector3.normalizeToRef(scratch, scratch);
-      faceDir = scratch;
-    }
+  if (Vector3.lengthSquared(movementAxis) > 0 && moveX * moveX + moveZ * moveZ > 1e-4) {
+    scratch.x = moveX; scratch.y = 0; scratch.z = moveZ;
+    Quaternion.fromLookAtToRef(VEC3_ZERO, scratch, VEC3_UP, targetFacing);
+    heading = Quaternion.toEulerAngles(targetFacing).y;
   }
+  targetOrientation = heading === null || stun ? orientation : heading;
 
-  if (Vector3.length(faceDir) != 0) {
-    Quaternion.fromLookAtToRef(VEC3_ZERO, faceDir, VEC3_UP, targetFacing);
-    targetOrientation = Quaternion.toEulerAngles(targetFacing).y;
-  } else {
-    targetOrientation = orientation;
-  }
-
+  // The facing eases toward the heading over TURN_FULL_TIME, at most TURN_MAX_DEGREES_SEC; a turn under way trails a
+  // turning heading by about TURN_FULL_TIME of that turn. A glide slowed to 1-3 m/s lets a key spiral turn its heading
+  // at 350-700 deg/s: a slower limit would fall further behind on every lap until the avatar flies backwards.
   if (targetOrientation != orientation) {
     if (Math.abs(targetOrientation - orientation) < 1) {
       orientation = targetOrientation;
     } else {
       orientation = relativeDegrees(targetOrientation, orientation);
+      // an about-turn (W to S) turns left, whichever way rounding puts the heading
+      if (targetOrientation - orientation > 179.9) orientation += 360;
       let perc = Math.min(tickTime / TURN_FULL_TIME, 1);
       orientation = Math.max(
-        orientation - turnSpeed * tickTime,
+        orientation - TURN_MAX_DEGREES_SEC * tickTime,
         Math.min(
-          orientation + turnSpeed * tickTime,
+          orientation + TURN_MAX_DEGREES_SEC * tickTime,
           targetOrientation * perc + orientation * (1 - perc)
         ));
       orientation = relativeDegrees(180, orientation);
     }
   }
+  publishOrientation();
+}
+
+function publishOrientation() {
+  for (let i = publishedOrientation.length - 1; i > 0; i--) publishedOrientation[i] = publishedOrientation[i - 1];
+  publishedOrientation[0] = orientation;
 }

@@ -150,10 +150,6 @@ export const HARD_LANDING_ONLY_FROM_LONG_FALL: number = 1;
 
 export const TURN_MAX_DEGREES_SEC = 1040; // max degrees to turn (set to inf for TURN_FULL_TIME to apply)
 export const TURN_FULL_TIME = 0.1; // time to turn fully towards target
-// max degrees to turn while gliding (set to inf for TURN_FULL_TIME to apply). The glide faces its direction of travel,
-// which a key spiral turns at 200-370 deg/s at glide speed: slower, the facing falls behind it, and past half a turn
-// behind it turns back the other way.
-export const GLIDER_TURN_MAX_DEGREES_SEC = 360;
 
 export const GROUNDED_HEIGHT = 0.05; // distance from surface at which player is considered "grounded"
 // Angle (0-90) from flat up to which ground is ground (can jump / won't slide): a 46 degree slope is walkable, 47 is
