@@ -114,8 +114,9 @@ the call state machine in `B/crates/comms/src/voice_chat/state.rs`. The shared H
 (`library/ui/apps/hud/features/voiceChat/VoiceChatPanel.tsx`) covers accepting and refusing calls,
 the mic, hanging up, raising a hand, promoting, demoting, kicking and ending a stream.
 The gatekeeper's mute only sets `muted` in the participant metadata, so the client enforces it:
-when its own metadata turns muted while it has not just unmuted, `sync_local` takes the mic down
-and keeps it down across a re-dial. The speaker may raise it again, as upstream's client allows.
+when its own metadata turns muted and that is not the echo of a mute it sent, `sync_local` takes
+the mic down and keeps it down across a re-dial. The speaker may raise it again, which sends
+`muted: false`.
 
 ## Client readiness for video
 
