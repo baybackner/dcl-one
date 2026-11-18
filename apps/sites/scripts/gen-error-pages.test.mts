@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
-import { isRetryable, STATIC_ERROR_STATUSES, statusCopy } from "@dcl/one-ui/apps/sites/status/statusCopy";
+import { ART_FILES, isRetryable, STATIC_ERROR_STATUSES, statusCopy } from "@dcl/one-ui/apps/sites/status/statusCopy";
 
 const SITES = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = path.join(SITES, "scripts/gen-error-pages.mts");
@@ -70,6 +70,21 @@ it("renders 404 as the Sites not-found page: its heading, copy, links, avatar ar
   expect(backgrounds).toContain(webpUri("custom-welcome-background.webp"));
   expect(html).not.toContain("Go to homepage");
 });
+
+it("fails on a Git LFS pointer in place of the art, naming the file and the command that fetches it", () => {
+  const art = path.join(ASSETS, "errors", ART_FILES[statusCopy(503).art].file);
+  const bytes = fs.readFileSync(art);
+  fs.writeFileSync(art, "version https://git-lfs.github.com/spec/v1\noid sha256:0000\nsize 1\n");
+  try {
+    const result = run("--check");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`library/ui/apps/sites/assets/errors/${path.basename(art)} is a Git LFS pointer`);
+    expect(result.stderr).toContain('git lfs pull --include="library/ui/apps/sites/assets/**"');
+  } finally {
+    fs.writeFileSync(art, bytes);
+  }
+  expect(fs.readFileSync(art).equals(bytes)).toBe(true);
+}, 60_000);
 
 it("is self-contained: no external stylesheet, script or image, and every custom property it reads is defined", () => {
   for (const status of STATIC_ERROR_STATUSES) {

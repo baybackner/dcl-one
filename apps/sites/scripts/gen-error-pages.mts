@@ -155,7 +155,9 @@ const webpUri = (path: string) => {
     if (!path.endsWith(".webp")) throw new Error(`gen-error-pages: ${file} is not a webp image`);
     const bytes = readFileSync(path);
     if (bytes.subarray(0, LFS_POINTER.length).toString("latin1") === LFS_POINTER) {
-      throw new Error(`gen-error-pages: ${file} is a Git LFS pointer. Run git lfs pull.`);
+      throw new Error(
+        `gen-error-pages: ${file} is a Git LFS pointer, not the image. From the repository root run: git lfs pull --include="library/ui/apps/sites/assets/**"`,
+      );
     }
     if (bytes.subarray(0, 4).toString("latin1") !== "RIFF" || bytes.subarray(8, 12).toString("latin1") !== "WEBP") {
       throw new Error(`gen-error-pages: ${file} is not a webp image`);
