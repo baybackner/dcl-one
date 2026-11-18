@@ -20,14 +20,10 @@ pub const EXIT_MARKER: &str = "[ExitUtils] Exit requested";
 pub const EXCEPTION_MARKER: &str = "DebugLogReportHandler:LogExceptionInternal";
 
 /// Exception counts by kind, in the order each kind was first seen.
-///
-/// A `Vec` rather than a `HashMap`: `add` keeps each kind unique, and `iter` yields the kinds in
-/// first-seen order, the same for the same logs, where a `HashMap`'s order varies between runs.
-/// A linear search costs nothing at a few dozen kinds.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ExceptionKindCounts(Vec<(String, u64)>);
+pub struct Kinds(Vec<(String, u64)>);
 
-impl ExceptionKindCounts {
+impl Kinds {
     pub fn add(&mut self, kind: &str, count: u64) {
         match self.0.iter_mut().find(|(k, _)| k == kind) {
             Some((_, total)) => *total += count,
@@ -56,10 +52,8 @@ impl ExceptionKindCounts {
     }
 
     /// Per-kind totals of several runs.
-    pub fn combine<'a>(
-        all: impl IntoIterator<Item = &'a ExceptionKindCounts>,
-    ) -> ExceptionKindCounts {
-        let mut total = ExceptionKindCounts::default();
+    pub fn combine<'a>(all: impl IntoIterator<Item = &'a Kinds>) -> Kinds {
+        let mut total = Kinds::default();
         for kinds in all {
             for (kind, count) in kinds.iter() {
                 total.add(kind, count);
@@ -70,12 +64,12 @@ impl ExceptionKindCounts {
 }
 
 /// The exceptions a run's log holds before its exit line. A run without a log has none.
-pub fn count(log: &Path) -> io::Result<(u64, ExceptionKindCounts)> {
+pub fn count(log: &Path) -> io::Result<(u64, Kinds)> {
     if !log.is_file() {
-        return Ok((0, ExceptionKindCounts::default()));
+        return Ok((0, Kinds::default()));
     }
     let mut count = 0;
-    let mut kinds = ExceptionKindCounts::default();
+    let mut kinds = Kinds::default();
     // The pair being read: the category of an empty-message entry, then the exception's type.
     let mut category: Option<String> = None;
     let mut kind: Option<String> = None;
@@ -114,7 +108,7 @@ pub fn count(log: &Path) -> io::Result<(u64, ExceptionKindCounts)> {
 /// `^\d\d:\d\d:\d\d\.\d\d\d - <color=#[0-9A-Fa-f]{6}>\[(?<cat>[^\]]+)\]</color>: (?<msg>.*)$`:
 /// the category and the message of an entry line. `\d` is an ASCII digit here, where .NET also
 /// takes other scripts' digits; the explorer writes the time in ASCII.
-pub(super) fn entry_start(line: &str) -> Option<(&str, &str)> {
+fn entry_start(line: &str) -> Option<(&str, &str)> {
     let time = line.as_bytes().get(..12)?;
     let time_shaped = time.iter().enumerate().all(|(i, b)| match i {
         2 | 5 => *b == b':',
@@ -254,7 +248,7 @@ mod tests {
     #[test]
     fn a_run_without_a_log_has_no_exception() {
         let path = crate::scratch("report-exceptions", "none").join("run.log");
-        assert_eq!(count(&path).unwrap(), (0, ExceptionKindCounts::default()));
+        assert_eq!(count(&path).unwrap(), (0, Kinds::default()));
     }
 
     #[test]

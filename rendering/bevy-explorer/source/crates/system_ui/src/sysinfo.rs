@@ -31,9 +31,7 @@ use scene_runner::{
         gltf_container::{GltfLoadingCount, SceneResourceLookup},
         ComponentTracker, TrackComponents,
     },
-    vec3_to_parcel,
-    visible_content_bytes::scene_visible_content_bytes,
-    ContainerEntity, ContainingScene, Toaster,
+    vec3_to_parcel, ContainerEntity, ContainingScene, Toaster,
 };
 use ui_core::{
     bound_node::BoundedImageMaterial,
@@ -568,44 +566,36 @@ fn update_tracker(
     let default_lookup = SceneResourceLookup::default();
     let resource_lookup = stats.get(*scene).unwrap_or(&default_lookup);
 
-    // each row is formatted once, into the template's props
-    let content_root = entities.named("content");
-    let mut add_row = |label: &str, value: &dyn std::fmt::Display| {
-        commands
-            .entity(content_root)
-            .spawn_template(
-                &dui,
-                "tracker-item",
-                DuiProps::new()
-                    .with_prop("label", label.to_string())
-                    .with_prop("value", value.to_string()),
-            )
-            .unwrap();
-    };
+    let mut display_data = Vec::default();
 
     if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
-        add_row("FPS", &(fps.smoothed().unwrap_or_default() as usize));
+        display_data.push((
+            "FPS",
+            (fps.smoothed().unwrap_or_default() as usize).to_string(),
+        ));
     }
-    add_row("GPU", &gpu_frame_time_text(&diagnostics));
+    display_data.push(("GPU", gpu_frame_time_text(&diagnostics)));
 
-    add_row(
+    display_data.push((
         "Unique Gltf Meshes",
-        &resource_lookup
+        resource_lookup
             .meshes_by_hash
             .values()
             .filter(|c| meshes.get(c.mesh_id).is_some())
-            .count(),
-    );
-    add_row(
+            .count()
+            .to_string(),
+    ));
+    display_data.push((
         "Visible Mesh Count",
-        &mesh_handles
+        mesh_handles
             .iter()
             .filter(|(_, c, v)| &c.root == scene && !matches!(v, Visibility::Hidden))
-            .count(),
-    );
-    add_row(
+            .count()
+            .to_string(),
+    ));
+    display_data.push((
         "Visible Triangle Count",
-        &mesh_handles
+        mesh_handles
             .iter()
             .filter(|(_, c, v)| &c.root == scene && !matches!(v, Visibility::Hidden))
             .flat_map(|(h, _, _)| meshes.get(h.id()))
@@ -615,17 +605,19 @@ fn update_tracker(
                     .unwrap_or_else(|| mesh.attributes().next().unwrap().1.len())
                     / 3
             })
-            .sum::<usize>(),
-    );
+            .sum::<usize>()
+            .to_string(),
+    ));
 
-    add_row(
+    display_data.push((
         "Unique Gltf Materials",
-        &resource_lookup
+        resource_lookup
             .materials
             .values()
             .filter(|h| materials.get(h.id()).is_some())
-            .count(),
-    );
+            .count()
+            .to_string(),
+    ));
 
     let visible_mats = material_handles
         .iter()
@@ -633,26 +625,52 @@ fn update_tracker(
         .map(|(h, ..)| &h.0)
         .collect::<HashSet<_, FixedHasher>>();
 
-    add_row("Visible Material Count", &visible_mats.len());
+    display_data.push(("Visible Material Count", visible_mats.len().to_string()));
 
-    let content = scene_visible_content_bytes(
-        *scene,
-        mesh_handles.iter(),
-        material_handles.iter(),
-        &meshes,
-        &materials,
-        &images,
-    );
-    let mib = |bytes: u64| ((bytes as f64) / 1024.0 / 1024.0).round() as u64;
+    let textures = visible_mats
+        .iter()
+        .flat_map(|h| materials.get(h.id()))
+        .flat_map(|mat| {
+            mat.base
+                .base_color_texture
+                .iter()
+                .chain(mat.base.emissive_texture.as_ref())
+                .chain(mat.base.normal_map_texture.as_ref())
+        })
+        .collect::<HashSet<_>>();
 
-    add_row("Total Texture Count", &content.texture_count);
-    add_row("Total Texture Memory (mb)", &mib(content.texture_bytes_sum));
-    add_row("Visible Mesh Memory (mb)", &mib(content.mesh_bytes_sum));
+    display_data.push(("Total Texture Count", textures.len().to_string()));
 
-    add_row(
+    let total_memory = textures
+        .iter()
+        .flat_map(|h| images.get(h.id()).and_then(|t| t.data.as_ref()))
+        .map(|data| data.len())
+        .sum::<usize>();
+    let total_mb = (total_memory as f32 / 1024.0 / 1024.0).round() as usize;
+
+    display_data.push(("Total Texture Memory (mb)", total_mb.to_string()));
+
+    display_data.push((
         "Total Entities",
-        &scene_entities.iter().filter(|c| &c.root == scene).count(),
-    );
+        scene_entities
+            .iter()
+            .filter(|c| &c.root == scene)
+            .count()
+            .to_string(),
+    ));
+
+    for (key, value) in display_data {
+        commands
+            .entity(entities.named("content"))
+            .spawn_template(
+                &dui,
+                "tracker-item",
+                DuiProps::new()
+                    .with_prop("label", key.to_string())
+                    .with_prop("value", value),
+            )
+            .unwrap();
+    }
 }
 
 // set fps

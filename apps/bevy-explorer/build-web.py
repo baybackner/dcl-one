@@ -50,18 +50,18 @@ def build_environment():
             'RAYON_NUM_THREADS': os.environ.get('RAYON_NUM_THREADS', str(min(os.cpu_count() or 1, 16)))}
 
 
-def cargo_wasm(no_opt, features, env):
+def cargo_wasm(no_opt, env):
     """Compile both modules in one feature graph; returns the directory that holds the two .wasm files."""
     if no_opt:
         env = {**env, 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS': '16'}
     run('cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',
         '--lib', '-p', 'decentra-bevy', '-p', 'dcl_scene_wasm', '--no-default-features',
-        '--features=' + ','.join(f'decentra-bevy/{feature}' for feature in features), env=env)
+        '--features=decentra-bevy/livekit,decentra-bevy/social', env=env)
     return Path(env.get('CARGO_TARGET_DIR', SOURCE / 'target')) / 'wasm32-unknown-unknown/release'
 
 
-def compile_wasm(no_opt, features, env):
-    target = cargo_wasm(no_opt, features, env)
+def compile_wasm(no_opt, env):
+    target = cargo_wasm(no_opt, env)
     for name, directory in (('webgpu_build', 'pkg'), ('dcl_scene_wasm', 'pkg-scene')):
         output = SOURCE / 'deploy/web/engine' / directory
         run('wasm-bindgen', str(target / f'{name}.wasm'), '--target', 'web',
@@ -73,7 +73,7 @@ def compile_wasm(no_opt, features, env):
             optimized.replace(wasm)
 
 
-def prepare_engine(no_opt, engine_cache, shared_build, features, env):
+def prepare_engine(no_opt, engine_cache, shared_build, env):
     flags = ['--no-opt'] if no_opt else []
     # WASM_PACK_MODE=no-install needs the Cargo.lock's wasm-bindgen-cli installed (see ENVIRONMENT).
     if mode := os.environ.get('WASM_PACK_MODE'):
@@ -89,10 +89,10 @@ def prepare_engine(no_opt, engine_cache, shared_build, features, env):
             if target.exists():
                 shutil.rmtree(target)
         if shared_build:
-            compile_wasm(no_opt, features, env)
+            compile_wasm(no_opt, env)
         else:
             run('wasm-pack', 'build', '--target', 'web', *flags, '--out-dir', './deploy/web/engine/pkg',
-                '--no-default-features', '--features=' + ','.join(features), env=env)
+                '--no-default-features', '--features=livekit,social', env=env)
             run('wasm-pack', 'build', 'crates/dcl_scene_wasm', '--target', 'web', *flags,
                 '--out-dir', '../../deploy/web/engine/pkg-scene', '--no-default-features', env=env)
         pkg = SOURCE / 'deploy/web/engine/pkg'
@@ -106,14 +106,7 @@ def prepare_engine(no_opt, engine_cache, shared_build, features, env):
     return engine
 
 
-def web_features(performance_profiler):
-    return ['livekit', 'social', *(['performance-profiler'] if performance_profiler else [])]
-
-
-def web(no_opt=False, engine_cache=None, shared_build=False, performance_profiler=False):
-    # the release engine leaves out `performance-profiler`: its spans and allocation counter cost
-    # every frame even while the profiler records nothing
-    features = web_features(performance_profiler)
+def web(no_opt=False, engine_cache=None, shared_build=False):
     env = build_environment()
     revision = os.environ.get('GITHUB_SHA', 'local')
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -123,7 +116,7 @@ def web(no_opt=False, engine_cache=None, shared_build=False, performance_profile
             pool.submit(run, 'corepack', 'pnpm@12.21.0', '--dir', 'react-web/bridge-scene',
                         'install', '--frozen-lockfile', '--ignore-scripts', env=env),
         ]
-        engine = prepare_engine(no_opt, engine_cache, shared_build, features, env)
+        engine = prepare_engine(no_opt, engine_cache, shared_build, env)
         for installation in installations:
             installation.result()
     run('node', './react-web/scripts/shared-inputs.mjs', '--check', env=env)
@@ -171,25 +164,20 @@ def main():
                         help='CI-only compiled WASM cache, restored with an exact input key')
     parser.add_argument('--shared-build', action='store_true',
                         help='Compile both WASM modules in one Cargo feature graph; requires wasm-bindgen and wasm-opt')
-    parser.add_argument('--performance-profiler', action='store_true',
-                        help="Compile in the Profiler section's spans and allocation counter (off in release builds)")
     parser.add_argument('--target-only', action='store_true',
                         help='Run only the Cargo steps of a shared build (the two modules and the bindings '
                              'test build) and stop; CI fills a target cache with them')
     args = parser.parse_args()
-    if args.performance_profiler and args.engine_cache:
-        parser.error('--performance-profiler builds a different engine than the cache holds')
     if args.target_only:
         if args.engine_cache or args.shared_build:
             parser.error('--target-only packs no engine: it takes neither --engine-cache nor --shared-build')
         env = build_environment()
-        cargo_wasm(args.no_opt, web_features(args.performance_profiler), env)
+        cargo_wasm(args.no_opt, env)
         # The bindings script compiles a test build in the same target; a build that restores
         # the target without it compiles that again.
         run('bash', './scripts/gen-ts-bindings.sh', env=env)
         return
-    web(args.no_opt, args.engine_cache.resolve() if args.engine_cache else None, args.shared_build,
-        args.performance_profiler)
+    web(args.no_opt, args.engine_cache.resolve() if args.engine_cache else None, args.shared_build)
 
 
 if __name__ == '__main__':

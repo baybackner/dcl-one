@@ -44,7 +44,7 @@ impl Plugin for AutopilotPlugin {
 }
 
 /// The phase machine, apart from the console command so a test can build it alone.
-pub(crate) struct RunControlPlugin;
+struct RunControlPlugin;
 
 impl Plugin for RunControlPlugin {
     fn build(&self, app: &mut App) {

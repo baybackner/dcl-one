@@ -1,6 +1,6 @@
 //! `benchmark report`: the Markdown report of a benchmark run, from the result artifacts the leg
 //! jobs upload. It is `scripts/ProduceSummary.cs` of `decentraland/performance-testing` ported
-//! one to one, so its numbers, verdicts and caveats are the harness's; the header, the section
+//! one to one, so its numbers, verdicts and notes are the harness's; the header, the section
 //! names and the note and headline for missing baseline runs are dcl-one's. It reads files only:
 //! the workflow posts what it writes.
 //!
@@ -10,11 +10,9 @@
 //! read becomes a note, as do the expected labels that left no section.
 
 mod exceptions;
-mod perf_summary;
 mod render;
 mod stats;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -23,20 +21,16 @@ use crate::cli::{BASE_BUILD, CHANGE_BUILD};
 use crate::failure::Failure;
 use crate::out;
 
-use exceptions::ExceptionKindCounts;
+use exceptions::Kinds;
 pub use exceptions::{EXCEPTION_MARKER, EXIT_MARKER};
-use perf_summary::ExplorerPerfSummary;
-use stats::{
-    FrameTimeVerdict, IncidentsPerRunVerdict, MedianAndRange, PeakMemoryVerdict,
-    SessionsNotComparable, SignificantMetricChange,
-};
+use stats::{Aggregate, ExceptionVerdict, Finding, Incomparable, Verdict};
 
 /// The exit code when no section has data; the report is written anyway.
 pub const EXIT_NO_DATA: i32 = 2;
 
 const RUNS_ON: &str = "runs_on.txt";
 
-pub struct ReportOptions {
+pub struct Options {
     /// Searched for sections, itself included.
     pub dir: PathBuf,
     pub title: String,
@@ -53,7 +47,7 @@ pub struct ReportOptions {
     pub expected_labels: Vec<String>,
 }
 
-pub struct BenchmarkReport {
+pub struct Report {
     pub markdown: String,
     /// Whether any section has data.
     pub has_data: bool,
@@ -62,121 +56,82 @@ pub struct BenchmarkReport {
 }
 
 /// One measured run of a build: its frame-time metrics and the exceptions its log holds.
-struct BuildBenchmarkRun {
-    sample_count: u64,
-    frame_time_ms: [f32; 6],
-    exception_count: u64,
-    exception_kinds: ExceptionKindCounts,
-    /// The explorer's `perf_summary` lines, when the run wrote them.
-    perf_summary: Option<ExplorerPerfSummary>,
+struct Run {
+    samples: u64,
+    metrics: [f32; 6],
+    exceptions: u64,
+    kinds: Kinds,
 }
 
 /// A build's runs in a section, outliers excluded.
-struct BuildBenchmarkRunsStatistics {
-    run_count: usize,
+struct Build {
+    runs: usize,
     /// The median sample count.
-    median_sample_count: u64,
-    frame_time_ms: [MedianAndRange; 6],
+    samples: u64,
+    metrics: [Aggregate; 6],
     /// Per run, not in total: after a crash or an exclusion the builds have different run counts.
-    exceptions_per_run: f64,
-    exception_kinds: ExceptionKindCounts,
-    /// The runs whose summary measured the hiccup count, which its row comes from.
-    cpu_hiccup_count_run_count: usize,
-    /// Frames over the hiccup threshold per run, across those runs.
-    cpu_hiccups_per_run: MedianAndRange,
-    /// The threshold in effect, the median across those runs.
-    cpu_hiccup_threshold_ms: Option<f32>,
-    /// The runs whose summary measured the peak memory, which its row comes from.
-    peak_memory_run_count: usize,
-    /// Peak engine memory per run, MiB, across those runs.
-    peak_memory_mib: MedianAndRange,
-    /// Self time per run, ms, of the scopes the summaries name, over every run with a summary
-    /// (0 in a run whose top rows leave the scope out), highest first.
-    scope_self_ms_per_run: Vec<(String, f32)>,
+    exceptions: f64,
+    kinds: Kinds,
 }
 
-struct BaselineComparison {
-    base: BuildBenchmarkRunsStatistics,
-    frame_time_verdicts: [FrameTimeVerdict; 6],
-    exceptions_per_run_verdict: IncidentsPerRunVerdict,
-    cpu_hiccups_per_run_verdict: IncidentsPerRunVerdict,
-    peak_memory_verdict: PeakMemoryVerdict,
+struct Comparison {
+    base: Build,
+    verdicts: [Verdict; 6],
+    exceptions: ExceptionVerdict,
 }
 
 /// A caveat shown under a section's table.
-enum RunnerCaveat {
+enum Note {
     MissingRuns {
         build: &'static str,
         runs: usize,
         expected: u64,
     },
-    OutlierRunExcluded {
+    Outlier {
         build: &'static str,
         exceptions: u64,
         others: Vec<u64>,
     },
-    SessionsNotComparable(SessionsNotComparable),
-    /// Exception kinds the change threw at least twice and the baseline never did.
-    NewExceptionKinds(Vec<(String, u64)>),
+    Incomparable(Incomparable),
+    /// Kinds the change threw at least twice and the baseline never did.
+    NewKinds(Vec<(String, u64)>),
     /// No baseline run produced data: the table shows the change alone, with no verdicts.
-    NoBaselineData,
+    NoBaseline,
 }
 
-struct RunnerSection {
+struct Section {
     title: String,
-    change: BuildBenchmarkRunsStatistics,
+    change: Build,
     /// None when no baseline run produced data: the table shows the change alone.
-    baseline_comparison: Option<BaselineComparison>,
-    caveats: Vec<RunnerCaveat>,
+    comparison: Option<Comparison>,
+    notes: Vec<Note>,
 }
 
-impl RunnerSection {
+impl Section {
     /// Its 🟢 and 🔴 verdicts, for the headline.
-    fn significant_metric_changes(&self) -> Vec<SignificantMetricChange> {
-        let Some(comparison) = &self.baseline_comparison else {
+    fn findings(&self) -> Vec<Finding> {
+        let Some(comparison) = &self.comparison else {
             return Vec::new();
         };
-        let found = |metric, improved, relative_change| SignificantMetricChange {
+        let found = |metric, improved, magnitude| Finding {
             runner: self.title.clone(),
             metric,
             improved,
-            relative_change,
+            magnitude,
         };
-        let mut findings: Vec<SignificantMetricChange> = comparison
-            .frame_time_verdicts
+        let mut findings: Vec<Finding> = comparison
+            .verdicts
             .iter()
-            .zip(stats::FRAME_TIME_METRICS)
+            .zip(stats::METRICS)
             .filter_map(|(verdict, metric)| match *verdict {
-                FrameTimeVerdict::Faster(by) => Some(found(metric, true, by)),
-                FrameTimeVerdict::Slower(by) => Some(found(metric, false, by)),
+                Verdict::Faster(by) => Some(found(metric, true, by)),
+                Verdict::Slower(by) => Some(found(metric, false, by)),
                 _ => None,
             })
             .collect();
-        match comparison.exceptions_per_run_verdict {
-            IncidentsPerRunVerdict::More => {
-                findings.push(found(stats::EXCEPTIONS_METRIC, false, 0.0))
-            }
-            IncidentsPerRunVerdict::Fewer => {
-                findings.push(found(stats::EXCEPTIONS_METRIC, true, 0.0))
-            }
-            _ => {}
-        }
-        match comparison.cpu_hiccups_per_run_verdict {
-            IncidentsPerRunVerdict::More => {
-                findings.push(found(stats::CPU_HICCUPS_METRIC, false, 0.0))
-            }
-            IncidentsPerRunVerdict::Fewer => {
-                findings.push(found(stats::CPU_HICCUPS_METRIC, true, 0.0))
-            }
-            _ => {}
-        }
-        match comparison.peak_memory_verdict {
-            PeakMemoryVerdict::LessMemory(by) => {
-                findings.push(found(stats::PEAK_MEMORY_METRIC, true, by))
-            }
-            PeakMemoryVerdict::MoreMemory(by) => {
-                findings.push(found(stats::PEAK_MEMORY_METRIC, false, by))
-            }
+        match comparison.exceptions {
+            ExceptionVerdict::More => findings.push(found(stats::EXCEPTIONS_METRIC, false, 0.0)),
+            ExceptionVerdict::Fewer => findings.push(found(stats::EXCEPTIONS_METRIC, true, 0.0)),
             _ => {}
         }
         findings
@@ -184,7 +139,7 @@ impl RunnerSection {
 }
 
 /// The report of every section under `options.dir`. A folder that does not exist has none.
-pub fn build_report(options: &ReportOptions) -> Result<BenchmarkReport, Failure> {
+pub fn build(options: &Options) -> Result<Report, Failure> {
     let mut warnings = Vec::new();
     let mut folders = Vec::new();
     match fs::metadata(&options.dir) {
@@ -208,9 +163,9 @@ pub fn build_report(options: &ReportOptions) -> Result<BenchmarkReport, Failure>
         });
         match result {
             Ok(section) => {
-                compared |= section.baseline_comparison.is_some();
-                findings.extend(section.significant_metric_changes());
-                sections += &render::runner_section(&section);
+                compared |= section.comparison.is_some();
+                findings.extend(section.findings());
+                sections += &render::section(&section);
                 has_data = true;
             }
             Err(message) => {
@@ -236,15 +191,15 @@ pub fn build_report(options: &ReportOptions) -> Result<BenchmarkReport, Failure>
     let mut markdown = render::header(options);
     if compared {
         markdown += &render::headline(
-            &stats::headline_metrics(&findings, false),
-            &stats::headline_metrics(&findings, true),
+            &stats::headline(&findings, false),
+            &stats::headline(&findings, true),
         );
     } else if has_data {
         markdown += render::NOTHING_COMPARED;
     }
     markdown += &render::legend(options.expected_runs);
     markdown += &sections;
-    Ok(BenchmarkReport {
+    Ok(Report {
         markdown,
         has_data,
         warnings,
@@ -277,17 +232,17 @@ fn read_label(folder: &Path) -> Result<String, String> {
     Ok(text.trim_start_matches('\u{FEFF}').trim_end().to_string())
 }
 
-fn read_section(folder: &Path, label: String, expected_runs: u64) -> Result<RunnerSection, String> {
+fn read_section(folder: &Path, label: String, expected_runs: u64) -> Result<Section, String> {
     let change = read_runs(folder, CHANGE_BUILD)?;
     if change.is_empty() {
         return Err(format!("no {CHANGE_BUILD} run CSVs were found"));
     }
     let base = read_runs(folder, BASE_BUILD)?;
-    Ok(compare_builds(label, change, base, expected_runs))
+    Ok(compare(label, change, base, expected_runs))
 }
 
 /// A build's runs (`<build>_<i>.csv` and its `.log`) in name order.
-fn read_runs(folder: &Path, build: &str) -> Result<Vec<BuildBenchmarkRun>, String> {
+fn read_runs(folder: &Path, build: &str) -> Result<Vec<Run>, String> {
     let mut csvs = Vec::new();
     let entries = fs::read_dir(folder).map_err(|error| error.to_string())?;
     for entry in entries {
@@ -304,221 +259,117 @@ fn read_runs(folder: &Path, build: &str) -> Result<Vec<BuildBenchmarkRun>, Strin
     csvs.sort();
     csvs.iter()
         .map(|csv| {
-            let (sample_count, frame_time_ms) = stats::read_run_frame_times(csv)?;
+            let (samples, metrics) = stats::read_run(csv)?;
             let log = csv.with_extension("log");
-            let (exception_count, exception_kinds) = exceptions::count(&log).map_err(|error| {
+            let (exceptions, kinds) = exceptions::count(&log).map_err(|error| {
                 format!("{}: {}", file_name(&log), out::safe(&error.to_string()))
             })?;
-            let perf_summary = perf_summary::read_last_perf_summary(&log).map_err(|error| {
-                format!("{}: {}", file_name(&log), out::safe(&error.to_string()))
-            })?;
-            Ok(BuildBenchmarkRun {
-                sample_count,
-                frame_time_ms,
-                exception_count,
-                exception_kinds,
-                perf_summary,
+            Ok(Run {
+                samples,
+                metrics,
+                exceptions,
+                kinds,
             })
         })
         .collect()
 }
 
-/// Runs whose summary measured the value a build needs for its hiccup or memory verdict.
-const MIN_MEASURED_RUNS: usize = 2;
-const TOO_FEW_MEASURED_RUNS: &str = "fewer than 2 runs measured it";
-
-/// The section's numbers, verdicts and caveats, as `ProduceSummary.cs` works them out.
-fn compare_builds(
-    label: String,
-    change: Vec<BuildBenchmarkRun>,
-    base: Vec<BuildBenchmarkRun>,
-    expected_runs: u64,
-) -> RunnerSection {
-    let mut caveats = Vec::new();
-    let change = build_benchmark_runs_statistics(&exclude_outlier_runs(
-        change,
-        "Change",
-        expected_runs,
-        &mut caveats,
-    ));
-    let base = build_benchmark_runs_statistics(&exclude_outlier_runs(
-        base,
-        "Baseline",
-        expected_runs,
-        &mut caveats,
-    ));
-    if base.run_count == 0 {
-        caveats.push(RunnerCaveat::NoBaselineData);
+/// The section's numbers, verdicts and notes, as `ProduceSummary.cs` works them out.
+fn compare(label: String, change: Vec<Run>, base: Vec<Run>, expected_runs: u64) -> Section {
+    let mut notes = Vec::new();
+    let change = summarize(&keep(change, "Change", expected_runs, &mut notes));
+    let base = summarize(&keep(base, "Baseline", expected_runs, &mut notes));
+    if base.runs == 0 {
+        notes.push(Note::NoBaseline);
     }
 
-    let baseline_comparison = (base.run_count > 0).then(|| {
-        let incomparable = stats::sessions_not_comparable(
-            change.run_count,
-            base.run_count,
-            change.median_sample_count,
-            base.median_sample_count,
-        );
+    let comparison = (base.runs > 0).then(|| {
+        let incomparable =
+            stats::incomparable(change.runs, base.runs, change.samples, base.samples);
         if let Some(incomparable) = incomparable {
-            caveats.push(RunnerCaveat::SessionsNotComparable(incomparable));
+            notes.push(Note::Incomparable(incomparable));
         }
 
         // a kind of exception only the change throws is a stronger signal than a higher count
         let mut new_kinds: Vec<(String, u64)> = change
-            .exception_kinds
+            .kinds
             .iter()
-            .filter(|(kind, count)| *count >= 2 && !base.exception_kinds.contains(kind))
+            .filter(|(kind, count)| *count >= 2 && !base.kinds.contains(kind))
             .map(|(kind, count)| (kind.to_string(), count))
             .collect();
         new_kinds.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         if !new_kinds.is_empty() {
-            caveats.push(RunnerCaveat::NewExceptionKinds(new_kinds));
+            notes.push(Note::NewKinds(new_kinds));
         }
 
-        let gpu_broken = stats::gpu_timing_broken(&change.frame_time_ms, &base.frame_time_ms);
-        let frame_time_verdicts = std::array::from_fn(|m| {
-            stats::frame_time_verdict(
+        let gpu_broken = stats::gpu_timing_broken(&change.metrics, &base.metrics);
+        let verdicts = std::array::from_fn(|m| {
+            stats::verdict(
                 m,
-                &change.frame_time_ms[m],
-                &base.frame_time_ms[m],
+                &change.metrics[m],
+                &base.metrics[m],
                 incomparable,
                 gpu_broken,
             )
         });
-        let exceptions_per_run_verdict = stats::incidents_per_run_verdict(
-            change.exceptions_per_run,
-            base.exceptions_per_run,
-            incomparable,
-        );
-        let measured_by_both = |change_runs: usize, base_runs: usize| {
-            change_runs >= MIN_MEASURED_RUNS && base_runs >= MIN_MEASURED_RUNS
-        };
-        let cpu_hiccups_per_run_verdict = if measured_by_both(
-            change.cpu_hiccup_count_run_count,
-            base.cpu_hiccup_count_run_count,
-        ) {
-            stats::hiccups_per_run_verdict(
-                &change.cpu_hiccups_per_run,
-                &base.cpu_hiccups_per_run,
-                change.cpu_hiccup_threshold_ms,
-                base.cpu_hiccup_threshold_ms,
-                incomparable,
-            )
-        } else {
-            IncidentsPerRunVerdict::Withheld(TOO_FEW_MEASURED_RUNS)
-        };
-        let peak_memory_verdict =
-            if measured_by_both(change.peak_memory_run_count, base.peak_memory_run_count) {
-                stats::peak_memory_verdict(
-                    &change.peak_memory_mib,
-                    &base.peak_memory_mib,
-                    incomparable,
-                )
-            } else {
-                PeakMemoryVerdict::Withheld(TOO_FEW_MEASURED_RUNS)
-            };
-        BaselineComparison {
+        let exceptions = stats::exception_verdict(change.exceptions, base.exceptions, incomparable);
+        Comparison {
             base,
-            frame_time_verdicts,
-            exceptions_per_run_verdict,
-            cpu_hiccups_per_run_verdict,
-            peak_memory_verdict,
+            verdicts,
+            exceptions,
         }
     });
 
-    RunnerSection {
+    Section {
         title: render::display_name(&label),
         change,
-        baseline_comparison,
-        caveats,
+        comparison,
+        notes,
     }
 }
 
 /// Drops the outlier runs from a build; a build with fewer runs than expected, and every dropped
 /// run, gets a note.
-fn exclude_outlier_runs(
-    runs: Vec<BuildBenchmarkRun>,
+fn keep(
+    runs: Vec<Run>,
     build: &'static str,
     expected_runs: u64,
-    caveats: &mut Vec<RunnerCaveat>,
-) -> Vec<BuildBenchmarkRun> {
+    notes: &mut Vec<Note>,
+) -> Vec<Run> {
     if !runs.is_empty() && (runs.len() as u64) < expected_runs {
-        caveats.push(RunnerCaveat::MissingRuns {
+        notes.push(Note::MissingRuns {
             build,
             runs: runs.len(),
             expected: expected_runs,
         });
     }
-    let all: Vec<u64> = runs.iter().map(|run| run.exception_count).collect();
-    let (dropped, kept): (Vec<BuildBenchmarkRun>, Vec<BuildBenchmarkRun>) = runs
+    let all: Vec<u64> = runs.iter().map(|run| run.exceptions).collect();
+    let (dropped, kept): (Vec<Run>, Vec<Run>) = runs
         .into_iter()
-        .partition(|run| stats::is_outlier(run.exception_count, &all));
-    let others: Vec<u64> = kept.iter().map(|run| run.exception_count).collect();
+        .partition(|run| stats::is_outlier(run.exceptions, &all));
+    let others: Vec<u64> = kept.iter().map(|run| run.exceptions).collect();
     for run in dropped {
-        caveats.push(RunnerCaveat::OutlierRunExcluded {
+        notes.push(Note::Outlier {
             build,
-            exceptions: run.exception_count,
+            exceptions: run.exceptions,
             others: others.clone(),
         });
     }
     kept
 }
 
-fn build_benchmark_runs_statistics(runs: &[BuildBenchmarkRun]) -> BuildBenchmarkRunsStatistics {
-    let exceptions: u64 = runs.iter().map(|run| run.exception_count).sum();
-    let summaries: Vec<&ExplorerPerfSummary> = runs
-        .iter()
-        .filter_map(|run| run.perf_summary.as_ref())
-        .collect();
-    // a scope's self time summed over every summary (two rows of one run that sanitize to the
-    // same name sum), divided by the summaries: a run whose top rows leave the scope out counts
-    // as 0
-    let mut scope_sums: BTreeMap<&str, f32> = BTreeMap::new();
-    for (name, ms) in summaries
-        .iter()
-        .flat_map(|summary| &summary.top_scope_self_ms)
-    {
-        *scope_sums.entry(name).or_default() += ms;
-    }
-    let mut scope_self_ms_per_run: Vec<(String, f32)> = scope_sums
-        .into_iter()
-        .map(|(name, sum)| (name.to_owned(), sum / summaries.len().max(1) as f32))
-        .collect();
-    scope_self_ms_per_run.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    // a summary measures a value or writes `n/a`, which is left out
-    let cpu_hiccup_counts: Vec<f32> = summaries
-        .iter()
-        .filter_map(|summary| summary.cpu_frames_over_hiccup_threshold_count)
-        .map(|count| count as f32)
-        .collect();
-    let peak_memories_mib: Vec<f32> = summaries
-        .iter()
-        .filter_map(|summary| summary.used_peak_mib)
-        .map(|mib| mib as f32)
-        .collect();
-    BuildBenchmarkRunsStatistics {
-        run_count: runs.len(),
-        median_sample_count: stats::median_int(runs.iter().map(|run| run.sample_count)),
-        frame_time_ms: std::array::from_fn(|m| {
-            stats::median_and_range(runs.iter().map(|run| run.frame_time_ms[m]))
-        }),
-        exceptions_per_run: if runs.is_empty() {
+fn summarize(runs: &[Run]) -> Build {
+    let exceptions: u64 = runs.iter().map(|run| run.exceptions).sum();
+    Build {
+        runs: runs.len(),
+        samples: stats::median_int(runs.iter().map(|run| run.samples)),
+        metrics: std::array::from_fn(|m| stats::aggregate(runs.iter().map(|run| run.metrics[m]))),
+        exceptions: if runs.is_empty() {
             0.0
         } else {
             exceptions as f64 / runs.len() as f64
         },
-        exception_kinds: ExceptionKindCounts::combine(runs.iter().map(|run| &run.exception_kinds)),
-        cpu_hiccup_count_run_count: cpu_hiccup_counts.len(),
-        cpu_hiccups_per_run: stats::median_and_range(cpu_hiccup_counts),
-        cpu_hiccup_threshold_ms: {
-            let thresholds: Vec<f32> = summaries
-                .iter()
-                .filter_map(|summary| summary.cpu_hiccup_threshold_ms)
-                .collect();
-            (!thresholds.is_empty()).then(|| stats::median_and_range(thresholds).median)
-        },
-        peak_memory_run_count: peak_memories_mib.len(),
-        peak_memory_mib: stats::median_and_range(peak_memories_mib),
-        scope_self_ms_per_run,
+        kinds: Kinds::combine(runs.iter().map(|run| &run.kinds)),
     }
 }
 
@@ -590,89 +441,6 @@ mod tests {
 
     fn lines(bytes: &[u8]) -> Vec<String> {
         Lines::new(bytes).map(Result::unwrap).collect()
-    }
-
-    #[test]
-    fn the_hiccup_and_memory_verdicts_each_need_two_runs_a_build_that_measured_the_value() {
-        let run = |summary: Option<ExplorerPerfSummary>| BuildBenchmarkRun {
-            sample_count: 1000,
-            frame_time_ms: [10.0; 6],
-            exception_count: 0,
-            exception_kinds: ExceptionKindCounts::default(),
-            perf_summary: summary,
-        };
-        let summary = |hiccups: Option<u64>, mib: Option<u64>| {
-            Some(ExplorerPerfSummary {
-                cpu_frames_over_hiccup_threshold_count: hiccups,
-                used_peak_mib: mib,
-                ..Default::default()
-            })
-        };
-        let compare = |change, base| {
-            compare_builds("apple-m1".to_owned(), change, base, 3)
-                .baseline_comparison
-                .unwrap()
-        };
-        // three runs a build, the summary in one change run only
-        let comparison = compare(
-            vec![run(summary(Some(9), Some(400))), run(None), run(None)],
-            vec![
-                run(summary(Some(1), Some(300))),
-                run(summary(Some(1), Some(300))),
-                run(None),
-            ],
-        );
-        assert_eq!(
-            comparison.cpu_hiccups_per_run_verdict,
-            IncidentsPerRunVerdict::Withheld(TOO_FEW_MEASURED_RUNS)
-        );
-        assert_eq!(
-            comparison.peak_memory_verdict,
-            PeakMemoryVerdict::Withheld(TOO_FEW_MEASURED_RUNS)
-        );
-
-        // two summaries a build, the change's hiccup counts `n/a`: no hiccup verdict
-        let comparison = compare(
-            vec![
-                run(summary(None, Some(400))),
-                run(summary(None, Some(400))),
-                run(None),
-            ],
-            vec![
-                run(summary(Some(1), Some(300))),
-                run(summary(Some(1), Some(300))),
-                run(None),
-            ],
-        );
-        assert_eq!(
-            comparison.cpu_hiccups_per_run_verdict,
-            IncidentsPerRunVerdict::Withheld(TOO_FEW_MEASURED_RUNS)
-        );
-        assert!(matches!(
-            comparison.peak_memory_verdict,
-            PeakMemoryVerdict::MoreMemory(_)
-        ));
-
-        let comparison = compare(
-            vec![
-                run(summary(Some(9), Some(400))),
-                run(summary(Some(9), Some(400))),
-                run(None),
-            ],
-            vec![
-                run(summary(Some(1), Some(300))),
-                run(summary(Some(1), Some(300))),
-                run(None),
-            ],
-        );
-        assert_eq!(
-            comparison.cpu_hiccups_per_run_verdict,
-            IncidentsPerRunVerdict::More
-        );
-        assert!(matches!(
-            comparison.peak_memory_verdict,
-            PeakMemoryVerdict::MoreMemory(_)
-        ));
     }
 
     #[test]
