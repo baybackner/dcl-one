@@ -295,6 +295,17 @@ describe("EventsView", () => {
     expect(http.postJSON).not.toHaveBeenCalled();
   });
 
+  it("should not send a signed-in member to sign in from Remind me, and save the reminder", async () => {
+    auth.identity = { signer: "0xAB" } as unknown as AuthIdentity;
+    http.postJSON.mockResolvedValue({ ok: true });
+    const { user } = setup("/events");
+    const button = await screen.findByRole("button", { name: "Remind me: Watch Party" });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    await user.click(button);
+    await waitFor(() => expect(http.postJSON).toHaveBeenCalled());
+    expect(signIn.openSignIn).not.toHaveBeenCalled();
+  });
+
   it("should roll a failed reminder back and say so", async () => {
     auth.identity = { signer: "0xAB" } as unknown as AuthIdentity;
     let fail: (error: Error) => void = () => {};

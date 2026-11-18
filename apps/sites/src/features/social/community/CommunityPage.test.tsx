@@ -25,7 +25,7 @@ const net = vi.hoisted(() => ({
 }));
 const auth = vi.hoisted(() => ({ identity: null as null | { signer: string } }));
 const signIn = vi.hoisted(() => ({ openSignIn: vi.fn() }));
-const reminders = vi.hoisted(() => ({ failed: null as string | null }));
+const reminders = vi.hoisted(() => ({ failed: null as string | null, onSignIn: null as null | (() => void) }));
 
 vi.mock("@/data/lib/catalyst/social/community-detail", async (original) => ({
   ...(await original<typeof import("@/data/lib/catalyst/social/community-detail")>()),
@@ -37,7 +37,10 @@ vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { childre
 vi.mock("../../events/useCreatorProfiles", () => ({ useCreatorProfiles: () => ({}) }));
 vi.mock("../../events/useEventReminders", () => ({
   REMIND_FAILED: "Couldn't update your reminder. Try again.",
-  useEventReminders: () => ({ failed: reminders.failed, get: () => ({ active: false, pending: false, toggle: () => {} }) }),
+  useEventReminders: (_identity: unknown, onSignIn: () => void) => {
+    reminders.onSignIn = onSignIn;
+    return { failed: reminders.failed, get: () => ({ active: false, pending: false, toggle: () => {} }) };
+  },
 }));
 
 import type { CommunityInfo } from "@/data/lib/catalyst/social/community-detail";
@@ -88,6 +91,7 @@ beforeEach(() => {
   signIn.openSignIn.mockReset();
   auth.identity = null;
   reminders.failed = null;
+  reminders.onSignIn = null;
   net.fetchCommunityMembers.mockResolvedValue({
     members: [{ memberAddress: ME, role: "owner", name: "Alice", profilePictureUrl: null, hasClaimedName: true }],
     total: 1,
@@ -545,6 +549,17 @@ describe("CommunityPage", () => {
     show();
 
     expect(await screen.findByText("Couldn't update your reminder. Try again.")).toBeTruthy();
+  });
+
+  it("asks a signed-out visitor to sign in when a Remind me needs it", async () => {
+    serve(community());
+    show();
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Upcoming Events" }));
+    await waitFor(() => expect(reminders.onSignIn).not.toBeNull());
+    reminders.onSignIn!();
+
+    expect(signIn.openSignIn).toHaveBeenCalledWith({ inPlace: true });
   });
 
   it("switches between members and events with the tabs", async () => {

@@ -16,7 +16,8 @@ vi.hoisted(() =>
   }),
 );
 
-vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ identity: null, address: null, isConnected: false }) }));
+const auth = vi.hoisted(() => ({ value: { identity: null as unknown, address: null as string | null, isConnected: false } }));
+vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => auth.value }));
 vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
 vi.mock("@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground", () => ({
   AnimatedBackground: () => <div data-testid="animated-background" />,
@@ -29,6 +30,7 @@ function SignInState() {
 afterEach(() => {
   closeSignIn();
   cleanup();
+  auth.value = { identity: null, address: null, isConnected: false };
 });
 
 describe("when a signed-out visitor fills the report form", () => {
@@ -45,6 +47,20 @@ describe("when a signed-out visitor fills the report form", () => {
     await user.click(screen.getByRole("button", { name: "Sign In" }));
     expect(screen.getByLabelText("Sign-in modal").textContent).toBe("open");
     expect(description).toHaveProperty("value", "The player sent a phishing link");
+  });
+});
+
+describe("when a signed-in visitor opens the report form", () => {
+  it("should not offer to sign in", () => {
+    const signer = "0x1111111111111111111111111111111111111111";
+    auth.value = { identity: { signer }, address: signer, isConnected: true };
+    render(
+      <MemoryRouter>
+        <ReportForm trackCtx={{ sid: "sid", story: "report" } as never} />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("button", { name: "Sign In" })).toBeNull();
+    expect(screen.queryByText("Please sign in with your wallet to submit a report.")).toBeNull();
   });
 });
 
