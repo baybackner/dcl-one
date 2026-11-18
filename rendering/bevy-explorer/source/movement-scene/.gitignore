@@ -2,7 +2,6 @@ node_modules
 .DS_Store
 bin
 
-# Blender source files are large (50MB+) — keep them out of git (use LFS or
-# external storage). The asset-tooling scripts under source/ ARE tracked.
+# Blender source files stay out of git.
 *.blend
 *.blend1

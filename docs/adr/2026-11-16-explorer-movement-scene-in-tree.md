@@ -22,10 +22,10 @@ scene (`source/react-web/bridge-scene`).
 
 - **Licence.** Its author agreed to publish it here under the Explorer's Apache-2.0 license
   (`rendering/bevy-explorer/source/LICENSE`).
-- **What is imported.** The scene's source, assets, asset tooling (`source/`) and manifests, at
-  upstream revision `72751a896fa7a624eef14720085894f570561078`. Editor and assistant configuration
-  files are left out (`.editor/`, `cursor*`, `CLAUDE.md`, `dclcontext/`), and so is the change log
-  (`CHANGES.md`).
+- **What is imported.** The scene's source, the assets it loads and its manifests, at upstream
+  revision `72751a896fa7a624eef14720085894f570561078`. Editor and assistant configuration files are
+  left out (`.editor/`, `cursor*`, `CLAUDE.md`, `dclcontext/`), and so are the asset tooling
+  (`source/`) with the models it reads, and the change log (`CHANGES.md`).
 - **Git LFS.** The scene's models, images and sounds (`*.glb`, `*.png`, `*.wav`) are stored in
   Git LFS, as the e2e scenes' are.
 - **Tooling.** The scene keeps its own `package.json` and is built with the SDK scene tooling.

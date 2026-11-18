@@ -123,8 +123,7 @@ const DOUBLE_JUMP_BLEND = 0.05; // s
 const DOUBLE_JUMP_EXIT = 0.778; // fraction of the clip
 // Directional glide avatar poses (the glider model itself is a separate prop
 // entity — see src/glider.ts).
-// The glider model is embedded in these clips (source/merge-glider-into-avatar.mjs),
-// so it renders and networks for free via the scene-driven movement animation — no
+// The glider model is embedded in these clips, so it renders and networks for free via the scene-driven movement animation — no
 // separate prop rig. Left/right banking is procedural (tiltRoll), not per-clip.
 const GLIDE_AVATAR = {
   forward: ANIM + 'Gliding_AvatarForwardRig.glb', // pitched forward (moving fast)
