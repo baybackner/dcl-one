@@ -692,12 +692,6 @@ impl AvatarRenderDefinition {
             | SCENE_MATERIAL_TOON_MESH_TAG
     }
 
-    /// Whether a mesh of `model` glows while its avatar is hovered: a wearable opts out with
-    /// `outlineCompatible: false`, whatever the outline setting.
-    fn hover_glows(&self, model: Option<&WearableModel>) -> bool {
-        model.is_none_or(|model| model.outline_compatible)
-    }
-
     /// the body model is guaranteed by spawn_scenes
     fn body_tag(&self) -> u32 {
         self.model_tag(self.body.model.as_ref())
@@ -721,6 +715,12 @@ pub struct RetryRenderAvatar;
 pub struct AvatarLoadFailures {
     bodies: HashSet<WearableUrn>,
     wearables: HashSet<WearableUrn>,
+}
+
+/// Whether a mesh of `model` glows while its avatar is hovered: a wearable opts out with
+/// `outlineCompatible: false`, whatever the outline setting.
+fn hover_glows(model: Option<&WearableModel>) -> bool {
+    model.is_none_or(|model| model.outline_compatible)
 }
 
 impl AvatarLoadFailures {
@@ -1598,7 +1598,7 @@ fn process_avatar(
                         MeshMaterial3d(instance_mat.clone()),
                         MeshTag(def.body_tag()),
                     ));
-                    set_hover_glows(&mut mesh, def.hover_glows(def.body.model.as_ref()));
+                    set_hover_glows(&mut mesh, hover_glows(def.body.model.as_ref()));
                 }
             }
 
@@ -1957,7 +1957,7 @@ fn process_avatar(
                             MeshMaterial3d(instance_mat.clone()),
                             MeshTag(def.model_tag(Some(model))),
                         ));
-                        set_hover_glows(&mut mesh, def.hover_glows(Some(model)));
+                        set_hover_glows(&mut mesh, hover_glows(Some(model)));
                     }
                 }
             }

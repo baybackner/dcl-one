@@ -30,8 +30,7 @@ pub const SCENE_MATERIAL_NO_DITHERING_MESH_TAG: u32 = 0x02000000;
 pub const SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG: u32 = 0x04000000;
 // cel-shade this mesh (avatars) instead of standard PBR — see toon.wgsl
 pub const SCENE_MATERIAL_TOON_MESH_TAG: u32 = 0x08000000;
-// the tone-on-tone avatar outline (bound_material.wgsl, mask_material.wgsl); a hovered avatar
-// glows through `highlight` instead of a tag
+// the tone-on-tone avatar outline (bound_material.wgsl, mask_material.wgsl)
 pub const SCENE_MATERIAL_OUTLINE_MESH_TAG: u32 = 0x10000000;
 /// an avatar being revealed bottom-up from its ghost: the shaders discard fragments above the
 /// reveal height, carried in the tag's low byte: 0 is no reveal, and 1..=255 span the range from

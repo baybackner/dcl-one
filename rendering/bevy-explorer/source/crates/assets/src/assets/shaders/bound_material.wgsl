@@ -150,8 +150,8 @@ fn fragment(
     // apply lighting
     if (pbr_input.material.flags & bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         if (mesh_tag & #{TOON_MESH_TAG}) != 0u {
-            // avatars: cel shading (own light model; uses the cast shadow only
-            // to pick the lit-vs-shadowed band pair)
+            // avatars: cel shading, a light model of its own (toon.wgsl) lit by the sun and
+            // the ambient light; the sun's cast shadow pushes surfaces towards the shades
             out.color = toon_lighting(pbr_input);
         } else {
             out.color = apply_pbr_lighting(pbr_input);

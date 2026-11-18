@@ -856,9 +856,9 @@ fn a_wearable_opts_out_of_the_hover_glow() {
     };
     for avatar_outline in [true, false] {
         let def = render_definition(avatar_outline, false);
-        assert!(def.hover_glows(def.body.model.as_ref()));
-        assert!(def.hover_glows(Some(&model(true))));
-        assert!(!def.hover_glows(Some(&model(false))));
+        assert!(hover_glows(def.body.model.as_ref()));
+        assert!(hover_glows(Some(&model(true))));
+        assert!(!hover_glows(Some(&model(false))));
         assert_eq!(
             def.model_tag(Some(&model(false))) & SCENE_MATERIAL_OUTLINE_MESH_TAG,
             0
