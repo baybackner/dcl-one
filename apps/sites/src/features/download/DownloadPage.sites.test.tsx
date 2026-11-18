@@ -11,6 +11,15 @@ vi.mock("@ui/web/frames/chrome-auth", () => ({ useChromeAuth: () => ({ signedIn:
 
 afterEach(cleanup);
 
+it("links home through the decorative 48px Decentraland logo", () => {
+  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads={null} />);
+  const home = screen.getAllByRole("link", { name: "Decentraland" }).find((a) => a.getAttribute("href") === "/");
+  const logo = home!.querySelector("img");
+  expect(logo!.getAttribute("alt")).toBe("");
+  expect([logo!.getAttribute("width"), logo!.getAttribute("height")]).toEqual(["48", "48"]);
+  expect(logo!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+});
+
 const WINDOWS = { os: "windows", arch: "amd64", url: "https://installers.test/Decentraland_installer.exe" } as const;
 const MACOS = { os: "macos", arch: "arm64", url: "https://installers.test/Decentraland_installer.dmg" } as const;
 

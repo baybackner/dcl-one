@@ -81,6 +81,13 @@ async function openCodeModal() {
 }
 
 describe("the sign-in page", () => {
+  it("shows the Decentraland logo, named, at 48px", () => {
+    page();
+    const logo = screen.getByRole("img", { name: "Decentraland" });
+    expect([logo.getAttribute("width"), logo.getAttribute("height")]).toEqual(["48", "48"]);
+    expect(logo.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+  });
+
   it("sends a reader who is already signed in straight on", async () => {
     setIdentity({
       signer: SIGNER,
@@ -136,6 +143,21 @@ describe("the sign-in page", () => {
       fireEvent.change(screen.getByTestId("otp-input-2"), { target: { value: "17" } });
     });
     expect(auth.verifyEmailSignIn).toHaveBeenLastCalledWith("jane.doe@example.com", "117111", { expirationMs: 30 * 86_400_000, rethrow: true });
+  });
+
+  it("shows the decorative 48px Decentraland logo in the wallet connection modal", async () => {
+    installWallet((req) => {
+      if (req.method === "eth_accounts") return [];
+      throw new Error("window.ethereum.enable is not a function");
+    });
+    page();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue with MetaMask" }));
+    });
+    const logo = screen.getByTestId("connection-modal").querySelector("img");
+    expect(logo!.getAttribute("alt")).toBe("");
+    expect([logo!.getAttribute("width"), logo!.getAttribute("height")]).toEqual(["48", "48"]);
+    expect(logo!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
   });
 
   it("moves focus into the wallet modal and keeps Tab inside it", async () => {

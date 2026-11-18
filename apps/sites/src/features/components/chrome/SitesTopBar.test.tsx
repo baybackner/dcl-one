@@ -72,6 +72,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Sites native chrome integration", () => {
+  it("draws the Decentraland logo in the banner as one decorative 40px image", () => {
+    render(<Host pathname="/places" />);
+    const logos = within(screen.getByRole("banner"))
+      .getAllByRole("presentation")
+      .filter((el) => el.tagName === "IMG" && el.getAttribute("width") === "40");
+    expect(logos).toHaveLength(1);
+    expect(logos[0]!.getAttribute("alt")).toBe("");
+    expect(logos[0]!.getAttribute("height")).toBe("40");
+    expect(logos[0]!.getAttribute("src")).toMatch(/^data:image\/svg\+xml|\.svg(\?|$)/);
+  });
+
   it("renders one banner and keeps signed-out links and dropdown destinations", () => {
     render(<Host />);
     expect(screen.getAllByRole("banner")).toHaveLength(1);
