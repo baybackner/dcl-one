@@ -671,6 +671,37 @@ pub struct AvatarRenderDefinition {
     avatar_outline: bool,
 }
 
+impl AvatarRenderDefinition {
+    /// The tag of a mesh of `model`. Avatars are always toon shaded; the outline follows the
+    /// setting in the definition, and toggling it re-renders avatars (see
+    /// retag_avatars_on_style_change). Wearables can opt out of the outline via
+    /// `outlineCompatible: false`.
+    fn model_tag(&self, model: Option<&WearableModel>) -> u32 {
+        let outline = self.avatar_outline && model.is_some_and(|model| model.outline_compatible);
+        (if outline {
+            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG
+        } else {
+            0
+        }) | (if self.disable_dither {
+            SCENE_MATERIAL_NO_DITHERING_MESH_TAG
+        } else {
+            0
+        }) | SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG
+            | SCENE_MATERIAL_TOON_MESH_TAG
+    }
+
+    /// the body model is guaranteed by spawn_scenes
+    fn body_tag(&self) -> u32 {
+        self.model_tag(self.body.model.as_ref())
+    }
+
+    /// The eyes, eyebrows and mouth are drawn on the body's head, so they shade, outline and
+    /// fade as the body does.
+    fn mask_tag(&self) -> u32 {
+        self.body_tag()
+    }
+}
+
 #[derive(Component)]
 pub struct RetryRenderAvatar;
 
@@ -1461,20 +1492,6 @@ fn process_avatar(
             Vec3::new(1.24, 2.42, 0.7) + root_gt.translation(),
         );
 
-        // avatars are always toon shaded; the outline follows the setting in the definition,
-        // and toggling it re-renders avatars (see retag_avatars_on_style_change)
-        let toon_tag = SCENE_MATERIAL_TOON_MESH_TAG;
-        // wearables can opt out of the outline via `outlineCompatible: false`
-        let outline_tag = |model: &WearableModel| {
-            if def.avatar_outline && model.outline_compatible {
-                SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG
-            } else {
-                0
-            }
-        };
-        // body model is guaranteed by spawn_scenes
-        let body_outline_tag = def.body.model.as_ref().map(outline_tag).unwrap_or(0);
-
         let bounds_key = bounds_bits(&def.bounds);
         // how far the visible meshes reach above the head bone, along it and in its own units:
         // the nametag clears them. read from each skin's bind pose, so the pose the avatar is
@@ -1570,16 +1587,7 @@ fn process_avatar(
                         });
                     commands.entity(scene_ent).try_insert((
                         MeshMaterial3d(instance_mat.clone()),
-                        MeshTag(
-                            body_outline_tag
-                                | (if def.disable_dither {
-                                    SCENE_MATERIAL_NO_DITHERING_MESH_TAG
-                                } else {
-                                    0
-                                })
-                                | SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG
-                                | toon_tag,
-                        ),
+                        MeshTag(def.body_tag()),
                     ));
                 }
             }
@@ -1634,7 +1642,10 @@ fn process_avatar(
                                 });
                             commands
                                 .entity(scene_ent)
-                                .try_insert(MeshMaterial3d(mask_material))
+                                .try_insert((
+                                    MeshMaterial3d(mask_material),
+                                    MeshTag(def.mask_tag()),
+                                ))
                                 .remove::<MeshMaterial3d<SceneMaterial>>();
                         } else {
                             debug!("no mask for {suffix}");
@@ -1664,19 +1675,9 @@ fn process_avatar(
                                         .with_base_opacity(AVATAR_DITHER_BASE_OPACITY)
                                         .with_capsule_dither(),
                                 });
-                            commands.entity(scene_ent).try_insert((
-                                MeshMaterial3d(material),
-                                MeshTag(
-                                    body_outline_tag
-                                        | (if def.disable_dither {
-                                            SCENE_MATERIAL_NO_DITHERING_MESH_TAG
-                                        } else {
-                                            0
-                                        })
-                                        | SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG
-                                        | toon_tag,
-                                ),
-                            ));
+                            commands
+                                .entity(scene_ent)
+                                .try_insert((MeshMaterial3d(material), MeshTag(def.mask_tag())));
                         };
                         *vis = Visibility::Inherited;
                     }
@@ -1943,16 +1944,7 @@ fn process_avatar(
                             });
                         commands.entity(scene_ent).try_insert((
                             MeshMaterial3d(instance_mat.clone()),
-                            MeshTag(
-                                outline_tag(model)
-                                    | (if def.disable_dither {
-                                        SCENE_MATERIAL_NO_DITHERING_MESH_TAG
-                                    } else {
-                                        0
-                                    })
-                                    | SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG
-                                    | toon_tag,
-                            ),
+                            MeshTag(def.model_tag(Some(model))),
                         ));
                     }
                 }

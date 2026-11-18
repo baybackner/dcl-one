@@ -792,3 +792,55 @@ fn an_exhausted_gltf_fallback_reports_terminal_error_to_the_scene_crdt() {
     assert_eq!(errors[0].asset, other_body().as_str());
     assert!(errors[0].timestamp > 0);
 }
+
+fn render_definition(avatar_outline: bool, disable_dither: bool) -> AvatarRenderDefinition {
+    AvatarRenderDefinition {
+        body: Wearable {
+            category: WearableCategory::BODY_SHAPE,
+            hides: default(),
+            model: Some(WearableModel {
+                gltf: default(),
+                outline_compatible: true,
+                spring_bones: None,
+            }),
+            texture: None,
+            mask: None,
+        },
+        body_shape: String::new(),
+        skin_color: Color::WHITE,
+        hair_color: Color::WHITE,
+        eyes_color: Color::WHITE,
+        wearables: Vec::new(),
+        hides: default(),
+        bounds: SceneBounds::unbounded(),
+        disable_dither,
+        avatar_outline,
+    }
+}
+
+/// the face masks carry the body's tag: always toon, outlined exactly when the body is, and
+/// faded by the camera dither exactly when the body is
+#[test]
+fn mask_tag_matches_the_body() {
+    let dither = SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG;
+    let outlined = render_definition(true, false);
+    assert_eq!(
+        outlined.mask_tag(),
+        SCENE_MATERIAL_TOON_MESH_TAG | SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG | dither
+    );
+    assert_eq!(outlined.mask_tag(), outlined.body_tag());
+
+    let plain = render_definition(false, false);
+    assert_eq!(plain.mask_tag(), SCENE_MATERIAL_TOON_MESH_TAG | dither);
+    assert_eq!(plain.mask_tag(), plain.body_tag());
+
+    let undithered = render_definition(true, true);
+    assert_eq!(
+        undithered.mask_tag(),
+        SCENE_MATERIAL_TOON_MESH_TAG
+            | SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG
+            | SCENE_MATERIAL_NO_DITHERING_MESH_TAG
+            | dither
+    );
+    assert_eq!(undithered.mask_tag(), undithered.body_tag());
+}

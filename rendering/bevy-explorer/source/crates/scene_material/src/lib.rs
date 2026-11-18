@@ -64,6 +64,37 @@ pub fn unrevealed_mesh_tag(tag: u32) -> u32 {
     tag & !SCENE_MATERIAL_REVEAL_MESH_TAG_MASK
 }
 
+/// the tag bits an avatar's style is read from (the camera dither, the toon lighting and the
+/// outlines) and the toon constants, for the pipeline of every shader that styles an avatar's
+/// meshes: bound_material.wgsl and mask_material.wgsl
+pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
+    [
+        (
+            "NO_DITHERING_MESH_TAG",
+            SCENE_MATERIAL_NO_DITHERING_MESH_TAG,
+        ),
+        (
+            "CONE_ONLY_DITHER_MESH_TAG",
+            SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
+        ),
+        ("TOON_MESH_TAG", SCENE_MATERIAL_TOON_MESH_TAG),
+        ("OUTLINE_MESH_TAGS", SCENE_MATERIAL_OUTLINE_MESH_TAGS),
+        (
+            "OUTLINE_BLACK_MESH_TAG",
+            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG,
+        ),
+        ("OUTLINE_RED_MESH_TAG", SCENE_MATERIAL_OUTLINE_RED_MESH_TAG),
+        (
+            "OUTLINE_BLUE_MESH_TAG",
+            SCENE_MATERIAL_OUTLINE_BLUE_MESH_TAG,
+        ),
+    ]
+    .into_iter()
+    .map(|(name, tag)| ShaderDefVal::UInt(name.to_owned(), tag))
+    .chain(toon::toon_shader_defs())
+    .collect()
+}
+
 /// the reveal encoding, for the pipeline of every shader that imports `reveal_discard`
 pub fn reveal_shader_defs() -> [ShaderDefVal; 3] {
     [
@@ -448,36 +479,8 @@ impl MaterialExtension for SceneBound {
                 "SHOW_OUTSIDE_BOUNDS_MESH_TAG".to_owned(),
                 SCENE_MATERIAL_SHOW_OUTSIDE_BOUNDS_MESH_TAG,
             ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "NO_DITHERING_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_NO_DITHERING_MESH_TAG,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "CONE_ONLY_DITHER_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "TOON_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_TOON_MESH_TAG,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "OUTLINE_MESH_TAGS".to_owned(),
-                SCENE_MATERIAL_OUTLINE_MESH_TAGS,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "OUTLINE_BLACK_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "OUTLINE_RED_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_OUTLINE_RED_MESH_TAG,
-            ));
-            fragment.shader_defs.push(ShaderDefVal::UInt(
-                "OUTLINE_BLUE_MESH_TAG".to_owned(),
-                SCENE_MATERIAL_OUTLINE_BLUE_MESH_TAG,
-            ));
+            fragment.shader_defs.extend(avatar_style_shader_defs());
             fragment.shader_defs.extend(reveal_shader_defs());
-            fragment.shader_defs.extend(toon::toon_shader_defs());
             // the material has no cell table (`webgl2`), so scene_bounds.wgsl leaves it out too
             if cfg!(feature = "webgl2") {
                 fragment.shader_defs.push("NO_SCENE_CELLS".into());

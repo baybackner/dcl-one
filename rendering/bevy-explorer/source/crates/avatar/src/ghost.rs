@@ -718,7 +718,7 @@ mod tests {
         use pipeline_test::{compile_pipelines, headless_app, render_target};
         use scene_material::{
             SceneBound, SceneBounds, EMPTY_SCENE_CELLS, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
-            SCENE_MATERIAL_TOON_MESH_TAG,
+            SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG, SCENE_MATERIAL_TOON_MESH_TAG,
         };
 
         let mut app = headless_app();
@@ -856,12 +856,18 @@ mod tests {
             MeshTag(revealed),
             Transform::from_xyz(-1.0, 0.5, 0.0),
         ));
-        world.spawn((
-            Mesh3d(cube),
-            MeshMaterial3d(mask),
-            MeshTag(revealed),
-            Transform::from_xyz(1.0, 0.5, 0.0),
-        ));
+        // a face mask with and without the avatar outline, which it reads from its tag
+        for (i, outline) in [SCENE_MATERIAL_OUTLINE_BLACK_MESH_TAG, 0]
+            .into_iter()
+            .enumerate()
+        {
+            world.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(mask.clone()),
+                MeshTag(revealed | outline),
+                Transform::from_xyz(1.0 + i as f32, 0.5, 0.0),
+            ));
+        }
 
         let started = Instant::now();
         while app.world().get::<AnimationPlayer>(body).is_none() {
@@ -877,9 +883,10 @@ mod tests {
         // material
         assert!(ok >= 5, "only {ok} pipelines compiled");
 
-        // the scene material's main pass compiled with the toon defs, both with and without the
-        // environment map (the toon ambient lookup only exists with it) and both with and
-        // without the depth prepass (the outline only reads it where it exists)
+        // the main passes of the scene material and of the mask material compiled with the toon
+        // defs, both with and without the environment map (the toon ambient lookup only exists
+        // with it) and both with and without the depth prepass (the outline only reads it where
+        // it exists)
         let has = |defs: &[ShaderDefVal], name: &str| {
             defs.iter().any(|def| match def {
                 ShaderDefVal::Bool(def_name, true) | ShaderDefVal::UInt(def_name, _) => {
@@ -888,43 +895,46 @@ mod tests {
                 _ => false,
             })
         };
-        let shader = app
-            .world()
-            .resource::<AssetServer>()
-            .get_handle::<Shader>("embedded://shaders/bound_material.wgsl")
-            .expect("bound_material.wgsl loaded")
-            .id();
         let cache = app.sub_app(RenderApp).world().resource::<PipelineCache>();
-        let toon_variants = cache
-            .pipelines()
-            .filter(|pipeline| matches!(pipeline.state, CachedPipelineState::Ok(_)))
-            .filter_map(|pipeline| match &pipeline.descriptor {
-                PipelineDescriptor::RenderPipelineDescriptor(descriptor) => {
-                    descriptor.fragment.as_ref()
-                }
-                _ => None,
-            })
-            .filter(|fragment| {
-                fragment.shader.id() == shader && has(&fragment.shader_defs, "TOON_LIGHT_UNIT_LUX")
-            })
-            .map(|fragment| {
-                (
-                    has(&fragment.shader_defs, "ENVIRONMENT_MAP"),
-                    has(&fragment.shader_defs, "DEPTH_PREPASS"),
-                )
-            })
-            .collect::<Vec<_>>();
-        for present in [true, false] {
-            assert!(
-                toon_variants.iter().any(|variant| variant.0 == present),
-                "no toon main pass with the environment map {present}, of (environment map, \
-                 depth prepass): {toon_variants:?}"
-            );
-            assert!(
-                toon_variants.iter().any(|variant| variant.1 == present),
-                "no toon main pass with the depth prepass {present}, of (environment map, \
-                 depth prepass): {toon_variants:?}"
-            );
+        for name in ["bound_material.wgsl", "mask_material.wgsl"] {
+            let shader = app
+                .world()
+                .resource::<AssetServer>()
+                .get_handle::<Shader>(format!("embedded://shaders/{name}"))
+                .unwrap_or_else(|| panic!("{name} loaded"))
+                .id();
+            let toon_variants = cache
+                .pipelines()
+                .filter(|pipeline| matches!(pipeline.state, CachedPipelineState::Ok(_)))
+                .filter_map(|pipeline| match &pipeline.descriptor {
+                    PipelineDescriptor::RenderPipelineDescriptor(descriptor) => {
+                        descriptor.fragment.as_ref()
+                    }
+                    _ => None,
+                })
+                .filter(|fragment| {
+                    fragment.shader.id() == shader
+                        && has(&fragment.shader_defs, "TOON_LIGHT_UNIT_LUX")
+                })
+                .map(|fragment| {
+                    (
+                        has(&fragment.shader_defs, "ENVIRONMENT_MAP"),
+                        has(&fragment.shader_defs, "DEPTH_PREPASS"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for present in [true, false] {
+                assert!(
+                    toon_variants.iter().any(|variant| variant.0 == present),
+                    "no {name} toon main pass with the environment map {present}, of \
+                     (environment map, depth prepass): {toon_variants:?}"
+                );
+                assert!(
+                    toon_variants.iter().any(|variant| variant.1 == present),
+                    "no {name} toon main pass with the depth prepass {present}, of \
+                     (environment map, depth prepass): {toon_variants:?}"
+                );
+            }
         }
     }
 }
