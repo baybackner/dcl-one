@@ -1698,14 +1698,15 @@ mod tests {
     }
 
     /// `order_by=created_at` with `desc` (or no `order`) puts a newer uncurated
-    /// destination above an older featured one, as `decentraland/places#896`
-    /// does; `asc` keeps the featured shelf on top.
+    /// destination above an older featured one and an older higher-ranked one,
+    /// as `decentraland/places#896` does; `asc` keeps the featured shelf on top.
     #[tokio::test]
     async fn destinations_created_at_desc_lists_a_newer_destination_above_an_older_featured_one() {
         let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
             return;
         };
-        let (newer, featured, oldest) = (
+        let (newer, featured, ranked, oldest) = (
+            uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
@@ -1727,6 +1728,14 @@ mod tests {
                 true,
                 "2023-06-01T00:00:00.000Z",
                 2000,
+            ),
+            (
+                &ranked,
+                "-143,142",
+                "Silver Terrace",
+                false,
+                "2024-06-01T00:00:00.000Z",
+                5000,
             ),
             (
                 &oldest,
@@ -1771,7 +1780,15 @@ mod tests {
         let body = post(
             state.clone(),
             "/api/destinations?limit=1&order_by=created_at",
-            json!([featured, newer, oldest]),
+            json!([featured, newer, ranked, oldest]),
+        )
+        .await;
+        assert_eq!(ids(&body), vec![newer.clone()], "{body}");
+        // Without the featured row, recency still outranks the ranking alone.
+        let body = post(
+            state.clone(),
+            "/api/destinations?limit=1&order_by=created_at",
+            json!([ranked, newer]),
         )
         .await;
         assert_eq!(ids(&body), vec![newer.clone()], "{body}");

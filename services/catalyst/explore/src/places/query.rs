@@ -538,7 +538,7 @@ pub(super) fn destinations_lead_prefix(f: &PlaceListFilters, live_prefix: &str) 
     }
 }
 
-/// `order_by=created_at&order=desc` on the destinations
+/// `order_by=created_at` with `order` omitted or `desc` on the destinations
 /// (`decentraland/places#896`): the newest destinations lead, so a feed of
 /// what is new is not the featured shelf again, and `highlighted`, the
 /// ranking and a search's text rank only break ties among equal creation
