@@ -40,8 +40,11 @@ const DOWN_FEATHER: f32 = 0.1;
 // fresnel backlight rim on the silhouette.
 const RIM_POWER: f32 = 5.0;
 const RIM_STRENGTH: f32 = 0.2;
-// multiplier on emissive wearables so they glow.
-const EMISSIVE_BOOST: f32 = 2.0;
+// scale from the material's emissive (glTF factor x4 avatar multiplier x10
+// shader lift, see bound_material.wgsl) to the avatar's lit range: a glTF
+// emissive factor of 0.25 matches a fully lit white albedo
+// (BAND_HIGH * BRIGHTNESS * exposure ~= 2), and 1.0 glows at four times that.
+const EMISSIVE_SCALE: f32 = 0.2;
 // the (light-colour-derived, illuminance-premultiplied ~thousands of lux)
 // brightness avatars are lit at, regardless of the scene light.
 const BRIGHTNESS: f32 = 2000.0;
@@ -115,7 +118,11 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
     let brightness = BRIGHTNESS * view.exposure;
 
     var color = (base_color.rgb * band + vec3(rim)) * brightness;
-    color += pbr_input.material.emissive.rgb * view.exposure * EMISSIVE_BOOST;
+    // emissive alpha is the exposure weight, as in bevy_pbr: bound_material
+    // writes 0, so the emission is already in output units and must not be
+    // scaled down by the view exposure (~0.001) like the lit term.
+    let emissive_exposure = mix(1.0, view.exposure, pbr_input.material.emissive.a);
+    color += pbr_input.material.emissive.rgb * emissive_exposure * EMISSIVE_SCALE;
 
     return vec4<f32>(color, base_color.a);
 }
