@@ -264,8 +264,11 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     s.glideOpenStep = s.step;
   } else if (s.prop === GlideProp.GLIDING) {
     if (!pressed || !canGlide) {
-      s.prop = GlideProp.CLOSING;
-      s.propStep = s.step;
+      // the prop that has just opened stays open for this step and closes on the next one
+      if (s.propStep < s.step) {
+        s.prop = GlideProp.CLOSING;
+        s.propStep = s.step;
+      }
     } else {
       // the glide holds the player's own fall at glidingFallingSpeed; the glider's drag takes a push, up or down
       s.vy = Math.max(s.vy, -glidingFallingSpeed);
