@@ -36,7 +36,7 @@ export function validateAlias() {
       replacement: here("./src/data/persisted-schemas.stub.ts"),
     });
     alias.push({
-      find: /^(?:\.{1,2}\/)+(?:.*\/)?thirdwebSchema$/,
+      find: "@web-core/auth/thirdwebSchema",
       replacement: here("./src/data/auth/thirdwebSchema.stub.ts"),
     });
     for (const name of CATALYST_SCHEMAS) {
