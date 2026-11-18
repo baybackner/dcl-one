@@ -21,7 +21,7 @@ stream from OBS, and talk over voice (nearby, private calls, community voice).
 |---|---|
 | Nearby (proximity) voice in scenes and islands | Server and Bevy client present. No multi-client run against a real LiveKit. |
 | Private 1:1 calls | Server routes and RPCs at parity; client flow in the Bevy engine and the shared HUD. |
-| Community voice (stage, raise hand, promote, kick, end) | Server at parity. Client lacks moderator mute (MV-6, MV-7). |
+| Community voice (stage, raise hand, promote, kick, end) | Server at parity. The client enforces a moderator mute; its HUD has no action to mute another speaker (MV-7). |
 | OBS/RTMP stream onto a scene screen | Served: `/scene-stream-access` and LiveKit Ingress into the scene room. The local stack runs the ingress (`tooling/dev.py`); an RTMP push to a key created with the request the API makes reaches the room as H264 and Opus. Not run end to end through the API and a client. |
 | Share a screen or camera from a browser (Decentraland Cast) | Served: every `/cast/*` route, and the `apps/sites` streamer and watcher pages. Run headless against a local LiveKit; no multi-client run in the explorer. |
 | Presentations (slides) and presenters | Presenters routes and the presentation-bot token served; no presenter service (`cast-presenter-service`) is hosted. |
@@ -113,6 +113,9 @@ Client: the Bevy engine signals voice over the social RPC (`B/crates/social/src/
 the call state machine in `B/crates/comms/src/voice_chat/state.rs`. The shared HUD
 (`library/ui/apps/hud/features/voiceChat/VoiceChatPanel.tsx`) covers accepting and refusing calls,
 the mic, hanging up, raising a hand, promoting, demoting, kicking and ending a stream.
+The gatekeeper's mute only sets `muted` in the participant metadata, so the client enforces it:
+when its own metadata turns muted while it has not just unmuted, `sync_local` takes the mic down
+and keeps it down across a re-dial. The speaker may raise it again, as upstream's client allows.
 
 ## Client readiness for video
 
@@ -136,14 +139,12 @@ the mic, hanging up, raising a hand, promoting, demoting, kicking and ending a s
 
 Ordered by what a meeting with screen sharing needs. Sizes: S small, M medium, L large.
 
-MV-1 to MV-4 (Cast routes, watcher token, the `apps/sites` streamer and watcher, presenters) and MV-11
-(the Admin Toolkit's base URLs) are done; see the Cast table and the client notes above.
+MV-1 to MV-4 (Cast routes, watcher token, the `apps/sites` streamer and watcher, presenters), MV-6
+(the client enforces a moderator mute) and MV-11 (the Admin Toolkit's base URLs) are done; see the
+Cast table and the client notes above.
 
 5. **MV-5: Presenter service.** P1 for slides, M–L. The presentation-bot token is served; host or port
    `cast-presenter-service`, which publishes the slides.
-6. **MV-6: The Bevy client ignores a moderator mute.** P1, S. `sync_local`
-   (`B/crates/comms/src/voice_chat/state.rs:738-754`) reads role and speaker but not `muted`; a speaker
-   muted by a moderator keeps publishing. Upstream mute is metadata-only, so the client must enforce it.
 7. **MV-7: No moderator "mute speaker" action in the HUD and bridge.** P2, S. Add it to
    `VoiceChatAction` and the participant menu.
 8. **MV-8: End-to-end run.** P1, M. Two clients, a real LiveKit with Ingress and the webhook: private
