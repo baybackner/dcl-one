@@ -20,8 +20,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   `max(ShadeSH9(0), ShadeSH9(down))` (`DCL_ToonBodyDoubleShadeWithFeather.hlsl:93`). Here the
   ambient is the sky envmap's diffuse irradiance, the Trilight ambient the world gets, read for a
   white surface facing up and down; the constant spherical harmonics term `ShadeSH9(0)` is
-  approximated by the mean of the two. Without the sky envmap (the avatar preview) there is no
-  ambient and the floor is `0.05 * _Unlit_Intensity`.
+  approximated by the mean of the two. The toon reads that irradiance without the world's 0.96
+  dielectric factor (`DIELECTRIC_DIFFUSE`, `sky_envmap_lookup.wgsl`), as Unity's toon reads
+  `ShadeSH9` raw while its lit world shader scales it by one minus the reflectivity, so avatars
+  sit about 4% above a white world surface in shade; that matches Unity and is not to be
+  removed. Without the sky envmap (the avatar preview) there is no ambient and the floor is
+  `0.05 * _Unlit_Intensity`.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest

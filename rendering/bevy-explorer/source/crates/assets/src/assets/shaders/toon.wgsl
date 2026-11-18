@@ -1,7 +1,7 @@
 // Toon (cel) shading for avatars: Unity's avatar shader, DCL_Toon, as the avatar material sets it
 // up, in this client's light units. The formulas are
 // unity-shared:Runtime/Shaders/Avatar/DCL_Toon/DCL_ToonBodyDoubleShadeWithFeather.hlsl (line
-// numbers below are that file's).
+// numbers below are that file's; `unity-shared` is decentraland/unity-shared-dependencies).
 //
 // - the sun (the brightest directional light) gives a half-Lambert, scaled down to half in its
 //   cast shadow, that picks the base colour or one of two grey shades in two feathered steps;
@@ -133,10 +133,11 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
         shadow = fetch_directional_shadow(sun, world_position, vertex_n, view_z);
     }
 
-    // the ambient light in light units: the diffuse ambient the pbr path gives a white surface
-    // facing up and down here, so a scene's ambient override and the ambient brightness setting
-    // reach avatars as they reach the world. Without the environment map there is none, leaving
-    // the floor
+    // the ambient light in light units: the diffuse irradiance the pbr path's envmap lookup gives
+    // a white surface facing up and down here, before the dielectric factor (0.96) the world's
+    // diffuse takes, as Unity's toon reads ShadeSH9 raw; a scene's ambient override and the
+    // ambient brightness setting reach avatars as they reach the world. Without the environment
+    // map there is none, leaving the floor
     var ambient_unity = vec3(0.0);
 #ifdef ENVIRONMENT_MAP
     let cluster_index = clustered_forward::fragment_cluster_index(pbr_input.frag_coord.xy, view_z, pbr_input.is_orthographic);
