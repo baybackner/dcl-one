@@ -1,7 +1,7 @@
 //! The ONE blob store's collector. Every domain writes into the same
 //! hash-addressed store (content files and entities, world scenes and
 //! thumbnails, posters, satellite regions, world manifests, community
-//! thumbnails and federated post bodies, camera-reel photos, builder item contents, project files and asset packs,
+//! thumbnails and federated post bodies, camera-reel photos, builder item uploads,
 //! player-report evidence, MLS commits and ciphertexts, snapshot files), so
 //! a file may go only when no domain names it. The store is walked once;
 //! its aged files (untouched for the age floor: at least an hour and the
@@ -9,7 +9,7 @@
 //! blob and committing the row that names it) are checked in chunks
 //! against every [`REFERENCE_SOURCES`] column (`= ANY`, index-served on the
 //! large tables) and the JSON documents that embed keys (the world scenes'
-//! and pending partial uploads' content lists, the asset-pack catalogue)
+//! and pending partial uploads' content lists)
 //! plus the global scenes the configuration names, so memory holds a chunk,
 //! never the corpus. A scene
 //! whose content list cannot be read exactly aborts the run, a candidate
@@ -133,11 +133,6 @@ pub const REFERENCE_SOURCES: &[&str] = &[
     "builder.items.catalyst_content_hash",
     "builder.uploaded_contents.hash",
     "builder.item_contents.hash",
-    "builder.projects.thumbnail",
-    "builder.project_files.hash",
-    "builder.asset_packs.thumbnail",
-    "builder.assets.thumbnail",
-    "builder.asset_contents.hash",
     "camera_reel.images.image_hash",
     "camera_reel.images.thumbnail_hash",
     "shop.outfit_thumbnails.blob_cid",
@@ -354,12 +349,11 @@ pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
 
 /// JSON documents that embed store keys, read by [`reference_set`] beside
 /// the plain sources: the world scene and pending upload entities'
-/// `content[].hash` and the asset-pack catalogue's thumbnails and asset contents.
+/// `content[].hash`.
 pub const JSON_SOURCES: &[&str] = &[
     "worlds.world_scenes.entity",
     "worlds.retired_world_scenes.entity",
     "worlds.pending_scenes.entity",
-    "builder.asset_catalog.packs",
 ];
 
 /// The age floor: at least an hour, and at least the widest store-then-row
@@ -444,51 +438,6 @@ fn content_hashes(
     Ok(())
 }
 
-fn catalogue_hashes(packs: &Value, out: &mut HashSet<String>) -> Result<(), GcError> {
-    let packs = match packs {
-        Value::Array(packs) => packs,
-        _ => {
-            return Err(GcError::Unreadable(
-                "builder.asset_catalog.packs is not an array".into(),
-            ));
-        }
-    };
-    for pack in packs {
-        if let Some(thumbnail) = pack
-            .get("thumbnail")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-        {
-            out.insert(thumbnail.to_string());
-        }
-        for asset in pack
-            .get("assets")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            for hash in asset
-                .get("contents")
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|c| c.values())
-            {
-                match hash.as_str() {
-                    Some(hash) if !hash.is_empty() => {
-                        out.insert(hash.to_string());
-                    }
-                    _ => {
-                        return Err(GcError::Unreadable(
-                            "an asset-pack content entry has no usable hash".into(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// The entity id of each `urn:decentraland:entity:<id>[?...]` the
 /// configuration names (the global scenes every world loads).
 pub fn global_scene_entity_ids(urns: &[String]) -> Vec<String> {
@@ -549,14 +498,10 @@ impl<'a> Pins<'a> {
     }
 }
 
-/// The small reference documents read whole: the asset-pack catalogue and
-/// the global scenes the configuration names (their entity file and its
-/// content list).
-pub async fn fixed_references(
-    conn: &mut sqlx::PgConnection,
-    pins: Pins<'_>,
-) -> Result<HashSet<String>, GcError> {
-    let mut keys = catalogue_references(conn).await?;
+/// The small reference documents read whole: the global scenes the
+/// configuration names (their entity file and its content list).
+pub async fn fixed_references(pins: Pins<'_>) -> Result<HashSet<String>, GcError> {
+    let mut keys = HashSet::new();
     for entity_id in global_scene_entity_ids(pins.global_scenes_urn) {
         if let Some(bytes) = pins.storage.retrieve(&entity_id).await? {
             let entity: Value = serde_json::from_slice(&bytes).map_err(|e| {
@@ -571,21 +516,6 @@ pub async fn fixed_references(
             )?;
         }
         keys.insert(entity_id);
-    }
-    Ok(keys)
-}
-
-/// The keys the asset-pack catalogue names (its one row).
-pub async fn catalogue_references(
-    conn: &mut sqlx::PgConnection,
-) -> Result<HashSet<String>, GcError> {
-    let mut keys = HashSet::new();
-    let catalogue: Option<Value> =
-        sqlx::query_scalar("SELECT packs FROM builder.asset_catalog WHERE id = 1")
-            .fetch_optional(&mut *conn)
-            .await?;
-    if let Some(packs) = catalogue {
-        catalogue_hashes(&packs, &mut keys)?;
     }
     Ok(keys)
 }
@@ -649,7 +579,7 @@ async fn referenced_since(
     let current: i64 = sqlx::query_scalar("SELECT pg_current_xact_id()::text::bigint")
         .fetch_one(&mut *conn)
         .await?;
-    let fixed = fixed_references(conn, pins).await?;
+    let fixed = fixed_references(pins).await?;
     let mut found = rows_among(conn, keys, true, (current - fence).max(0)).await?;
     found.extend(keys.iter().filter(|k| fixed.contains(*k)).cloned());
     Ok(found)
@@ -694,7 +624,7 @@ async fn references_among(
     if keys.is_empty() {
         return Ok(HashSet::new());
     }
-    let fixed = fixed_references(conn, pins).await?;
+    let fixed = fixed_references(pins).await?;
     let mut found = rows_among(conn, keys, pending, ALL_ROWS).await?;
     found.extend(keys.iter().filter(|k| fixed.contains(*k)).cloned());
     Ok(found)
@@ -773,8 +703,8 @@ async fn aged(
 }
 
 /// Unlinks those of `keys` a collection pass with `min_age` would: aged
-/// files outside the fixed references (the asset-pack catalogue, the global
-/// scenes) that no domain names, re-checked right before the unlink. For a
+/// files outside the fixed references (the global scenes) that no domain
+/// names, re-checked right before the unlink. For a
 /// writer reclaiming the blobs it staged; younger ones are left to the
 /// collector, which covers the same store-then-row gap. Answers how many
 /// went.
@@ -789,11 +719,7 @@ pub async fn unlink_orphans(
         return Ok(0);
     }
     check_json_sources(pool).await?;
-    let fixed = fixed_references(
-        &mut *pool.acquire().await?,
-        Pins::new(storage, global_scenes_urn),
-    )
-    .await?;
+    let fixed = fixed_references(Pins::new(storage, global_scenes_urn)).await?;
     let now = SystemTime::now();
     let mut candidates: Vec<String> = Vec::new();
     for key in keys {
@@ -824,7 +750,7 @@ pub async fn collect(
 ) -> Result<GcReport, GcError> {
     check_json_sources(pool).await?;
     let pins = Pins::new(storage, global_scenes_urn);
-    let fixed = fixed_references(&mut *pool.acquire().await?, pins).await?;
+    let fixed = fixed_references(pins).await?;
     let refuse_empty =
         !options.allow_empty_reference_set && fixed.is_empty() && !any_reference(pool).await?;
     let now = SystemTime::now();
@@ -950,14 +876,6 @@ mod tests {
         assert!(out.contains("h1"));
         assert!(content_hashes("s", Some(&json!([{ "file": "a" }])), &mut out).is_err());
         assert!(content_hashes("s", Some(&json!({ "a": "h" })), &mut out).is_err());
-        let mut packs = HashSet::new();
-        catalogue_hashes(
-            &json!([{ "thumbnail": "t1", "assets": [{ "contents": { "a.glb": "g1" } }] }]),
-            &mut packs,
-        )
-        .unwrap();
-        assert_eq!(packs, HashSet::from(["t1".to_string(), "g1".to_string()]));
-        assert!(catalogue_hashes(&json!({}), &mut packs).is_err());
         assert_eq!(
             global_scene_entity_ids(&[
                 "urn:decentraland:entity:bafyx?baseUrl=https://x/".into(),
@@ -1298,17 +1216,10 @@ mod tests {
         ] {
             assert!(storage.exist(key).await.unwrap(), "{key} stays");
         }
-        // The key-level check other unlink paths run counts the fixed references too.
-        let pack_file = put(b"asset pack file".to_vec()).await;
-        sqlx::query("INSERT INTO builder.asset_catalog (id, packs, source, built_at) VALUES (1, $1, 'test', timezone('UTC', now()))")
-            .bind(json!([{ "assets": [{ "contents": { "a.glb": pack_file } }] }]))
-            .execute(&pool)
-            .await
-            .unwrap();
-        let keys = vec![global.clone(), global_file.clone(), pack_file.clone()];
+        let keys = vec![global.clone(), global_file.clone()];
         let pins = Pins::new(&storage, &globals);
-        assert_eq!(referenced_among(&pool, pins, &keys).await.unwrap().len(), 3);
-        assert_eq!(published_among(&pool, pins, &keys).await.unwrap().len(), 3);
+        assert_eq!(referenced_among(&pool, pins, &keys).await.unwrap().len(), 2);
+        assert_eq!(published_among(&pool, pins, &keys).await.unwrap().len(), 2);
         pool.close().await;
         let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP DATABASE \"{name}\" WITH (FORCE)"

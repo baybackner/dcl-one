@@ -7,7 +7,7 @@
 //! of this node's database, blobs and credentials to be demonstrated before
 //! the switch is turned on in production. Off (the default), every
 //! `POST`/`PUT`/`PATCH`/`DELETE` answers 503 with the builder envelope and a
-//! `Retry-After`; the reads (drafts, catalogue, blobs, on-chain lookups)
+//! `Retry-After`; the reads (drafts, blobs, on-chain lookups)
 //! keep answering. Nothing is exempt: the builder has no admission mint or
 //! stateless proxy on a mutating method. The middleware itself is shared:
 //! [`Gate`] carries a router's open paths and its own refusal envelope, so

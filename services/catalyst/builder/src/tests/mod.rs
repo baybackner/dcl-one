@@ -8,7 +8,7 @@ mod curation_auth;
 mod curation_auth_fuzz;
 mod draft_persistence;
 mod linked_publication;
-mod projects;
 mod publication_preparation;
 mod publication_transactions;
 mod upstream_routes;
+mod write_gate;
