@@ -11,7 +11,7 @@ import { evmAddress } from "@shop/model/address";
 import { marketplaceOn } from "../../market/testing-flags";
 import { catalogTransport, ShopHarness, type SessionKind } from "../fixtures";
 import ShopChrome, { shopTabs } from "./ShopChrome";
-import { formatCreditsBalance } from "./ShopCreditsChip";
+import { formatCreditsBalance } from "@shop/credits/balance-query";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));

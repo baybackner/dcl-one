@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { useNavigate } from "react-router";
 
-import { ProfileNavigationContext } from "@ui/web/frames/ProfileNavigation";
+import { ProfileNavigationContext } from "@dcl/one-ui/apps/sites/chrome/profile-navigation";
 import StProfileCommunitiesTab from "@ui/web/pages/StProfileCommunitiesTab";
 import StProfileOverviewTab from "@ui/web/pages/StProfileOverviewTab";
 

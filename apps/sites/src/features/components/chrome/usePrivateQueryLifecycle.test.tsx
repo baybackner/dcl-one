@@ -6,6 +6,7 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { CREDITS_BALANCE_QUERY_KEY } from "@shop/credits/balance-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
@@ -31,6 +32,8 @@ describe("when the Sites host changes authenticated identity", () => {
     signal = undefined;
     client.setQueryData(["blog", "categories"], ["Announcements"]);
     client.setQueryData(["private", "0xa", "cached"], "old private value");
+    client.setQueryData([CREDITS_BALANCE_QUERY_KEY, "0xa"], "old balance");
+    client.setQueryData([CREDITS_BALANCE_QUERY_KEY, "0xb"], "new balance");
     client.setQueryData(["legacy", "0xa"], "legacy owner retains this entry");
     wrapper = ({ children }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -62,6 +65,8 @@ describe("when the Sites host changes authenticated identity", () => {
       await Promise.resolve();
     });
     expect(client.getQueriesData({ queryKey: ["private", "0xa"] })).toEqual([]);
+    expect(client.getQueryData([CREDITS_BALANCE_QUERY_KEY, "0xa"])).toBeUndefined();
+    expect(client.getQueryData([CREDITS_BALANCE_QUERY_KEY, "0xb"])).toBe("new balance");
     expect(client.getQueryData(["blog", "categories"])).toEqual([
       "Announcements",
     ]);
@@ -105,6 +110,7 @@ describe("when the Sites host changes authenticated identity", () => {
     );
     rerender({ account: "" });
     expect(client.getQueriesData({ queryKey: ["private"] })).toEqual([]);
+    expect(client.getQueriesData({ queryKey: [CREDITS_BALANCE_QUERY_KEY] })).toEqual([]);
   });
   it("should remove every declared private account on sign-out and leave public data intact", () => {
     client.setQueryData(["private", "0xb", "cached"], "another private value");
@@ -115,6 +121,7 @@ describe("when the Sites host changes authenticated identity", () => {
     );
     rerender({ account: null });
     expect(client.getQueriesData({ queryKey: ["private"] })).toEqual([]);
+    expect(client.getQueriesData({ queryKey: [CREDITS_BALANCE_QUERY_KEY] })).toEqual([]);
     expect(client.getQueryData(["blog", "categories"])).toEqual([
       "Announcements",
     ]);

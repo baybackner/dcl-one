@@ -17,7 +17,7 @@ vi.mock("@/data/lib/catalyst/jump/jump.server", () => ({
   loadJumpPlace: vi.fn(),
 }));
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ identity: auth.identity }) }));
-vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
+vi.mock("@/features/components/chrome/SitesLayout", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
 vi.mock("@/features/jump/useRemindMe", () => ({
   useRemindMe: (identity: unknown, _eventId: string, onSignIn: () => void) => ({
     active: false,

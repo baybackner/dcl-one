@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import Spinner from "../../atoms/Spinner";
 import "./chitemdetail.css";
-import { docsUrl } from "../../data/docs";
+import { docsUrl } from "@web-core/docs";
 import { ChevronLeft, DotsGlyph, ManaGlyph } from "../../atoms/icons";
 
 type MetricKind =

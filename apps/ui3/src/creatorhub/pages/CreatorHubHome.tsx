@@ -9,7 +9,7 @@ import CoverImage from "../../components/CoverImage";
 import ThumbnailImage from "../../components/ThumbnailImage";
 import Spinner from "../../atoms/Spinner";
 import { asset } from "../../asset";
-import { docsUrl } from "../../data/docs";
+import { docsUrl } from "@web-core/docs";
 import { publicThumbnail } from "../../data/thumbnail";
 import "./creatorhubhome.css";
 

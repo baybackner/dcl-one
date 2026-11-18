@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "@dcl/one-ui";
 import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "../../components/chrome/SitesLayout";
 
 import { track, type TrackContext } from "@/core/lib/telemetry/track";
 import { useAuth } from "@/data/lib/auth/context";
@@ -272,7 +272,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   };
 
   return (
-    <SitesChrome active="legal" overlayNav>
+    <SitesLayout active="legal" overlayNav>
       <main className={styles.page}>
         <AnimatedBackground />
         <div className={styles.content}>
@@ -418,6 +418,6 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
           </p>
         </div>
       </main>
-    </SitesChrome>
+    </SitesLayout>
   );
 }

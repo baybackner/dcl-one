@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseE
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams, useRouteLoaderData } from "react-router";
 
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 import { ExploreBand, type ExploreBandLabels } from "@dcl/one-ui/apps/sites/places/ExploreBand";
 import { JumpInModal } from "@dcl/one-ui/apps/sites/places/JumpInModal";
 import { LiveNow } from "@dcl/one-ui/apps/sites/places/LiveNow";
@@ -320,7 +320,7 @@ function PlacesExplorer({ loaderSid, loaderPlatform, unavailable }: ExplorerProp
   }
 
   return (
-    <SitesChrome active="explore">
+    <SitesLayout active="explore">
       <PlacesPage
         title="Places"
         status={status}
@@ -363,7 +363,7 @@ function PlacesExplorer({ loaderSid, loaderPlatform, unavailable }: ExplorerProp
           onJumpIn={(event) => jumpIn(modal.place, event)}
         />
       ) : null}
-    </SitesChrome>
+    </SitesLayout>
   );
 
   function exploreResults() {

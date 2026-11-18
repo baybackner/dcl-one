@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef } from "react";
 
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 import { SitesLocaleContext, sitesLanguage } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { homeCopy } from "@/features/home/locale";
 import { successCopy } from "@/features/download/success-copy";
@@ -96,7 +96,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         .replace("{total}", String(total)),
   };
   return (
-    <SitesChrome
+    <SitesLayout
       active="play"
       overlayNav
       headerSurface="overlay"
@@ -156,6 +156,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           store={store}
         />
       </main>
-    </SitesChrome>
+    </SitesLayout>
   );
 }

@@ -18,7 +18,7 @@ vi.hoisted(() =>
 
 const auth = vi.hoisted(() => ({ value: { identity: null as unknown, address: null as string | null, isConnected: false } }));
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => auth.value }));
-vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
+vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
 vi.mock("@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground", () => ({
   AnimatedBackground: () => <div data-testid="animated-background" />,
 }));

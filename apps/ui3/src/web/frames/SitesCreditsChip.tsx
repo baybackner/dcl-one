@@ -5,7 +5,7 @@ import { Link } from "react-router";
 
 import { EnsureQueryClient } from "../../shop/checkout/services";
 import { useBalance } from "../../shop/credits/hooks";
-import { formatCreditsBalance } from "../../shop/discovery/frames/ShopCreditsChip";
+import { formatCreditsBalance } from "@shop/credits/balance-query";
 import { SHOP_BASE } from "../../shop/routes";
 
 function Chip({ account }: { account: string }) {

@@ -4,10 +4,10 @@
 
 interface Window {
   // The page's public configuration, written by the host's document (Sites' root loader).
-  __DCL_PUBLIC__?: { walletConnectProjectId?: string };
+  __DCL_PUBLIC__?: { walletConnectProjectId?: string; docsBase?: string };
 }
 
 // Vite's build-time environment, when the host bundles with Vite.
 interface ImportMeta {
-  readonly env?: { readonly VITE_DCL_WALLETCONNECT_PROJECT_ID?: string };
+  readonly env?: { readonly VITE_DCL_WALLETCONNECT_PROJECT_ID?: string; readonly VITE_SHOP_API_MODE?: string };
 }

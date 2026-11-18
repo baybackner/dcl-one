@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "../../components/chrome/SitesLayout";
 import { useAuth } from "@/data/lib/auth/context";
 import { getIdentity } from "@/data/lib/auth/session";
 import type { AuthIdentity } from "@/data/lib/auth/types";
@@ -162,7 +162,7 @@ function ManagementSession({ mode, identity }: { mode: Mode; identity: AuthIdent
   }
 
   return (
-    <SitesChrome active="whatson">
+    <SitesLayout active="whatson">
       <main className={styles.root}>
         <EventNavigation profile={access.profile} canManageUsers={canManageUsers} />
         <h1>{TITLES[mode]}</h1>
@@ -268,6 +268,6 @@ function ManagementSession({ mode, identity }: { mode: Mode; identity: AuthIdent
             </>
           )}
       </main>
-    </SitesChrome>
+    </SitesLayout>
   );
 }

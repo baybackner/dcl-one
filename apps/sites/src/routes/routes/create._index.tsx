@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { redirect, useLocation, useNavigate } from "react-router";
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
 
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import { creatorHubHost } from "@ui/creatorhub/explorer-host";
 
@@ -65,9 +65,9 @@ export default function CreateRoute({ loaderData }: Route.ComponentProps) {
 
   return (
     <HydrationBoundary state={loaderData?.dehydratedState}>
-      <SitesChrome active="create" overlayNav>
+      <SitesLayout active="create" overlayNav>
         <CreateLanding />
-      </SitesChrome>
+      </SitesLayout>
     </HydrationBoundary>
   );
 }

@@ -33,7 +33,7 @@ vi.mock("@/data/lib/catalyst/social/community-detail", async (original) => ({
 }));
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ identity: auth.identity }) }));
 vi.mock("../../components/auth/signin-store", () => signIn);
-vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("../../events/useCreatorProfiles", () => ({ useCreatorProfiles: () => ({}) }));
 vi.mock("../../events/useEventReminders", () => ({
   REMIND_FAILED: "Couldn't update your reminder. Try again.",

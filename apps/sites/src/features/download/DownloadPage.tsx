@@ -5,7 +5,7 @@ import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import googlePlayBadge from "@dcl/one-ui/apps/sites/assets/google_play_cta.svg?url";
 import { VerifiedIcon } from "@dcl/one-ui/apps/sites/download/VerifiedIcon";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "../components/chrome/SitesLayout";
 
 import { successHref, type Installer } from "@/data/lib/download/installers";
 
@@ -167,9 +167,9 @@ export default function DownloadPage({ primary, secondary, android, downloads }:
   );
   return (
     <div className={styles.frame}>
-      <SitesChrome active="play" overlayNav hideNav={!signedIn}>
+      <SitesLayout active="play" overlayNav hideNav={!signedIn}>
         {page}
-      </SitesChrome>
+      </SitesLayout>
     </div>
   );
 }

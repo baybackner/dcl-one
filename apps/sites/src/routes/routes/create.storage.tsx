@@ -4,7 +4,7 @@ import { useRevalidator, useSearchParams } from "react-router";
 import Button from "@ui/atoms/Button";
 import EmptyState from "@ui/components/EmptyState";
 import StStorageSelect from "@ui/web/pages/StStorageSelect";
-import { docsUrl } from "@ui/data/docs";
+import { docsUrl } from "@web-core/docs";
 import StStorageScene from "@ui/web/pages/StStorageScene";
 import StStorageEnvironment from "@ui/web/pages/StStorageEnvironment";
 import StStoragePlayers from "@ui/web/pages/StStoragePlayers";

@@ -1,12 +1,12 @@
 import { JumpInvalid } from "@dcl/one-ui/apps/sites/jump/JumpInvalid";
 import { JumpPage } from "@dcl/one-ui/apps/sites/jump/JumpPage";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "../components/chrome/SitesLayout";
 
 import { jumpTravelHref } from "@/data/lib/catalyst/jump/jump";
 
 export function JumpInvalidRoute({ kind }: { kind: "place" | "event" }) {
   return (
-    <SitesChrome active="play" overlayNav>
+    <SitesLayout active="play" overlayNav>
       <JumpPage invalid>
         <JumpInvalid
           kind={kind}
@@ -15,6 +15,6 @@ export function JumpInvalidRoute({ kind }: { kind: "place" | "event" }) {
           homeHref="/"
         />
       </JumpPage>
-    </SitesChrome>
+    </SitesLayout>
   );
 }

@@ -1,7 +1,7 @@
 import { PageHeader } from "../../components/Surface";
 import { CreatorHubChromeMaybe, type CreatorHubNavId } from "../frames/CreatorHubChrome";
 import "./chlearn.css";
-import { docsUrl } from "../../data/docs";
+import { docsUrl } from "@web-core/docs";
 
 const VideosArt = () => (
   <svg className="chl__art" viewBox="0 0 150 100" aria-hidden="true">

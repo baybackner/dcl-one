@@ -5,7 +5,7 @@ import {
   type ShouldRevalidateFunctionArgs,
 } from "react-router";
 import { HydrationBoundary } from "@tanstack/react-query";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import { detectPlatform } from "@/features/download/options";
 import { EventsView } from "@/features/events/EventsView";
@@ -76,14 +76,14 @@ export default function Events({ loaderData }: Route.ComponentProps) {
   if (params.get(TAB_PARAM) === "my") return <EventManagement mode="mine" />;
   return (
     <HydrationBoundary state={loaderData?.dehydratedState ?? undefined}>
-      <SitesChrome active="whatson">
+      <SitesLayout active="whatson">
         <EventsView
           sid={first.sid}
           platform={first.platform}
           origin={first.origin}
           initial={first.initial}
         />
-      </SitesChrome>
+      </SitesLayout>
     </HydrationBoundary>
   );
 }

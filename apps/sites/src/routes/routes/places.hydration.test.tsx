@@ -19,7 +19,7 @@ import Places, { loader, clientLoader } from "./places";
 
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ isConnected: false, identity: null }) }));
 vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
-vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock("@/features/components/chrome/SitesLayout", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("@/data/lib/catalyst/places/destinations", async (original) => ({
   ...(await original<typeof import("@/data/lib/catalyst/places/destinations")>()),
   fetchDestinations: vi.fn(),

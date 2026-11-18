@@ -2,7 +2,7 @@ import { PageHeader } from "../../components/Surface";
 import { CreatorHubChromeMaybe } from "../frames/CreatorHubChrome";
 import EmptyStateCard from "../../components/EmptyStateCard";
 import "./chscenesemptystate.css";
-import { docsUrl } from "../../data/docs";
+import { docsUrl } from "@web-core/docs";
 
 const ImportIcon = () => (
   <svg viewBox="0 0 20 16" width="20" height="16" aria-hidden="true">

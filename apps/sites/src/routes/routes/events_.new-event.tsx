@@ -7,7 +7,7 @@ import { buildHangoutSubmit, deleteHangout, emptyDraft, eventToDraft, loadEditab
 import { loadHangoutOptions, type HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import { useAuth } from "@/data/lib/auth/context";
 import { getIdentity } from "@/data/lib/auth/session";
-import { SitesChromeMaybe } from "@ui/web/frames/SitesChrome";
+import { SitesLayoutMaybe } from "@/features/components/chrome/SitesLayout";
 import { openSignIn } from "@/features/components/auth/signin-store";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoader } from "@/core/lib/telemetry/page-loader";
@@ -136,7 +136,7 @@ export default function SubmitHangoutRoute({ loaderData }: Route.ComponentProps)
   }
 
   return (
-    <SitesChromeMaybe active="whatson">
+    <SitesLayoutMaybe active="whatson">
     <LdSubmitHangoutView>
       {waiting ? <p role="status">Loading your hangout…</p> : error ? <div><p role="alert">{error}</p><Link to="/events?tab=my">Back to My Hangouts</Link><button type="button" onClick={() => { setLoaded(null); setOptionsRead(null); setOptionsAttempt((previous) => previous + 1); }}>Check access again</button></div> : <SubmitHangout
         key={`${auth.address ?? "signed-out"}:${d.eventId ?? "new"}`}
@@ -165,6 +165,6 @@ export default function SubmitHangoutRoute({ loaderData }: Route.ComponentProps)
       {original && canEdit && !waiting && !error && <button type="button" disabled={deleting} onClick={() => { void removeHangout(); }}>{deleting ? "Deleting…" : "Delete hangout"}</button>}
       {deleteError && <p role="alert">{deleteError}</p>}
     </LdSubmitHangoutView>
-    </SitesChromeMaybe>
+    </SitesLayoutMaybe>
   );
 }

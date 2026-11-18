@@ -12,7 +12,7 @@ const auth = vi.hoisted(() => ({ identity: null as AuthIdentity | null, isConnec
 vi.hoisted(() => { Object.assign(window, { __vite_plugin_react_preamble_installed__: true }); });
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => auth }));
 vi.mock("@/data/lib/auth/session", () => ({ getIdentity: () => auth.identity }));
-vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock("@/data/lib/catalyst/places/event-management", async (original) => ({
   ...await original<typeof import("@/data/lib/catalyst/places/event-management")>(),
   loadEventProfile: vi.fn(), loadEventProfiles: vi.fn(), loadManagedEvents: vi.fn(), moderateEvent: vi.fn(), saveEventPermissions: vi.fn(),

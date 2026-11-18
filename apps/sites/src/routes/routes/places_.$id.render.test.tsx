@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { renderToString } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
@@ -59,7 +60,7 @@ function renderRoute(travel: PlaceTravel = { playBase: "/play/", jumpHref: "/pla
     [{ id: "place", path: "/places/:id", Component: PlaceDetailRoute as never }],
     { initialEntries: [`/places/${PLACE_ID}`], hydrationData: { loaderData: { place: loaderData } } },
   );
-  renderToString(<RouterProvider router={router} />);
+  renderToString(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>);
   return seen.props!;
 }
 

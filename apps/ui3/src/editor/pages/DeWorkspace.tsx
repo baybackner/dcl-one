@@ -71,7 +71,7 @@ import { useProjectRealm } from "./useProjectRealm";
 import { useSceneMeters } from "./useSceneMeters";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts";
 import { ACTION_ID, TRIGGER_ID } from "../interaction-ids";
-import { docsUrl } from "../../data/docs";
+import { docsUrl } from "@web-core/docs";
 
 export { DeToolbar } from "../components/DeToolbar";
 

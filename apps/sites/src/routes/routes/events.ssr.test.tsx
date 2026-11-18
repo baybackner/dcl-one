@@ -18,7 +18,7 @@ vi.hoisted(() =>
   }),
 );
 
-vi.mock("@ui/web/frames/SitesChrome", () => ({
+vi.mock("@/features/components/chrome/SitesLayout", () => ({
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 vi.mock("@/data/lib/auth/context", () => ({

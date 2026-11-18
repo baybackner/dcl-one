@@ -27,6 +27,10 @@
     "primitives": 0,
     "tokens": 12
   },
+  "apps/sites/src/features/components/chrome/SitesLayout.module.css": {
+    "primitives": 0,
+    "tokens": 11
+  },
   "apps/sites/src/features/components/chrome/SitesTopBar.module.css": {
     "primitives": 0,
     "tokens": 12
@@ -177,7 +181,7 @@
   },
   "apps/ui3/src/web/frames/siteschrome.css": {
     "primitives": 4,
-    "tokens": 99
+    "tokens": 24
   },
   "apps/ui3/src/web/pages/StCastNotFound.module.css": {
     "primitives": 0,

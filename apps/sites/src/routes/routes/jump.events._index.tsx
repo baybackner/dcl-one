@@ -3,7 +3,7 @@ import { JumpEventActions } from "@dcl/one-ui/apps/sites/jump/JumpEventActions";
 import { JumpPage } from "@dcl/one-ui/apps/sites/jump/JumpPage";
 import { useState } from "react";
 import { redirect } from "react-router";
-import SitesChrome from "@ui/web/frames/SitesChrome";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import { useAuth } from "@/data/lib/auth/context";
 import { siteUrl } from "@/data/lib/catalyst/bases";
@@ -108,10 +108,10 @@ export default function JumpEvents({ loaderData }: Route.ComponentProps) {
     );
 
   return (
-    <SitesChrome active="play" overlayNav>
+    <SitesLayout active="play" overlayNav>
       <JumpPage>
         <JumpCard {...card} {...jumpInFor(card.jumpInHref, launch)} when={when} actions={actions} />
       </JumpPage>
-    </SitesChrome>
+    </SitesLayout>
   );
 }
