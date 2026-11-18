@@ -1489,8 +1489,7 @@ impl IpfsIo {
         self.default_fs_path.as_deref()
     }
 
-    /// The cached bytes under `key` (native only: on web the worker's cache is read through
-    /// `web_cache`).
+    /// The cached bytes under `key` on native. Web reads go through `web_cache`.
     async fn read_disk_cache(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, std::io::Error> {
         let Some(cached) = self
             .cache_path()
@@ -1506,8 +1505,8 @@ impl IpfsIo {
         Ok(Some(buffer))
     }
 
-    /// Drops the cached bytes under `key`, if there are any, and says whether there were (native
-    /// only: on web the worker's cache entry goes through `web_cache`).
+    /// Drops the native cache entry under `key` and returns whether it existed. Web eviction
+    /// goes through `web_cache`.
     #[cfg(not(target_arch = "wasm32"))]
     async fn forget_disk_cache(&self, key: &CacheKey) -> Result<bool, std::io::Error> {
         let Some(cached) = self
@@ -1661,8 +1660,7 @@ impl IpfsIo {
     /// Poll the scene's content server until each of `file_paths` (resolved via the scene
     /// collection) is fetchable, sharing one `timeout` budget; returns whether all became available.
     /// Used after writing imported files to wait for the dev server to index them before the
-    /// renderer first tries to load them — otherwise that first load 404s and is never retried. On
-    /// web the successful GETs also warm the service-worker cache for the exact URLs the loader uses.
+    /// renderer first tries to load them.
     pub async fn await_contents_available(
         &self,
         file_paths: &[String],
@@ -2123,14 +2121,10 @@ impl IpfsIo {
             let cache_key =
                 cache_key.filter(|_| !url::Url::parse(&remote).is_ok_and(|url| url.is_loopback()));
 
-            // on web the service worker's cache (`web_cache`) is the content cache: anything with
-            // a cache key (content by hash, and urls by their digest) is looked up there once,
-            // here; the download that follows a miss does not ask the worker again
             #[cfg(target_arch = "wasm32")]
             let sw_caches = cache_key.is_some();
 
-            // the worker's cache is the disk cache here: read it directly, so a cached file
-            // doesn't wait on a request slot behind every download in the queue
+            // Read the web cache before acquiring a request slot so cache hits skip the download queue.
             #[cfg(target_arch = "wasm32")]
             if sw_caches {
                 if let Some(cached) = web_cache::read(&remote).await {

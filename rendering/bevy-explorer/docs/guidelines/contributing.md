@@ -197,7 +197,6 @@ Before adding a shared budget, identify the workload that needs it and measure t
 on unrelated callers. Give changes with independent consumers or failure modes their own
 PR and test evidence.
 
-For browser forwarding changes, run
+For service worker routing changes, run
 `pnpm exec vitest run src/test/serviceWorkerCache.test.ts src/test/previewRealm.test.ts` from
-`rendering/bevy-explorer/source/react-web`. Check abort propagation, streamed requests,
-referrer policy and disposal of unread response bodies.
+`rendering/bevy-explorer/source/react-web`.

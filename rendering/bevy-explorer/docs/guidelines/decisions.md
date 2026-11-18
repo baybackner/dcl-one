@@ -635,13 +635,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   downloaded again in every session. An entry under a content hash is never dropped this way: it
   was checked against the hash before it was written, so a bad one is the asset processor's
   output or disk damage, which belong to the processor and the disk, not to a retry.
-- **Engine content downloads carry no `X-IPFS` header on web.** The engine reads
-  `ipfs-path-cache-v2` itself before it queues a download (`crates/ipfs/src/lib.rs`, the variants
-  client), so the worker passes the request to the network untouched; a lookup there could only
-  repeat that miss. The worker still answers requests that carry the header from that cache, and
-  only the engine writes it. A hit missed in between (the same hash finishing under another url,
-  another tab), or one that appears before a retry (the engine reads the cache only before the
-  first attempt), costs one more download of the same bytes.
+- **The service worker does not answer content requests from the content cache.** The engine
+  reads `ipfs-path-cache-v2` itself before it queues a download (`crates/ipfs/src/lib.rs`, the
+  variants client), so a lookup in the worker could only repeat that miss; the worker only trims
+  the cache. A hit missed in between (the same hash finishing under another url, another tab), or
+  one that appears before a retry (the engine reads the cache only before the first attempt),
+  costs one more download of the same bytes (#726).
 - **Web-only engine switches are page params**, not `LaunchOptions` fields.
 - **`CommsApi.consumeMessages` resolves to a bare array** of `{ sender, data }`, not the
   protocol's `{ messages }`, because unity-explorer, the client scenes are tested on, returns
@@ -670,14 +669,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Collectible cache retention must be generic** across wearables and emotes, and an emote's
   ownership is its membership of the avatar's animation graph. A pruning PR that special-cases
   emotes (#1323) is parked for that reason.
-- **A missing content file stays missing until restart.** When a server answers 400, 404, 405,
-  410, 414 or 451 to a read of a content hash, later reads of that url by content hash are
-  answered from memory for the rest of the session. Any other read of the same url (by url, or
-  from a loopback content server, which is never keyed by hash) is answered from memory for 10 s
-  after the failure and then asked for again; other failures are answered from memory for 10 s;
-  preview mode asks again on every read. A later failure of another kind does not shorten a
-  session entry, and a successful download of the url clears its entry. At most 4096 urls are
-  held.
+- **Definitive failures on hash-keyed content reads are remembered for the session.** Outside
+  preview, a definitive failure (404 and similar) is remembered for that URL when read by hash.
+  A catalyst only activates an entity once it holds all of its files, so the answer is final.
+  Other reads and failures keep the 10 s retry. Preview asks again on every read (#727).
 - **A content download that does not match its hash fails the read**, so bytes that are not the
   file the scene named never reach a loader. It is a failure like a dropped transfer, asked for
   again after 10 s, not a missing file. A name the check cannot verify is read as before, uncached.
