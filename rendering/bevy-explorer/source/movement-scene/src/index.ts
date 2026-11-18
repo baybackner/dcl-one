@@ -9,10 +9,9 @@ import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
 import { beginTick } from './clock';
-// Debug/tuning infrastructure — kept in the tree but disconnected so it has no
-// effect on a production deployment. Re-enable the import + the call in main()
-// when you want to live-tune feel or test long glides.
-// import { setupUi } from './ui';
+// Test geometry — kept in the tree but disconnected so it has no effect on a
+// production deployment. Re-enable the import + the call in main() to test
+// long glides.
 // import { initTestTower } from './testTower';
 
 // Avatar-bus audio clip pools published via MovementAnimation.sounds. Engine
@@ -178,9 +177,8 @@ export function main() {
   initGroundProbes();
   initStepCasts();
   initWalkSystem();
-  // Debug/tuning — disabled for production (see imports above).
+  // Test geometry — disabled for production (see imports above).
   // initTestTower();
-  // setupUi();
 
   engine.addSystem(initFrame, 100000 + 1);
   engine.addSystem(applyMovement, 100000 - 3);
