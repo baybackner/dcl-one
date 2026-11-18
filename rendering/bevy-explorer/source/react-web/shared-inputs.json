@@ -1018,6 +1018,10 @@
           "kind": "directory"
         },
         {
+          "name": "shop",
+          "kind": "directory"
+        },
+        {
           "name": "sites",
           "kind": "directory"
         }
@@ -6445,7 +6449,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "faad3876c599cc00be6b1f603e6da088da219df3be8fb6d9656804eae22aa40f"
+      "sha256": "f302f76b0423a53887eb6d1e19d43addb63596fa7edf1a038e108a127119ed50"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
