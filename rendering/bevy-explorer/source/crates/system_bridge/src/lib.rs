@@ -140,6 +140,10 @@ pub enum SystemApi {
     LiveSceneInfo(RpcResultSender<Vec<LiveSceneInfo>>),
     GetHomeScene(RpcResultSender<HomeScene>),
     SetHomeScene(HomeScene),
+    /// None takes the lobby stage down.
+    SetLobbyStage(Option<LobbyStage>),
+    /// Whether the local user may enter the named world (`name.dcl.eth`).
+    GetWorldAccess(String, RpcResultSender<WorldAccessVerdict>),
     /// Credential-free resolved service endpoints.
     GetServiceUrls(RpcResultSender<Vec<(String, String)>>),
     GetWelcome(RpcResultSender<WelcomeState>),
@@ -189,6 +193,8 @@ pub enum SystemApi {
     GetWorldAccessStream(RpcStreamSender<WorldAccessEvent>),
     /// Answers the password prompt: the password, or `None` when the player gives up.
     SetWorldPassword(Option<world_access::WorldPassword>),
+    /// The signed-in wallet's platform ban: now, then again on every change.
+    GetPlatformBanStream(RpcStreamSender<PlatformBanNotice>),
     SetInteractableArea(Vec4),
     GetMicState(RpcResultSender<MicState>),
     SetMicEnabled(bool),
