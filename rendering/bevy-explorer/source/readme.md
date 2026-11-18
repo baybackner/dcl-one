@@ -234,9 +234,8 @@ Replies are JSON where the command says so; a failed command rejects (web) or an
   to the engine through `engine_console_command` and write Bevy input events, unlike `/press_key`
   and `/click_at`, which need a DevTools client for real input. `docs/guidelines/interaction.md`
   has the options, replies and diagnoses.
-- Movement: `/avatar_animations [on|off]` holds the player's own avatar pose while off.
-  `/movement_state` reports the active locomotion settings and the last movement step's
-  velocities.
+- Movement: `/movement_state` reports the active locomotion settings and the last movement
+  step's velocities.
 - The preview-only commands (`/jump`, `/speed`, `/move_player_to`, the debug dumps) stay preview-only.
 
 **The loopback console.** Every native build, the headless client mode included, carries a JSON-RPC

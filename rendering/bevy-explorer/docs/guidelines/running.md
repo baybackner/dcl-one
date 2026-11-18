@@ -250,9 +250,6 @@ State, in every build:
 
 Movement:
 
-- `/avatar_animations [on|off]`: whether the player's own avatar animates; off holds its current
-  pose for measurements, while clip selection and the movement scene's animation feedback go on.
-  The reply is `enabled` and the count of `clips` still playing. Foot IK (`/footik`) is separate.
 - `/movement_state`: the active locomotion settings and the last completed movement step's
   `requested`, `actual` and `external` velocities, in SDK axes.
 

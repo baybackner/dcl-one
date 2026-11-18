@@ -34,7 +34,7 @@ use common::{
 use comms::{
     broadcast, global_crdt::ForeignPlayer, profile::CurrentUserProfile, BroadcastTarget, Transport,
 };
-use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
+use console::DoAddConsoleCommand;
 use ipfs::IpfsAssetServer;
 use scene_runner::{
     asset_preload::plugin::PreloadedGltf, permissions::Permission, update_world::animation::Clips,
@@ -157,12 +157,7 @@ impl Plugin for AvatarAnimationPlugin {
             Update,
             (
                 (handle_trigger_emotes, broadcast_emote).before(animate),
-                (
-                    animate,
-                    play_current_emote,
-                    play_masked_emote,
-                    hold_own_avatar_pose,
-                )
+                (animate, play_current_emote, play_masked_emote)
                     .chain()
                     .after(process_avatar),
                 play_scene_driven_sounds.after(process_avatar),
@@ -170,110 +165,6 @@ impl Plugin for AvatarAnimationPlugin {
                 .in_set(SceneSets::PostLoop),
         );
         app.add_console_command::<EmoteConsoleCommand, _>(emote_console_command);
-        app.init_resource::<OwnAvatarAnimations>()
-            .add_console_command::<AvatarAnimationsCommand, _>(avatar_animations_command)
-            .add_debug_section(DebugSection {
-                title: "Avatar animations",
-                query: "/avatar_animations",
-                fields: &[("Playing clips", "clips")],
-                actions: &[],
-                inputs: &[DebugInput {
-                    label: "Animate own avatar",
-                    field: "enabled",
-                    command: "/avatar_animations {value}",
-                    kind: DebugInputKind::Toggle,
-                }],
-            });
-    }
-}
-
-/// Whether the player's own avatar animates. Off holds its pose where it is: every clip of its
-/// animation player is paused, while clip selection and the scene's animation feedback carry on.
-/// Measuring movement with the pose held keeps animation work out of the frame. Other avatars
-/// are not affected; foot and head IK have their own switches.
-#[derive(Resource)]
-pub struct OwnAvatarAnimations {
-    pub enabled: bool,
-}
-
-impl Default for OwnAvatarAnimations {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
-
-/// Read whether the player's own avatar animates, or turn its animations `on` or `off` (off holds
-/// the current pose).
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/avatar_animations")]
-struct AvatarAnimationsCommand {
-    /// `on` or `off` (`true` or `false`)
-    state: Option<String>,
-}
-
-fn avatar_animations_command(
-    mut cmd: ConsoleCommand<AvatarAnimationsCommand>,
-    mut setting: ResMut<OwnAvatarAnimations>,
-    player: Query<&AvatarAnimPlayer, With<PrimaryUser>>,
-    animation_players: Query<&AnimationPlayer>,
-) {
-    let Some(Ok(request)) = cmd.take() else {
-        return;
-    };
-    match request.state.as_deref() {
-        None => (),
-        Some("on" | "true") => setting.enabled = true,
-        Some("off" | "false") => setting.enabled = false,
-        Some(other) => {
-            cmd.reply_failed(format!("unknown state `{other}`: use on or off"));
-            return;
-        }
-    }
-    let clips = player
-        .single()
-        .ok()
-        .and_then(|target| animation_players.get(target.0).ok())
-        .map(|animation_player| {
-            animation_player
-                .playing_animations()
-                .filter(|(_, active)| !active.is_paused())
-                .count()
-        });
-    cmd.reply_ok(
-        serde_json::json!({
-            "enabled": setting.enabled,
-            // the change lands with the next frame's animation update
-            "clips": clips,
-            "unavailable": { "clips": "the player's avatar is not built" },
-        })
-        .to_string(),
-    );
-}
-
-/// After this frame's clip selection: pause every clip on the player's own avatar while its
-/// animations are off, and resume them once when they are turned back on.
-fn hold_own_avatar_pose(
-    setting: Res<OwnAvatarAnimations>,
-    player: Query<&AvatarAnimPlayer, With<PrimaryUser>>,
-    mut animation_players: Query<&mut AnimationPlayer>,
-    mut held: Local<bool>,
-) {
-    if setting.enabled && !*held {
-        return;
-    }
-    let Some(mut animation_player) = player
-        .single()
-        .ok()
-        .and_then(|target| animation_players.get_mut(target.0).ok())
-    else {
-        return;
-    };
-    if setting.enabled {
-        animation_player.resume_all();
-        *held = false;
-    } else {
-        animation_player.pause_all();
-        *held = true;
     }
 }
 
@@ -2274,48 +2165,6 @@ mod tests {
         graph::AnimationNodeIndex,
         transition::{advance_transitions, expire_completed_transitions},
     };
-
-    fn paused(app: &App, entity: Entity) -> Vec<bool> {
-        app.world()
-            .get::<AnimationPlayer>(entity)
-            .unwrap()
-            .playing_animations()
-            .map(|(_, active)| active.is_paused())
-            .collect()
-    }
-
-    #[test]
-    fn turning_own_animations_off_holds_only_the_players_pose() {
-        let mut app = App::new();
-        app.init_resource::<OwnAvatarAnimations>()
-            .add_systems(Update, hold_own_avatar_pose);
-        let mut clip = AnimationPlayer::default();
-        clip.play(AnimationNodeIndex::new(1));
-        let own = app.world_mut().spawn(clip.clone()).id();
-        app.world_mut()
-            .entity_mut(own)
-            .insert((AvatarAnimPlayer(own), PrimaryUser::default()));
-        let other = app.world_mut().spawn(clip).id();
-        app.world_mut()
-            .entity_mut(other)
-            .insert(AvatarAnimPlayer(other));
-
-        app.update();
-        assert_eq!(paused(&app, own), [false]);
-
-        app.world_mut()
-            .resource_mut::<OwnAvatarAnimations>()
-            .enabled = false;
-        app.update();
-        assert_eq!(paused(&app, own), [true]);
-        assert_eq!(paused(&app, other), [false]);
-
-        app.world_mut()
-            .resource_mut::<OwnAvatarAnimations>()
-            .enabled = true;
-        app.update();
-        assert_eq!(paused(&app, own), [false]);
-    }
 
     const IDLE: usize = 1;
     const WALK: usize = 2;
