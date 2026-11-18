@@ -57,6 +57,13 @@ function readInput() {
 
   input.x = snap(Vector3.dot(movementAxis, right));
   input.z = snap(Vector3.dot(movementAxis, fwd));
+  // Each held key drives its own axis at full speed: a diagonal is not shortened here, the step cuts the move to the
+  // gait's speed. Adding or releasing a side key while running then only turns the move; shortened axes would have one
+  // slow down while the other speeds up, a dip of about a fifth of the speed.
+  if (walkAxis === null && input.x !== 0 && input.z !== 0) {
+    input.x = Math.sign(input.x);
+    input.z = Math.sign(input.z);
+  }
   input.limit = isGliding ? glidingSpeed
     : inputSystem.isPressed(InputAction.IA_MODIFIER) ? sprintSpeed
     : inputSystem.isPressed(InputAction.IA_WALK) ? walkSpeed
@@ -209,7 +216,9 @@ function step(s: State, c: StepInput, h: number) {
   else if (es > MAX_EXTERNAL_SPEED * MAX_EXTERNAL_SPEED) { const f = MAX_EXTERNAL_SPEED / Math.sqrt(es); s.ex *= f; s.ez *= f; }
 }
 
-// Air jump launch: the move velocity turns to the keys held on this step, at least AIR_JUMP_IMPULSE fast.
+// Air jump launch: the move velocity turns to the keys held on this step, each held axis at least AIR_JUMP_IMPULSE
+// fast. A diagonal launches sqrt(2) faster; above the gait's speed, air drag and acceleration take the excess back
+// within about 0.1 s.
 function airLaunch(s: State, c: StepInput) {
   if (!AIR_JUMP_STOP_WITHOUT_KEYS && c.x === 0 && c.z === 0) return;
   const v = Math.max(AIR_JUMP_IMPULSE, Math.sqrt(s.vx * s.vx + s.vz * s.vz));
