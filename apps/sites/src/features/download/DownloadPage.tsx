@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { Button } from "@dcl/one-ui";
-import { asset } from "@ui/asset";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
+import googlePlayBadge from "@dcl/one-ui/apps/sites/assets/google_play_cta.svg?url";
+import { VerifiedIcon } from "@dcl/one-ui/apps/sites/download/VerifiedIcon";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import SitesChrome from "@ui/web/frames/SitesChrome";
 
@@ -70,7 +71,7 @@ function DownloadOptions({ primary, secondary, downloads }: Pick<DownloadPagePro
       <div className={styles.alternatives}>
         {downloads && (
           <p className={styles.counts}>
-            <img src={asset("assets/home/verified.svg")} alt="" width={24} height={24} />
+            <VerifiedIcon size={24} />
             {`Total Downloads: ${downloads}`}
           </p>
         )}
@@ -159,7 +160,7 @@ export default function DownloadPage({ primary, secondary, android, downloads }:
       </div>
       <div className={styles.share}>
         <a className={styles.storeButton} href={android ? GOOGLE_PLAY_URL : APP_STORE_URL} target="_blank" rel="noopener noreferrer">
-          <img className={styles.storeBadge} src={android ? asset("assets/home/google-play.svg") : appStoreBadge} alt={android ? "Get it on Google Play" : "Download on the App Store"} />
+          <img className={styles.storeBadge} src={android ? googlePlayBadge : appStoreBadge} alt={android ? "Get it on Google Play" : "Download on the App Store"} />
         </a>
       </div>
     </main>

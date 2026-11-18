@@ -7,7 +7,7 @@
 // minute ("all off" only before any read has succeeded). The variants' payloads (an address list, for one) come with
 // the flags, kept as upstream keeps them (`parseRemoteFlags`).
 
-import { parseRemoteFlags, type RemoteFlagsAnswer } from "@ui/shop/discovery/lib/remoteFlags";
+import { parseRemoteFlags, type RemoteFlagsAnswer } from "@shop/discovery/lib/rolloutFlags";
 
 import { withDeadline } from "./request-deadline";
 import { ttlMemo } from "./ttl-memo";
