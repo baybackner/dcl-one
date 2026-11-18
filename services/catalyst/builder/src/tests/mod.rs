@@ -11,3 +11,4 @@ mod linked_publication;
 mod projects;
 mod publication_preparation;
 mod publication_transactions;
+mod upstream_routes;

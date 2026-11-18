@@ -1,7 +1,7 @@
 # builder-server -> builder
 
-Pinned at `452af1e06cf103ffa4e5b115b002120e98d375c7` (migrations through
-`1727096280687_add-programmatic-check-to-third-parties`).
+Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
+`1790640000001_create-collection-events`).
 
 | Step | Upstream | Target |
 | --- | --- | --- |
@@ -54,8 +54,9 @@ stops the batch on any missing hash. `uploaded_by` is the item owner.
   `builder.asset_catalog`, built by the operator command.
 - Project manifests and files: S3 objects, not rows (`project_manifests`,
   `project_files` stay empty for imported projects).
-- `collection_curations`, `slot_usage_cheques`, `virtual_third_parties`,
-  `deployments`, `pools`, `pool_groups`, `pool_likes`: no target.
+- `collection_curations`, `collection_events`, `slot_usage_cheques`,
+  `virtual_third_parties`, `deployments`, `pools`, `pool_groups`,
+  `pool_likes`: no target.
 - `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`,
   `lock`, `linked_contract_address`, `linked_contract_network`: no target column.
 - Left to the node: `collection_publications`, `linked_collection_publications`,
