@@ -54,8 +54,9 @@ export const settings = {
   // step, which otherwise reads as a shuffle (0.1 tuned in testing).
   jogStopStart: 0.1,
   // --- Glide pose selection ---
-  // Turn rate (deg/s) past which the glide avatar leans left/right.
-  glideLeanRate: 30,
+  // Turn rate (deg/s) of the glide's facing at which the bank reaches its full angle (GLIDE_TILT_FULL_ANGLE); a
+  // gentle glide turn banks a fraction of it, a tight spiral fully.
+  glideLeanRate: 300,
   // h-speed (m/s) above which glide uses the forward (pitched) pose; below it
   // uses the upright/idle pose ("lean back").
   glideForwardSpeed: 3,
