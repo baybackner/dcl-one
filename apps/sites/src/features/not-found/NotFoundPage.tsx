@@ -5,7 +5,7 @@ import { Link } from "react-router";
 
 import { Button } from "@dcl/one-ui";
 import { asset } from "@ui/asset";
-import AnimatedBackground from "@ui/shop/discovery/components/animated-background/AnimatedBackground";
+import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
 
 import { GeneralDecentralandColor } from "@dcl/one-ui/foundations/icons";
 import styles from "./NotFoundPage.module.css";

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import SitesChrome from "@ui/web/frames/SitesChrome";
-import AnimatedBackground from "@ui/shop/discovery/components/animated-background/AnimatedBackground";
+import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
 import { Hero } from "@dcl/one-ui/apps/sites/home/Hero";
 import { WhatsOn } from "@dcl/one-ui/apps/sites/home/WhatsOn";
 import { CatchTheVibe } from "@dcl/one-ui/apps/sites/home/CatchTheVibe";

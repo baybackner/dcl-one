@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode 
 import { useNavigate, useSearchParams } from "react-router";
 
 import { Button } from "@dcl/one-ui";
-import AnimatedBackground from "@ui/shop/discovery/components/animated-background/AnimatedBackground";
+import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
 import SitesChrome from "@ui/web/frames/SitesChrome";
 
 import { track, type TrackContext } from "@/core/lib/telemetry/track";
