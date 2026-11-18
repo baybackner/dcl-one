@@ -45,8 +45,6 @@
     "gen:schema-stubs:check": "node scripts/gen-schema-stubs.mts --check",
     "gen:authoring-schemas": "node scripts/gen-authoring-schemas.mjs",
     "gen:authoring-schemas:check": "node scripts/gen-authoring-schemas.mjs --check",
-    "gen:error-pages": "node scripts/gen-error-pages.mts",
-    "gen:error-pages:check": "node scripts/gen-error-pages.mts --check",
     "css:inventory": "node scripts/css-inventory.mjs"
   },
   "dependencies": {

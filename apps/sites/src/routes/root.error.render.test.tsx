@@ -2,16 +2,17 @@ import { renderToString } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, it } from "vitest";
 
-import StatusPage from "@ui/components/StatusPage";
+import crew from "@dcl/one-ui/apps/sites/assets/errors/crew.webp";
+import locked from "@dcl/one-ui/apps/sites/assets/errors/locked.webp";
+import lost from "@dcl/one-ui/apps/sites/assets/errors/lost.webp";
+import notFoundAvatar from "@dcl/one-ui/apps/sites/assets/errors/not-found-avatar.webp";
+import wave from "@dcl/one-ui/apps/sites/assets/errors/wave.webp";
+import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { ErrorBoundary } from "./root";
 
 const routeError = (status: number, statusText: string, data: unknown = "") =>
   ({ status, statusText, internal: false, data }) as unknown;
 // Every status the root renders with StatusPage (404 renders NotFoundPage), with the art it draws.
-const lost = "assets/errors/lost.webp";
-const locked = "assets/errors/locked.webp";
-const wave = "assets/errors/wave.webp";
-const crew = "assets/errors/crew.webp";
 const ART_BY_STATUS: Record<number, string> = {
   400: wave, 401: locked, 403: locked, 405: wave, 408: wave, 410: lost, 413: wave, 414: wave, 418: wave, 429: wave,
   500: crew, 502: crew, 503: crew, 504: crew, 507: crew,
@@ -30,7 +31,7 @@ describe("root error boundary", () => {
     const html = renderBoundary(routeError(404, "Not Found", "No route matches /nope"));
     expect(html).toContain('data-status="404"');
     expect(html).toContain("This page has left the world.");
-    expect(html).toContain("assets/errors/not-found-avatar.webp");
+    expect(html).toContain(`src="${notFoundAvatar}"`);
     expect(html).toContain('aria-label="Decentraland Home"');
     expect(html).toMatch(/href="\/whats-on"[^>]*>(<span[^>]*>)*See Events</);
     expect(html).not.toContain("Nothing built on this parcel");
@@ -39,7 +40,7 @@ describe("root error boundary", () => {
   it("offers a retry on 5xx and uses the crew art", () => {
     const html = renderBoundary(routeError(503, "Service Unavailable"));
     expect(html).toContain("We&#x27;ll be right back");
-    expect(html).toContain("assets/errors/crew.webp");
+    expect(html).toContain(`src="${crew}"`);
     expect(html).toContain("Try again");
   });
 
@@ -67,7 +68,7 @@ describe("root error boundary", () => {
 
   it("draws each status with its art", () => {
     for (const [status, art] of Object.entries(ART_BY_STATUS)) {
-      expect(renderBoundary(routeError(Number(status), "")), status).toContain(art);
+      expect(renderBoundary(routeError(Number(status), "")), status).toContain(`src="${art}"`);
     }
   });
 
@@ -88,7 +89,7 @@ describe("root error boundary", () => {
     const html = renderBoundary(new TypeError("boom"));
     expect(import.meta.env.DEV).toBe(true);
     expect(html).toContain('data-status="500"');
-    expect(html).toContain("assets/errors/crew.webp");
+    expect(html).toContain(`src="${crew}"`);
     expect(html).not.toContain("boom");
   });
 });

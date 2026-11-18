@@ -26,7 +26,7 @@ import EmbedBridge from "@/features/components/chrome/EmbedBridge";
 import { reloadingForAccount } from "@/features/components/chrome/explorer-host";
 import SyncEngineBridge from "@/features/components/creator-hub/SyncEngineBridge";
 import NotFoundPage from "@/features/not-found/NotFoundPage";
-import StatusPage from "@ui/components/StatusPage";
+import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { EMBED_BOOT_SCRIPT } from "@ui/web/frames/embed";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { pageSid, sessionMiddleware } from "@/core/lib/telemetry/session";

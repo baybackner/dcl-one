@@ -1,15 +1,17 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 
-import { isRetryable, STATIC_ERROR_STATUSES, statusCopy } from "@ui/components/statusCopy";
+import { isRetryable, STATIC_ERROR_STATUSES, statusCopy } from "@dcl/one-ui/apps/sites/status/statusCopy";
 
-const UI3 = fileURLToPath(new URL("../../ui3/", import.meta.url));
-const SCRIPT = path.join(UI3, "scripts/gen-error-pages.mts");
-const OUT = path.join(UI3, "public/errors");
-const run = (...args: string[]) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: UI3, encoding: "utf8" });
+const SITES = fileURLToPath(new URL("../", import.meta.url));
+const SCRIPT = path.join(SITES, "scripts/gen-error-pages.mts");
+const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "gen-error-pages-"));
+const run = (...args: string[]) =>
+  spawnSync(process.execPath, [SCRIPT, ...args], { cwd: SITES, env: { ...process.env, ERROR_PAGES_OUT: OUT }, encoding: "utf8" });
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -17,6 +19,7 @@ beforeAll(() => {
   const result = run();
   expect(result.status, result.stderr).toBe(0);
 }, 60_000);
+afterAll(() => fs.rmSync(OUT, { recursive: true, force: true }));
 
 it("writes one page per static status and nothing else", () => {
   expect(fs.readdirSync(OUT).sort()).toEqual(STATIC_ERROR_STATUSES.map((s) => `${s}.html`).sort());
@@ -58,7 +61,18 @@ it("is self-contained: no external stylesheet, script or image, and every custom
   }
 });
 
-it("reports the pages up to date right after writing them", () => {
-  const result = run("--check");
-  expect(result.status, result.stderr).toBe(0);
+it("reports the pages up to date right after writing them, and a stale or unexpected page as out of date", () => {
+  expect(run("--check").status).toBe(0);
+  const page = path.join(OUT, "503.html");
+  const html = fs.readFileSync(page, "utf8");
+  fs.writeFileSync(page, html.replace("We'll be right back", "Stale"));
+  fs.writeFileSync(path.join(OUT, "999.html"), "");
+  try {
+    const result = run("--check");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("503.html, 999.html (unexpected)");
+  } finally {
+    fs.writeFileSync(page, html);
+    fs.rmSync(path.join(OUT, "999.html"));
+  }
 });
