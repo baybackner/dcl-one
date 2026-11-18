@@ -278,6 +278,7 @@ library/ui/
       Button.module.css
       Button.test.tsx
       Button.figma.ts   Figma mapping, read by the tooling only
+    chrome/             contexts the web chrome shares between hosts, imported by path, not from index.ts
   apps/
     <app>/              app-specific UI: components and styles used by one app
   index.ts              public foundation and component exports
