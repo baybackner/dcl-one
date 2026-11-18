@@ -1552,9 +1552,6 @@ mod tests {
                 let sent = SentTiming {
                     at: now,
                     frame: frame - 1,
-                    loop_start: now,
-                    deadline: now,
-                    redispatch: frame > 1,
                 };
                 context.tick_timing.reply = Some(ReplyTiming {
                     sent,

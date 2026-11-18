@@ -146,13 +146,7 @@ mod tests {
     #[test]
     fn a_dispatch_in_the_frame_a_late_reply_landed_is_a_redispatch() {
         let at = Instant::now();
-        let sent = |frame| SentTiming {
-            at,
-            frame,
-            loop_start: at,
-            deadline: at,
-            redispatch: false,
-        };
+        let sent = |frame| SentTiming { at, frame };
         let replied = |sent_frame, frame| SceneTickTiming {
             sent: Some(sent(sent_frame)),
             reply: Some(ReplyTiming {
@@ -160,7 +154,6 @@ mod tests {
                 at,
                 frame,
             }),
-            held_back: None,
         };
         // the reply of frame 6's tick landed in frame 7
         assert!(replied(6, 7).late_reply_in(7));

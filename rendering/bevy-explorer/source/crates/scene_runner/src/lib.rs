@@ -100,8 +100,6 @@ pub struct SceneUpdates {
     pub jobs_in_flight: HashSet<Entity>,
     pub update_deadline: SystemTime,
     pub eligible_jobs: usize,
-    /// When this frame's scene loop started.
-    pub loop_start_time: Instant,
     pub loop_end_time: Instant,
     /// The frame length `run_scene_loop` last targeted (vsync refresh rate or the fps target,
     /// with the session override); None when the target is uncapped (fps 0).
@@ -392,7 +390,6 @@ impl Plugin for SceneRunnerPlugin {
             update_deadline: web_time::SystemTime::now(),
             eligible_jobs: 0,
             scene_queue: Default::default(),
-            loop_start_time: Instant::now(),
             loop_end_time: Instant::now(),
             frame_target: None,
             priority_scenes: Default::default(),
@@ -532,7 +529,6 @@ fn run_scene_loop(world: &mut World) {
     loop_schedule.next_frame_end = target_end_time + frame_target_duration;
 
     let mut updates = world.resource_mut::<SceneUpdates>();
-    updates.loop_start_time = start_loop_time;
     updates.loop_end_time = target_end_time;
     updates.frame_target = (fps != 0.0).then_some(frame_target_duration);
     updates.loop_polled = false;
@@ -1432,8 +1428,6 @@ fn send_scene_updates(
 
     let now = time.elapsed_secs_f64();
     let dt = dispatch_dt(context.tick_number, context.last_sent, now);
-    // only the movement scene's re-dispatch goes out in the frame its late reply landed
-    let redispatch = context.tick_timing.late_reply_in(engine_info.frame.0);
 
     let crdt = context.crdt_store.take_updates();
     if let Some(mut traffic) = traffic {
@@ -1451,9 +1445,6 @@ fn send_scene_updates(
         context.tick_timing.sent = Some(renderer_context::SentTiming {
             at: Instant::now(),
             frame: engine_info.frame.0,
-            loop_start: updates.loop_start_time,
-            deadline: updates.loop_end_time,
-            redispatch,
         });
         dcl_assert!(!updates.jobs_in_flight.contains(&ent));
         updates.jobs_in_flight.insert(ent);
@@ -1590,7 +1581,7 @@ fn receive_scene_updates(
                             if Some(root) == movement_scene {
                                 redispatch = movement_redispatch_due(
                                     &mut updates,
-                                    &mut context,
+                                    &context,
                                     first_poll,
                                     time.elapsed_secs_f64(),
                                 )
@@ -1682,11 +1673,10 @@ fn receive_scene_updates(
 /// Records the movement scene's tick that just replied and tells whether to dispatch the scene
 /// again now ([`movement_redispatch`]): its reply came in a later frame than its dispatch, the
 /// scene can run and, unless the reply is seen at this loop's first poll, the time left in this
-/// frame's scene loop covers its recent ticks. A late reply left to the next frame marks
-/// `tick_timing.held_back`.
+/// frame's scene loop covers its recent ticks.
 fn movement_redispatch_due(
     updates: &mut SceneUpdates,
-    context: &mut RendererSceneContext,
+    context: &RendererSceneContext,
     first_poll: bool,
     now: f64,
 ) -> bool {
@@ -1712,11 +1702,7 @@ fn movement_redispatch_due(
     let left = updates
         .loop_end_time
         .saturating_duration_since(Instant::now());
-    let fits = updates.movement_ticks.redispatch_fits(left, first_poll);
-    if !fits {
-        context.tick_timing.held_back = Some(reply.frame);
-    }
-    fits
+    updates.movement_ticks.redispatch_fits(left, first_poll)
 }
 
 // entities deleted this loop

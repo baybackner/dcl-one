@@ -137,8 +137,7 @@ pub struct RendererSceneContext {
     pub resource_counters: Option<SceneResourceCounters>,
     pub(crate) counter_sample_time: Option<web_time::Instant>,
     pub(crate) crdt_bytes_per_second: Option<f64>,
-    /// When the scene's last tick was dispatched and its last reply arrived, against the frame's
-    /// scene loop.
+    /// When and in which frame the scene's last tick was dispatched and its last reply arrived.
     pub tick_timing: SceneTickTiming,
     /// Engine time the tick of the last reply was dispatched (`last_sent` then). A scene
     /// dispatched again in the frame its reply landed has a later `last_sent`.
@@ -150,30 +149,11 @@ pub struct RendererSceneContext {
     pub redispatch_rotation: Option<Quat>,
 }
 
-/// A scene tick's dispatch: when it left and the frame's scene loop it left in.
+/// A scene tick's dispatch: when and in which frame it left.
 #[derive(Debug, Clone, Copy)]
 pub struct SentTiming {
     pub at: web_time::Instant,
     pub frame: u32,
-    /// When the frame's scene loop started.
-    pub loop_start: web_time::Instant,
-    /// When the frame's scene loop ends: a reply that arrives later is applied in a later frame.
-    pub deadline: web_time::Instant,
-    /// A dispatch answering the movement scene's late reply in the frame it landed
-    /// ([`crate::movement_redispatch`]).
-    pub redispatch: bool,
-}
-
-impl SentTiming {
-    /// Milliseconds from the start of the frame's scene loop to the dispatch.
-    pub fn after_start_ms(&self) -> f32 {
-        signed_ms(self.at, self.loop_start)
-    }
-
-    /// Milliseconds from the dispatch to the end of the frame's scene loop.
-    pub fn before_deadline_ms(&self) -> f32 {
-        signed_ms(self.deadline, self.at)
-    }
 }
 
 /// A scene tick's reply: its dispatch, and when and in which frame the engine received it.
@@ -191,12 +171,6 @@ impl ReplyTiming {
     pub fn frames(&self) -> u32 {
         self.frame.wrapping_sub(self.sent.frame)
     }
-
-    /// Milliseconds from the end of the dispatch frame's scene loop to the reply (negative: the
-    /// reply arrived before it).
-    pub fn after_deadline_ms(&self) -> f32 {
-        signed_ms(self.at, self.sent.deadline)
-    }
 }
 
 /// The last dispatch and reply of a scene ([`RendererSceneContext::tick_timing`]).
@@ -204,9 +178,6 @@ impl ReplyTiming {
 pub struct SceneTickTiming {
     pub sent: Option<SentTiming>,
     pub reply: Option<ReplyTiming>,
-    /// The last frame a late reply of the movement scene was not answered by a re-dispatch: too
-    /// little of the frame's scene loop was left ([`crate::movement_redispatch`]).
-    pub held_back: Option<u32>,
 }
 
 impl SceneTickTiming {
@@ -216,15 +187,6 @@ impl SceneTickTiming {
     pub fn late_reply_in(&self, frame: u32) -> bool {
         self.reply
             .is_some_and(|reply| reply.frame == frame && reply.frames() > 0)
-    }
-}
-
-/// `a - b` in milliseconds, negative when `a` is earlier.
-fn signed_ms(a: web_time::Instant, b: web_time::Instant) -> f32 {
-    if a >= b {
-        (a - b).as_secs_f32() * 1000.0
-    } else {
-        -(b - a).as_secs_f32() * 1000.0
     }
 }
 
