@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from "react";
-
 type SyncState =
   | "synced"
   | "editing"
@@ -524,6 +522,9 @@ export function createSyncEngine(opts?: { dbName?: string }): SyncEngine {
   };
 }
 
-export function useSyncSummary(engine: SyncEngine): EngineSummary {
-  return useSyncExternalStore(engine.subscribe, engine.getSummary, engine.getSummary);
+let shared: SyncEngine | null = null;
+
+export function getSharedSyncEngine(): SyncEngine {
+  if (!shared) shared = createSyncEngine();
+  return shared;
 }

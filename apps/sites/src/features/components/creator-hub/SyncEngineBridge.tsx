@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { getSharedSyncEngine } from "@ui/creatorhub/lib/shared-sync";
+import { getSharedSyncEngine } from "@web-core/creator-hub-sync";
 
 import { putServerDraft } from "@/data/lib/catalyst/creator-hub/scene-drafts-client";
 

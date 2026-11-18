@@ -1,4 +1,4 @@
-import { type EngineSummary } from "../lib/sync-engine";
+import { type EngineSummary } from "@web-core/creator-hub-sync";
 import "./syncindicator.css";
 
 type Tone = "ok" | "busy" | "attn" | "warn";

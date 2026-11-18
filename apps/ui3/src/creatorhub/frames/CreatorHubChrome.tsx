@@ -5,7 +5,7 @@ import DclTopBar from "../../web/frames/DclTopBar";
 import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import AccountMenu from "../../web/frames/AccountMenu";
 import CreatorHubSyncChip from "../components/CreatorHubSyncChip";
-import { CREATOR_HUB_HOME } from "../explorer-host";
+import { CREATOR_HUB_HOME } from "@web-core/creator-hub-host";
 import "./creatorhubchrome.css";
 import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import SiteSectionNavigation from "../../web/frames/SiteSectionNavigation";

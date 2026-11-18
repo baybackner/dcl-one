@@ -4,7 +4,7 @@ import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query
 
 import SitesLayout from "@/features/components/chrome/SitesLayout";
 
-import { creatorHubHost } from "@ui/creatorhub/explorer-host";
+import { creatorHubHost } from "@web-core/creator-hub-host";
 
 import { isDesktopShell } from "@/data/lib/auth/native-shell";
 import { latestPostsQuery } from "@/data/lib/create-landing/blog-posts";

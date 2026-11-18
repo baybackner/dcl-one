@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 
 import FlowMapPage, { Hourglass } from "../../flowmap/FlowMapPage";
 import type { LinkComponentProps } from "../../flowmap/FlowMapPage";
-import { CREATOR_HUB_HOME } from "../explorer-host";
+import { CREATOR_HUB_HOME } from "@web-core/creator-hub-host";
 import { ASCII_SOURCE, SECTIONS, STATS } from "./chflowmapdata";
 
 type ChFlowMapPageProps = {

@@ -6,7 +6,7 @@ import {
   type PushBody,
   type PushResult,
   type SyncEngine,
-} from "./sync-engine";
+} from "./creator-hub-sync";
 
 function waitFor(engine: SyncEngine, pred: (s: EngineSummary) => boolean, timeoutMs = 1000): Promise<EngineSummary> {
   return new Promise((resolve, reject) => {

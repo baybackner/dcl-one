@@ -1,5 +1,5 @@
-import type { AuthIdentity } from "@web-core/auth/identity";
-import type { Eip1193Provider } from "../data/auth/wallet";
+import type { AuthIdentity } from "./auth/identity";
+import type { Eip1193Provider } from "./auth/eip1193";
 
 export type CreatorHubHost = {
   version: 1;
