@@ -169,9 +169,12 @@ pub enum Reply {
     JoinCommunity(String, u64, Result<String, VoiceRefusal>),
     /// With the community it ends: ending an abandoned start must not drop the current stream.
     EndCommunity(String, Result<(), VoiceRefusal>),
-    /// Raise hand, promote, demote, kick, reject, mute: fire and forget, the result only shown as
-    /// the last error.
+    /// Raise hand, promote, demote, kick, reject: fire and forget, the result only shown as the
+    /// last error.
     Moderation(Result<(), VoiceRefusal>),
+    /// The local speaker's mute toggle, with whether it muted: as `Moderation`, and a mute the
+    /// server refused is not echoed.
+    MuteSpeaker(bool, Result<(), VoiceRefusal>),
 }
 
 /// Everything that moves the state.
@@ -251,7 +254,7 @@ pub struct CallState {
     pub local_role: Role,
     pub local_requesting_to_speak: bool,
     /// The local participant's metadata says muted: by the user's own toggle or a moderator.
-    pub local_muted: bool,
+    local_muted: bool,
     /// Why the last action failed or the call could not happen; cleared by the next call or
     /// stream. Set through [`Self::set_error`].
     pub error: Option<String>,
@@ -264,9 +267,9 @@ pub struct CallState {
     mic_wanted: bool,
     /// The room has connected once in this call; later connects are re-dials.
     connected_once: bool,
-    /// The user unmuted and the room has not yet echoed `muted: false`: a `muted: true` read
-    /// meanwhile is the echo of the user's earlier mute, not a moderator's.
-    unmute_unechoed: bool,
+    /// The room has yet to echo a mute the user sent: the next `muted: true` is that echo, not a
+    /// moderator's mute.
+    mute_unechoed: bool,
     deferred: Option<(Deferred, f64)>,
     /// Ends a private call the server still has open after the social link dropped while it
     /// rang; sent when the link is back.
@@ -538,10 +541,13 @@ impl CallState {
                             return effects;
                         }
                         self.set_call_mic(enabled, &mut effects);
-                        self.unmute_unechoed = enabled;
                         // tell the server, so the others see the speaker muted or not
                         if let (Some(community_id), Some(me)) = (self.community_id.clone(), self.me)
                         {
+                            // a room that reads muted already does not echo another mute
+                            if !enabled && !self.local_muted {
+                                self.mute_unechoed = true;
+                            }
                             effects.push(Effect::Rpc(Rpc::MuteSpeaker {
                                 community_id,
                                 address: me,
@@ -747,25 +753,24 @@ impl CallState {
             return;
         }
         let was_speaker = self.local_speaker;
+        let was_muted = self.local_muted;
         self.local_role = Role::parse(&metadata.role);
         self.local_requesting_to_speak = metadata.is_requesting_to_speak;
         self.local_speaker = self.kind == Kind::Private || metadata.is_speaker;
+        self.local_muted = metadata.muted;
         // a demoted speaker's mic goes down; a promoted one's
         // comes up muted (here: stays down until toggled)
-        if was_speaker && !self.local_speaker {
-            if self.mic_enabled {
-                effects.push(Effect::SetCallMic(false));
+        let mut mic_down = was_speaker && !self.local_speaker;
+        // The gatekeeper's mute only marks the metadata, so the client enforces it; the speaker
+        // may raise the mic again.
+        if metadata.muted && !was_muted && self.kind == Kind::Community {
+            if self.mute_unechoed {
+                self.mute_unechoed = false;
+            } else {
+                mic_down = true;
             }
-            self.mic_wanted = false;
         }
-        // The gatekeeper's mute only marks the metadata, so the client enforces it: a speaker a
-        // moderator mutes has the mic taken down, and may raise it again as with its own toggle
-        // (upstream's rule). The echo of the user's own mute changes nothing: the mic is down.
-        let was_muted = self.local_muted;
-        self.local_muted = metadata.muted;
-        if !metadata.muted {
-            self.unmute_unechoed = false;
-        } else if !was_muted && !self.unmute_unechoed && self.kind == Kind::Community {
+        if mic_down {
             if self.mic_enabled {
                 effects.push(Effect::SetCallMic(false));
             }
@@ -889,6 +894,14 @@ impl CallState {
             }
             Reply::Moderation(result) => {
                 if let Err(e) = result {
+                    self.set_error(e.message());
+                }
+            }
+            Reply::MuteSpeaker(muted, result) => {
+                if let Err(e) = result {
+                    if muted {
+                        self.mute_unechoed = false;
+                    }
                     self.set_error(e.message());
                 }
             }
@@ -1944,28 +1957,76 @@ mod tests {
     }
 
     #[test]
-    fn the_echo_of_the_speakers_own_mute_changes_nothing() {
+    fn a_moderator_mute_reaches_a_promoted_speaker_who_unmuted() {
         let mut s = state();
-        speaking(&mut s);
-        s.apply(Input::SetMic(false), 0.0);
-        s.apply(Input::CallMicChanged(false), 0.0);
-        assert!(s.apply(own_metadata(true, true), 0.0).is_empty());
-        assert!(s.local_muted);
+        s.apply(Input::JoinCommunity("c1".to_owned()), 0.0);
+        s.apply(
+            Input::Reply(Reply::JoinCommunity(
+                "c1".to_owned(),
+                s.attempt,
+                Ok("livekit:c".to_owned()),
+            )),
+            0.0,
+        );
+        s.apply(own_metadata(false, false), 0.0);
+        s.apply(Input::RoomConnected, 0.0);
+        // promoted: the room has read `muted: false` since the join, so the unmutes change nothing
+        // there and are never echoed
+        s.apply(own_metadata(true, false), 0.0);
+        s.apply(Input::SetMic(true), 0.0);
+        s.apply(Input::CallMicChanged(true), 0.0);
+        s.apply(Input::SetMic(true), 0.0);
+        assert_eq!(
+            s.apply(own_metadata(true, true), 0.0),
+            vec![Effect::SetCallMic(false)]
+        );
+    }
+
+    /// The user mutes and unmutes; a moderator's mute lands at the server before the unmute (the
+    /// room ends unmuted) or after it (the room ends muted). The mic ends as the room does.
+    #[test]
+    fn a_moderator_mute_around_the_speakers_unmute_ends_where_the_room_does() {
+        for (mute_echoed_first, room, mic_up) in [
+            (true, &[false][..], true),
+            (true, &[false, true][..], false),
+            (false, &[true, false][..], true),
+            (false, &[true, false, true][..], false),
+        ] {
+            let mut s = state();
+            speaking(&mut s);
+            s.apply(Input::SetMic(false), 0.0);
+            s.apply(Input::CallMicChanged(false), 0.0);
+            if mute_echoed_first {
+                assert!(s.apply(own_metadata(true, true), 0.0).is_empty());
+            }
+            s.apply(Input::SetMic(true), 0.0);
+            s.apply(Input::CallMicChanged(true), 0.0);
+            for &muted in room {
+                for effect in s.apply(own_metadata(true, muted), 0.0) {
+                    if let Effect::SetCallMic(enabled) = effect {
+                        s.apply(Input::CallMicChanged(enabled), 0.0);
+                    }
+                }
+            }
+            assert_eq!(s.mic_enabled, mic_up, "{mute_echoed_first} {room:?}");
+        }
     }
 
     #[test]
-    fn a_late_echo_of_a_mute_does_not_undo_the_unmute_after_it() {
+    fn a_mute_the_server_refused_does_not_hide_a_moderators() {
         let mut s = state();
         speaking(&mut s);
         s.apply(Input::SetMic(false), 0.0);
         s.apply(Input::CallMicChanged(false), 0.0);
+        s.apply(
+            Input::Reply(Reply::MuteSpeaker(
+                true,
+                Err(VoiceRefusal::Transport("down".to_owned())),
+            )),
+            0.0,
+        );
         s.apply(Input::SetMic(true), 0.0);
         s.apply(Input::CallMicChanged(true), 0.0);
-        // the room echoes the mute only now, then the unmute
-        assert!(s.apply(own_metadata(true, true), 0.0).is_empty());
-        assert!(s.apply(own_metadata(true, false), 0.0).is_empty());
-        assert!(s.mic_enabled);
-        // a moderator's mute after that is enforced again
         assert_eq!(
             s.apply(own_metadata(true, true), 0.0),
             vec![Effect::SetCallMic(false)]

@@ -397,7 +397,7 @@ fn query(rpc: Rpc) -> (VoiceQuery, Pending) {
             muted,
         } => {
             let (response, pending) =
-                awaiting(|r: Result<bool, _>| Reply::Moderation(r.map(|_| ())));
+                awaiting(move |r: Result<bool, _>| Reply::MuteSpeaker(muted, r.map(|_| ())));
             let address = hex(address);
             let query = VoiceQuery::MuteSpeaker {
                 community_id,
