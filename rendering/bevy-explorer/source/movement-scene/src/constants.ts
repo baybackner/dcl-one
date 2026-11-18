@@ -126,7 +126,8 @@ export const GLIDE_OPEN_THROUGH_LANDING: number = 1;
 export const GLIDE_TILT_DAMP_TIME = 0.3; // time constant for the glide tilt (animation playback time) to drift toward its target
 export const GLIDE_TILT_FULL_ANGLE = 20; // orientation delta (degrees) at which the glide tilt reaches its full-left/full-right pose
 // Landing stun: a landing more than LANDING_STUN_DROP below the top of the airtime (the highest point since the ground;
-// a glide restarts it from the glide's height) stops horizontal movement for LANDING_STUN_TIME. Jumping is still allowed.
+// a glide restarts it from the glide's height) stops horizontal movement for the scene's hardLandingCooldown
+// (AvatarLocomotionSettings), LANDING_STUN_TIME when no scene sets it. Jumping is still allowed.
 export const LANDING_STUN_DROP = 8; // m
 export const LANDING_STUN_TIME = 0.76; // s from the landing step (38 steps)
 // 1: the keys held through the stun still accelerate the move, so the gait speed is back on the first step after it

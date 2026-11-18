@@ -7,13 +7,13 @@ import {
   FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
   GLIDE_OPENS_ON_TAP, GRAVITY,
   GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
-  LANDING_STUN_DROP, LANDING_STUN_TIME, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  LANDING_STUN_DROP, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
   GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
   VERTICAL_DAMP_TIME, VERTICAL_PREDICT, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
 import { engineAssist, engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
 import { movementAxis } from './horizontal';
-import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jumpHeight, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
+import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jumpHeight, landingStunTime, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
 import { frameTime, replyDelay, replyDelaySmooth, tickAdvance } from './clock';
 
 const G = -GRAVITY.y;
@@ -145,7 +145,6 @@ function copyVState(from: VState, to: VState) {
 var groundY = -Infinity;
 // Steps between an air press and its launch: the height is held on every step in between.
 const AIR_HOVER_STEPS = Math.round(AIR_JUMP_HOVER_TIME / FIXED_STEP);
-const STUN_STEPS = Math.round(LANDING_STUN_TIME / FIXED_STEP);
 const GLIDE_OPEN_STEPS = Math.round(GLIDE_OPEN_TIME / FIXED_STEP);
 const GLIDE_CLOSE_STEPS = Math.round(GLIDE_CLOSE_TIME / FIXED_STEP);
 
@@ -173,8 +172,10 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   let glideDrag = false;
   const onGround = onGroundTick && s.vy <= 0;
   if (onGround) {
-    // a landing more than LANDING_STUN_DROP below the top of the airtime stuns
-    if (s.lastGroundedStep !== s.step - 1 && s.topY - s.y > LANDING_STUN_DROP) s.stunEndStep = s.step + STUN_STEPS;
+    // a landing more than LANDING_STUN_DROP below the top of the airtime stuns for landingStunTime, in whole steps
+    if (s.lastGroundedStep !== s.step - 1 && s.topY - s.y > LANDING_STUN_DROP) {
+      s.stunEndStep = s.step + Math.round(landingStunTime / FIXED_STEP);
+    }
     s.topY = s.y;
     s.lastGroundedStep = s.step;
     s.jumpCount = 0;

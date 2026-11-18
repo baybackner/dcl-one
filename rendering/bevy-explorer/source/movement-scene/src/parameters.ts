@@ -1,6 +1,6 @@
 import { DeepReadonlyObject, PBAvatarLocomotionSettings, PBInputModifier } from "@dcl/sdk/ecs";
 import { settings } from "./settings";
-import { AIR_JUMP_COUNT, DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED } from "./constants";
+import { AIR_JUMP_COUNT, DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED, LANDING_STUN_TIME } from "./constants";
 
 export var sprintSpeed = 0;
 export var jogSpeed = 0;
@@ -10,6 +10,7 @@ export var sprintJumpHeight = 0;
 export var doubleJumpHeight = 0;
 export var glidingSpeed = 0;
 export var glidingFallingSpeed = 0;
+export var landingStunTime = LANDING_STUN_TIME; // s without horizontal movement after a stunning landing
 export var doubleJumpEnabled = false;
 export var glideEnabled = false;
 // Slots available between two grounded frames. applyJump() tracks usage in
@@ -39,6 +40,8 @@ export function initParamters(
     doubleJumpHeight = useLocal ? DOUBLE_JUMP_HEIGHT : (locomotion?.doubleJumpHeight ?? DOUBLE_JUMP_HEIGHT);
     glidingSpeed = useLocal ? GLIDE_HORIZONTAL_SPEED : (locomotion?.glidingSpeed ?? GLIDE_HORIZONTAL_SPEED);
     glidingFallingSpeed = useLocal ? GLIDE_FALL_SPEED : (locomotion?.glidingFallingSpeed ?? GLIDE_FALL_SPEED);
+    // the scene's hardLandingCooldown as set: 0 or less leaves no stun
+    landingStunTime = useLocal ? LANDING_STUN_TIME : (locomotion?.hardLandingCooldown ?? LANDING_STUN_TIME);
 
     const jogEnabled = !modifiers?.mode?.standard.disableJog && !modifiers?.mode?.standard.disableAll;
     const walkEnabled = !modifiers?.mode?.standard.disableWalk && !modifiers?.mode?.standard.disableAll;

@@ -261,7 +261,8 @@ impl FromConfig for AvatarLocomotionSettings {
             run_speed: Some(config.player_settings.run_speed),
             jump_height: Some(config.player_settings.jump_height),
             run_jump_height: Some(config.player_settings.run_jump_height),
-            hard_landing_cooldown: Some(0.0),
+            // unset: the movement scene keeps its own landing stun; 0 would remove it
+            hard_landing_cooldown: None,
             double_jump_height: None,
             gliding_speed: None,
             gliding_falling_speed: None,
@@ -1443,5 +1444,12 @@ mod tests {
             Vec3::new(5.0, 0.0, 0.0),
         );
         assert!(end.y > 1.0, "stopped at {end}");
+    }
+
+    #[test]
+    fn without_a_scene_setting_the_hard_landing_cooldown_reaches_scenes_unset() {
+        let settings = AvatarLocomotionSettings::from_config(&default()).0;
+        assert_eq!(settings.hard_landing_cooldown, None);
+        assert!(settings.walk_speed.is_some() && settings.jump_height.is_some());
     }
 }
