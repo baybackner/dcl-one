@@ -27,7 +27,7 @@ import { reloadingForAccount } from "@/features/components/chrome/explorer-host"
 import SyncEngineBridge from "@/features/components/creator-hub/SyncEngineBridge";
 import NotFoundPage from "@/features/not-found/NotFoundPage";
 import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
-import { EMBED_BOOT_SCRIPT } from "@ui/web/frames/embed";
+import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { pageSid, sessionMiddleware } from "@/core/lib/telemetry/session";
 import { readWallet } from "@/data/lib/auth/wallet-cookie";

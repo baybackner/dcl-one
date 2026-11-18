@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import Modal from "../../components/Modal";
 import { EMBED_ESCAPE_MESSAGE, installEmbedGuards } from "./embed";
 
 let parent: { postMessage: ReturnType<typeof vi.fn> };
@@ -25,13 +25,16 @@ it("closes the Shop's frame on an Escape its page left alone", () => {
   expect(parent.postMessage).toHaveBeenCalledWith(EMBED_ESCAPE_MESSAGE, "*");
 });
 
-it("keeps Escape inside a hub framed by the Explorer, where it closes the hub's own dialog", async () => {
+it("keeps Escape inside a hub framed by the Explorer, where it closes the hub's own dialog", () => {
   uninstall = installEmbedGuards(window, { scope: ["/create"], open: vi.fn() });
   const onClose = vi.fn();
-  render(<Modal onClose={onClose} ariaLabel="Delete project"><p>Delete it?</p></Modal>);
-  await act(async () => {});
-  expect(screen.getByRole("dialog", { name: "Delete project" })).toBeInTheDocument();
-  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  // The dialog leaves the event unconsumed, so only the missing relay keeps it from reaching the parent.
+  render(
+    <div role="dialog" aria-label="Delete project" tabIndex={-1} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+      <p>Delete it?</p>
+    </div>,
+  );
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Delete project" }), { key: "Escape" });
   expect(onClose).toHaveBeenCalledOnce();
   expect(parent.postMessage).not.toHaveBeenCalled();
 });
