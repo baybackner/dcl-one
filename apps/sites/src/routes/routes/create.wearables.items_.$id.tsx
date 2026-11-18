@@ -12,7 +12,7 @@ import { type BuilderItem } from "@/data/lib/catalyst/builder/items";
 import { loadCreatorItem } from "@/data/lib/catalyst/creator-hub/wearable-item-detail.server";
 import { useAuth } from "@/data/lib/auth/context";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoaderWith } from "@/core/lib/telemetry/page-loader";
 import { track } from "@/core/lib/telemetry/track";

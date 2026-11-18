@@ -13,7 +13,7 @@ import { loadCollectionDetail } from "@/data/lib/catalyst/builder/collection-det
 import { readWallet } from "@/data/lib/auth/wallet-cookie";
 import { useAuth } from "@/data/lib/auth/context";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoaderWith } from "@/core/lib/telemetry/page-loader";
 import { track } from "@/core/lib/telemetry/track";

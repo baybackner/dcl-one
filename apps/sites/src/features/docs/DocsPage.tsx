@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import DclTopBar from "@ui/web/frames/DclTopBar";
-import { useChromeNav } from "@ui/web/frames/chrome-nav";
+import { useChromeNav } from "@dcl/one-ui/components/chrome/chrome-nav";
 import styles from "./DocsPage.module.css";
 import type { DocsPageView, DocsSpace } from "@/data/lib/docs/types";
 import DocsIcon from "./DocsIcon";

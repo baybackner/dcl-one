@@ -14,7 +14,7 @@ import {
   ManageSignIn,
   useManageScope,
 } from "@/features/components/creator-hub/manage-scope";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoaderWith } from "@/core/lib/telemetry/page-loader";
 

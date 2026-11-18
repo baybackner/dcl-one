@@ -1,5 +1,5 @@
 import type { ComponentPropsWithRef } from "react";
-import { chromeLinkClick, chromeLinkProps, useChromeNav, type ChromeNavigate } from "./chrome-nav";
+import { chromeLinkClick, chromeLinkProps, useChromeNav, type ChromeNavigate } from "@dcl/one-ui/components/chrome/chrome-nav";
 
 type ChromeLinkProps = ComponentPropsWithRef<"a"> & { onNavigate?: ChromeNavigate };
 

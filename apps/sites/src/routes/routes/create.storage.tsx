@@ -13,7 +13,7 @@ import CreatorHubChrome from "@ui/creatorhub/frames/CreatorHubChrome";
 import "@ui/creatorhub/frames/creatorhubchrome.css";
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   clearEnvKeys,
   clearValues,

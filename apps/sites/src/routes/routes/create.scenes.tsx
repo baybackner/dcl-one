@@ -18,7 +18,7 @@ import {
   type ProjectMeta,
 } from "@/data/lib/fs/handle-store";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { loadCreatorScenes, type CreatorScene } from "@/data/lib/catalyst/create/index.server";
 import { discoverDeployedScenes } from "@/data/lib/catalyst/creator-hub/discover-deployed.server";
 import type { DiscoveredScene } from "@/data/lib/catalyst/creator-hub/discover-deployed";

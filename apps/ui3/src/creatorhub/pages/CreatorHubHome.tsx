@@ -3,7 +3,7 @@ import { PageHeader } from "../../components/Surface";
 import ChromeLink from "../../web/frames/ChromeLink";
 import type { ReactNode } from "react";
 import { CreatorHubChromeMaybe } from "../frames/CreatorHubChrome";
-import { useChromeAuth } from "../../web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import EmptyState from "../../components/EmptyState";
 import CoverImage from "../../components/CoverImage";
 import ThumbnailImage from "../../components/ThumbnailImage";

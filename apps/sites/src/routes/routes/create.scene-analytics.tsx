@@ -15,7 +15,7 @@ import { sceneKey } from "@ui/creatorhub/lib/scene-analytics";
 
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { fetchCreatorScenesStats } from "@/data/lib/catalyst/creator-hub/scene-analytics";
 import { getJSON, worldsBase } from "@/data/lib/catalyst/client";
 import { ownedSessionCookies, requestSession } from "@/core/lib/telemetry/session";

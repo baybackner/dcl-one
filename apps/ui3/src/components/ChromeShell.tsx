@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import DappFooter from "./DappFooter";
-import type { ChromeNavigate } from "../web/frames/chrome-nav";
+import type { ChromeNavigate } from "@dcl/one-ui/components/chrome/chrome-nav";
 import ChromeLink from "../web/frames/ChromeLink";
 import DclTopBar from "../web/frames/DclTopBar";
 import SiteLayout from "../web/frames/SiteLayout";

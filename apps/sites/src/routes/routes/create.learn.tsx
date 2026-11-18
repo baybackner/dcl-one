@@ -4,7 +4,7 @@ import ChLearn from "@ui/creatorhub/pages/ChLearn";
 
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { sidLoader } from "@/core/lib/telemetry/page-loader";
 import { track } from "@/core/lib/telemetry/track";
 

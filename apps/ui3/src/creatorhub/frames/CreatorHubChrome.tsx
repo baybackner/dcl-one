@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
-import { useChromeAuth } from "../../web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import DclTopBar from "../../web/frames/DclTopBar";
 import ChromeLink from "../../web/frames/ChromeLink";
 import AccountMenu from "../../web/frames/AccountMenu";

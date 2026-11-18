@@ -5,8 +5,8 @@ import {
   NavBar,
   type NavBarLinkProps,
 } from "@dcl/one-ui";
-import type { DclTopBarProps } from "@ui/web/frames/DclTopBar";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import type { ChromeTopBarProps } from "@dcl/one-ui/components/chrome/chrome-nav";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import ChromeLink from "@ui/web/frames/ChromeLink";
 import { useSiteLayout } from "@ui/web/frames/SiteLayout";
 import {
@@ -61,7 +61,7 @@ export default function SitesTopBar({
   accountControl,
   balances,
   onNavigate,
-}: DclTopBarProps) {
+}: ChromeTopBarProps) {
   const NavigationLink = useMemo(
     () =>
       function NavigationLink(props: NavBarLinkProps) {

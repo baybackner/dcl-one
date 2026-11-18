@@ -12,7 +12,7 @@ import "@ui/creatorhub/components/chmodaldeleteproject.css";
 import CreatorHubBreadcrumb from "@ui/creatorhub/components/CreatorHubBreadcrumb";
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   parcelCount,
   type DeleteCopy,

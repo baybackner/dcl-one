@@ -2,7 +2,7 @@ import CreatorHubChrome from "@ui/creatorhub/frames/CreatorHubChrome";
 
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { creatorHubMeta } from "@/core/lib/seo/creator-hub-meta";
 
 const DOWNLOAD_HREF = "/download/creator-hub";

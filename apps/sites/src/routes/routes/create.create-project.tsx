@@ -9,7 +9,7 @@ import CreatorHubBreadcrumb from "@ui/creatorhub/components/CreatorHubBreadcrumb
 import { resolveBreadcrumbOrigin } from "@/features/components/creator-hub/breadcrumbOrigins";
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoader } from "@/core/lib/telemetry/page-loader";
 

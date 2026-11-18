@@ -17,7 +17,7 @@ vi.mock("@/data/lib/auth/index", () => ({ useAuth: () => state.auth }));
 vi.mock("../components/auth/signin-store", () => ({ openSignIn: state.openSignIn }));
 vi.mock("@ui/web/frames/SitesChrome", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
 
-import { ChromeAuthContext, type ChromeAuth } from "@ui/web/frames/chrome-auth";
+import { ChromeAuthContext, type ChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 
 import { AccountLayout, type AccountSection } from "./AccountLayout";
 

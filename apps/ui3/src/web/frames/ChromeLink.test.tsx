@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import ChromeLink from "./ChromeLink";
-import { ChromeNavContext } from "./chrome-nav";
+import { ChromeNavContext } from "@dcl/one-ui/components/chrome/chrome-nav";
 import CreatorHubChrome from "../../creatorhub/frames/CreatorHubChrome";
 
 afterEach(cleanup);

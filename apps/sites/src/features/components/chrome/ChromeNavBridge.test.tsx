@@ -8,7 +8,7 @@ import SitesChrome from "@ui/web/frames/SitesChrome";
 import SiteLayout from "@ui/web/frames/SiteLayout";
 import DclTopBar from "@ui/web/frames/DclTopBar";
 import ChromeLink from "@ui/web/frames/ChromeLink";
-import { useChromeNav } from "@ui/web/frames/chrome-nav";
+import { useChromeNav } from "@dcl/one-ui/components/chrome/chrome-nav";
 import ChromeNavBridge, { chromeHrefTarget, upstreamShopPath } from "./ChromeNavBridge";
 
 const ORIGIN = "https://example.org";

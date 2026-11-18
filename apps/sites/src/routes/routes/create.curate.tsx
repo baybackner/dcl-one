@@ -5,7 +5,7 @@ import "@ui/creatorhub/frames/creatorhubchrome.css";
 import { useAuth } from "@/data/lib/auth/index";
 import { readWallet } from "@/data/lib/auth/wallet-cookie";
 import { openSignIn } from "@/features/components/auth/signin-store";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   filterRows,
   readAssigneeFilter,

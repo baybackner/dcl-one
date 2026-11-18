@@ -18,7 +18,7 @@ import {
   ManageSignIn,
   useManageScope,
 } from "@/features/components/creator-hub/manage-scope";
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   applyFilter,
   applySearch,

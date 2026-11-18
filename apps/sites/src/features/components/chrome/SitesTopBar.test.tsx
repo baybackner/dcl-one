@@ -13,8 +13,8 @@ import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DclTopBar from "@ui/web/frames/DclTopBar";
 import SiteLayout from "@ui/web/frames/SiteLayout";
-import { ChromeAuthContext, type ChromeAuth } from "@ui/web/frames/chrome-auth";
-import { ChromeNavContext } from "@ui/web/frames/chrome-nav";
+import { ChromeAuthContext, type ChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
+import { ChromeNavContext } from "@dcl/one-ui/components/chrome/chrome-nav";
 import ChromeNavBridge from "./ChromeNavBridge";
 
 vi.hoisted(() => {

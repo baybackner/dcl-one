@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import "./sitelayout.css";
-import { useChromeNav } from "./chrome-nav";
+import { useChromeNav } from "@dcl/one-ui/components/chrome/chrome-nav";
 
 type SiteLayoutNavigation = { sections?: (closeMenu: () => void) => ReactNode };
 const SiteLayoutContext = createContext<SiteLayoutNavigation | null>(null);
