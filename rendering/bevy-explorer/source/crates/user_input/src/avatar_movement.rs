@@ -739,9 +739,7 @@ pub fn apply_movement(
     {
         let moved = (position - start).with_y(0.0).length();
         let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
-        if let Some((drop, normal)) =
-            cast_avatar(&mut scenes, disabled, position, DVec3::NEG_Y, reach, false)
-        {
+        if let Some((drop, normal)) = cast_down(&mut scenes, disabled, position, reach) {
             let slope = normal.with_y(0.0).length() / normal.y;
             if walkable(normal)
                 && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
@@ -818,6 +816,34 @@ fn cast_avatar(
         }
     }
     nearest
+}
+
+/// [`cast_avatar`] straight down from `position` for `reach`, from just off any wall the capsule
+/// touches. The position is stored as f32, so an avatar resting against a wall can sit inside it
+/// by a rounding error larger than the sweep's overlap (micrometres a few hundred metres from the
+/// origin), and the cast would stop on the wall at once.
+fn cast_down(
+    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    disabled: &HashMap<Entity, HashSet<ColliderId>>,
+    position: DVec3,
+    reach: f64,
+) -> Option<(f64, DVec3)> {
+    let overlap = f64::from(PLAYER_COLLIDER_OVERLAP);
+    // the f32 rounding of the largest coordinate, and the overlap beyond it
+    let off = position.abs().max_element() * f64::from(f32::EPSILON) + overlap;
+    let mut from = position;
+    let mut hit = None;
+    // off a wall, or the two walls of a corner
+    for _ in 0..3 {
+        hit = cast_avatar(scenes, disabled, from, DVec3::NEG_Y, reach, false);
+        match hit {
+            Some((drop, normal)) if drop <= overlap && !walkable(normal) => {
+                from += normal.with_y(0.0).normalize_or_zero() * off;
+            }
+            _ => break,
+        }
+    }
+    hit
 }
 
 /// Height over the ground below which an avatar standing still is not settled onto it.
@@ -1242,6 +1268,11 @@ mod tests {
     /// `apply_movement` over the floor (top at y 0) and the given boxes (centre, half extents,
     /// rotation), 50 steps of 20 ms at a constant scene velocity from `start`.
     fn walk(boxes: &[(Vec3, Vec3, Quat)], start: Vec3, velocity: Vec3) -> Vec3 {
+        walk_phases(boxes, start, &[(velocity, 50)])
+    }
+
+    /// [`walk`] with the scene velocity changing: each phase's velocity for its number of steps.
+    fn walk_phases(boxes: &[(Vec3, Vec3, Quat)], start: Vec3, phases: &[(Vec3, usize)]) -> Vec3 {
         let mut app = App::new();
         app.add_plugins(TimePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(
@@ -1257,7 +1288,7 @@ mod tests {
             .add_systems(PostUpdate, apply_movement);
         let mut colliders = SceneColliderData::default();
         let floor = (
-            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(start.x, -0.5, start.z),
             Vec3::new(50.0, 0.5, 50.0),
             Quat::IDENTITY,
         );
@@ -1266,8 +1297,7 @@ mod tests {
             colliders.set_wall(&id, *centre, *half, *rotation);
         }
         app.world_mut().spawn(colliders);
-        let mut movement = ActivePlayerComponent::<AvatarMovement>::from_config(&default());
-        movement.component.velocity = velocity;
+        let movement = ActivePlayerComponent::<AvatarMovement>::from_config(&default());
         let player = app
             .world_mut()
             .spawn((
@@ -1281,8 +1311,15 @@ mod tests {
                 Transform::from_translation(start),
             ))
             .id();
-        for _ in 0..50 {
-            app.update();
+        for &(velocity, steps) in phases {
+            app.world_mut()
+                .get_mut::<ActivePlayerComponent<AvatarMovement>>(player)
+                .unwrap()
+                .component
+                .velocity = velocity;
+            for _ in 0..steps {
+                app.update();
+            }
         }
         app.world().get::<Transform>(player).unwrap().translation
     }
@@ -1348,6 +1385,27 @@ mod tests {
     fn an_avatar_standing_just_over_the_ground_settles_onto_it() {
         let end = walk(&[], Vec3::new(0.0, 0.03, 0.0), Vec3::ZERO);
         assert!(end.y < 1e-3, "hovers at {end}");
+    }
+
+    #[test]
+    fn an_avatar_landing_against_a_wall_settles_onto_the_ground() {
+        // a wall facing -x at x 470: that far from the origin the stored f32 position of an
+        // avatar against it rounds to within micrometres of the wall, either side
+        let wall = (
+            Vec3::new(470.25, 1.5, 0.0),
+            Vec3::new(0.25, 1.5, 5.0),
+            Quat::IDENTITY,
+        );
+        // a fall into the wall that ends 0.01-0.05 m over the floor, then the scene stands still
+        // (the first update has no elapsed time)
+        let fall = Vec3::new(7.74, -6.16, 0.0);
+        for height in [0.0106, 0.0289, 0.0497] {
+            let start = Vec3::new(469.6, height - fall.y * 0.02, 0.0);
+            let phases = [(Vec3::ZERO, 1), (fall, 1), (Vec3::ZERO, 10)];
+            let end = walk_phases(&[wall], start, &phases);
+            assert!(end.x > 469.69, "{height} m: short of the wall at {end}");
+            assert!(end.y < 1e-3, "{height} m: hovers at {end}");
+        }
     }
 
     /// A riser of `height` whose face is at x 1.
