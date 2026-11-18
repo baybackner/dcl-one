@@ -13,7 +13,7 @@ import type { ShopHost } from "@ui/shop/native-contract";
 import { NativeShopContext } from "@ui/shop/native-context";
 import { shopRouteObjects } from "@ui/shop/routes";
 import type { ShopWalletHost } from "@ui/shop/wallet/session";
-import type { AuthIdentity } from "@ui/data/auth/identity";
+import type { AuthIdentity } from "@web-core/auth/identity";
 
 import { legacyShopTarget } from "@/core/lib/shop/redirects";
 import { useAuth } from "@/data/lib/auth/context";

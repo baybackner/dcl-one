@@ -5,8 +5,8 @@
 // - who signs: a web identity, the identity ui3 keeps in localStorage, or the engine (the bridge pair);
 // - the document's client, signed with the stored identity, which a host that owns the session replaces.
 
-import type { AuthIdentity } from "../../data/auth/identity";
-import { signAuthChain } from "../../data/auth/signerCore";
+import type { AuthIdentity } from "@web-core/auth/identity";
+import { signAuthChain } from "@web-core/auth/signerCore";
 import { catalystBase, signedFetch } from "../../data/catalyst/client";
 import type { ShopPeers, UrnNetwork } from "@shop/detail/lib/urn";
 import type { ShopApiMode, ShopApiOptions } from "@shop/api/client";

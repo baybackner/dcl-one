@@ -17,7 +17,7 @@ import {
   parseNotificationsLoose,
   relativeTime,
   type Notification,
-} from "../../data/catalyst/notificationsView";
+} from "@web-core/notifications/notificationsView";
 import { useChromeAuth } from "./chrome-auth";
 import { useChromeNav, type ChromeNavigate } from "./chrome-nav";
 import ChromeLink from "./ChromeLink";
@@ -25,7 +25,7 @@ import AccountMenu from "./AccountMenu";
 import "../../atoms/maskicon.css";
 import "./dcltopbar.css";
 import { useSiteLayout } from "./SiteLayout";
-import { getAvatarBackgroundColor, getDisplayName } from "../../shop/discovery/lib/avatarColor";
+import { getAvatarBackgroundColor, getDisplayName } from "@web-core/profile/avatarColor";
 
 type DclTopBarVariant = "default" | "sites";
 

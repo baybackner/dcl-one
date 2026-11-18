@@ -4,12 +4,14 @@ import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
-import { validateAliasObject } from "../ui3/vite.validate.js";
+import { validateAliasObject } from "../../library/web-core/validate/vite.mjs";
 
 const ui = fileURLToPath(new URL("../ui3/src", import.meta.url));
 const src = fileURLToPath(new URL("./src", import.meta.url));
 const catalystApi = fileURLToPath(new URL("../../library/catalyst-api", import.meta.url));
 const shopCore = fileURLToPath(new URL("../../library/shop", import.meta.url));
+// The browser logic shared with ui3 (validation seam, auth signing, profile and notification views).
+const webCore = fileURLToPath(new URL("../../library/web-core", import.meta.url));
 // The Explorer HUD UI /play compiles, and the behaviours /play supplies to it (hostContract.ts there).
 const hud = fileURLToPath(new URL("../../library/ui/apps/hud", import.meta.url));
 const explorerCore = fileURLToPath(new URL("../../library/explorer-core", import.meta.url));
@@ -273,7 +275,7 @@ export default defineConfig({
     host: process.env.HOST || "127.0.0.1",
     port: Number(process.env.PORT) || 5212,
     strictPort: true,
-    fs: { allow: [".", "../ui3", "../../library/catalyst-api", "../../library/shop", "../../library/ui", "../../library/explorer-core"] },
+    fs: { allow: [".", "../ui3", "../../library/catalyst-api", "../../library/shop", "../../library/web-core", "../../library/ui", "../../library/explorer-core"] },
     proxy: nodeProxy(),
   },
   resolve: {
@@ -283,6 +285,7 @@ export default defineConfig({
         "@ui": ui,
         "@catalyst-api": catalystApi,
         "@shop": shopCore,
+        "@web-core": webCore,
         "@hud-host": hudHost,
         "@shop-host": shopHost,
         "@noble/curves/secp256k1.js": noble("curves/secp256k1.js"),
@@ -301,7 +304,7 @@ export default defineConfig({
       { find: /^@dcl\/one-ui\/text-styles\.module\.css$/, replacement: join(oneUi, "foundations", "typography", "text-styles.module.css") },
       { find: /^@dcl\/one-ui\//, replacement: `${oneUi}/` },
     ],
-    dedupe: ["viem", "react", "react-dom", "zod"],
+    dedupe: ["viem", "react", "react-dom", "zod", "@walletconnect/sign-client"],
   },
   optimizeDeps: {
     include: ["monaco-editor", "@xstate/react", "xstate", "zod", "viem/accounts"],

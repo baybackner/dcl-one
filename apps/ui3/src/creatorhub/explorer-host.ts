@@ -1,4 +1,4 @@
-import type { AuthIdentity } from "../data/auth/identity";
+import type { AuthIdentity } from "@web-core/auth/identity";
 import type { Eip1193Provider } from "../data/auth/wallet";
 
 export type CreatorHubHost = {

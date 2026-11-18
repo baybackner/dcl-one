@@ -7,7 +7,7 @@ import {
   setValidationDevMode,
   setValidationReporter,
   validationFailures,
-} from "../validate";
+} from "./index";
 
 const Schema = z.object({ a: z.string() });
 

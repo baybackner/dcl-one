@@ -4,7 +4,7 @@ import { useNavigate } from "react-router";
 import type { SignInSocialProvider } from "@ui/components/SignInModalView";
 
 import { magicApiKey } from "@/data/lib/auth/magic-config";
-import { hasWalletConnect } from "@ui/data/auth/walletconnect-config";
+import { hasWalletConnect } from "@web-core/auth/walletconnect-config";
 import { useAuth } from "@/data/lib/auth/index";
 import {
   beginShellBrowserSignIn,

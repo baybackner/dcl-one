@@ -13,7 +13,7 @@ import { ShopServicesProvider, type ShopServices } from "@ui/shop/checkout/servi
 import ShopChrome from "@ui/shop/discovery/frames/ShopChrome";
 import { ShopWalletProvider } from "@ui/shop/wallet/context";
 import type { ShopWalletHost } from "@ui/shop/wallet/session";
-import type { AuthIdentity } from "@ui/data/auth/identity";
+import type { AuthIdentity } from "@web-core/auth/identity";
 
 import { useAuth } from "@/data/lib/auth/index";
 import { browserProvider, currentWalletKind, inAppSessionFor, managedShopProvider, web3Usable } from "@/data/lib/auth/shop-wallet";

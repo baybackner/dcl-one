@@ -10,7 +10,7 @@ import { asAddress } from "../../data/catalyst/sceneOwner";
 import { fetchCommunityProfiles } from "../../data/hooks/useCommunityProfiles";
 import { qk, STALE } from "../../data/queryKeys";
 import { isPlaceholderThumbnail, type PlaceViewer } from "../../data/catalyst/places";
-import { getAvatarBackgroundColor, getDisplayName, syntheticAvatar } from "../../shop/discovery/lib/avatarColor";
+import { getAvatarBackgroundColor, getDisplayName, syntheticAvatar } from "@web-core/profile/avatarColor";
 import styles from "./PlaceDetail.module.css";
 
 // The scene page as decentraland.org draws it: the live watcher, the jump-in dialog, the chat panel and the creator line.

@@ -1,7 +1,7 @@
 import type { BusEnvelope } from "../generated/editor-bus";
 import { editorBusChannelFromViewportSrc } from "./editor-bus";
 import { SceneToPageMessageSchema } from "../generated/editor-bus-schemas";
-import { check } from "../validate";
+import { check } from "@web-core/validate";
 import { currentProjectScope } from "./project-cache";
 
 export interface BridgePageInfo {

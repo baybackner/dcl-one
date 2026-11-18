@@ -206,7 +206,8 @@
       "paths": [
         "/apps/sites/",
         "/apps/ui3/",
-        "/library/ui/"
+        "/library/ui/",
+        "/library/web-core/"
       ]
     },
     {

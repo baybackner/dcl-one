@@ -1,6 +1,13 @@
 
 import { z } from "zod";
-import type { ThirdwebAuthResult } from "./thirdweb";
+
+export type ThirdwebAuthResult = {
+  isNewUser: boolean;
+  token: string;
+  userId: string;
+  walletAddress: string;
+  type: string;
+};
 
 export const ThirdwebAuthResultSchema = z.looseObject({
   isNewUser: z.boolean(),

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { destination } from "@/data/lib/catalyst/places/destination.fixture";
 
-import { getAvatarBackgroundColor, getDisplayName } from "@ui/shop/discovery/lib/avatarColor";
+import { getAvatarBackgroundColor, getDisplayName } from "@web-core/profile/avatarColor";
 
 import { creatorAddresses, creatorBatches, modalPlace, placeCard, placeCreator } from "./cards";
 

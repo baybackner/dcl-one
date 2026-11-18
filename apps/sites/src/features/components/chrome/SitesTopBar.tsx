@@ -14,7 +14,7 @@ import {
   notificationLink,
   notificationTitle,
   relativeTime,
-} from "@ui/data/catalyst/notificationsView";
+} from "@web-core/notifications/notificationsView";
 import SitesNotificationsDialog from "@dcl/one-ui/apps/sites/chrome/SitesNotificationsDialog";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import wordmark from "@dcl/one-ui/apps/sites/assets/dcl_name.svg?url";
