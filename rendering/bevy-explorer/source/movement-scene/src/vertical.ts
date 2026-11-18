@@ -6,8 +6,8 @@ import {
   AIR_JUMP_HOVER_TRACK, AIR_JUMP_LOST_ON_TOUCHDOWN, AIR_JUMP_RISE_BUFFER_STEPS,
   FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_THROUGH_LANDING, GLIDE_OPEN_TIME,
   GLIDE_OPENS_ON_TAP, GRAVITY,
-  GRAVITY_RISE_FACTOR, GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_TO_GLIDE_TIME,
-  LANDING_STUN_DROP, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, LONG_JUMP_GRAVITY_SCALE, LONG_JUMP_TIME, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
+  GROUND_SNAP_HEIGHT, INPUT_DELAY_TICKS, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
+  JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, LANDING_STUN_TOP_KEPT_ON_PLACEMENT, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
   GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, RAMP_GUARD, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
   VERTICAL_DAMP_TIME, VERTICAL_PREDICT, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
@@ -82,8 +82,8 @@ export var glideProp = GlideProp.CLOSED;
 export var isGliding = false;
 
 // The avatar moves at vy + ve: one vertical speed that gravity and scene pushes act on (the ballistic speed, vg + ve),
-// with the player's own moves added on top of it (vy - vg). A jump's quick rise and its held window, an air jump's held
-// height and the glide's fall shape vy only, so they never cancel a push, and a push never gets the jump's rise gravity.
+// with the player's own moves added on top of it (vy - vg). A jump's rise and its held window, an air jump's held
+// height and the glide's fall shape vy only, so they never cancel a push, and a push never gets the jump's slowdown.
 // The glider's drag takes a push's share while gliding (GLIDE_DAMP_TIME).
 type VState = {
   vy: number; // the player's own vertical velocity: gravity, jumps, an air jump's held height, the glide
@@ -161,7 +161,7 @@ function launchSpeed(running: boolean): number {
   const maxHeight = running ? sprintJumpHeight : jumpHeight;
   const k = sprintSpeed > 0 ? Math.min(1, Math.max(0, Math.min(req, act) / sprintSpeed)) : 0;
   currentJumpHeight = jumpHeight + (maxHeight - jumpHeight) * k;
-  return Math.sqrt(2 * Math.max(0, currentJumpHeight) * G * GRAVITY_RISE_FACTOR);
+  return Math.sqrt(2 * Math.max(0, currentJumpHeight) * JUMP_RISE_DECEL);
 }
 
 function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: boolean, noGravity: boolean, h: number) {
@@ -190,7 +190,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     vy0 = s.vy;
   } else if (s.step === s.airLaunchStep) {
     currentJumpHeight = doubleJumpHeight;
-    s.vy = Math.sqrt(2 * Math.max(0, doubleJumpHeight) * G * GRAVITY_RISE_FACTOR);
+    s.vy = Math.sqrt(2 * Math.max(0, doubleJumpHeight) * JUMP_RISE_DECEL);
     s.airLaunched = true;
   }
 
@@ -230,12 +230,13 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   if (hover) {
     // no gravity while the height is held
   } else if (!onGround || justJumped) {
-    if (!noGravity || s.vy > 0) {
-      let g = G;
-      if (heldWindow(s, pressed, h)) g *= LONG_JUMP_GRAVITY_SCALE;
-      if (s.vy > 0) g *= GRAVITY_RISE_FACTOR;
-      s.vy -= g * h;
+    const scale = heldWindow(s, pressed, h) ? JUMP_HOLD_SCALE : 1;
+    if (s.vy > 0) {
+      // the jump's own rise slows until the apex
+      s.vy -= JUMP_RISE_DECEL * scale * h;
       if (noGravity) s.vy = Math.max(0, s.vy);
+    } else if (!noGravity) {
+      s.vy -= G * scale * h;
     }
   } else {
     s.vy = 0;
@@ -288,8 +289,8 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
     if (!hover && s.vy <= 0) s.vg = s.vy;
     else if (!noGravity) s.vg -= G * h;
   }
-  // height: gravity is constant within a step, so the step moves the mean of its start and end velocity, and the
-  // pushes' share
+  // height: the acceleration is constant within a step, so the step moves the mean of its start and end velocity, and
+  // the pushes' share
   s.y += (0.5 * (vy0 + s.vy) + s.ve) * h;
 
   if (airPress && s.y <= groundY) {
@@ -314,13 +315,14 @@ function keepPush(s: VState): number {
   return s.ve;
 }
 
-// A held key lowers gravity for LONG_JUMP_TIME after a jump's press (an air jump: see AIR_JUMP_HOLD_*).
+// A held key scales the player's own vertical acceleration for JUMP_HOLD_TIME after a jump's press (an air jump: see
+// AIR_JUMP_HOLD_*).
 function heldWindow(s: VState, pressed: boolean, h: number): boolean {
   if (!pressed) return false;
-  if (s.airLaunchStep === NEVER || s.consumedStep !== s.airPressStep) return (s.step - s.consumedStep) * h < LONG_JUMP_TIME;
+  if (s.airLaunchStep === NEVER || s.consumedStep !== s.airPressStep) return (s.step - s.consumedStep) * h < JUMP_HOLD_TIME;
   if (!AIR_JUMP_HOLD_ANY_PRESS && !s.heldSincePress) return false;
   const from = AIR_JUMP_HOLD_FROM_PRESS ? s.airPressStep : s.airLaunchStep;
-  return s.step >= from && (s.step - from) * h < LONG_JUMP_TIME;
+  return s.step >= from && (s.step - from) * h < JUMP_HOLD_TIME;
 }
 
 function vadvance(s: VState, pressed: boolean, running: boolean, onGround: boolean, noGravity: boolean, t: number): number {

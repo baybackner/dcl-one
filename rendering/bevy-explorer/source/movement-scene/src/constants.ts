@@ -1,5 +1,7 @@
 import { Vector3 } from "@dcl/sdk/math";
 
+// The one gravity of the world (m/s^2): falls, scene pushes and forces, and the avatar from a jump's apex on. A jump's
+// rise is the player's own move (JUMP_RISE_DECEL), not a different gravity.
 export const GRAVITY = Vector3.scale(Vector3.Down(), 10.0);
 
 export const WALK_SPEED = 1.5; // max walk speed
@@ -67,13 +69,18 @@ export const VERTICAL_STOP_DECEL = 5;
 // can't produce absurd speeds.
 export const MAX_SPEED = 30;
 
-// Jump. Heights are those of a tapped jump; holding the key lowers gravity (below) and
-// reaches about twice the height. A running jump blends toward JUMP_HEIGHT_SPRINT with speed.
+// Jump: the player's own move on top of GRAVITY. It launches at the speed that reaches its height while slowing at
+// JUMP_RISE_DECEL, so a 1 m jump peaks after 0.22 s (1.5 m: 0.27 s, 2 m: 0.32 s); from the apex the avatar falls
+// under GRAVITY. Heights are those of a jump released at once (AvatarLocomotionSettings jumpHeight, runJumpHeight,
+// doubleJumpHeight); a key held into JUMP_HOLD_TIME adds height, and a running jump blends toward JUMP_HEIGHT_SPRINT with speed.
 export const JUMP_HEIGHT = 1;
 export const JUMP_HEIGHT_SPRINT = 1.5;
-export const GRAVITY_RISE_FACTOR = 4; // gravity multiplier while moving up (also sizes the launch speed)
-export const LONG_JUMP_TIME = 0.52; // s after a jump's press during which a held key scales gravity (26 steps)
-export const LONG_JUMP_GRAVITY_SCALE = 0.5;
+export const JUMP_RISE_DECEL = 40; // m/s^2, the jump's own slowdown from the launch to the apex
+// Held jump: while the key is held, for JUMP_HOLD_TIME after the press, the player's own vertical acceleration (the
+// jump's slowdown, then the fall) is scaled by JUMP_HOLD_SCALE. A held ground jump rises about twice as high in twice
+// the time.
+export const JUMP_HOLD_TIME = 0.52; // s (26 steps)
+export const JUMP_HOLD_SCALE = 0.5;
 // Steps a press is buffered before landing, and steps after leaving the ground that a jump
 // is still allowed (one window for both; off while moving up).
 export const JUMP_GRACE_STEPS = 8;
@@ -94,9 +101,9 @@ export const AIR_JUMP_IMPULSE = 8;
 export const AIR_JUMP_LOST_ON_TOUCHDOWN: number = 1;
 // 1: no movement key on the launch step stops horizontal motion; 0: the horizontal velocity is kept.
 export const AIR_JUMP_STOP_WITHOUT_KEYS: number = 1;
-// 1: the held-key window (LONG_JUMP_TIME) counts from the air press, so the hover uses part of it; 0: from the launch.
+// 1: the held-key window (JUMP_HOLD_TIME) counts from the air press, so the hover uses part of it; 0: from the launch.
 export const AIR_JUMP_HOLD_FROM_PRESS: number = 1;
-// 1: any jump key held in that window lowers gravity (a later, ignored press too); 0: only the air press held throughout.
+// 1: any jump key held in that window counts as held (a later, ignored press too); 0: only the air press held throughout.
 export const AIR_JUMP_HOLD_ANY_PRESS: number = 1;
 // Steps a press made while rising stays wanted for an air jump (0: a press before the cooldown while rising is dropped).
 export const AIR_JUMP_RISE_BUFFER_STEPS: number = 0;
@@ -194,4 +201,4 @@ export const VEC3_FORWARD = Vector3.Forward();
 export const VEC3_RIGHT = Vector3.Right();
 export const VEC3_INF = Vector3.fromArray([Infinity, Infinity, Infinity]);
 export const VEC3_NEG_INF = Vector3.fromArray([-Infinity, -Infinity, -Infinity]);
-export const VEC3_HORIZONTAL_MASK = Vector3.create(1, 0, 1);
+export const VEC3_HORIZONTAL_MASK = Vector3.create(1, 0, 1);
