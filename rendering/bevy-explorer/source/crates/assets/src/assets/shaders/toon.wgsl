@@ -27,8 +27,10 @@
 #import bevy_pbr::{clustered_forward, clustered_forward::ClusterableObjectIndexRanges, environment_map, lighting}
 #endif
 
-// multiplier on emissive wearables so they glow.
-const EMISSIVE_BOOST: f32 = 2.0;
+// scale from the material's emissive (glTF factor x4 avatar multiplier x10
+// shader lift, see bound_material.wgsl) to the avatar's lit range: a glTF
+// emissive factor of 0.25 glows at about 2, and 1.0 at four times that.
+const EMISSIVE_SCALE: f32 = 0.2;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
@@ -171,7 +173,11 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
 
     // the rim adds on top of the lit colours
     var color = (base_color.rgb * diffuse + rim * light) * unit;
-    color += pbr_input.material.emissive.rgb * view.exposure * EMISSIVE_BOOST;
+    // emissive alpha is the exposure weight, as in bevy_pbr: bound_material
+    // writes 0, so the emission is already in output units and must not be
+    // scaled down by the view exposure (~0.001) like the lit term.
+    let emissive_exposure = mix(1.0, view.exposure, pbr_input.material.emissive.a);
+    color += pbr_input.material.emissive.rgb * emissive_exposure * EMISSIVE_SCALE;
 
     return vec4<f32>(color, base_color.a);
 }
