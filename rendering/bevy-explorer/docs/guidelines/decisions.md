@@ -26,6 +26,16 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   sit about 4% above a white world surface in shade; that matches Unity and is not to be
   removed. Without the sky envmap (the avatar preview) there is no ambient and the floor is
   `0.05 * _Unlit_Intensity`.
+- **Toon avatars' outline is a screen-space line.** Unity draws an inverted hull
+  (`DCL_ToonOutline.hlsl`) for the avatars within 8 m; here the line is the prepass edge
+  detection, with Unity's colour (`_Outline_Color * base * base`, unlit), width
+  (`_Outline_Width * 0.001` m, thinning from `_Nearest_Distance` to `_Farthest_Distance`) and
+  cutoff. Three differences are kept. The 8 m cutoff is measured to the avatar's origin, where
+  Unity measures to the head anchor (`AvatarShapeVisibilitySystem.cs:93`), so the outline comes
+  and goes at a slightly different camera distance. A line thinner than a pixel covers that
+  fraction of the pixel and fades, where Unity's hull aliases. And there is no frustum test:
+  Unity skips avatars out of view, while an off-screen avatar has no fragments to draw a line
+  on, so the test would save nothing.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest

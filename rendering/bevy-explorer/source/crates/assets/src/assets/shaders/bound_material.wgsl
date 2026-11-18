@@ -13,7 +13,7 @@
 #import bevy_core_pipeline::tonemapping::approximate_inverse_tone_mapping
 
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
-#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, discard_dither, reveal_discard}
+#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, discard_dither, reveal_discard, toon_outline}
 #import "embedded://shaders/toon.wgsl"::toon_lighting
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
@@ -174,18 +174,26 @@ fn fragment(
         }
     }
 
-    if (mesh_tag & #{OUTLINE_MESH_TAGS}) != 0 {
-        let outline_color = vec3(
-            f32((mesh_tag & #{OUTLINE_RED_MESH_TAG}) != 0),
-            0.0,
-            f32((mesh_tag & #{OUTLINE_BLUE_MESH_TAG}) != 0),
-        );
-        let black = (mesh_tag & (#{OUTLINE_MESH_TAGS} & ~#{OUTLINE_BLACK_MESH_TAG})) == 0;
+    let view_z = -view_transformations::depth_ndc_to_view_z(in.position.z);
+
+    if (mesh_tag & #{OUTLINE_RED_MESH_TAG}) != 0 {
+        // the hover outline: red at any distance, and wider on nearer fragments
         out.color = apply_outline(
             in.position,
-            out.color, 
-            outline_color,
-            !black,
+            out.color,
+            vec3(10.0, 0.0, 0.0),
+            clamp(view.viewport.z / 640.0 / view_z, 1.0, 5.0),
+            sample_index,
+            dither_opacity,
+        );
+    } else if (mesh_tag & #{OUTLINE_MESH_TAGS}) != 0 {
+        // the avatar outline
+        out.color = toon_outline(
+            in.position,
+            out.color,
+            pbr_input.material.base_color.rgb,
+            in.instance_index,
+            view_z,
             sample_index,
             dither_opacity,
         );
@@ -206,7 +214,7 @@ fn fragment(
 #ifdef TRANSPARENT_FOCUS_OUTPUT
     // accumulate alpha-weighted view depth + coverage for depth of field
     out.focus = vec4(
-        -view_transformations::depth_ndc_to_view_z(in.position.z),
+        view_z,
         1.0,
         0.0,
         out.color.a,

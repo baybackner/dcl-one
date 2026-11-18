@@ -5,6 +5,7 @@
     mesh_view_bindings::{globals, lights, view},
     mesh_functions,
     shadows,
+    view_transformations,
 }
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
 #import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, reveal_discard}
@@ -108,8 +109,8 @@ fn fragment(
     out.color = apply_outline(
         in.position,
         out.color, 
-        vec3(1., 0., 0.),
-        false,
+        vec3(0.0),
+        clamp(-view.viewport.z / 640.0 / view_transformations::depth_ndc_to_view_z(in.position.z), 1.0, 5.0),
         sample_index,
         1.0,
     );

@@ -735,6 +735,7 @@ mod tests {
 
         let target = render_target(&mut app);
         let bare_target = render_target(&mut app);
+        let no_prepass_target = render_target(&mut app);
         let world = app.world_mut();
         // the unbounded scene's cell table, as SceneBoundPlugin inserts it
         world.resource_mut::<Assets<ShaderStorageBuffer>>().insert(
@@ -817,6 +818,16 @@ mod tests {
             NormalPrepass,
             Transform::from_xyz(0.0, 1.0, 4.0).looking_at(Vec3::Y, Vec3::Y),
         ));
+        // no prepasses, as a camera has with the outline setting off: the outline reads them,
+        // so the materials compile without those reads
+        world.spawn((
+            Camera3d::default(),
+            Camera {
+                target: RenderTarget::Image(no_prepass_target.into()),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 1.0, 4.0).looking_at(Vec3::Y, Vec3::Y),
+        ));
         world.spawn((
             DirectionalLight {
                 shadows_enabled: true,
@@ -867,7 +878,8 @@ mod tests {
         assert!(ok >= 5, "only {ok} pipelines compiled");
 
         // the scene material's main pass compiled with the toon defs, both with and without the
-        // environment map (the toon ambient lookup only exists with it)
+        // environment map (the toon ambient lookup only exists with it) and both with and
+        // without the depth prepass (the outline only reads it where it exists)
         let has = |defs: &[ShaderDefVal], name: &str| {
             defs.iter().any(|def| match def {
                 ShaderDefVal::Bool(def_name, true) | ShaderDefVal::UInt(def_name, _) => {
@@ -895,11 +907,22 @@ mod tests {
             .filter(|fragment| {
                 fragment.shader.id() == shader && has(&fragment.shader_defs, "TOON_LIGHT_UNIT_LUX")
             })
-            .map(|fragment| has(&fragment.shader_defs, "ENVIRONMENT_MAP"))
+            .map(|fragment| {
+                (
+                    has(&fragment.shader_defs, "ENVIRONMENT_MAP"),
+                    has(&fragment.shader_defs, "DEPTH_PREPASS"),
+                )
+            })
             .collect::<Vec<_>>();
-        assert!(
-            toon_variants.contains(&true) && toon_variants.contains(&false),
-            "toon main pass variants by environment map: {toon_variants:?}"
-        );
+        for present in [true, false] {
+            assert!(
+                toon_variants.iter().any(|variant| variant.0 == present),
+                "toon main pass variants by (environment map, depth prepass): {toon_variants:?}"
+            );
+            assert!(
+                toon_variants.iter().any(|variant| variant.1 == present),
+                "toon main pass variants by (environment map, depth prepass): {toon_variants:?}"
+            );
+        }
     }
 }

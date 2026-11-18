@@ -2,7 +2,8 @@
 //! of toon.wgsl's light model, in this client's light units (`common::sky_preset::LIGHT_UNIT_LUX`).
 //! The sun's half-Lambert picks the base colour or one of two grey shades in two feathered steps,
 //! under a light colour that is the sun in light units, saturated, and floored by the ambient
-//! light so avatars stay visible at night.
+//! light so avatars stay visible at night. The outline is a tone of the surface it borders, thins
+//! with the avatar's distance and stops at 8 m.
 
 use bevy::{math::Vec3, render::render_resource::ShaderDefVal};
 use common::sky_preset::LIGHT_UNIT_LUX;
@@ -32,9 +33,22 @@ pub const RIM_INSIDE_MASK: f32 = 0.15;
 /// The rim light's strength, as `saturate(1 + RIM_MASK_LEVEL)`: a tenth
 pub const RIM_MASK_LEVEL: f32 = -0.9;
 
+/// The outline's width in metres at and below `OUTLINE_NEAREST_M` from the camera
+pub const OUTLINE_WIDTH_M: f32 = 0.002;
+/// The camera distance at and below which the outline has its full width
+pub const OUTLINE_NEAREST_M: f32 = 0.5;
+/// The camera distance at and beyond which the outline has no width
+pub const OUTLINE_FARTHEST_M: f32 = 100.0;
+/// The grey of the outline, taken times the base colour twice: a darker, more saturated tone of
+/// the surface it borders, not lit
+pub const OUTLINE_COLOR: f32 = 0.6320754;
+/// The squared camera distance beyond which an avatar has no outline: 8 m
+pub const OUTLINE_MAX_SQR_DISTANCE: f32 = 64.0;
+
 /// The constants above, and `LIGHT_UNIT_LUX` as `TOON_LIGHT_UNIT_LUX`, for the pipeline of every
-/// shader that imports toon.wgsl. A def carries only integers, so each `f32` travels as its bit
-/// pattern in a `UInt` def and the shader reads it back with `bitcast<f32>(#{NAME}u)`.
+/// shader that imports toon.wgsl or bound_material_effect.wgsl's `toon_outline`. A def carries
+/// only integers, so each `f32` travels as its bit pattern in a `UInt` def and the shader reads
+/// it back with `bitcast<f32>(#{NAME}u)`.
 pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
     [
         ("TOON_BASE_COLOR_STEP", BASE_COLOR_STEP),
@@ -49,6 +63,11 @@ pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
         ("TOON_RIM_INSIDE_MASK", RIM_INSIDE_MASK),
         ("TOON_RIM_MASK_LEVEL", RIM_MASK_LEVEL),
         ("TOON_LIGHT_UNIT_LUX", LIGHT_UNIT_LUX),
+        ("TOON_OUTLINE_WIDTH_M", OUTLINE_WIDTH_M),
+        ("TOON_OUTLINE_NEAREST_M", OUTLINE_NEAREST_M),
+        ("TOON_OUTLINE_FARTHEST_M", OUTLINE_FARTHEST_M),
+        ("TOON_OUTLINE_COLOR", OUTLINE_COLOR),
+        ("TOON_OUTLINE_MAX_SQR_DISTANCE", OUTLINE_MAX_SQR_DISTANCE),
     ]
     .into_iter()
     .map(|(name, value)| ShaderDefVal::UInt(name.to_owned(), value.to_bits()))
@@ -103,6 +122,22 @@ pub fn toon_light(sun_lux: Vec3, ambient_unity: Vec3) -> Vec3 {
 /// approximated by the mean of the two, or the light from below where that is brighter.
 pub fn toon_ambient(up: Vec3, down: Vec3) -> Vec3 {
     (0.5 * (up + down)).max(down)
+}
+
+/// The outline's width in pixels on a fragment `view_z` metres deep, for an avatar
+/// `camera_distance` metres from the camera and a vertical focal length of `focal_px` pixels:
+/// `OUTLINE_WIDTH_M` thinning smoothly from `OUTLINE_NEAREST_M` to nothing at
+/// `OUTLINE_FARTHEST_M`, projected at the fragment's depth. bound_material_effect.wgsl's
+/// `toon_outline`.
+pub fn outline_width_px(camera_distance: f32, view_z: f32, focal_px: f32) -> f32 {
+    let t = ((camera_distance - OUTLINE_NEAREST_M) / (OUTLINE_FARTHEST_M - OUTLINE_NEAREST_M))
+        .clamp(0.0, 1.0);
+    OUTLINE_WIDTH_M * (1.0 - t * t * (3.0 - 2.0 * t)) * focal_px / view_z
+}
+
+/// Whether an avatar whose origin is `sqr_distance` square metres from the camera has an outline.
+pub fn outline_visible(sqr_distance: f32) -> bool {
+    sqr_distance <= OUTLINE_MAX_SQR_DISTANCE
 }
 
 #[cfg(test)]
@@ -186,6 +221,14 @@ mod tests {
     }
 
     #[test]
+    fn outline_width_shrinks_with_distance_and_cuts_at_eight_metres() {
+        let focal = 540.0 / (30f32.to_radians()).tan(); // 1080p at 60 degrees vertical
+        assert!((outline_width_px(1.0, 1.0, focal) - 0.002 * focal).abs() < 0.05);
+        assert!(outline_width_px(8.0, 8.0, focal) < 0.3);
+        assert!(outline_visible(64.0) && !outline_visible(64.0001));
+    }
+
+    #[test]
     fn wgsl_defs_mirror_the_constants() {
         let expected = [
             ("TOON_BASE_COLOR_STEP", BASE_COLOR_STEP),
@@ -200,6 +243,11 @@ mod tests {
             ("TOON_RIM_INSIDE_MASK", RIM_INSIDE_MASK),
             ("TOON_RIM_MASK_LEVEL", RIM_MASK_LEVEL),
             ("TOON_LIGHT_UNIT_LUX", LIGHT_UNIT_LUX),
+            ("TOON_OUTLINE_WIDTH_M", OUTLINE_WIDTH_M),
+            ("TOON_OUTLINE_NEAREST_M", OUTLINE_NEAREST_M),
+            ("TOON_OUTLINE_FARTHEST_M", OUTLINE_FARTHEST_M),
+            ("TOON_OUTLINE_COLOR", OUTLINE_COLOR),
+            ("TOON_OUTLINE_MAX_SQR_DISTANCE", OUTLINE_MAX_SQR_DISTANCE),
         ];
         let defs = toon_shader_defs();
         assert_eq!(defs.len(), expected.len());

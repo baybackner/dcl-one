@@ -5,6 +5,7 @@
     pbr_types,
     mesh_functions,
 }
+#import bevy_render::maths::PI
 
 // an avatar being revealed bottom-up from its ghost (avatar/src/ghost.rs): the tag's low byte is
 // the reveal height above the mesh origin (the feet), 0 for no reveal and 1..=255 spanning the
@@ -62,8 +63,12 @@ fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>,
 #endif
 #endif
 
+// draws a line on the fragments the prepass shows on an edge: a depth edge (the silhouette)
+// becomes outline_rgb, and a crease darkens the surface.
+// width_px: the line's width in pixels; below one pixel the line covers that fraction of the
+// pixel, so a thin line fades instead of breaking up
 // dither_opacity: this fragment's discard_dither opacity; 1 when it isn't dithered
-fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_color: vec3<f32>, hilight: bool, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
+fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32>, width_px: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
     var out = color_in;
 #ifdef DEPTH_PREPASS
 
@@ -76,8 +81,8 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_color: vec3<f
     if is_orthographic {
         mid = 2.0 / view.clip_from_view[1].y;
     }
-    let width = (1.0 / mid) * view.viewport.z / 640.0;
-    let d = clamp(width, 1.0, 5.0);
+    let d = max(width_px, 1.0);
+    let strength = saturate(width_px);
 
     let pxpy = neighbour_depth(position, vec2(d, d), center, dither_opacity, sample_index);
     let pxmy = neighbour_depth(position, vec2(d, -d), center, dither_opacity, sample_index);
@@ -105,19 +110,48 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_color: vec3<f
     }
 #endif
 
-    var hi = 0.0;
-    if hilight {
-        hi = 1.0;
-    }
+    // a crease takes the outline's grey where the pipeline has the toon defs (the avatar body),
+    // and half the surface colour elsewhere (the masks)
+#ifdef TOON_OUTLINE_COLOR
+    let crease = bitcast<f32>(#{TOON_OUTLINE_COLOR}u);
+#else
+    let crease = 0.5;
+#endif
     if edge1 {
-        out = vec4<f32>(outline_color * 10. * hi, out.a);
+        out = vec4<f32>(mix(out.rgb, outline_rgb, strength), out.a);
     } else if edge2 {
-        out = vec4<f32>(out.rgb * (outline_color * 4.5 * hi + 0.5), out.a);
+        out = vec4<f32>(mix(out.rgb, out.rgb * crease, strength), out.a);
     }
 #endif
 
 return out;
 }
+
+// the avatar outline (scene_material::toon, which holds the constants and the CPU twin of the
+// width): a darker, more saturated tone of the surface, base being its base colour, that thins
+// with the avatar's distance from the camera and stops at the cutoff distance. Distances are to
+// the avatar's origin, so the whole avatar gains or loses its outline at once. A pipeline
+// importing this needs scene_material::toon::toon_shader_defs
+#ifdef TOON_OUTLINE_WIDTH_M
+fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, instance_index: u32, view_z: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
+    let to_camera = mesh_functions::get_world_from_local(instance_index)[3].xyz - view.world_position;
+    let sqr_distance = dot(to_camera, to_camera);
+    // past the cutoff there is no line, and no prepass read
+    if sqr_distance > bitcast<f32>(#{TOON_OUTLINE_MAX_SQR_DISTANCE}u) {
+        return color_in;
+    }
+    // the width in metres falls from full at the nearest distance to none at the farthest, and
+    // is projected at this fragment's depth
+    let falloff = 1.0 - smoothstep(bitcast<f32>(#{TOON_OUTLINE_NEAREST_M}u), bitcast<f32>(#{TOON_OUTLINE_FARTHEST_M}u), sqrt(sqr_distance));
+    let focal_px = view.clip_from_view[1][1] * view.viewport.w * 0.5;
+    let width_px = bitcast<f32>(#{TOON_OUTLINE_WIDTH_M}u) * falloff * focal_px / view_z;
+    // the line is not lit: its colour is in the base colour's space, scaled by one light unit to
+    // the pre-tonemap level of the lit body (toon.wgsl)
+    let unit = bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u) * view.exposure / PI;
+    let outline_rgb = bitcast<f32>(#{TOON_OUTLINE_COLOR}u) * base * base * unit;
+    return apply_outline(position, color_in, outline_rgb, width_px, sample_index, dither_opacity);
+}
+#endif
 
 struct Dither {
     // what the pixel's threshold is tested against; 1 or more never discards
