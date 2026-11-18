@@ -1,45 +1,35 @@
-//! The avatar toon light model, Unity's avatar shader DCL_Toon as the avatar material configures
-//! it: its constants, their shader defs for toon.wgsl, and the CPU twin of toon.wgsl's light
-//! model, in this client's light units (`common::sky_preset::LIGHT_UNIT_LUX`).
-//!
-//! Sources (`unity-shared` is decentraland/unity-shared-dependencies, `unity` is
-//! decentraland/unity-explorer):
-//! - the formulas: `unity-shared:Runtime/Shaders/Avatar/DCL_Toon/DCL_ToonBodyDoubleShadeWithFeather.hlsl`
-//!   (line numbers below are that file's), included by `DCL_ToonBody.hlsl`;
-//! - the values: `unity:Explorer/Assets/DCL/AvatarRendering/AvatarShape/Assets/Avatar_Toon.mat`,
-//!   baked into `unity-shared:Runtime/Shaders/Avatar/DCL_Toon/DCL_ToonVariables.hlsl`.
+//! The avatar toon light model: its constants, their shader defs for toon.wgsl, and the CPU twin
+//! of toon.wgsl's light model, in this client's light units (`common::sky_preset::LIGHT_UNIT_LUX`).
+//! The sun's half-Lambert picks the base colour or one of two grey shades in two feathered steps,
+//! under a light colour that is the sun in light units, saturated, and floored by the ambient
+//! light so avatars stay visible at night.
 
 use bevy::{math::Vec3, render::render_resource::ShaderDefVal};
 use common::sky_preset::LIGHT_UNIT_LUX;
 
-/// `_BaseColor_Step` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the half-Lambert below
-/// which the base colour gives way to the shades
+/// The half-Lambert below which the base colour gives way to the shades
 pub const BASE_COLOR_STEP: f32 = 0.2;
-/// `_BaseShade_Feather` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the width of the
-/// base-to-shade transition below the step
+/// The width of the base-to-shade transition below `BASE_COLOR_STEP`
 pub const BASE_SHADE_FEATHER: f32 = 0.02;
-/// `_ShadeColor_Step` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the half-Lambert below
-/// which the first shade gives way to the second
+/// The half-Lambert below which the first shade gives way to the second
 pub const SHADE_COLOR_STEP: f32 = 0.2;
-/// `_1st2nd_Shades_Feather` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the width of the
-/// first-to-second shade transition
+/// The width of the first-to-second shade transition below `SHADE_COLOR_STEP`
 pub const SHADES_FEATHER: f32 = 0.05;
-/// `_1st_ShadeColor` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`), a grey
+/// The grey the lit base colour is multiplied by in the first shade
 pub const FIRST_SHADE: f32 = 0.9490197;
-/// `_2nd_ShadeColor` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`), a grey
+/// The grey of the second, darker shade
 pub const SECOND_SHADE: f32 = 0.8000001;
-/// `_Unlit_Intensity` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the gain on the ambient
-/// light that floors the light colour
+/// The gain on the ambient light that floors the light colour
 pub const UNLIT_INTENSITY: f32 = 4.0;
-/// The `half3(0.05, 0.05, 0.05)` of `DCL_ToonBodyDoubleShadeWithFeather.hlsl:93`: the ambient
-/// floor before `UNLIT_INTENSITY`
+/// The least ambient light the floor takes, before `UNLIT_INTENSITY`: with no light at all an
+/// avatar is lit at a fifth of noon
 pub const UNLIT_FLOOR: f32 = 0.05;
-/// `_RimLight_Power` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`)
+/// The rim light's width: the rim is the silhouette term to the power `2^(3 - 3 * RIM_POWER)`, so
+/// 0 keeps it at the very edge and 1 spreads it over the body
 pub const RIM_POWER: f32 = 0.3;
-/// `_RimLight_InsideMask` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`)
+/// The silhouette term below which there is no rim light; above it the rim rises to 1
 pub const RIM_INSIDE_MASK: f32 = 0.15;
-/// `_Tweak_RimLightMaskLevel` (`Avatar_Toon.mat`, `DCL_ToonVariables.hlsl`): the rim is scaled
-/// by `saturate(1 + RIM_MASK_LEVEL)`
+/// The rim light's strength, as `saturate(1 + RIM_MASK_LEVEL)`: a tenth
 pub const RIM_MASK_LEVEL: f32 = -0.9;
 
 /// The constants above, and `LIGHT_UNIT_LUX` as `TOON_LIGHT_UNIT_LUX`, for the pipeline of every
@@ -66,9 +56,10 @@ pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
 }
 
 /// The shadow mask (1 in the shades) and the shades term (the first shade blending into the
-/// second) for a half-Lambert from `n_dot_l` and the sun's cast-shadow term `shadow` (1 lit):
-/// lines 115 and 125-129 with `_Set_SystemShadowsToBase` 1, `_Tweak_SystemShadowsLevel` 0 and
-/// white shade-position maps. toon.wgsl's `toon_mask_and_shades`.
+/// second) for a half-Lambert from `n_dot_l` and the sun's cast-shadow term `shadow` (1 lit). A
+/// full shadow halves the half-Lambert the mask reads, so only surfaces already turning away from
+/// the sun fall into the shades; the shades blend on the unshadowed half-Lambert. toon.wgsl's
+/// `toon_mask_and_shades`.
 fn mask_and_shades(n_dot_l: f32, shadow: f32) -> (f32, f32) {
     let half_lambert = 0.5 * n_dot_l + 0.5;
     let shadowed = half_lambert * (shadow * 0.5 + 0.5).clamp(0.0, 1.0);
@@ -87,30 +78,29 @@ pub fn toon_band(n_dot_l: f32, shadow: f32) -> f32 {
     1.0 + (shades - 1.0) * mask
 }
 
-/// The lit multiplier on the base colour under the light colour `light` (`toon_light`), as
-/// lines 105-129 compose it: the shade colours are taken from the already lit base colour and
-/// lit again (`_Use_BaseAs1st`, `_Is_LightColor_1st_Shade`, `_Is_LightColor_2nd_Shade`), so the
-/// shades are `base * light * shade * light`. At a light of 1 this is `toon_band`.
+/// The lit multiplier on the base colour under the light colour `light` (`toon_light`): the
+/// shade colours are taken from the already lit base colour and lit again, so the shades are
+/// `base * light * shade * light` and darken faster than the light dims. At a light of 1 this is
+/// `toon_band`.
 pub fn toon_diffuse(n_dot_l: f32, shadow: f32, light: Vec3) -> Vec3 {
     let (mask, shades) = mask_and_shades(n_dot_l, shadow);
     light * Vec3::ONE.lerp(light * shades, mask)
 }
 
-/// Unity's `lightColor` (lines 93 and 98, `_Is_Filter_LightColor` 1):
-/// `max(default_light, saturate(sun_lux / LIGHT_UNIT_LUX))` per channel, with the floor
-/// `default_light = saturate(max(ambient_unity, UNLIT_FLOOR) * UNLIT_INTENSITY)`. `sun_lux` is
-/// the sun's colour times its illuminance; `ambient_unity` is the ambient light in light units
-/// (`toon_ambient`).
+/// The light colour: `max(default_light, saturate(sun_lux / LIGHT_UNIT_LUX))` per channel, with
+/// the floor `default_light = saturate(max(ambient_unity, UNLIT_FLOOR) * UNLIT_INTENSITY)`.
+/// Saturated so a bright sun never lifts avatars past white, floored so they stay visible at
+/// night. `sun_lux` is the sun's colour times its illuminance; `ambient_unity` is the ambient
+/// light in light units (`toon_ambient`).
 pub fn toon_light(sun_lux: Vec3, ambient_unity: Vec3) -> Vec3 {
     let default_light = (ambient_unity.max(Vec3::splat(UNLIT_FLOOR)) * UNLIT_INTENSITY)
         .clamp(Vec3::ZERO, Vec3::ONE);
     default_light.max((sun_lux / LIGHT_UNIT_LUX).clamp(Vec3::ZERO, Vec3::ONE))
 }
 
-/// Unity's `max(ShadeSH9(0), ShadeSH9(down))` (line 93) from `up` and `down`, the diffuse
-/// irradiance of a white surface facing up and down, in light units: the spherical harmonics'
-/// constant term, the mean irradiance over every direction, is approximated by the mean of the
-/// two.
+/// The ambient light that floors `toon_light`, from `up` and `down`, the diffuse irradiance of a
+/// white surface facing up and down, in light units: the mean irradiance over every direction,
+/// approximated by the mean of the two, or the light from below where that is brighter.
 pub fn toon_ambient(up: Vec3, down: Vec3) -> Vec3 {
     (0.5 * (up + down)).max(down)
 }
@@ -171,7 +161,7 @@ mod tests {
         assert_eq!(toon_light(Vec3::splat(1e9), Vec3::ZERO), Vec3::ONE);
         // a black sun and no ambient: the 0.05 * 4 floor
         assert_eq!(toon_light(Vec3::ZERO, Vec3::ZERO), Vec3::splat(0.2));
-        // the ambient times _Unlit_Intensity lifts the floor
+        // the ambient times the gain lifts the floor
         assert!(close(
             toon_light(Vec3::ZERO, Vec3::splat(0.1)),
             Vec3::splat(0.4)
