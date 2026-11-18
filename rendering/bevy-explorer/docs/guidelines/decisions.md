@@ -608,6 +608,9 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   Distance. Bevy has one sea plane, a single opaque quad that casts no shadows, so hiding it would
   save almost nothing, and the water material draws without fog, so nothing would soften it
   appearing and disappearing.
+- **No satellite floor.** unity-explorer lays the minimap's satellite images flat at 0.205 m under the
+  terrain in Genesis City; here the ground covers that plane everywhere, so the floor would never be
+  seen and is not shipped.
 
 ## Deliberate choices that look like mistakes
 
@@ -768,3 +771,8 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   HUD does not have and reads as a fault; the control appears when its function exists. The
   Portable experiences button follows the same rule and shows only while an experience is
   active.
+- **The embedded assets stay in plain git, not Git LFS.** `crates/assets/build.rs` embeds whatever
+  is on disk, so an LFS pointer would compile and be wrong at runtime, and an LFS checkout would
+  have to be pulled by every Explorer build and matched by every check that hashes the build's
+  inputs. The build fails on a file that is an LFS pointer. Revisit if the landscape folder
+  (`crates/assets/src/assets/landscape`) reaches tens of MB.
