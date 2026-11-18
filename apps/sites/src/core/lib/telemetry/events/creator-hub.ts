@@ -119,10 +119,6 @@ export type CreatorHubEvents = {
     name: string;
     simulated: true;
   };
-  ch_claim_name_returned_to_publish: {
-    name: string;
-    world_name: string;
-  };
   ch_claim_name_review_reached: {
     name: string;
     price_mana: string;
@@ -133,119 +129,7 @@ export type CreatorHubEvents = {
   ch_claim_name_unavailable: {
     name: string;
   };
-  ch_create_project_completed: {
-    files: string[];
-    folder?: string;
-    name: string;
-    path: string;
-    template: string;
-    via?: "canceled" | "directory" | "download";
-    written: boolean;
-  };
-  ch_create_project_failed: {
-    code?: string;
-    message: string;
-  };
-  ch_create_project_name_set: {
-    name: string;
-  };
-  ch_create_project_path_invalid: {
-    path: string;
-  };
-  ch_create_project_path_set: {
-    path: string;
-  };
-  ch_create_project_scaffolding: {
-    name: string;
-    path: string;
-    template: string;
-  };
-  ch_create_project_started: Record<string, never>;
-  ch_create_project_template_selected: {
-    preselected?: true;
-    template: string;
-  };
   ch_curate_signin_clicked: Record<string, never>;
-  ch_delete_cancelled: {
-    local?: true;
-    project_id: string;
-  };
-  ch_delete_confirmed: {
-    delete_files: boolean;
-    local?: true;
-    local_files?: "deleted" | "kept";
-    overrode_pointers?: number;
-    project_id: string;
-    replaced_entity?: string;
-    simulated: false;
-    status?: number;
-    tombstone_id?: string;
-  };
-  ch_delete_done_viewed: {
-    deleted_id: null | string;
-    remaining: number;
-  };
-  ch_delete_failed: {
-    error: string;
-    project_id: string;
-    simulated: false;
-    status: number;
-  };
-  ch_delete_files_opted_in: {
-    local?: true;
-    project_id: string;
-  };
-  ch_delete_files_toggled: {
-    checked: boolean;
-    local?: true;
-    project_id: string;
-  };
-  ch_delete_no_deployment: {
-    base: string;
-    project_id: string;
-  };
-  ch_delete_opened: {
-    local?: true;
-    project_id: string;
-    published: boolean | null;
-  };
-  ch_delete_scenes_viewed: {
-    count: number;
-    source: "empty" | "live" | "unavailable";
-  };
-  ch_deploy_world_completed: {
-    jump_url?: string;
-    name?: string;
-    target: "land" | "world";
-  };
-  ch_deploy_world_confirm_reached: {
-    name?: string;
-    target: "land" | "world";
-  };
-  ch_deploy_world_destination_selected: {
-    target: "land" | "world";
-  };
-  ch_deploy_world_failed: {
-    error?: string;
-    name?: string;
-  };
-  ch_deploy_world_name_selected: {
-    name?: string;
-  };
-  ch_deploy_world_names_empty: Record<string, never>;
-  ch_deploy_world_quota_exceeded: {
-    max_mb: number;
-    phase?: string;
-    total_bytes: number;
-  };
-  ch_deploy_world_review_reached: {
-    exceeded: boolean;
-    target: "land" | "world";
-    total_bytes: number;
-  };
-  ch_deploy_world_started: {
-    target: "land" | "world";
-  };
   ch_home_card_opened: {
     card: string;
   };
@@ -314,34 +198,6 @@ export type CreatorHubEvents = {
     seeded?: boolean;
     to?: string;
   };
-  ch_scenes_empty_viewed: Record<string, never>;
-  ch_scenes_import_failed: {
-    files?: number;
-    has_scene_json?: boolean;
-    reason: string;
-  };
-  ch_scenes_signin_clicked: Record<string, never>;
-  ch_scenes_viewed: {
-    count: number;
-    empty: boolean;
-    error: boolean;
-  };
-  ch_studio_opened: {
-    source: string;
-    template_id: string;
-  };
-  ch_template_previewed: {
-    template_id: string;
-  };
-  ch_template_selected: {
-    template_id: string;
-    title: string;
-  };
-  ch_template_view_code: {
-    template_id: string;
-  };
-  ch_templates_signin_clicked: Record<string, never>;
-  ch_templates_viewed: Record<string, never>;
   ch_world_perms_access_type_set: {
     access_type: string;
   };

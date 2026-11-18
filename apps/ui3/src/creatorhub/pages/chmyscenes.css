@@ -139,39 +139,6 @@
   white-space: nowrap;
 }
 
-.chms__badge {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px 4px 8px;
-  border-radius: var(--r-pill, 999px);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: #fff;
-  background: rgba(10, 9, 13, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-.chms__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: 0 0 auto;
-}
-.chms__badge--good { color: var(--success, #34ce77); }
-.chms__badge--good .chms__dot { box-shadow: 0 0 0 3px rgba(52, 206, 119, 0.18); }
-.chms__badge--brand { color: var(--chms-brand); }
-.chms__badge--info { color: var(--info, #2196f3); }
-.chms__badge--warn { color: var(--warning, #fe9c2a); }
-.chms__badge--bad { color: var(--error, #fb3b3b); }
-.chms__badge--muted { color: rgba(255, 255, 255, 0.6); }
-
 .chms__body {
   display: flex;
   flex-direction: column;
@@ -211,8 +178,6 @@
 
 .chms__actions { margin-top: auto; padding-top: 4px; }
 .chms__viewonly { display: flex; flex-direction: column; gap: 6px; }
-.chms__stack { display: flex; flex-direction: column; gap: 6px; }
-.chms__stack .chms__btn { width: 100%; }
 .chms__note {
   font-size: 11px;
   font-weight: 600;
@@ -380,38 +345,6 @@
   .chms__grid { grid-template-columns: minmax(0, 1fr); }
   .chms__head { align-items: flex-start; }
   .chms__scanhead { gap: 14px; }
-}
-
-.chms__tabs {
-  display: flex;
-  gap: 6px;
-  width: 100%;
-  max-width: none;
-  margin: 0 auto;
-  padding: 20px 24px 0;
-  box-sizing: border-box;
-}
-.chms__tab {
-  border: 1px solid var(--line, rgba(255, 255, 255, 0.1));
-  background: var(--fill-2, rgba(255, 255, 255, 0.06));
-  color: rgba(255, 255, 255, 0.75);
-  border-radius: var(--r-pill, 999px);
-  padding: 8px 18px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-.chms__tab:hover { background: var(--fill-3, rgba(255, 255, 255, 0.09)); color: #fff; }
-.chms__tab.is-active {
-  background: rgba(255, 45, 85, 0.14);
-  border-color: rgba(255, 45, 85, 0.45);
-  color: #fff;
-}
-.chms__tab:focus-visible {
-  outline: 2px solid var(--chms-brand);
-  outline-offset: 2px;
 }
 
 .chms__toolbar {

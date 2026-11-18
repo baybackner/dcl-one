@@ -364,7 +364,7 @@ Each host keeps only what is its own:
   stylesheets the host's public files as CSS variables such as `--hud-logo`);
 - what only one host has: react-web's benchmark autopilot
   (`engine/autopilot.ts`, `shell/localGuest.ts`) and Shop query client, and
-  `/play`'s in-world Shop and Creator Hub editor embed.
+  `/play`'s in-world Shop.
 
 Where the two copies had drifted, the shared copy kept the fix or feature
 either host had, for both.

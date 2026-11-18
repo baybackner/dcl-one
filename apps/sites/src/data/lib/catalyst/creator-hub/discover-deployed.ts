@@ -6,10 +6,7 @@ export type DiscoveredScene = {
   pointers: string[];
   worldName: string | null;
   thumbnailUrl: string | null;
-  editable: boolean;
-  republishable: boolean;
   deployedAt: number | null;
-  openHref: string;
 };
 
 type RawContentEntry = { file?: string; key?: string; hash?: string };
@@ -25,8 +22,6 @@ export type RawDeployment = {
 };
 
 export const SCENE_CAP = 500;
-
-const COMPOSITE_RE = /(^|\/)main\.composite$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null;
@@ -63,17 +58,6 @@ function findContentHash(content: RawContentEntry[], path: string): string | nul
 
 function stripBase(base: string): string {
   return base.replace(/\/+$/, "");
-}
-
-function buildOpenHref(
-  kind: "land" | "world",
-  pointer: string,
-): string {
-  const q = new URLSearchParams();
-  q.set("pointer", pointer);
-  if (kind === "world") q.set("world", "1");
-  q.set("from", "discovery");
-  return `/create/scene-editor?${q.toString()}`;
 }
 
 export function normalizeDeployment(
@@ -117,16 +101,7 @@ export function normalizeDeployment(
     ? `${cleanBase}/content/contents/${thumbHash}`
     : null;
 
-  const editable = content.some((c) => COMPOSITE_RE.test(contentFile(c)));
-
-  const republishable = kind === "world" || pointers.every(isLandPointer);
-
   const deployedAt = numOrNull(d.entityTimestamp) ?? numOrNull(d.localTimestamp);
-
-  const openHref = buildOpenHref(
-    kind,
-    kind === "world" ? worldName ?? "" : baseParcel,
-  );
 
   return {
     entityId,
@@ -136,15 +111,11 @@ export function normalizeDeployment(
     pointers,
     worldName,
     thumbnailUrl,
-    editable,
-    republishable,
     deployedAt,
-    openHref,
   };
 }
 
 function sortScenes(a: DiscoveredScene, b: DiscoveredScene): number {
-  if (a.editable !== b.editable) return a.editable ? -1 : 1;
   if (a.deployedAt == null && b.deployedAt == null) return 0;
   if (a.deployedAt == null) return 1;
   if (b.deployedAt == null) return -1;

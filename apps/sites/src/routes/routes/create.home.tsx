@@ -3,8 +3,7 @@ import ScreenFreshness from "@/features/components/chrome/ScreenFreshness";
 import { useEffect, useRef } from "react";
 import { data, useNavigate, useRevalidator, useSearchParams } from "react-router";
 
-import CreatorHubHome, { type ChTemplateCard } from "@ui/creatorhub/pages/CreatorHubHome";
-import { STARTER_TEMPLATES } from "@ui/creatorhub/pages/ChTemplates";
+import CreatorHubHome from "@ui/creatorhub/pages/CreatorHubHome";
 
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
@@ -51,14 +50,6 @@ export default function CreateHome({ loaderData }: Route.ComponentProps) {
   );
 }
 
-const TEMPLATE_CARDS: ChTemplateCard[] = STARTER_TEMPLATES.map((t) => ({
-  id: t.id,
-  title: t.title,
-  thumb: t.thumb,
-  difficulty: t.difficulty_level,
-  href: `/create/scene-editor?new=1&template=${encodeURIComponent(t.id)}&name=${encodeURIComponent(t.title)}&from=home`,
-}));
-
 function HubHomeView({ sid, creator, profileAddress, profileName, scenes, scenesError }: {
   sid: string; creator: string; profileAddress: string; profileName: string; scenes: CreatorScene[]; scenesError: boolean;
 }) {
@@ -92,13 +83,7 @@ function HubHomeView({ sid, creator, profileAddress, profileName, scenes, scenes
 
   const rescoping = isConnected && !!address && !creator;
 
-  const sceneRows = scenes.map((s) => ({
-    id: s.id,
-    title: s.title,
-    href: s.base_position
-      ? `/create/scene-editor?pointer=${encodeURIComponent(s.base_position)}${s.world_name ? `&world=${encodeURIComponent(s.world_name)}` : ""}&from=home`
-      : `/create/scene-editor?new=1&name=${encodeURIComponent(s.title)}&from=home`,
-  }));
+  const sceneRows = scenes.map((s) => ({ id: s.id, title: s.title, href: "/create/scenes" }));
 
   function onScenesRetry() {
     track("ch_home_card_opened", { card: "scenes_retry" }, { sid, story: STORY });
@@ -110,8 +95,6 @@ function HubHomeView({ sid, creator, profileAddress, profileName, scenes, scenes
         scenes={sceneRows}
         scenesError={scenesError}
         rescoping={rescoping}
-        templates={TEMPLATE_CARDS}
-        onCardClick={(card) => track("ch_home_card_opened", { card }, { sid, story: STORY })}
         onRetry={onScenesRetry}
         signedIn={isConnected}
         account={address ?? ""}
@@ -122,7 +105,7 @@ function HubHomeView({ sid, creator, profileAddress, profileName, scenes, scenes
         }}
         onStartBuilding={() => {
           track("ch_home_start_building", {}, { sid, story: STORY });
-          navigate(sceneRows.length > 0 ? "/create/scenes" : "/create/templates");
+          navigate("/download/creator-hub");
         }}
         onScenes={() => track("ch_scenes_clicked", { from: "home", card: "scenes" }, { sid, story: STORY })}
         onLearn={() => track("ch_home_card_opened", { card: "learn" }, { sid, story: STORY })}

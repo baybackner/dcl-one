@@ -12,14 +12,6 @@ import {
 } from "../../flowmap/flowmapdata";
 import type { FlowSection } from "../../flowmap/flowmapdata";
 
-const EDITOR = (chains?: string[]) =>
-  state("EDITOR", {
-    href: "/create/scene-editor",
-    sub: "/create/scene-editor",
-    chains,
-  });
-
-
 export const SECTIONS: FlowSection[] = [
   {
     id: "entry",
@@ -39,7 +31,6 @@ export const SECTIONS: FlowSection[] = [
             items: [
               node("chip", "Home", { href: "/create/home" }),
               node("chip", "Scenes", { href: "/create/scenes" }),
-              node("chip", "Templates", { href: "/create/templates" }),
               node("chip", "Collections", { href: "/create/wearables" }),
               node("chip", "Curate", { href: "/create/curate", sub: "committee" }),
               node("chip", "Worlds", { href: "/create/worlds" }),
@@ -54,17 +45,15 @@ export const SECTIONS: FlowSection[] = [
           },
           {
             chain: "start-building",
-            items: [click("Start building"), route("/create/scenes"), sep(), route("/create/templates")],
-            note: "the Scenes card banner and its empty state \u{2014} /create/scenes when the account already has scenes, /create/templates otherwise",
+            items: [click("Start building"), route("/download/creator-hub")],
+            note: "the header button and the Scenes card's empty state \u{2014} scenes are built in the desktop app",
           },
           {
             chain: "home-cards",
             chips: true,
-            note: "the home cards \u{2014} a starter template card opens the editor with ?from=home so its breadcrumb returns here; the Manage card mirrors the rail doors",
+            note: "the home cards \u{2014} the Manage card mirrors the rail doors",
             items: [
               node("chip", "Scenes", { href: "/create/scenes", sub: "See All" }),
-              node("chip", "Start from a template", { href: "/create/templates", sub: "Browse all templates" }),
-              node("chip", "Template card", { href: "/create/scene-editor?new=1&template=X&name=X&from=home" }),
               node("chip", "Manage", { sub: "Collections \u{B7} Worlds \u{B7} Metrics \u{B7} Curate \u{B7} Land \u{B7} Names" }),
               node("chip", "Learn", { href: "/create/learn" }),
             ],
@@ -88,189 +77,19 @@ export const SECTIONS: FlowSection[] = [
   },
 
   {
-    id: "create",
+    id: "scenes",
     num: "02",
-    title: "Create a Scene",
-    machines: ["create-project", "delete-project"],
+    title: "Published Scenes",
     blurb:
-      "Template pick \u{2192} confirm \u{2192} straight into the editor. The naming wizard at /create/create-project survives as the deep-link/legacy path. Reopening a saved or deployed scene hydrates its composite. Deleting writes a signed tombstone.",
+      "The scenes your wallet deployed to LAND or a World. Each one's deployed files download as a zip; scenes are built in the desktop app.",
     tracks: [
-      {
-        chain: "template-flow",
-        items: [
-          route("/create/templates"),
-          click("card"),
-          node("modal", "CONFIRM_MODAL"),
-          load("LOAD engine \u{B7} \u{201C}Loading scene editor\u{2026}\u{201D}", { label: "Create" }),
-          state("EDITOR", {
-            href: "/create/scene-editor",
-            sub: "?new=1&template=X&from=templates",
-            chains: ["template-flow", "start-building"],
-          }),
-        ],
-        branches: [
-          {
-            chain: "template-flow",
-            items: [click("Cancel / Esc"), outcome("back")],
-          },
-        ],
-      },
-      {
-        chain: "legacy-wizard",
-        note: "deep-link/legacy path \u{2014} no in-product click leads here anymore",
-        items: [
-          route("/create/create-project", { sub: "machine: create-project" }),
-          step(),
-          state("NAMING", { sub: "name prefilled" }),
-          click("Create"),
-          state("SCAFFOLDING"),
-          load("write files"),
-          state("CREATED"),
-          click("Open in editor"),
-          EDITOR(["legacy-wizard"]),
-        ],
-        branches: [
-          {
-            chain: "legacy-wizard",
-            items: [
-              auto("no template"),
-              click("pick"),
-              state("TEMPLATING"),
-              load(),
-              state("SCAFFOLDING"),
-            ],
-          },
-          {
-            chain: "scaffold-error",
-            items: [
-              auto("error"),
-              state("ERROR"),
-              click("Retry / Choose folder"),
-              state("SCAFFOLDING"),
-            ],
-          },
-        ],
-      },
-      {
-        chain: "reopen",
-        items: [
-          route("/create/scenes"),
-          load("hydrate composite", { label: "scene card" }),
-          state("EDITOR", {
-            href: "/create/scene-editor",
-            sub: "reopen + continue",
-          }),
-        ],
-        branches: [
-          {
-            chain: "reopen",
-            chips: true,
-            note: "empty state",
-            items: [
-              node("chip", "Import"),
-              node("chip", "Templates", { href: "/create/templates" }),
-              node("chip", "Sign in"),
-            ],
-          },
-        ],
-      },
       {
         chain: "published",
         items: [
-          route("/create/my-scenes", { sub: "scenes deployed by your wallet" }),
-          click("Open"),
-          state("EDITOR", {
-            href: "/create/scene-editor",
-            sub: "?pointer=\u{2026} \u{B7} reopen the live scene",
-          }),
-        ],
-        branches: [
-          {
-            chain: "published",
-            items: [auto("none yet"), click("Start from a template"), route("/create/templates")],
-          },
-        ],
-      },
-      {
-        chain: "delete",
-        items: [
-          route("/create/delete-project", { sub: "machine: delete-project" }),
-          step(),
-          state("CONFIRM"),
-          load("signed tombstone", { label: "Delete" }),
-          outcome("done", { sub: "?local=deleted | kept" }),
-        ],
-      },
-    ],
-  },
-
-  {
-    id: "editor",
-    num: "03",
-    title: "Editor Loop",
-    machines: ["scene-editor-place-items"],
-    blurb:
-      "Boot, then the place-and-save loop; preview is an explicit Play. Drafts sync in the background to the node as builder project manifests. Exits follow the ?from= breadcrumb.",
-    tracks: [
-      {
-        chain: "start-building",
-        items: [
-          route("/create/scene-editor", { sub: "machine: scene-editor-place-items" }),
-          load("BOOT"),
-          state("EDITING"),
-        ],
-      },
-      {
-        chain: "save-loop",
-        items: [
-          state("EDITING"),
-          click("Open Assets"),
-          state("BROWSING"),
-          click("place"),
-          state("PLACING"),
-          click("Create entity"),
-          state("TRANSFORMING"),
-          click("axes"),
-          state("MODIFYING"),
-          load("FSA write", { label: "Save" }),
-          state("SAVED"),
-          click("continue"),
-          state("EDITING"),
-        ],
-      },
-      {
-        chain: "preview",
-        note: "no auto-play; Stop \u{2260} reload",
-        items: [
-          state("EDITING"),
-          load("\u{201C}Loading preview\u{2026}\u{201D}", { label: "\u{25B6} Play" }),
-          state("PREVIEW"),
-          { t: "edge", kind: "reversible", label: "Pause / Play" },
-          click("\u{25A0} Stop"),
-          state("EDITING"),
-        ],
-      },
-      {
-        chain: "sync",
-        note: "background \u{2014} no click; the rail chip mirrors draft-sync state",
-        items: [
-          state("EDITING"),
-          auto("draft saved"),
-          load("PUT /builder-api/v1/projects/:id/manifest \u{B7} signed auth chain"),
-          outcome("sync chip: Synced", { sub: "If-Match on the manifest revision" }),
-        ],
-      },
-      {
-        chain: "exits",
-        items: [
-          state("EDITING"),
-          click("Exit"),
-          outcome("breadcrumb origin", {
-            sub: "?from= home | scenes | templates | manage | operator \u{2014} default /create/scenes",
-          }),
-          sep(),
-          click("Publish"),
-          node("jump", "deploy flow", { href: "#deploy" }),
+          route("/create/scenes", { sub: "scenes deployed by your wallet" }),
+          click("Download scene files"),
+          load("fetch the deployed files"),
+          outcome("zip"),
         ],
       },
     ],
@@ -465,38 +284,6 @@ export const SECTIONS: FlowSection[] = [
   },
 
   {
-    id: "deploy",
-    num: "06",
-    title: "Deploy & Claim",
-    machines: ["deploy-scene", "claim-name"],
-    blurb:
-      "Publish a scene to a World name via a signed deploy; claim a new name and come back with it preselected. The breadcrumb honors ?from= \u{2014} scene-editor entries get \u{201C}Back to editor\u{201D}.",
-    tracks: [
-      {
-        chain: "deploy",
-        items: [
-          route("/create/publish", { sub: "machine: deploy-scene \u{B7} ?from= breadcrumb" }),
-          step(),
-          state("PICK NAME", { sub: "live \u{B7} ?name= preselect" }),
-          load("signed deploy", { label: "Deploy" }),
-          state("SUCCESS"),
-        ],
-        branches: [
-          {
-            chain: "claim",
-            items: [
-              click("Claim name"),
-              route("/create/claim-name", { sub: "marketplace claim" }),
-              click("Use in Publish to World"),
-              outcome("back with ?name"),
-            ],
-          },
-        ],
-      },
-    ],
-  },
-
-  {
     id: "metrics",
     num: "07",
     title: "Metrics",
@@ -608,44 +395,22 @@ export const STATS = computeStats(SECTIONS);
 export const ASCII_SOURCE = `# Creator Hub \u{2014} click/state sitemap
 
 Every edge is one user CLICK, or a LOAD\u{23F3} when the transition invokes work >100ms
-(engine boot, folder picker, signed deploy, scaffolding). States in CAPS are
+(uploads, signed writes, file downloads). States in CAPS are
 machine states; \`/paths\` are routes. Regenerated against the live route tree.
 
 \`\`\`
 /create (HOME)
-\u{251C}\u{2500}\u{2500} rail: Home \u{B7} Scenes \u{B7} Templates \u{B7} Collections \u{2503} Curate(committee-gated) \u{B7}
+\u{251C}\u{2500}\u{2500} rail: Home \u{B7} Scenes \u{B7} Collections \u{2503} Curate(committee-gated) \u{B7}
 \u{2502}         Worlds \u{B7} Land(/shop) \u{B7} Names(/marketplace/names) \u{B7} Metrics \u{2503} Learn
 \u{2502}         (+ \u{2699} Settings \u{B7} Sign in \u{2014} every door stays in-product)
-\u{251C}\u{2500}\u{2500} cards: Scenes(See All \u{2192} /create/scenes) \u{B7} Start from a template \u{2192} /create/templates \u{B7}
-\u{2502}          template card \u{2192} EDITOR (?new=1&template=X&name=X&from=home) \u{B7} Learn
+\u{251C}\u{2500}\u{2500} cards: Scenes(See All \u{2192} /create/scenes) \u{B7} Learn
 \u{2502}          (+ a Manage card mirroring the rail doors)
 \u{2502}
-\u{251C}\u{2500}[Start building]\u{2500}\u{25B6} /create/scenes (has scenes) \u{B7} /create/templates (none yet)
+\u{251C}\u{2500}[Start building]\u{2500}\u{25B6} /download/creator-hub (scenes are built in the desktop app)
 \u{251C}\u{2500}[See All]\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{25B6} /create/scenes \u{B7} /create/learn
 \u{251C}\u{2500}[Sign in]\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{25B6} SIGNIN_MODAL \u{2500}\u{2500}[OTP/social]\u{2500}\u{2500}\u{25B6} signed-in
 \u{2502}
-\u{251C}\u{2500}\u{2500} /create/templates
-\u{2502}    \u{2514}\u{2500}[card]\u{2500}\u{2500}\u{25B6} CONFIRM_MODAL \u{2500}\u{2500}[Create]\u{2500}\u{2500}\u{23F3} LOAD engine \u{2500}\u{2500}\u{25B6} EDITOR
-\u{2502}                     \u{2502}            (?new=1&template=X&from=templates)
-\u{2502}                     \u{2514}\u{2500}[Cancel/Esc]\u{2500}\u{2500}\u{25B6} back
-\u{251C}\u{2500}\u{2500} /create/create-project        (machine: create-project \u{2014} LEGACY,
-\u{2502}    deep-link only; no in-product click leads here anymore)
-\u{2502}    NAMING \u{2500}\u{2500}[Create]\u{2500}\u{2500}\u{25B6} SCAFFOLDING \u{2500}\u{2500}\u{23F3} write files \u{2500}\u{2500}\u{25B6} CREATED \u{2500}\u{2500}[Open in
-\u{2502}    editor]\u{2500}\u{2500}\u{25B6} EDITOR   \u{2514}\u{2500} error \u{2500}\u{2500}\u{25B6} ERROR \u{2500}\u{2500}[Retry]/[Choose folder]\u{2500}\u{2500}\u{25B6} retry
-\u{2502}
-\u{251C}\u{2500}\u{2500} EDITOR  /create/scene-editor   (machine: scene-editor-place-items)
-\u{2502}    \u{23F3} BOOT \u{25B6} EDITING \u{2500}[Open Assets]\u{25B6} BROWSING \u{2500}[place]\u{25B6} PLACING \u{2500}[Create entity]\u{25B6}
-\u{2502}    TRANSFORMING \u{2500}[axes]\u{25B6} MODIFYING \u{2500}[Save]\u{23F3} FSA write \u{25B6} SAVED \u{2500}[continue]\u{25B6} EDITING
-\u{2502}    EDITING \u{2500}[\u{25B6} Play]\u{23F3} "Loading preview\u{2026}" \u{25B6} PREVIEW \u{2500}[\u{23F8} Pause]\u{21C4}[\u{25B6}]\u{2500}[\u{25A0} Stop]\u{25B6} EDITING
-\u{2502}    background: draft saved \u{2500}\u{2500}\u{23F3} PUT /builder-api/v1/projects/:id/manifest (signed) \u{2500}\u{2500}\u{25B6}
-\u{2502}                sync chip Synced   (If-Match on the manifest revision)
-\u{2502}    \u{2500}[Exit]\u{25B6} breadcrumb origin (?from= home|scenes|templates|manage|operator;
-\u{2502}             default /create/scenes) \u{B7} \u{2500}[Publish]\u{25B6} deploy flow
-\u{2502}
-\u{251C}\u{2500}\u{2500} /create/scenes \u{2500}\u{2500} [scene card]\u{2500}\u{2500}\u{23F3} hydrate composite \u{2500}\u{2500}\u{25B6} EDITOR (reopen+continue)
-\u{2502}    \u{2514}\u{2500} empty: [Import]/[Templates]/[Sign in]
-\u{251C}\u{2500}\u{2500} /create/my-scenes \u{2500}\u{2500} [Open]\u{2500}\u{2500}\u{25B6} EDITOR (?pointer=\u{2026} reopen live scene)
-\u{2502}    \u{2514}\u{2500} empty: [Start from a template]\u{2500}\u{2500}\u{25B6} /create/templates
+\u{251C}\u{2500}\u{2500} /create/scenes \u{2500}\u{2500} [Download scene files]\u{23F3} fetch the deployed files \u{2500}\u{2500}\u{25B6} zip
 \u{2502}
 \u{251C}\u{2500}\u{2500} /create/wearables (COLLECTIONS)
 \u{2502}    \u{251C}\u{2500}[New collection]\u{25B6} /collections/new   (machine: wearable-create-collection)
@@ -663,11 +428,6 @@ machine states; \`/paths\` are routes. Regenerated against the live route tree.
 \u{2502}    \u{2514}\u{2500} world-permissions: tabs \u{2500}[invite]/[add collaborator]/[password \u{2265}8+2num]\u{2500}\u{25B6}
 \u{2502}                          COMMIT\u{23F3} (signed ACL write)
 \u{2502}
-\u{251C}\u{2500}\u{2500} /create/publish  (machine: deploy-scene; breadcrumb honors ?from=,
-\u{2502}    from=scene-editor \u{25B6} "Back to editor")
-\u{2502}    PICK NAME(live; ?name= preselect) \u{2500}[Deploy]\u{23F3} signed deploy \u{2500}\u{25B6} SUCCESS
-\u{2502}    \u{2514}\u{2500}[Claim name]\u{25B6} /create/claim-name \u{2500}\u{25B6} [Use in Publish to World]\u{2500}\u{2500}back w/ ?name
-\u{2502}
 \u{251C}\u{2500}\u{2500} /create/metrics   signed-out\u{25B6}GATE \u{B7} creator\u{25B6}cards (real: collections/
 \u{2502}    on-sale/sales/visits) + per-scene visits table (real rows from the places
 \u{2502}    API; per-row "Not available" on gaps)
@@ -680,15 +440,13 @@ machine states; \`/paths\` are routes. Regenerated against the live route tree.
 \u{2502}    (\u{25B6} /create/map \u{2014} this document)
 \u{251C}\u{2500}\u{2500} /create/settings \u{2500}\u{2500} preferences \u{2500}[Close]\u{25B6} back (history \u{B7} /create)
 \u{251C}\u{2500}\u{2500} /download/creator-hub \u{2500}\u{2500} [Download]\u{25B6} per-OS installer
-\u{251C}\u{2500}\u{2500} delete-project: CONFIRM \u{2500}[Delete]\u{23F3} signed tombstone \u{25B6} done (?local=deleted|kept)
 \u{2514}\u{2500}\u{2500} /create/map \u{2014} this map \u{B7} sibling: /explorer-map (the Explorer client)
 \`\`\`
 
 Legend: \`[x]\` = click edge \u{B7} \`\u{23F3}\` = >100ms invoked load (spinner/status shown) \u{B7}
 \`\u{21C4}\` = reversible pair \u{B7} \`\u{2197}\` = external tab. Redirect shims carry no clicks and
 are compressed: /create \u{2192} /create \u{B7} /create/about \u{2192} /create \u{B7}
-/create/publish \u{2192} deploy-world \u{B7} /builder/* \u{2192} in-product
-equivalents (/shop, /marketplace/names, \u{2026}) \u{B7} /create/drafts/* \u{2192}
-/api/creator-hub/drafts/* (308). Orphans/gaps (metrics-funnel,
+/builder/* \u{2192} in-product equivalents (/shop, /marketplace/names, \u{2026}).
+Orphans/gaps (metrics-funnel,
 integration-create-entry) are intentionally absent \u{2014} not implemented.
 `;

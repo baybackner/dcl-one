@@ -5,12 +5,10 @@ import type { ReactNode } from "react";
 import { CreatorHubChromeMaybe } from "../frames/CreatorHubChrome";
 import { useChromeAuth } from "../../web/frames/chrome-auth";
 import EmptyState from "../../components/EmptyState";
-import CoverImage from "../../components/CoverImage";
 import ThumbnailImage from "../../components/ThumbnailImage";
 import Spinner from "../../atoms/Spinner";
 import { asset } from "../../asset";
 import { docsUrl } from "../../data/docs";
-import { publicThumbnail } from "../../data/thumbnail";
 import "./creatorhubhome.css";
 
 type LearnResource = { title: string; href: string; kind: "doc" | "video" };
@@ -303,14 +301,6 @@ export type ChNetworkScene = {
   href: string;
 };
 
-export type ChTemplateCard = {
-  id: string;
-  title: string;
-  thumb?: string;
-  difficulty?: string;
-  href: string;
-};
-
 export type ChHappening = {
   id: string;
   kind: "event" | "post";
@@ -322,52 +312,6 @@ export type ChHappening = {
   live?: boolean;
 };
 
-type StripHeaderProps = {
-  title: string;
-  linkLabel: string;
-  href: string;
-  onLink?: () => void;
-};
-
-function StripHeader({ title, linkLabel, href, onLink }: StripHeaderProps) {
-  return (
-    <div className="chh__stripheader">
-      <h2 className="chh__striptitle">{title}</h2>
-      <ChromeLink className="chh__striplink" href={href} onClick={onLink}>
-        {linkLabel}
-      </ChromeLink>
-    </div>
-  );
-}
-
-function TemplatesStrip({ templates, onCardClick }: { templates: ChTemplateCard[]; onCardClick?: (card: string) => void }) {
-  return (
-    <section className="chh__strip" aria-label="Start from a template">
-      <StripHeader
-        title="Start from a template"
-        linkLabel="Browse all templates"
-        href="/create/templates"
-        onLink={() => onCardClick?.("templates_all")}
-      />
-      <div className="chh__striprow">
-        {templates.map((t) => (
-          <ChromeLink key={t.id} className="chh__templatecard" href={t.href} onClick={() => onCardClick?.(`template:${t.id}`)}>
-            <span className="chh__scenecardmedia">
-              {t.thumb ? (
-                <CoverImage className="chh__scenecardimg" src={publicThumbnail(t.thumb, 640)} fallbackSrc={t.thumb} alt="" loading="eager" />
-              ) : (
-                <span className="chh__scenecardimg chh__scenecardimg--empty" aria-hidden="true" />
-              )}
-              {t.difficulty ? <span className="chh__diffchip">{t.difficulty}</span> : null}
-            </span>
-            <span className="chh__scenecardtitle u-truncate">{t.title}</span>
-          </ChromeLink>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 type CreatorHubHomeProps = {
   scenes?: ChScene[];
   scenesError?: boolean;
@@ -378,14 +322,12 @@ type CreatorHubHomeProps = {
   committee?: boolean;
   chrome?: boolean;
   banner?: ReactNode;
-  templates?: ChTemplateCard[];
   topSpacing?: ChTopSpacing;
   onSignIn?: () => void;
   onStartBuilding?: () => void;
   onScenes?: () => void;
   onLearn?: () => void;
   onRetry?: () => void;
-  onCardClick?: (card: string) => void;
 };
 
 export default function CreatorHubHome({
@@ -398,14 +340,12 @@ export default function CreatorHubHome({
   committee,
   chrome = true,
   banner = null,
-  templates = [],
   topSpacing = "compact",
   onSignIn,
   onStartBuilding,
   onScenes,
   onLearn,
   onRetry,
-  onCardClick,
 }: CreatorHubHomeProps) {
   const auth = useChromeAuth();
   const isCommittee = committee ?? auth.committee;
@@ -447,8 +387,6 @@ export default function CreatorHubHome({
             {hasScenes ? <ManageCard committee={isCommittee} /> : null}
             <LearnCard onLearn={onLearn} />
           </div>
-
-          {templates.length > 0 ? <TemplatesStrip templates={templates} onCardClick={onCardClick} /> : null}
         </div>
       </section>
     </CreatorHubChromeMaybe>

@@ -44,8 +44,7 @@ type ClaimEvent =
   | { type: "CONFIRM_MINT" }
   | { type: "EDIT" }
   | { type: "BACK" }
-  | { type: "RETRY" }
-  | { type: "RETURN" };
+  | { type: "RETRY" };
 
 export const CLAIM_EVENTS = {
   started: "ch_claim_name_started",
@@ -54,7 +53,6 @@ export const CLAIM_EVENTS = {
   reviewReached: "ch_claim_name_review_reached",
   mintSubmitted: "ch_claim_name_mint_submitted",
   completed: "ch_claim_name_completed",
-  returned: "ch_claim_name_returned_to_publish",
 } as const;
 
 export const STATE_TO_SLUG = {
@@ -151,12 +149,6 @@ export const claimNameMachine = setup({
         },
         context.trackCtx,
       ),
-    trackReturned: ({ context }) =>
-      context.track(
-        CLAIM_EVENTS.returned,
-        { name: context.name, world_name: `${context.name.toLowerCase()}.dcl.eth` },
-        context.trackCtx,
-      ),
   },
 }).createMachine({
   id: "creatorHubClaimName",
@@ -229,11 +221,6 @@ export const claimNameMachine = setup({
       },
     },
     done: {
-      on: {
-        RETURN: { target: "returned", actions: "trackReturned" },
-      },
-    },
-    returned: {
       type: "final",
     },
     error: {

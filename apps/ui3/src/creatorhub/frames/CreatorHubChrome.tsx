@@ -4,7 +4,6 @@ import { useChromeAuth } from "../../web/frames/chrome-auth";
 import DclTopBar from "../../web/frames/DclTopBar";
 import ChromeLink from "../../web/frames/ChromeLink";
 import AccountMenu from "../../web/frames/AccountMenu";
-import CreatorHubSyncChip from "../components/CreatorHubSyncChip";
 import { CREATOR_HUB_HOME } from "../explorer-host";
 import "./creatorhubchrome.css";
 import SiteLayout from "../../web/frames/SiteLayout";
@@ -14,9 +13,7 @@ import { truncateAddress } from "../../data/format";
 export type CreatorHubNavId =
   | "home"
   | "scenes"
-  | "templates"
   | "preview"
-  | "publish"
   | "admissions"
   | "collections"
   | "curate"
@@ -52,20 +49,6 @@ const CREATORHUB_NAV: NavItem[] = [
     ),
   },
   {
-    id: "templates",
-    group: "Create",
-    label: "Templates",
-    href: "/create/templates",
-    icon: (
-      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-        <rect x="3" y="3" width="6" height="6" rx="1.3" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        <rect x="11" y="3" width="6" height="6" rx="1.3" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        <rect x="3" y="11" width="6" height="6" rx="1.3" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        <rect x="11" y="11" width="6" height="6" rx="1.3" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      </svg>
-    ),
-  },
-  {
     id: "scenes",
     group: "Create",
     label: "Scenes",
@@ -74,18 +57,6 @@ const CREATORHUB_NAV: NavItem[] = [
       <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
         <path d="M10 2.5 17.5 7 10 11.5 2.5 7 10 2.5Z" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round" />
         <path d="M2.5 13 10 17.5 17.5 13" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    id: "publish",
-    group: "Create",
-    label: "Publishing",
-    href: "/create/publish",
-    icon: (
-      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-        <path d="M10 13V4M6.5 7.5 10 4l3.5 3.5" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M4 14.5v1A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },
@@ -336,7 +307,6 @@ export default function CreatorHubChrome({
         items={group.items.map(({ item }) => ({ id: item.id, href: item.href, label: item.label, icon: item.icon }))}
         active={active} onSelect={onTab} closeMenu={closeMenu}
       />)}
-      <CreatorHubSyncChip />
       {showSettings ? onSettings ? (
         <button className="side-nav-item" type="button" onClick={() => { closeMenu(); onSettings(); }}><DownloadIcon />Download</button>
       ) : <ChromeLink className="side-nav-item" href={settingsHref} onClick={closeMenu}><DownloadIcon />Download</ChromeLink> : null}

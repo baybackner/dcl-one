@@ -12,20 +12,7 @@ export type MySceneVM = {
   pointers: string[];
   worldName: string | null;
   thumbnailUrl: string | null;
-  editable: boolean;
-  republishable?: boolean;
   deployedAt: number | null;
-  openHref: string;
-  syncState?: "local" | "local-ahead";
-};
-
-type MySceneTab = { id: string; label: string; active?: boolean };
-
-type SyncState = NonNullable<MySceneVM["syncState"]>;
-
-const SYNC_META: Record<SyncState, { label: string; tone: string }> = {
-  local: { label: "Saved locally", tone: "good" },
-  "local-ahead": { label: "Edited locally", tone: "brand" },
 };
 
 const SORT_OPTIONS = [
@@ -115,23 +102,9 @@ const GlobeGlyph = () => (
   </svg>
 );
 
-const OpenGlyph = () => (
-  <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-    <path d="M4 13.5 13.5 4M8 4h5.5V9.5" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M13.5 11.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15V8A1.5 1.5 0 0 1 5 6.5h3.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
 const DownloadGlyph = () => (
   <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
     <path d="M10 3v9M6.2 8.8 10 12.5l3.8-3.7" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M4 14.5v1A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-  </svg>
-);
-
-const UploadGlyph = () => (
-  <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
-    <path d="M10 12.5v-9M6.2 7.2 10 3.5l3.8 3.7" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     <path d="M4 14.5v1A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
   </svg>
 );
@@ -161,20 +134,6 @@ const RadarGlyph = () => (
   </svg>
 );
 
-function StatusBadge({ state }: { state: SyncState }): JSX.Element {
-  const meta = SYNC_META[state];
-  return (
-    <span
-      className={`chms__badge chms__badge--${meta.tone}`}
-      role="status"
-      aria-label={`Status: ${meta.label}`}
-    >
-      <span className="chms__dot" aria-hidden="true" />
-      {meta.label}
-    </span>
-  );
-}
-
 function PlaceholderTile({ scene }: { scene: MySceneVM }): JSX.Element {
   const seed = scene.kind === "world" ? scene.worldName ?? scene.entityId : scene.baseParcel || scene.entityId;
   const hue = hueFrom(seed);
@@ -195,17 +154,13 @@ function SceneCard({
   index,
   dupCount,
   downloading,
-  onOpen,
   onDownload,
-  onRepublish,
 }: {
   scene: MySceneVM;
   index: number;
   dupCount: number;
   downloading: boolean;
-  onOpen: (s: MySceneVM) => void;
   onDownload?: (s: MySceneVM) => void;
-  onRepublish?: (s: MySceneVM) => void;
 }): JSX.Element {
   const when = relativeDeployed(scene.deployedAt);
   const parcelCount = scene.kind === "land" ? scene.pointers.length : 0;
@@ -221,7 +176,6 @@ function SceneCard({
         ) : (
           <PlaceholderTile scene={scene} />
         )}
-        {scene.syncState ? <StatusBadge state={scene.syncState} /> : null}
       </div>
       <div className="chms__body">
         <h3 className="chms__cardtitle u-truncate" title={scene.title}>
@@ -243,76 +197,25 @@ function SceneCard({
         </div>
         {when ? <p className="chms__when">{when}</p> : <p className="chms__when chms__when--empty" />}
         <div className="chms__actions">
-          {scene.editable ? (
-            <div className="chms__stack">
+          <div className="chms__viewonly">
+            {onDownload ? (
               <button
                 type="button"
-                className="chms__btn chms__btn--primary"
-                onClick={() => onOpen(scene)}
-                aria-label={`Open ${scene.title} in the editor`}
+                className="chms__btn chms__btn--ghost"
+                onClick={() => onDownload(scene)}
+                disabled={downloading}
+                aria-busy={downloading}
+                aria-label={`Download the deployed files of ${scene.title}`}
               >
-                <OpenGlyph />
-                Open in editor
+                <DownloadGlyph />
+                {downloading ? "Preparing zip\u{2026}" : "Download scene files"}
               </button>
-              {scene.kind === "land" && scene.republishable !== false && onRepublish ? (
-                <>
-                  <button
-                    type="button"
-                    className="chms__btn chms__btn--ghost"
-                    onClick={() => onRepublish(scene)}
-                    aria-label={`Republish ${scene.title} to LAND ${scene.baseParcel}`}
-                  >
-                    <UploadGlyph />
-                    Republish to LAND
-                  </button>
-                  <span className="chms__note">
-                    Republishing updates {scene.baseParcel || "this LAND"} on this
-                    network only &#x2014; Genesis City on decentraland.org is not
-                    affected. Your wallet&apos;s LAND rights are checked before publish.
-                  </span>
-                </>
-              ) : scene.kind === "land" ? (
-                <span className="chms__note">
-                  Publishing from here updates this network only, never
-                  Genesis City on decentraland.org.
-                </span>
-              ) : null}
-            </div>
-          ) : (
-            <div className="chms__viewonly">
-              {onDownload ? (
-                <button
-                  type="button"
-                  className="chms__btn chms__btn--ghost"
-                  onClick={() => onDownload(scene)}
-                  disabled={downloading}
-                  aria-busy={downloading}
-                  aria-label={`Download the deployed files of ${scene.title}`}
-                >
-                  <DownloadGlyph />
-                  {downloading ? "Preparing zip\u{2026}" : "Download scene files"}
-                </button>
-              ) : null}
-              {scene.kind === "land" && scene.republishable !== false && onRepublish ? (
-                <button
-                  type="button"
-                  className="chms__btn chms__btn--ghost"
-                  onClick={() => onRepublish(scene)}
-                  aria-label={`Republish ${scene.title} to LAND ${scene.baseParcel}`}
-                >
-                  <UploadGlyph />
-                  Republish to LAND
-                </button>
-              ) : null}
-              <span className="chms__note">
-                Code scene &#x2014; not editable here. Work on the files with the SDK CLI
-                (<code className="chms__code">npx @dcl/sdk-commands start</code>).
-                {scene.kind === "land"
-                  ? " Republishing updates this network only \u{2014} Genesis City on decentraland.org is not affected."
-                  : ""}
-              </span>
-            </div>
-          )}
+            ) : null}
+            <span className="chms__note">
+              Work on the files with the SDK CLI
+              (<code className="chms__code">npx @dcl/sdk-commands start</code>).
+            </span>
+          </div>
         </div>
       </div>
     </article>
@@ -341,13 +244,8 @@ export default function ChMyScenes(props: {
   loading: boolean;
   scenes: MySceneVM[];
   onSignIn: () => void;
-  onOpen: (s: MySceneVM) => void;
-  onStartFromTemplate: () => void;
   onDownload?: (s: MySceneVM) => void;
-  onRepublish?: (s: MySceneVM) => void;
   downloadingId?: string | null;
-  tabs?: MySceneTab[];
-  onTab?: (id: string) => void;
   chrome?: boolean;
 }): JSX.Element {
   const {
@@ -357,13 +255,8 @@ export default function ChMyScenes(props: {
     loading,
     scenes,
     onSignIn,
-    onOpen,
-    onStartFromTemplate,
     onDownload,
-    onRepublish,
     downloadingId,
-    tabs,
-    onTab,
     chrome = true,
   } = props;
 
@@ -433,12 +326,8 @@ export default function ChMyScenes(props: {
         </span>
         <h1 className="chms__herotitle">No published scenes found for this wallet yet</h1>
         <p className="chms__herolead">
-          When you publish a scene to your LAND or a World, it&apos;ll show up here automatically &#x2014; ready
-          to reopen and keep building. Start something new to get going.
+          When you publish a scene to your LAND or a World, it&apos;ll show up here automatically.
         </p>
-        <button type="button" className="chms__btn chms__btn--primary chms__btn--lg" onClick={onStartFromTemplate}>
-          Start from a template
-        </button>
       </div>
     );
   } else {
@@ -452,13 +341,9 @@ export default function ChMyScenes(props: {
             <p className="chms__subtitle">
               {count} published scene{count === 1 ? "" : "s"} found
               {name ? <> for <span className="chms__addr">{name}</span></> : account ? <> for <span className="chms__addr">{truncateAddress(account)}</span></> : null}
-              . Opening one loads your deployed copy &#x2014; edits stay in this browser until you save
-              them to disk.
+              .
             </p>
           </div>
-          <button type="button" className="chms__btn chms__btn--ghost" onClick={onStartFromTemplate}>
-            Start from a template
-          </button>
         </header>
         <div className="chms__toolbar">
           <label className="chms__search">
@@ -504,9 +389,7 @@ export default function ChMyScenes(props: {
                 index={i}
                 dupCount={dupCounts.get(scene.title.trim().toLowerCase()) ?? 1}
                 downloading={downloadingId === scene.entityId}
-                onOpen={onOpen}
                 onDownload={onDownload}
-                onRepublish={onRepublish}
               />
             ))}
           </div>
@@ -518,21 +401,6 @@ export default function ChMyScenes(props: {
   return (
     <CreatorHubChromeMaybe chrome={chrome} active="scenes" signedIn={signedIn} account={account} name={name} onSignIn={onSignIn}>
       <div className="chms">
-        {tabs && tabs.length > 0 ? (
-          <nav className="chms__tabs" aria-label="Scene lists">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={"chms__tab" + (t.active ? " is-active" : "")}
-                aria-current={t.active ? "page" : undefined}
-                onClick={() => onTab?.(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </nav>
-        ) : null}
         {body}
       </div>
     </CreatorHubChromeMaybe>

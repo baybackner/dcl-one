@@ -23,6 +23,20 @@ function auth(over: Partial<ChromeAuth> = {}): ChromeAuth {
 
 afterEach(() => cleanup());
 
+describe("creator hub navigation", () => {
+  test("offers no scene templates or scene publishing entry", () => {
+    render(
+      <ChromeAuthContext.Provider value={auth()}>
+        <CreatorHubChrome active="home" />
+      </ChromeAuthContext.Provider>,
+    );
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href") ?? "");
+    expect(hrefs).toContain("/create/wearables");
+    expect(hrefs.filter((href) => /^\/create\/(templates|publish|scene-editor|create-project)\b/.test(href))).toEqual([]);
+    expect(screen.queryByRole("link", { name: /Templates|Publishing/ })).toBeNull();
+  });
+});
+
 describe("creator hub account entry", () => {
   test("the rail account button opens the menu with Download and Log out", async () => {
     const a = auth();

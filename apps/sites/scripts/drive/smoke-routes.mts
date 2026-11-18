@@ -22,18 +22,11 @@ export const ROUTES: Route[] = [
   { path: "/create", auth: "both" },
   { path: "/create/home", auth: "both" },
   { path: "/create/scenes", auth: "both" },
-  { path: "/create/templates", auth: "out" },
   { path: "/create/wearables", auth: "out", allowConsole: [AUTH_PROBE] },
   { path: "/create/curate", auth: "out", allowConsole: [AUTH_PROBE] },
   { path: "/create/learn", auth: "out" },
 
-  // Creator Hub: every route must render clean signed-out (gates, not
-  // crashes) and signed-in (burner). scene-editor boots the engine iframe,
-  // so give its console the auth-probe latitude only.
   { path: "/creator-hub/my-scenes", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/create-project", auth: "both" },
-  { path: "/creator-hub/scene-editor?new=1", auth: "both", allowConsole: [AUTH_PROBE, ...HEADLESS_NO_GPU] },
-  { path: "/creator-hub/deploy-world", auth: "both", allowConsole: [AUTH_PROBE] },
   { path: "/creator-hub/manage", auth: "both", allowConsole: [AUTH_PROBE] },
   { path: "/creator-hub/world-settings", auth: "both", allowConsole: [AUTH_PROBE] },
   { path: "/creator-hub/world-permissions", auth: "both", allowConsole: [AUTH_PROBE] },

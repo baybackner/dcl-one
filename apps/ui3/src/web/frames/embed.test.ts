@@ -48,7 +48,7 @@ describe("embed scope", () => {
     expect(isEmbedScopePath("/create/scenes", scope)).toBe(true);
     expect(embedEscapeHref("/create", "?creator=0xabc", "", scope)).toBeNull();
     expect(embedEscapeHref("/shop", "", "", scope)).toBe("/shop");
-    expect(embedLinkDisposition("/create/publish", ORIGIN, scope)).toBe("frame");
+    expect(embedLinkDisposition("/create/worlds", ORIGIN, scope)).toBe("frame");
     expect(embedLinkDisposition("/marketplace", ORIGIN, scope)).toBe("top");
   });
 });

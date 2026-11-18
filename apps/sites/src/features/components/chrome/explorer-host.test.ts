@@ -21,7 +21,7 @@ function framedBy(host: CreatorHubHost | undefined) {
   return Object.assign(new EventTarget(), {
     parent,
     document,
-    location: { href: "https://node.example/create/publish", origin: "https://node.example", hostname: "node.example", protocol: "https:" },
+    location: { href: "https://node.example/create/worlds", origin: "https://node.example", hostname: "node.example", protocol: "https:" },
     open: vi.fn(),
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,

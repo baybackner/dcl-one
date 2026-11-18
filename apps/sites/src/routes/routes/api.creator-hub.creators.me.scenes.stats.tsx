@@ -1,4 +1,4 @@
-import { verifyAuthChainRequest } from "@/data/lib/catalyst/creator-hub/scene-drafts.server";
+import { verifyAuthChainRequest } from "@/data/lib/auth/verify-request.server";
 import { loadCreatorSceneStats } from "@/data/lib/catalyst/creator-hub/scene-analytics.server";
 
 export async function loader({ request }: { request: Request }) {

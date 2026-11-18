@@ -52,13 +52,12 @@ const TRAVERSAL_EVENTS = [
   { type: "EDIT" as const },
   { type: "BACK" as const },
   { type: "RETRY" as const },
-  { type: "RETURN" as const },
 ];
 
 describe("claimNameMachine \u{2014} URL ?step slug map", () => {
   it("covers every event-addressable state, round-trips uniquely, and falls back to the first step", () => {
     const machineStates = new Set(Object.keys(claimNameMachine.states));
-    const mapped = new Set<string>([...Object.keys(STATE_TO_SLUG), "returned"]);
+    const mapped = new Set<string>(Object.keys(STATE_TO_SLUG));
     expect(mapped).toEqual(machineStates);
 
     const slugs = Object.values(STATE_TO_SLUG);
@@ -145,7 +144,7 @@ describe("claimNameMachine \u{2014} model-based path coverage (@xstate/graph)", 
 });
 
 describe("claimNameMachine \u{2014} telemetry events (happy path)", () => {
-  it("name -> available -> review -> mint -> done -> return fires the full funnel", async () => {
+  it("name -> available -> review -> mint -> done fires the full funnel and ends the flow", async () => {
     const track = vi.fn();
     const actor = createActor(claimNameMachine, {
       input: inputFor({ check: availableCheck, mint: okMint, track }),
@@ -157,8 +156,7 @@ describe("claimNameMachine \u{2014} telemetry events (happy path)", () => {
     actor.send({ type: "CONFIRM_MINT" });
     await waitFor(actor, (s) => s.matches("done"));
 
-    actor.send({ type: "RETURN" });
-    expect(actor.getSnapshot().matches("returned")).toBe(true);
+    expect(actor.getSnapshot().status).toBe("done");
 
     const events = track.mock.calls.map((c) => c[0]);
     expect(events).toEqual(
@@ -168,7 +166,6 @@ describe("claimNameMachine \u{2014} telemetry events (happy path)", () => {
         CLAIM_EVENTS.reviewReached,
         CLAIM_EVENTS.mintSubmitted,
         CLAIM_EVENTS.completed,
-        CLAIM_EVENTS.returned,
       ]),
     );
     expect(events.indexOf(CLAIM_EVENTS.reviewReached)).toBeLessThan(

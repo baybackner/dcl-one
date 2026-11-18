@@ -109,7 +109,7 @@ export function realZeroNote(takenAt: string): string {
 export const NEVER_DEPLOYED_REASON =
   "No scene deployed to this NAME, so presence has never had anything to sample.";
 export const NEVER_DEPLOYED_TODAY =
-  "Publish a scene to this NAME from /create/deploy-world.";
+  "Publish a scene to this NAME from the Creator Hub desktop app.";
 
 export function disagreementSentence(
   presenceCount: number | null,

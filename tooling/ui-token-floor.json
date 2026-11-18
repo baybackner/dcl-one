@@ -43,14 +43,6 @@
     "primitives": 0,
     "tokens": 198
   },
-  "apps/sites/src/features/creator-hub/scene-editor-place-items/device-preview.css": {
-    "primitives": 7,
-    "tokens": 0
-  },
-  "apps/sites/src/features/creator-hub/scene-editor-place-items/sdk-project.css": {
-    "primitives": 3,
-    "tokens": 0
-  },
   "apps/sites/src/features/docs/docs.css": {
     "primitives": 11,
     "tokens": 0
