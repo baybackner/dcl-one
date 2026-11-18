@@ -25,7 +25,6 @@ use bevy::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use cache_size::CacheSizeSetting;
-use cel_shading_setting::CelShadingSetting;
 use common::structs::DmPrivacy;
 #[cfg(not(target_arch = "wasm32"))]
 use common::structs::SsaoSetting;
@@ -61,7 +60,6 @@ pub mod avatar_outline_setting;
 pub mod bloom_settings;
 pub mod cache_size;
 pub mod camera_smoothing;
-pub mod cel_shading_setting;
 pub mod chat_bubble_visibility;
 pub mod constrain_ui;
 mod debug_quality;
@@ -195,7 +193,6 @@ impl Plugin for SettingBridgePlugin {
         add_enum_setting::<SsaoSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<SkyReflectionSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<OobSetting>(app, &mut settings, &mut schedule, &config);
-        add_enum_setting::<CelShadingSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<AvatarOutlineSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<AvatarGhostsSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<AaSetting>(app, &mut settings, &mut schedule, &config);

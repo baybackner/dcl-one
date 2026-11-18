@@ -668,7 +668,6 @@ pub struct AvatarRenderDefinition {
     hides: HashSet<WearableCategory>,
     bounds: SceneBounds,
     disable_dither: bool,
-    cel_shading: bool,
     avatar_outline: bool,
 }
 
@@ -743,16 +742,16 @@ fn record_avatar_failures(
         });
 }
 
-// when an avatar style setting (cel shading, outline) is toggled, re-render every
+// when the avatar outline setting is toggled, re-render every
 // avatar so their meshes are respawned with the right mesh tags. the tags are set
 // once at mesh creation in process_avatar, so an in-place flip isn't enough.
 fn retag_avatars_on_style_change(
     config: Res<AppConfig>,
-    mut prev: Local<Option<(bool, bool)>>,
+    mut prev: Local<Option<bool>>,
     avatars: Query<Entity, With<AvatarSelection>>,
     mut commands: Commands,
 ) {
-    let cur = (config.graphics.cel_shading, config.graphics.avatar_outline);
+    let cur = config.graphics.avatar_outline;
     if *prev != Some(cur) {
         if prev.is_some() {
             for entity in &avatars {
@@ -1051,7 +1050,6 @@ fn update_render_avatar(
                     .map(|ctx| ctx.bounds.clone())
                     .unwrap_or_default(),
                 disable_dither: selection.disable_dither,
-                cel_shading: config.graphics.cel_shading,
                 avatar_outline: config.graphics.avatar_outline,
             },
             emote: selection
@@ -1463,13 +1461,9 @@ fn process_avatar(
             Vec3::new(1.24, 2.42, 0.7) + root_gt.translation(),
         );
 
-        // style avatar meshes per the settings in the definition; toggling either
-        // re-renders avatars (see retag_avatars_on_style_change)
-        let toon_tag = if def.cel_shading {
-            SCENE_MATERIAL_TOON_MESH_TAG
-        } else {
-            0
-        };
+        // avatars are always toon shaded; the outline follows the setting in the definition,
+        // and toggling it re-renders avatars (see retag_avatars_on_style_change)
+        let toon_tag = SCENE_MATERIAL_TOON_MESH_TAG;
         // wearables can opt out of the outline via `outlineCompatible: false`
         let outline_tag = |model: &WearableModel| {
             if def.avatar_outline && model.outline_compatible {

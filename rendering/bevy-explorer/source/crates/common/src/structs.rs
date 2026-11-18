@@ -966,8 +966,6 @@ pub struct GraphicsSettings {
     pub sky_reflections: SkyReflectionSetting,
     pub oob: f32,
     pub ambient_brightness: i32,
-    /// cel-shade avatars (toon shading) instead of standard PBR
-    pub cel_shading: bool,
     /// draw the dark edge outline around avatars
     pub avatar_outline: bool,
     /// show a hologram ghost where an avatar is still loading
@@ -1003,7 +1001,6 @@ impl Default for GraphicsSettings {
             sky_reflections: SkyReflectionSetting::High,
             oob: 2.0,
             ambient_brightness: AMBIENT_BRIGHTNESS_DEFAULT,
-            cel_shading: true,
             avatar_outline: true,
             avatar_ghosts: true,
             gpu_bytes_per_frame: 10_000_000,
@@ -2231,6 +2228,19 @@ pub struct PointAtMarkerVisibilityChanged;
 mod tests {
     use super::*;
     use crate::inputs::CommonInputAction;
+
+    /// the removed `cel_shading` field in a saved config must not stop it loading
+    #[test]
+    fn old_config_with_cel_shading_still_loads() {
+        let mut graphics = serde_json::to_value(GraphicsSettings::default()).unwrap();
+        graphics["cel_shading"] = serde_json::Value::Bool(false);
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "graphics": graphics })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&config.graphics).unwrap(),
+            serde_json::to_value(GraphicsSettings::default()).unwrap()
+        );
+    }
 
     #[test]
     fn fog_reads_the_old_variants_as_on() {
