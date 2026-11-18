@@ -33,6 +33,8 @@
   <canvas id="canvas" width="400" height="300"></canvas>
   <div id="hud">
     <button id="save">Save</button>
+    <button id="leave">Leave</button>
+    <button id="leave-page">Leave page</button>
     <input id="search" type="text" aria-label="Search" value="old">
   </div>
   <script>
@@ -74,6 +76,11 @@
           return 'logged'
         }
       },
+      '/fixture_reload': {
+        args: [{ name: 'json', kind: 'json', optional: true }],
+        help: 'load the frame again ({"page": true}: the whole page, as the shell does), and never answer',
+        run: (rest) => new Promise(() => setTimeout(() => (rest.trim() && JSON.parse(rest).page ? reloadPage() : location.reload()), 50))
+      },
       '/fixture_state': {
         args: [],
         help: 'what the frame is like',
@@ -81,7 +88,9 @@
           crossOriginIsolated: window.crossOriginIsolated,
           hasFocus: document.hasFocus(),
           active: document.activeElement?.id || document.activeElement?.tagName.toLowerCase(),
-          value: search.value
+          value: search.value,
+          // which load of the document this is
+          loadedAt: performance.timeOrigin
         })
       }
     }
@@ -145,6 +154,11 @@
       if (bound) window.__dclTrustedInput(JSON.stringify({ id: 1, op: 'click', x: 60, y: 60, button: 'left' }))
       setTimeout(() => parent.postMessage({ bound, answered, events: window.__events }, '*'), 1500)
     }
+    // as the HUD's confirmed Sign Out: the click loads the frame again, or asks the shell to load
+    // the whole page again (library/ui/apps/hud/features/gate/signOutOfWorld.ts)
+    const reloadPage = () => parent.postMessage({ type: 'fixture:reload' }, '*')
+    document.getElementById('leave').addEventListener('click', () => location.reload())
+    document.getElementById('leave-page').addEventListener('click', reloadPage)
     // the engine is up once the console answers, as for engineRpc.ts
     ready.then(() => { window.engine_console_command = runConsoleCommand })
   </script>

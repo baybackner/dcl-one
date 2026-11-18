@@ -1094,6 +1094,17 @@ export class Hud {
     return result
   }
 
+  /** A real click on a control whose click loads the page again (the Me panel's confirmed Sign
+   *  Out): the page may go before the click is answered, which is the click landing, not a
+   *  failure. What the click did is for the caller to wait for, in the page loaded in its place. */
+  async clickAndLeave(selector: Selector): Promise<void> {
+    try {
+      await this.click(selector)
+    } catch (error) {
+      if (!(error instanceof ConsoleError && error.navigated)) throw error
+    }
+  }
+
   /** Replace a field's text, once a click would land on it; the reply holds the field as the
    *  typing left it. A real fill leaves the field focused: it returns once the engine has handed
    *  the field the keyboard, so the next key is the field's. */

@@ -267,14 +267,17 @@ function namesPrivateKey(blob: string): boolean {
 export class ConsoleError extends Error {
   readonly line: string
   readonly output: string
+  /** The page went away before the line answered (it loaded again): the line may have run. */
+  readonly navigated: boolean
 
-  constructor(line: string, output: string) {
+  constructor(line: string, output: string, options: { navigated?: boolean } = {}) {
     const safeLine = redactLine(line)
     const safeOutput = redact(line, output)
     super(`\`${safeLine}\` failed: ${safeOutput}`)
     this.name = 'ConsoleError'
     this.line = safeLine
     this.output = safeOutput
+    this.navigated = options.navigated ?? false
   }
 }
 

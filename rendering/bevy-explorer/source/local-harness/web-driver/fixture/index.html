@@ -26,6 +26,10 @@
     frame.src = probe || `app.html${location.search}`
     // the web client's shell focuses the app when it has loaded
     frame.addEventListener('load', () => frame.focus())
+    // the app's sign-out, as the web client's shell answers it: the whole page loads again
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'fixture:reload') location.reload()
+    })
 
     if (probe) {
       const messages = []

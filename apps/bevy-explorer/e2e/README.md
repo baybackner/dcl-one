@@ -141,6 +141,9 @@ What the driver does for every scenario, so a spec need not:
   card's button grows in), since a click aimed at it there lands where it no longer is, and one
   under the browser's pointer lock as locked to another element (photo mode's camera holds the
   pointer until the right button frees it), since every click then goes to that element.
+  `hud.clickAndLeave` is for a click that loads the page again (the Me panel's confirmed Sign
+  Out): the page can go before the click is answered, and the web driver then rejects the line as
+  `NAVIGATED` at once, which `clickAndLeave` takes as the click landing.
 - **The keyboard where the scenario expects it.** The HUD relays a text field's focus to the
   engine through the bridge scene, a few frames late, and `/world_state` says which side has the
   keys (`keyboardClaimed`). A real `hud.fill` returns once the field has them, so the next key is

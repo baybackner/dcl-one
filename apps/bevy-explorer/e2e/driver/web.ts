@@ -111,7 +111,9 @@ export class WebConsole implements Console {
     try {
       return await this.#driver.console(normalized, { timeout: this.#commandTimeoutMs })
     } catch (error) {
-      throw new ConsoleError(normalized, error instanceof Error ? error.message : String(error))
+      // the driver's NAVIGATED: the app frame's document went away before the line answered
+      const navigated = (error as { code?: unknown } | null)?.code === 'NAVIGATED'
+      throw new ConsoleError(normalized, error instanceof Error ? error.message : String(error), { navigated })
     }
   }
 

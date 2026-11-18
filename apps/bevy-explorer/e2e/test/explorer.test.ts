@@ -298,6 +298,30 @@ describe('Explorer', () => {
     ])
   })
 
+  test('hud.clickAndLeave takes the page going before the click answered, and fails on anything else', async () => {
+    const leaving = new FakeConsole({
+      hud_wait: control(),
+      hud_click: (line) => {
+        throw new ConsoleError(line, 'the app frame\'s document went away', { navigated: true })
+      }
+    })
+    await new Explorer(leaving).hud.clickAndLeave({ name: 'Sign Out', role: 'button', index: 1 })
+    assert.deepEqual(leaving.lines.map(commandOf), ['hud_wait', 'hud_click'])
+
+    const answered = new FakeConsole({ hud_wait: control(), hud_click: control({ input: 'trusted' }) })
+    await new Explorer(answered).hud.clickAndLeave('Sign Out')
+
+    const failing = new FakeConsole({
+      hud_wait: control(),
+      hud_click: (line) => {
+        throw new ConsoleError(line, 'the test runner did not answer a trusted click within 10000 ms')
+      }
+    })
+    await assert.rejects(new Explorer(failing).hud.clickAndLeave('Sign Out'), /did not answer a trusted click/)
+    const synthetic = new FakeConsole({ hud_wait: control(), hud_click: control({ input: 'synthetic' }) })
+    await assert.rejects(new Explorer(synthetic).hud.clickAndLeave('Sign Out'), /was synthetic/)
+  })
+
   test('hud.click waits for the control to take a click, and fails naming what it saw', async () => {
     const fake = new FakeConsole({
       hud_wait: (line) => {

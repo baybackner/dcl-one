@@ -160,8 +160,11 @@ scenario(
     await explorer.hud.wait(ME_PANEL, { timeoutMs: CONTROL_TIMEOUT_MS })
     await press(explorer, SIGN_OUT_ROW)
     await explorer.hud.wait(SIGN_OUT_QUESTION, { timeoutMs: CONTROL_TIMEOUT_MS })
-    // two controls are named Sign Out while the question is open: the row, then the question's button
-    await press(explorer, { name: 'Sign Out', role: 'button', index: 1 })
+    // two controls are named Sign Out while the question is open: the row, then the question's
+    // button. The page loads again on it, and can go before the click is answered.
+    const confirm: Selector = { name: 'Sign Out', role: 'button', index: 1 }
+    await explorer.hud.wait(confirm, { state: 'actionable', timeoutMs: CONTROL_TIMEOUT_MS })
+    await explorer.hud.clickAndLeave(confirm)
     await until(
       () => explorer.worldState(),
       (state) => !state.signedIn,

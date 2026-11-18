@@ -37,6 +37,20 @@ const CLOSE_TIMEOUT_MS = 5_000;
 const POLL_MS = 100;
 const PRESENT_TIMEOUT_MS = 5_000;
 
+// What Chrome answers a `Runtime.evaluate` for a context it does not have: it ran nothing.
+const NOT_RUN = /Cannot find context with specified id/;
+// What it answers one whose context went away while it ran: its document was replaced or closed.
+const GONE_WHILE_RUNNING = /Execution context was destroyed|Inspected target navigated or closed|the target was detached/;
+// `#evaluate`'s answer for a line Chrome did not run.
+const STALE = Symbol('stale');
+
+/** A line whose document went away before it answered: it may have run. */
+function navigated(line) {
+  const error = new Error(`\`${line}\` was cut short: the app frame's document went away (its page loaded again or navigated) before it answered`);
+  error.code = 'NAVIGATED';
+  return error;
+}
+
 // The bits of the `modifiers` field of CDP's input events.
 const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
 // `button` and the `buttons` bit of the mouse button a request names.
@@ -263,11 +277,21 @@ class Pipe {
     const message = { id, method, params };
     if (sessionId) message.sessionId = sessionId;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { method, resolve, reject });
+      this.#pending.set(id, { method, sessionId, resolve, reject });
       this.output.write(`${JSON.stringify(message)}\0`, (error) => {
         if (error && this.#pending.delete(id)) reject(error);
       });
     });
+  }
+
+  /** A target's session is gone (Chrome detached it): Chrome answers nothing more sent to it, so
+   *  reject what still waits on it. */
+  failSession(sessionId, error) {
+    for (const [id, call] of this.#pending) {
+      if (call.sessionId !== sessionId) continue;
+      this.#pending.delete(id);
+      call.reject(error);
+    }
   }
 
   /** Chrome is gone: reject what waits for it, and everything after. */
@@ -288,6 +312,8 @@ class Driver {
   #stderr = [];
   #sessions = new Map();
   #contexts = new Map();
+  // what waits on a context, by its key: called when the context goes away
+  #contextWatchers = new Map();
   #page = null;
   #app = null;
   #held = new Set();
@@ -386,8 +412,11 @@ class Driver {
       case 'Target.detachedFromTarget':
         this.#sessions.delete(params.sessionId);
         for (const [key, context] of this.#contexts) {
-          if (context.session.id === params.sessionId) this.#contexts.delete(key);
+          if (context.session.id === params.sessionId) this.#dropContext(key);
         }
+        // a frame whose page loads again is detached with calls still out (an out-of-process
+        // frame's): Chrome never answers them
+        this.#pipe.failSession(params.sessionId, new Error('the target was detached: its page loaded again or closed'));
         break;
       case 'Runtime.executionContextCreated': {
         const session = this.#sessions.get(sessionId);
@@ -404,11 +433,11 @@ class Driver {
         break;
       }
       case 'Runtime.executionContextDestroyed':
-        this.#contexts.delete(`${sessionId}:${params.executionContextId}`);
+        this.#dropContext(`${sessionId}:${params.executionContextId}`);
         break;
       case 'Runtime.executionContextsCleared':
         for (const [key, context] of this.#contexts) {
-          if (context.session.id === sessionId) this.#contexts.delete(key);
+          if (context.session.id === sessionId) this.#dropContext(key);
         }
         break;
       case 'Runtime.consoleAPICalled':
@@ -437,6 +466,32 @@ class Driver {
         break;
       }
     }
+  }
+
+  #dropContext(key) {
+    this.#contexts.delete(key);
+    const watchers = this.#contextWatchers.get(key);
+    this.#contextWatchers.delete(key);
+    for (const gone of watchers ?? []) gone();
+  }
+
+  /** Settles (rejects with `error()`) when the context goes away; `cancel` stops watching. */
+  #whenGone(context, error) {
+    const key = `${context.session.id}:${context.id}`;
+    let cancel = () => {};
+    const promise = new Promise((_, reject) => {
+      if (!this.#contexts.has(key)) return reject(error());
+      const gone = () => reject(error());
+      const watchers = this.#contextWatchers.get(key) ?? new Set();
+      watchers.add(gone);
+      this.#contextWatchers.set(key, watchers);
+      cancel = () => {
+        watchers.delete(gone);
+        if (watchers.size === 0 && this.#contextWatchers.get(key) === watchers) this.#contextWatchers.delete(key);
+      };
+    });
+    promise.catch(() => {});
+    return { promise, cancel: () => cancel() };
   }
 
   #attached(parentId, { sessionId, targetInfo, waitingForDebugger }) {
@@ -551,13 +606,38 @@ class Driver {
   }
 
   /** `await window.engine_console_command(line)` in the app frame: what it resolves with, or a
-   *  rejection with the message the page failed with. */
+   *  rejection with the message the page failed with. When the frame's document goes away before
+   *  it answers (the page loaded again, as the HUD's confirmed Sign Out does), the rejection is
+   *  at once and has `code` NAVIGATED: the line may have run. A line sent to a document already
+   *  gone, which Chrome says it never ran, goes to the one loaded in its place. */
   async console(line, { timeout = DEFAULT_TIMEOUT_MS } = {}) {
     const started = Date.now();
     for (const secret of secretsOf(line)) this.#secrets.add(secret);
-    await this.ready({ timeout });
-    const context = await this.#findApp();
-    if (!context) throw new Error('the app frame went away');
+    const exited = this.#exit.then((info) => {
+      throw new Error(this.#goneMessage(info));
+    });
+    exited.catch(() => {});
+    const left = () => Math.max(1, timeout - (Date.now() - started));
+    const late = () => `\`${line}\` did not finish within ${timeout} ms`;
+    for (;;) {
+      await this.ready({ timeout: left() });
+      const context = await this.#findApp();
+      if (!context) continue; // gone again since `ready`: wait for the next
+      const answer = await within(Promise.race([this.#evaluate(context, line), exited]), left(), late);
+      if (answer === STALE) {
+        this.#dropContext(`${context.session.id}:${context.id}`);
+        if (Date.now() - started >= timeout) throw new Error(late());
+        continue;
+      }
+      const { ok, value, error } = answer;
+      if (!ok) throw new Error(error);
+      return value;
+    }
+  }
+
+  // The line run in one context: the page's answer as `{ ok, value, error }`, STALE when Chrome
+  // did not run it there, or a NAVIGATED rejection when the context went away while it ran.
+  async #evaluate(context, line) {
     // a rejection arrives as a value, so the page's message is not wrapped in a protocol error
     const expression = `(async (line) => {
       try {
@@ -567,24 +647,30 @@ class Driver {
         return { ok: false, error: error ?? String(e) };
       }
     })(${JSON.stringify(String(line))})`;
-    const exited = this.#exit.then((info) => {
-      throw new Error(this.#goneMessage(info));
-    });
-    exited.catch(() => {});
-    const answer = await within(
-      Promise.race([
+    const gone = this.#whenGone(context, () => navigated(line));
+    let answer;
+    try {
+      answer = await Promise.race([
         this.#send('Runtime.evaluate', { expression, contextId: context.id, awaitPromise: true, returnByValue: true }, context.session),
-        exited
-      ]),
-      Math.max(1, timeout - (Date.now() - started)),
-      () => `\`${line}\` did not finish within ${timeout} ms`
-    );
+        gone.promise
+      ]);
+    } catch (error) {
+      if (error?.code === 'NAVIGATED') throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (NOT_RUN.test(message)) return STALE;
+      if (GONE_WHILE_RUNNING.test(message)) {
+        // gone for Chrome before its event says so: the next line must not be sent there
+        this.#dropContext(`${context.session.id}:${context.id}`);
+        throw navigated(line);
+      }
+      throw error;
+    } finally {
+      gone.cancel();
+    }
     if (answer.exceptionDetails) {
       throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text);
     }
-    const { ok, value, error } = answer.result.value;
-    if (!ok) throw new Error(error);
-    return value;
+    return answer.result.value;
   }
 
   // --- trusted input ---

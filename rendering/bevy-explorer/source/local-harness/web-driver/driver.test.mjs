@@ -407,6 +407,55 @@ for (const isolated of [true, false]) {
       assert.equal(menu.trusted, true);
     });
   });
+
+  // A command whose document goes away before it answers (the HUD's confirmed Sign Out loads the
+  // page again): the console rejects as soon as the frame's context is gone, and the next command
+  // runs in the document loaded in its place.
+  describe(`a document that goes away, ${kind}`, { skip: noChrome || noStrip }, () => {
+    const page = openPage({ isolated, mode: 'hud' });
+    const navigated = (error) => error.code === 'NAVIGATED' && /went away/.test(error.message);
+    const loadedAt = async () => (await json(page.driver, '/fixture_state')).loadedAt;
+    // The document loaded in place of `before`, as a spec's poll finds it: a line sent while the
+    // old one is going is cut short too, and is sent again.
+    async function reloaded(before) {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const now = await loadedAt().catch((error) => {
+          if (!navigated(error) || Date.now() > deadline) throw error;
+          return before;
+        });
+        if (now !== before) return;
+        assert.ok(Date.now() < deadline, 'the document was not loaded again');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    for (const [what, rest, control] of [
+      ['its frame', '', 'Leave'],
+      ['the whole page', ' {"page":true}', 'Leave page']
+    ]) {
+      test(`a command cut short by ${what} loading again is rejected as navigated, at once`, { timeout: 60_000 }, async () => {
+        const before = await loadedAt();
+        const started = Date.now();
+        await assert.rejects(page.driver.console(`/fixture_reload${rest}`), navigated);
+        assert.ok(Date.now() - started < 10_000, `rejected after ${Date.now() - started} ms`);
+        await reloaded(before);
+      });
+
+      test(`/hud_click on a control that loads ${what} again answers or is rejected as navigated, never later`, { timeout: 60_000 }, async () => {
+        for (let round = 0; round < 5; round += 1) {
+          const before = await loadedAt();
+          const started = Date.now();
+          await page.driver.console(`/hud_click ${JSON.stringify(control)}`).then(
+            (reply) => assert.equal(JSON.parse(reply).input, 'trusted'),
+            (error) => assert.ok(navigated(error), String(error))
+          );
+          assert.ok(Date.now() - started < 10_000, `round ${round} took ${Date.now() - started} ms`);
+          await reloaded(before);
+        }
+      });
+    }
+  });
 }
 
 // A frame of another origin has the binding too, and must get nothing from it.

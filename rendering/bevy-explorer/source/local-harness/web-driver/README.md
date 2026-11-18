@@ -5,7 +5,11 @@ launches Chrome over the DevTools protocol and gives a test what the standalone'
 and CEF input give it:
 
 - **Console commands.** `console(line)` runs `await window.engine_console_command(line)` in the
-  app frame and returns what it resolves with, or rejects with the page's message.
+  app frame and returns what it resolves with, or rejects with the page's message. When the
+  frame's document goes away before it answers (the page loads again, as the HUD's confirmed Sign
+  Out makes it), it rejects at once with an error whose `code` is `NAVIGATED`: the line may have
+  run. A line Chrome says it never ran, sent to a document already gone, goes to the one loaded
+  in its place.
 - **Trusted input.** `/hud_click`, `/hud_fill`, `/press_key` and `/click_at` (page side:
   `library/explorer-core/lib/hudAutomation.ts`) ask the runner for real input instead of dispatching DOM
   events, so the page sees `isTrusted` events.
