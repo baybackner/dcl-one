@@ -1,7 +1,9 @@
 // Builds public/errors/<status>.html: self-contained branded error pages that nginx serves for errors
 // it generates itself (the app is down or timed out, rate limits, `return 404`, oversized bodies). The
 // app's own 4xx/5xx render StatusPage (library/ui/apps/sites/status), whose copy, CSS Module and art
-// these pages share.
+// these pages share. 404 is the app's own NotFoundPage (src/features/not-found), rendered from its
+// component with the CSS Modules its markup uses; its AnimatedBackground renders the still image, as
+// the app does under reduced motion, since a static page runs no WebGL.
 //
 // Every page inlines its CSS, the --dcl-* tokens that CSS reads (from library/ui/foundations), the logo
 // and the art (as a data: URI), so it renders even when nothing behind nginx is reachable.
@@ -12,16 +14,18 @@
 //   node scripts/gen-error-pages.mts [--check]
 //   ERROR_PAGES_OUT=<dir> writes elsewhere than public/errors.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createElement } from "react";
+import { createElement, type ComponentType } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { MemoryRouter } from "react-router";
+import { createServer, type ModuleNode } from "vite";
 
 const sites = fileURLToPath(new URL("../", import.meta.url));
 const oneUi = fileURLToPath(new URL("../../../library/ui/", import.meta.url));
 const status = join(oneUi, "apps/sites/status");
 const artDir = join(oneUi, "apps/sites/assets/errors");
+const notFoundEntry = join(sites, "src/features/not-found/NotFoundPage.tsx");
 const foundations = join(oneUi, "foundations");
 const outDir = process.env.ERROR_PAGES_OUT || join(sites, "public/errors");
 const check = process.argv.includes("--check");
@@ -34,21 +38,59 @@ const vite = await createServer({
   logLevel: "silent",
   appType: "custom",
   server: { middlewareMode: true, hmr: false, watch: null },
-  resolve: { dedupe: ["react", "react-dom"] },
+  // The @dcl/one-ui aliases of vite.config.ts, which NotFoundPage imports through.
+  resolve: {
+    dedupe: ["react", "react-dom"],
+    alias: [
+      { find: /^@dcl\/one-ui$/, replacement: join(oneUi, "index.ts") },
+      { find: /^@dcl\/one-ui\//, replacement: oneUi },
+    ],
+  },
   optimizeDeps: { noDiscovery: true, include: [] },
 });
 let copyModule: typeof import("../../../library/ui/apps/sites/status/statusCopy.ts");
 let styles: Record<string, string>;
 let moduleCss: string;
 let icons: typeof import("../../../library/ui/foundations/icons/index.ts");
+let notFoundMarkup: string;
+let notFoundCss: string;
 try {
   copyModule = await vite.ssrLoadModule(join(status, "statusCopy.ts")) as typeof copyModule;
   styles = (await vite.ssrLoadModule(join(status, "StatusPage.module.css"))).default as Record<string, string>;
   moduleCss = (await vite.ssrLoadModule(`${join(status, "StatusPage.module.css")}?inline`)).default as string;
   icons = await vite.ssrLoadModule(join(foundations, "icons/index.ts")) as typeof icons;
+  const NotFoundPage = (await vite.ssrLoadModule(notFoundEntry)).default as ComponentType;
+  // React hoists a preload for each <img>; the page inlines the image, so the preload would only repeat its bytes.
+  notFoundMarkup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(NotFoundPage)))
+    .replace(/<link rel="preload" as="image"[^>]*>/g, "");
+  notFoundCss = await usedModuleCss(vite, notFoundEntry, notFoundMarkup);
 } finally {
   await vite.close();
 }
+/**
+ * The CSS Modules the entry imports (dependencies first, the order a build emits them) whose classes the
+ * markup uses: `@dcl/one-ui`'s index brings every component's module, and only the used ones belong here.
+ */
+async function usedModuleCss(vite: Awaited<ReturnType<typeof createServer>>, entry: string, markup: string): Promise<string> {
+  const used = new Set([...markup.matchAll(/class="([^"]*)"/g)].flatMap((m) => m[1]!.split(/\s+/)));
+  const files: string[] = [];
+  const seen = new Set<ModuleNode>();
+  const walk = (node: ModuleNode | undefined) => {
+    if (!node || seen.has(node)) return;
+    seen.add(node);
+    for (const dep of node.ssrImportedModules) walk(dep);
+    if (node.file?.endsWith(".module.css")) files.push(node.file);
+  };
+  walk(await vite.moduleGraph.getModuleByUrl(entry, true));
+  const sheets: string[] = [];
+  for (const file of files) {
+    const classes = Object.values((await vite.ssrLoadModule(file)).default as Record<string, string>);
+    if (classes.some((name) => used.has(name))) sheets.push((await vite.ssrLoadModule(`${file}?inline`)).default as string);
+  }
+  if (!sheets.length) throw new Error(`gen-error-pages: no CSS Module of ${entry} styles its markup`);
+  return sheets.join("\n");
+}
+
 const { ART_FILES, LOGOMARK_VIEW_BOX, STATIC_ERROR_STATUSES, isRetryable, statusCopy } = copyModule;
 
 const MEDIA_BLOCK = /@media[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g;
@@ -106,42 +148,60 @@ const cls = (...names: string[]) =>
 
 const LFS_POINTER = "version https://git-lfs.github.com/spec/v1";
 const artData = new Map<string, string>();
-const artUri = (file: string) => {
-  if (!artData.has(file)) {
-    const bytes = readFileSync(join(artDir, file));
+const artUri = (file: string) => webpUri(join(artDir, file));
+const webpUri = (path: string) => {
+  const file = relative(join(oneUi, "../.."), path);
+  if (!artData.has(path)) {
+    if (!path.endsWith(".webp")) throw new Error(`gen-error-pages: ${file} is not a webp image`);
+    const bytes = readFileSync(path);
     if (bytes.subarray(0, LFS_POINTER.length).toString("latin1") === LFS_POINTER) {
       throw new Error(`gen-error-pages: ${file} is a Git LFS pointer. Run git lfs pull.`);
     }
     if (bytes.subarray(0, 4).toString("latin1") !== "RIFF" || bytes.subarray(8, 12).toString("latin1") !== "WEBP") {
       throw new Error(`gen-error-pages: ${file} is not a webp image`);
     }
-    artData.set(file, `data:image/webp;base64,${bytes.toString("base64")}`);
+    artData.set(path, `data:image/webp;base64,${bytes.toString("base64")}`);
   }
-  return artData.get(file)!;
+  return artData.get(path)!;
+};
+/** Vite serves a file outside the Sites root at /@fs/<absolute path>, one inside it at its root-relative path. */
+const assetUri = (url: string) => {
+  const path = decodeURIComponent(url);
+  return webpUri(path.startsWith("/@fs/") ? path.slice("/@fs".length) : join(sites, path));
 };
 
-const css = moduleCss.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s*\n\s*/g, "");
-const style = `${tokenBlock(css)}html,body{margin:0;background:#0d0c11}${css}`;
+const minify = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s*\n\s*/g, "");
+const SHELL_CSS = "html,body{margin:0;background:#0d0c11}";
+const css = minify(moduleCss);
+const style = `${tokenBlock(css)}${SHELL_CSS}${css}`;
+const notFoundStyleCss = minify(notFoundCss).replace(/url\(\s*(['"]?)(\/[^'")]+)\1\s*\)/g, (_, _q, url: string) => `url(${assetUri(url)})`);
+const notFoundStyle = `${tokenBlock(notFoundStyleCss)}${SHELL_CSS}${notFoundStyleCss}`;
+const notFoundBody = notFoundMarkup.replace(/ src="(\/[^"]+)"/g, (_, url: string) => ` src="${assetUri(url)}"`);
 const logo = renderToStaticMarkup(
   createElement(icons.GeneralDecentraland, { className: styles.logoMark, size: 28, viewBox: LOGOMARK_VIEW_BOX, "aria-hidden": "true" }),
 );
 
-function page(code: number): string {
-  const copy = statusCopy(code);
-  const art = ART_FILES[copy.art];
-  const second = isRetryable(code)
-    ? `<button type="button" class="${cls("button", "secondary")}" onclick="location.reload()">Try again</button>`
-    : `<button type="button" class="${cls("button", "secondary")}" onclick="history.back()">Go back</button>`;
+function head(code: number, source: string, css: string): string {
   return `<!doctype html>
-<!-- Generated by apps/sites/scripts/gen-error-pages.mts from library/ui/apps/sites/status. Do not edit. -->
+<!-- Generated by apps/sites/scripts/gen-error-pages.mts from ${source}. Do not edit. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${code} · ${escape(copy.eyebrow)} · Decentraland</title>
-<style>${style}</style>
-</head>
+<title>${code} · ${escape(statusCopy(code).eyebrow)} · Decentraland</title>
+<style>${css}</style>
+</head>`;
+}
+
+function page(code: number): string {
+  if (code === 404) return `${head(code, "apps/sites/src/features/not-found", notFoundStyle)}\n<body>\n${notFoundBody}\n</body>\n</html>\n`;
+  const copy = statusCopy(code);
+  const art = ART_FILES[copy.art];
+  const second = isRetryable(code)
+    ? `<button type="button" class="${cls("button", "secondary")}" onclick="location.reload()">Try again</button>`
+    : `<button type="button" class="${cls("button", "secondary")}" onclick="history.back()">Go back</button>`;
+  return `${head(code, "library/ui/apps/sites/status", style)}
 <body>
 <main class="${cls("page")}" aria-labelledby="sp-title" data-status="${code}">
 <div class="${cls("card")}">
