@@ -917,11 +917,13 @@ mod tests {
         for present in [true, false] {
             assert!(
                 toon_variants.iter().any(|variant| variant.0 == present),
-                "toon main pass variants by (environment map, depth prepass): {toon_variants:?}"
+                "no toon main pass with the environment map {present}, of (environment map, \
+                 depth prepass): {toon_variants:?}"
             );
             assert!(
                 toon_variants.iter().any(|variant| variant.1 == present),
-                "toon main pass variants by (environment map, depth prepass): {toon_variants:?}"
+                "no toon main pass with the depth prepass {present}, of (environment map, \
+                 depth prepass): {toon_variants:?}"
             );
         }
     }

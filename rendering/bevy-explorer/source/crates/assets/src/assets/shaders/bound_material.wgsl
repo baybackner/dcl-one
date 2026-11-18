@@ -13,7 +13,7 @@
 #import bevy_core_pipeline::tonemapping::approximate_inverse_tone_mapping
 
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
-#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, discard_dither, reveal_discard, toon_outline}
+#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, depth_outline_width_px, discard_dither, reveal_discard, toon_outline}
 #import "embedded://shaders/toon.wgsl"::toon_lighting
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
@@ -177,12 +177,13 @@ fn fragment(
     let view_z = -view_transformations::depth_ndc_to_view_z(in.position.z);
 
     if (mesh_tag & #{OUTLINE_RED_MESH_TAG}) != 0 {
-        // the hover outline: red at any distance, and wider on nearer fragments
+        // the hover outline: red at any distance, wider on nearer fragments, with red creases
         out.color = apply_outline(
             in.position,
             out.color,
             vec3(10.0, 0.0, 0.0),
-            clamp(view.viewport.z / 640.0 / view_z, 1.0, 5.0),
+            vec3(5.0, 0.5, 0.5),
+            depth_outline_width_px(view_z),
             sample_index,
             dither_opacity,
         );

@@ -30,12 +30,16 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   (`DCL_ToonOutline.hlsl`) for the avatars within 8 m; here the line is the prepass edge
   detection, with Unity's colour (`_Outline_Color * base * base`, unlit), width
   (`_Outline_Width * 0.001` m, thinning from `_Nearest_Distance` to `_Farthest_Distance`) and
-  cutoff. Three differences are kept. The 8 m cutoff is measured to the avatar's origin, where
+  cutoff. Differences kept: the 8 m cutoff is measured to the avatar's origin, where
   Unity measures to the head anchor (`AvatarShapeVisibilitySystem.cs:93`), so the outline comes
   and goes at a slightly different camera distance. A line thinner than a pixel covers that
   fraction of the pixel and fades, where Unity's hull aliases. And there is no frustum test:
   Unity skips avatars out of view, while an off-screen avatar has no fragments to draw a line
-  on, so the test would save nothing.
+  on, so the test would save nothing. The edge detection also darkens normal creases inside
+  the silhouette (the surface times 0.6320754, `bound_material_effect.wgsl`), which Unity's
+  hull does not draw; the crease is kept because the outline's look here relies on it. And
+  Unity outlines a preview avatar at any distance (`avatarShape.IsPreview ||`,
+  `AvatarShapeVisibilitySystem.cs:93`), where the preview here follows the same 8 m rule.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest

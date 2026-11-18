@@ -63,12 +63,22 @@ fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>,
 #endif
 #endif
 
+// the width in pixels of a line that is wider on nearer fragments, between 1 and 5 pixels; an
+// orthographic view takes its height in metres in place of the depth
+fn depth_outline_width_px(view_z: f32) -> f32 {
+    var depth = view_z;
+    if view.clip_from_view[3].w == 1.0 {
+        depth = 2.0 / view.clip_from_view[1].y;
+    }
+    return clamp(view.viewport.z / 640.0 / depth, 1.0, 5.0);
+}
+
 // draws a line on the fragments the prepass shows on an edge: a depth edge (the silhouette)
-// becomes outline_rgb, and a crease darkens the surface.
+// becomes outline_rgb, and a crease multiplies the surface by crease.
 // width_px: the line's width in pixels; below one pixel the line covers that fraction of the
 // pixel, so a thin line fades instead of breaking up
 // dither_opacity: this fragment's discard_dither opacity; 1 when it isn't dithered
-fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32>, width_px: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
+fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32>, crease: vec3<f32>, width_px: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
     var out = color_in;
 #ifdef DEPTH_PREPASS
 
@@ -110,13 +120,6 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32
     }
 #endif
 
-    // a crease takes the outline's grey where the pipeline has the toon defs (the avatar body),
-    // and half the surface colour elsewhere (the masks)
-#ifdef TOON_OUTLINE_COLOR
-    let crease = bitcast<f32>(#{TOON_OUTLINE_COLOR}u);
-#else
-    let crease = 0.5;
-#endif
     if edge1 {
         out = vec4<f32>(mix(out.rgb, outline_rgb, strength), out.a);
     } else if edge2 {
@@ -141,15 +144,21 @@ fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, insta
         return color_in;
     }
     // the width in metres falls from full at the nearest distance to none at the farthest, and
-    // is projected at this fragment's depth
+    // is projected at this fragment's depth. focal_px is the pixels a metre covers one metre
+    // deep, and at any depth in an orthographic view
     let falloff = 1.0 - smoothstep(bitcast<f32>(#{TOON_OUTLINE_NEAREST_M}u), bitcast<f32>(#{TOON_OUTLINE_FARTHEST_M}u), sqrt(sqr_distance));
     let focal_px = view.clip_from_view[1][1] * view.viewport.w * 0.5;
-    let width_px = bitcast<f32>(#{TOON_OUTLINE_WIDTH_M}u) * falloff * focal_px / view_z;
+    var width_px = bitcast<f32>(#{TOON_OUTLINE_WIDTH_M}u) * falloff * focal_px;
+    if view.clip_from_view[3].w != 1.0 {
+        width_px /= view_z;
+    }
     // the line is not lit: its colour is in the base colour's space, scaled by one light unit to
     // the pre-tonemap level of the lit body (toon.wgsl)
     let unit = bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u) * view.exposure / PI;
     let outline_rgb = bitcast<f32>(#{TOON_OUTLINE_COLOR}u) * base * base * unit;
-    return apply_outline(position, color_in, outline_rgb, width_px, sample_index, dither_opacity);
+    // a crease darkens the surface by the outline's grey
+    let crease = vec3(bitcast<f32>(#{TOON_OUTLINE_COLOR}u));
+    return apply_outline(position, color_in, outline_rgb, crease, width_px, sample_index, dither_opacity);
 }
 #endif
 

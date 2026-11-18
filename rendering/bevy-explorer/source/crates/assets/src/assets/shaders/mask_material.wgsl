@@ -8,7 +8,7 @@
     view_transformations,
 }
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
-#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, reveal_discard}
+#import "embedded://shaders/bound_material_effect.wgsl"::{apply_outline, depth_outline_width_px, reveal_discard}
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount}
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 
@@ -110,7 +110,8 @@ fn fragment(
         in.position,
         out.color, 
         vec3(0.0),
-        clamp(-view.viewport.z / 640.0 / view_transformations::depth_ndc_to_view_z(in.position.z), 1.0, 5.0),
+        vec3(0.5),
+        depth_outline_width_px(-view_transformations::depth_ndc_to_view_z(in.position.z)),
         sample_index,
         1.0,
     );

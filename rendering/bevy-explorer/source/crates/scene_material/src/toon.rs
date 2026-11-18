@@ -222,8 +222,20 @@ mod tests {
 
     #[test]
     fn outline_width_shrinks_with_distance_and_cuts_at_eight_metres() {
-        let focal = 540.0 / (30f32.to_radians()).tan(); // 1080p at 60 degrees vertical
-        assert!((outline_width_px(1.0, 1.0, focal) - 0.002 * focal).abs() < 0.05);
+        // 1080p at 60 degrees vertical
+        let focal = 540.0 / (30f32.to_radians()).tan();
+        // 1 m is 0.5 m into the 99.5 m falloff
+        let t = 0.5 / 99.5;
+        let at_one_metre = 0.002 * (1.0 - t * t * (3.0 - 2.0 * t)) * focal;
+        assert!((outline_width_px(1.0, 1.0, focal) - at_one_metre).abs() < 1e-6);
+        assert!((at_one_metre - 0.002 * focal).abs() < 0.05);
+        // a fragment twice as deep has half the width
+        assert!((outline_width_px(1.0, 2.0, focal) - 0.5 * at_one_metre).abs() < 1e-6);
+        // full width at and inside the nearest distance, none at and past the farthest
+        assert_eq!(outline_width_px(0.5, 1.0, focal), 0.002 * focal);
+        assert_eq!(outline_width_px(0.1, 1.0, focal), 0.002 * focal);
+        assert_eq!(outline_width_px(100.0, 100.0, focal), 0.0);
+        assert_eq!(outline_width_px(150.0, 150.0, focal), 0.0);
         assert!(outline_width_px(8.0, 8.0, focal) < 0.3);
         assert!(outline_visible(64.0) && !outline_visible(64.0001));
     }
