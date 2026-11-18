@@ -69,6 +69,8 @@ Each pass of the loop runs four chained sets (`SceneLoopSets`):
    into a bevy component (`C: TryFrom<D>`) on the matching entity. Registration is
    `add_crdt_lww_component` or `add_crdt_go_component` in `update_world`; the registration adds
    the system. Only transforms and text shapes have hand-written loop systems.
+   After them, once their components are in, `stage_redispatch_rotation` (`user_input`) stages
+   the movement scene's rotation for its re-dispatch (see below).
 
 The loop runs at least once per frame, then repeats while time remains and there are eligible
 scenes or replies outstanding. Priority: the scenes the player is in (the one they stand in,
@@ -101,7 +103,12 @@ a tenth of the ticks miss, that percentile is a whole loop and holds back every 
 later in a loop. At most one tick stays in flight, so this happens at most once per frame and
 the loop still ends at its deadline. A re-dispatch's reply that is late
 too is applied in the next frame. The movement scene tells a reply the engine has not applied
-yet from a takeover by the requested velocity it receives.
+yet from a takeover by the requested velocity it receives. The re-dispatch is sent the player's
+rotation as the late reply sets it, staged after each loop pass (`stage_redispatch_rotation`,
+`redispatch_rotation`): the engine applies the reply's orientation only in `PostUpdate`, and the
+scene turns from the rotation it is sent, so from the player's current rotation every other frame
+would continue a different chain of replies. A reply whose orientation the engine will not apply
+(a `movePlayerTo` facing holds) leaves the player's rotation.
 
 Everything downstream of the loop reads bevy components. A system that needs scene data never
 reads the CRDT store directly; it queries the component the `UpdateWorld` system wrote.

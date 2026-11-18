@@ -5,6 +5,13 @@
 //! dispatched again at once with the frame's input, ahead of the queue. A reply seen at the
 //! loop's first poll is always answered; one seen later in the loop only if the time left
 //! before the deadline covers the 90th percentile of the scene's recent ticks.
+//!
+//! The re-dispatch is sent the player's rotation as the late reply sets it
+//! (`RendererSceneContext::redispatch_rotation`): the engine applies that reply's orientation
+//! only after the scene loop, and the scene turns from the rotation it is sent, so from the
+//! player's current rotation it would turn again from the one before that reply. Every other
+//! frame would then continue a different chain of replies, and the avatar would alternate
+//! between the two.
 
 use std::{collections::VecDeque, time::Duration};
 

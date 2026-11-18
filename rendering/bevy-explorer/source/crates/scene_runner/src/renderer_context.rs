@@ -143,6 +143,11 @@ pub struct RendererSceneContext {
     /// Engine time the tick of the last reply was dispatched (`last_sent` then). A scene
     /// dispatched again in the frame its reply landed has a later `last_sent`.
     pub reply_sent: f64,
+    /// For the movement scene, the player's rotation once its late reply that landed in this
+    /// frame is applied, which happens only after the scene loop. Its re-dispatch is sent this
+    /// rotation instead of the player's ([`crate::movement_redispatch`]). Set before each
+    /// dispatch by the crate that applies the reply; None when the engine will not apply it.
+    pub redispatch_rotation: Option<Quat>,
 }
 
 /// A scene tick's dispatch: when it left and the frame's scene loop it left in.
@@ -340,6 +345,7 @@ impl RendererSceneContext {
             crdt_bytes_per_second: None,
             tick_timing: SceneTickTiming::default(),
             reply_sent: 0.0,
+            redispatch_rotation: None,
         };
 
         new_context.live_entities[SceneEntityId::ROOT.id as usize] =
@@ -384,6 +390,14 @@ impl RendererSceneContext {
 
     pub fn is_dead(&self, entity: SceneEntityId) -> bool {
         self.entity_entry(entity.id).0 > entity.generation
+    }
+
+    /// The player's rotation a dispatch in `frame` sends the scene, given the player's current
+    /// `rotation`: the movement scene's re-dispatch is sent its `redispatch_rotation`.
+    pub fn player_rotation_to_send(&self, frame: u32, rotation: Quat) -> Quat {
+        self.redispatch_rotation
+            .filter(|_| self.tick_timing.late_reply_in(frame))
+            .unwrap_or(rotation)
     }
 
     /// Iterate over scene entities known to the renderer: those with an associated bevy entity,

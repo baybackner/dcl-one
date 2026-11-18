@@ -11,7 +11,7 @@ use common::{
         GROUND_SNAP_DROP, MAX_GROUND_INCLINE, MAX_STEP_HEIGHT, PLAYER_COLLIDER_OVERLAP,
         PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD,
     },
-    sets::{PostUpdateSets, SceneSets},
+    sets::{PostUpdateSets, SceneLoopSets, SceneSets},
     structs::{
         avatar_tilt_quat, AppConfig, AvatarDynamicState, EngineMovementControl, PrimaryPlayerRes,
         PrimaryUser, SceneDrivenAnim, SceneDrivenAnimationFeedback, SceneDrivenAnimationRequest,
@@ -44,7 +44,7 @@ use scene_runner::{
         },
         AddCrdtInterfaceExt,
     },
-    ContainingScene, SceneEntity, SceneUpdates,
+    ContainingScene, SceneEntity, SceneLoopSchedule, SceneUpdates,
 };
 
 pub struct AvatarMovementPlugin;
@@ -76,6 +76,9 @@ impl Plugin for AvatarMovementPlugin {
         app.init_resource::<SceneDrivenAnimationFeedback>();
 
         app.add_systems(Update, broadcast_movement_info.in_set(SceneSets::Init));
+        app.world_mut()
+            .resource_mut::<SceneLoopSchedule>()
+            .add_systems(stage_redispatch_rotation.after(SceneLoopSets::UpdateWorld));
 
         app.add_systems(
             Update,
@@ -564,12 +567,19 @@ pub fn apply_impulses(
 // pre-teleport transform, so applying its orientation would clobber the imposed facing.
 // Strict `>` (here as `<=` to suppress) treats a same-frame dispatch as stale, since
 // `last_sent` is captured before the restricted-action runs and shares the frame's timestamp.
-fn movement_suppressed(
-    movement_control: &EngineMovementControl,
-    movement: &ActivePlayerComponent<AvatarMovement>,
-) -> bool {
+fn movement_suppressed(movement_control: &EngineMovementControl, initiated_at: f64) -> bool {
     !movement_control.suppress_avatar_physics.is_empty()
-        || movement.initiated_at <= movement_control.accept_movement_after
+        || initiated_at <= movement_control.accept_movement_after
+}
+
+impl AvatarMovement {
+    /// The player's rotation this movement sets. Yaw is authoritative (broadcast to other
+    /// clients, used by physics); tilt is a render-only lean composed on top.
+    /// `to_euler(YXZ).0` still recovers the yaw.
+    fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(self.orientation / 360.0 * TAU)
+            * avatar_tilt_quat(self.tilt_pitch, self.tilt_roll)
+    }
 }
 
 // Movement pipeline step 1 (see the PBAvatarMovement proto comment): set the avatar
@@ -585,12 +595,35 @@ pub fn apply_rotation(
         return;
     };
 
-    if !movement_suppressed(&movement_control, movement) {
-        // Yaw is authoritative (broadcast to other clients, used by physics); tilt is a
-        // render-only lean composed on top. `to_euler(YXZ).0` still recovers the yaw.
-        transform.rotation = Quat::from_rotation_y(movement.component.orientation / 360.0 * TAU)
-            * avatar_tilt_quat(movement.component.tilt_pitch, movement.component.tilt_roll);
+    if !movement_suppressed(&movement_control, movement.initiated_at) {
+        transform.rotation = movement.component.rotation();
     }
+}
+
+/// After each pass of the scene loop, sets the movement scene's `redispatch_rotation`: the
+/// rotation [`apply_rotation`] will set from its late reply that landed in this frame, for its
+/// re-dispatch, which the next pass sends before that. Runs after the pass's `AvatarMovement`
+/// updates are applied.
+fn stage_redispatch_rotation(
+    player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
+    mut scenes: Query<&mut RendererSceneContext>,
+    movements: Query<&AvatarMovement>,
+    movement_control: Res<EngineMovementControl>,
+    frame: Res<FrameCount>,
+) {
+    let Ok(active) = player.single() else {
+        return;
+    };
+    let Ok(mut context) = scenes.get_mut(active.scene()) else {
+        return;
+    };
+    let applied = context.tick_timing.late_reply_in(frame.0)
+        && !movement_suppressed(&movement_control, context.reply_sent);
+    context.redispatch_rotation = context
+        .bevy_entity(SceneEntityId::PLAYER)
+        .and_then(|entity| movements.get(entity).ok())
+        .filter(|_| applied)
+        .map(AvatarMovement::rotation);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -620,7 +653,7 @@ pub fn apply_movement(
 
     // Orientation was already set this frame by `apply_rotation` (pipeline step 1);
     // here we only apply velocity. The same suppression gate still governs velocity.
-    let suppress = movement_suppressed(&movement_control, movement);
+    let suppress = movement_suppressed(&movement_control, movement.initiated_at);
     // standing still: nothing moves, unless the avatar hovers over the ground it stands on and
     // the ground snap below settles it
     let settle = dynamic_state.ground_height > SETTLE_HEIGHT
@@ -1451,5 +1484,142 @@ mod tests {
         let settings = AvatarLocomotionSettings::from_config(&default()).0;
         assert_eq!(settings.hard_landing_cooldown, None);
         assert!(settings.walk_speed.is_some() && settings.jump_height.is_some());
+    }
+
+    /// A movement scene turning the player while each reply lands a frame late and the scene is
+    /// dispatched again in the frame it lands. A tick with input turns 10 degrees toward 90 from
+    /// the yaw it is sent; one without holds that yaw. The first `turning` ticks have input.
+    /// With `imposed`, the player starts at that yaw and every reply was dispatched before it was
+    /// imposed. Returns, for each frame, the yaw the tick is sent and the player's yaw after the
+    /// frame.
+    fn late_replies(turning: u32, frames: u32, imposed: Option<f32>) -> Vec<(f32, f32)> {
+        use bevy::ecs::system::RunSystemOnce;
+        use dcl_types::SceneId;
+        use scene_runner::renderer_context::{ReplyTiming, SentTiming};
+
+        let yaw = |rotation: Quat| rotation.to_euler(EulerRot::YXZ).0.to_degrees();
+        let mut app = App::new();
+        app.insert_resource(EngineMovementControl {
+            accept_movement_after: if imposed.is_some() { f64::MAX } else { -1.0 },
+            ..default()
+        });
+        let scene = app.world_mut().spawn_empty().id();
+        let scene_player = app.world_mut().spawn(AvatarMovement::default()).id();
+        let mut context = RendererSceneContext::new(
+            SceneId::DUMMY,
+            "hash".to_owned(),
+            "storage_root".to_owned(),
+            false,
+            0,
+            "movement".to_owned(),
+            IVec2::ZERO,
+            HashSet::from_iter([IVec2::ZERO]),
+            vec![],
+            default(),
+            vec![],
+            scene,
+            0.0,
+            false,
+            "sdk_version",
+            false,
+            false,
+        );
+        context.associate_bevy_entity(SceneEntityId::PLAYER, scene_player);
+        app.world_mut().entity_mut(scene).insert(context);
+        let player = app
+            .world_mut()
+            .spawn((
+                PrimaryUser::default(),
+                Transform::from_rotation(Quat::from_rotation_y(
+                    imposed.unwrap_or_default().to_radians(),
+                )),
+                ActivePlayerComponent {
+                    scene,
+                    entity: scene_player,
+                    scene_last_update: 0,
+                    scene_start_tick: 0,
+                    scene_is_portable: false,
+                    initiated_at: f64::MIN,
+                    component: AvatarMovement::default(),
+                },
+            ))
+            .id();
+
+        let now = web_time::Instant::now();
+        let mut in_flight = None;
+        let mut frames_out = Vec::new();
+        for frame in 0..frames {
+            app.insert_resource(FrameCount(frame));
+            if let Some(orientation) = in_flight.take() {
+                // the reply to the previous frame's tick lands and is picked for this frame
+                let world = app.world_mut();
+                world
+                    .get_mut::<AvatarMovement>(scene_player)
+                    .unwrap()
+                    .orientation = orientation;
+                let mut context = world.get_mut::<RendererSceneContext>(scene).unwrap();
+                let sent = SentTiming {
+                    at: now,
+                    frame: frame - 1,
+                    loop_start: now,
+                    deadline: now,
+                    redispatch: frame > 1,
+                };
+                context.tick_timing.reply = Some(ReplyTiming {
+                    sent,
+                    at: now,
+                    frame,
+                });
+                context.reply_sent = f64::from(frame - 1);
+                let mut active = world
+                    .get_mut::<ActivePlayerComponent<AvatarMovement>>(player)
+                    .unwrap();
+                active.component.orientation = orientation;
+                active.initiated_at = f64::from(frame - 1);
+            }
+            app.world_mut()
+                .run_system_once(stage_redispatch_rotation)
+                .unwrap();
+            let world = app.world();
+            let sent = yaw(world
+                .get::<RendererSceneContext>(scene)
+                .unwrap()
+                .player_rotation_to_send(frame, world.get::<Transform>(player).unwrap().rotation));
+            in_flight = Some(if frame < turning {
+                sent + (90.0 - sent).clamp(-10.0, 10.0)
+            } else {
+                sent
+            });
+            app.world_mut().run_system_once(apply_rotation).unwrap();
+            let applied = yaw(app.world().get::<Transform>(player).unwrap().rotation);
+            frames_out.push((sent, applied));
+        }
+        frames_out
+    }
+
+    #[test]
+    fn a_redispatch_turns_on_from_the_late_reply_it_answers() {
+        let frames = late_replies(3, 12, None);
+        let yaws: Vec<f32> = frames.iter().map(|(_, applied)| *applied).collect();
+        assert!(
+            yaws.windows(2).all(|pair| pair[1] >= pair[0] - 1e-3),
+            "turned back: {yaws:?}"
+        );
+        // every tick turns on from the one before it: three ticks with input turn 30 degrees
+        assert!(
+            yaws[4..].iter().all(|yaw| (yaw - 30.0).abs() < 1e-3),
+            "settled at {yaws:?}"
+        );
+    }
+
+    #[test]
+    fn a_redispatch_is_sent_an_imposed_facing_its_late_reply_does_not_override() {
+        let frames = late_replies(3, 6, Some(45.0));
+        assert!(
+            frames
+                .iter()
+                .all(|(sent, applied)| (sent - 45.0).abs() < 1e-3 && (applied - 45.0).abs() < 1e-3),
+            "{frames:?}"
+        );
     }
 }

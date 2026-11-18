@@ -266,6 +266,17 @@ pub struct SceneLoopSchedule {
     sleeper: SpinSleeper,
 }
 
+impl SceneLoopSchedule {
+    /// Adds systems to each pass of the scene loop.
+    pub fn add_systems<M>(
+        &mut self,
+        systems: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
+    ) -> &mut Self {
+        self.schedule.add_systems(systems);
+        self
+    }
+}
+
 // left px, top px, right px, bottom px
 #[derive(Default, Resource)]
 pub struct InteractableArea(pub Option<Vec4>);
@@ -1256,12 +1267,12 @@ fn send_scene_updates(
     // collect components
 
     // generate updates for camera and player
+    let mut player_transform = player.single().copied().unwrap_or_default();
+    player_transform.rotation =
+        context.player_rotation_to_send(engine_info.frame.0, player_transform.rotation);
     for (mut affine, id, is_player) in [
         (
-            player
-                .single()
-                .map(Transform::compute_affine)
-                .unwrap_or_default(),
+            player_transform.compute_affine(),
             SceneEntityId::PLAYER,
             true,
         ),
