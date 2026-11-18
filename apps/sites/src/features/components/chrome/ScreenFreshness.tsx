@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useRevalidator } from "react-router";
-import FreshnessNotice from "@ui/components/FreshnessNotice";
-import type { PublicFreshness } from "@ui/data/screens/section";
+import FreshnessNotice from "@dcl/one-ui/apps/sites/shared/FreshnessNotice";
+import type { PublicFreshness } from "@web-core/freshness/section";
 
 export default function ScreenFreshness({ freshness }: { freshness?: PublicFreshness }) {
   const { revalidate, state } = useRevalidator();

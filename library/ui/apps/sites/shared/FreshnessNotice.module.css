@@ -1,24 +1,23 @@
-.freshness-notice {
+.root {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
-  padding: 12px 20px;
-  color: var(--text);
-  background: var(--panel-2);
-  font-family: var(--font-sans);
+  gap: var(--dcl-space-8) var(--dcl-space-16);
+  padding: var(--dcl-space-12) calc(var(--dcl-space-16) + var(--dcl-space-4));
+  color: var(--dcl-text-primary);
+  background: var(--dcl-bg-surface);
 }
-.freshness-notice button {
+.retry {
   color: inherit;
   background: transparent;
   border: 0;
-  padding: 4px;
+  padding: var(--dcl-space-4);
   font: inherit;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
 }
-.freshness-notice button:focus-visible {
+.retry:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 3px;
 }
