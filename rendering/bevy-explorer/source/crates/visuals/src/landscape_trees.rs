@@ -2,7 +2,7 @@
 //!
 //! Only parcels confirmed empty carry them: a parcel that is unknown, occupied or outside the
 //! terrain counts as occupied, and an instance whose footprint reaches such a parcel is hidden.
-//! They stand within the Landscape Distance of the player, on the eased terrain.
+//! They stand within the Landscape Distance of the player, on the terrain.
 
 use bevy::{
     asset::{embedded_asset, embedded_path, RenderAssetUsages},
@@ -377,7 +377,7 @@ fn desired_trees(
     desired
 }
 
-/// Spawn and drop the layout's instances around the player, and keep them on the eased terrain.
+/// Spawn and drop the layout's instances around the player, and keep them on the terrain.
 fn update_trees(
     mut commands: Commands,
     landscape: Landscape,
@@ -458,7 +458,7 @@ fn update_trees(
     let resnap = |parcel: IVec2| {
         changes.relayout
             || changes.params
-            || changes.eased.is_some_and(|(min, max)| {
+            || changes.targets.is_some_and(|(min, max)| {
                 (min - 1).cmple(parcel).all() && (max + 1).cmpge(parcel).all()
             })
     };

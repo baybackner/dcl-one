@@ -7,6 +7,7 @@ use bevy::{
         hash::FixedHasher,
     },
     prelude::*,
+    render::camera::CameraUpdateSystem,
     transform::systems::{mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms},
 };
 use common::{anim_last_system, sets::PostUpdateSets, util::ModifyComponentExt};
@@ -85,12 +86,17 @@ pub fn configure_post_update_sets(app: &mut App) {
             PostUpdateSets::Nametag,
             PostUpdateSets::AttachSync,
             PostUpdateSets::Billboard,
+            PostUpdateSets::CameraFit,
         )
             .chain()
             .after(GltfLinkSet)
             .after(anim_last_system!())
             .before(TransformSystem::TransformPropagate)
             .before(process_scene_lifecycle),
+    );
+    app.configure_sets(
+        PostUpdate,
+        PostUpdateSets::CameraFit.after(CameraUpdateSystem),
     );
 }
 
