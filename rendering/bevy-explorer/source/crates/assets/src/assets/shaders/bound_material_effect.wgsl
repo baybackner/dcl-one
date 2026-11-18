@@ -122,15 +122,18 @@ return out;
 
 // the avatar outline (scene_material::toon, which holds the constants and the CPU twin of the
 // width): a darker, more saturated tone of the surface, base being its base colour, that thins
-// with the avatar's distance from the camera and stops at the cutoff distance. Distances are to
-// the avatar's origin, so the whole avatar gains or loses its outline at once. A pipeline
-// importing this needs scene_material::toon::toon_shader_defs
+// with the mesh's distance from the camera and, in a perspective view, stops at the cutoff
+// distance. Distances are to the mesh's origin, so a whole mesh gains or loses its outline at
+// once. An orthographic view has no cutoff: its camera stands back however large it draws the
+// avatar (the avatar preview). A pipeline importing this needs
+// scene_material::toon::toon_shader_defs
 #ifdef TOON_OUTLINE_WIDTH_M
 fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, instance_index: u32, view_z: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
     let to_camera = mesh_functions::get_world_from_local(instance_index)[3].xyz - view.world_position;
     let sqr_distance = dot(to_camera, to_camera);
-    // past the cutoff there is no line, and no prepass read
-    if sqr_distance > bitcast<f32>(#{TOON_OUTLINE_MAX_SQR_DISTANCE}u) {
+    let perspective = view.clip_from_view[3].w != 1.0;
+    // past the cutoff a perspective view has no line, and no prepass read
+    if perspective && sqr_distance > bitcast<f32>(#{TOON_OUTLINE_MAX_SQR_DISTANCE}u) {
         return color_in;
     }
     // the width in metres falls from full at the nearest distance to none at the farthest, and
@@ -139,7 +142,7 @@ fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, insta
     let falloff = 1.0 - smoothstep(bitcast<f32>(#{TOON_OUTLINE_NEAREST_M}u), bitcast<f32>(#{TOON_OUTLINE_FARTHEST_M}u), sqrt(sqr_distance));
     let focal_px = view.clip_from_view[1][1] * view.viewport.w * 0.5;
     var width_px = bitcast<f32>(#{TOON_OUTLINE_WIDTH_M}u) * falloff * focal_px;
-    if view.clip_from_view[3].w != 1.0 {
+    if perspective {
         width_px /= view_z;
     }
     // the line is not lit: its colour is in the base colour's space, scaled by one light unit to

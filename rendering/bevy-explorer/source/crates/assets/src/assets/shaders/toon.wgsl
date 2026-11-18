@@ -3,7 +3,9 @@
 // - the sun (the brightest directional light) gives a half-Lambert, scaled down to half in its
 //   cast shadow, that picks the base colour or one of two grey shades in two feathered steps;
 // - the light colour is the sun in light units, saturated, and floored by the ambient light
-//   times a gain, so avatars dim at night but stay visible;
+//   times a gain, so avatars dim at night but stay visible. The ambient light is the sky
+//   environment map's where the view has it, and the view's flat ambient light where it has not,
+//   so a camera lit flat lights avatars flat;
 // - a white rim light on the silhouette, in the same light colour.
 // No point or spot light reaches the avatar (decisions.md).
 //
@@ -57,10 +59,10 @@ fn toon_diffuse(n_dot_l: f32, shadow: f32, light: vec3<f32>) -> vec3<f32> {
 
 // the light colour: the sun in light units, saturated so a bright sun never lifts avatars past
 // white, and floored by the ambient light times a gain and by a minimum so they stay visible
-fn toon_light(sun_lux: vec3<f32>, ambient_unity: vec3<f32>) -> vec3<f32> {
+fn toon_light(sun_lux: vec3<f32>, ambient: vec3<f32>) -> vec3<f32> {
     let unlit = bitcast<f32>(#{TOON_UNLIT_INTENSITY}u);
     let unlit_floor = bitcast<f32>(#{TOON_UNLIT_FLOOR}u);
-    let default_light = saturate(max(ambient_unity, vec3(unlit_floor)) * unlit);
+    let default_light = saturate(max(ambient, vec3(unlit_floor)) * unlit);
     return max(default_light, saturate(sun_lux / bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u)));
 }
 
@@ -69,6 +71,14 @@ fn toon_light(sun_lux: vec3<f32>, ambient_unity: vec3<f32>) -> vec3<f32> {
 // two, or the light from below where that is brighter
 fn toon_ambient(up: vec3<f32>, down: vec3<f32>) -> vec3<f32> {
     return max(0.5 * (up + down), down);
+}
+
+// a view's flat ambient light (the lights uniform's ambient_color: colour times brightness) in
+// light units. The pbr path lights a white surface by the flat ambient at that value, and by a
+// sun facing it at its illuminance over pi, so one light unit of flat ambient is the unit's lux
+// over pi
+fn toon_flat_ambient(ambient_color: vec3<f32>) -> vec3<f32> {
+    return max(ambient_color, vec3(0.0)) * PI / bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u);
 }
 
 #ifdef ENVIRONMENT_MAP
@@ -130,20 +140,24 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
         shadow = fetch_directional_shadow(sun, world_position, vertex_n, view_z);
     }
 
-    // the ambient light in light units: the diffuse irradiance the pbr path's envmap lookup gives
-    // a white surface facing up and down here, before the dielectric factor (0.96) the world's
-    // diffuse takes: avatars take the whole irradiance (decisions.md). A scene's ambient
-    // override and the ambient brightness setting reach avatars as they reach the world. Without
-    // the environment map there is none, leaving the floor
-    var ambient_unity = vec3(0.0);
+    // the ambient light in light units. With the sky environment map it is the diffuse
+    // irradiance the pbr path's envmap lookup gives a white surface facing up and down here,
+    // before the dielectric factor (0.96) the world's diffuse takes: avatars take the whole
+    // irradiance (decisions.md). A scene's ambient override and the ambient brightness setting
+    // reach avatars as they reach the world; the flat ambient light is not read, being there
+    // only the level the sky reflections are drawn towards. Without the environment map the
+    // flat ambient light is the view's ambient, as it is for the world, so a camera lit flat
+    // (the avatar preview) lights avatars flat
 #ifdef ENVIRONMENT_MAP
     let cluster_index = clustered_forward::fragment_cluster_index(pbr_input.frag_coord.xy, view_z, pbr_input.is_orthographic);
     var clusterable_object_index_ranges = clustered_forward::unpack_clusterable_object_index_ranges(cluster_index);
     let up = toon_irradiance(vec3(0.0, 1.0, 0.0), world_position.xyz, &clusterable_object_index_ranges);
     let down = toon_irradiance(vec3(0.0, -1.0, 0.0), world_position.xyz, &clusterable_object_index_ranges);
-    ambient_unity = toon_ambient(up * view.exposure / unit, down * view.exposure / unit);
+    let ambient = toon_ambient(up * view.exposure / unit, down * view.exposure / unit);
+#else
+    let ambient = toon_flat_ambient(lights.ambient_color.rgb);
 #endif
-    let light = toon_light(sun_lux, ambient_unity);
+    let light = toon_light(sun_lux, ambient);
 
     let diffuse = toon_diffuse(dot(vertex_n, l), shadow, light);
 

@@ -2,8 +2,11 @@
 //! of toon.wgsl's light model, in this client's light units (`common::sky_preset::LIGHT_UNIT_LUX`).
 //! The sun's half-Lambert picks the base colour or one of two grey shades in two feathered steps,
 //! under a light colour that is the sun in light units, saturated, and floored by the ambient
-//! light so avatars stay visible at night. The outline is a tone of the surface it borders, thins
-//! with the avatar's distance and stops at 8 m.
+//! light so avatars stay visible at night: the sky environment map's where the view has it, the
+//! view's flat ambient light where it has not. The outline is a tone of the surface it borders,
+//! thins with the avatar's distance and, in a perspective view, stops at 8 m.
+
+use std::f32::consts::PI;
 
 use bevy::{math::Vec3, render::render_resource::ShaderDefVal};
 use common::sky_preset::LIGHT_UNIT_LUX;
@@ -42,7 +45,7 @@ pub const OUTLINE_FARTHEST_M: f32 = 100.0;
 /// The grey of the outline, taken times the base colour twice: a darker, more saturated tone of
 /// the surface it borders, not lit
 pub const OUTLINE_COLOR: f32 = 0.6320754;
-/// The squared camera distance beyond which an avatar has no outline: 8 m
+/// The squared camera distance beyond which an avatar has no outline in a perspective view: 8 m
 pub const OUTLINE_MAX_SQR_DISTANCE: f32 = 64.0;
 
 /// The constants above, and `LIGHT_UNIT_LUX` as `TOON_LIGHT_UNIT_LUX`, for the pipeline of every
@@ -107,13 +110,13 @@ pub fn toon_diffuse(n_dot_l: f32, shadow: f32, light: Vec3) -> Vec3 {
 }
 
 /// The light colour: `max(default_light, saturate(sun_lux / LIGHT_UNIT_LUX))` per channel, with
-/// the floor `default_light = saturate(max(ambient_unity, UNLIT_FLOOR) * UNLIT_INTENSITY)`.
+/// the floor `default_light = saturate(max(ambient, UNLIT_FLOOR) * UNLIT_INTENSITY)`.
 /// Saturated so a bright sun never lifts avatars past white, floored so they stay visible at
-/// night. `sun_lux` is the sun's colour times its illuminance; `ambient_unity` is the ambient
-/// light in light units (`toon_ambient`).
-pub fn toon_light(sun_lux: Vec3, ambient_unity: Vec3) -> Vec3 {
-    let default_light = (ambient_unity.max(Vec3::splat(UNLIT_FLOOR)) * UNLIT_INTENSITY)
-        .clamp(Vec3::ZERO, Vec3::ONE);
+/// night. `sun_lux` is the sun's colour times its illuminance; `ambient` is the ambient light in
+/// light units (`toon_ambient` with the sky environment map, `toon_flat_ambient` without).
+pub fn toon_light(sun_lux: Vec3, ambient: Vec3) -> Vec3 {
+    let default_light =
+        (ambient.max(Vec3::splat(UNLIT_FLOOR)) * UNLIT_INTENSITY).clamp(Vec3::ZERO, Vec3::ONE);
     default_light.max((sun_lux / LIGHT_UNIT_LUX).clamp(Vec3::ZERO, Vec3::ONE))
 }
 
@@ -122,6 +125,15 @@ pub fn toon_light(sun_lux: Vec3, ambient_unity: Vec3) -> Vec3 {
 /// approximated by the mean of the two, or the light from below where that is brighter.
 pub fn toon_ambient(up: Vec3, down: Vec3) -> Vec3 {
     (0.5 * (up + down)).max(down)
+}
+
+/// The ambient light of a view without the sky environment map, in light units, from its flat
+/// ambient light `ambient_color`: the `AmbientLight`'s linear colour times its brightness, as the
+/// lights uniform carries it. The pbr path lights a white surface by the flat ambient at that
+/// value, and by a sun facing it at its illuminance over pi, so one light unit of flat ambient is
+/// `LIGHT_UNIT_LUX / PI`.
+pub fn toon_flat_ambient(ambient_color: Vec3) -> Vec3 {
+    ambient_color.max(Vec3::ZERO) * PI / LIGHT_UNIT_LUX
 }
 
 /// The outline's width in pixels on a fragment `view_z` metres deep, for an avatar
@@ -135,9 +147,10 @@ pub fn outline_width_px(camera_distance: f32, view_z: f32, focal_px: f32) -> f32
     OUTLINE_WIDTH_M * (1.0 - t * t * (3.0 - 2.0 * t)) * focal_px / view_z
 }
 
-/// Whether an avatar whose origin is `sqr_distance` square metres from the camera has an outline.
-pub fn outline_visible(sqr_distance: f32) -> bool {
-    sqr_distance <= OUTLINE_MAX_SQR_DISTANCE
+/// Whether a mesh whose origin is `sqr_distance` square metres from the camera has an outline.
+/// An orthographic view has no cutoff: its camera stands back however large it draws the avatar.
+pub fn outline_visible(sqr_distance: f32, orthographic: bool) -> bool {
+    orthographic || sqr_distance <= OUTLINE_MAX_SQR_DISTANCE
 }
 
 #[cfg(test)]
@@ -149,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn bands_follow_unity_steps() {
+    fn bands_follow_the_steps() {
         // lit, half-Lambert 1
         assert!((toon_band(1.0, 1.0) - 1.0).abs() < 1e-6);
         // half-Lambert 0: below both steps
@@ -209,6 +222,41 @@ mod tests {
     }
 
     #[test]
+    fn flat_ambient_lights_a_view_without_the_sky_flat() {
+        // one light unit of flat ambient lights a white surface as a sun of one light unit does
+        assert!(close(
+            toon_flat_ambient(Vec3::splat(LIGHT_UNIT_LUX / PI)),
+            Vec3::ONE
+        ));
+        // a brightness of 5000 (an override of 5 at the default ambient setting of 50, times
+        // 20) is 5 light units and a tinted ambient keeps its tint
+        assert!(close(
+            toon_flat_ambient(Vec3::new(5000.0, 2500.0, 0.0)),
+            Vec3::new(5000.0, 2500.0, 0.0) * PI / LIGHT_UNIT_LUX
+        ));
+        assert!((toon_flat_ambient(Vec3::splat(5000.0)).x - 5.009_469).abs() < 1e-4);
+        // which saturates the floor: the avatar is lit flat at 1 with no sun at all
+        assert_eq!(
+            toon_light(Vec3::ZERO, toon_flat_ambient(Vec3::splat(5000.0))),
+            Vec3::ONE
+        );
+        // a dim flat ambient lifts the floor by the gain
+        assert!(close(
+            toon_light(
+                Vec3::ZERO,
+                toon_flat_ambient(Vec3::splat(0.1 * LIGHT_UNIT_LUX / PI))
+            ),
+            Vec3::splat(0.4)
+        ));
+        // none leaves the minimum, and a negative value counts as none
+        assert_eq!(
+            toon_light(Vec3::ZERO, toon_flat_ambient(Vec3::ZERO)),
+            Vec3::splat(0.2)
+        );
+        assert_eq!(toon_flat_ambient(Vec3::splat(-1.0)), Vec3::ZERO);
+    }
+
+    #[test]
     fn ambient_takes_the_brighter_of_average_and_down() {
         assert!(close(
             toon_ambient(Vec3::splat(0.4), Vec3::splat(0.2)),
@@ -237,7 +285,10 @@ mod tests {
         assert_eq!(outline_width_px(100.0, 100.0, focal), 0.0);
         assert_eq!(outline_width_px(150.0, 150.0, focal), 0.0);
         assert!(outline_width_px(8.0, 8.0, focal) < 0.3);
-        assert!(outline_visible(64.0) && !outline_visible(64.0001));
+        assert!(outline_visible(64.0, false) && !outline_visible(64.0001, false));
+        // an orthographic view outlines at any distance, at the width its distance gives
+        assert!(outline_visible(64.0001, true) && outline_visible(1e6, true));
+        assert!(outline_width_px(8.5, 1.0, focal) > 0.98 * 0.002 * focal);
     }
 
     #[test]
