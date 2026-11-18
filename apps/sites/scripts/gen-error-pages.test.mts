@@ -12,6 +12,9 @@ const SCRIPT = path.join(SITES, "scripts/gen-error-pages.mts");
 const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "gen-error-pages-"));
 const run = (...args: string[]) =>
   spawnSync(process.execPath, [SCRIPT, ...args], { cwd: SITES, env: { ...process.env, ERROR_PAGES_OUT: OUT }, encoding: "utf8" });
+const ASSETS = fileURLToPath(new URL("../../../library/ui/apps/sites/assets/", import.meta.url));
+const STATUS_PAGES = STATIC_ERROR_STATUSES.filter((s) => s !== 404);
+const webpUri = (file: string) => `data:image/webp;base64,${fs.readFileSync(path.join(ASSETS, file)).toString("base64")}`;
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -26,8 +29,8 @@ it("writes one page per static status and nothing else", () => {
   expect(STATIC_ERROR_STATUSES).toEqual(expect.arrayContaining([404, 429, 500, 503]));
 });
 
-it("renders each page with its copy, the home link and the right second action", () => {
-  for (const status of STATIC_ERROR_STATUSES) {
+it("renders each page but 404 as the status page, with its copy, the home link and the right second action", () => {
+  for (const status of STATUS_PAGES) {
     const html = fs.readFileSync(path.join(OUT, `${status}.html`), "utf8");
     const copy = statusCopy(status);
     expect(html, String(status)).toContain(`<title>${status} · ${escape(copy.eyebrow)} · Decentraland</title>`);
@@ -51,10 +54,27 @@ it("inlines the art as real webp bytes, so a Git LFS pointer cannot pass", () =>
   }
 });
 
+it("renders 404 as the Sites not-found page: its heading, copy, links, avatar art and the background's still image", () => {
+  const html = fs.readFileSync(path.join(OUT, "404.html"), "utf8");
+  expect(html).toContain('data-status="404"');
+  expect(html).toMatch(/<p [^>]*aria-hidden="true">404<\/p>/);
+  const heading = /<h1[^>]*>(.*?)<\/h1>/s.exec(html);
+  expect(heading?.[1]?.replace(/<[^>]+>/g, "")).toBe("Oops! This page has left the world.");
+  expect(html).toContain(
+    "The link may be outdated, but Decentraland is still live. Find community events, DJ sets, creator-built games, and new experiences happening in-world.",
+  );
+  expect(html).toMatch(/<a [^>]*aria-label="Decentraland Home"[^>]*href="\/"[^>]*><svg[^>]*>.*?<\/svg><\/a>/s);
+  expect(html).toMatch(/<a [^>]*href="\/whats-on"[^>]*>.*?See Events.*?<\/a>/s);
+  expect(html).toContain(`src="${webpUri("errors/not-found-avatar.webp")}"`);
+  const backgrounds = [...html.matchAll(/background-image:\s*url\(["']?([^"')]+)["']?\)/g)].map((m) => m[1]);
+  expect(backgrounds).toContain(webpUri("custom-welcome-background.webp"));
+  expect(html).not.toContain("Go to homepage");
+});
+
 it("is self-contained: no external stylesheet, script or image, and every custom property it reads is defined", () => {
   for (const status of STATIC_ERROR_STATUSES) {
     const html = fs.readFileSync(path.join(OUT, `${status}.html`), "utf8");
-    expect(html, String(status)).not.toMatch(/<link [^>]*rel="stylesheet"|<script[ >]|src="(?!data:)/);
+    expect(html, String(status)).not.toMatch(/<link [^>]*rel="stylesheet"|<script[ >]|src="(?!data:)|url\((?!["']?(?:data:|#))/);
     const defined = new Set([...html.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
     const used = [...new Set([...html.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))];
     expect(used.filter((name) => !defined.has(name)), String(status)).toEqual([]);
