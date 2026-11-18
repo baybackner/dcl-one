@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 
 import NotFound from "@ui/shop/pages/NotFound";
-import { resolveShopAlias } from "@ui/shop/routes";
+import { resolveShopAlias } from "@shop/route-aliases";
 
 import { shopLoader } from "../shop/loader.server";
 import { ShopPage, shopHeaders, shopMeta } from "../shop/page";

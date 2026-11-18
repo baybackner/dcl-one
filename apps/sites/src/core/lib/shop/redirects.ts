@@ -8,7 +8,7 @@
 
 import { landIdentity, landRedirectTarget } from "@ui/shop/land/redirects";
 import { isNameRegistrar, landCategoryOf } from "@shop/land/contracts";
-import { aliasTarget, resolveShopAlias, SHOP_BASE } from "@ui/shop/routes";
+import { aliasTarget, resolveShopAlias, SHOP_BASE } from "@shop/route-aliases";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const NUMBER = /^[0-9]+$/;

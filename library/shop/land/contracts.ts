@@ -53,6 +53,10 @@ export function landNetwork(chainId: ChainId): LandNetwork {
   return found;
 }
 
+export function landTokenId(x: number, y: number): string {
+  return ((BigInt.asUintN(128, BigInt(x)) << 128n) | BigInt.asUintN(128, BigInt(y))).toString();
+}
+
 export type LandCategory = "parcel" | "estate";
 
 /** Which LAND registry a contract is, on any configured network; null for anything else. */

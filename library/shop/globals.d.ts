@@ -15,6 +15,7 @@ declare var URLSearchParams: {
     set(name: string, value: string): void;
     get(name: string): string | null;
     toString(): string;
+    [Symbol.iterator](): IterableIterator<[name: string, value: string]>;
   };
 };
 // A caller's signal: handed on to the host's transport as it came, and asked only whether it has aborted (a read that
