@@ -19,7 +19,7 @@ export const settings = {
   // 1 = ignore engine-provided locomotion settings and use the values above
   // (so tuning always takes effect). 0 = defer to engine locomotion when present.
   // Production defaults to 0 so a deployment honors the engine's locomotion
-  // settings; flip to 1 (or via the tuner) when tuning local speeds in isolation.
+  // settings; flip to 1 when tuning local speeds in isolation.
   forceLocalSpeeds: 0,
 
   // --- Animation phasing ---

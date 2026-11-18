@@ -925,7 +925,7 @@ fn step_reach() -> f64 {
     f64::from(PLAYER_COLLIDER_RADIUS) * (1.0 - f64::from(MAX_GROUND_INCLINE.sin())) + 0.01
 }
 /// How far a move slower than [`step_reach`] a frame pushes against a riser before it steps onto
-//// it: a walk pauses at each riser about as long as the reference client's.
+/// it: the default walk (1.5 m/s) pauses about 0.1 s at each riser, so climbing reads as stepping.
 const STEP_PUSH: f64 = 0.15;
 
 /// Step offset from a riser too steep to stand on: up by at most [`MAX_STEP_HEIGHT`] (less under a

@@ -24,8 +24,8 @@ export function initParamters(
     modifiers: DeepReadonlyObject<PBInputModifier> | undefined
 ) {
     // When forceLocalSpeeds is on, ignore engine-provided locomotion so the
-    // tuner's speed values always take effect; otherwise prefer engine values
-    // and fall back to the tuner's.
+    // speeds in settings.ts always take effect; otherwise prefer engine values
+    // and fall back to settings.ts.
     const useLocal = settings.forceLocalSpeeds !== 0;
     const baseSprintSpeed = useLocal ? settings.sprintSpeed : (locomotion?.runSpeed ?? settings.sprintSpeed);
     const baseJogSpeed = useLocal ? settings.jogSpeed : (locomotion?.jogSpeed ?? settings.jogSpeed);
@@ -34,7 +34,7 @@ export function initParamters(
     const baseJumpHeight = useLocal ? settings.jumpHeight : (locomotion?.jumpHeight ?? settings.jumpHeight);
     const baseSprintJumpHeight = useLocal ? settings.sprintJumpHeight : (locomotion?.runJumpHeight ?? settings.sprintJumpHeight);
 
-    // Double-jump height and glide speeds have no tuner setting; the constants
+    // Double-jump height and glide speeds have no entry in settings.ts; the constants
     // are the local defaults, overridden by the engine locomotion component
     // unless forceLocalSpeeds pins them local.
     doubleJumpHeight = useLocal ? DOUBLE_JUMP_HEIGHT : (locomotion?.doubleJumpHeight ?? DOUBLE_JUMP_HEIGHT);

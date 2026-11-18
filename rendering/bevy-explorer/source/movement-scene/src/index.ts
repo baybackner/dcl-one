@@ -333,7 +333,7 @@ var glidePrevOrientation = 0;
 export var glideTurnRate = 0;
 // Smoothed procedural glide bank (roll, degrees), eased toward a target derived from
 // glideTurnRate while gliding and back to 0 otherwise. Published as AvatarMovement.tiltRoll
-// so the engine banks the whole avatar — replaces the old discrete left/right lean clips.
+// so the engine banks the whole avatar; no separate left/right lean clips are needed.
 export var glideTilt = 0;
 
 // Glide animation phase, from the vertical model's glider prop (glideProp): 'deploy' plays the
@@ -864,8 +864,8 @@ function applyMovement() {
 
   // Procedural glide bank: roll proportional to how hard we're turning, clamped to
   // GLIDE_TILT_FULL_ANGLE and eased over GLIDE_TILT_DAMP_TIME. glideLeanRate (deg/s) is the
-  // turn rate at which the bank reaches full angle — the same tuning knob the old discrete
-  // lean used as its threshold. Target is 0 when not gliding so we ease back upright.
+  // turn rate at which the bank reaches full angle. Target is 0 when not gliding so we ease
+  // back upright.
   const tiltTarget = isGliding
     ? Math.max(
         -GLIDE_TILT_FULL_ANGLE,
