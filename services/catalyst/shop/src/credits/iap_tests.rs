@@ -245,7 +245,7 @@ async fn the_device_path_credits_only_a_transaction_bought_for_the_signer() {
 }
 
 #[tokio::test]
-async fn a_refund_the_balance_cannot_cover_queues_live_signed_credits_for_revocation() {
+async fn a_refund_the_balance_cannot_cover_queues_signed_credits_up_to_the_uncovered_part() {
     let Some(pool) = pool().await else { return };
     let c = chain(ChainSpec::default());
     let app = setup(&pool, &c, open_limits());
@@ -277,9 +277,46 @@ async fn a_refund_the_balance_cannot_cover_queues_live_signed_credits_for_revoca
     .await
     .unwrap();
 
+    // A second purchase: 200 available, 110 pledged, so a 100 refund leaves 10 uncovered,
+    // which the newest signed credit covers; the older one stays live.
+    let (_, out) = notify(
+        &app,
+        c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&tx_id(), PRODUCT, Some(&token))),
+        ),
+    )
+    .await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let older_id = format!("auth-{}", uuid::Uuid::new_v4().simple());
+    let older_hash = format!(
+        "0x{}",
+        hex::encode(alloy_primitives::keccak256(older_id.as_bytes()))
+    );
+    sqlx::query(
+        "INSERT INTO credits.authorizations (id, address, usd_cents, amount_wei, status, expires_at, chain_id, contract, credit_hash, created_at) \
+         VALUES ($1, $2, 300, 1, 'authorized', timezone('UTC', now()) + interval '5 minutes', 137, $3, $4, timezone('UTC', now()) - interval '1 minute')",
+    )
+    .bind(&older_id)
+    .bind(&w.address)
+    .bind("0x00000000000000000000000000000000000000c2")
+    .bind(&older_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let (_, out) = notify(&app, c.notification("REFUND", Some(signed_tx))).await;
     assert_eq!(out["action"], "refunded", "{out}");
     assert_eq!(out["revocations"], 1);
+    let older_queued: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM credits.revocations WHERE credit_hash = $1)",
+    )
+    .bind(&older_hash)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!older_queued, "only the uncovered part is revoked");
+    assert_eq!(available(&pool, &w.address).await, "100");
     let (reason, status): (String, String) =
         sqlx::query_as("SELECT reason, status FROM credits.revocations WHERE credit_hash = $1")
             .bind(&hash)
@@ -678,4 +715,562 @@ async fn concurrent_registrations_of_one_wallet_all_return_its_token() {
         assert_eq!(status, StatusCode::OK, "{out}");
         assert_eq!(out["data"]["appAccountToken"], account_token(&w.address));
     }
+}
+
+fn bearer() -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+        "authorization",
+        "Bearer op-secret-123456789012345678901234".parse().unwrap(),
+    );
+    h
+}
+
+fn setup_with_admin(pool: &PgPool, c: &Chain, limits: Limits) -> Router {
+    app(test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(c, limits)),
+            admin_token: Some("op-secret-123456789012345678901234"),
+            ..StateCfg::default()
+        },
+    ))
+}
+
+async fn row(pool: &PgPool, id: &str) -> Option<(String, Option<String>, Option<String>)> {
+    sqlx::query_as(
+        "SELECT status, address, held_reason FROM credits.iap_transactions WHERE transaction_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+async fn held_ids(app: &Router) -> Vec<String> {
+    let (status, _, out) = send(
+        app,
+        "GET",
+        "/credits/credits/iap/held?limit=200",
+        bearer(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    out["held"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["appleTransactionId"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_purchase_over_a_wallet_cap_is_held_until_an_operator_credits_it() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let token = register(&app, &w).await;
+    let id = tx_id();
+    let (status, out) = notify(
+        &app,
+        c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&id, PRODUCT, Some(&token))),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["error"], "wallet_cap_exceeded");
+    assert_eq!(out["held"], true);
+    assert_eq!(
+        row(&pool, &id).await,
+        Some((
+            "held".into(),
+            Some(w.address.clone()),
+            Some("total_limit".into())
+        ))
+    );
+    assert!(held_ids(&app).await.contains(&id));
+    assert_eq!(available(&pool, &w.address).await, "0");
+
+    // A held purchase is never credited to another wallet.
+    let other = scratch_wallet();
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": other.address, "appleTransactionId": id, "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": w.address, "appleTransactionId": id, "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["alreadyExisted"], false);
+    assert_eq!(available(&pool, &w.address).await, "100");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
+    assert!(!held_ids(&app).await.contains(&id));
+
+    // The same transaction again, for another wallet: already credited elsewhere.
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": other.address, "appleTransactionId": id, "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(available(&pool, &other.address).await, "0");
+}
+
+#[tokio::test]
+async fn a_held_purchase_is_credited_by_a_later_delivery() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_held_retry").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let w = scratch_wallet();
+    let token = w.address.clone();
+
+    // Over the node's ceiling, then an unknown product: both held and retried by Apple.
+    let closed = setup(
+        &pool,
+        &c,
+        Limits {
+            daily_cents: 0,
+            ..open_limits()
+        },
+    );
+    let capped = tx_id();
+    let signed = c.transaction(&capped, PRODUCT, Some(&token));
+    let (status, _) = notify(
+        &closed,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        row(&pool, &capped).await.unwrap().2.as_deref(),
+        Some("service_daily_limit")
+    );
+    let unknown = tx_id();
+    let unknown_signed = c.transaction(&unknown, "org.example.later", Some(&token));
+    let (status, _) = notify(
+        &closed,
+        c.notification("ONE_TIME_CHARGE", Some(unknown_signed.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        row(&pool, &unknown).await.unwrap().2.as_deref(),
+        Some("unknown_product")
+    );
+
+    // The ceiling resets and the product is configured: the retries credit both.
+    let mut reopened = iap(&c, open_limits());
+    Arc::get_mut(&mut reopened)
+        .unwrap()
+        .catalog
+        .insert("org.example.later".into(), 50);
+    let app = app(test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(reopened),
+            ..StateCfg::default()
+        },
+    ));
+    let (_, out) = notify(&app, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(unknown_signed)),
+    )
+    .await;
+    assert_eq!(out["action"], "minted", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "150");
+    assert_eq!(row(&pool, &capped).await.unwrap().0, "paid");
+    let report = test_state(pool.clone(), StateCfg::default())
+        .credits
+        .reconcile()
+        .await
+        .unwrap();
+    assert!(report.purchase_grant_mismatches.is_empty());
+    drop(app);
+    drop(closed);
+    own.drop().await;
+}
+
+#[tokio::test]
+async fn a_purchase_naming_no_wallet_is_held_and_credited_by_the_device() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let token = account_token(&w.address);
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&token));
+    let (status, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["error"], "unresolvable_app_account_token");
+    assert_eq!(out["held"], true);
+    let token_kept: Option<String> = sqlx::query_scalar(
+        "SELECT app_account_token FROM credits.iap_transactions WHERE transaction_id = $1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(token_kept, Some(token));
+    assert!(held_ids(&app).await.contains(&id));
+
+    let (_, out) = call(
+        &app,
+        &w,
+        "post",
+        "/credits/credits/iap/verify",
+        &[],
+        Some(json!({ "jwsRepresentation": signed })),
+    )
+    .await;
+    assert_eq!(out["data"]["credited"], true, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
+}
+
+#[tokio::test]
+async fn a_quantity_out_of_range_is_held_without_a_retry() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let id = tx_id();
+    let mut p = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&w.address));
+    p["quantity"] = json!(11);
+    let (status, out) = notify(&app, c.notification("ONE_TIME_CHARGE", Some(c.sign(&p)))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["error"], "quantity_out_of_range");
+    assert_eq!(
+        row(&pool, &id).await,
+        Some((
+            "held".into(),
+            Some(w.address.clone()),
+            Some("quantity_out_of_range".into())
+        ))
+    );
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+#[tokio::test]
+async fn a_transaction_revoked_when_first_seen_is_never_credited() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let id = tx_id();
+    let mut revoked = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&w.address));
+    revoked["revocationDate"] = json!(1_700_000_000_000i64);
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(c.sign(&revoked))),
+    )
+    .await;
+    assert_eq!(out["error"], "revoked_transaction", "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+
+    let (_, out) = notify(
+        &app,
+        c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&id, PRODUCT, Some(&w.address))),
+        ),
+    )
+    .await;
+    assert_eq!(out["error"], "refunded_transaction", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+#[tokio::test]
+async fn a_reversed_refund_grants_the_charge_back_again() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_refund_reversed").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let w = scratch_wallet();
+    let signed = c.transaction(&tx_id(), PRODUCT, Some(&w.address));
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "minted", "{out}");
+    for _ in 0..2 {
+        let (_, out) = notify(&app, c.notification("REFUND", Some(signed.clone()))).await;
+        assert_eq!(out["action"], "refunded", "{out}");
+        assert_eq!(available(&pool, &w.address).await, "0");
+        let (_, out) = notify(
+            &app,
+            c.notification("REFUND_REVERSED", Some(signed.clone())),
+        )
+        .await;
+        assert_eq!(out["action"], "reinstated", "{out}");
+        assert_eq!(available(&pool, &w.address).await, "100");
+    }
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+    let report = state.credits.reconcile().await.unwrap();
+    assert!(report.ok, "{report:?}");
+
+    // A refund that arrived before the purchase, then reversed: the purchase credits.
+    let early = c.transaction(&tx_id(), PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("REFUND", Some(early.clone()))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(early))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "200");
+    drop(app);
+    drop(state);
+    own.drop().await;
+}
+
+#[tokio::test]
+async fn a_partial_refund_charges_back_its_share() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let id = tx_id();
+    let (_, out) = notify(
+        &app,
+        c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&id, PRODUCT, Some(&w.address))),
+        ),
+    )
+    .await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let mut refunded = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&w.address));
+    refunded["revocationDate"] = json!(1_700_000_000_000i64);
+    refunded["revocationPercentage"] = json!(25_000);
+    let (_, out) = notify(&app, c.notification("REFUND", Some(c.sign(&refunded)))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "75");
+}
+
+#[tokio::test]
+async fn the_device_path_answers_the_cap_codes() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_verify_caps").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let w = scratch_wallet();
+    let token = account_token(&w.address);
+    let wallet_capped = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_daily_cents: 500,
+            ..open_limits()
+        },
+    );
+    let verify = |app: Router, id: String| {
+        let w = &w;
+        let signed = c.transaction(&id, PRODUCT, Some(&token));
+        async move {
+            call(
+                &app,
+                w,
+                "post",
+                "/credits/credits/iap/verify",
+                &[],
+                Some(json!({ "jwsRepresentation": signed })),
+            )
+            .await
+            .1
+        }
+    };
+    let out = verify(wallet_capped.clone(), tx_id()).await;
+    assert_eq!(
+        (out["code"].as_str(), out["reason"].as_str()),
+        (Some("cap_exceeded"), Some("daily_limit")),
+        "{out}"
+    );
+    let node_capped = setup(
+        &pool,
+        &c,
+        Limits {
+            daily_cents: 500,
+            ..open_limits()
+        },
+    );
+    let out = verify(node_capped.clone(), tx_id()).await;
+    assert_eq!(out["code"], "service_daily_limit", "{out}");
+    let mut other = super::apple::testkit::transaction_payload(&tx_id(), "nope", Some(&token));
+    other["quantity"] = json!(1);
+    let (_, out) = call(
+        &node_capped,
+        &w,
+        "post",
+        "/credits/credits/iap/verify",
+        &[],
+        Some(json!({ "jwsRepresentation": c.sign(&other) })),
+    )
+    .await;
+    assert_eq!(out["code"], "unknown_product", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+    drop(wallet_capped);
+    drop(node_capped);
+    own.drop().await;
+}
+
+#[tokio::test]
+async fn the_operator_credit_is_held_to_the_node_ceiling() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_operator_ceiling").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            daily_cents: 500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": w.address, "appleTransactionId": tx_id(), "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+    assert!(
+        held_ids(&app).await.is_empty(),
+        "an operator credit records no held row"
+    );
+    drop(app);
+    own.drop().await;
+}
+
+#[tokio::test]
+async fn imported_purchases_count_toward_the_caps() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, amount_cents, status, created_at) \
+         VALUES ($1, $2, $3, 100, 1000, 'imported', timezone('UTC', now()) - interval '30 days')",
+    )
+    .bind(tx_id())
+    .bind(PRODUCT)
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_, out) = call(
+        &app,
+        &w,
+        "post",
+        "/credits/credits/iap/quote",
+        &[],
+        Some(json!({ "productId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(
+        (out["code"].as_str(), out["reason"].as_str()),
+        (Some("cap_exceeded"), Some("total_limit")),
+        "{out}"
+    );
+    // An imported purchase is not this node's credit order.
+    let path = format!("/credits/users/{}/credit-orders", w.address);
+    let (_, out) = call(&app, &w, "get", &path, &[], None).await;
+    assert_eq!(out["total"], 0, "{out}");
+}
+
+#[tokio::test]
+async fn credit_orders_page_through_card_and_app_store_rows_once_each() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    // Every row at one instant: only the tie-break orders them.
+    sqlx::query(
+        "INSERT INTO credits.purchases (address, sku, credits, amount_cents, currency, status, created_at) \
+         VALUES ($1, 'pack', 10, 100, 'usd', 'paid', '2026-01-01')",
+    )
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..6 {
+        sqlx::query(
+            "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, amount_cents, status, credited_by, created_at) \
+             VALUES ($1, $2, $3, 100, 1000, 'paid', 'device', '2026-01-01')",
+        )
+        .bind(tx_id())
+        .bind(PRODUCT)
+        .bind(&w.address)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let state = test_state(pool.clone(), StateCfg::default());
+    let mut seen = std::collections::HashSet::new();
+    for offset in 0..7 {
+        let page = state
+            .credits
+            .credit_orders_history(&w.address, 1, offset)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 7);
+        assert!(seen.insert(page.orders[0].id.clone()), "offset {offset}");
+    }
+    assert_eq!(seen.len(), 7);
+    drop(app);
 }

@@ -1,12 +1,22 @@
--- An upstream transaction is kept as a `refunded` row without a wallet, so
--- the node never credits it again (a device's or a notification's later
--- delivery answers `refunded_transaction`). A later Apple refund of it is
--- not charged back: USD credits arrive as plain ledger grants and MANA ones
--- were never granted on the node (README, known limitations). A row the
--- node already holds is left alone.
+-- A USD-rail upstream purchase is kept as `imported` with its wallet, value
+-- and time: it counts toward the caps, and a later delivery finds it
+-- credited. Any other upstream transaction is kept as a `refunded` row
+-- without a wallet. Either way the node never credits it again (a device's
+-- or a notification's later delivery answers it credited or
+-- `refunded_transaction`). A later Apple refund of it is not charged back:
+-- USD credits arrive as plain ledger grants and MANA ones were never
+-- granted on the node (README, known limitations). A row the node already
+-- holds is left alone.
 INSERT INTO credits.iap_transactions
-    (transaction_id, product_id, status, refund_ref, refund_reason, refunded_at)
-SELECT transaction_id, product_id, 'refunded', 'credits-server', 'credited upstream',
-       timezone('UTC', now())
+    (transaction_id, product_id, address, credits, amount_cents, status,
+     refund_ref, refund_reason, refunded_at, created_at)
+SELECT transaction_id, product_id, address,
+       CASE WHEN address IS NOT NULL THEN round(amount_cents::numeric / 10, 1) END,
+       CASE WHEN address IS NOT NULL THEN amount_cents END,
+       CASE WHEN address IS NOT NULL THEN 'imported' ELSE 'refunded' END,
+       CASE WHEN address IS NULL THEN 'credits-server' END,
+       CASE WHEN address IS NULL THEN 'credited upstream' END,
+       CASE WHEN address IS NULL THEN timezone('UTC', now()) END,
+       COALESCE(created_at AT TIME ZONE 'UTC', timezone('UTC', now()))
 FROM stage
 ON CONFLICT (transaction_id) DO NOTHING;

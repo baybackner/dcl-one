@@ -5,9 +5,11 @@
 //!   Notifications V2. The signed payload is the authentication: a payload
 //!   that does not verify answers 400; once verified, `ONE_TIME_CHARGE`
 //!   credits the wallet registered for the transaction's account token and
-//!   `REFUND` reverses it. Every other outcome answers 200 except the ones
-//!   Apple should retry: an unknown product, a purchase over the node's daily
-//!   ceiling and a node without App Store configuration answer 503.
+//!   `REFUND` reverses it (`REFUND_REVERSED` undoes that). A purchase not
+//!   credited is held (`credits::iap`). Every other outcome answers 200
+//!   except the ones Apple should retry: an unknown product, a purchase over
+//!   the node's daily ceiling and a node without App Store configuration
+//!   answer 503.
 //! - `POST /credits/iap/verify` (`/v1/iap/verify`, signed fetch): the device
 //!   posts StoreKit's `jwsRepresentation`; it credits the signer only when the
 //!   transaction's account token is the signer's. Business outcomes answer
@@ -20,20 +22,24 @@
 //! - operator `POST /credits/iap` (`/admin/iap/credits`) and
 //!   `POST /credits/iap/refund` (`/admin/iap/refunds`): the same credit and
 //!   reversal for support, behind the operator bearer; the credit is held
-//!   to the node's daily ceiling, not the per-wallet caps.
+//!   to the node's daily ceiling, not the per-wallet caps. Operator
+//!   `GET /credits/iap/held` (`/admin/iap/held`) lists the held purchases.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{OriginalUri, State};
+use axum::extract::{OriginalUri, Query, State};
 use axum::http::{HeaderMap, Uri};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 
 use super::signer_from;
 use crate::credits::SharedState;
-use crate::credits::admin::{RequireAdmin, normalize_address};
+use crate::credits::admin::{RequireAdmin, normalize_address, paginate};
+use crate::credits::apple::Transaction;
 use crate::credits::errors::ApiError;
-use crate::credits::iap::{CapReason, Channel, CreditOutcome, Iap, Purchase, RefundOutcome};
+use crate::credits::iap::{
+    CapReason, Channel, CreditOutcome, HoldReason, Iap, Purchase, RefundOutcome, ReinstateOutcome,
+};
 use crate::types::UsdCents;
 
 fn configured(state: &SharedState) -> Result<&Iap, ApiError> {
@@ -72,58 +78,7 @@ pub async fn webhook(
         return Ok(Json(json!({ "ok": true, "skipped": true })));
     };
     match notification.notification_type.as_str() {
-        "ONE_TIME_CHARGE" => {
-            let Some(address) = state
-                .credits
-                .wallet_for_iap_token(t.app_account_token.as_deref())
-                .await?
-            else {
-                tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store purchase names no registered wallet: paid but not credited, reconcile by hand");
-                return Ok(Json(
-                    json!({ "ok": true, "error": "unresolvable_app_account_token" }),
-                ));
-            };
-            let outcome = state
-                .credits
-                .credit_iap(
-                    iap,
-                    Purchase {
-                        address: &address,
-                        transaction_id: &t.transaction_id,
-                        original_transaction_id: t.original_transaction_id.as_deref(),
-                        product_id: &t.product_id,
-                        quantity: t.quantity,
-                        revoked: t.revoked,
-                        channel: Channel::Notification,
-                    },
-                )
-                .await?;
-            match outcome {
-                CreditOutcome::Credited { already, .. } => Ok(Json(
-                    json!({ "ok": true, "action": "minted", "creditId": t.transaction_id, "alreadyExisted": already }),
-                )),
-                CreditOutcome::Revoked => {
-                    Ok(Json(json!({ "ok": true, "error": "revoked_transaction" })))
-                }
-                CreditOutcome::Refunded => {
-                    Ok(Json(json!({ "ok": true, "error": "refunded_transaction" })))
-                }
-                CreditOutcome::UnknownProduct => {
-                    tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, product_id = %t.product_id, "app store purchase of a product outside IAP_PRODUCT_CATALOG_USD: paid but not credited");
-                    Err(ApiError::service_unavailable("unknown_product"))
-                }
-                CreditOutcome::Capped(CapReason::ServiceDailyLimit) => {
-                    tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store purchase over IAP_DAILY_LIMIT_CENTS: answered for a later retry");
-                    Err(ApiError::service_unavailable("service_daily_limit"))
-                }
-                CreditOutcome::Capped(reason) => {
-                    tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, address = %address, reason = reason.as_str(), "app store purchase over a cap: paid but not credited, reconcile by hand");
-                    Ok(Json(
-                        json!({ "ok": true, "error": "wallet_cap_exceeded", "reason": reason.as_str() }),
-                    ))
-                }
-            }
-        }
+        "ONE_TIME_CHARGE" => charge(&state, iap, uuid, &t).await,
         "REFUND" => {
             let reason = format!(
                 "apple_refund:{}",
@@ -131,7 +86,13 @@ pub async fn webhook(
             );
             match state
                 .credits
-                .refund_iap(&t.transaction_id, Some(&t.product_id), uuid, &reason)
+                .refund_iap(
+                    &t.transaction_id,
+                    Some(&t.product_id),
+                    uuid,
+                    &reason,
+                    t.revocation_percentage,
+                )
                 .await?
             {
                 RefundOutcome::Reversed {
@@ -151,10 +112,75 @@ pub async fn webhook(
                 }
             }
         }
+        "REFUND_REVERSED" => match state.credits.reinstate_iap(&t.transaction_id, uuid).await? {
+            ReinstateOutcome::Reinstated { credits, .. } => Ok(Json(
+                json!({ "ok": true, "action": "reinstated", "creditId": t.transaction_id, "credits": credits }),
+            )),
+            ReinstateOutcome::Cleared => charge(&state, iap, uuid, &t).await,
+            ReinstateOutcome::NotRefunded => {
+                Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
+            }
+        },
         "TEST" => Ok(Json(json!({ "ok": true, "test": true }))),
         other => {
             tracing::info!(notification_uuid = %uuid, kind = %other, "app store notification type not acted on");
             Ok(Json(json!({ "ok": true, "ignored": true })))
+        }
+    }
+}
+
+/// Credits a notification's purchase to the wallet its account token names.
+async fn charge(
+    state: &SharedState,
+    iap: &Iap,
+    uuid: &str,
+    t: &Transaction,
+) -> Result<Json<JsonValue>, ApiError> {
+    let address = state
+        .credits
+        .wallet_for_iap_token(t.app_account_token.as_deref())
+        .await?;
+    let outcome = state
+        .credits
+        .credit_iap(
+            iap,
+            Purchase {
+                address: address.as_deref(),
+                app_account_token: t.app_account_token.as_deref(),
+                transaction_id: &t.transaction_id,
+                original_transaction_id: t.original_transaction_id.as_deref(),
+                product_id: &t.product_id,
+                quantity: t.quantity,
+                revoked: t.revoked,
+                channel: Channel::Notification,
+            },
+        )
+        .await?;
+    match outcome {
+        CreditOutcome::Credited { already, .. } => Ok(Json(
+            json!({ "ok": true, "action": "minted", "creditId": t.transaction_id, "alreadyExisted": already }),
+        )),
+        CreditOutcome::Revoked => Ok(Json(json!({ "ok": true, "error": "revoked_transaction" }))),
+        CreditOutcome::Refunded => Ok(Json(json!({ "ok": true, "error": "refunded_transaction" }))),
+        CreditOutcome::Held(HoldReason::UnknownProduct) => {
+            tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, product_id = %t.product_id, "app store purchase of a product outside IAP_PRODUCT_CATALOG_USD: held, answered for a later retry");
+            Err(ApiError::service_unavailable("unknown_product"))
+        }
+        CreditOutcome::Held(HoldReason::Capped(CapReason::ServiceDailyLimit)) => {
+            tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store purchase over IAP_DAILY_LIMIT_CENTS: held, answered for a later retry");
+            Err(ApiError::service_unavailable("service_daily_limit"))
+        }
+        CreditOutcome::Held(HoldReason::Capped(reason)) => {
+            tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, reason = reason.as_str(), "app store purchase over a wallet cap: held for an operator");
+            Ok(Json(
+                json!({ "ok": true, "error": "wallet_cap_exceeded", "reason": reason.as_str(), "held": true }),
+            ))
+        }
+        CreditOutcome::Held(reason) => {
+            tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, reason = reason.as_str(), "app store purchase not credited: held for an operator");
+            Ok(Json(
+                json!({ "ok": true, "error": reason.as_str(), "held": true }),
+            ))
         }
     }
 }
@@ -206,7 +232,8 @@ pub async fn verify(
         .credit_iap(
             iap,
             Purchase {
-                address: &wallet,
+                address: Some(&wallet),
+                app_account_token: t.app_account_token.as_deref(),
                 transaction_id: &t.transaction_id,
                 original_transaction_id: t.original_transaction_id.as_deref(),
                 product_id: &t.product_id,
@@ -223,15 +250,15 @@ pub async fn verify(
         })),
         CreditOutcome::Revoked => refused("revoked_transaction"),
         CreditOutcome::Refunded => refused("refunded_transaction"),
-        CreditOutcome::UnknownProduct => {
-            tracing::error!(wallet = %wallet, transaction_id = %t.transaction_id, product_id = %t.product_id, "app store purchase of a product outside IAP_PRODUCT_CATALOG_USD: paid but not credited");
-            refused("unknown_product")
-        }
-        CreditOutcome::Capped(reason) if reason.as_str() == "service_daily_limit" => {
+        CreditOutcome::Held(HoldReason::Capped(CapReason::ServiceDailyLimit)) => {
             refused("service_daily_limit")
         }
-        CreditOutcome::Capped(reason) => {
+        CreditOutcome::Held(HoldReason::Capped(reason)) => {
             Json(json!({ "ok": false, "code": "cap_exceeded", "reason": reason.as_str() }))
+        }
+        CreditOutcome::Held(reason) => {
+            tracing::error!(wallet = %wallet, transaction_id = %t.transaction_id, product_id = %t.product_id, reason = reason.as_str(), "app store purchase not credited: held for an operator");
+            refused(reason.as_str())
         }
     })
 }
@@ -348,7 +375,8 @@ pub async fn admin_credit(
         .credit_iap(
             iap,
             Purchase {
-                address: &address,
+                address: Some(&address),
+                app_account_token: None,
                 transaction_id: &b.apple_transaction_id,
                 original_transaction_id: b.apple_original_transaction_id.as_deref(),
                 product_id: &b.apple_product_id,
@@ -376,13 +404,11 @@ pub async fn admin_credit(
         }
         CreditOutcome::Refunded => Err(ApiError::conflict("this transaction was refunded")),
         CreditOutcome::Revoked => Err(ApiError::conflict("this transaction was revoked")),
-        CreditOutcome::UnknownProduct => {
-            Err(ApiError::bad_request("unknown appleProductId or quantity"))
-        }
-        CreditOutcome::Capped(r) => Err(ApiError::unprocessable(format!(
+        CreditOutcome::Held(HoldReason::Capped(r)) => Err(ApiError::unprocessable(format!(
             "over a cap: {}",
             r.as_str()
         ))),
+        CreditOutcome::Held(_) => Err(ApiError::bad_request("unknown appleProductId or quantity")),
     }
 }
 
@@ -409,7 +435,7 @@ pub async fn admin_refund(
     }
     match state
         .credits
-        .refund_iap(&b.apple_transaction_id, None, &b.refund_id, &b.reason)
+        .refund_iap(&b.apple_transaction_id, None, &b.refund_id, &b.reason, None)
         .await?
     {
         RefundOutcome::Reversed {
@@ -428,4 +454,36 @@ pub async fn admin_refund(
             "no credited App Store transaction with this id",
         )),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HeldQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// Operator list of the paid purchases not credited yet, oldest first.
+pub async fn admin_held(
+    _admin: RequireAdmin,
+    State(state): State<SharedState>,
+    Query(q): Query<HeldQuery>,
+) -> Result<Json<JsonValue>, ApiError> {
+    configured(&state)?;
+    let (limit, offset) = paginate(q.limit, q.offset);
+    let held = state.credits.held_iap(limit, offset).await?;
+    let held: Vec<JsonValue> = held
+        .into_iter()
+        .map(|h| {
+            json!({
+                "appleTransactionId": h.transaction_id,
+                "appleProductId": h.product_id,
+                "quantity": h.quantity,
+                "userAddress": h.address,
+                "appAccountToken": h.app_account_token,
+                "reason": h.reason,
+                "createdAt": h.created_at.and_utc().to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "held": held })))
 }

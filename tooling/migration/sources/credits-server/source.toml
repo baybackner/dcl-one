@@ -31,9 +31,13 @@ Not migrated, by reason:
   sale_proceeds, proceeds_cursor, proceeds_abandoned_fills, studios,
   studio_operators, studio_budget_entries, shop_daily_summaries,
   usd_purchase_alerts (no target; their money effects are user_credits rows).
-- iap_credits beyond their transaction ids: their Credits are user_credits
-  rows. Each id lands as a wallet-less 'refunded' credits.iap_transactions
-  row so the node never credits it again; iap_account_tokens are copied.
+- iap_credits beyond their transaction ids, wallets, cents and times: their
+  Credits are user_credits rows. A USD-rail id lands as an 'imported'
+  credits.iap_transactions row (counted by the per-wallet caps), any other
+  as a wallet-less 'refunded' row, so the node never credits it again;
+  iap_account_tokens are copied. iap_transaction reads upstream after its
+  App Store routes stop writing, and APPLE_BUNDLE_ID is set on the node
+  only after the import.
 - Node-only state left to the node: packs (upstream packs are code), idempotency,
   captcha_challenges, carts, cart_items, checkouts, fulfillment_outbox,
   authorizations, authorization_lines, usage_settlements, revocations, usages,
@@ -133,6 +137,9 @@ key = ["transaction_id"]
 columns = [
   { name = "transaction_id", type = "text" },
   { name = "product_id", type = "text" },
+  { name = "address", type = "text" },
+  { name = "amount_cents", type = "bigint" },
+  { name = "created_at", type = "timestamptz" },
 ]
 
 [[step]]

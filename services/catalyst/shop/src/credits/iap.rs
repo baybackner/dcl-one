@@ -4,23 +4,34 @@
 //!
 //! A purchase is credited from Apple's signed transaction only: the product
 //! decides the Credits (`IAP_PRODUCT_CATALOG_USD`, product id to whole
-//! Credits per unit, times the signed quantity), never the client. One
+//! Credits per unit, times the signed quantity), never the client. As
+//! upstream, the variable names the USD rail; its values are Credits. One
 //! transaction id credits once, whichever path delivers it first (the
 //! server notification, the device's `/iap/verify`, an operator), and a
-//! transaction Apple revoked or refunded is never credited. The per-wallet
-//! caps (`IAP_WALLET_TOTAL_LIMIT_CENTS`, `IAP_WALLET_DAILY_LIMIT_CENTS`, 0
+//! transaction Apple revoked or refunded is never credited: a revoked one
+//! seen first is recorded `refunded`. The per-wallet caps
+//! (`IAP_WALLET_TOTAL_LIMIT_CENTS`, `IAP_WALLET_DAILY_LIMIT_CENTS`, 0
 //! uncapped) and the node's daily ceiling (`IAP_DAILY_LIMIT_CENTS`, 0
 //! closed) are checked under one advisory lock with the insert, over the
-//! last 24 hours; an operator credit, which reconciles a paid purchase a
-//! wallet cap refused, is held to the node's ceiling only.
+//! last 24 hours, counting purchases credited here or imported; an
+//! operator credit is held to the node's ceiling only.
 //!
-//! A refund charges the purchase's Credits back from the wallet in the
-//! refund's transaction (`Credits::revoke_in_tx`, floored at zero, the wallet
+//! A paid purchase that is not credited (a cap, the ceiling, an unknown
+//! product or quantity, an account token naming no wallet) is kept as a
+//! `held` row an operator lists (`held_iap`); the next delivery or an
+//! operator credit re-checks it and credits it.
+//!
+//! A refund charges the purchase's Credits back, or Apple's
+//! `revocationPercentage` share of them, from the wallet in the refund's
+//! transaction (`Credits::revoke_in_tx`, floored at zero, the wallet
 //! blocked when the balance net of live pledges cannot cover it). When it
-//! cannot, every live signed credit of the wallet is queued for
-//! `revokeCredits` on chain (`credits.revocations`), so Credits already
-//! signed cannot be spent after the refund. A refund of a transaction never
-//! credited leaves a `refunded` row that keeps it from being credited later.
+//! cannot, the wallet's newest live signed credits covering the uncovered
+//! part are queued for `revokeCredits` on chain (`credits.revocations`). A
+//! refund of a transaction never credited leaves a `refunded` row that
+//! keeps it from being credited later; an operator refund of an unknown id
+//! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
+//! what was charged back, or clears the `refunded` row of a purchase never
+//! credited so it can be credited.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -48,11 +59,11 @@ pub struct RawSettings {
     pub bundle_id: Option<String>,
     /// `APPLE_APP_APPLE_ID`: required in production.
     pub app_apple_id: Option<i64>,
-    /// `APPLE_ENVIRONMENT` (sandbox).
+    /// `APPLE_ENVIRONMENT`: production or sandbox, required with `APPLE_BUNDLE_ID`.
     pub environment: Option<String>,
     /// `APPLE_ROOT_CERTS_DIR`: Apple's root certificates, DER `.cer`/`.der` files.
     pub root_certs_dir: Option<String>,
-    /// `IAP_PRODUCT_CATALOG_USD`: `{"<productId>": <credits>}`.
+    /// `IAP_PRODUCT_CATALOG_USD`: `{"<productId>": <whole Credits>}`.
     pub catalog: Option<String>,
     /// `IAP_WALLET_TOTAL_LIMIT_CENTS` (0: uncapped).
     pub wallet_total_limit_cents: i64,
@@ -166,7 +177,9 @@ impl Channel {
 }
 
 pub struct Purchase<'a> {
-    pub address: &'a str,
+    /// `None`: the transaction's account token names no wallet.
+    pub address: Option<&'a str>,
+    pub app_account_token: Option<&'a str>,
     pub transaction_id: &'a str,
     pub original_transaction_id: Option<&'a str>,
     pub product_id: &'a str,
@@ -192,6 +205,26 @@ impl CapReason {
     }
 }
 
+/// Why a paid purchase was not credited (`credits.iap_transactions.held_reason`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HoldReason {
+    UnknownWallet,
+    UnknownProduct,
+    Quantity,
+    Capped(CapReason),
+}
+
+impl HoldReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UnknownWallet => "unresolvable_app_account_token",
+            Self::UnknownProduct => "unknown_product",
+            Self::Quantity => "quantity_out_of_range",
+            Self::Capped(reason) => reason.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreditOutcome {
     /// Credited now, or earlier by another path (`already`), to `address`.
@@ -204,8 +237,8 @@ pub enum CreditOutcome {
     Revoked,
     /// The transaction was refunded; it is never credited.
     Refunded,
-    UnknownProduct,
-    Capped(CapReason),
+    /// Not credited; a `held` row records it unless an operator asked.
+    Held(HoldReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,8 +251,30 @@ pub enum RefundOutcome {
         revocations: usize,
     },
     AlreadyRefunded,
-    /// No credited purchase: a `refunded` row now keeps it from being credited.
+    /// Not credited on this node: a `refunded` row now keeps it from being credited.
     NotCredited,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReinstateOutcome {
+    /// The charged-back Credits were granted again.
+    Reinstated { address: String, credits: String },
+    /// The refund of a transaction never credited was cleared, so it can be credited.
+    Cleared,
+    /// No refund of this transaction to reverse.
+    NotRefunded,
+}
+
+/// A paid purchase not credited yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldPurchase {
+    pub transaction_id: String,
+    pub product_id: String,
+    pub quantity: Option<i64>,
+    pub address: Option<String>,
+    pub app_account_token: Option<String>,
+    pub reason: String,
+    pub created_at: chrono::NaiveDateTime,
 }
 
 /// What a wallet bought and may still buy (cents; `None` uncapped).
@@ -262,6 +317,7 @@ fn grant_key(transaction_id: &str) -> String {
 }
 
 impl Credits {
+    /// Purchases credited by this node or imported, refunded or not; held ones are not counted.
     pub async fn iap_totals<'e, E: sqlx::PgExecutor<'e>>(
         executor: E,
         address: &str,
@@ -270,7 +326,8 @@ impl Credits {
             "SELECT COALESCE(SUM(amount_cents) FILTER (WHERE address = $1), 0)::bigint AS total, \
                     COALESCE(SUM(amount_cents) FILTER (WHERE address = $1 AND created_at > timezone('UTC', now()) - interval '24 hours'), 0)::bigint AS daily, \
                     COALESCE(SUM(amount_cents) FILTER (WHERE created_at > timezone('UTC', now()) - interval '24 hours'), 0)::bigint AS service \
-             FROM credits.iap_transactions WHERE address IS NOT NULL \
+             FROM credits.iap_transactions \
+             WHERE address IS NOT NULL AND (credited_by IS NOT NULL OR status = 'imported') \
                AND (address = $1 OR created_at > timezone('UTC', now()) - interval '24 hours')",
         )
         .bind(address)
@@ -285,9 +342,6 @@ impl Credits {
 
     /// Credits one App Store transaction once; see the module docs.
     pub async fn credit_iap(&self, iap: &Iap, p: Purchase<'_>) -> Result<CreditOutcome, ApiError> {
-        if p.revoked {
-            return Ok(CreditOutcome::Revoked);
-        }
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(p.transaction_id)).await?;
         let existing = sqlx::query(
@@ -297,25 +351,56 @@ impl Credits {
         .bind(p.transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
+        let mut held_for = None;
         if let Some(row) = existing {
-            tx.commit().await?;
             let status: String = row.get("status");
-            return Ok(
-                match (status.as_str(), row.get::<Option<String>, _>("address")) {
-                    ("paid", Some(address)) => CreditOutcome::Credited {
+            let address: Option<String> = row.get("address");
+            match (status.as_str(), address) {
+                ("paid" | "imported", Some(_)) if p.revoked => return Ok(CreditOutcome::Revoked),
+                ("paid" | "imported", Some(address)) => {
+                    return Ok(CreditOutcome::Credited {
                         address,
                         credits: row.get::<Option<i64>, _>("credits").unwrap_or(0),
                         already: true,
-                    },
-                    _ => CreditOutcome::Refunded,
-                },
-            );
+                    });
+                }
+                ("held", address) => held_for = address,
+                _ => return Ok(CreditOutcome::Refunded),
+            }
         }
+        if p.revoked {
+            // Recorded, so a later delivery of the same purchase is not credited either.
+            sqlx::query(
+                "INSERT INTO credits.iap_transactions AS t \
+                     (transaction_id, original_transaction_id, product_id, status, refund_ref, refund_reason, refunded_at) \
+                 VALUES ($1, $2, $3, 'refunded', 'apple', 'revoked when received', timezone('UTC', now())) \
+                 ON CONFLICT (transaction_id) DO UPDATE SET status = 'refunded', held_reason = NULL, \
+                     refund_ref = EXCLUDED.refund_ref, refund_reason = EXCLUDED.refund_reason, \
+                     refunded_at = EXCLUDED.refunded_at, updated_at = timezone('UTC', now())",
+            )
+            .bind(p.transaction_id)
+            .bind(p.original_transaction_id)
+            .bind(p.product_id)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(CreditOutcome::Revoked);
+        }
+        let address = match (p.address, held_for) {
+            (Some(a), Some(h)) if a != h => {
+                return Err(ApiError::conflict(
+                    "this transaction is held for another wallet",
+                ));
+            }
+            (Some(a), _) => a.to_string(),
+            (None, Some(h)) => h,
+            (None, None) => return hold(tx, &p, None, None, HoldReason::UnknownWallet).await,
+        };
         let Some(per_unit) = iap.credits_per_unit(p.product_id) else {
-            return Ok(CreditOutcome::UnknownProduct);
+            return hold(tx, &p, Some(&address), None, HoldReason::UnknownProduct).await;
         };
         if !(1..=MAX_QUANTITY).contains(&p.quantity) {
-            return Ok(CreditOutcome::UnknownProduct);
+            return hold(tx, &p, Some(&address), None, HoldReason::Quantity).await;
         }
         let credits = per_unit * p.quantity;
         let cents = UsdCents::from_credits(credits)
@@ -332,22 +417,30 @@ impl Credits {
             _ => iap.limits,
         };
         lock(&mut tx, DAILY_LOCK).await?;
-        let totals = Self::iap_totals(&mut *tx, p.address).await?;
+        let totals = Self::iap_totals(&mut *tx, &address).await?;
         if let Some(reason) = totals.decide(&limits, cents) {
-            return Ok(CreditOutcome::Capped(reason));
+            let value = Some((credits, cents));
+            return hold(tx, &p, Some(&address), value, HoldReason::Capped(reason)).await;
         }
 
         sqlx::query(
+            "DELETE FROM credits.iap_transactions WHERE transaction_id = $1 AND status = 'held'",
+        )
+        .bind(p.transaction_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
             "INSERT INTO credits.iap_transactions \
-                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, status, credited_by) \
-             VALUES ($1, $2, $3, $4, $5::numeric, $6, 'paid', $7)",
+                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, status, credited_by) \
+             VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, 'paid', $8)",
         )
         .bind(p.transaction_id)
         .bind(p.original_transaction_id)
         .bind(p.product_id)
-        .bind(p.address)
+        .bind(&address)
         .bind(credits.to_string())
         .bind(cents)
+        .bind(p.quantity)
         .bind(p.channel.as_str())
         .execute(&mut *tx)
         .await?;
@@ -362,7 +455,7 @@ impl Credits {
         self.admin_grant_credits_in_tx(
             &mut tx,
             GrantRequest {
-                address: p.address,
+                address: &address,
                 amount: &credits.to_string(),
                 kind: "purchase",
                 reason: Some("app store purchase"),
@@ -375,7 +468,7 @@ impl Credits {
         .await?;
         tx.commit().await?;
         Ok(CreditOutcome::Credited {
-            address: p.address.to_string(),
+            address,
             credits,
             already: false,
         })
@@ -383,18 +476,20 @@ impl Credits {
 
     /// Reverses one App Store transaction once; see the module docs.
     /// `product_id` is `None` for an operator refund, which records nothing
-    /// for a transaction never credited.
+    /// for a transaction never seen. `percentage` is the refunded share in
+    /// thousandths of a percent; `None` refunds all of it.
     pub async fn refund_iap(
         &self,
         transaction_id: &str,
         product_id: Option<&str>,
         refund_ref: &str,
         reason: &str,
+        percentage: Option<i64>,
     ) -> Result<RefundOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         let row = sqlx::query(
-            "SELECT status, address, credits::text AS credits FROM credits.iap_transactions \
+            "SELECT status, address FROM credits.iap_transactions \
              WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
@@ -418,40 +513,88 @@ impl Credits {
             return Ok(RefundOutcome::NotCredited);
         };
         let status: String = row.get("status");
-        let (Some(address), Some(credits)) = (
-            row.get::<Option<String>, _>("address"),
-            row.get::<Option<String>, _>("credits"),
-        ) else {
-            return Ok(RefundOutcome::AlreadyRefunded);
-        };
-        if status != "paid" {
-            return Ok(RefundOutcome::AlreadyRefunded);
+        let address: Option<String> = row.get("address");
+        match (status.as_str(), address) {
+            ("held", _) => {
+                sqlx::query(
+                    "UPDATE credits.iap_transactions \
+                     SET status = 'refunded', held_reason = NULL, refund_ref = $2, refund_reason = $3, \
+                         refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
+                     WHERE transaction_id = $1",
+                )
+                .bind(transaction_id)
+                .bind(refund_ref)
+                .bind(reason)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok(RefundOutcome::NotCredited)
+            }
+            // Credited upstream: its Credits are plain ledger grants, never charged back here.
+            ("imported", _) => Ok(RefundOutcome::NotCredited),
+            ("paid", Some(address)) => {
+                let charged: String = sqlx::query_scalar(
+                    "UPDATE credits.iap_transactions \
+                     SET status = 'refunded', \
+                         revoked_credits = CASE WHEN $4::bigint IS NULL THEN credits \
+                                                ELSE trim_scale(round(credits * $4::bigint / 100000, 2)) END, \
+                         refund_ref = $2, refund_reason = $3, \
+                         refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
+                     WHERE transaction_id = $1 RETURNING revoked_credits::text",
+                )
+                .bind(transaction_id)
+                .bind(refund_ref)
+                .bind(reason)
+                .bind(percentage)
+                .fetch_one(&mut *tx)
+                .await?;
+                self.charge_back_iap(tx, transaction_id, address, &charged, refund_ref, reason)
+                    .await
+            }
+            _ => Ok(RefundOutcome::AlreadyRefunded),
         }
-        sqlx::query(
-            "UPDATE credits.iap_transactions \
-             SET status = 'refunded', revoked_credits = credits, refund_ref = $2, refund_reason = $3, \
-                 refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
-             WHERE transaction_id = $1",
-        )
-        .bind(transaction_id)
-        .bind(refund_ref)
-        .bind(reason)
-        .execute(&mut *tx)
-        .await?;
+    }
+
+    async fn charge_back_iap(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        transaction_id: &str,
+        address: String,
+        charged: &str,
+        refund_ref: &str,
+        reason: &str,
+    ) -> Result<RefundOutcome, ApiError> {
+        if super::money::CreditAmount::parse_positive(charged).is_err() {
+            tx.commit().await?;
+            return Ok(RefundOutcome::Reversed {
+                address,
+                removed: "0".into(),
+                shortfall: "0".into(),
+                revocations: 0,
+            });
+        }
         let detail =
             json!({ "source": "apple", "transactionId": transaction_id, "refundRef": refund_ref });
         let revoked = self
             .revoke_in_tx(
                 &mut tx,
                 &address,
-                &credits,
+                charged,
                 &grant_key(transaction_id),
                 reason,
                 &detail,
             )
             .await?;
+        // What was actually removed: a reversed refund grants back this, not the shortfall.
+        sqlx::query(
+            "UPDATE credits.iap_transactions SET revoked_credits = $2::numeric WHERE transaction_id = $1",
+        )
+        .bind(transaction_id)
+        .bind(&revoked.removed)
+        .execute(&mut *tx)
+        .await?;
         let revocations = if revoked.uncovered {
-            revoke_live_credits_in_tx(&mut tx, &address).await?
+            revoke_live_credits_in_tx(&mut tx, &address, &revoked.uncovered_amount).await?
         } else {
             0
         };
@@ -465,6 +608,94 @@ impl Credits {
             shortfall: revoked.shortfall,
             revocations,
         })
+    }
+
+    /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited purchase
+    /// gets back what its refund charged back, and a refund of a transaction
+    /// never credited is cleared so the purchase can be credited.
+    pub async fn reinstate_iap(
+        &self,
+        transaction_id: &str,
+        refund_ref: &str,
+    ) -> Result<ReinstateOutcome, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        lock(&mut tx, &grant_key(transaction_id)).await?;
+        let row = sqlx::query(
+            "SELECT status, address, credited_by, revoked_credits::text AS revoked \
+             FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
+        )
+        .bind(transaction_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row.filter(|r| r.get::<String, _>("status") == "refunded") else {
+            return Ok(ReinstateOutcome::NotRefunded);
+        };
+        let (Some(address), Some(_)) = (
+            row.get::<Option<String>, _>("address"),
+            row.get::<Option<String>, _>("credited_by"),
+        ) else {
+            sqlx::query("DELETE FROM credits.iap_transactions WHERE transaction_id = $1")
+                .bind(transaction_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok(ReinstateOutcome::Cleared);
+        };
+        let credits: String = row.get("revoked");
+        sqlx::query(
+            "UPDATE credits.iap_transactions \
+             SET status = 'paid', revoked_credits = 0, refund_ref = NULL, refund_reason = NULL, \
+                 refunded_at = NULL, updated_at = timezone('UTC', now()) \
+             WHERE transaction_id = $1",
+        )
+        .bind(transaction_id)
+        .execute(&mut *tx)
+        .await?;
+        if super::money::CreditAmount::parse_positive(&credits).is_ok() {
+            let key = format!("{}:reinstated:{refund_ref}", grant_key(transaction_id));
+            let detail = json!({ "source": "apple", "transactionId": transaction_id, "refundRef": refund_ref });
+            self.admin_grant_credits_in_tx(
+                &mut tx,
+                GrantRequest {
+                    address: &address,
+                    amount: &credits,
+                    kind: "refund",
+                    reason: Some("app store refund reversed"),
+                    actor: Some(IAP_ACTOR),
+                    idempotency_key: Some(&key),
+                    detail: &detail,
+                    studio_name: None,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(ReinstateOutcome::Reinstated { address, credits })
+    }
+
+    /// Paid purchases not credited yet, oldest first.
+    pub async fn held_iap(&self, limit: i64, offset: i64) -> Result<Vec<HeldPurchase>, ApiError> {
+        let rows = sqlx::query(
+            "SELECT transaction_id, product_id, quantity, address, app_account_token, held_reason, created_at \
+             FROM credits.iap_transactions WHERE status = 'held' \
+             ORDER BY created_at, transaction_id LIMIT $1 OFFSET $2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| HeldPurchase {
+                transaction_id: r.get("transaction_id"),
+                product_id: r.get("product_id"),
+                quantity: r.get("quantity"),
+                address: r.get("address"),
+                app_account_token: r.get("app_account_token"),
+                reason: r.get("held_reason"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 
     /// Records `address` as the wallet behind its account token.
@@ -510,18 +741,66 @@ impl Credits {
     }
 }
 
-/// Queues every unexpired signed credit of `address` for `revokeCredits`.
+/// Records a paid purchase that was not credited as `held` (not for an
+/// operator credit, which is not Apple-signed) and answers why.
+async fn hold(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    p: &Purchase<'_>,
+    address: Option<&str>,
+    value: Option<(i64, i64)>,
+    reason: HoldReason,
+) -> Result<CreditOutcome, ApiError> {
+    if p.channel == Channel::Operator {
+        return Ok(CreditOutcome::Held(reason));
+    }
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions AS t \
+             (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, \
+              app_account_token, status, held_reason) \
+         VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8, 'held', $9) \
+         ON CONFLICT (transaction_id) DO UPDATE SET \
+             address = COALESCE(EXCLUDED.address, t.address), credits = EXCLUDED.credits, \
+             amount_cents = EXCLUDED.amount_cents, quantity = EXCLUDED.quantity, \
+             app_account_token = COALESCE(EXCLUDED.app_account_token, t.app_account_token), \
+             held_reason = EXCLUDED.held_reason, updated_at = timezone('UTC', now()) \
+         WHERE t.status = 'held'",
+    )
+    .bind(p.transaction_id)
+    .bind(p.original_transaction_id)
+    .bind(p.product_id)
+    .bind(address)
+    .bind(value.map(|(credits, _)| credits.to_string()))
+    .bind(value.map(|(_, cents)| cents))
+    .bind(p.quantity)
+    .bind(p.app_account_token.map(str::to_ascii_lowercase))
+    .bind(reason.as_str())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    tracing::warn!(transaction_id = %p.transaction_id, reason = reason.as_str(), "app store purchase held: paid but not credited");
+    Ok(CreditOutcome::Held(reason))
+}
+
+/// Queues the newest unexpired signed credits of `address` for
+/// `revokeCredits` until their value covers `uncovered` Credits.
 async fn revoke_live_credits_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     address: &str,
+    uncovered: &str,
 ) -> Result<usize, ApiError> {
     let rows = sqlx::query(
-        "SELECT id, credit_hash, chain_id, contract FROM credits.authorizations \
-         WHERE address = $1 AND status IN ('authorized', 'retired') \
-           AND expires_at > timezone('UTC', now()) \
-           AND credit_hash IS NOT NULL AND chain_id IS NOT NULL AND contract IS NOT NULL",
+        "SELECT id, credit_hash, chain_id, contract FROM ( \
+             SELECT id, credit_hash, chain_id, contract, \
+                    SUM(usd_cents) OVER (ORDER BY created_at DESC, id) - usd_cents AS before \
+             FROM credits.authorizations \
+             WHERE address = $1 AND status IN ('authorized', 'retired') \
+               AND expires_at > timezone('UTC', now()) \
+               AND credit_hash IS NOT NULL AND chain_id IS NOT NULL AND contract IS NOT NULL \
+         ) a WHERE before < $2::numeric * $3::numeric",
     )
     .bind(address)
+    .bind(uncovered)
+    .bind(UsdCents::CENTS_PER_CREDIT)
     .fetch_all(&mut **tx)
     .await?;
     let mut queued = 0;
@@ -537,7 +816,7 @@ async fn revoke_live_credits_in_tx(
         }
     }
     if queued > 0 {
-        tracing::warn!(address = %address, queued, "app store refund exceeds the unpledged balance: live signed credits queued for revocation");
+        tracing::warn!(address = %address, queued, uncovered, "app store refund exceeds the unpledged balance: live signed credits queued for revocation");
     }
     Ok(queued)
 }
@@ -545,6 +824,18 @@ async fn revoke_live_credits_in_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundle_id_without_an_environment_refuses_to_start() {
+        let err = Iap::parse(RawSettings {
+            bundle_id: Some("org.example.app".into()),
+            daily_limit_cents: Some(0),
+            ..RawSettings::default()
+        })
+        .err()
+        .expect("APPLE_ENVIRONMENT is required");
+        assert!(err.to_string().contains("APPLE_ENVIRONMENT"), "{err}");
+    }
 
     #[test]
     fn the_catalog_takes_positive_whole_credits_only() {

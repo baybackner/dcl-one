@@ -17,7 +17,7 @@
 //! `/admin/users/{a}/block`, `/admin/packs[/{sku}]`, `/admin/purchases`,
 //! `/admin/checkouts[/{id}/{refund,force-fulfill}]`, `/admin/ledger`,
 //! `/admin/grants/{ref}/{reclaim,release}`, `/admin/reconcile`,
-//! `/credits/iap[/refund]` (App Store, `iap.rs`) behind
+//! `/credits/iap[/refund|/held]` (App Store, `iap.rs`) behind
 //! `CATALYRST_CREDITS_ADMIN_TOKEN` (`admin.rs`).
 //!
 //! Where each route reads and writes:
@@ -1018,6 +1018,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/credits/iap/verify", post(handlers::iap::verify))
         .route("/credits/iap", post(handlers::iap::admin_credit))
         .route("/credits/iap/refund", post(handlers::iap::admin_refund))
+        .route("/credits/iap/held", get(handlers::iap::admin_held))
         .route("/cart", get(handlers::cart::get_cart))
         .route("/cart/items", post(handlers::cart::add_item))
         .route(
@@ -1153,6 +1154,7 @@ pub fn shop_router(state: SharedState) -> Router {
         .route("/v1/iap/verify", post(handlers::iap::verify))
         .route("/admin/iap/credits", post(handlers::iap::admin_credit))
         .route("/admin/iap/refunds", post(handlers::iap::admin_refund))
+        .route("/admin/iap/held", get(handlers::iap::admin_held))
         .merge(handlers::admin::shop_router())
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(axum::middleware::from_fn(
@@ -1291,6 +1293,8 @@ mod schema_tests {
             "usages",
             "usage_index_cursor",
             "captcha_challenges",
+            "iap_transactions",
+            "iap_account_tokens",
         ] {
             assert!(
                 crate::db::SCHEMA_SQL.contains(&format!("CREATE TABLE credits.{table} (")),

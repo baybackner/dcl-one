@@ -147,7 +147,7 @@ impl Credits {
 
     /// The wallet's credit orders newest first: one row per `credits.purchases`
     /// row of the card flows (a Checkout Session order or a PaymentIntent)
-    /// and one per App Store purchase credited to it (`credits.iap_transactions`).
+    /// and one per App Store purchase this node credited to it (`credits.iap_transactions`).
     pub async fn credit_orders_history(
         &self,
         address: &str,
@@ -156,7 +156,7 @@ impl Credits {
     ) -> Result<CreditOrdersOut, ApiError> {
         let total: i64 = sqlx::query_scalar(
             "SELECT (SELECT count(*) FROM credits.purchases WHERE address = $1 AND method = 'card') \
-                  + (SELECT count(*) FROM credits.iap_transactions WHERE address = $1)",
+                  + (SELECT count(*) FROM credits.iap_transactions WHERE address = $1 AND credited_by IS NOT NULL)",
         )
         .bind(address)
         .fetch_one(&self.pool)
@@ -170,8 +170,8 @@ impl Credits {
                  SELECT 'apple', NULL, NULL, NULL, transaction_id, product_id, \
                         floor(credits)::bigint, amount_cents, \
                         CASE WHEN status = 'refunded' THEN amount_cents ELSE 0 END, status, created_at \
-                 FROM credits.iap_transactions WHERE address = $1 \
-             ) o ORDER BY created_at DESC, id DESC NULLS LAST LIMIT $2 OFFSET $3",
+                 FROM credits.iap_transactions WHERE address = $1 AND credited_by IS NOT NULL \
+             ) o ORDER BY created_at DESC, id DESC NULLS LAST, transaction_id DESC LIMIT $2 OFFSET $3",
         )
         .bind(address)
         .bind(limit)

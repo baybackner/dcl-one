@@ -410,7 +410,7 @@ impl Credits {
                      SELECT address, credits FROM credits.purchases \
                      WHERE status IN ('paid','refunded','disputed') \
                      UNION ALL \
-                     SELECT address, credits FROM credits.iap_transactions WHERE address IS NOT NULL \
+                     SELECT address, credits FROM credits.iap_transactions WHERE credited_by IS NOT NULL \
                  ) p GROUP BY address \
              ), granted AS ( \
                  SELECT address, SUM(amount) AS g \

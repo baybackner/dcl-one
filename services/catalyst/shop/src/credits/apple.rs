@@ -39,11 +39,16 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// `APPLE_ENVIRONMENT`: `production` or `sandbox` (the default).
+    /// `APPLE_ENVIRONMENT`: `production` or `sandbox`, with no default.
     pub fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
         match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-            None | Some("") | Some("sandbox") => Ok(Self::Sandbox),
+            Some("sandbox") => Ok(Self::Sandbox),
             Some("production") => Ok(Self::Production),
+            None | Some("") => {
+                anyhow::bail!(
+                    "APPLE_ENVIRONMENT (production or sandbox) is required with APPLE_BUNDLE_ID"
+                )
+            }
             Some(_) => anyhow::bail!("APPLE_ENVIRONMENT must be production or sandbox"),
         }
     }
@@ -80,6 +85,8 @@ pub struct Transaction {
     pub app_account_token: Option<String>,
     /// Apple revoked it (a refund): `revocationDate` or `revocationReason` is present.
     pub revoked: bool,
+    /// The share Apple refunded, in thousandths of a percent (`revocationPercentage`); `None` is all of it.
+    pub revocation_percentage: Option<i64>,
 }
 
 /// A verified notification; `transaction` is `None` for one that carries none (TEST, summaries).
@@ -191,6 +198,10 @@ impl Verifier {
             app_account_token: str_field(&p, "appAccountToken").map(str::to_string),
             revoked: !p.get("revocationDate").is_none_or(JsonValue::is_null)
                 || !p.get("revocationReason").is_none_or(JsonValue::is_null),
+            revocation_percentage: p
+                .get("revocationPercentage")
+                .and_then(JsonValue::as_i64)
+                .filter(|v| (1..100_000).contains(v)),
         })
     }
 
@@ -333,6 +344,8 @@ pub(crate) mod testkit {
         pub leaf_marker: bool,
         pub intermediate_ca: bool,
         pub leaf_expired: bool,
+        pub intermediate_expired: bool,
+        pub root_expired: bool,
     }
 
     impl Default for ChainSpec {
@@ -342,6 +355,8 @@ pub(crate) mod testkit {
                 leaf_marker: true,
                 intermediate_ca: true,
                 leaf_expired: false,
+                intermediate_expired: false,
+                root_expired: false,
             }
         }
     }
@@ -350,6 +365,11 @@ pub(crate) mod testkit {
         let mut p = CertificateParams::new(Vec::<String>::new()).unwrap();
         p.distinguished_name.push(DnType::CommonName, cn);
         p
+    }
+
+    fn expired(p: &mut CertificateParams) {
+        p.not_before = rcgen::date_time_ymd(2000, 1, 1);
+        p.not_after = rcgen::date_time_ymd(2001, 1, 1);
     }
 
     fn marker(oid: &[u64]) -> CustomExtension {
@@ -361,6 +381,9 @@ pub(crate) mod testkit {
         let root_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
         let mut root_params = params("Test Root CA");
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        if spec.root_expired {
+            expired(&mut root_params);
+        }
         let root = root_params.self_signed(&root_key).unwrap();
         let root_issuer = Issuer::new(root_params, &root_key);
 
@@ -368,6 +391,9 @@ pub(crate) mod testkit {
         let mut int_params = params("Test Intermediate CA");
         if spec.intermediate_ca {
             int_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        }
+        if spec.intermediate_expired {
+            expired(&mut int_params);
         }
         if spec.intermediate_marker {
             int_params
@@ -388,8 +414,7 @@ pub(crate) mod testkit {
             leaf_params.custom_extensions.push(marker(LEAF_MARKER));
         }
         if spec.leaf_expired {
-            leaf_params.not_before = rcgen::date_time_ymd(2000, 1, 1);
-            leaf_params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+            expired(&mut leaf_params);
         }
         let leaf = leaf_params.signed_by(&leaf_key, &int_issuer).unwrap();
         Chain {
@@ -439,11 +464,24 @@ pub(crate) mod testkit {
 
         /// A signed notification of `kind` nesting `transaction`.
         pub fn notification(&self, kind: &str, transaction: Option<String>) -> String {
-            let mut data = serde_json::json!({
-                "bundleId": BUNDLE,
-                "appAppleId": APP_APPLE_ID,
-                "environment": "Sandbox",
-            });
+            self.notification_with(
+                kind,
+                transaction,
+                serde_json::json!({
+                    "bundleId": BUNDLE,
+                    "appAppleId": APP_APPLE_ID,
+                    "environment": "Sandbox",
+                }),
+            )
+        }
+
+        /// A signed notification of `kind` with its own `data` app fields.
+        pub fn notification_with(
+            &self,
+            kind: &str,
+            transaction: Option<String>,
+            mut data: JsonValue,
+        ) -> String {
             if let Some(t) = transaction {
                 data["signedTransactionInfo"] = JsonValue::String(t);
             }
@@ -570,6 +608,122 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err, VerifyError::Chain);
         }
+    }
+
+    #[test]
+    fn an_expired_intermediate_or_root_is_refused() {
+        for spec in [
+            ChainSpec {
+                intermediate_expired: true,
+                ..Default::default()
+            },
+            ChainSpec {
+                root_expired: true,
+                ..Default::default()
+            },
+        ] {
+            let c = chain(spec);
+            let err = c
+                .verifier(Environment::Sandbox)
+                .transaction(&c.transaction("1", "p", None), now())
+                .unwrap_err();
+            assert_eq!(err, VerifyError::Chain);
+        }
+    }
+
+    #[test]
+    fn the_environment_has_no_default() {
+        assert!(Environment::parse(None).is_err());
+        assert!(Environment::parse(Some(" ")).is_err());
+        assert!(Environment::parse(Some("staging")).is_err());
+        assert_eq!(
+            Environment::parse(Some("Sandbox")).unwrap(),
+            Environment::Sandbox
+        );
+        assert_eq!(
+            Environment::parse(Some("production")).unwrap(),
+            Environment::Production
+        );
+    }
+
+    #[test]
+    fn a_notification_must_name_this_app_and_environment() {
+        let c = chain(ChainSpec::default());
+        let sandbox = c.verifier(Environment::Sandbox);
+        let app = |bundle: &str, app_id: i64, env: &str| serde_json::json!({ "bundleId": bundle, "appAppleId": app_id, "environment": env });
+        let n = |data| c.notification_with("TEST", None, data);
+        assert_eq!(
+            sandbox
+                .notification(&n(app("org.example.other", APP_APPLE_ID, "Sandbox")), now())
+                .unwrap_err(),
+            VerifyError::App
+        );
+        assert_eq!(
+            sandbox
+                .notification(&n(app(BUNDLE, APP_APPLE_ID, "Production")), now())
+                .unwrap_err(),
+            VerifyError::Environment
+        );
+
+        let prod = c.verifier(Environment::Production);
+        assert_eq!(
+            prod.notification(&n(app(BUNDLE, 42, "Production")), now())
+                .unwrap_err(),
+            VerifyError::App
+        );
+        assert_eq!(
+            prod.notification(&n(app(BUNDLE, APP_APPLE_ID, "Sandbox")), now())
+                .unwrap_err(),
+            VerifyError::Environment
+        );
+        let mut t = transaction_payload("9", "p", None);
+        t["environment"] = "Production".into();
+        let ok = prod
+            .notification(
+                &c.notification_with(
+                    "ONE_TIME_CHARGE",
+                    Some(c.sign(&t)),
+                    app(BUNDLE, APP_APPLE_ID, "Production"),
+                ),
+                now(),
+            )
+            .unwrap();
+        assert_eq!(ok.transaction.unwrap().transaction_id, "9");
+        // A production notification nesting a sandbox transaction is refused.
+        assert_eq!(
+            prod.notification(
+                &c.notification_with(
+                    "ONE_TIME_CHARGE",
+                    Some(c.transaction("9", "p", None)),
+                    app(BUNDLE, APP_APPLE_ID, "Production"),
+                ),
+                now(),
+            )
+            .unwrap_err(),
+            VerifyError::Environment
+        );
+    }
+
+    #[test]
+    fn a_partial_refund_reports_its_share() {
+        let c = chain(ChainSpec::default());
+        let v = c.verifier(Environment::Sandbox);
+        let mut p = transaction_payload("1", "p", None);
+        p["revocationDate"] = 1_700_000_000_000i64.into();
+        p["revocationPercentage"] = 25_000.into();
+        assert_eq!(
+            v.transaction(&c.sign(&p), now())
+                .unwrap()
+                .revocation_percentage,
+            Some(25_000)
+        );
+        p["revocationPercentage"] = 100_000.into();
+        assert_eq!(
+            v.transaction(&c.sign(&p), now())
+                .unwrap()
+                .revocation_percentage,
+            None
+        );
     }
 
     #[test]

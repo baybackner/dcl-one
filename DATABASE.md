@@ -1554,17 +1554,27 @@ gains it from the object pass, so no step exists.
 transaction, keyed by Apple's transaction id (`shop/src/credits/iap.rs`).
 Writers are the App Store notification (`POST /credits/apple/webhook`), the
 device's `POST /credits/credits/iap/verify` and the operator's
-`POST /credits/credits/iap` (a credit), and the notification's `REFUND` and the
-operator's `POST /credits/credits/iap/refund` (a reversal). A credit takes a
-transaction-scoped advisory lock on the transaction id, then the node-wide
-App Store lock, reads the caps over the wallet's rows and the node's last 24
-hours, inserts the row and grants the Credits in one transaction; a reversal
-takes the same transaction lock, flips the row to `refunded`, charges the
-Credits back (`Credits::revoke_in_tx`) and, when the balance net of live
-pledges cannot cover it, queues the wallet's unexpired signed credits in
-`credits.revocations`, in one transaction. Readers are the wallet's credit
-orders (`address, created_at DESC`) and the caps (`address` and `created_at`
-partial indexes, rows with a wallet only). Rows are one per purchase.
+`POST /credits/credits/iap` (a credit), and the notification's `REFUND` and
+`REFUND_REVERSED` and the operator's `POST /credits/credits/iap/refund` (a
+reversal and its undo). A credit takes a transaction-scoped advisory lock on
+the transaction id, then the node-wide App Store lock, reads the caps over the
+wallet's rows and the node's last 24 hours, inserts the row and grants the
+Credits in one transaction. A paid purchase it cannot credit (a cap, the
+node's ceiling, an unknown product or quantity, an account token naming no
+wallet) is upserted as `held` with its reason, unless an operator asked; a
+later delivery or an operator credit re-checks a held row and turns it `paid`.
+A reversal takes the same transaction lock, flips the row to `refunded`,
+charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
+records what was removed in `revoked_credits` and, when the balance net of
+live pledges cannot cover it, queues the wallet's newest unexpired signed
+credits covering the uncovered part in `credits.revocations`, in one
+transaction. `REFUND_REVERSED` grants `revoked_credits` back (a `refund`
+ledger row) and returns the row to `paid`, or deletes a `refunded` row never
+credited so the purchase can be credited. Readers are the wallet's credit
+orders (`address, created_at DESC`, rows this node credited), the caps
+(`address` and `created_at` partial indexes; rows credited here or
+`imported`) and the operator's held list (`GET /credits/credits/iap/held`,
+the `status = 'held'` partial index). Rows are one per purchase.
 
 `credits.iap_account_tokens` maps an `appAccountToken` (a one-way
 derivation of the wallet, `credits::apple::account_token`) to its wallet:
@@ -1572,16 +1582,20 @@ written by `/iap/register` and an allowed `/iap/quote` (insert; a repeat,
 concurrent or not, returns the existing row), read by the notification to
 find the wallet. One row per wallet.
 
-The credits-server import (`tooling/migration`) writes each upstream App
-Store transaction id as a `refunded` row without a wallet and copies the
-account tokens, both insert-only, so a purchase credited upstream is never
-credited again.
+The credits-server import (`tooling/migration`) writes each upstream USD-rail
+App Store transaction as `imported` with its wallet, cents and upstream time
+(counted by the caps, never charged back) and any other as a `refunded` row
+without a wallet, and copies the account tokens, all insert-only, so a
+purchase credited upstream is never credited again. It reads after upstream's
+App Store routes stop writing.
 
 Invariants: a transaction id credits at most once and never after a refund;
-a refund of a transaction never credited leaves a `refunded` row without a
-wallet, so its later delivery credits nothing. The Credits come from the
-product in Apple's signed transaction (`IAP_PRODUCT_CATALOG_USD`), never from
-the request. `revoked_credits` never exceeds `credits`. The bootstrap defines
+a notification's or device's refund of a transaction never credited, or a
+transaction revoked when first seen, leaves a `refunded` row, so its later
+delivery credits nothing (an operator refund of an unknown id records
+nothing and answers 404). The Credits come from the product in Apple's signed
+transaction (`IAP_PRODUCT_CATALOG_USD`, whole Credits), never from the
+request. `revoked_credits` never exceeds `credits`. The bootstrap defines
 both tables; an existing database gains them from the object pass, so no step
 exists.
 

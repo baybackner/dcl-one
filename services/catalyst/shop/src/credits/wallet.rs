@@ -504,6 +504,7 @@ impl Credits {
                 shortfall: amount.to_string(),
                 has_shortfall: true,
                 uncovered: true,
+                uncovered_amount: amount.to_string(),
             });
         };
         let available_before: String = before.get("available");
@@ -529,7 +530,8 @@ impl Credits {
                        (($3::numeric - available) - ($4::numeric - earned_available))::text AS paid_removed, \
                        GREATEST($2::numeric - ($3::numeric - available), 0)::text AS shortfall, \
                        ($2::numeric > $3::numeric - available) AS has_shortfall, \
-                       ($2::numeric > $3::numeric - (SELECT credits FROM held)) AS uncovered",
+                       ($2::numeric > $3::numeric - (SELECT credits FROM held)) AS uncovered, \
+                       GREATEST($2::numeric - GREATEST($3::numeric - (SELECT credits FROM held), 0), 0)::text AS uncovered_amount",
         )
         .bind(address)
         .bind(amount)
@@ -549,6 +551,7 @@ impl Credits {
         let paid_removed: String = row.get("paid_removed");
         let shortfall: String = row.get("shortfall");
         let has_shortfall: bool = row.get("has_shortfall");
+        let uncovered_amount: String = row.get("uncovered_amount");
 
         let mut detail = detail.clone();
         if let serde_json::Value::Object(map) = &mut detail {
@@ -578,6 +581,7 @@ impl Credits {
             shortfall,
             has_shortfall,
             uncovered: blocked,
+            uncovered_amount,
         })
     }
 }
@@ -594,4 +598,6 @@ pub struct RevokeOutcome {
     pub has_shortfall: bool,
     /// The reversal exceeds the balance net of live pledges: the wallet was blocked.
     pub uncovered: bool,
+    /// How much of the reversal the balance net of live pledges could not cover.
+    pub uncovered_amount: String,
 }

@@ -483,7 +483,7 @@ pub struct ShopConfig {
     #[arg(long, env = "APPLE_APP_APPLE_ID")]
     pub apple_app_apple_id: Option<i64>,
 
-    /// production or sandbox (the default): the App Store environment signed data must name.
+    /// production or sandbox, required with APPLE_BUNDLE_ID: the App Store environment signed data must name.
     #[arg(long, env = "APPLE_ENVIRONMENT")]
     pub apple_environment: Option<String>,
 
