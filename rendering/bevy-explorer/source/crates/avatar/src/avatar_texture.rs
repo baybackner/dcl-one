@@ -274,15 +274,13 @@ fn update_booth_image(
             continue;
         };
         if image.size() != node_size.as_uvec2() {
-            images
-                .get_mut(h_image.image.id())
-                .unwrap()
-                .texture_descriptor
-                .size = Extent3d {
-                width: (node_size.x as u32).max(16),
-                height: (node_size.y as u32).max(16),
-                ..Default::default()
-            };
+            if let Some(image) = images.get_mut(h_image.image.id()) {
+                image.texture_descriptor.size = Extent3d {
+                    width: (node_size.x as u32).max(16),
+                    height: (node_size.y as u32).max(16),
+                    ..Default::default()
+                };
+            }
         }
     }
 }

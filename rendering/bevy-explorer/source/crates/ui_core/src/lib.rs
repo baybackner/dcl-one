@@ -74,7 +74,11 @@ pub enum WeightName {
 pub const FONT_SIZE_SCALE: f32 = 0.95;
 
 pub fn user_font(name: FontName, weight: WeightName) -> Handle<Font> {
-    FONTS.get().unwrap().get(&(name, weight)).unwrap().clone()
+    FONTS
+        .get()
+        .and_then(|fonts| fonts.get(&(name, weight)))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Create the SDK font assets from the embedded font files and register them with the

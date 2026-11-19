@@ -618,7 +618,7 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
     let decentraland_app_config = DecentralandAppConfig::new(
         decentraland_serialized_app_config(),
         decentraland_app_arguments(&options),
-        Some(WASM_ASSET_LOADER_HANDLE.get().unwrap().clone()),
+        WASM_ASSET_LOADER_HANDLE.get().cloned(),
         compute_threads as usize,
     );
 

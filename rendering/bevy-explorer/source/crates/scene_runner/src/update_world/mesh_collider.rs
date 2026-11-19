@@ -404,13 +404,16 @@ impl SceneColliderData {
             if let Some(collider) = self.collider_set.get_mut(handle) {
                 let (req_scale, req_rotation, req_translation) =
                     transform.to_scale_rotation_translation();
-                let ColliderState {
+                let Some(ColliderState {
                     base_collider,
                     translation: init_translation,
                     scale: init_scale,
                     rotation: init_rotation,
                     ..
-                } = self.collider_state.get(id).unwrap();
+                }) = self.collider_state.get(id)
+                else {
+                    return None;
+                };
 
                 if (&req_scale, &req_rotation, &req_translation)
                     != (init_scale, init_rotation, init_translation)
@@ -441,10 +444,11 @@ impl SceneColliderData {
                         }
                     }
 
-                    let state_mut = self.collider_state.get_mut(id).unwrap();
-                    state_mut.translation = req_translation;
-                    state_mut.rotation = req_rotation;
-                    state_mut.scale = new_scale;
+                    if let Some(state_mut) = self.collider_state.get_mut(id) {
+                        state_mut.translation = req_translation;
+                        state_mut.rotation = req_rotation;
+                        state_mut.scale = new_scale;
+                    }
 
                     collider.set_position(Isometry::from_parts(
                         req_translation.as_dvec3().into(),
@@ -848,21 +852,20 @@ impl SceneColliderData {
             },
         );
 
-        result.map(|(handle, intersection)| {
+        result.and_then(|(handle, intersection)| {
             let id = self.get_id(handle).unwrap().clone();
             let position = self
                 .collider_set
-                .get(handle)
-                .unwrap()
+                .get(handle)?
                 .position()
                 .transform_point(&intersection.witness1);
-            RaycastResult {
+            Some(RaycastResult {
                 id,
                 toi: intersection.time_of_impact as f32,
                 normal: DVec3::from(intersection.normal1).as_vec3(),
                 face: None,
                 position: DVec3::from(position).as_vec3(),
-            }
+            })
         })
     }
 
@@ -991,7 +994,9 @@ impl SceneColliderData {
             translation,
             PLAYER_COLLIDER_RADIUS + PLAYER_COLLIDER_OVERLAP,
             |slf, h| {
-                let collided = slf.collider_set.get(h).unwrap();
+                let Some(collided) = slf.collider_set.get(h) else {
+                    return;
+                };
                 let result = parry::query::closest_points(
                     &Isometry::from(Vector::from(translation)),
                     &avatar_inner_segment,

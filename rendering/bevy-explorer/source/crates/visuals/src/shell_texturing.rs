@@ -82,8 +82,9 @@ impl ParcelGrass {
         let parcel = deferred_world.get::<ParcelGrass>(entity).unwrap().parcel;
 
         let mut parcel_grass_map = deferred_world.resource_mut::<ParcelGrassMap>();
-        let removed_entity = parcel_grass_map.remove(&parcel).unwrap();
-        assert_eq!(entity, removed_entity);
+        if let Some(removed_entity) = parcel_grass_map.remove(&parcel) {
+            assert_eq!(entity, removed_entity);
+        }
     }
 }
 

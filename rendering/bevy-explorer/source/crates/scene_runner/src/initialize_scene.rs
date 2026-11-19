@@ -2189,8 +2189,9 @@ fn update_loading_quads(
         );
         let active = (nearest_point - player_translation.xz()).length() < 10.0;
         if prev_active.contains(&h_mat.0.id()) || active {
-            let mat = mats.get_mut(h_mat.0.id()).unwrap();
-            mat.player_pos = player_translation.extend(if active { 1.0 } else { 0.0 })
+            if let Some(mat) = mats.get_mut(h_mat.0.id()) {
+                mat.player_pos = player_translation.extend(if active { 1.0 } else { 0.0 })
+            }
         }
 
         trans.translation.y = player_translation.y + 1000.0;

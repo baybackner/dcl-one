@@ -244,9 +244,12 @@ pub fn handle_scene_permissions(
     }
 
     // send any new requests
-    for i in permission_ids.len()..manager.pending.len() {
-        let req = manager.pending.get(i).unwrap();
-
+    for (i, req) in manager
+        .pending
+        .iter()
+        .enumerate()
+        .skip(permission_ids.len())
+    {
         let Ok(hash) = scenes.get(req.scene).map(|ctx| &ctx.hash) else {
             resolved.insert(i, false);
             permission_ids.push(None);
@@ -301,7 +304,9 @@ pub fn handle_scene_permissions(
     // send out resolved items, and tell the streams any request they were shown is no longer open
     for (index, result) in resolved.iter().rev() {
         let id = permission_ids.remove(*index);
-        let perm = manager.pending.remove(*index).unwrap();
+        let Some(perm) = manager.pending.remove(*index) else {
+            continue;
+        };
         perm.sender.send(*result);
 
         if let Some(id) = id {

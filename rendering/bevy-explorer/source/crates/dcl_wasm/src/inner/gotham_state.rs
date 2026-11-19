@@ -70,13 +70,14 @@ impl GothamState {
         self.try_take().unwrap_or_else(|| missing::<T>())
     }
 
-    pub fn borrow_mut_or_default<T: Default + 'static>(&mut self) -> &mut T {
+    /// The stored `T`, inserting `T::default()` first when absent. `None` only if the slot for
+    /// `T` holds another type.
+    pub fn borrow_mut_or_default<T: Default + 'static>(&mut self) -> Option<&mut T> {
         let type_id = TypeId::of::<T>();
         self.data
             .entry(type_id)
             .or_insert_with(|| Box::new(T::default()))
             .downcast_mut()
-            .unwrap()
     }
 }
 

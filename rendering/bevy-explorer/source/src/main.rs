@@ -110,7 +110,9 @@ fn main() {
 
     // Graceful exits don't need to have the log sent to the analytics server
     // so we remove the touch file
-    let _ = std::fs::remove_file(crash_marker());
+    if let Some(marker) = crash_marker() {
+        let _ = std::fs::remove_file(marker);
+    }
 
     // after the touch file is gone: an early exit would leave it behind and the next run would
     // report the usage error as a crash
@@ -135,8 +137,10 @@ fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
         .client
         .session_id
         .get_or_insert_with(|| uuid::Uuid::new_v4().to_string());
-    if let Err(e) = std::fs::write(crash_marker(), session_id) {
-        warn!("failed to write the session id to the crash marker: {e}");
+    if let Some(marker) = crash_marker() {
+        if let Err(e) = std::fs::write(marker, session_id) {
+            warn!("failed to write the session id to the crash marker: {e}");
+        }
     }
 
     Ok(DecentralandAppConfig::new(
@@ -317,13 +321,16 @@ fn create_logs_folder() {
 }
 
 fn create_log_files() {
-    File::create(SESSION_LOG.get().unwrap())
+    let Some(session_log) = SESSION_LOG.get() else {
+        return;
+    };
+    File::create(session_log)
         .expect("failed to create log file")
-        .write_all(format!("{}\n\n", SESSION_LOG.get().unwrap()).as_bytes())
+        .write_all(format!("{session_log}\n\n").as_bytes())
         .expect("failed to create log file");
 
-    File::create(crash_marker()).unwrap();
-    println!("log file: {}", SESSION_LOG.get().unwrap());
+    File::create(crash_report::marker_of(Path::new(session_log))).unwrap();
+    println!("log file: {session_log}");
 }
 
 /// Generate the file name for the log files of current instance
@@ -343,14 +350,19 @@ fn decentraland_log_file() {
         .unwrap();
 }
 
-/// This run's crash marker: created with the log, removed on a graceful exit.
-fn crash_marker() -> PathBuf {
-    crash_report::marker_of(Path::new(SESSION_LOG.get().unwrap()))
+/// This run's crash marker: created with the log, removed on a graceful exit. `None` before the
+/// session log is named.
+fn crash_marker() -> Option<PathBuf> {
+    SESSION_LOG
+        .get()
+        .map(|session_log| crash_report::marker_of(Path::new(session_log)))
 }
 
 /// The log of an earlier run that left its crash marker behind.
 fn decentraland_crash_file() -> Option<PathBuf> {
-    crash_report::crashed_log(&data_local_dir(), Path::new(SESSION_LOG.get().unwrap()))
+    SESSION_LOG.get().and_then(|session_log| {
+        crash_report::crashed_log(&data_local_dir(), Path::new(session_log))
+    })
 }
 
 /// A launch that stopped before the app ran, carrying the process exit status: 0 when the user

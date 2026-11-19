@@ -63,11 +63,12 @@ impl CrdtStore {
                 new_timestamp,
                 maybe_new_data,
             ),
-            CrdtType::GO(_) => self
-                .go
-                .entry(component_id)
-                .or_default()
-                .append(entity, maybe_new_data.unwrap()),
+            CrdtType::GO(_) => maybe_new_data.is_some_and(|new_data| {
+                self.go
+                    .entry(component_id)
+                    .or_default()
+                    .append(entity, new_data)
+            }),
         }
     }
 
@@ -85,10 +86,12 @@ impl CrdtStore {
                 .or_default()
                 .force_update(entity, maybe_new_data),
             CrdtType::GO(_) => {
-                self.go
-                    .entry(component_id)
-                    .or_default()
-                    .append(entity, maybe_new_data.unwrap());
+                if let Some(new_data) = maybe_new_data {
+                    self.go
+                        .entry(component_id)
+                        .or_default()
+                        .append(entity, new_data);
+                }
                 SceneCrdtTimestamp(0)
             }
         }
@@ -107,12 +110,13 @@ impl CrdtStore {
                 .entry(component_id)
                 .or_default()
                 .update_if_different(entity, maybe_new_data),
-            CrdtType::GO(_) => self
-                .go
-                .entry(component_id)
-                .or_default()
-                .append(entity, maybe_new_data.unwrap())
-                .then_some(SceneCrdtTimestamp(0)),
+            CrdtType::GO(_) => maybe_new_data.and_then(|new_data| {
+                self.go
+                    .entry(component_id)
+                    .or_default()
+                    .append(entity, new_data)
+                    .then_some(SceneCrdtTimestamp(0))
+            }),
         }
     }
 
@@ -179,11 +183,12 @@ impl CrdtStore {
             // last_write must retain authoritative state for future LWW conflict
             // checks, so dirty entries are cloned rather than moved out.
             let updates = std::mem::take(&mut state.updates);
-            let last_write = HashMap::from_iter(
-                updates
-                    .iter()
-                    .map(|update| (*update, state.last_write.get(update).unwrap().clone())),
-            );
+            let last_write = HashMap::from_iter(updates.iter().filter_map(|update| {
+                state
+                    .last_write
+                    .get(update)
+                    .map(|data| (*update, data.clone()))
+            }));
             lww.insert(
                 *component_id,
                 CrdtLWWState {

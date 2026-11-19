@@ -451,7 +451,9 @@ fn update_pointer_target(
             .unwrap_or(player_translation);
         let distance = (nearest_point - player_translation).length();
 
-        let avatar = avatar_colliders.lookup.get(&avatar_hit.id).unwrap();
+        let Some(avatar) = avatar_colliders.lookup.get(&avatar_hit.id) else {
+            return;
+        };
 
         world_target.0 = Some(PointerTargetInfo {
             container: *avatar,
@@ -465,7 +467,9 @@ fn update_pointer_target(
             ty: PointerTargetType::Avatar,
         });
     } else if let Some((scene_entity, hit)) = maybe_nearest_hit {
-        let (_, context, collider_data) = scenes.get_mut(scene_entity).unwrap();
+        let Ok((_, context, collider_data)) = scenes.get_mut(scene_entity) else {
+            return;
+        };
 
         // get player distance
         let nearest_point = collider_data

@@ -216,10 +216,10 @@ fn automatic_testing(
     // process received snapshots
     if let Ok(result) = local_receiver.as_mut().unwrap().try_recv() {
         let name = urlencoding::encode(&result.request.name);
-        let screenshots: &LoadedFolder = folders.get(screenshots.id()).unwrap();
+        let screenshots: Option<&LoadedFolder> = folders.get(screenshots.id());
         let existing_image = screenshots
-            .handles
-            .iter()
+            .into_iter()
+            .flat_map(|folder| folder.handles.iter())
             .find(|h| {
                 let p = h
                     .path()
@@ -236,6 +236,7 @@ fn automatic_testing(
             });
 
         let comparison = (|| {
+            screenshots.ok_or_else(|| "screenshots folder is not loaded".to_owned())?;
             let captured = snapshot_rgb(&result.image)?;
             let suffix = if existing_image.is_some() {
                 "_output"
@@ -427,7 +428,9 @@ fn automatic_testing(
         });
         return;
     };
-    let context = scenes.get(current_scene).unwrap();
+    let Ok(context) = scenes.get(current_scene) else {
+        return;
+    };
 
     // A scene that failed to load never sends a plan: it fails by name (`scene load`, which its
     // `allow_failures` may list, as a step's name) and the run goes on.

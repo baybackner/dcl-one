@@ -255,9 +255,10 @@ fn update_texture_cameras(
 
             let image = match maybe_existing_image {
                 Some(existing) => {
-                    let prev = images.get_mut(existing.0.id()).unwrap();
-                    if prev.texture_descriptor.size != image_size {
-                        prev.texture_descriptor.size = image_size;
+                    if let Some(prev) = images.get_mut(existing.0.id()) {
+                        if prev.texture_descriptor.size != image_size {
+                            prev.texture_descriptor.size = image_size;
+                        }
                     }
                     existing.0.clone()
                 }

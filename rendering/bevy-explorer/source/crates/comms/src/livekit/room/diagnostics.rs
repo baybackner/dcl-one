@@ -269,7 +269,9 @@ fn room_diagnostics(
             if traffic.is_none() {
                 result["unavailable"][key] = json!("Room has not connected");
             } else {
-                result["unavailable"].as_object_mut().unwrap().remove(key);
+                if let Some(unavailable) = result["unavailable"].as_object_mut() {
+                    unavailable.remove(key);
+                }
             }
         } else {
             #[cfg(not(target_arch = "wasm32"))]

@@ -790,7 +790,9 @@ impl PulseDecoder {
         if self.tick_secs(delta.server_tick) < joined_at {
             return Vec::new();
         }
-        let subject = self.subjects.get_mut(&delta.subject_id).unwrap();
+        let Some(subject) = self.subjects.get_mut(&delta.subject_id) else {
+            return Vec::new();
+        };
 
         // A reliable baseline may still be in flight. Keep one future update to chain when it
         // arrives; request a resync too, since the gap may be genuine packet loss.

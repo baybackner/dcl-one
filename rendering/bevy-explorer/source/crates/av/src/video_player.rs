@@ -427,13 +427,15 @@ fn play_videos(
                     length,
                 })) => {
                     debug!("resize");
-                    let image = images.get_mut(&video.image).unwrap();
                     let target_extent = Extent3d {
                         width: width.max(16),
                         height: height.max(16),
                         depth_or_array_layers: 1,
                     };
-                    if image.texture_descriptor.size != target_extent {
+                    if let Some(image) = images
+                        .get_mut(&video.image)
+                        .filter(|image| image.texture_descriptor.size != target_extent)
+                    {
                         debug!("resize {target_extent:?}");
                         image.data = None;
                         image.texture_descriptor.size = target_extent;
@@ -456,15 +458,15 @@ fn play_videos(
 
             // no pixels: the render world copied the frame into the gpu image itself
             if let Some(pixels) = frame.data() {
-                let image = images.get_mut(&video.image).unwrap();
-
-                match &mut image.data {
-                    Some(data) => {
-                        data.copy_from_slice(pixels);
-                        image.transfer_priority = RenderAssetTransferPriority::Priority(-2);
-                    }
-                    None => {
-                        image.data = Some(pixels.to_owned());
+                if let Some(image) = images.get_mut(&video.image) {
+                    match &mut image.data {
+                        Some(data) => {
+                            data.copy_from_slice(pixels);
+                            image.transfer_priority = RenderAssetTransferPriority::Priority(-2);
+                        }
+                        None => {
+                            image.data = Some(pixels.to_owned());
+                        }
                     }
                 }
             }

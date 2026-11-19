@@ -241,7 +241,9 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
                 }
             }
             Some(PointerResult::Builtin(handle)) => {
-                let reps = self.assets.get(handle).unwrap();
+                let Some(reps) = self.assets.get(handle) else {
+                    return Err(CollectibleError::Missing);
+                };
                 match reps.representations.get(body_shape) {
                     Some(collectible) => Ok(collectible),
                     None => Err(CollectibleError::NoRepresentation),
@@ -294,7 +296,11 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
                     Err(CollectibleError::Loading)
                 }
             }
-            Some(PointerResult::Builtin(handle)) => Ok(&self.assets.get(handle).unwrap().data),
+            Some(PointerResult::Builtin(handle)) => self
+                .assets
+                .get(handle)
+                .map(|asset| &asset.data)
+                .ok_or(CollectibleError::Missing),
             None => {
                 self.collectibles
                     .pointer_request
@@ -310,8 +316,11 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
     }
 
     pub fn add_builtin(&mut self, urn: CollectibleUrn<T>, value: Collectible<T>) {
-        if let Some(PointerResult::Builtin(h)) = self.collectibles.pointers.get(&urn) {
-            let asset = self.assets.get_mut(h).unwrap();
+        let existing = match self.collectibles.pointers.get(&urn) {
+            Some(PointerResult::Builtin(h)) => self.assets.get_mut(h),
+            _ => None,
+        };
+        if let Some(asset) = existing {
             asset.representations.extend(value.representations);
             asset
                 .data

@@ -89,26 +89,25 @@ pub fn spawn_scene(
 
     IoTaskPool::get()
         .spawn(async move {
+            let Some(scene_queue) = SCENE_QUEUE.get() else {
+                bevy::log::error!("scene queue not initialized");
+                return;
+            };
             // push data to static vec
-            SCENE_QUEUE
-                .get()
-                .unwrap()
-                .lock()
-                .await
-                .push(SceneInitializationData {
-                    initial_crdt_store,
-                    scene_context,
-                    thread_rx,
-                    scene_js,
-                    crdt_component_interfaces,
-                    renderer_sender,
-                    global_update_receiver,
-                    storage_root,
-                    super_user,
-                    scene_origin,
-                    kill_flag: kill_flag.clone(),
-                    ipc_close: ipc_close.clone(),
-                });
+            scene_queue.lock().await.push(SceneInitializationData {
+                initial_crdt_store,
+                scene_context,
+                thread_rx,
+                scene_js,
+                crdt_component_interfaces,
+                renderer_sender,
+                global_update_receiver,
+                storage_root,
+                super_user,
+                scene_origin,
+                kill_flag: kill_flag.clone(),
+                ipc_close: ipc_close.clone(),
+            });
 
             // spin up a scene thread to consume it
             spawn_and_init_sandbox().await;
@@ -148,7 +147,7 @@ pub async fn wasm_init_scene() -> Result<WorkerContext, JsValue> {
         .lock()
         .await
         .pop()
-        .unwrap();
+        .ok_or_else(|| JsValue::from_str("no scene is queued"))?;
     let context = WorkerContext {
         state: Default::default(),
     };

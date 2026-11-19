@@ -162,7 +162,7 @@ fn load_frame(
         // get frame
         let h_gltf = match gltf_handles.entry(frame.frame_type) {
             Entry::Vacant(vacancy) => {
-                if let Some(path) = NFTSHAPE_LOOKUP.get(&frame.frame_type).unwrap() {
+                if let Some(Some(path)) = NFTSHAPE_LOOKUP.get(&frame.frame_type) {
                     vacancy.insert(asset_server.load(*path)).clone()
                 } else {
                     commands.entity(ent).remove::<FrameLoading>();

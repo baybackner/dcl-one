@@ -251,8 +251,7 @@ pub fn process_streams(
                 }
             }
 
-            if let Some(index) = next_index {
-                let context = streams.get_mut(index).unwrap();
+            if let Some(context) = next_index.and_then(|index| streams.get_mut(index)) {
                 context.send_frame();
             }
         }

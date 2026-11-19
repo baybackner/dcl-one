@@ -158,7 +158,9 @@ fn transport_on_add(
 ) {
     let entity = trigger.target();
     let (transport_debug_ui_entity, children) = transport_debug_ui.into_inner();
-    let (transport, has_scene_room) = transports.get(entity).unwrap();
+    let Ok((transport, has_scene_room)) = transports.get(entity) else {
+        return;
+    };
 
     let next_row = transport_columns
         .iter_many(children.collection())
@@ -197,8 +199,8 @@ fn transport_on_remove(
     let deleted_row = children
         .iter()
         .find_map(|child| {
-            let node = nodes.get(child).unwrap();
-            let (_, transport_ref) = transport_refs.get(child).unwrap();
+            let node = nodes.get(child).ok()?;
+            let (_, transport_ref) = transport_refs.get(child).ok()?;
             if transport_ref.0 == entity {
                 node.grid_row.get_start()
             } else {
@@ -208,7 +210,7 @@ fn transport_on_remove(
         .unwrap();
     // Despawn nodes that reference entity that had
     for transport_ref_entity in children.iter().filter_map(|child| {
-        let (node_entity, transport_ref) = transport_refs.get(child).unwrap();
+        let (node_entity, transport_ref) = transport_refs.get(child).ok()?;
         if transport_ref.0 == entity {
             Some(node_entity)
         } else {
@@ -233,7 +235,9 @@ fn transport_on_insert(
     transport_references: Query<(Entity, &TransportRef), With<TransportColumn>>,
 ) {
     let entity = trigger.target();
-    let transport = transports.get(entity).unwrap();
+    let Ok(transport) = transports.get(entity) else {
+        return;
+    };
 
     let Some(node) =
         transport_references

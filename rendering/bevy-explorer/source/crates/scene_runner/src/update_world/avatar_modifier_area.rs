@@ -230,8 +230,10 @@ fn update_avatar_modifier_area(
         // for each modifier area the player is within (starting from oldest)
         let mut areas_clone = modifiers.areas.clone();
         for active_area in areas_clone.iter_mut() {
-            let (_, scene_ent, maybe_area, maybe_modifier, _) =
-                areas.get(active_area.entity).unwrap();
+            let Ok((_, scene_ent, maybe_area, maybe_modifier, _)) = areas.get(active_area.entity)
+            else {
+                continue;
+            };
 
             if maybe_area.is_some_and(|area| !area.0.modifiers.is_empty()) {
                 let area = maybe_area.unwrap();

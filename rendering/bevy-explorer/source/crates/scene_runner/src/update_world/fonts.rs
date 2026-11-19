@@ -315,7 +315,9 @@ impl SceneFontServer<'_, '_> {
             );
         }
 
-        let family = self.families.families.get_mut(key).unwrap();
+        let Some(family) = self.families.families.get_mut(key) else {
+            return user_font(fallback, weight);
+        };
         if let Some(slot) = family.slots.get(&weight) {
             return slot.handle.clone();
         }
@@ -445,8 +447,13 @@ fn update_scene_fonts(mut fonts: SceneFontServer, scenes: Query<(), With<Rendere
             Stage::ContentFile(handle) => match ipfas.load_state(handle.id()) {
                 LoadState::Loaded => {
                     debug!("font `{}` loaded as a scene file", key.src);
-                    let font = assets.get(handle.id()).unwrap().clone();
-                    family.stage = Stage::Single(font);
+                    family.stage = match assets.get(handle.id()) {
+                        Some(font) => Stage::Single(font.clone()),
+                        None => {
+                            warn!("font `{}` loaded but is missing from assets", key.src);
+                            Stage::Failed
+                        }
+                    };
                 }
                 LoadState::Failed(_) => match fontsource_id(&key.src) {
                     Some(id) => {
@@ -532,7 +539,9 @@ fn update_scene_fonts(mut fonts: SceneFontServer, scenes: Query<(), With<Rendere
             let Some(font) = font else {
                 continue;
             };
-            let slot = family.slots.get_mut(&weight).unwrap();
+            let Some(slot) = family.slots.get_mut(&weight) else {
+                continue;
+            };
             assets.insert(slot.handle.id(), font);
             slot.source = SlotSource::Done;
         }

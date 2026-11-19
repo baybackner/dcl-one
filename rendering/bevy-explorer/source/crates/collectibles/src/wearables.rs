@@ -638,8 +638,9 @@ fn clean_images(
             continue;
         };
         if image.asset_usage.intersects(RenderAssetUsages::MAIN_WORLD) {
-            let image = images.get_mut(id).unwrap();
-            image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+            if let Some(image) = images.get_mut(id) {
+                image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+            }
         }
     }
 
@@ -658,8 +659,9 @@ fn clean_images(
                 continue;
             };
             if image.asset_usage.intersects(RenderAssetUsages::MAIN_WORLD) {
-                let image = images.get_mut(*id).unwrap();
-                image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+                if let Some(image) = images.get_mut(*id) {
+                    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+                }
             }
         }
     }

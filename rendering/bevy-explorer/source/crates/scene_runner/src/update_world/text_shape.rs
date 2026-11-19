@@ -837,7 +837,9 @@ impl AtlasPage {
         let old_size = self.size;
         let new_size = old_size * 2;
         let bpp = self.bytes_per_pixel as usize;
-        let image = images.get_mut(&self.image).unwrap();
+        let Some(image) = images.get_mut(&self.image) else {
+            return Err(AtlasFull);
+        };
         let old = image.data.take().unwrap();
         let mut data = vec![0u8; (new_size * new_size) as usize * bpp];
         let row = old_size as usize * bpp;
@@ -857,7 +859,9 @@ impl AtlasPage {
     fn write(&self, images: &mut Assets<Image>, pos: UVec2, width: u32, height: u32, src: &[u8]) {
         let bpp = self.bytes_per_pixel as usize;
         let row = width as usize * bpp;
-        let image = images.get_mut(&self.image).unwrap();
+        let Some(image) = images.get_mut(&self.image) else {
+            return;
+        };
         let data = image.data.as_mut().unwrap();
         for y in 0..height as usize {
             let dst = ((pos.y as usize + y) * self.size as usize + pos.x as usize) * bpp;
@@ -1012,9 +1016,9 @@ impl GlyphAtlas {
         let old_sdf = self.sdf.restart(images);
         let old_color = self.color.as_mut().map(|page| page.restart(images));
         self.add_white(images);
-        let old_data = |handle: &Handle<Image>| images.get(handle).unwrap().data.clone().unwrap();
+        let old_data = |handle: &Handle<Image>| images.get(handle).and_then(|i| i.data.clone());
         let old_sdf_data = old_data(&old_sdf);
-        let old_color_data = old_color.as_ref().map(old_data);
+        let old_color_data = old_color.as_ref().and_then(old_data);
         // glyphs with no ink have nothing to move (and an empty rect has no size); dropped
         // glyphs start over
         let (mut inked, mut inkless): (Vec<_>, Vec<_>) = old_glyphs
@@ -1028,11 +1032,12 @@ impl GlyphAtlas {
         inked.sort_by_key(|(_, slot)| std::cmp::Reverse((slot.rect.height(), slot.rect.width())));
         for (key, slot) in inked {
             let (page, old) = match slot.page {
-                Page::Sdf => (&mut self.sdf, &old_sdf_data),
-                Page::Color => (
-                    self.color.as_mut().unwrap(),
-                    old_color_data.as_ref().unwrap(),
-                ),
+                Page::Sdf => (&mut self.sdf, old_sdf_data.as_ref()),
+                Page::Color => (self.color.as_mut().unwrap(), old_color_data.as_ref()),
+            };
+            // without its old pixels the glyph is rastered again on next use
+            let Some(old) = old else {
+                continue;
             };
             let raster = page.read(old, slot.rect);
             if !in_use.contains(&key) {

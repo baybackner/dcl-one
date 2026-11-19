@@ -166,7 +166,9 @@ async fn inspect(mut socket: WebSocketStream<TcpStream>) -> Result<()> {
                 let Some(id) = command["id"].as_u64() else { continue };
                 match command["method"].as_str() {
                     Some("Network.enable") => {
-                        receiver.get_or_insert_with(|| REPORTER.get().unwrap().events.subscribe());
+                        if receiver.is_none() {
+                            receiver = REPORTER.get().map(|reporter| reporter.events.subscribe());
+                        }
                         json!({"id":id,"result":{}})
                     },
                     Some("Network.disable") => {

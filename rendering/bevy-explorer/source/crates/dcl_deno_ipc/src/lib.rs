@@ -293,7 +293,9 @@ pub async fn renderer_ipc_out(
                 // the scene host doesn't echo our close back, so release the entry here
                 if matches!(ipc.1, IpcMessage::Closed) {
                     ENGINE_IPC_CONTEXT.with_borrow_mut(|ctx| {
-                        ctx.as_mut().unwrap().ipc_channel_registry.remove(&ipc.0)
+                        if let Some(ctx) = ctx.as_mut() {
+                            ctx.ipc_channel_registry.remove(&ipc.0);
+                        }
                     });
                 }
                 write_msg(&mut stream, &EngineToScene::IpcMessage(ipc.0, ipc.1)).await;

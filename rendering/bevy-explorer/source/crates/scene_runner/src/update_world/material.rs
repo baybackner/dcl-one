@@ -887,7 +887,9 @@ fn update_loading_materials(
             State::Ok => true,
             State::Pending => false,
             State::Failed => {
-                let mat = mats.get_mut(h_mat).unwrap();
+                let Some(mat) = mats.get_mut(h_mat) else {
+                    continue;
+                };
 
                 for item in [
                     &mut mat.base.base_color_texture,

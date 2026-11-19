@@ -212,25 +212,28 @@ fn strip_prefix(key: &mut String) {
     *key = key.split_once(':').unwrap().1.to_owned()
 }
 
-fn with_storage<R>(state: &WorkerContext, f: impl Fn(&mut HashMap<String, String>) -> R) -> R {
-    f(&mut state
-        .state
-        .borrow_mut()
+fn with_storage<R>(
+    state: &WorkerContext,
+    f: impl Fn(&mut HashMap<String, String>) -> R,
+) -> Result<R, WasmError> {
+    let mut state = state.state.borrow_mut();
+    let storage = state
         .borrow_mut_or_default::<LocalStorage>()
-        .0)
+        .ok_or_else(|| anyhow::anyhow!("local storage slot holds another type"))?;
+    Ok(f(&mut storage.0))
 }
 
 // returns filtered keys matching current user, including the prefix
 fn iterate_keys(state: &WorkerContext) -> Result<Vec<String>, WasmError> {
     let address = address(state)?;
     let address = &address;
-    Ok(with_storage(state, |storage| {
+    with_storage(state, |storage| {
         storage
             .keys()
             .filter(|k| k.starts_with(address))
             .map(ToOwned::to_owned)
             .collect()
-    }))
+    })
 }
 
 #[wasm_bindgen]
@@ -256,7 +259,7 @@ pub fn op_webstorage_set(
     let address = address(state)?;
     with_storage(state, |storage| {
         storage.insert(format!("{address}:{key_name}"), value.to_owned())
-    });
+    })?;
     write(state);
     Ok(())
 }
@@ -267,11 +270,11 @@ pub fn op_webstorage_get(
     key_name: &str,
 ) -> Result<Option<String>, WasmError> {
     let address = address(state)?;
-    Ok(with_storage(state, |storage| {
+    with_storage(state, |storage| {
         storage
             .get(&format!("{address}:{key_name}"))
             .map(ToOwned::to_owned)
-    }))
+    })
 }
 
 #[wasm_bindgen]
@@ -279,7 +282,7 @@ pub fn op_webstorage_remove(state: &WorkerContext, key_name: &str) -> Result<(),
     let address = address(state)?;
     with_storage(state, |storage| {
         storage.remove(&format!("{address}:{key_name}"))
-    });
+    })?;
     write(state);
     Ok(())
 }
@@ -291,7 +294,7 @@ pub fn op_webstorage_clear(state: &WorkerContext) -> Result<(), WasmError> {
         for key in &keys {
             storage.remove(key);
         }
-    });
+    })?;
     write(state);
     Ok(())
 }
@@ -306,7 +309,7 @@ pub fn op_webstorage_iterate_keys(state: &WorkerContext) -> Result<Vec<String>, 
 #[wasm_bindgen]
 pub fn op_webstorage_has(state: &WorkerContext, key_name: &str) -> Result<bool, WasmError> {
     let address = address(state)?;
-    Ok(with_storage(state, |storage| {
+    with_storage(state, |storage| {
         storage.contains_key(&format!("{address}:{key_name}"))
-    }))
+    })
 }
