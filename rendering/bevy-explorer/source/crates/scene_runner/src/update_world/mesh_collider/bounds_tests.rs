@@ -558,7 +558,7 @@ fn the_colliders_off_for_bounds_are_counted() {
 
 /// A scene on parcel (0, 0) that `update_scene_collider_data` gave its collider data, in a run
 /// that shows what is out of bounds or in one that does not.
-fn scene_in_a_run(show_out_of_bounds: bool) -> (App, Entity) {
+pub(super) fn scene_in_a_run(show_out_of_bounds: bool) -> (App, Entity) {
     let mut app = App::new();
     app.insert_resource(ShowOutOfBounds(show_out_of_bounds))
         .add_systems(Update, update_scene_collider_data);
