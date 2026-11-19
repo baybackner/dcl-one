@@ -1,12 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
-import { lazy, Suspense } from 'react'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MainMenuShell } from '../features/menu/MainMenuShell'
 import { ProfileChip } from '../features/menu/ProfileChip'
 import shellStyles from '../features/menu/MainMenuShell.module.css'
-import { CreateLoading, CreateShell } from '../features/editorHost/CreatePage'
-import { fakeSession } from './harness'
 
 describe('main menu shell nav', () => {
   function shell() {
@@ -44,7 +41,22 @@ describe('main menu shell nav', () => {
 })
 
 describe('main menu shell entrance', () => {
+  // Each test starts well after the previous one closed its shells.
+  let clock = Date.now()
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    clock += 3_600_000
+    vi.setSystemTime(clock)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
   const darkFrames = (container: HTMLElement): number => container.getElementsByClassName(shellStyles.darkFrame).length
+  const page = (active: string): React.JSX.Element => (
+    <MainMenuShell key={active} active={active} onNavigate={vi.fn()} onClose={vi.fn()}>
+      <div>{active}</div>
+    </MainMenuShell>
+  )
 
   it('a fresh open fades through a dark frame', () => {
     const { container } = render(
@@ -65,48 +77,25 @@ describe('main menu shell entrance', () => {
   })
 
   it('a page switch keeps the open view without a dark frame', () => {
-    const page = (active: string): React.JSX.Element => (
-      <MainMenuShell key={active} active={active} onNavigate={vi.fn()} onClose={vi.fn()}>
-        <div>{active}</div>
-      </MainMenuShell>
-    )
     const { container, rerender } = render(page('map'))
     rerender(page('backpack'))
     expect(screen.getByText('backpack')).toBeTruthy()
     expect(darkFrames(container)).toBe(0)
   })
 
-  it('a first Create load from another page stays a page switch', () => {
-    const Loading = lazy(() => new Promise<never>(() => {}))
-    const session = fakeSession()
-    session.create.open = true
-    const { container, rerender } = render(
-      <MainMenuShell active="map" onNavigate={vi.fn()} onClose={vi.fn()}>
-        <div>map</div>
-      </MainMenuShell>
-    )
-    rerender(
-      <Suspense
-        fallback={
-          <CreateShell create={session.create} profile={session.profile} onNavigate={vi.fn()}>
-            <CreateLoading />
-          </CreateShell>
-        }
-      >
-        <Loading />
-      </Suspense>
-    )
-    expect(screen.getByRole('status')).toHaveTextContent('Opening Create…')
+  it('a page that mounts just after the last one closed is a page switch', () => {
+    const { container, rerender } = render(page('map'))
+    rerender(<></>)
+    rerender(page('create'))
     expect(darkFrames(container)).toBe(0)
   })
 
-  it('the Create shell shows nothing while Create is closed', () => {
-    const { container } = render(
-      <CreateShell create={fakeSession().create} profile={fakeSession().profile} onNavigate={vi.fn()}>
-        <CreateLoading />
-      </CreateShell>
-    )
-    expect(container).toBeEmptyDOMElement()
+  it('a shell that opens a while after the last one closed fades through a dark frame', () => {
+    const { container, rerender } = render(page('map'))
+    rerender(<></>)
+    vi.setSystemTime(Date.now() + 1000)
+    rerender(page('backpack'))
+    expect(darkFrames(container)).toBe(1)
   })
 })
 

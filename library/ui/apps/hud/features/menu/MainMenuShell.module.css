@@ -12,8 +12,8 @@
   transform: scale(var(--ui-scale));
   transform-origin: top left;
   z-index: var(--z-modal);
-  /* the dark frame: above every persistent layer a page stacks in the overlay (the gallery cover
-     is 6); hover tooltips and dropdowns sit higher */
+  /* the dark frame: above every persistent layer a page stacks in the overlay; hover tooltips and
+     dropdowns sit higher */
   --menu-veil-z: 10;
   display: flex;
   flex-direction: column;

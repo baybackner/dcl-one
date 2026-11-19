@@ -33,6 +33,10 @@ const SELECTED_ART: Record<string, [string, number]> = {
 // shell that mounts with none open is a fresh open (animate). The previous shell's unmount cleanup
 // runs AFTER the new shell renders, so reading this at render time correctly sees the outgoing shell.
 let openShells = 0
+// A shell that mounts this soon after the last one closed is a page switch too: a lazily loaded page
+// (Create) mounts its shell only once its code arrives, after the outgoing shell is gone.
+const SWITCH_GAP_MS = 200
+let lastShellClosedAt = Number.NEGATIVE_INFINITY
 
 export interface MenuItem {
   label: string
@@ -86,7 +90,7 @@ export function MainMenuShell({
   children: React.ReactNode
 }): React.JSX.Element {
   // Animate the entrance only on a fresh open (no other shell mounted), not on page switches.
-  const [animate] = useState(() => openShells === 0)
+  const [animate] = useState(() => openShells === 0 && Date.now() - lastShellClosedAt > SWITCH_GAP_MS)
   const bindingsSnap = useBindingsSnapshot()
   const offered = useContext(EditorOffered)
   const presented = useContext(MenuPresentationContext)
@@ -96,6 +100,7 @@ export function MainMenuShell({
     openShells++
     return () => {
       openShells--
+      if (openShells === 0) lastShellClosedAt = Date.now()
     }
   }, [])
 

@@ -7078,7 +7078,7 @@
     },
     {
       "path": "library/ui/apps/hud/App.tsx",
-      "sha256": "f3117c1131c7beb1eb7229e291ac60b0431136ff27a8e5b5d5838ddc9441e1ad"
+      "sha256": "bf0b506bcc719347237e5a3c7c84b5964bdc426440c65cd148ffbcb9503b4421"
     },
     {
       "path": "library/ui/apps/hud/assets/backpack/add-gradient.webp",
@@ -9282,7 +9282,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "sha256": "53ac9ade8463bc15b4d86b12a86ce3ba5941e2cd22dbb8bd95aa3ba73fe33e05"
+      "sha256": "5291915b7abebbfe573a70b6f42990f0b1a1367a6ce8fb29568971bc687442a6"
     },
     {
       "path": "library/ui/apps/hud/features/editorHost/DeployConfirm.module.css",
@@ -9782,11 +9782,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
-      "sha256": "3ff6674f7078578f4545c68484661b81417064bde105816e2de82ba7ea525cc1"
+      "sha256": "6be27261ced1a75491bcdcde77f72b34122bea13e33f851f05b630923d69cb9d"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
-      "sha256": "e5ef09c4dfc65800ab4efab6d6731a3a9435e3b5000877bcf21bf787dc18947f"
+      "sha256": "552d37049501276cbc42d47ad4dbb1e1bed4656df7accb0a33323838bd57b156"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MenuBackdrop.module.css",
@@ -10830,7 +10830,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "sha256": "3b0e356a64ae81ca07a1aefb89e6c164c416ced2a506ef2686702beba8e0ed26"
+      "sha256": "08d593d3686cd7e9da76821284db320f32e5cfa4632be60a132f126e9840a131"
     },
     {
       "path": "library/ui/apps/hud/test/pageWindow.test.ts",
@@ -13942,21 +13942,6 @@
     },
     {
       "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/editorHost/EditorHost.tsx",
       "kind": "native:dynamic"
     },
@@ -43687,21 +43672,6 @@
     },
     {
       "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
       "to": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
       "kind": "native:runtime"
     },
@@ -43743,21 +43713,6 @@
     {
       "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
       "to": "library/ui/apps/hud/features/menu/ProfileChip.tsx",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/test/harness.tsx",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/test/harness.tsx",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
     {

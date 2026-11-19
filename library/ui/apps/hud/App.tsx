@@ -67,7 +67,6 @@ import { DIALOG_TITLE, isDialogSource } from '@explorer-core/features/error/fata
 import { openEntryParamsDialog } from './features/gate/EntryParamsDialog'
 import { EDITOR_BUILD, editorOffered, FEATURES_PARAM } from '@explorer-core/features/editorHost/config'
 import { EditorOffered } from './features/editorHost/EditorOffered'
-import { CreateLoading, CreateShell } from './features/editorHost/CreatePage'
 import { useTipEmote } from './features/donate/useDonate'
 // The scene editor's host and Create page: loaded once Create is first opened. lazy() keeps a
 // failed load, so a crash swaps in a fresh one for the next open.
@@ -571,15 +570,7 @@ function Hud({ integratedGpu, host }: { integratedGpu: GpuAdapterInfo | null; ho
             session.closeAllPanels()
           }}
         >
-          {/* While Create first loads, its empty shell stands in, so arriving from another page stays a
-              page switch rather than a fresh open. */}
-          <Suspense
-            fallback={
-              <CreateShell create={session.create} profile={session.profile} onNavigate={goToMenuPage}>
-                <CreateLoading />
-              </CreateShell>
-            }
-          >
+          <Suspense fallback={null}>
             <EditorHost session={session} entrySearch={ENTRY_SEARCH} onNavigate={goToMenuPage} />
           </Suspense>
         </SurfaceBoundary>
