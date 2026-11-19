@@ -342,20 +342,23 @@ fn suppress_nearby_voice_on_refusal(
 }
 
 /// The focus every mic decision reads: the client window's while Mute Mic in Background is on,
-/// always `Focused` while it is off.
+/// always `Focused` while it is off. An app without a client window (headless) is `Focused`.
 #[derive(SystemParam)]
 pub(crate) struct MicrophoneFocus<'w> {
-    focus: Res<'w, ClientWindowFocus>,
+    focus: Option<Res<'w, ClientWindowFocus>>,
     audio: Res<'w, AudioSettings>,
 }
 
 impl MicrophoneFocus<'_> {
     pub(crate) fn get(&self) -> ClientWindowFocus {
-        self.audio.microphone_focus(*self.focus)
+        self.audio.microphone_focus(self.window())
     }
 
-    pub(crate) fn is_changed(&self) -> bool {
-        self.focus.is_changed() || self.audio.is_changed()
+    fn window(&self) -> ClientWindowFocus {
+        self.focus
+            .as_deref()
+            .copied()
+            .unwrap_or(ClientWindowFocus::Focused)
     }
 }
 

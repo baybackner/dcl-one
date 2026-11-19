@@ -3,7 +3,7 @@ use common::{
     debug_panic,
     inputs::SystemAction,
     rpc::{RpcCall, RpcCallEvent, RpcOrigin},
-    structs::{AudioSettings, ClientWindowFocus, MicState},
+    structs::{AudioSettings, MicState},
 };
 use dcl_component::proto_components::kernel::apis::{
     VideoTrackSourceType, VideoTracksActiveStreamsData, VideoTracksActiveStreamsResponse,
@@ -15,7 +15,6 @@ use tokio::{sync::mpsc, task::JoinHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use {
     crate::livekit::LivekitAudioManager,
-    common::structs::AudioSettings,
     kira::{
         manager::{AudioManager, AudioManagerSettings, DefaultBackend},
         track::TrackBuilder,
@@ -391,19 +390,12 @@ fn handle_input(
 fn respond_to_system_api(
     mut events: EventReader<SystemApi>,
     mut mic: ResMut<MicState>,
-    focus: Option<Res<ClientWindowFocus>>,
-    audio: Res<AudioSettings>,
+    focus: super::mic::MicrophoneFocus,
 ) {
     for ev in events.read() {
         match ev {
-            // headless has no client window focus and never pauses the mic
             SystemApi::GetMicState(rpc_result_sender) => {
-                let focus = focus
-                    .as_deref()
-                    .copied()
-                    .unwrap_or(ClientWindowFocus::Focused);
-                rpc_result_sender
-                    .send(mic.gated_by_client_window_focus(audio.microphone_focus(focus)));
+                rpc_result_sender.send(mic.gated_by_client_window_focus(focus.get()));
             }
             SystemApi::SetMicEnabled(enabled) => {
                 mic.request_enabled(*enabled);

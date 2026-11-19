@@ -31,7 +31,7 @@ impl AppSetting for MuteMicInBackgroundSetting {
     }
 
     fn description(&self) -> String {
-        "Mute Mic in Background\n\nOn: the microphone pauses while the window is not focused. Off: it stays live.".to_owned()
+        "Mute Mic in Background\n\nOn: the microphone pauses while the Explorer is in the background (another app or tab). Off: it stays live.".to_owned()
     }
 
     fn category() -> super::SettingCategory {

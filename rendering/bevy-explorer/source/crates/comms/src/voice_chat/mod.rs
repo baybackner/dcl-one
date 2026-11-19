@@ -422,7 +422,7 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// The state as the HUD sees it; the mic shows off while `focus`, the microphone's, lacks it.
+    /// The state as the HUD sees it; the mic shows off while `focus` (the microphone's) is `NoFocus`.
     pub fn snapshot(
         &self,
         mic: &CallMic,
@@ -583,6 +583,7 @@ fn drive_voice_chat(
     mut voice: ResMut<VoiceChat>,
     mut call_mic: ResMut<CallMic>,
     focus: crate::livekit::mic::MicrophoneFocus,
+    mut last_focus: Local<Option<ClientWindowFocus>>,
     mut inputs: ResMut<VoiceInputs>,
     mut system_api: EventReader<SystemApi>,
     mut social_events: EventReader<VoiceEventReceived>,
@@ -877,15 +878,14 @@ fn drive_voice_chat(
     if voice.state_streams.iter().any(|s| s.is_closed()) {
         voice.state_streams.retain(|s| !s.is_closed());
     }
-    let dirty = force_snapshot
-        || changed
-        || connection_changed
-        || call_mic.is_changed()
-        || focus.is_changed();
+    let mic_focus = focus.get();
+    let focus_changed = last_focus.replace(mic_focus) != Some(mic_focus);
+    let dirty =
+        force_snapshot || changed || connection_changed || call_mic.is_changed() || focus_changed;
     if voice.state_streams.is_empty() || !dirty {
         return;
     }
-    let snapshot = voice.snapshot(&call_mic, focus.get(), &participants);
+    let snapshot = voice.snapshot(&call_mic, mic_focus, &participants);
     for sender in &voice.state_streams {
         let _ = sender.send(snapshot.clone());
     }

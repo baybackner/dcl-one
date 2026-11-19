@@ -185,8 +185,9 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   `document.hasFocus()` on the web) while the Mute Mic in Background setting (Sounds, on by
   default) is on, so it never captures while the player is in another app or tab: it stops
   capturing and publishing for nearby voice and calls alike, and resumes when focus returns.
-  The mic setting does not change, and neither pause nor resume plays the mic on/off sound. The HUD shows the paused mic off: the call panel at once, the nearby mic toggle
-  at its next mic state poll (up to 1 s).
+  The mic setting does not change, and neither pause nor resume plays the mic on/off sound.
+  The HUD shows the paused mic off: the call panel at once, the nearby mic toggle at its next
+  mic state poll (up to 1 s).
   - In a community stream no `MuteSpeakerFromCommunityVoiceChat` is sent for the pause, so
     other clients keep showing the paused speaker unmuted while no audio arrives; the mute
     entry above holds only for a mute the player chooses.
