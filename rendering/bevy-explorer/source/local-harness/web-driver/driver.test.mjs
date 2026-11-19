@@ -539,7 +539,7 @@ function jpegSize(jpeg) {
 
 for (const isolated of [true, false]) {
   describe(`resizeView, app frame ${isolated ? 'out of process' : 'in process'}`, { skip: noChrome }, () => {
-    // the frame fills the page, as the web client's app frame does
+    // the app frame fills the page
     const page = openPage({ isolated, mode: 'hud', query: '&fill=1' });
     const frameSize = async () => (await json(page.driver, '/fixture_state')).size;
 

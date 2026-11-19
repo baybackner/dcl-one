@@ -515,9 +515,9 @@ class Driver {
   }
 
   /** Lay the page out at `width` x `height` CSS px, inside the same window; `null` returns it to
-   *  the window's size. The page gets a `resize` as for a resized window. Resolves once the page
-   *  is at that size and the app frame has drawn two frames since; an app frame that filled the
-   *  page at the window's size fills it again first. Rejects once `timeout` has passed. */
+   *  the window's size. Resolves once the page is at that size, the app frame too when it filled
+   *  the page at the window's size, and the app frame has run two animation frames since. Rejects
+   *  once `timeout` has passed. */
   async resizeView(size, { timeout = PRESENT_TIMEOUT_MS } = {}) {
     const deadline = Date.now() + timeout;
     const late = () => `the app frame did not settle at ${size ? size.join('x') : "the window's size"} within ${timeout} ms`;
@@ -532,7 +532,7 @@ class Driver {
     else await this.#send('Emulation.setDeviceMetricsOverride', { width: size[0], height: size[1], deviceScaleFactor: 0, mobile: false }, this.#page);
     const want = size ?? this.#windowView.size;
     for (;;) {
-      // the app frame may run in its own process, which gets the new size on its own schedule
+      // retries until the deadline: one read can find the page and the app frame at different sizes
       const left = () => Math.max(1, deadline - Date.now());
       const view = await within(this.#readView(), left(), late);
       const settled = view && sameSize(view.page, want) && (!this.#windowView.fills || sameSize(view.app, want));
@@ -551,8 +551,8 @@ class Driver {
     return app == null ? null : { page: JSON.parse(page.result.value), app: JSON.parse(app), context };
   }
 
-  /** `expression`'s value in the app frame's `context`; undefined once the context goes away,
-   *  which Chrome may never answer for. */
+  /** `expression`'s value in the app frame's `context`; undefined when the evaluate fails or the
+   *  context goes away first, without waiting for its answer. */
   async #evaluateInApp(context, expression, awaitPromise) {
     const gone = this.#gone(context);
     try {

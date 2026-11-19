@@ -129,12 +129,12 @@ scenario('the System button opens a panel with the help rows, Escape closes it',
   assert.equal((await explorer.hud.get({ name: 'System', role: 'button' })).checked, false, 'System should not read pressed once its panel is closed')
 })
 
-/** A tall and a wide view: the HUD's scale fits any window shape, so the rail stays whole in both. */
+/** A tall and a wide view. */
 const VIEW_SIZES: Array<[number, number]> = [[700, 900], [1600, 400]]
-/** Only a browser lays the page out at another size inside the same window. */
+/** Skipped on the standalone: its transport has no `resizeView`. */
 const NO_VIEW_RESIZE = target.transport === 'native' ? 'the standalone: the suite cannot resize its window' : undefined
 
-/** The rail buttons not wholly inside a `width` x `height` view, or that a click would miss. */
+/** The rail buttons not wholly inside a `width` x `height` view, or not actionable. */
 async function railButtonsOffView(explorer: Explorer, [width, height]: [number, number]): Promise<string[]> {
   const off: string[] = []
   for (const name of RAIL_BUTTONS) {
@@ -145,8 +145,6 @@ async function railButtonsOffView(explorer: Explorer, [width, height]: [number, 
   return off
 }
 
-// `resizeView` resolves once the app frame has the size and has drawn since, so the HUD has scaled
-// for it: the rail read next is the new layout, not the previous size's.
 scenario('the rail stays whole and clickable in a tall and in a wide view', async ({ explorer, restore }) => {
   await explorer.hud.wait(ME, { timeoutMs: CONTROL_TIMEOUT_MS })
   restore(() => explorer.resizeView(null))
