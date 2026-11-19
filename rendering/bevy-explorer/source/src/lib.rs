@@ -858,7 +858,7 @@ fn setup(
                 hdr: true,
                 // Scene tests keep the simulation camera but render only their
                 // explicit snapshot cameras, avoiding an unused software-rendered view.
-                is_active: testing.test_scenes.is_none(),
+                is_active: !testing.scene_test_run,
                 ..Default::default()
             },
             default_camera_components(),
