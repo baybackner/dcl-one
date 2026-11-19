@@ -1548,6 +1548,37 @@ IP and links. Addresses are lower-cased and checked by the table; the handler
 normalises the body's. The bootstrap defines the table; an existing database
 gains it from the object pass, so no step exists.
 
+## App Store purchases workload
+
+`credits.iap_transactions` (`schemas/60_ops.sql`) holds one row per App Store
+transaction, keyed by Apple's transaction id (`shop/src/credits/iap.rs`).
+Writers are the App Store notification (`POST /credits/apple/webhook`), the
+device's `POST /credits/credits/iap/verify` and the operator's
+`POST /credits/credits/iap` (a credit), and the notification's `REFUND` and the
+operator's `POST /credits/credits/iap/refund` (a reversal). A credit takes a
+transaction-scoped advisory lock on the transaction id, then the node-wide
+App Store lock, reads the caps over the wallet's rows and the node's last 24
+hours, inserts the row and grants the Credits in one transaction; a reversal
+takes the same transaction lock, flips the row to `refunded`, charges the
+Credits back (`Credits::revoke_in_tx`) and, when the balance net of live
+pledges cannot cover it, queues the wallet's unexpired signed credits in
+`credits.revocations`, in one transaction. Readers are the wallet's credit
+orders (`address, created_at DESC`) and the caps (`address` and `created_at`
+partial indexes, rows with a wallet only). Rows are one per purchase.
+
+`credits.iap_account_tokens` maps an `appAccountToken` (a one-way
+derivation of the wallet, `credits::apple::account_token`) to its wallet:
+written by `/iap/register` and an allowed `/iap/quote` (insert, never
+updated), read by the notification to find the wallet. One row per wallet.
+
+Invariants: a transaction id credits at most once and never after a refund;
+a refund of a transaction never credited leaves a `refunded` row without a
+wallet, so its later delivery credits nothing. The Credits come from the
+product in Apple's signed transaction (`IAP_PRODUCT_CATALOG_USD`), never from
+the request. `revoked_credits` never exceeds `credits`. The bootstrap defines
+both tables; an existing database gains them from the object pass, so no step
+exists.
+
 ## Credits checkout and broker claim edges
 
 A credits checkout line buys through the shop broker under the claim key

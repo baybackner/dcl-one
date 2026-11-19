@@ -238,6 +238,61 @@ CREATE TABLE credits.payment_reversals (
     CONSTRAINT payment_reversals_refunded_check CHECK (refunded_cents >= 0)
 );
 
+-- One row per App Store transaction (`transaction_id`, Apple's id, the
+-- idempotency key of the grant and of the refund). A credited purchase
+-- holds the wallet, the credits granted and their USD value; a refund of a
+-- transaction never credited is kept as a `refunded` row without a wallet,
+-- so a later delivery of that purchase is not credited. `revoked_credits` is
+-- what the refund charged back, bounded by the grant.
+CREATE TABLE credits.iap_transactions (
+    transaction_id text NOT NULL,
+    original_transaction_id text,
+    product_id text NOT NULL,
+    address text,
+    credits numeric,
+    amount_cents bigint,
+    status text NOT NULL,
+    -- notification | device | operator: the path that credited it.
+    credited_by text,
+    revoked_credits numeric NOT NULL DEFAULT 0,
+    refund_ref text,
+    refund_reason text,
+    refunded_at timestamp without time zone,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT iap_transactions_pkey PRIMARY KEY (transaction_id),
+    CONSTRAINT iap_transactions_address_check CHECK (address IS NULL OR address ~ '^0x[0-9a-f]{40}$'),
+    CONSTRAINT iap_transactions_status_check CHECK (status IN ('paid', 'refunded')),
+    CONSTRAINT iap_transactions_credited_check
+        CHECK ((address IS NULL) = (credits IS NULL) AND (credits IS NULL) = (amount_cents IS NULL)
+               AND (address IS NULL) = (credited_by IS NULL)),
+    CONSTRAINT iap_transactions_paid_check CHECK (status = 'refunded' OR address IS NOT NULL),
+    CONSTRAINT iap_transactions_credited_by_check CHECK (credited_by IN ('notification', 'device', 'operator')),
+    CONSTRAINT iap_transactions_amount_check CHECK (credits IS NULL OR (credits > 0 AND amount_cents > 0)),
+    CONSTRAINT iap_transactions_revoked_check
+        CHECK (revoked_credits >= 0 AND (credits IS NULL OR revoked_credits <= credits))
+);
+
+-- A wallet's App Store purchases (the credit-order history, newest first,
+-- and the per-wallet caps over its rows), and the node's daily total.
+CREATE INDEX iap_transactions_address_idx ON credits.iap_transactions (address, created_at DESC)
+    WHERE address IS NOT NULL;
+CREATE INDEX iap_transactions_created_idx ON credits.iap_transactions (created_at) WHERE address IS NOT NULL;
+
+-- The wallet behind an App Store `appAccountToken`: the token is a one-way
+-- derivation of the wallet (`credits::apple::account_token`), recorded when
+-- the signed-in wallet registers or quotes, so a server notification that
+-- carries only the token can be credited to it.
+CREATE TABLE credits.iap_account_tokens (
+    token text NOT NULL,
+    address text NOT NULL,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT iap_account_tokens_pkey PRIMARY KEY (token),
+    CONSTRAINT iap_account_tokens_token_check
+        CHECK (token ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+    CONSTRAINT iap_account_tokens_address_check CHECK (address ~ '^0x[0-9a-f]{40}$')
+);
+
 -- One open cart per wallet; the address is the natural key.
 CREATE TABLE credits.carts (
     id bigint GENERATED ALWAYS AS IDENTITY,

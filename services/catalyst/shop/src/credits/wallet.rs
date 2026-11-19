@@ -503,6 +503,7 @@ impl Credits {
                 removed: "0".to_string(),
                 shortfall: amount.to_string(),
                 has_shortfall: true,
+                uncovered: true,
             });
         };
         let available_before: String = before.get("available");
@@ -576,6 +577,7 @@ impl Credits {
             removed,
             shortfall,
             has_shortfall,
+            uncovered: blocked,
         })
     }
 }
@@ -590,4 +592,6 @@ pub struct RevokeOutcome {
     /// Whether `shortfall` is strictly positive, decided by PostgreSQL in
     /// NUMERIC (the text form may render as "0.00").
     pub has_shortfall: bool,
+    /// The reversal exceeds the balance net of live pledges: the wallet was blocked.
+    pub uncovered: bool,
 }

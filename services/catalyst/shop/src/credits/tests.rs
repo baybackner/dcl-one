@@ -295,25 +295,27 @@ fn lazy_pool() -> PgPool {
         .expect("lazy pool")
 }
 
-async fn pool() -> Option<PgPool> {
+pub(super) async fn pool() -> Option<PgPool> {
     crate::db::scratch::pool(8).await
 }
 
 pub(super) use crate::test_db::OwnDatabase;
 
-struct StateCfg {
-    mock_card: bool,
-    fulfillment_mode: &'static str,
-    stripe_webhook_secret: Option<&'static str>,
-    onchain_authorize_enabled: bool,
-    require_purchase_intent: bool,
-    admin_token: Option<&'static str>,
-    writes_enabled: bool,
+pub(super) struct StateCfg {
+    pub(super) iap: Option<Arc<super::iap::Iap>>,
+    pub(super) mock_card: bool,
+    pub(super) fulfillment_mode: &'static str,
+    pub(super) stripe_webhook_secret: Option<&'static str>,
+    pub(super) onchain_authorize_enabled: bool,
+    pub(super) require_purchase_intent: bool,
+    pub(super) admin_token: Option<&'static str>,
+    pub(super) writes_enabled: bool,
 }
 
 impl Default for StateCfg {
     fn default() -> Self {
         Self {
+            iap: None,
             mock_card: false,
             fulfillment_mode: "secondary",
             stripe_webhook_secret: None,
@@ -326,7 +328,7 @@ impl Default for StateCfg {
 }
 
 fn state_with(pool: PgPool, cfg: StateCfg, market: FakeMarket, broker: MockBroker) -> SharedState {
-    let settings = Settings::parse(RawSettings {
+    let mut settings = Settings::parse(RawSettings {
         writes_enabled: cfg.writes_enabled,
         mock_card: cfg.mock_card,
         // The mock card runs only on Amoy (Settings::parse); the HTTP routes under test do not read the chain.
@@ -345,6 +347,7 @@ fn state_with(pool: PgPool, cfg: StateCfg, market: FakeMarket, broker: MockBroke
         ..RawSettings::default()
     })
     .unwrap();
+    settings.iap = cfg.iap;
     Arc::new(State::with_sources(
         pool,
         Outbound::for_tests(),
@@ -355,7 +358,7 @@ fn state_with(pool: PgPool, cfg: StateCfg, market: FakeMarket, broker: MockBroke
     ))
 }
 
-fn test_state(pool: PgPool, cfg: StateCfg) -> SharedState {
+pub(super) fn test_state(pool: PgPool, cfg: StateCfg) -> SharedState {
     state_with(pool, cfg, FakeMarket::default(), MockBroker::configured())
 }
 
