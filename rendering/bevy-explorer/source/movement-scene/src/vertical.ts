@@ -172,7 +172,7 @@ function vstep(s: VState, pressed: boolean, running: boolean, onGroundTick: bool
   if (onGround) {
     // a landing more than LANDING_STUN_DROP below the top of the airtime stuns for landingStunTime, in whole steps
     if (s.lastGroundedStep !== s.step - 1 && s.topY - s.y > LANDING_STUN_DROP) {
-      s.stunEndStep = s.step + Math.round(landingStunTime / FIXED_STEP);
+      s.stunEndStep = s.step + landingStunSteps();
     }
     s.topY = s.y;
     s.lastGroundedStep = s.step;
@@ -516,10 +516,13 @@ var airPublishedStep = NEVER;
 export function airLaunchStep(): number { return vstate.airLaunchStep; }
 // Landing stun: horizontal movement stops on steps up to stunEndStep() (exclusive) of the committed model. Before the
 // committed model reaches the ground, landingStuns() tells whether that landing will stun (the drop from the top to
-// the ground under the avatar is over LANDING_STUN_DROP); once landed the top is the ground and it is false.
+// the ground under the avatar is over LANDING_STUN_DROP and the stun lasts a step or more); once landed the top is the
+// ground and it is false.
 export function stunEndStep(): number { return vstate.stunEndStep; }
 export function stunned(): boolean { return vstate.step < vstate.stunEndStep; }
-export function landingStuns(): boolean { return vstate.topY - groundY > LANDING_STUN_DROP; }
+export function landingStuns(): boolean { return landingStunSteps() > 0 && vstate.topY - groundY > LANDING_STUN_DROP; }
+// Steps a stunning landing holds the avatar for: none when the scene's hardLandingCooldown rounds to 0 or less.
+function landingStunSteps(): number { return Math.round(landingStunTime / FIXED_STEP); }
 // The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
 var landedNow = false;
 // Height the engine last placed the avatar at, while it has not touched the ground since (a landing stun's top ignores
