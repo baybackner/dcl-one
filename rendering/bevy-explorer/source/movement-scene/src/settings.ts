@@ -53,11 +53,8 @@ export const settings = {
   // h-speed (m/s) above which glide uses the forward (pitched) pose; below it
   // uses the upright/idle pose ("lean back").
   glideForwardSpeed: 3,
-  // Playback speed of the glider deploy/stow clips (Glider_Open / Glider_Close).
-  // Higher = the glider snaps into the hands faster on glide start.
-  gliderOpenSpeed: 2.1,
-  // Crossfade time (s) between the glider prop's forward/left/right poses
-  // (src/glider.ts). Higher = lazier, smoother banking of the glider mesh.
+  // Crossfade time (s) between the forward and idle glide poses (GLIDE_AVATAR in index.ts).
+  // Higher = a lazier, smoother swap.
   gliderFade: 0.5,
 
   // --- Jump look & feel ---

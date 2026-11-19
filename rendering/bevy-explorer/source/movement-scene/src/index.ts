@@ -9,10 +9,6 @@ import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
 import { beginTick } from './clock';
-// Test geometry — kept in the tree but disconnected so it has no effect on a
-// production deployment. Re-enable the import + the call in main() to test
-// long glides.
-// import { initTestTower } from './testTower';
 
 // Avatar-bus audio clip pools published via MovementAnimation.sounds. Engine
 // plays each listed clip once per frame on the avatar's local audio bus — the
@@ -121,8 +117,7 @@ const DOUBLE_JUMP: Record<JumpVariation, { plain: string; right: string }> = {
 const DOUBLE_JUMP_SPEED = 0.7;
 const DOUBLE_JUMP_BLEND = 0.05; // s
 const DOUBLE_JUMP_EXIT = 0.778; // fraction of the clip
-// Directional glide avatar poses (the glider model itself is a separate prop
-// entity — see src/glider.ts).
+// Directional glide avatar poses.
 // The glider model is embedded in these clips, so it renders and networks for free via the scene-driven movement animation — no
 // separate prop rig. Left/right banking is procedural (tiltRoll), not per-clip.
 const GLIDE_AVATAR = {
@@ -176,8 +171,6 @@ export function main() {
   initGroundProbes();
   initStepCasts();
   initWalkSystem();
-  // Test geometry — disabled for production (see imports above).
-  // initTestTower();
 
   engine.addSystem(initFrame, 100000 + 1);
   engine.addSystem(applyMovement, 100000 - 3);

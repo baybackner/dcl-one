@@ -50,7 +50,6 @@ export function updateEngineWalk(target: Vector3 | undefined, threshold: number 
       stuckCheckXZDist = Infinity;
       walkStartTick = tick;
       walkResult = undefined;
-      //console.log(`[walk] started via engine: target=(${walkTarget.x.toFixed(2)}, ${walkTarget.z.toFixed(2)})`);
     }
     // Same target while walk is active: leave all state alone
   } else if (engineWalkActive) {
@@ -58,7 +57,6 @@ export function updateEngineWalk(target: Vector3 | undefined, threshold: number 
     engineWalkActive = false;
     engineWalkTarget = null;
     if (walkTarget !== null) {
-      //console.log('[walk] cancelled: engine removed target');
       walkResult = false;
       walkTarget = null;
     }
@@ -143,7 +141,6 @@ export function getWalkAxis(): Vector3 | null {
     inputSystem.isPressed(InputAction.IA_FORWARD) ||
     inputSystem.isPressed(InputAction.IA_BACKWARD)
   ) {
-    //console.log('[walk] cancelled: manual input');
     walkResult = false;
     walkTarget = null;
     updateDropCaster(null);
@@ -156,7 +153,6 @@ export function getWalkAxis(): Vector3 | null {
 
   // Stop: reached target within tolerance
   if (xzDist < walkTolerance) {
-    //console.log('[walk] done: reached target');
     walkResult = true;
     walkTarget = null;
     updateDropCaster(null);
@@ -171,7 +167,6 @@ export function getWalkAxis(): Vector3 | null {
     const cappedDrop = Math.min(dropHitDistance, playerPosition.y);
     const allowedDrop = Math.max(DROP_THRESHOLD, playerPosition.y - walkTarget.y + GROUND_SNAP_HEIGHT);
     if (cappedDrop > allowedDrop) {
-      //console.log(`[walk] stopped: drop ahead (drop=${cappedDrop.toFixed(2)}, allowed=${allowedDrop.toFixed(2)})`);
       walkResult = false;
       walkTarget = null;
       updateDropCaster(null);
@@ -185,7 +180,6 @@ export function getWalkAxis(): Vector3 | null {
     stuckCheckTime = time;
     stuckCheckXZDist = xzDist;
     if (progress < STUCK_MIN_PROGRESS) {
-      //console.log(`[walk] stopped: stuck (progress=${progress.toFixed(2)} in ${STUCK_CHECK_INTERVAL}s)`);
       walkResult = false;
       walkTarget = null;
       updateDropCaster(null);
