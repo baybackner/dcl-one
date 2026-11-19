@@ -6,7 +6,7 @@ use crate::drafts::{CollectionDraft, ItemDraft};
 use crate::items::ItemsComponent;
 use dcl_auth::{hash_bytes_v1, verify_hash};
 
-use super::support::{cleanup, off_chain, on_chain, scratch_component, unique};
+use super::support::{cleanup, off_chain, on_chain, save_collection, scratch_component, unique};
 
 const OWNER: &str = "0x1111111111111111111111111111111111111111";
 const OTHER: &str = "0x2222222222222222222222222222222222222222";
@@ -17,12 +17,13 @@ async fn draft_delete_preserves_shared_uploads_and_serializes_with_publication()
         return;
     };
     let collection = Uuid::new_v4();
-    let draft: CollectionDraft =
-        serde_json::from_value(json!({ "id": collection, "name": "Delete fixture" })).unwrap();
-    store
-        .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
-        .await
-        .unwrap();
+    save_collection(
+        &store,
+        OWNER,
+        json!({ "id": collection, "name": "Delete fixture" }),
+    )
+    .await
+    .unwrap();
     let mut item: ItemDraft = serde_json::from_value(json!({
         "id": Uuid::new_v4(), "name": "Delete me", "type": "wearable", "collection_id": collection,
         "data": { "category": "upper_body" },
@@ -170,21 +171,24 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
         return;
     };
     let collection = Uuid::new_v4();
-    let draft: CollectionDraft =
-        serde_json::from_value(json!({ "id": collection, "name": "Collection draft" })).unwrap();
-    let saved = store
-        .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
-        .await
-        .unwrap();
-    assert_eq!(saved.name, "Collection draft");
-    assert!(!saved.is_published);
-    assert!(saved.contract_address.is_none());
-    assert!(
-        store
-            .save_collection_draft(&granted::edit(OTHER, draft.id), &draft)
-            .await
-            .is_err()
+    let draft = json!({ "id": collection, "name": "Collection draft" });
+    let saved = save_collection(&store, OWNER, draft.clone()).await.unwrap();
+    assert_eq!(saved["name"], "Collection draft");
+    assert_eq!(saved["is_published"], false);
+    assert_eq!(
+        saved["salt"],
+        format!(
+            "{:#x}",
+            crate::collections::contract::salt(&collection.to_string())
+        ),
+        "the salt is computed from the id"
     );
+    assert!(
+        saved["contract_address"]
+            .as_str()
+            .is_some_and(dcl_auth::is_eth_address)
+    );
+    assert!(save_collection(&store, OTHER, draft.clone()).await.is_err());
     assert!(
         store
             .collection_drafts(&granted::wallet(OTHER))
@@ -317,12 +321,7 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
     );
     item.contents.remove("missing.glb");
     let contract = on_chain(store.pool(), collection, true).await;
-    assert!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
-            .await
-            .is_err()
-    );
+    assert!(save_collection(&store, OWNER, draft.clone()).await.is_err());
     assert!(
         store
             .save_item_files(
@@ -347,57 +346,50 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
     let linked_id = Uuid::new_v4();
     let provider = "urn:decentraland:matic:collections-thirdparty:example";
     let urn = format!("{provider}:{linked_id}");
-    let mut linked: CollectionDraft =
-        serde_json::from_value(json!({ "id": linked_id, "name": "Linked draft", "urn": urn }))
-            .unwrap();
-    let saved = store
-        .save_collection_draft(&granted::edit(OWNER, linked.id), &linked)
+    let mut linked = json!({ "id": linked_id, "name": "Linked draft", "urn": urn });
+    let saved = save_collection(&store, OWNER, linked.clone())
         .await
         .unwrap();
-    assert_eq!(saved.urn.as_deref(), Some(urn.as_str()));
-    assert_eq!(saved.third_party_id.as_deref(), Some(provider));
-    assert!(!saved.is_published);
-    linked.name = "Renamed linked draft".into();
+    assert_eq!(saved["urn"], urn.as_str());
     assert_eq!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, linked.id), &linked)
+        saved["eth_address"], "",
+        "a third-party collection has no owner"
+    );
+    assert_eq!(saved["is_published"], false);
+    linked["name"] = json!("Renamed linked draft");
+    assert_eq!(
+        save_collection(&store, OWNER, linked.clone())
             .await
-            .unwrap()
-            .name,
-        linked.name
+            .unwrap()["name"],
+        "Renamed linked draft"
     );
     assert!(
-        store
-            .save_collection_draft(&granted::edit(OTHER, linked.id), &linked)
+        save_collection(&store, OTHER, linked.clone())
             .await
             .is_err()
     );
-    linked.urn = None;
+    linked["urn"] = json!(null);
     assert!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, linked.id), &linked)
+        save_collection(&store, OWNER, linked.clone())
             .await
             .is_err()
     );
-    linked.urn = Some(format!(
+    linked["urn"] = json!(format!(
         "urn:decentraland:matic:collections-thirdparty:other:{linked_id}"
     ));
     assert!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, linked.id), &linked)
+        save_collection(&store, OWNER, linked.clone())
             .await
             .is_err()
     );
-    assert_eq!(
-        store
-            .collection_by_id(&granted::read(linked_id))
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT urn_suffix FROM builder.collections WHERE id = $1")
+            .bind(linked_id)
+            .fetch_one(store.pool())
             .await
-            .unwrap()
-            .unwrap()
-            .urn_suffix
-            .as_deref(),
-        Some(urn.as_str())
-    );
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some(urn.as_str()));
+    let mut linked: CollectionDraft = serde_json::from_value(linked).unwrap();
     linked.urn = Some("urn:decentraland:matic:collections-v2:forged".into());
     assert!(linked.validate(linked_id).is_err());
     linked.urn = Some(format!("{provider}:bad suffix"));
@@ -412,14 +404,12 @@ async fn an_item_draft_answers_iso_timestamps() {
         return;
     };
     let collection = Uuid::new_v4();
-    let draft: CollectionDraft =
-        serde_json::from_value(json!({ "id": collection, "name": "Timestamps" })).unwrap();
-    let saved = serde_json::to_value(
-        store
-            .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
-            .await
-            .unwrap(),
+    let saved = save_collection(
+        &store,
+        OWNER,
+        json!({ "id": collection, "name": "Timestamps" }),
     )
+    .await
     .unwrap();
     let item: ItemDraft = serde_json::from_value(json!({
         "id": Uuid::new_v4(), "name": "Stamped", "type": "wearable", "collection_id": collection,
@@ -447,4 +437,152 @@ async fn an_item_draft_answers_iso_timestamps() {
 fn is_iso(value: &str) -> bool {
     chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.3fZ").is_ok()
         && value.len() == "2026-01-01T00:00:00.000Z".len()
+}
+
+#[tokio::test]
+async fn a_name_another_save_is_claiming_is_refused_once_that_save_commits() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
+    let name = format!("Claimed {}", &first.simple().to_string()[..8]);
+    let mut claim = store.pool().begin().await.unwrap();
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('builder.collections name:' || lower($1), 0))",
+    )
+    .bind(&name)
+        .execute(&mut *claim)
+        .await
+        .unwrap();
+    let waiting = {
+        let pool = store.pool().clone();
+        let name = name.to_uppercase();
+        tokio::spawn(async move {
+            let store = ItemsComponent::new(pool, super::support::temp_storage().await);
+            save_collection(&store, OTHER, json!({ "id": second, "name": name })).await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "the second save waits for the name");
+    sqlx::query("INSERT INTO builder.collections (id, name, eth_address) VALUES ($1, $2, $3)")
+        .bind(first)
+        .bind(&name)
+        .bind(OWNER)
+        .execute(&mut *claim)
+        .await
+        .unwrap();
+    claim.commit().await.unwrap();
+    let refused = waiting.await.unwrap().unwrap_err();
+    assert_eq!(
+        (refused.status(), refused.to_string().as_str()),
+        (409, "Name already in use")
+    );
+    cleanup(&store, &[first, second], &[]).await;
+}
+
+#[tokio::test]
+async fn a_submitted_third_party_collection_keeps_its_urn_but_takes_other_edits() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    let provider = format!(
+        "urn:decentraland:matic:collections-thirdparty:kept{}",
+        &id.simple().to_string()[..8]
+    );
+    let urn = format!("{provider}:hats");
+    save_collection(
+        &store,
+        OWNER,
+        json!({ "id": id, "name": "Kept", "urn": urn }),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
+         VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, 'submitted', '{}')",
+    )
+    .bind(id)
+    .bind(format!("0x{}", "1".repeat(64)))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let renamed = save_collection(
+        &store,
+        OWNER,
+        json!({ "id": id, "name": "Renamed", "urn": urn }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renamed["name"], "Renamed");
+    let moved = save_collection(
+        &store,
+        OWNER,
+        json!({ "id": id, "name": "Renamed", "urn": format!("{provider}:caps") }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (moved.status(), moved.to_string().as_str()),
+        (
+            409,
+            "The third party collection already has published items. It can't be updated or inserted."
+        )
+    );
+    cleanup(&store, &[id], &[]).await;
+}
+
+#[tokio::test]
+async fn a_provider_links_a_contract_to_one_collection_and_never_unlinks_it() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
+    let provider = format!(
+        "urn:decentraland:matic:collections-thirdparty:linked{}",
+        &first.simple().to_string()[..8]
+    );
+    let linked = |id: Uuid, suffix: &str, address: Option<&str>| {
+        json!({ "id": id, "name": format!("Linked {suffix}"), "urn": format!("{provider}:{suffix}"),
+            "linked_contract_address": address, "linked_contract_network": address.map(|_| "mainnet") })
+    };
+    let contract = format!("0x{}", "Ab".repeat(20));
+    save_collection(&store, OWNER, linked(first, "one", Some(&contract)))
+        .await
+        .unwrap();
+    let taken = save_collection(&store, OWNER, linked(second, "two", Some(&contract)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (taken.status(), taken.to_string().as_str()),
+        (
+            200,
+            "duplicate key value violates unique constraint \"linkedContract_linkedNetwork_thirdPartyId_unique\""
+        )
+    );
+    let cleared = save_collection(&store, OWNER, linked(first, "one", None))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (cleared.status(), cleared.to_string().as_str()),
+        (
+            200,
+            "Columns linked_contract_address, linked_contract_network cannot be set to null if they were previously not null"
+        )
+    );
+    let kept: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT linked_contract_address, linked_contract_network FROM builder.collections WHERE id = $1",
+    )
+    .bind(first)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        kept,
+        (Some(contract.to_lowercase()), Some("mainnet".into()))
+    );
+    save_collection(&store, OWNER, linked(second, "two", None))
+        .await
+        .unwrap();
+    cleanup(&store, &[first, second], &[]).await;
 }

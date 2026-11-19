@@ -87,7 +87,12 @@ source is down.
   than an empty list. Published content stays readable as any signer reads
   it, a committee member included.
 - Every by-id read is a decision, so it answers 503 when the chain copy is
-  older than its decision bound, as writes do.
+  older than its decision bound, as writes do, with one exception: the
+  stored owner of a draft whose answer no chain fact can change beyond
+  what the owner already holds (a third-party draft, or a standard draft
+  whose contract the copy doesn't hold) reads it in full
+  from a copy that has a complete pass of any age, as the owner's own
+  listing already answers it.
 - Between a creator transfer and the copy's next pass, the previous creator
   keeps the owner's access.
 - A new role or source is one change to `access.rs`, which the authorization

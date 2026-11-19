@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { warnInvalid } from "../warn";
 import type { OrphanItemOut as RsOrphanItemOut } from "@catalyst-api/builder/OrphanItemOut";
-import type { BuilderCollectionOut as RsBuilderCollectionOut } from "@catalyst-api/builder/BuilderCollectionOut";
+import type { CollectionListingRowOut as RsCollectionListingRowOut } from "@catalyst-api/builder/CollectionListingRowOut";
 
 const nullableStr = z.string().nullish().transform((v) => v ?? null);
 /** A builder timestamp (ISO-8601, as the node writes it) as epoch milliseconds. */
@@ -29,23 +29,49 @@ export const COLLECTION_SORTS = [
 ] as const;
 export type CollectionSort = (typeof COLLECTION_SORTS)[number];
 
-export const BuilderCollectionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  type: z.enum(COLLECTION_TYPES),
-  is_published: z.boolean(),
-  is_approved: z.boolean(),
-  reviewed_at: isoMillis,
-  created_at: isoMillis,
-  updated_at: isoMillis,
-  contract_address: nullableStr,
-  third_party_id: nullableStr,
-  urn: nullableStr,
-  status: z.enum(COLLECTION_STATUSES).nullish().transform((v) => v ?? null),
-  pending: z.boolean().nullish().transform((v) => v ?? false),
-  count: z.number(),
-  thumbs: z.array(z.string()),
-});
+const THIRD_PARTY_URN = /^(urn:decentraland:[^:]+:collections-thirdparty:[^:]+):[^:]+$/;
+
+function statusOf(row: { is_published: boolean; is_approved: boolean }): CollectionStatus {
+  if (row.is_approved) return "synced";
+  return row.is_published ? "under_review" : "unsynced";
+}
+
+/** A row of `GET /v1/{address}/collections` (builder-server's `FullCollection`), as the list shows it. */
+export const BuilderCollectionSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    is_published: z.boolean(),
+    is_approved: z.boolean(),
+    reviewed_at: isoMillis,
+    created_at: isoMillis,
+    updated_at: isoMillis,
+    contract_address: nullableStr,
+    urn: z.string(),
+    lock: z.string().nullable(),
+    item_count: z.string().regex(/^\d+$/),
+  })
+  .transform((row) => {
+    const provider = THIRD_PARTY_URN.exec(row.urn)?.[1] ?? null;
+    const type: CollectionType = provider ? "third_party" : "standard";
+    return {
+      id: row.id,
+      name: row.name,
+      type,
+      is_published: row.is_published,
+      is_approved: row.is_approved,
+      reviewed_at: row.reviewed_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      contract_address: row.contract_address,
+      third_party_id: provider,
+      urn: row.urn,
+      status: statusOf(row),
+      pending: row.lock !== null,
+      count: Number(row.item_count),
+      thumbs: [] as string[],
+    };
+  });
 export type BuilderCollection = z.infer<typeof BuilderCollectionSchema>;
 
 const ORPHAN_ITEM_TYPES = ["wearable", "emote", "smart_wearable"] as const;
@@ -102,7 +128,7 @@ type AssignableTo<Sub, Sup> = Sub extends Sup ? true : false;
 type Assert<T extends true> = T;
 
 export type _DriftBuilderCollection = Assert<
-  AssignableTo<RsBuilderCollectionOut, z.input<typeof BuilderCollectionSchema>>
+  AssignableTo<RsCollectionListingRowOut, z.input<typeof BuilderCollectionSchema>>
 >;
 
 export type _DriftOrphanItem = Assert<

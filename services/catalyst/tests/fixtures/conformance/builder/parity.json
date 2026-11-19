@@ -5,22 +5,155 @@
     "revision": "98897af692f26063a088aebb2ea5bb3f683168a2",
     "route_ledger": "services/catalyst/builder/src/tests/upstream_routes.rs"
   },
-  "review_policy": "reviewed means every capture cited for the operation replays against the node with no difference and at least one is cited, for the cases those captures cover; it never means exhaustive equivalence. known_gap names a difference a replay observes, and the capture's replay lists it exactly. not_reviewed means the cited captures, if any, don't settle the operation, even if the node routes it.",
+  "review_policy": "reviewed means every capture cited for the operation replays against the node with no difference, or with differences that only the deliberate gaps the operation lists account for, and at least one is cited, for the cases those captures cover; it never means exhaustive equivalence. known_gap names a difference a replay observes, and the capture's replay lists it exactly. not_reviewed means the cited captures, if any, don't settle the operation, even if the node routes it.",
   "volatile_fields": [
     "created_at",
-    "updated_at"
+    "updated_at",
+    "last_activity_at"
   ],
   "deliberate_gaps": {
-    "timestamped-signatures-only": "Every signed operation: upstream also accepts a request whose auth chain signs only its method and its path below /v1 (lowercased), whatever x-identity-timestamp or x-identity-metadata header the request carries or omits, valid until the delegated key expires. The node accepts only the timestamped payload over its own method and path, at most five minutes old and one minute ahead, and refuses such a request with upstream's 401 {ok:false, data:{message}, error:'Unauthenticated'}.",
-    "signature-window": "Every signed operation: upstream accepts a timestamp up to 30 minutes old or ahead; the node accepts at most five minutes old and one minute ahead, and refuses the rest with the same 401.",
-    "unauthenticated-message": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message.",
-    "chain-copy-lag": "Every operation that reads a collection's published or approved state: upstream asks the Polygon collections subgraph on each request; the node reads its copy of that subgraph, which the shop's collections mirror refreshes every three times MARKETPLACE_MIRROR_INTERVAL_SECS (15 minutes at the default 300). A collection deployed outside the node's own publication flow reads as unpublished, and an approval or a role change as not yet made, until the next pass, so a client that polls after a deployment (the old builder web retries its publish every 5 seconds) waits up to that bound plus the subgraph's lag. When the copy has no complete pass the node answers 503, and when its last pass, or the row or absence a decision reads, is more than 30 minutes old it answers 503 to every request that grants access or writes.",
-    "owner-is-the-chain-creator": "Every operation that decides by a standard collection's owner: once the node's copy of the Polygon collections subgraph holds the collection, its owner is the chain creator for every check; before, the stored eth_address. Upstream compares the stored eth_address in some checks and the chain creator in others until an owner sync rewrites the row, so between a creator transfer and that sync a client of upstream sees the previous creator keep, and the new creator lack, part of the owner's access; the node gives all of it to the chain creator at once.",
-    "managers-from-chain-only": "Every operation that admits an on-chain manager: the node reads managers only from its copy of the Polygon collections subgraph, so only a collection on chain has managers. Upstream also admits the managers a PUT /v1/collections/:id body stored for a collection that is not on chain.",
-    "access-checks-never-write": "DELETE /v1/items/:id and POST /v1/items/:id/files: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
-    "access-before-kind-conflict": "PUT /v1/collections/:id on an existing collection: the node answers 401 Unauthorized to upsert collection before it compares the body's URN with the stored collection, so only a signer who may save the collection gets the 409s for converting it or changing its third party. Upstream answers those 409s first.",
-    "committee-cache": "GET /v1/committee: the node answers from the same read of the Polygon collections subgraph its committee decisions use, kept one hour, so a member added or removed shows up to an hour later. Upstream reads the subgraph on every GET /v1/committee and keeps its own read an hour for decisions.",
-    "committee-unavailable": "Every operation a committee member may perform: when the Polygon collections subgraph can't answer, the node answers 503 to GET /v1/committee and to every decision only the committee could grant, and asks again after 30 seconds. Once its read is more than an hour old and a refresh has failed, a committee member reads published content as any signer does until a read succeeds. Upstream answers GET /v1/committee with an empty list and treats nobody as a member."
+    "timestamped-signatures-only": {
+      "text": "Every signed operation: upstream also accepts a request whose auth chain signs only its method and its path below /v1 (lowercased), whatever x-identity-timestamp or x-identity-metadata header the request carries or omits, valid until the delegated key expires. The node accepts only the timestamped payload over its own method and path, at most five minutes old and one minute ahead, and refuses such a request with upstream's 401 {ok:false, data:{message}, error:'Unauthenticated'}.",
+      "captures": [
+        "source/14-collection-untimestamped-read.json",
+        "source/15-collection-untimestamped-write.json",
+        "source/18-collection-untimestamped-with-headers.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=401"
+      ]
+    },
+    "signature-window": {
+      "text": "Every signed operation: upstream accepts a timestamp up to 30 minutes old or ahead; the node accepts at most five minutes old and one minute ahead, and refuses the rest with the same 401.",
+      "captures": [],
+      "anchors": []
+    },
+    "unauthenticated-message": {
+      "text": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message.",
+      "captures": [
+        "source/03-collection-unsigned.json",
+        "source/07-collection-malformed-chain.json",
+        "source/08-collection-expired-signature.json",
+        "source/09-collection-future-signature.json",
+        "source/10-collection-signature-for-another-path.json",
+        "source/11-collection-metadata-mismatch.json",
+        "source/17-collection-signature-for-another-method.json",
+        "source/19-collection-unsigned-invalid-body.json",
+        "source/28-collection-items-unsigned.json",
+        "source/77-address-collections-unsigned.json",
+        "source/132-collection-save-unsigned.json"
+      ],
+      "anchors": []
+    },
+    "chain-copy-lag": {
+      "text": "Every operation that reads a collection's published or approved state: upstream asks the Polygon collections subgraph on each request; the node reads its copy of that subgraph, which the shop's collections mirror refreshes every three times MARKETPLACE_MIRROR_INTERVAL_SECS (15 minutes at the default 300). A collection deployed outside the node's own publication flow reads as unpublished, and an approval or a role change as not made, until the next pass, so a client that polls after a deployment (the old builder web retries its publish every 5 seconds) waits up to that bound plus the subgraph's lag. When the copy has no complete pass the node answers 503, and when its last pass, or the row or absence a decision reads, is more than 30 minutes old it answers 503 to every request that grants access or writes. A standard collection deployed outside the node's own publication flow within that window still reads as a draft, so its owner can save it: a save that changes its name or calldata gives the row another computed address, and the row no longer maps to the deployed contract. Upstream refuses such a save by asking the Polygon RPC whether the stored address holds a contract, and by the day-long lock the old builder sets right after its deployment.",
+      "captures": [],
+      "anchors": []
+    },
+    "owner-is-the-chain-creator": {
+      "text": "Every operation that decides by a standard collection's owner: once the node's copy of the Polygon collections subgraph holds the collection, its owner is the chain creator for every check; before, the stored eth_address. Upstream compares the stored eth_address in some checks and the chain creator in others until an owner sync rewrites the row, so between a creator transfer and that sync a client of upstream sees the previous creator keep, and the new creator lack, part of the owner's access; the node gives all of it to the chain creator at once.",
+      "captures": [
+        "source/126-collection-new-chain-creator.json",
+        "source/127-collection-stored-owner-after-transfer.json"
+      ],
+      "anchors": []
+    },
+    "managers-from-chain-only": {
+      "text": "Every operation that admits an on-chain manager or answers a collection's managers and minters: the node reads managers and minters only from its copy of the Polygon collections subgraph, so only a collection on chain has them, and a PUT /v1/collections/:id body never sets them. Upstream also stores the managers and minters such a body carries for a collection that is not on chain, answers them and admits those managers.",
+      "captures": [
+        "source/130-collection-save-draft-managers.json"
+      ],
+      "anchors": []
+    },
+    "access-checks-never-write": {
+      "text": "DELETE /v1/items/:id and POST /v1/items/:id/files: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
+      "captures": [],
+      "anchors": []
+    },
+    "access-before-kind-conflict": {
+      "text": "PUT /v1/collections/:id on an existing collection: the node answers 401 Unauthorized to upsert collection before it compares the body's URN with the stored collection, so only a signer who may save the collection gets the 409s for converting it or changing its third party. Upstream answers those 409s first.",
+      "captures": [],
+      "anchors": []
+    },
+    "committee-cache": {
+      "text": "GET /v1/committee: the node answers from the same read of the Polygon collections subgraph its committee decisions use, kept one hour, so a member added or removed shows up to an hour later. Upstream reads the subgraph on every GET /v1/committee and keeps its own read an hour for decisions.",
+      "captures": [],
+      "anchors": []
+    },
+    "committee-unavailable": {
+      "text": "Every operation a committee member may perform: when the Polygon collections subgraph can't answer, the node answers 503 to GET /v1/committee and to every decision only the committee could grant, and asks again after 30 seconds. Once its read is more than an hour old and a refresh has failed, a committee member reads published content as any signer does until a read succeeds. Upstream answers GET /v1/committee with an empty list and treats nobody as a member.",
+      "captures": [],
+      "anchors": []
+    },
+    "collection-list-bounds": {
+      "text": "GET /v1/collections and GET /v1/:address/collections: the node answers at most 1,000 rows (the committee's listing and the public search) or 5,000 rows (an address's own listing) per response, with or without page and limit, and a page's limit above that is answered with the cap as its limit. It refuses with 400 a q longer than 256 characters, more than 5 tag values, a tag longer than 64 characters, a repeated page, limit, q, sort, type or is_published, a type other than standard or third_party, and a negative page or limit, and matches q literally, % and _ included. Upstream answers every matching row, reads % and _ in q as wildcards, and answers those inputs otherwise.",
+      "captures": [],
+      "anchors": []
+    },
+    "address-listing-transferred": {
+      "text": "GET /v1/:address/collections: a collection whose stored owner is the address but whose chain copy names another creator and neither the address as manager or minter is left out of the results, of total and of the status counts. Upstream leaves it out of the results only, after paging, so its total and counts include it, the page that held it answers one row fewer and each later page starts one row further on than the node's.",
+      "captures": [
+        "source/63-address-collections-page.json",
+        "source/106-address-collections-page-two.json"
+      ],
+      "anchors": [
+        "data.total value"
+      ]
+    },
+    "collection-save-input": {
+      "text": "PUT /v1/collections/:id: the node refuses with 400 Invalid request body a body key the schema doesn't name, a blank name, a urn that is not a whole collection URN, a string field over 256 characters, a managers or minters list over 1,000 entries and data over 1 MiB. Upstream drops keys its schema doesn't name, accepts those values.",
+      "captures": [
+        "source/92-collection-save-extra-field.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "initialize-data-creator": {
+      "text": "PUT /v1/collections/:id for a standard collection: the node computes the contract address only from data that is initialize calldata naming the signer as the collection's creator, and refuses other data with 409 Cannot upsert a collection without a valid data, after it has checked who may save the collection. Upstream computes the address from any data string.",
+      "captures": [
+        "source/05-collection-create.json",
+        "source/93-collection-save-foreign-creator.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=409"
+      ]
+    },
+    "invalid-body-detail": {
+      "text": "PUT /v1/collections/:id with a body the schema refuses: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
+      "captures": [
+        "source/16-collection-invalid-body.json"
+      ],
+      "anchors": []
+    },
+    "admin-addresses-not-admitted": {
+      "text": "GET /v1/collections/:id: upstream answers its ADMIN_ADDRESSES wallets the full body of a published collection; the node gives BUILDER_ADMIN_ADDRESSES no role on collection reads, and answers those wallets as any other signer.",
+      "captures": [
+        "source/129-collection-admin.json"
+      ],
+      "anchors": []
+    },
+    "polygon-mainnet-collections": {
+      "text": "GET and PUT /v1/collections/:id and both listings: the node computes a standard collection's address with the Polygon mainnet collection factory and answers urn:decentraland:matic: collection URNs. Upstream deployed against a test network (CHAIN_NAME Sepolia) uses the Amoy factory and amoy URNs.",
+      "captures": [],
+      "anchors": []
+    },
+    "stored-name-trimmed": {
+      "text": "PUT /v1/collections/:id: the node stores and answers a collection's name trimmed of surrounding spaces; upstream stores it as sent and answers it so, also in a refusal's data.",
+      "captures": [
+        "source/135-collection-save-name-case-and-spaces.json"
+      ],
+      "anchors": []
+    },
+    "query-never-overrides": {
+      "text": "GET /v1/:address/collections and GET and PUT /v1/collections/:id: the node takes the address and the id from the path, and a PUT's collection and data from its JSON body, whatever the query string carries; upstream reads an address, id, collection or data query parameter before the path or body. No client sends one: the old builder web, the marketplace and this repository's clients put only the listing filters in the query string.",
+      "captures": [
+        "source/149-address-collections-query-address-other.json",
+        "source/150-address-collections-query-address-own.json",
+        "source/151-collection-query-id.json"
+      ],
+      "anchors": []
+    }
   },
   "operations": [
     {
@@ -68,7 +201,15 @@
             "data.price value",
             "data.rarity value",
             "data.urn value"
-          ]
+          ],
+          "explained_by": {
+            "data.beneficiary value": "open:item-chain-merge",
+            "data.content_hash value": "open:item-chain-merge",
+            "data.is_published value": "open:item-chain-merge",
+            "data.price value": "open:item-chain-merge",
+            "data.rarity value": "open:item-chain-merge",
+            "data.urn value": "open:item-chain-merge"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/37-item-published-owner.json",
@@ -80,7 +221,15 @@
             "data.price value",
             "data.rarity value",
             "data.urn value"
-          ]
+          ],
+          "explained_by": {
+            "data.beneficiary value": "open:item-chain-merge",
+            "data.content_hash value": "open:item-chain-merge",
+            "data.is_published value": "open:item-chain-merge",
+            "data.price value": "open:item-chain-merge",
+            "data.rarity value": "open:item-chain-merge",
+            "data.urn value": "open:item-chain-merge"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/38-item-published-committee.json",
@@ -92,13 +241,21 @@
             "data.price value",
             "data.rarity value",
             "data.urn value"
-          ]
+          ],
+          "explained_by": {
+            "data.beneficiary value": "open:item-chain-merge",
+            "data.content_hash value": "open:item-chain-merge",
+            "data.is_published value": "open:item-chain-merge",
+            "data.price value": "open:item-chain-merge",
+            "data.rarity value": "open:item-chain-merge",
+            "data.urn value": "open:item-chain-merge"
+          }
         }
       ],
       "gaps": [
-        "Published items: upstream merges the collections subgraph's item into the body (urn, price, beneficiary, rarity and content_hash from the chain, is_published true); the node answers its own row's values.",
-        "Third party: upstream answers any signer the public item of a third-party collection that has an item curation; the node answers 401 until it keeps item curations.",
-        "Upstream's ADMIN_ADDRESSES wallets read any published item in full; the node gives BUILDER_ADMIN_ADDRESSES no role.",
+        "open:item-chain-merge",
+        "open:item-curation-publicity",
+        "open:admin-addresses-items",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag"
@@ -125,7 +282,10 @@
           "scope": "GET without an auth chain.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/29-collection-items-stranger.json",
@@ -149,7 +309,17 @@
             "data[].rarity value",
             "data[].urn value",
             "data[].video missing"
-          ]
+          ],
+          "explained_by": {
+            "data[].beneficiary value": "open:item-chain-merge",
+            "data[].content_hash value": "open:item-chain-merge",
+            "data[].description value": "open:item-list-fields",
+            "data[].is_published value": "open:item-chain-merge",
+            "data[].price value": "open:item-chain-merge",
+            "data[].rarity value": "open:item-chain-merge",
+            "data[].urn value": "open:item-chain-merge",
+            "data[].video missing": "open:item-list-fields"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/32-collection-items-published-manager.json",
@@ -163,16 +333,26 @@
             "data[].rarity value",
             "data[].urn value",
             "data[].video missing"
-          ]
+          ],
+          "explained_by": {
+            "data[].beneficiary value": "open:item-chain-merge",
+            "data[].content_hash value": "open:item-chain-merge",
+            "data[].description value": "open:item-list-fields",
+            "data[].is_published value": "open:item-chain-merge",
+            "data[].price value": "open:item-chain-merge",
+            "data[].rarity value": "open:item-chain-merge",
+            "data[].urn value": "open:item-chain-merge",
+            "data[].video missing": "open:item-list-fields"
+          }
         }
       ],
       "gaps": [
-        "Published items: upstream merges the collections subgraph's item into the body (urn, price, beneficiary, rarity and content_hash from the chain, is_published true); the node answers its own row's values.",
-        "Item lists: the node answers an empty description as \"\" where upstream answers null, and omits video when it is null.",
-        "Upstream admits its ADMIN_ADDRESSES wallets to every collection's full list, drafts included; the node gives BUILDER_ADMIN_ADDRESSES no role here.",
-        "Minters: upstream lists every item, drafts included, to a minter of a collection on chain; the node lists a minter the minted items only.",
-        "Third party: upstream lists any signer the items of a third-party collection that have an item curation; the node lists such a signer none until it keeps item curations.",
-        "The node validates status before it looks the collection up; upstream answers 404 for a missing collection first.",
+        "open:item-chain-merge",
+        "open:item-list-fields",
+        "open:admin-addresses-items",
+        "open:minter-item-list",
+        "open:item-curation-publicity",
+        "open:status-before-existence",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
@@ -184,7 +364,7 @@
       "id": "api_http:PUT:/v1/items/:idOrURN",
       "owner": "items",
       "status": "not_reviewed",
-      "result": "Three moves of an existing item that upstream refuses were compared and match: into a third-party collection from no collection, out of a third-party collection, and from one third-party collection to another, each 401 Item can't change between collections. Saves are not compared yet.",
+      "result": "Three moves of an existing item that upstream refuses were compared and match: into a third-party collection from no collection, out of a third-party collection, and from one third-party collection to another, each 401 Item can't change between collections. Saves are not compared.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/33-item-orphan-into-third-party.json",
@@ -203,10 +383,10 @@
         }
       ],
       "gaps": [
-        "Published: upstream lets the owner and an on-chain manager save an existing item's metadata and contents in a published collection (a rarity change, a move or a new item stays 409); the node answers 409 to every save there.",
-        "Locked: upstream answers 423 while the collection's lock is under a day old; the node has no lock yet and answers 423 while its own publication of the collection is in progress.",
-        "Path: upstream also takes a third-party item URN in place of the id and saves third-party items by URN; the node takes a UUID only, and its third-party item saves carry no URN.",
-        "Third party: upstream's provider managers come from the third-party registry; the node's are the wallet that created the collection.",
+        "open:published-item-edits",
+        "open:lock",
+        "open:item-urn-path",
+        "open:third-party-registry",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
         "deliberate:chain-copy-lag"
@@ -220,8 +400,8 @@
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
       "gaps": [
-        "Body: upstream answers data true; the node answers {id}.",
-        "Locked: the node answers 423 while its own publication of the collection is in progress; upstream while the collection's lock is under a day old.",
+        "open:item-delete-body",
+        "open:lock",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
@@ -236,9 +416,9 @@
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
       "gaps": [
-        "Published: upstream accepts uploads from the owner, an on-chain manager or the provider's manager whatever the collection's state; the node answers 409 once the collection is published and 423 while its own publication is in progress.",
-        "Body: upstream answers no data; the node answers the stored file map.",
-        "Bounds: the node accepts at most 100 files and 20 MB together; upstream bounds each file at 25 MiB and not their count.",
+        "open:published-item-uploads",
+        "open:item-files-body",
+        "open:item-files-bounds",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
@@ -267,102 +447,559 @@
     {
       "id": "api_http:GET:/v1/collections",
       "owner": "collections",
-      "status": "not_reviewed",
-      "result": "One case compared: an unsigned search of published collections, with the subgraph answering no collections, matches ({ok:true, data:[]}).",
+      "status": "known_gap",
+      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches except the registry case. Also compared: a programmatic provider's collection on the committee's listing (upstream is_programmatic true, the node leaves it out: the open registry gap).",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/01-collections-public-search.json",
           "scope": "Unsigned GET with q and is_published=true; the fake subgraph lists no collection and no committee member is the caller.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/39-collections-committee-search.json",
+          "scope": "GET /collections signed by a committee member, searching listing collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/40-collections-committee-page.json",
+          "scope": "GET /collections signed by a committee member, paginated, first page of two.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/41-collections-committee-name-desc.json",
+          "scope": "GET /collections signed by a committee member, sorted by name descending.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/42-collections-committee-most-relevant.json",
+          "scope": "GET /collections signed by a committee member, sorted by relevance.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/43-collections-committee-last-activity.json",
+          "scope": "GET /collections signed by a committee member, sorted by last activity, newest first.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/44-collections-committee-requested-at.json",
+          "scope": "GET /collections signed by a committee member, sorted by request date, oldest first.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/45-collections-committee-to-review.json",
+          "scope": "GET /collections signed by a committee member, filtered to collections to review.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/46-collections-committee-statuses.json",
+          "scope": "GET /collections signed by a committee member, filtered to disabled or approved collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/47-collections-committee-pending.json",
+          "scope": "GET /collections signed by a committee member, filtered to pending collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/48-collections-committee-updates.json",
+          "scope": "GET /collections signed by a committee member, filtered to reviews of updates.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/49-collections-committee-unassigned.json",
+          "scope": "GET /collections signed by a committee member, filtered to unassigned standard collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/50-collections-committee-published.json",
+          "scope": "GET /collections signed by a committee member, filtered to published collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/51-collections-committee-unpublished.json",
+          "scope": "GET /collections signed by a committee member, filtered to unpublished collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/52-collections-committee-tag.json",
+          "scope": "GET /collections signed by a committee member, filtered by an item tag in another case.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/53-collections-committee-empty-page.json",
+          "scope": "GET /collections signed by a committee member, paginated with no match.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/54-collections-committee-invalid-status.json",
+          "scope": "GET /collections signed by a committee member, with an unknown status.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/55-collections-committee-two-review-types.json",
+          "scope": "GET /collections signed by a committee member, with two review types.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/56-collections-committee-invalid-assignee.json",
+          "scope": "GET /collections signed by a committee member, with an assignee that is not an address.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/57-collections-public-search-listing.json",
+          "scope": "GET /collections unsigned, searching published listing collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/58-collections-public-search-approved.json",
+          "scope": "GET /collections unsigned, as the marketplace searches approved collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/59-collections-public-search-committee.json",
+          "scope": "GET /collections signed by a committee member, searching published collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/60-collections-stranger.json",
+          "scope": "GET /collections signed by a wallet that is not on the committee, without a search.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/61-collections-unsigned.json",
+          "scope": "GET /collections without a signature or a search.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/110-collections-committee-curation-page.json",
+          "scope": "GET /collections signed by a committee member, as the curation page asks for its first page.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/111-collections-committee-curation-page-two.json",
+          "scope": "GET /collections signed by a committee member, as the curation page asks for a later page.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/112-collections-committee-third-party.json",
+          "scope": "GET /collections signed by a committee member, filtered to third-party collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/113-collections-committee-review-new.json",
+          "scope": "GET /collections signed by a committee member, filtered to reviews of new collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/114-collections-committee-sort-name-asc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by NAME_ASC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/115-collections-committee-sort-created-at-asc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by CREATED_AT_ASC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/116-collections-committee-sort-created-at-desc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by CREATED_AT_DESC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/117-collections-committee-sort-updated-at-asc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by UPDATED_AT_ASC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/118-collections-committee-sort-updated-at-desc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by UPDATED_AT_DESC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/119-collections-committee-sort-last-activity-asc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by LAST_ACTIVITY_ASC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/120-collections-committee-sort-requested-at-desc.json",
+          "scope": "GET /collections signed by a committee member, standard collections sorted by REQUESTED_AT_DESC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/121-collections-committee-assignee.json",
+          "scope": "GET /collections signed by a committee member, filtered to a curator nobody assigned.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/122-collections-committee-rejected.json",
+          "scope": "GET /collections signed by a committee member, filtered to rejected, under review and auto-reviewing collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/123-collections-public-search-page.json",
+          "scope": "GET /collections unsigned, searching published collections, paginated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/124-collections-public-search-tag.json",
+          "scope": "GET /collections unsigned, searching published collections with an item tag.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/125-collections-public-search-type.json",
+          "scope": "GET /collections unsigned, searching published standard collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/143-collections-committee-registered-provider.json",
+          "scope": "GET /collections signed by a committee member, searching collections of a provider the registry lists.",
+          "replay": [
+            "data.length value",
+            "data[].id value",
+            "data[].is_programmatic missing",
+            "data[].name value",
+            "data[].urn value"
+          ],
+          "explained_by": {
+            "data.length value": "open:third-party-registry",
+            "data[].id value": "open:third-party-registry",
+            "data[].is_programmatic missing": "open:third-party-registry",
+            "data[].name value": "open:third-party-registry",
+            "data[].urn value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/147-collections-committee-programmatic-provider.json",
+          "scope": "GET /collections signed by a committee member, searching collections of a programmatic provider.",
+          "replay": [
+            "data[].is_programmatic missing"
+          ],
+          "explained_by": {
+            "data[].is_programmatic missing": "open:third-party-registry"
+          }
         }
       ],
       "gaps": [
-        "deliberate:chain-copy-lag"
+        "open:third-party-registry",
+        "deliberate:collection-list-bounds",
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:managers-from-chain-only",
+        "deliberate:polygon-mainnet-collections"
       ],
-      "remaining_verification": "Capture the committee listing, pagination (with page and limit, upstream answers {total, limit, pages, page, results}), the review, tag and type filters, and a search that finds published collections."
+      "remaining_verification": "The third-party change (11) reads the registry; then capture 143 replays clean. The review filters, relevance and curation_status read every collection as uncurated until the curation changes (12, 13)."
     },
     {
       "id": "api_http:GET:/v1/:address/collections",
       "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names, except the registry case. Also compared: a programmatic provider's manager listing its third-party collections (is_programmatic, the open registry gap) and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap).",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/62-address-collections-creator.json",
+          "scope": "GET /{address}/collections signed by that address, every collection it may list.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/63-address-collections-page.json",
+          "scope": "GET /{address}/collections signed by that address, paginated, first page of two.",
+          "replay": [
+            "data.counts.draft value",
+            "data.results.length value",
+            "data.total value"
+          ],
+          "explained_by": {
+            "data.counts.draft value": "deliberate:address-listing-transferred",
+            "data.results.length value": "deliberate:address-listing-transferred",
+            "data.total value": "deliberate:address-listing-transferred"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/64-address-collections-draft.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to drafts.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/65-address-collections-published.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to published collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/66-address-collections-disabled.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to disabled collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/67-address-collections-unpublished.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to unpublished collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/68-address-collections-third-party.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to third-party collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/69-address-collections-contract.json",
+          "scope": "GET /{address}/collections signed by that address, filtered by a contract address.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/70-address-collections-search.json",
+          "scope": "GET /{address}/collections signed by that address, searching by name, sorted by name.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/71-address-collections-manager.json",
+          "scope": "GET /{address}/collections signed by that address, an on-chain manager.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/72-address-collections-minter.json",
+          "scope": "GET /{address}/collections signed by that address, an on-chain minter.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/73-address-collections-new-creator.json",
+          "scope": "GET /{address}/collections signed by that address, the chain creator of a collection another wallet stored.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/74-address-collections-other.json",
+          "scope": "GET /{address}/collections signed by another wallet.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/75-address-collections-invalid-status.json",
+          "scope": "GET /{address}/collections signed by that address, with an unknown status.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/76-address-collections-invalid-contract.json",
+          "scope": "GET /{address}/collections signed by that address, with a contract address that is not an address.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/77-address-collections-unsigned.json",
+          "scope": "GET /{address}/collections without a signature.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/100-address-collections-published-only.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to published collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/101-address-collections-published-search.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to published collections and searching by name.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/102-address-collections-published-no-match.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to published collections with a search nothing matches.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/103-address-collections-published-page.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to published collections, paginated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/104-address-collections-unpublished-search.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to unpublished collections and searching by name.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/105-address-collections-standard.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to standard collections.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/106-address-collections-page-two.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to standard collections, the second page of two.",
+          "replay": [
+            "data.counts.draft value",
+            "data.pages value",
+            "data.results[].contract_address value",
+            "data.results[].id value",
+            "data.results[].is_approved value",
+            "data.results[].is_mapping_complete value",
+            "data.results[].is_published value",
+            "data.results[].item_count value",
+            "data.results[].last_activity_at value",
+            "data.results[].managers.length value",
+            "data.results[].minters.length value",
+            "data.results[].name value",
+            "data.results[].reviewed_at value",
+            "data.results[].salt value",
+            "data.results[].updated_at value",
+            "data.results[].urn value",
+            "data.total value"
+          ],
+          "explained_by": {
+            "data.counts.draft value": "deliberate:address-listing-transferred",
+            "data.pages value": "deliberate:address-listing-transferred",
+            "data.results[].contract_address value": "deliberate:address-listing-transferred",
+            "data.results[].id value": "deliberate:address-listing-transferred",
+            "data.results[].is_approved value": "deliberate:address-listing-transferred",
+            "data.results[].is_mapping_complete value": "deliberate:address-listing-transferred",
+            "data.results[].is_published value": "deliberate:address-listing-transferred",
+            "data.results[].item_count value": "deliberate:address-listing-transferred",
+            "data.results[].last_activity_at value": "deliberate:address-listing-transferred",
+            "data.results[].managers.length value": "deliberate:address-listing-transferred",
+            "data.results[].minters.length value": "deliberate:address-listing-transferred",
+            "data.results[].name value": "deliberate:address-listing-transferred",
+            "data.results[].reviewed_at value": "deliberate:address-listing-transferred",
+            "data.results[].salt value": "deliberate:address-listing-transferred",
+            "data.results[].updated_at value": "deliberate:address-listing-transferred",
+            "data.results[].urn value": "deliberate:address-listing-transferred",
+            "data.total value": "deliberate:address-listing-transferred"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/107-address-collections-oldest-first.json",
+          "scope": "GET /{address}/collections signed by that address, filtered to standard collections, oldest first.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/108-address-collections-none.json",
+          "scope": "GET /{address}/collections signed by that address, which holds no collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/109-address-collections-committee-other.json",
+          "scope": "GET /{address}/collections signed by a committee member for another address.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/142-address-collections-registered-manager.json",
+          "scope": "GET /{address}/collections signed by that address, a manager the registry lists for a provider.",
+          "replay": [
+            "data.length value",
+            "data[].contract_address value",
+            "data[].eth_address value",
+            "data[].id value",
+            "data[].is_approved value",
+            "data[].is_mapping_complete value",
+            "data[].is_programmatic missing",
+            "data[].is_published value",
+            "data[].item_count value",
+            "data[].minters.length value",
+            "data[].name value",
+            "data[].reviewed_at value",
+            "data[].salt value",
+            "data[].urn value"
+          ],
+          "explained_by": {
+            "data.length value": "open:third-party-registry",
+            "data[].contract_address value": "open:third-party-registry",
+            "data[].eth_address value": "open:third-party-registry",
+            "data[].id value": "open:third-party-registry",
+            "data[].is_approved value": "open:third-party-registry",
+            "data[].is_mapping_complete value": "open:third-party-registry",
+            "data[].is_programmatic missing": "open:third-party-registry",
+            "data[].is_published value": "open:third-party-registry",
+            "data[].item_count value": "open:third-party-registry",
+            "data[].minters.length value": "open:third-party-registry",
+            "data[].name value": "open:third-party-registry",
+            "data[].reviewed_at value": "open:third-party-registry",
+            "data[].salt value": "open:third-party-registry",
+            "data[].urn value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/146-address-collections-programmatic-provider.json",
+          "scope": "GET /{address}/collections signed by that address, a manager the registry lists for a programmatic provider.",
+          "replay": [
+            "data[].is_programmatic value"
+          ],
+          "explained_by": {
+            "data[].is_programmatic value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/149-address-collections-query-address-other.json",
+          "scope": "GET /{address}/collections signed by that address, with an address query parameter naming another wallet.",
+          "replay": [
+            "status: fixture=401 candidate=200",
+            "data value",
+            "error missing",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=401 candidate=200": "deliberate:query-never-overrides",
+            "data value": "deliberate:query-never-overrides",
+            "error missing": "deliberate:query-never-overrides",
+            "ok value": "deliberate:query-never-overrides"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/150-address-collections-query-address-own.json",
+          "scope": "GET /{address}/collections signed by another wallet, with an address query parameter naming the signer.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data value",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:query-never-overrides",
+            "data value": "deliberate:query-never-overrides",
+            "error extra": "deliberate:query-never-overrides",
+            "ok value": "deliberate:query-never-overrides"
+          }
+        }
+      ],
+      "gaps": [
+        "open:third-party-registry",
+        "deliberate:address-listing-transferred",
+        "deliberate:collection-list-bounds",
+        "deliberate:unauthenticated-message",
+        "deliberate:chain-copy-lag",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:managers-from-chain-only",
+        "deliberate:polygon-mainnet-collections",
+        "deliberate:timestamped-signatures-only",
+        "deliberate:signature-window",
+        "deliberate:query-never-overrides"
+      ],
+      "remaining_verification": "The third-party change (11) adds the registry's providers to the address's scope; then capture 142 replays clean. The status filter reads every collection as uncurated until the curation changes (12, 13)."
     },
     {
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's reads of a draft, a published unapproved and a published approved collection, a committee member's read of a draft, a stranger's and an on-chain manager's reads of a published collection, the unsigned refusal, a stranger's refusal of a draft and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. Every caller is admitted or refused as upstream decides, with upstream's status and envelope; the reads answer upstream's is_published and is_approved and differ in other fields, and a request signed over method and path alone is refused where upstream serves it.",
+      "result": "The full body for the owner of a draft, of a published unapproved and of a published approved collection, for a committee member of a draft and of a published collection, for an on-chain manager and an on-chain minter, and for the provider's manager of a third-party collection; the public detail for a signer without a role on a published unapproved and approved collection; the refusals of a stranger on a draft and on a third-party collection, an unsigned request, each signature defect, a missing id and a malformed id were compared. Every one matches but the signature cases. Also compared: the chain creator and the stored owner of a transferred collection, a committee member on a third-party draft, an ADMIN_ADDRESSES wallet on a collection on chain, a wallet named as manager only in a draft's body, and a second registry manager of a provider. Also compared: the manager of a programmatic provider reading its collection (upstream is_programmatic true, the node false: the open registry gap), and an id query parameter naming another collection (upstream answers that one; the node the path's: a deliberate gap).",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
           "scope": "Signed GET by the owner of a draft standard collection.",
-          "replay": [
-            "data.forum_id missing",
-            "data.forum_link missing",
-            "data.is_mapping_complete missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.lock missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.reviewed_at missing",
-            "data.salt missing",
-            "data.third_party_id extra",
-            "data.urn value"
-          ]
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/20-collection-published-unapproved-owner.json",
           "scope": "Signed GET by the owner of a standard collection the collections subgraph holds as not approved; the replay seeds the same facts into the node's copy of the subgraph.",
-          "replay": [
-            "data.created_at value",
-            "data.forum_id missing",
-            "data.forum_link missing",
-            "data.is_mapping_complete missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.lock missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.reviewed_at missing",
-            "data.salt missing",
-            "data.third_party_id extra",
-            "data.updated_at value",
-            "data.urn value"
-          ]
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/21-collection-published-approved-owner.json",
           "scope": "Signed GET by the owner of a standard collection the collections subgraph holds as approved; the replay seeds the same facts into the node's copy of the subgraph.",
-          "replay": [
-            "data.created_at value",
-            "data.forum_id missing",
-            "data.forum_link missing",
-            "data.is_mapping_complete missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.lock missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.reviewed_at missing",
-            "data.salt missing",
-            "data.third_party_id extra",
-            "data.updated_at value",
-            "data.urn value"
-          ]
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/03-collection-unsigned.json",
           "scope": "GET without an auth chain.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/04-collection-stranger.json",
@@ -374,35 +1011,50 @@
           "scope": "GET whose first auth chain header is not JSON; replayed with its recorded headers.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/08-collection-expired-signature.json",
           "scope": "GET signed by the owner 40 minutes before the request; re-signed at replay time 40 minutes before the replay, so the window check refuses it.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/09-collection-future-signature.json",
           "scope": "GET signed by the owner 40 minutes after the request; re-signed at replay time 40 minutes ahead, so the future bound refuses it.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/10-collection-signature-for-another-path.json",
           "scope": "GET signed by the owner over another collection path; re-signed at replay time over that path, so the signature check refuses it.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/11-collection-metadata-mismatch.json",
           "scope": "GET whose x-identity-metadata is not the metadata the owner signed; re-signed at replay time with the same mismatch, so the signature check refuses it.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/12-collection-scene-signer.json",
@@ -442,14 +1094,43 @@
             "data.urn missing",
             "error extra",
             "ok value"
-          ]
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:timestamped-signatures-only",
+            "data.contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.created_at missing": "deliberate:timestamped-signatures-only",
+            "data.eth_address missing": "deliberate:timestamped-signatures-only",
+            "data.forum_id missing": "deliberate:timestamped-signatures-only",
+            "data.forum_link missing": "deliberate:timestamped-signatures-only",
+            "data.id missing": "deliberate:timestamped-signatures-only",
+            "data.is_approved missing": "deliberate:timestamped-signatures-only",
+            "data.is_mapping_complete missing": "deliberate:timestamped-signatures-only",
+            "data.is_published missing": "deliberate:timestamped-signatures-only",
+            "data.item_count missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_network missing": "deliberate:timestamped-signatures-only",
+            "data.lock missing": "deliberate:timestamped-signatures-only",
+            "data.managers missing": "deliberate:timestamped-signatures-only",
+            "data.message extra": "deliberate:timestamped-signatures-only",
+            "data.minters missing": "deliberate:timestamped-signatures-only",
+            "data.name missing": "deliberate:timestamped-signatures-only",
+            "data.reviewed_at missing": "deliberate:timestamped-signatures-only",
+            "data.salt missing": "deliberate:timestamped-signatures-only",
+            "data.updated_at missing": "deliberate:timestamped-signatures-only",
+            "data.urn missing": "deliberate:timestamped-signatures-only",
+            "error extra": "deliberate:timestamped-signatures-only",
+            "ok value": "deliberate:timestamped-signatures-only"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/17-collection-signature-for-another-method.json",
           "scope": "GET signed by the owner as a PUT; re-signed at replay time with the other method, so the signature check refuses it.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/18-collection-untimestamped-with-headers.json",
@@ -479,77 +1160,251 @@
             "data.urn missing",
             "error extra",
             "ok value"
-          ]
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:timestamped-signatures-only",
+            "data.contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.created_at missing": "deliberate:timestamped-signatures-only",
+            "data.eth_address missing": "deliberate:timestamped-signatures-only",
+            "data.forum_id missing": "deliberate:timestamped-signatures-only",
+            "data.forum_link missing": "deliberate:timestamped-signatures-only",
+            "data.id missing": "deliberate:timestamped-signatures-only",
+            "data.is_approved missing": "deliberate:timestamped-signatures-only",
+            "data.is_mapping_complete missing": "deliberate:timestamped-signatures-only",
+            "data.is_published missing": "deliberate:timestamped-signatures-only",
+            "data.item_count missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_network missing": "deliberate:timestamped-signatures-only",
+            "data.lock missing": "deliberate:timestamped-signatures-only",
+            "data.managers missing": "deliberate:timestamped-signatures-only",
+            "data.message extra": "deliberate:timestamped-signatures-only",
+            "data.minters missing": "deliberate:timestamped-signatures-only",
+            "data.name missing": "deliberate:timestamped-signatures-only",
+            "data.reviewed_at missing": "deliberate:timestamped-signatures-only",
+            "data.salt missing": "deliberate:timestamped-signatures-only",
+            "data.updated_at missing": "deliberate:timestamped-signatures-only",
+            "data.urn missing": "deliberate:timestamped-signatures-only",
+            "error extra": "deliberate:timestamped-signatures-only",
+            "ok value": "deliberate:timestamped-signatures-only"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/22-collection-committee.json",
           "scope": "Signed GET by a committee member with no other role on a draft; the node reads the same committee from its fake subgraph.",
-          "replay": [
-            "data.forum_id missing",
-            "data.forum_link missing",
-            "data.is_mapping_complete missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.lock missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.reviewed_at missing",
-            "data.salt missing",
-            "data.third_party_id extra",
-            "data.urn value"
-          ]
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/23-collection-published-stranger.json",
           "scope": "Signed GET by a wallet with no role on a collection on chain: upstream answers its public detail, which drops salt, lock and the forum fields.",
-          "replay": [
-            "data.created_at value",
-            "data.is_mapping_complete missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.reviewed_at missing",
-            "data.third_party_id extra",
-            "data.updated_at value",
-            "data.urn value"
-          ]
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/24-collection-published-manager.json",
           "scope": "Signed GET by an on-chain manager of a collection on chain: upstream answers the full collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/78-collection-minter.json",
+          "scope": "GET /collections/{id} signed by an on-chain minter of an approved collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/79-collection-published-committee.json",
+          "scope": "GET /collections/{id} signed by a committee member who holds no other role on a collection on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/80-collection-third-party-manager.json",
+          "scope": "GET /collections/{id} signed by a manager of the provider of the third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/81-collection-third-party-stranger.json",
+          "scope": "GET /collections/{id} signed by a wallet that manages no provider of the third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/82-collection-missing.json",
+          "scope": "GET /collections/{id} signed by the owner for an id no collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/83-collection-malformed-id.json",
+          "scope": "GET /collections/{id} signed by the owner with an id that is not a UUID.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/84-collection-approved-stranger.json",
+          "scope": "GET /collections/{id} signed by a wallet that holds no role on an approved collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/126-collection-new-chain-creator.json",
+          "scope": "GET /collections/{id} signed by the chain creator of a collection another wallet stored.",
           "replay": [
-            "data.created_at value",
+            "data.forum_id extra",
+            "data.forum_link extra",
+            "data.lock extra",
+            "data.salt extra"
+          ],
+          "explained_by": {
+            "data.forum_id extra": "deliberate:owner-is-the-chain-creator",
+            "data.forum_link extra": "deliberate:owner-is-the-chain-creator",
+            "data.lock extra": "deliberate:owner-is-the-chain-creator",
+            "data.salt extra": "deliberate:owner-is-the-chain-creator"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/127-collection-stored-owner-after-transfer.json",
+          "scope": "GET /collections/{id} signed by the stored owner of a collection whose chain creator is another wallet.",
+          "replay": [
             "data.forum_id missing",
             "data.forum_link missing",
+            "data.lock missing",
+            "data.salt missing"
+          ],
+          "explained_by": {
+            "data.forum_id missing": "deliberate:owner-is-the-chain-creator",
+            "data.forum_link missing": "deliberate:owner-is-the-chain-creator",
+            "data.lock missing": "deliberate:owner-is-the-chain-creator",
+            "data.salt missing": "deliberate:owner-is-the-chain-creator"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/128-collection-third-party-committee.json",
+          "scope": "GET /collections/{id} signed by a committee member who holds no other role on a third-party draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/129-collection-admin.json",
+          "scope": "GET /collections/{id} signed by an ADMIN_ADDRESSES wallet on a collection on chain.",
+          "replay": [
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.lock missing",
+            "data.salt missing"
+          ],
+          "explained_by": {
+            "data.forum_id missing": "deliberate:admin-addresses-not-admitted",
+            "data.forum_link missing": "deliberate:admin-addresses-not-admitted",
+            "data.lock missing": "deliberate:admin-addresses-not-admitted",
+            "data.salt missing": "deliberate:admin-addresses-not-admitted"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/131-collection-body-manager.json",
+          "scope": "GET /collections/{id} signed by a wallet the draft names as manager in its body only.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/141-collection-registered-manager.json",
+          "scope": "GET /collections/{id} signed by another manager the registry lists for the provider of a third-party collection.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_approved missing",
             "data.is_mapping_complete missing",
+            "data.is_programmatic missing",
+            "data.is_published missing",
             "data.item_count missing",
             "data.linked_contract_address missing",
             "data.linked_contract_network missing",
             "data.lock missing",
             "data.managers missing",
             "data.minters missing",
+            "data.name missing",
             "data.reviewed_at missing",
             "data.salt missing",
-            "data.third_party_id extra",
-            "data.updated_at value",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "open:third-party-registry",
+            "data.contract_address missing": "open:third-party-registry",
+            "data.created_at missing": "open:third-party-registry",
+            "data.eth_address value": "open:third-party-registry",
+            "data.forum_id missing": "open:third-party-registry",
+            "data.forum_link missing": "open:third-party-registry",
+            "data.is_approved missing": "open:third-party-registry",
+            "data.is_mapping_complete missing": "open:third-party-registry",
+            "data.is_programmatic missing": "open:third-party-registry",
+            "data.is_published missing": "open:third-party-registry",
+            "data.item_count missing": "open:third-party-registry",
+            "data.linked_contract_address missing": "open:third-party-registry",
+            "data.linked_contract_network missing": "open:third-party-registry",
+            "data.lock missing": "open:third-party-registry",
+            "data.managers missing": "open:third-party-registry",
+            "data.minters missing": "open:third-party-registry",
+            "data.name missing": "open:third-party-registry",
+            "data.reviewed_at missing": "open:third-party-registry",
+            "data.salt missing": "open:third-party-registry",
+            "data.updated_at missing": "open:third-party-registry",
+            "data.urn missing": "open:third-party-registry",
+            "error extra": "open:third-party-registry",
+            "ok value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/145-collection-programmatic-provider.json",
+          "scope": "GET /collections/{id} signed by the manager of the programmatic provider of a third-party collection.",
+          "replay": [
+            "data.is_programmatic value"
+          ],
+          "explained_by": {
+            "data.is_programmatic value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/151-collection-query-id.json",
+          "scope": "GET /collections/{id} signed by the owner, with an id query parameter naming another collection.",
+          "replay": [
+            "data.contract_address value",
+            "data.created_at value",
+            "data.id value",
+            "data.is_mapping_complete value",
+            "data.is_published value",
+            "data.item_count value",
+            "data.managers.length value",
+            "data.name value",
+            "data.reviewed_at value",
+            "data.salt value",
             "data.urn value"
-          ]
+          ],
+          "explained_by": {
+            "data.contract_address value": "deliberate:query-never-overrides",
+            "data.created_at value": "deliberate:query-never-overrides",
+            "data.id value": "deliberate:query-never-overrides",
+            "data.is_mapping_complete value": "deliberate:query-never-overrides",
+            "data.is_published value": "deliberate:query-never-overrides",
+            "data.item_count value": "deliberate:query-never-overrides",
+            "data.managers.length value": "deliberate:query-never-overrides",
+            "data.name value": "deliberate:query-never-overrides",
+            "data.reviewed_at value": "deliberate:query-never-overrides",
+            "data.salt value": "deliberate:query-never-overrides",
+            "data.urn value": "deliberate:query-never-overrides"
+          }
         }
       ],
       "gaps": [
-        "Reads: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers urn as null for a draft and for a collection it did not publish itself. For a published collection upstream answers created_at and updated_at from the subgraph; the node answers the draft row's. Upstream answers a signer without a role on a published collection a public detail without salt, lock and the forum fields; the node answers every admitted caller the same body, which carries none of them.",
-        "Upstream's ADMIN_ADDRESSES wallets read the full detail of a published collection; the node gives BUILDER_ADMIN_ADDRESSES no role here.",
+        "open:third-party-registry",
         "deliberate:owner-is-the-chain-creator",
+        "deliberate:managers-from-chain-only",
+        "deliberate:admin-addresses-not-admitted",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
+        "deliberate:polygon-mainnet-collections",
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "Capture reads by a minter, a third-party manager, a missing id and a malformed id."
+      "remaining_verification": "The third-party change (11) reads the registry; then capture 141 replays clean. Fields whose sources arrive later answer upstream's empty value: lock (10), forum fields (14), a third-party collection's dates and published state from item curations (12)."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
@@ -602,27 +1457,57 @@
       "id": "api_http:PUT:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's creation of a standard draft, the same creation signed over method and path alone, a body upstream's schema refuses, an unsigned request with such a body, and saves of an existing draft by a stranger and by a committee member and of a collection on chain by its on-chain manager were compared. The node creates the draft with a different body, refuses the untimestamped request, refuses the invalid body with upstream's status and error, refuses the unsigned one before reading its body, as upstream does, and refuses the three signers without the owner's role exactly as upstream does.",
+      "result": "Creating a standard draft with initialize calldata naming its signer, renaming a draft, a name in use, body and path ids that differ, a body without data, a body claiming publication, a published collection, creating a third-party collection, a third-party URN in use, a changed URN suffix of an unpublished third-party collection, converting either kind, moving a collection to another provider, and the refusals of a stranger, a committee member, an on-chain manager, an unsigned request and an invalid body were compared. Also compared: unsigned with a valid body, a stranger saving another provider's collection, names in use only by a third-party collection or differing by case and spaces, approval claimed alone, a linked contract another collection of the provider links and a cleared linked contract (both refused as upstream refuses them), a manager kept in a draft's body, and a create under a provider the registry lists by a wallet that doesn't manage it and by one that does. Every difference is one a deliberate gap names, except the registry case. Also compared: a create under a programmatic registered provider, and a registry manager saving a collection another manager created (upstream 200, the node 401: the open registry gap).",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/05-collection-create.json",
           "scope": "Signed PUT by the owner creating a new standard draft with a client-shaped body (eth_address set to the signer, data set). created_at and updated_at come from the database clock and are volatile.",
           "replay": [
-            "data.contract_address value",
+            "status: fixture=200 candidate=409",
+            "data.contract_address missing",
+            "data.created_at missing",
             "data.forum_id missing",
             "data.forum_link missing",
+            "data.is_approved missing",
             "data.is_mapping_complete missing",
+            "data.is_published missing",
             "data.item_count missing",
             "data.linked_contract_address missing",
             "data.linked_contract_network missing",
             "data.lock missing",
             "data.managers missing",
             "data.minters missing",
+            "data.name missing",
             "data.reviewed_at missing",
             "data.salt missing",
-            "data.third_party_id extra",
-            "data.urn value"
-          ]
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=409": "deliberate:initialize-data-creator",
+            "data.contract_address missing": "deliberate:initialize-data-creator",
+            "data.created_at missing": "deliberate:initialize-data-creator",
+            "data.forum_id missing": "deliberate:initialize-data-creator",
+            "data.forum_link missing": "deliberate:initialize-data-creator",
+            "data.is_approved missing": "deliberate:initialize-data-creator",
+            "data.is_mapping_complete missing": "deliberate:initialize-data-creator",
+            "data.is_published missing": "deliberate:initialize-data-creator",
+            "data.item_count missing": "deliberate:initialize-data-creator",
+            "data.linked_contract_address missing": "deliberate:initialize-data-creator",
+            "data.linked_contract_network missing": "deliberate:initialize-data-creator",
+            "data.lock missing": "deliberate:initialize-data-creator",
+            "data.managers missing": "deliberate:initialize-data-creator",
+            "data.minters missing": "deliberate:initialize-data-creator",
+            "data.name missing": "deliberate:initialize-data-creator",
+            "data.reviewed_at missing": "deliberate:initialize-data-creator",
+            "data.salt missing": "deliberate:initialize-data-creator",
+            "data.updated_at missing": "deliberate:initialize-data-creator",
+            "data.urn missing": "deliberate:initialize-data-creator",
+            "error extra": "deliberate:initialize-data-creator",
+            "ok value": "deliberate:initialize-data-creator"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/15-collection-untimestamped-write.json",
@@ -652,21 +1537,53 @@
             "data.urn missing",
             "error extra",
             "ok value"
-          ]
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:timestamped-signatures-only",
+            "data.contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.created_at missing": "deliberate:timestamped-signatures-only",
+            "data.eth_address missing": "deliberate:timestamped-signatures-only",
+            "data.forum_id missing": "deliberate:timestamped-signatures-only",
+            "data.forum_link missing": "deliberate:timestamped-signatures-only",
+            "data.id missing": "deliberate:timestamped-signatures-only",
+            "data.is_approved missing": "deliberate:timestamped-signatures-only",
+            "data.is_mapping_complete missing": "deliberate:timestamped-signatures-only",
+            "data.is_published missing": "deliberate:timestamped-signatures-only",
+            "data.item_count missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_address missing": "deliberate:timestamped-signatures-only",
+            "data.linked_contract_network missing": "deliberate:timestamped-signatures-only",
+            "data.lock missing": "deliberate:timestamped-signatures-only",
+            "data.managers missing": "deliberate:timestamped-signatures-only",
+            "data.message extra": "deliberate:timestamped-signatures-only",
+            "data.minters missing": "deliberate:timestamped-signatures-only",
+            "data.name missing": "deliberate:timestamped-signatures-only",
+            "data.reviewed_at missing": "deliberate:timestamped-signatures-only",
+            "data.salt missing": "deliberate:timestamped-signatures-only",
+            "data.updated_at missing": "deliberate:timestamped-signatures-only",
+            "data.urn missing": "deliberate:timestamped-signatures-only",
+            "error extra": "deliberate:timestamped-signatures-only",
+            "ok value": "deliberate:timestamped-signatures-only"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/16-collection-invalid-body.json",
           "scope": "Signed PUT by the owner whose collection name is a number; re-signed for the replay.",
           "replay": [
             "data value"
-          ]
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/19-collection-unsigned-invalid-body.json",
           "scope": "PUT without a signature whose collection name is a number: both refuse it as unauthenticated before validating the body.",
           "replay": [
             "data.message value"
-          ]
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/25-collection-save-stranger.json",
@@ -682,21 +1599,361 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/27-collection-save-published-manager.json",
           "scope": "Signed PUT by an on-chain manager of a collection on chain.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/85-collection-save-create.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft with initialize data that names it as the creator.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/86-collection-save-rename.json",
+          "scope": "PUT /collections/{id} signed by the owner, renaming its draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/87-collection-save-name-in-use.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft whose name another collection has in another case.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/88-collection-save-ids-differ.json",
+          "scope": "PUT /collections/{id} signed by the owner, with a body id that is not the path id.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/89-collection-save-without-data.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft without data.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/90-collection-save-claims-publication.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft that claims to be published.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/91-collection-save-published.json",
+          "scope": "PUT /collections/{id} signed by the owner of a collection on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/92-collection-save-extra-field.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft whose body has a field the schema does not name.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address missing",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.id missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:collection-save-input",
+            "data.contract_address missing": "deliberate:collection-save-input",
+            "data.created_at missing": "deliberate:collection-save-input",
+            "data.eth_address missing": "deliberate:collection-save-input",
+            "data.forum_id missing": "deliberate:collection-save-input",
+            "data.forum_link missing": "deliberate:collection-save-input",
+            "data.id missing": "deliberate:collection-save-input",
+            "data.is_approved missing": "deliberate:collection-save-input",
+            "data.is_mapping_complete missing": "deliberate:collection-save-input",
+            "data.is_published missing": "deliberate:collection-save-input",
+            "data.item_count missing": "deliberate:collection-save-input",
+            "data.linked_contract_address missing": "deliberate:collection-save-input",
+            "data.linked_contract_network missing": "deliberate:collection-save-input",
+            "data.lock missing": "deliberate:collection-save-input",
+            "data.managers missing": "deliberate:collection-save-input",
+            "data.minters missing": "deliberate:collection-save-input",
+            "data.name missing": "deliberate:collection-save-input",
+            "data.reviewed_at missing": "deliberate:collection-save-input",
+            "data.salt missing": "deliberate:collection-save-input",
+            "data.updated_at missing": "deliberate:collection-save-input",
+            "data.urn missing": "deliberate:collection-save-input",
+            "error extra": "deliberate:collection-save-input",
+            "ok value": "deliberate:collection-save-input"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/93-collection-save-foreign-creator.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft with initialize data that names another wallet as the creator.",
+          "replay": [
+            "status: fixture=200 candidate=409",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=409": "deliberate:initialize-data-creator",
+            "data.contract_address missing": "deliberate:initialize-data-creator",
+            "data.created_at missing": "deliberate:initialize-data-creator",
+            "data.forum_id missing": "deliberate:initialize-data-creator",
+            "data.forum_link missing": "deliberate:initialize-data-creator",
+            "data.is_approved missing": "deliberate:initialize-data-creator",
+            "data.is_mapping_complete missing": "deliberate:initialize-data-creator",
+            "data.is_published missing": "deliberate:initialize-data-creator",
+            "data.item_count missing": "deliberate:initialize-data-creator",
+            "data.linked_contract_address missing": "deliberate:initialize-data-creator",
+            "data.linked_contract_network missing": "deliberate:initialize-data-creator",
+            "data.lock missing": "deliberate:initialize-data-creator",
+            "data.managers missing": "deliberate:initialize-data-creator",
+            "data.minters missing": "deliberate:initialize-data-creator",
+            "data.name missing": "deliberate:initialize-data-creator",
+            "data.reviewed_at missing": "deliberate:initialize-data-creator",
+            "data.salt missing": "deliberate:initialize-data-creator",
+            "data.updated_at missing": "deliberate:initialize-data-creator",
+            "data.urn missing": "deliberate:initialize-data-creator",
+            "error extra": "deliberate:initialize-data-creator",
+            "ok value": "deliberate:initialize-data-creator"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/94-collection-save-third-party-create.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, creating a third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/95-collection-save-third-party-urn-in-use.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, creating a third-party collection with a URN another collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/96-collection-save-third-party-rename-urn.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, changing the URN of an unpublished third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/97-collection-save-third-party-as-standard.json",
+          "scope": "PUT /collections/{id} signed by the owner, saving a third-party collection without its URN.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/98-collection-save-standard-as-third-party.json",
+          "scope": "PUT /collections/{id} signed by the owner, saving its standard draft with a third-party URN.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/99-collection-save-third-party-provider-change.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, moving its collection to another provider.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/130-collection-save-draft-managers.json",
+          "scope": "PUT /collections/{id} signed by the owner, saving its draft with a manager in the body.",
+          "replay": [
+            "data.managers.length value"
+          ],
+          "explained_by": {
+            "data.managers.length value": "deliberate:managers-from-chain-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/132-collection-save-unsigned.json",
+          "scope": "PUT /collections/{id} without a signature, with a valid body.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/133-collection-save-third-party-stranger.json",
+          "scope": "PUT /collections/{id} signed by a wallet that manages no provider, saving an existing third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/134-collection-save-name-of-third-party.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft named as a third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/135-collection-save-name-case-and-spaces.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft whose name differs from one in use only by case and spaces.",
+          "replay": [
+            "data.name value"
+          ],
+          "explained_by": {
+            "data.name value": "deliberate:stored-name-trimmed"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/136-collection-save-approval-claim.json",
+          "scope": "PUT /collections/{id} signed by the owner, creating a draft that claims approval only.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/137-collection-save-linked-contract-taken.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, creating a collection linked to a contract another collection of the provider links.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/138-collection-save-linked-contract-cleared.json",
+          "scope": "PUT /collections/{id} signed by a manager of the provider, clearing the linked contract of its collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/139-collection-save-registered-provider-stranger.json",
+          "scope": "PUT /collections/{id} signed by a wallet that manages no provider, creating a collection under a provider the registry lists.",
+          "replay": [
+            "status: fixture=401 candidate=200",
+            "data.contract_address extra",
+            "data.created_at extra",
+            "data.eth_address value",
+            "data.forum_id extra",
+            "data.forum_link extra",
+            "data.is_approved extra",
+            "data.is_mapping_complete extra",
+            "data.is_published extra",
+            "data.item_count extra",
+            "data.linked_contract_address extra",
+            "data.linked_contract_network extra",
+            "data.lock extra",
+            "data.managers extra",
+            "data.minters extra",
+            "data.name extra",
+            "data.reviewed_at extra",
+            "data.salt extra",
+            "data.updated_at extra",
+            "data.urn extra",
+            "error missing",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=401 candidate=200": "open:third-party-registry",
+            "data.contract_address extra": "open:third-party-registry",
+            "data.created_at extra": "open:third-party-registry",
+            "data.eth_address value": "open:third-party-registry",
+            "data.forum_id extra": "open:third-party-registry",
+            "data.forum_link extra": "open:third-party-registry",
+            "data.is_approved extra": "open:third-party-registry",
+            "data.is_mapping_complete extra": "open:third-party-registry",
+            "data.is_published extra": "open:third-party-registry",
+            "data.item_count extra": "open:third-party-registry",
+            "data.linked_contract_address extra": "open:third-party-registry",
+            "data.linked_contract_network extra": "open:third-party-registry",
+            "data.lock extra": "open:third-party-registry",
+            "data.managers extra": "open:third-party-registry",
+            "data.minters extra": "open:third-party-registry",
+            "data.name extra": "open:third-party-registry",
+            "data.reviewed_at extra": "open:third-party-registry",
+            "data.salt extra": "open:third-party-registry",
+            "data.updated_at extra": "open:third-party-registry",
+            "data.urn extra": "open:third-party-registry",
+            "error missing": "open:third-party-registry",
+            "ok value": "open:third-party-registry"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/140-collection-save-registered-provider-manager.json",
+          "scope": "PUT /collections/{id} signed by a manager the registry lists, creating a collection under its provider.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/144-collection-save-programmatic-provider.json",
+          "scope": "PUT /collections/{id} signed by a manager the registry lists, creating a collection under its programmatic provider.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/148-collection-save-registered-other-manager.json",
+          "scope": "PUT /collections/{id} signed by a manager the registry lists, saving a collection another manager of the provider created.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.contract_address missing",
+            "data.created_at missing",
+            "data.eth_address value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_approved missing",
+            "data.is_mapping_complete missing",
+            "data.is_published missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.name missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.updated_at missing",
+            "data.urn missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "open:third-party-registry",
+            "data.contract_address missing": "open:third-party-registry",
+            "data.created_at missing": "open:third-party-registry",
+            "data.eth_address value": "open:third-party-registry",
+            "data.forum_id missing": "open:third-party-registry",
+            "data.forum_link missing": "open:third-party-registry",
+            "data.is_approved missing": "open:third-party-registry",
+            "data.is_mapping_complete missing": "open:third-party-registry",
+            "data.is_published missing": "open:third-party-registry",
+            "data.item_count missing": "open:third-party-registry",
+            "data.linked_contract_address missing": "open:third-party-registry",
+            "data.linked_contract_network missing": "open:third-party-registry",
+            "data.lock missing": "open:third-party-registry",
+            "data.managers missing": "open:third-party-registry",
+            "data.minters missing": "open:third-party-registry",
+            "data.name missing": "open:third-party-registry",
+            "data.reviewed_at missing": "open:third-party-registry",
+            "data.salt missing": "open:third-party-registry",
+            "data.updated_at missing": "open:third-party-registry",
+            "data.urn missing": "open:third-party-registry",
+            "error extra": "open:third-party-registry",
+            "ok value": "open:third-party-registry"
+          }
         }
       ],
       "gaps": [
-        "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id.",
-        "Invalid body: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema errors, the node's is {}.",
-        "Locked: upstream answers 423 while a collection's lock is under a day old; the node has no lock yet and answers 423 while its own publication of the collection is in progress.",
-        "Third party: upstream saves a third-party collection after its items are submitted and lets its URN suffix change while no item is curated; the node answers 409 to both. Upstream's provider managers come from the third-party registry; the node's are the wallet that created the collection.",
+        "open:third-party-registry",
+        "deliberate:initialize-data-creator",
+        "deliberate:collection-save-input",
+        "deliberate:invalid-body-detail",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
         "deliberate:access-before-kind-conflict",
+        "deliberate:polygon-mainnet-collections",
         "deliberate:timestamped-signatures-only",
         "deliberate:unauthenticated-message",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:stored-name-trimmed"
       ],
-      "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use and mismatched body and URL ids."
+      "remaining_verification": "The third-party change (11) reads the registry: then a non-manager's create under a registered provider answers 401 and capture 139 replays clean. The lock's 423 waits for the lifecycle change (10)."
     },
     {
       "id": "api_http:DELETE:/v1/collections/:id",
@@ -968,5 +2225,109 @@
       "gaps": [],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     }
-  ]
+  ],
+  "open_gaps": {
+    "third-party-registry": {
+      "text": "The node reads no third-party registry: it takes the wallet stored as a third-party collection's creator as its provider's only manager, lets any signer create a third-party collection under any provider id, and answers is_programmatic false on a third-party collection's reads and address-listing rows and leaves it out of the committee's listing. Upstream reads the registry's providers and managers: a non-manager's create under a listed provider answers 401, every manager the registry lists reads, lists and saves its provider's collections, and is_programmatic is the provider's, also on the committee's listing.",
+      "captures": [
+        "source/139-collection-save-registered-provider-stranger.json",
+        "source/141-collection-registered-manager.json",
+        "source/142-address-collections-registered-manager.json",
+        "source/143-collections-committee-registered-provider.json",
+        "source/145-collection-programmatic-provider.json",
+        "source/146-address-collections-programmatic-provider.json",
+        "source/147-collections-committee-programmatic-provider.json",
+        "source/148-collection-save-registered-other-manager.json"
+      ],
+      "closes": "The node reads the third-party registry's providers, their managers and whether each is programmatic, decides a third-party collection's managers and is_programmatic from it, and refuses a create under a listed provider by a wallet that doesn't manage it.",
+      "anchors": []
+    },
+    "item-chain-merge": {
+      "text": "A published item's body is the node's own row: upstream merges the collections subgraph's item into it (urn, price, beneficiary, rarity and content_hash from the chain, is_published true).",
+      "captures": [
+        "source/31-collection-items-published-stranger.json",
+        "source/32-collection-items-published-manager.json",
+        "source/36-item-published-stranger.json",
+        "source/37-item-published-owner.json",
+        "source/38-item-published-committee.json"
+      ],
+      "closes": "The node merges the chain copy's item into a published item's body as it merges a collection's.",
+      "anchors": []
+    },
+    "item-curation-publicity": {
+      "text": "A third-party item with an item curation is not public on the node, which keeps no item curations; upstream answers any signer its public item.",
+      "captures": [],
+      "closes": "The node keeps item curations and answers a curated third-party item publicly.",
+      "anchors": []
+    },
+    "admin-addresses-items": {
+      "text": "The node gives BUILDER_ADMIN_ADDRESSES no role on item reads; upstream's ADMIN_ADDRESSES wallets read any published item in full.",
+      "captures": [],
+      "closes": "The node admits its admin wallets to item reads as upstream admits ADMIN_ADDRESSES, or records the difference as deliberate.",
+      "anchors": []
+    },
+    "item-list-fields": {
+      "text": "Item lists answer an empty description as \"\" where upstream answers null, and omit video when it is null.",
+      "captures": [
+        "source/31-collection-items-published-stranger.json",
+        "source/32-collection-items-published-manager.json"
+      ],
+      "closes": "The node answers an item list's description and video as upstream does.",
+      "anchors": []
+    },
+    "minter-item-list": {
+      "text": "A minter of a collection on chain lists its minted items only; upstream lists every item, drafts included.",
+      "captures": [],
+      "closes": "The node lists every item to a minter of a collection on chain.",
+      "anchors": []
+    },
+    "status-before-existence": {
+      "text": "The collection items listing refuses an invalid status before it looks the collection up; upstream answers 404 for a missing collection first.",
+      "captures": [],
+      "closes": "The node looks the collection up before it validates the status filter.",
+      "anchors": []
+    },
+    "published-item-edits": {
+      "text": "The node answers 409 to every item save in a published collection; upstream lets the owner and an on-chain manager save an existing item's metadata and contents there.",
+      "captures": [],
+      "closes": "The node accepts the owner's and an on-chain manager's metadata and contents saves of an existing item in a published collection, refusing a rarity change, a move or a new item.",
+      "anchors": []
+    },
+    "lock": {
+      "text": "The node keeps no lock: it answers 423 while its own publication of the collection runs; upstream answers 423 while the collection's lock is under a day old.",
+      "captures": [],
+      "closes": "The node keeps a collection's lock and answers 423 while it is under a day old.",
+      "anchors": []
+    },
+    "item-urn-path": {
+      "text": "PUT /v1/items takes a UUID only and third-party item saves carry no URN; upstream also takes a third-party item URN in place of the id.",
+      "captures": [],
+      "closes": "The node takes a third-party item URN in the path and saves third-party items by URN.",
+      "anchors": []
+    },
+    "item-delete-body": {
+      "text": "DELETE /v1/items answers {id}; upstream answers data true.",
+      "captures": [],
+      "closes": "The node answers data true.",
+      "anchors": []
+    },
+    "published-item-uploads": {
+      "text": "The node answers 409 to uploads once the collection is published and 423 while its own publication runs; upstream accepts uploads from the owner, an on-chain manager or the provider's manager whatever the collection's state.",
+      "captures": [],
+      "closes": "The node accepts those uploads as upstream does.",
+      "anchors": []
+    },
+    "item-files-body": {
+      "text": "POST /v1/items/:id/files answers the stored file map; upstream answers no data.",
+      "captures": [],
+      "closes": "The node answers no data.",
+      "anchors": []
+    },
+    "item-files-bounds": {
+      "text": "The node accepts at most 100 files and 20 MB together per upload; upstream bounds each file at 25 MiB and not their count.",
+      "captures": [],
+      "closes": "The node bounds uploads as upstream does, or records the bound as deliberate.",
+      "anchors": []
+    }
+  }
 }

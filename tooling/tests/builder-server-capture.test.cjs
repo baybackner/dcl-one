@@ -327,11 +327,63 @@ test('the fake subgraph answers the rows its where argument selects and reports 
   const ids = found => found.map(row => row.id.slice(-1))
   assert.deepEqual(ids(selected(field({ id: variable('id') }), rows, { id: '0x5EED000000000000000000000000000000000007' }, unfaked)), ['7'])
   assert.deepEqual(ids(selected(field({ id_in: { kind: 'ListValue', values: [variable('a')] } }), rows, { a: rows[0].id }, unfaked)), ['6'])
-  assert.deepEqual(ids(selected(field({ managers_contains: variable('users') }), rows, { users: ['0xA1'] }, unfaked)), ['7'])
+  assert.deepEqual(ids(selected(field({ managers_contains: variable('users') }), rows, { users: ['0xa1'] }, unfaked)), ['7'])
   assert.deepEqual(ids(selected(field({ minters_contains: variable('users') }), rows, { users: ['0xm1'] }, unfaked)), ['6'])
   assert.deepEqual(ids(selected(field({ creator: { kind: 'StringValue', value: '0xc2' } }), rows, {}, unfaked)), ['7'])
   assert.deepEqual(ids(selected({ name: { value: 'collections' }, arguments: [] }, rows, {}, unfaked)), ['6', '7'])
   assert.deepEqual(unfaked, [])
   assert.deepEqual(selected(field({ isApproved: { kind: 'BooleanValue', value: true } }), rows, {}, unfaked), [])
   assert.deepEqual(unfaked, ['graph collections where isApproved', 'graph collections where isApproved'])
+})
+
+test('cases run in the order of their numbers, which no two share', () => {
+  const { caseOrderErrors, CASES } = require(script)
+  assert.deepEqual(caseOrderErrors(CASES), [])
+  assert.deepEqual(caseOrderErrors([{ name: '99-last' }, { name: '100-after' }]), [])
+  assert.deepEqual(caseOrderErrors([{ name: '100-after' }, { name: '99-last' }]), ['99-last runs after 100-after'])
+  assert.deepEqual(caseOrderErrors([{ name: '05-one' }, { name: '5-two' }]), ['5-two runs after 05-one'])
+  assert.deepEqual(caseOrderErrors([{ name: 'unnumbered' }]), ['unnumbered: a case name starts with its number'])
+})
+
+test('every source capture a gap of the ledger lists is a case the script records', () => {
+  const { ledgerCaptureErrors, CASES } = require(script)
+  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../services/catalyst/tests/fixtures/conformance/builder/parity.json'), 'utf8'))
+  assert.deepEqual(ledgerCaptureErrors(ledger, CASES), [])
+  const listing = captures => ({ deliberate_gaps: { kept: { captures } }, open_gaps: { missing: { captures: ['source/02-gone.json'] } } })
+  assert.deepEqual(ledgerCaptureErrors(listing(['source/01-info.json', 'live/01-public.json']), [{ name: '01-info' }]), [
+    'open gap missing: lists source/02-gone.json, which is no capture'
+  ])
+  assert.deepEqual(ledgerCaptureErrors(listing(['source/03-renamed.json']), [{ name: '03-renamed-case' }]), [
+    'deliberate gap kept: lists source/03-renamed.json, which is no capture',
+    'open gap missing: lists source/02-gone.json, which is no capture'
+  ])
+})
+
+test('the fake subgraph filters, orders and pages as The Graph does', () => {
+  const { selected } = require(script)
+  const rows = [
+    { id: '0xb', creator: '0xc', managers: ['0xa1', '0xa2'], minters: [] },
+    { id: '0xa', creator: '0xc', managers: ['0xa1'], minters: ['0xm1'] },
+    { id: '0xc', creator: '0xd', managers: [], minters: [] }
+  ]
+  const list = values => ({ kind: 'ListValue', values: values.map(value => ({ kind: 'StringValue', value })) })
+  const field = (where, args = {}) => ({
+    name: { value: 'collections' },
+    arguments: [
+      { name: { value: 'where' }, value: { kind: 'ObjectValue', fields: Object.entries(where).map(([key, value]) => ({ name: { value: key }, value })) } },
+      ...Object.entries(args).map(([key, value]) => ({ name: { value: key }, value }))
+    ]
+  })
+  const unfaked = []
+  const ids = (where, args) => selected(field(where, args), rows, {}, unfaked).map(row => row.id)
+  assert.deepEqual(ids({ managers_contains: list([]) }), ['0xa', '0xb', '0xc'], 'an empty _contains is contained in every list')
+  assert.deepEqual(ids({ managers_contains: list(['0xa1', '0xa2']) }), ['0xb'], '_contains needs every value')
+  assert.deepEqual(ids({ managers_contains: list(['0xA1']) }), [], '_contains compares exactly')
+  assert.deepEqual(ids({ managers_contains_nocase: list(['0xA1']) }), ['0xa', '0xb'], '_contains_nocase ignores case')
+  assert.deepEqual(ids({ managers_contains_nocase: list([]) }), ['0xa', '0xb', '0xc'])
+  assert.deepEqual(ids({ id_in: list([]) }), [], 'an empty _in matches nothing')
+  assert.deepEqual(ids({ id_gt: { kind: 'StringValue', value: '0xa' } }), ['0xb', '0xc'])
+  assert.deepEqual(ids({}, { first: { kind: 'IntValue', value: '2' }, skip: { kind: 'IntValue', value: '1' } }), ['0xb', '0xc'], 'ordered by id, then skipped and bounded')
+  assert.deepEqual(ids({}, { orderBy: { kind: 'EnumValue', value: 'id' }, orderDirection: { kind: 'EnumValue', value: 'desc' } }), ['0xc', '0xb', '0xa'])
+  assert.deepEqual(unfaked, [])
 })

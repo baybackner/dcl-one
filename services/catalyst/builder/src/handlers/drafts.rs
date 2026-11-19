@@ -9,15 +9,11 @@ use uuid::Uuid;
 use crate::SharedState;
 use crate::access;
 use crate::auth::Signed;
-use crate::drafts::{CollectionDraft, CollectionListingOut, ItemDraft};
+use crate::collections::save;
+use crate::drafts::{CollectionListingOut, ItemDraft};
 use crate::http::{ApiData, ApiError};
-use crate::items::CollectionMetaOut;
 use crate::publication::PublicationPreparation;
 
-#[derive(Deserialize)]
-pub struct CollectionBody {
-    collection: CollectionDraft,
-}
 #[derive(Deserialize)]
 pub struct ItemBody {
     item: ItemDraft,
@@ -45,18 +41,40 @@ pub async fn get_item_drafts(
     )))
 }
 
+/// `PUT /v1/collections/:id` (`upsertCollection`): the body's schema, the
+/// ids, a standard collection's `data`, then who may save it
+/// (`access::edit_collection`), then the `initialize` calldata and the
+/// save's own rules (`collections::save`).
 pub async fn put_collection(
     State(state): State<SharedState>,
     Signed(signer): Signed,
-    Path(id): Path<Uuid>,
-    Json(body): Json<CollectionBody>,
-) -> Result<Json<ApiData<CollectionMetaOut>>, ApiError> {
-    body.collection.validate(id)?;
-    let edit = access::edit_collection(&state, &signer, id).await?;
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<ApiData<Value>>, ApiError> {
+    let save = save::parse(&body)?;
+    if save.id != id {
+        return Err(
+            ApiError::bad_request("The body and URL collection ids do not match")
+                .with_data(serde_json::json!({ "urlId": id, "bodyId": save.id })),
+        );
+    }
+    let uuid = Uuid::parse_str(&id).map_err(|_| ApiError::bad_request("Invalid request body"))?;
+    let standard = save
+        .urn
+        .as_deref()
+        .and_then(save::third_party_urn)
+        .is_none();
+    if standard {
+        save::standard_request(&save, signer.as_str())?;
+    }
+    let edit = access::edit_collection(&state, &signer, uuid).await?;
+    let deployment = standard
+        .then(|| save::standard_deployment(&save, signer.as_str()))
+        .transpose()?;
     Ok(Json(ApiData::ok(
         state
             .items
-            .save_collection_draft(&edit, &body.collection)
+            .save_collection(&edit, &save, deployment)
             .await?,
     )))
 }

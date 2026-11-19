@@ -133,8 +133,15 @@ macro_rules! own_records {
     };
 }
 
-const FROM_COLLECTIONS: &str = "builder.collections c LEFT JOIN shop.collections chain \
-    ON chain.network = 'matic' AND chain.contract_address = lower(c.contract_address)";
+macro_rules! chain_join {
+    () => {
+        "LEFT JOIN shop.collections chain \
+         ON chain.network = 'matic' AND chain.contract_address = lower(c.contract_address)"
+    };
+}
+
+const CHAIN_JOIN: &str = chain_join!();
+const FROM_COLLECTIONS: &str = concat!("builder.collections c ", chain_join!());
 const PUBLISHED: &str = concat!(
     "(chain.contract_address IS NOT NULL OR ",
     own_records!(),
@@ -159,6 +166,12 @@ impl ReadView {
     /// c` with the copy joined once as `chain`.
     pub fn collections(&self) -> &'static str {
         FROM_COLLECTIONS
+    }
+
+    /// The copy joined once as `chain` to a `FROM` item aliased `c` that has
+    /// `builder.collections`' columns.
+    pub fn chain_join(&self) -> &'static str {
+        CHAIN_JOIN
     }
 
     /// A boolean over [`Self::collections`]: the collection is published (the
@@ -259,6 +272,21 @@ pub async fn for_read(conn: &mut PgConnection) -> Result<ReadView, ApiError> {
         Condition::Fresh
     });
     Ok(ReadView { pass })
+}
+
+/// Whether the copy holds `contract` on Polygon, by its last complete pass
+/// of any age: for a read whose answer that fact alone decides.
+pub async fn holds(
+    conn: &mut PgConnection,
+    _view: &ReadView,
+    contract: &str,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM shop.collections WHERE network = 'matic' AND contract_address = lower($1))",
+    )
+    .bind(contract)
+    .fetch_one(conn)
+    .await?)
 }
 
 /// A view for a decision; 503 also while the last pass is stale.

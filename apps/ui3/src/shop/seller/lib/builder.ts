@@ -126,11 +126,11 @@ function fromContents(name: string | undefined, contents: Record<string, string>
   return "";
 }
 
-/** Upstream `fetchCreatorCollections`: the creator's PUBLISHED collections (the only ones that can be listed). */
+/** Upstream `fetchCreatorCollections`: the creator's published collections, as the node filters them, that have a contract (the only ones that can be listed). */
 export async function fetchCreatorCollections(address: string, opts: BuilderOptions): Promise<CreatorCollection[]> {
   const payload = await getJson<Paginated<RawCollection>>(`/${address.toLowerCase()}/collections?is_published=true`, opts);
   return unwrapList(payload)
-    .filter((c) => c.is_published && !!c.contract_address)
+    .filter((c) => !!c.contract_address)
     .map((c) => ({
       id: c.id,
       name: c.name,
@@ -202,7 +202,7 @@ export async function fetchPublishableItems(address: string, opts: BuilderOption
     const perCollection = await Promise.all(collections.map((c) => fetchCollectionItems(c, opts).catch(() => [] as PublishableItem[])));
     return perCollection.flat();
   }
-  const byId = new Map(collections.map((c) => [c.id, c]));
+  const byId = new Map(collections.flatMap((c) => [[c.id, c], [c.contractAddress, c]] as const));
   const position = new Map(collections.map((c, i) => [c.id, i]));
   return rawItems
     .flatMap((raw) => {

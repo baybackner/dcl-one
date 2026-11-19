@@ -16,7 +16,8 @@
 //! readers (`marketplace::graph`) where the old code read the squid
 //! ([`onchain`]); the shop's copy of the Polygon collections subgraph,
 //! read by shared SQL, for a collection's published and approved state
-//! ([`chain_state`]: 503 while the copy can't tell); `shared::cache::TtlMap`
+//! ([`chain_state`]: 503 while the copy can't tell) and the chain facts a
+//! collection's body and listings merge ([`collections`]); `shared::cache::TtlMap`
 //! for the in-process memos. The one
 //! client it does not share is the Foundation review's
 //! (`linked_publication_review::foundation_client`: guarded as the shared
@@ -37,9 +38,9 @@
 //!
 //! Deviations from the old crate, all deliberate: the signed-fetch window is
 //! the shared verifier's 5 minutes (the old required path allowed 30); the
-//! subgraph readers replace the squid side pool (503 on the address routes
-//! and empty curation listings without a collections subgraph, as the old
-//! node answered without its pool); `BUILDER_CONTENT_BUCKET_URL` is
+//! subgraph readers replace the squid side pool (503 on the address items
+//! route and empty curation listings without a collections subgraph, as the
+//! old node answered without its pool); `BUILDER_CONTENT_BUCKET_URL` is
 //! optional (unset: an unknown storage hash answers 404 instead of the 301);
 //! `BUILDER_POLYGON_RPC_URL`
 //! must be https to a public host (a plaintext verifier could be fed a fake
@@ -69,6 +70,7 @@ pub(crate) use catalyst_storage as storage;
 pub mod access;
 pub mod auth;
 pub mod chain_state;
+pub mod collections;
 pub mod committee;
 pub mod drafts;
 pub mod handlers;

@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{OriginalUri, Path, Query, State};
+use axum::extract::{OriginalUri, Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -8,9 +8,10 @@ use serde_json::{Value, json};
 use crate::SharedState;
 use crate::access;
 use crate::auth::{Signed, signed_path, try_extract_signer};
+use crate::collections::listing::{CommitteeListing, ListQuery, OwnListing, PublicSearch};
 use crate::committee::Member;
 use crate::http::{ApiData, ApiError};
-use crate::items::{CollectionMetaOut, FullItemOut, ItemQuery};
+use crate::items::{FullItemOut, ItemQuery};
 use crate::shared::signed_fetch::AUTH_CHAIN_HEADER_PREFIX;
 
 use super::onchain::ItemsParams;
@@ -46,14 +47,9 @@ pub async fn get_collection(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
-) -> Result<Json<ApiData<CollectionMetaOut>>, ApiError> {
+) -> Result<Json<ApiData<Value>>, ApiError> {
     let read = access::read_collection(&state, &signer, &id).await?;
-    let meta = state
-        .items
-        .collection_by_id(&read)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Not found"))?;
-    Ok(Json(ApiData::ok(CollectionMetaOut::from(&meta))))
+    Ok(Json(ApiData::ok(state.items.collection(&read).await?)))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -140,26 +136,20 @@ fn unauthorized_for(eth_address: &str) -> ApiError {
     ApiError::unauthorized("Unauthorized").with_data(json!({ "eth_address": eth_address }))
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct CollectionsParams {
-    pub q: Option<String>,
-    pub is_published: Option<String>,
-}
-
-/// `GET /v1/collections` (`getCollections`): `q` with `is_published=true`
-/// is the public search over the published collections, anonymous;
-/// otherwise the committee lists every wallet's drafts and anyone else,
-/// signed or not, is refused with the signer (`""` anonymously). A wallet
-/// reads its own set at `/v1/{address}/collections`.
+/// `GET /v1/collections` (`getCollections`): a `q` with `is_published=true`
+/// is the public search, open to anyone and answered in full to the
+/// committee (from the read at hand, without waiting); any other request is
+/// the committee's listing, and anyone else, signed or not, is refused with
+/// the signer (`""` anonymously). The filters are checked after the caller.
 pub async fn get_collections(
     State(state): State<SharedState>,
-    Query(params): Query<CollectionsParams>,
+    RawQuery(raw): RawQuery,
     OriginalUri(original): OriginalUri,
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let signed = headers.contains_key(format!("{AUTH_CHAIN_HEADER_PREFIX}0"));
-    let answer = list_collections(&state, params, &original, &uri, &headers)
+    let answer = list_collections(&state, raw.as_deref(), &original, &uri, &headers)
         .await
         .into_response();
     if signed {
@@ -171,40 +161,38 @@ pub async fn get_collections(
 
 async fn list_collections(
     state: &SharedState,
-    params: CollectionsParams,
+    raw: Option<&str>,
     original: &Uri,
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
-    let q = params.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
-    if let Some(q) = q
-        && params.is_published.as_deref() == Some("true")
-    {
-        return Ok(Json(ApiData::ok(
-            state.items.published_collections_named(q).await?,
-        ))
-        .into_response());
-    }
-    match try_extract_signer(
+    let q = ListQuery::parse(raw);
+    let signer = try_extract_signer(
         headers,
         "get",
         &signed_path(original, uri),
         state.eip1654.as_deref(),
     )
-    .await
-    {
-        Some(signer) => {
-            let committee = access::committee(state, &signer).await?;
-            Ok(Json(ApiData::ok(
-                state
-                    .items
-                    .collection_drafts_of_everyone(&committee)
-                    .await?,
-            ))
-            .into_response())
+    .await;
+    let committee = match (&signer, q.is_public_search()) {
+        (Some(signer), true) => access::known_committee_member(state, signer),
+        (Some(signer), false) => Some(access::committee(state, signer).await?),
+        (None, true) => None,
+        (None, false) => return Err(unauthorized_for("")),
+    };
+    let data = match committee {
+        Some(member) => {
+            state
+                .items
+                .committee_collections(&CommitteeListing::new(&member, &q)?)
+                .await?
         }
-        None => Err(unauthorized_for("")),
-    }
+        None => {
+            let search = PublicSearch::new(&q)?.ok_or_else(|| unauthorized_for(""))?;
+            state.items.public_collections(&search).await?
+        }
+    };
+    Ok(Json(ApiData::ok(data)).into_response())
 }
 
 /// `GET /v1/items` (`getItems`): the committee lists every wallet's item
@@ -221,17 +209,20 @@ pub async fn get_items(
 }
 
 /// `GET /v1/{address}/collections` (`getAddressCollections`): the wallet
-/// itself, signed; anyone else is refused with the path's address. The set
-/// is the on-chain reader's (`onchain::get_address_collections`).
+/// itself, signed; anyone else is refused with the path's address. Its
+/// collections from the builder's rows and the chain copy
+/// (`collections::listing`).
 pub async fn get_address_collections(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(address): Path<String>,
-) -> Result<Response, ApiError> {
+    RawQuery(raw): RawQuery,
+) -> Result<Json<ApiData<Value>>, ApiError> {
     let wallet = access::own_address(&signer, &address)?;
-    Ok(super::onchain::get_address_collections(&state, &wallet)
-        .await?
-        .into_response())
+    let listing = OwnListing::new(&wallet, &ListQuery::parse(raw.as_deref()))?;
+    Ok(Json(ApiData::ok(
+        state.items.address_collections(&listing).await?,
+    )))
 }
 
 /// `GET /v1/{address}/items` (`getAddressItems`): the same rule over the
@@ -346,6 +337,17 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn names(body: &Value) -> Vec<String> {
+        body["data"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| c["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The four listings, builder-server's rule: a wallet that owns nothing
     /// and is not on the committee gets the upstream 401 envelope naming the
     /// wallet the request was about, the owner its own set, the committee
@@ -365,22 +367,21 @@ mod tests {
         let app = crate::router(state.clone());
         let tag = Uuid::new_v4().simple().to_string();
         let (draft, published) = (Uuid::new_v4(), Uuid::new_v4());
-        let first: crate::drafts::CollectionDraft =
-            serde_json::from_value(json!({ "id": draft, "name": format!("draft {tag}") })).unwrap();
-        let saved = state
-            .items
-            .save_collection_draft(&granted::edit(&owner, draft), &first)
-            .await
-            .unwrap();
-        assert_eq!(saved.eth_address, owner);
-        let second: crate::drafts::CollectionDraft =
-            serde_json::from_value(json!({ "id": published, "name": format!("SheFi {tag}%_") }))
-                .unwrap();
-        state
-            .items
-            .save_collection_draft(&granted::edit(&owner, published), &second)
-            .await
-            .unwrap();
+        let saved = crate::tests::support::save_collection(
+            &state.items,
+            &owner,
+            json!({ "id": draft, "name": format!("draft {tag}") }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved["eth_address"], owner.as_str());
+        crate::tests::support::save_collection(
+            &state.items,
+            &owner,
+            json!({ "id": published, "name": format!("SheFi {tag}%_") }),
+        )
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id) \
              VALUES ($1, $2, $3, 'Minted', 'wearable', '0')",
@@ -471,16 +472,20 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let listed = ids(&body);
         assert!(
-            listed.contains(&draft.to_string()) && !listed.contains(&published.to_string()),
-            "{body}"
+            listed.contains(&draft.to_string()) && listed.contains(&published.to_string()),
+            "the committee lists every collection: {body}"
         );
         let search = format!("/v1/collections?q={tag}&is_published=true");
         let (status, body) = get(&app, &search, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        let found = ids(&body);
+        let found = names(&body);
         assert!(
-            found.contains(&published.to_string()) && !found.contains(&draft.to_string()),
+            found.contains(&format!("SheFi {tag}%_")) && !found.contains(&format!("draft {tag}")),
             "{body}"
+        );
+        assert!(
+            body["data"][0].get("id").is_none(),
+            "the public search answers no id: {body}"
         );
         let (status, body) = get(
             &app,
@@ -490,7 +495,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(
-            ids(&body).contains(&published.to_string()),
+            names(&body).contains(&format!("SheFi {tag}%_")),
             "the pattern characters of q are literal: {body}"
         );
         let (status, body) = get(
@@ -499,7 +504,7 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!((status, ids(&body)), (StatusCode::OK, vec![]));
+        assert_eq!((status, names(&body)), (StatusCode::OK, vec![]));
         let (status, body) = get(&app, &format!("/v1/collections?q={tag}"), None).await;
         assert_eq!(
             (status, body),
@@ -536,6 +541,164 @@ mod tests {
         }
 
         cleanup(&state.items, &[draft, published], &[]).await;
+    }
+
+    /// The query parameters builder-server's `getCollections` reads
+    /// (`getPaginationParams`, `getReviewFilters`, `sort`, `q`,
+    /// `is_published`, `tag`, `type`).
+    const COLLECTIONS_PARAMS: [&str; 10] = [
+        "page",
+        "limit",
+        "sort",
+        "q",
+        "is_published",
+        "tag",
+        "type",
+        "status",
+        "review_type",
+        "assignee",
+    ];
+    /// The query parameters builder-server's `getAddressCollections` reads
+    /// (`address` through `extractFromReq`, which reads the query first).
+    const ADDRESS_PARAMS: [&str; 9] = [
+        "address",
+        "page",
+        "limit",
+        "is_published",
+        "sort",
+        "q",
+        "type",
+        "status",
+        "contract_address",
+    ];
+
+    fn names_or_body(body: &Value) -> Value {
+        match &body["data"] {
+            Value::Array(rows) => rows.iter().map(|r| r["name"].clone()).collect(),
+            other => other.clone(),
+        }
+    }
+
+    /// Every parameter builder-server's listing handlers read changes what
+    /// the node answers: none is accepted and silently ignored.
+    #[tokio::test]
+    async fn every_listing_parameter_upstream_reads_is_applied_or_deliberately_ignored() {
+        let (owner, committee) = (address_of(OWNER_KEY), address_of(COMMITTEE_KEY));
+        let Some(state) = state(&committee).await else {
+            return;
+        };
+        let app = crate::router(state.clone());
+        let tag = Uuid::new_v4().simple().to_string()[..10].to_string();
+        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let mut sorted = ids;
+        sorted.sort();
+        let [draft, linked, published] = sorted;
+        let save = |id: Uuid, name: String, urn: Option<String>| {
+            let items = &state.items;
+            let owner = owner.clone();
+            async move {
+                crate::tests::support::save_collection(
+                    items,
+                    &owner,
+                    json!({ "id": id, "name": name, "urn": urn }),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        save(draft, format!("{tag} a draft"), None).await;
+        save(
+            linked,
+            format!("{tag} b linked"),
+            Some(format!(
+                "urn:decentraland:matic:collections-thirdparty:p{tag}:c"
+            )),
+        )
+        .await;
+        let saved = save(published, format!("{tag} c published"), None).await;
+        sqlx::query(
+            "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, data) \
+             VALUES ($1, $2, $3, 'Minted', 'wearable', '0', jsonb_build_object('tags', jsonb_build_array($4::text)))",
+        )
+        .bind(Uuid::new_v4())
+        .bind(published)
+        .bind(&owner)
+        .bind(&tag)
+        .execute(state.items.pool())
+        .await
+        .unwrap();
+        let contract = saved["contract_address"].as_str().unwrap().to_string();
+        let routes = [
+            (
+                "/v1/collections".to_string(),
+                COMMITTEE_KEY,
+                COLLECTIONS_PARAMS.as_slice(),
+                vec![
+                    ("page", "page=1&limit=1".to_string()),
+                    ("limit", "limit=1".to_string()),
+                    ("sort", "sort=NAME_DESC".to_string()),
+                    ("q", format!("q={tag}%20a")),
+                    ("is_published", "is_published=true".to_string()),
+                    ("tag", format!("tag={tag}")),
+                    ("type", "type=third_party".to_string()),
+                    ("status", "status=to_review".to_string()),
+                    ("review_type", "review_type=updates".to_string()),
+                    ("assignee", format!("assignee={committee}")),
+                ],
+            ),
+            (
+                format!("/v1/{owner}/collections"),
+                OWNER_KEY,
+                ADDRESS_PARAMS.as_slice(),
+                vec![
+                    ("page", "page=1&limit=1".to_string()),
+                    ("limit", "limit=1".to_string()),
+                    ("is_published", "is_published=true".to_string()),
+                    ("sort", "sort=NAME_DESC".to_string()),
+                    ("q", format!("q={tag}%20a")),
+                    ("type", "type=third_party".to_string()),
+                    ("status", "status=draft".to_string()),
+                    ("contract_address", format!("contract_address={contract}")),
+                    ("address", format!("address={committee}")),
+                ],
+            ),
+        ];
+        for (path, key, params, cases) in routes {
+            let mut covered: Vec<&str> = cases.iter().map(|(p, _)| *p).collect();
+            covered.sort();
+            let mut expected = params.to_vec();
+            expected.sort();
+            assert_eq!(
+                covered, expected,
+                "{path}: every parameter upstream reads has a case"
+            );
+            let base_query = format!("q={tag}&sort=CREATED_AT_ASC");
+            let (status, base) = get(&app, &format!("{path}?{base_query}"), Some(key)).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {base}");
+            for (param, query) in cases {
+                let query = if query.starts_with("q=") || query.starts_with("sort=") {
+                    query
+                } else {
+                    format!("{base_query}&{query}")
+                };
+                let (status, body) = get(&app, &format!("{path}?{query}"), Some(key)).await;
+                assert_eq!(status, StatusCode::OK, "{path}?{query}: {body}");
+                if param == "address" {
+                    assert_eq!(
+                        names_or_body(&body),
+                        names_or_body(&base),
+                        "{path}: the path names the address, never the query (deliberate gap query-never-overrides)"
+                    );
+                    continue;
+                }
+                assert_ne!(
+                    names_or_body(&body),
+                    names_or_body(&base),
+                    "{path}: {param} ({query}) changes nothing"
+                );
+            }
+        }
+        cleanup(&state.items, &ids, &[]).await;
     }
 
     #[test]

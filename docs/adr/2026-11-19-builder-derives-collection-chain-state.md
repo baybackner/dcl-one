@@ -61,6 +61,21 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
     chain.
   - The facts and the write guard can't be reached without a decision view,
     which only the readiness check builds.
+- **Bodies and listings merge the copy.** A collection's body, by id and in
+  every listing, is its stored row with the copy's name, creator, managers,
+  minters, approval, review date and creation and update dates in place of
+  the row's once the copy holds its contract. An address's own listing is
+  the collections it stored, plus those whose contract the copy lists with
+  the address as creator, manager or minter, less those whose contract the
+  copy lists without the address in any of those roles. A collection on
+  chain that the builder doesn't hold isn't listed.
+- **The node computes the contract address.** A standard draft's salt is the
+  keccak-256 of its id, and its contract address is the collection factory's
+  CREATE2 address for that salt, the forwarder and the collection's
+  `initialize` calldata, which the client sends with each save and which must
+  name the signer as the collection's creator. A request never sets the
+  address. A draft can only map to a contract whose deployment names its own
+  signer as creator, so it can't inherit another wallet's collection.
 - **Deployment.** The node that serves the builder runs the Polygon
   collections mirror (`MARKETPLACE_MIRRORS_ENABLED=true`,
   `MATIC_COLLECTIONS_SUBGRAPH_URL`), or shares a database with a node that
@@ -71,8 +86,20 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
 - **Lag.** A collection deployed outside the node's own flow reads as a
   draft until the copy's next pass. The bound is three times
   `MARKETPLACE_MIRROR_INTERVAL_SECS` (15 minutes at the default 300) plus the
-  subgraph's own lag. Until then its owner can still edit the draft. An
-  approval or a role change shows after the same delay.
+  subgraph's own lag. Until then its owner can still edit the draft, and an
+  edit that changes its name or calldata gives the row another computed
+  address, so the row no longer maps to the deployed contract. The node has
+  no day-long lock after a deployment and no live chain check on a save.
+  An approval or a role change shows after the same delay.
+- **Saves need a fresh copy; an owner's own read doesn't.** Every standard
+  draft holds a computed contract address, and anyone holding its salt and
+  calldata can deploy it outside the node. So every save, of a standard or a
+  third-party collection, new or existing, decides from a copy at most 30
+  minutes old and answers 503 otherwise. A read of a draft is decided the
+  same way, except that the stored owner of a third-party draft, or of a
+  standard draft whose contract the copy doesn't hold, reads it from a copy
+  of any age: no chain fact can change what that answer reveals, and the
+  owner's own listing answers the same row from the same copy.
 - **Nodes without the mirror.** Nodes under the `island` and `journey`
   postures, and the `offline` development profile, run no mirror, so the
   builder's draft routes answer 503 there. The builder logs which condition

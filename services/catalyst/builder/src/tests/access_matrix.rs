@@ -143,9 +143,19 @@ fn upstream_keys(name: &str) -> std::collections::BTreeSet<String> {
 
 /// [`upstream_keys`] of a collection body, plus `third_party_id`: the
 /// provider prefix of the `urn` the same caller receives.
-fn collection_keys(name: &str) -> std::collections::BTreeSet<String> {
-    let mut keys = upstream_keys(name);
-    keys.insert("third_party_id".to_string());
+/// The keys upstream answers a collection read: the full body or the public
+/// detail, of a standard or a third-party collection.
+fn collection_keys(full: bool, third_party: bool) -> std::collections::BTreeSet<String> {
+    let mut keys = upstream_keys(match (full, third_party) {
+        (_, true) => "80-collection-third-party-manager",
+        (true, false) => "02-collection-owner",
+        (false, false) => "23-collection-published-stranger",
+    });
+    if third_party && !full {
+        for private in ["salt", "forum_link", "forum_id", "lock"] {
+            keys.remove(private);
+        }
+    }
     keys
 }
 
@@ -176,12 +186,6 @@ fn collection_published(action: &str) -> Option<Expect> {
     refused(
         409,
         format!("The collection is published. It can't be {action}."),
-    )
-}
-fn third_party_published(action: &str) -> Option<Expect> {
-    refused(
-        409,
-        format!("The third party collection already has published items. It can't be {action}."),
     )
 }
 fn collection_locked(action: &str) -> Option<Expect> {
@@ -395,6 +399,21 @@ async fn call(
     let body = match payload {
         Payload::None => Body::empty(),
         Payload::Json(value) => {
+            let value = match (method, value.get("collection")) {
+                ("PUT", Some(collection)) if path.contains("/v1/collections/") => {
+                    let signer = caller.key().map_or(Owner.address(), |key| {
+                        format!("{:#x}", wallet(key).address())
+                    });
+                    let mut collection = collection.clone();
+                    if let (Some(id), Some(name)) =
+                        (collection["id"].as_str(), collection["name"].as_str())
+                    {
+                        collection["name"] = format!("{name} {}", &id[..8]).into();
+                    }
+                    super::support::collection_body(collection, &signer)
+                }
+                _ => value,
+            };
             request = request.header(header::CONTENT_TYPE, "application/json");
             Body::from(value.to_string())
         }
@@ -838,7 +857,7 @@ impl Op {
                 Missing => ok(),
                 Malformed => None,
                 _ if !owner => refused(401, "Unauthorized to upsert collection"),
-                ThirdPartySubmitted => third_party_published("updated"),
+                ThirdPartySubmitted => ok(),
                 _ if kind.published() => collection_published("updated"),
                 Locked => collection_locked("updated"),
                 _ => ok(),
@@ -1019,8 +1038,7 @@ async fn cell(
     let allowed = match op {
         Op::ReadItem | Op::CollectionItems if sees_all => upstream_keys("37-item-published-owner"),
         Op::ReadItem | Op::CollectionItems => upstream_keys("36-item-published-stranger"),
-        Op::ReadCollection if sees_all => collection_keys("02-collection-owner"),
-        _ => collection_keys("23-collection-published-stranger"),
+        _ => collection_keys(sees_all, kind.third_party()),
     };
     let bodies: Vec<&Value> = match op {
         Op::ReadCollection if status.is_success() => vec![&body["data"]],
@@ -1033,6 +1051,17 @@ async fn cell(
             .unwrap_or_default();
         if !extra.is_empty() {
             problems.push(format!("keys upstream doesn't send this caller: {extra:?}"));
+        }
+        if op == Op::ReadCollection {
+            let missing: Vec<&String> = allowed
+                .iter()
+                .filter(|k| answered.get(k.as_str()).is_none())
+                .collect();
+            if !missing.is_empty() {
+                problems.push(format!(
+                    "keys upstream sends this caller missing: {missing:?}"
+                ));
+            }
         }
     }
     for item in items {
@@ -1122,36 +1151,48 @@ async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
 fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     match caller {
         Anonymous => unauthenticated(),
-        _ if op.by_id() && kind == Draft => Some(Expect(503, String::new())),
+        _ if op.by_id() && matches!(kind, Draft | ThirdParty | Published) => {
+            Some(Expect(503, String::new()))
+        }
         _ => None,
     }
 }
 
-async fn assert_cannot_tell(m: &Matrix) {
+/// With the copy stale (`stale`) or without a complete pass, every by-id
+/// decision answers 503, but a stored owner's read of their own draft
+/// (standard, not on chain, or third-party) while the copy is only stale:
+/// no chain fact can change that answer.
+async fn assert_cannot_tell(m: &Matrix, stale: bool) {
     let mut failures = Vec::new();
     for op in ops().into_iter().filter(|op| op.by_id()) {
         for caller in CALLERS {
             for mount in MOUNTS {
-                let f = fixture(&m.pool, Draft).await;
-                let Some(Expect(expected, _)) = unavailable(op, Draft, caller) else {
-                    continue;
-                };
-                let (method, path, payload) = op.request(Draft, &f);
-                let before = snapshot(&m.pool).await;
-                let (status, body) =
-                    call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
-                if status.as_u16() != expected
-                    || (expected == 503
-                        && body["error"] != "Chain state is not available yet. Try again later.")
-                {
-                    failures.push(format!(
-                        "{mount}{method} {path} as {caller:?}: {status} {body}"
-                    ));
-                }
-                if snapshot(&m.pool).await != before {
-                    failures.push(format!(
-                        "{mount}{method} {path} as {caller:?}: wrote while the copy can't tell"
-                    ));
+                for kind in [Draft, ThirdParty, Published] {
+                    let f = fixture(&m.pool, kind).await;
+                    let Some(Expect(mut expected, _)) = unavailable(op, kind, caller) else {
+                        continue;
+                    };
+                    if stale && op == Op::ReadCollection && caller == Owner && kind != Published {
+                        expected = 200;
+                    }
+                    let (method, path, payload) = op.request(kind, &f);
+                    let before = snapshot(&m.pool).await;
+                    let (status, body) =
+                        call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
+                    if status.as_u16() != expected
+                        || (expected == 503
+                            && body["error"]
+                                != "Chain state is not available yet. Try again later.")
+                    {
+                        failures.push(format!(
+                            "{mount}{method} {path} as {caller:?}: {status} {body}"
+                        ));
+                    }
+                    if snapshot(&m.pool).await != before {
+                        failures.push(format!(
+                            "{mount}{method} {path} as {caller:?}: wrote while the copy can't tell"
+                        ));
+                    }
                 }
             }
         }
@@ -1166,7 +1207,7 @@ async fn a_stale_copy_grants_nothing_and_writes_nothing() {
         return;
     };
     fresh_pass(&m.pool, 31).await;
-    assert_cannot_tell(&m).await;
+    assert_cannot_tell(&m, true).await;
 }
 
 #[tokio::test]
@@ -1179,7 +1220,7 @@ async fn a_copy_without_a_complete_pass_grants_nothing_and_writes_nothing() {
         .execute(&m.pool)
         .await
         .unwrap();
-    assert_cannot_tell(&m).await;
+    assert_cannot_tell(&m, false).await;
 }
 
 /// With the committee source down, a decision the committee could change

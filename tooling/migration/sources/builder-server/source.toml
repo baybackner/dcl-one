@@ -17,8 +17,8 @@ item_content stops on a missing hash.
 Not migrated: projects, asset_packs, assets, collection_curations,
 collection_events, slot_usage_cheques, virtual_third_parties, deployments,
 pools, pool_groups, pool_likes (no target), the collections' managers,
-minters, reviewed_at, forum_link, forum_id, lock and linked_contract_* columns
-(no target column). collection_publications and
+minters, reviewed_at, forum_link, forum_id and lock columns (no target
+column). collection_publications and
 linked_collection_publications stay the node's.
 
 No step has a watermark: published/curation state is derived from other
@@ -41,6 +41,8 @@ columns = [
   { name = "third_party_id", type = "text" },
   { name = "created_at", type = "timestamptz" },
   { name = "updated_at", type = "timestamptz" },
+  { name = "linked_contract_address", type = "text" },
+  { name = "linked_contract_network", type = "text" },
 ]
 
 [[step]]

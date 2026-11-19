@@ -50,16 +50,41 @@ or `Todo`. Its schema is the social family's (`../social/parity.json`): each ope
 
 - `not_reviewed`: the captures it cites, if any, don't settle the
   operation.
-- `known_gap`: a capture replays with a difference. `gaps` states each
-  difference in prose.
-- `reviewed`: it cites at least one capture and every capture it cites
-  replays with no difference. It covers the cases those captures exercise,
-  not every input.
+- `known_gap`: it lists at least one open gap.
+- `reviewed`: it cites at least one capture and lists no open gap: every
+  difference its captures replay with is explained by a deliberate gap. It
+  covers the cases those captures exercise, not every input.
 
 `deliberate_gaps` states, once each, a difference the node keeps on
-purpose, by name. An operation lists it among its `gaps` as
-`deliberate:<name>`. Every reference must name a stated gap, and every
-stated gap must be referenced.
+purpose, by name: its `text`, the `captures` it explains notes on (paths
+relative to this folder, such as `source/92-collection-save-extra-field.json`)
+and, for a gap about a refusal or a status, its `anchors`, the notes a capture
+must record before the gap explains any other note there. `open_gaps` states
+the differences the node doesn't keep on purpose the same way, with `closes`:
+the behavior of the node that would close it. An operation lists them among
+its `gaps` as `deliberate:<name>` or `open:<name>`, and lists nothing else.
+Every reference must name a stated gap, and every stated gap must be
+referenced. An evidence entry maps each note it records to the gap that
+explains it in `explained_by` (`{"<note>": "deliberate:<name>"}` or
+`"open:<name>"`); that map is the one list of the notes a gap explains on that
+capture. The ledger test refuses a recorded note no gap explains, a mapping to
+a gap its operation doesn't list, a mapping to a gap that doesn't list the
+capture, a note whose gap's anchors the capture doesn't record, a mapping of a
+note the capture doesn't record, a gap that lists a file that isn't a capture,
+and a gap that lists a capture none of whose notes it explains. The capture
+script refuses to run when a gap lists a `source/` capture none of its cases
+records, with the ledger test's message.
+
+The ledger guarantees this for every operation. Each note a cited capture
+records is attributed to exactly one gap that the operation lists and that
+lists that capture, and every capture a gap lists records at least one note
+attributed to it, so a gap explains differences only on the captures it names
+and adding a capture to a gap is an edit of that gap. A gap about a refusal or
+a status explains a note only on a capture that also records its anchors.
+`reviewed` lists no open gap, `known_gap` lists at least one, and every open
+gap says what closes it. The replay reproduces exactly the recorded notes. The
+ledger doesn't check that a gap's text describes the notes attributed to it,
+or that a gap labeled deliberate is kept on purpose; review decides both.
 
 An evidence entry whose path is in this folder must be a capture directly in
 `source/` or `live/` whose request method and path match the operation (a
@@ -68,7 +93,7 @@ query string and a trailing slash are ignored), and must carry `replay`: the
 exact notes the replay produces for it, empty for a match. A capture whose
 request matches more than one in-scope operation is refused. A capture's
 `volatile_paths` may only end in a field named in `volatile_fields`
-(`created_at`, `updated_at`), and the recorded value there must be
+(`created_at`, `updated_at`, `last_activity_at`), and the recorded value there must be
 `<<VOLATILE>>`. A note is `status: ...`,
 `header ...`, a body path with `missing`, `extra` or `value`, `body bytes
 differ: ...` or `candidate body is not JSON: ...`, as
@@ -89,8 +114,8 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
   test.
 - `the_builder_captures_replay_against_the_mounted_router` seeds a scratch
   database from `seed.json`, builds the builder routers as `serve` composes
-  them (at the root and under `/builder-api`), replays every capture in file
-  name order and requires each one's notes to equal its `replay` list. A
+  them (at the root and under `/builder-api`), replays every capture in the
+  order of its number (`live/` first) and requires each one's notes to equal its `replay` list. A
   `GET` or `HEAD` capture is also replayed under `/builder-api` and must
   produce the same notes. A signed capture is signed again for the replay by
   the same wallet, over the path it is sent to, with its recorded metadata,
@@ -108,12 +133,18 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
 `seed.json` accepts only the fields both seeders apply; any other field
 fails the replay test with its name. `collections` are the builder's rows,
 each with the contract address its draft computed, and a third-party one with
-its provider id and URN suffix. `items` are the builder's item rows.
+its provider id, URN suffix and, optionally, its linked contract address and
+network. The capture stores a third-party row with an empty `eth_address`, as
+upstream stores one; the replay stores the owner the seed names, which the
+node reads as the provider's manager. `items` are the builder's item rows.
 `third_parties` are providers neither registry lists: the capture inserts
-them as upstream's virtual third parties; the node reads no registry yet and
+them as upstream's virtual third parties; the node reads no registry and
 admits the wallet that owns a third-party collection as its provider's
 manager, so the replay requires each provider's managers to be exactly that
-wallet. `chain` names, once, what
+wallet. `registry` names the providers the third-party registry lists, with
+their managers: the capture serves them from its fake third-party subgraph
+to upstream, and the node, which reads no registry, gets nothing. The
+`admin` wallet is upstream's `ADMIN_ADDRESSES`. `chain` names, once, what
 the Polygon collections subgraph holds: the committee's roles, its
 collections (contract, name, creator and owner roles, approval, manager and
 minter roles and unix timestamps) and their items. The capture serves
@@ -156,10 +187,12 @@ Then it:
    `items` fields with the `seed.json` `chain` rows their `where` argument
    selects (by `id`, `id_in`, `creator`, `managers_contains`,
    `minters_contains`, `collection` or `isCommitteeMember`; a collection
-   carries its items) and the third-party subgraph's fields with an empty
-   list. It answers the catalyst's active-entities read with no entities,
-   and points the peer, RPC, forum, warehouse, S3, SNS and OpenSea settings
-   at it. Slack is off and the feature flags are set off
+   carries its items) and the third-party subgraph's `thirdParties` with
+   the `seed.json` `registry` rows (by `id`, `managers_contains` or
+   `managers_contains_nocase`). It answers the catalyst's active-entities read with no entities
+   and the Polygon JSON-RPC's `eth_chainId`, `net_version` and `eth_getCode`
+   (code only at a `chain` collection's contract), and points the peer, RPC,
+   forum, warehouse, S3, SNS and OpenSea settings at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
    with `--require`, into the migration process: proxy variables are
@@ -167,7 +200,7 @@ Then it:
    address is refused, as is a `dns.lookup` of any other hostname. The
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
-   apply, or if it called a fake route other than the subgraphs and the
+   apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC and the
    active-entities read. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
@@ -230,8 +263,12 @@ order.
 
 1. Add the case to `CASES` in `tooling/builder-server-capture.cjs`: a
    `name` with the next number prefix, a `description`, `method`, `path`,
-   optional `query`, `signer` (a `seed.json` role), `metadata`, `sign`,
-   `headers`, `body` and `volatile`.
+   optional `query` (each value a string, or a list of strings for a
+   repeated parameter), `signer` (a `seed.json` role), `metadata`, `sign`,
+   `headers`, `body` and `volatile`. Both sides run the captures in the order of
+   their numbers against one database, so a capture sees what the writes
+   before it left; the script and the ledger test refuse two captures with
+   one number, and a case listed before a lower number.
    Add any rows it needs to `seed.json`, and teach both seeders (the
    script's `seedDatabase` and `SEED_KEYS`, the test's `Seed` and `seed`)
    the new field. If upstream asks the fake for a new subgraph field, add
@@ -239,23 +276,26 @@ order.
 2. Run the capture and copy the new file into `source/`.
 3. Run the tests. The ledger test names the uncited capture and the replay
    test prints the notes it produces.
-4. Cite the capture in its operation's `evidence` with a `scope` and the
-   `replay` notes, then set the status: `reviewed` when the notes are empty
-   and the operation's cases are covered, `known_gap` with a `gaps` entry for
-   each difference otherwise.
+4. Cite the capture in its operation's `evidence` with a `scope`, the
+   `replay` notes and `explained_by` for each note, then set the status:
+   `reviewed` when the operation's cases are covered and no open gap
+   explains a note, `known_gap` otherwise.
 
 ### Marking a gap
 
 Record a difference where the replay shows it.
 
 1. Copy the replay's notes into the capture's `replay` list unchanged.
-2. Set the operation's `status` to `known_gap` and state each difference in
-   `gaps`: what upstream answers and what the node answers. A difference the
-   node keeps on purpose is stated in `deliberate_gaps` and referenced as
-   `deliberate:<name>`.
+2. Map each note to the gap that explains it in `explained_by`, and add the
+   capture to that gap's `captures`. A difference the node keeps on purpose is a
+   `deliberate_gaps` entry; any other is an `open_gaps` entry stating what
+   upstream answers, what the node answers and what closes it. The operation
+   lists the gap, and is `known_gap` while it lists an open one.
 3. When a change makes the node match, the replay test fails on that
-   capture; empty its `replay` list and update the status in the same
-   change.
+   capture; empty its `replay` list and its `explained_by`, drop the capture
+   from the gap's `captures`, remove a gap left explaining nothing that no
+   operation needs, and update the
+   status in the same change.
 
 ## Dated captures of the public service
 

@@ -1,11 +1,12 @@
 // GENERATED from library/catalyst-api/builder by sites/scripts/gen-zod-schemas.mts. Do not edit.
 import { z } from "zod";
 
-import type { BuilderCollectionOut } from "@catalyst-api/builder/BuilderCollectionOut";
 import type { BulkItemStatusPatchOut } from "@catalyst-api/builder/BulkItemStatusPatchOut";
 import type { CollectionItemsOut } from "@catalyst-api/builder/CollectionItemsOut";
 import type { CollectionListingOut } from "@catalyst-api/builder/CollectionListingOut";
+import type { CollectionListingRowOut } from "@catalyst-api/builder/CollectionListingRowOut";
 import type { CollectionMetaOut } from "@catalyst-api/builder/CollectionMetaOut";
+import type { CollectionOut } from "@catalyst-api/builder/CollectionOut";
 import type { CollectionStatus } from "@catalyst-api/builder/CollectionStatus";
 import type { CollectionType } from "@catalyst-api/builder/CollectionType";
 import type { CommitteeMemberOut } from "@catalyst-api/builder/CommitteeMemberOut";
@@ -25,32 +26,6 @@ import type { PublicationPreparation } from "@catalyst-api/builder/PublicationPr
 import type { PublicationState } from "@catalyst-api/builder/PublicationState";
 import type { ReviewCurationOut } from "@catalyst-api/builder/ReviewCurationOut";
 import type { ReviewRowOut } from "@catalyst-api/builder/ReviewRowOut";
-
-export const CollectionStatusSchema = z.enum(["synced", "under_review", "unsynced"]);
-
-export const CollectionTypeSchema = z.literal("standard");
-
-export const BuilderCollectionOutSchema = z.object({
-  chain_id: z.number().nullable(),
-  contract_address: z.string(),
-  count: z.number(),
-  created_at: z.string().nullable(),
-  creator: z.string().nullable(),
-  id: z.string(),
-  is_approved: z.boolean(),
-  is_published: z.boolean(),
-  name: z.string(),
-  network: z.string().nullable(),
-  owner: z.string().nullable(),
-  pending: z.boolean(),
-  reviewed_at: z.string().nullable(),
-  status: CollectionStatusSchema,
-  third_party_id: z.string().nullable(),
-  thumbs: z.array(z.string()),
-  type: CollectionTypeSchema,
-  updated_at: z.string().nullable(),
-  urn: z.string().nullable(),
-});
 
 export const BulkItemStatusPatchOutSchema = z.object({
   collection_id: z.string(),
@@ -113,6 +88,32 @@ export const CollectionListingOutSchema = z.object({
   updated_at: z.string(),
 });
 
+export const CollectionListingRowOutSchema = z.object({
+  curation_status: z.string().nullable(),
+  last_activity_at: z.string(),
+  id: z.string(),
+  name: z.string(),
+  eth_address: z.string(),
+  salt: z.string().nullable(),
+  contract_address: z.string().nullable(),
+  is_published: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  managers: z.array(z.string()),
+  minters: z.array(z.string()),
+  is_approved: z.boolean(),
+  reviewed_at: z.string().nullable(),
+  forum_link: z.string().nullable(),
+  lock: z.string().nullable(),
+  forum_id: z.number().nullable(),
+  linked_contract_address: z.string().nullable(),
+  linked_contract_network: z.string().nullable(),
+  is_mapping_complete: z.boolean(),
+  item_count: z.string(),
+  is_programmatic: z.boolean().optional(),
+  urn: z.string(),
+});
+
 export const CollectionMetaOutSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -125,6 +126,34 @@ export const CollectionMetaOutSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
 });
+
+export const CollectionOutSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  eth_address: z.string(),
+  salt: z.string().nullable(),
+  contract_address: z.string().nullable(),
+  is_published: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  managers: z.array(z.string()),
+  minters: z.array(z.string()),
+  is_approved: z.boolean(),
+  reviewed_at: z.string().nullable(),
+  forum_link: z.string().nullable(),
+  lock: z.string().nullable(),
+  forum_id: z.number().nullable(),
+  linked_contract_address: z.string().nullable(),
+  linked_contract_network: z.string().nullable(),
+  is_mapping_complete: z.boolean(),
+  item_count: z.string(),
+  is_programmatic: z.boolean().optional(),
+  urn: z.string(),
+});
+
+export const CollectionStatusSchema = z.enum(["synced", "under_review", "unsynced"]);
+
+export const CollectionTypeSchema = z.literal("standard");
 
 export const CommitteeMemberOutSchema = z.object({
   address: z.string(),
@@ -256,11 +285,12 @@ type AssignableTo<Sub, Sup> = Sub extends Sup ? true : false;
 type Mutual<A, B> = AssignableTo<A, B> extends true ? AssignableTo<B, A> : false;
 type Assert<T extends true> = T;
 
-export type _AssertBuilderCollectionOut = Assert<Mutual<BuilderCollectionOut, z.infer<typeof BuilderCollectionOutSchema>>>;
 export type _AssertBulkItemStatusPatchOut = Assert<Mutual<BulkItemStatusPatchOut, z.infer<typeof BulkItemStatusPatchOutSchema>>>;
 export type _AssertCollectionItemsOut = Assert<Mutual<CollectionItemsOut, z.infer<typeof CollectionItemsOutSchema>>>;
 export type _AssertCollectionListingOut = Assert<Mutual<CollectionListingOut, z.infer<typeof CollectionListingOutSchema>>>;
+export type _AssertCollectionListingRowOut = Assert<Mutual<CollectionListingRowOut, z.infer<typeof CollectionListingRowOutSchema>>>;
 export type _AssertCollectionMetaOut = Assert<Mutual<CollectionMetaOut, z.infer<typeof CollectionMetaOutSchema>>>;
+export type _AssertCollectionOut = Assert<Mutual<CollectionOut, z.infer<typeof CollectionOutSchema>>>;
 export type _AssertCollectionStatus = Assert<Mutual<CollectionStatus, z.infer<typeof CollectionStatusSchema>>>;
 export type _AssertCollectionType = Assert<Mutual<CollectionType, z.infer<typeof CollectionTypeSchema>>>;
 export type _AssertCommitteeMemberOut = Assert<Mutual<CommitteeMemberOut, z.infer<typeof CommitteeMemberOutSchema>>>;

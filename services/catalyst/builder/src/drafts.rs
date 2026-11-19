@@ -18,15 +18,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::access::{self, CollectionEdit, ItemChange, ItemRead, ItemSave, OnCommittee, Wallet};
+use crate::access::{self, ItemChange, ItemRead, ItemSave, OnCommittee, Wallet};
 use crate::chain_state::{self, ReadView};
 use crate::storage::OpenedContent;
 use dcl_auth::{hash_bytes_v1, is_canonical_cid, is_eth_address};
 
 use super::http::{ApiError, iso};
-use super::items::{
-    CollectionMetaOut, CollectionMetaRow, ItemsComponent, collection_meta, collection_meta_columns,
-};
+use super::items::{CollectionMetaOut, CollectionMetaRow, ItemsComponent, collection_meta_columns};
 
 #[derive(Debug, sqlx::FromRow)]
 struct CollectionListingRow {
@@ -234,8 +232,8 @@ fn with_timestamps((mut row, created, updated): (Value, NaiveDateTime, NaiveDate
 
 const FK_VIOLATION: &str = "23503";
 
-/// The bound of the committee-wide and the public listings: the per-owner
-/// ones are a wallet's own handful, these span every wallet.
+/// The bound of the committee's item drafts listing: the per-owner ones are
+/// a wallet's own handful, this one spans every wallet.
 pub const LISTING_LIMIT: i64 = 1000;
 
 fn collection_listing(view: &ReadView) -> String {
@@ -274,52 +272,6 @@ fn listing_out(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
 }
 
 impl ItemsComponent {
-    pub async fn save_collection_draft(
-        &self,
-        edit: &CollectionEdit,
-        draft: &CollectionDraft,
-    ) -> Result<CollectionMetaOut, ApiError> {
-        draft.validate(edit.id())?;
-        let signer = edit.signer();
-        let mut tx = self.pool.begin().await?;
-        let view = chain_state::for_decision(&mut tx).await?;
-        let stored: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT third_party_id, urn_suffix FROM builder.collections WHERE id=$1 FOR UPDATE",
-        )
-        .bind(draft.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        access::confirm_collection_edit(&mut tx, &view, edit).await?;
-        let provider = draft
-            .urn
-            .as_deref()
-            .and_then(|urn| urn.rsplit_once(':').map(|(provider, _)| provider));
-        if let Some((stored, urn)) = stored {
-            kind_kept(draft, signer, stored.as_deref(), provider, urn.as_deref())?;
-        }
-        let changed = sqlx::query(
-            "INSERT INTO builder.collections AS c (id, name, eth_address, salt, urn_suffix, third_party_id) VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, salt = EXCLUDED.salt, updated_at = timezone('UTC', now()) \
-             WHERE c.eth_address = $3 AND NOT c.publication_pending \
-             AND c.urn_suffix IS NOT DISTINCT FROM $5 AND c.third_party_id IS NOT DISTINCT FROM $6 \
-             RETURNING id",
-        ).bind(draft.id).bind(draft.name.trim()).bind(signer).bind(&draft.salt)
-            .bind(&draft.urn).bind(provider)
-            .fetch_optional(&mut *tx).await?;
-        if changed.is_none() {
-            access::confirm_collection_edit(&mut tx, &view, edit).await?;
-            return Err(ApiError::internal(format!(
-                "collection {} changed under its row lock",
-                draft.id
-            )));
-        }
-        let row = collection_meta(&mut tx, &view, edit)
-            .await?
-            .ok_or_else(|| ApiError::not_found("Collection not found"))?;
-        tx.commit().await?;
-        Ok(CollectionMetaOut::from(&row))
-    }
-
     /// "My collections": the owner's unpublished collections and published
     /// linked ones (`collections_owner_idx`).
     pub async fn collection_drafts(
@@ -334,53 +286,6 @@ impl ItemsComponent {
             draft_predicate(&view)
         )))
         .bind(wallet.address())
-        .fetch_all(&mut *conn)
-        .await?;
-        Ok(listing_out(&rows))
-    }
-
-    /// Every wallet's drafts, newest first: the committee's `GET
-    /// /v1/collections` (builder-server's `getCollections` without the
-    /// published search), at most [`LISTING_LIMIT`] rows.
-    pub async fn collection_drafts_of_everyone(
-        &self,
-        _committee: &OnCommittee,
-    ) -> Result<Vec<CollectionListingOut>, ApiError> {
-        let mut conn = self.pool.acquire().await?;
-        let view = chain_state::for_read(&mut conn).await?;
-        let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{} WHERE {} ORDER BY c.updated_at DESC LIMIT $1",
-            collection_listing(&view),
-            draft_predicate(&view)
-        )))
-        .bind(LISTING_LIMIT)
-        .fetch_all(&mut *conn)
-        .await?;
-        Ok(listing_out(&rows))
-    }
-
-    /// The published collections whose name contains `q` (case-insensitive,
-    /// the pattern characters of `q` literal), newest first: the public
-    /// search `GET /v1/collections?q=...&is_published=true`, at most
-    /// [`LISTING_LIMIT`] rows.
-    pub async fn published_collections_named(
-        &self,
-        q: &str,
-    ) -> Result<Vec<CollectionListingOut>, ApiError> {
-        let pattern = q
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let mut conn = self.pool.acquire().await?;
-        let view = chain_state::for_read(&mut conn).await?;
-        let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{} WHERE {} AND c.name ILIKE '%' || $1 || '%' ESCAPE '\\' \
-             ORDER BY c.updated_at DESC LIMIT $2",
-            collection_listing(&view),
-            view.published()
-        )))
-        .bind(pattern)
-        .bind(LISTING_LIMIT)
         .fetch_all(&mut *conn)
         .await?;
         Ok(listing_out(&rows))
@@ -652,37 +557,6 @@ async fn lock_item(
         ));
     }
     Ok(())
-}
-
-/// A save keeps the collection's kind and provider: builder-server's 409s,
-/// and its 401 for a third-party collection saved without its URN.
-fn kind_kept(
-    draft: &CollectionDraft,
-    signer: &str,
-    stored: Option<&str>,
-    provider: Option<&str>,
-    urn: Option<&str>,
-) -> Result<(), ApiError> {
-    let id = draft.id;
-    match (stored, provider) {
-        (None, Some(_)) => Err(ApiError::conflict(
-            "The collection can't be converted into a third party collection.",
-        )
-        .with_data(serde_json::json!({ "id": id }))),
-        (Some(_), None) => Err(ApiError::unauthorized("Unauthorized to upsert collection")
-            .with_data(serde_json::json!({ "id": id, "eth_address": signer }))),
-        (Some(stored), Some(provider)) if stored != provider => Err(ApiError::conflict(
-            "The third party id cannot be changed",
-        )
-        .with_data(
-            serde_json::json!({ "id": id, "eth_address": signer, "third_party_id": provider }),
-        )),
-        (Some(_), Some(_)) if urn != draft.urn.as_deref() => {
-            Err(ApiError::conflict("The collection's URN can't be changed.")
-                .with_data(serde_json::json!({ "id": id })))
-        }
-        _ => Ok(()),
-    }
 }
 
 #[cfg(test)]

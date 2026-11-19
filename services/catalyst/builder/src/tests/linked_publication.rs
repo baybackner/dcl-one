@@ -56,10 +56,13 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         "id": id, "name": "Linked hats", "urn": format!("{PROVIDER}:{id}")
     }))
     .unwrap();
-    store
-        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-        .await
-        .unwrap();
+    super::support::save_collection(
+        &store,
+        OWNER,
+        serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn}),
+    )
+    .await
+    .unwrap();
     assert!(
         store
             .prepare_linked_publication(&granted::publisher(OWNER, id))
@@ -102,10 +105,13 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .await
         .unwrap();
     collection.name = "Updated hats".into();
-    store
-        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-        .await
-        .unwrap();
+    super::support::save_collection(
+        &store,
+        OWNER,
+        serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn}),
+    )
+    .await
+    .unwrap();
     assert!(
         store
             .begin_linked_publication(&granted::publisher(OWNER, id), &stale.revision)
@@ -138,10 +144,13 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     assert_eq!(first.salt, b.unwrap().salt);
     assert_eq!(first.status, "prepared");
     assert!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-            .await
-            .is_err()
+        super::support::save_collection(
+            &store,
+            OWNER,
+            serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn})
+        )
+        .await
+        .is_err()
     );
     assert!(
         store

@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { decodeFunctionData, parseAbi } from "viem";
 import { collectionDraftWriter, listCollectionDrafts } from "./collection-drafts";
 
 it("lists local collections through the signed owner endpoint", async () => {
@@ -33,7 +34,7 @@ it("retries an interrupted collection import without duplicating items or erasin
     }
     return items.has(id) ? Response.json({ data: items.get(id) }) : Response.json({ message: 'Item not found' }, { status: 404 });
   });
-  const writer = collectionDraftWriter(() => ({ fetch, base: 'https://builder.test' }));
+  const writer = collectionDraftWriter(() => ({ fetch, address: '0x1111111111111111111111111111111111111111', base: 'https://builder.test' }));
   const args = { name: 'Saved collection', type: 'standard' as const, items: [{ file: new File([JSON.stringify({ asset: { version: '2.0' } })], 'item.gltf') }] };
   await expect(writer(args)).rejects.toThrow('Upload offline');
   const result = await writer(args);
@@ -74,4 +75,52 @@ it("saves linked drafts with the selected managed provider and refuses revoked a
   await expect(writer(args)).rejects.toThrow("no longer manages");
   expect(collections).toHaveLength(1);
   await expect(writer({ ...args, thirdPartyId: "https://evil.test" })).rejects.toThrow("Choose a provider");
+});
+
+type DraftFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+describe("when a standard collection is saved", () => {
+  const owner = "0xC1aba94a79ca07d9d15a62ff5c9b382777e0c70e";
+  let bodies: { collection: Record<string, unknown>; data?: string }[];
+  let fetch: Mock<DraftFetch>;
+
+  beforeEach(async () => {
+    bodies = [];
+    fetch = vi.fn<DraftFetch>(async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path.startsWith("/v1/collections/")) {
+        const body = JSON.parse(init!.body as string);
+        bodies.push(body);
+        return Response.json({ data: { ...body.collection, is_published: false, is_approved: false, item_count: "0", urn: "urn:decentraland:matic:collections-v2:0x969194d18107025936324ddc6b1019a6755c94d5" } });
+      }
+      if (init?.method === "POST") return Response.json({ data: { "item.gltf": "stored-cid" } });
+      return init?.method === "PUT" ? Response.json({ data: {} }) : Response.json({ error: "Item not found" }, { status: 404 });
+    });
+    await collectionDraftWriter(() => ({ fetch, address: owner, base: "https://builder.test" }))({
+      name: "  Hats  ", type: "standard", items: [{ file: new File([JSON.stringify({ asset: { version: "2.0" } })], "item.gltf") }],
+    });
+  });
+
+  it("should send the keys the collection schema requires, with the signing wallet as owner", () => {
+    expect(bodies[0].collection).toEqual({ id: expect.any(String), name: "Hats", eth_address: owner.toLowerCase(), salt: null, contract_address: null });
+  });
+
+  it("should send initialize calldata naming the signing wallet as the collection's creator", () => {
+    const abi = parseAbi(["function initialize(string name,string symbol,string baseURI,address creator,bool shouldComplete,bool isApproved,address rarities,(string rarity,uint256 price,address beneficiary,string metadata)[] items)"]);
+    const { args } = decodeFunctionData({ abi, data: bodies[0].data as `0x${string}` });
+    expect([args[0], args[1], args[3].toLowerCase(), args[4], args[5], args[7]]).toEqual(["Hats", "DCL-HTS", owner.toLowerCase(), true, false, []]);
+  });
+});
+
+describe("when a standard collection is saved without a signed-in wallet", () => {
+  let fetch: Mock<DraftFetch>;
+
+  beforeEach(() => {
+    fetch = vi.fn<DraftFetch>();
+  });
+
+  it("should refuse before writing anything", async () => {
+    const writer = collectionDraftWriter(() => ({ fetch }));
+    await expect(writer({ name: "Hats", type: "standard", items: [{ file: new File([JSON.stringify({ asset: { version: "2.0" } })], "item.gltf") }] })).rejects.toThrow("Sign in");
+  });
 });

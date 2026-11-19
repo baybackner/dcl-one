@@ -61,6 +61,8 @@ CREATE TABLE builder.collections (
     publication_pending boolean NOT NULL DEFAULT false,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    linked_contract_address text,
+    linked_contract_network text,
     CONSTRAINT collections_pkey PRIMARY KEY (id),
     CONSTRAINT collections_contract_address_key UNIQUE (contract_address),
     CONSTRAINT collections_eth_address_lowercase_check CHECK (eth_address = lower(eth_address)),
@@ -68,13 +70,37 @@ CREATE TABLE builder.collections (
     CONSTRAINT collections_salt_len_check CHECK (salt IS NULL OR char_length(salt) <= 128),
     CONSTRAINT collections_third_party_urn_check
         CHECK (third_party_id IS NULL
-               OR (urn_suffix IS NOT NULL AND left(urn_suffix, char_length(third_party_id) + 1) = third_party_id || ':'))
+               OR (urn_suffix IS NOT NULL AND left(urn_suffix, char_length(third_party_id) + 1) = third_party_id || ':')),
+    CONSTRAINT collections_linked_contract_check
+        CHECK (linked_contract_address IS NULL OR linked_contract_address ~ '^0x[0-9a-f]{40}$'),
+    CONSTRAINT collections_linked_network_check
+        CHECK (linked_contract_network IS NULL OR linked_contract_network IN ('mainnet', 'sepolia', 'matic', 'amoy',
+               'base_mainnet', 'base_sepolia', 'monad_mainnet', 'monad_testnet', 'ape_mainnet', 'ape_caldera')),
+    CONSTRAINT collections_linked_contract_key UNIQUE (third_party_id, linked_contract_address, linked_contract_network)
 );
+
+CREATE FUNCTION builder.collections_linked_contract_kept() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (OLD.linked_contract_address IS NOT NULL AND NEW.linked_contract_address IS NULL)
+       OR (OLD.linked_contract_network IS NOT NULL AND NEW.linked_contract_network IS NULL) THEN
+        RAISE EXCEPTION 'Columns linked_contract_address, linked_contract_network cannot be set to null if they were previously not null';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER collections_linked_contract_kept BEFORE UPDATE ON builder.collections
+    FOR EACH ROW EXECUTE FUNCTION builder.collections_linked_contract_kept();
 
 -- "My collections" (GET /v1/drafts/collections: eth_address = $1 AND (not
 -- published OR third_party_id IS NOT NULL) ORDER BY updated_at DESC), a
 -- per-owner set of tens of rows.
 CREATE INDEX collections_owner_idx ON builder.collections (eth_address);
+
+CREATE INDEX collections_standard_name_idx ON builder.collections (lower(name)) WHERE third_party_id IS NULL;
+
+CREATE INDEX collections_third_party_urn_idx ON builder.collections (urn_suffix) WHERE third_party_id IS NOT NULL;
 
 -- ── items ──────────────────────────────────────────────────────────────────
 
@@ -144,6 +170,8 @@ CREATE INDEX items_collection_created_idx ON builder.items (collection_id, creat
 -- "My item drafts" (GET /v1/items: eth_address = $1 AND NOT is_published
 -- ... ORDER BY updated_at DESC) and the owner probe of every item write.
 CREATE INDEX items_owner_updated_idx ON builder.items (eth_address, updated_at DESC);
+
+CREATE INDEX items_minted_collection_idx ON builder.items (collection_id) WHERE blockchain_item_id IS NOT NULL;
 
 -- ── uploads ────────────────────────────────────────────────────────────────
 

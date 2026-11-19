@@ -30,10 +30,11 @@
 //! async fn save(
 //!     state: &catalyst_builder::SharedState,
 //!     signer: &catalyst_shared::signed_fetch::Signer,
-//!     draft: &catalyst_builder::drafts::CollectionDraft,
+//!     save: &catalyst_builder::collections::save::CollectionSave,
+//!     id: uuid::Uuid,
 //! ) {
-//!     let edit = catalyst_builder::access::edit_collection(state, signer, draft.id).await.unwrap();
-//!     let _ = state.items.save_collection_draft(&edit, draft).await;
+//!     let edit = catalyst_builder::access::edit_collection(state, signer, id).await.unwrap();
+//!     let _ = state.items.save_collection(&edit, save, None).await;
 //! }
 //! ```
 //!
@@ -51,9 +52,9 @@
 //! ```compile_fail,E0308
 //! async fn skip(
 //!     state: &catalyst_builder::SharedState,
-//!     draft: &catalyst_builder::drafts::CollectionDraft,
+//!     save: &catalyst_builder::collections::save::CollectionSave,
 //! ) {
-//!     let _ = state.items.save_collection_draft("0xabc", draft).await;
+//!     let _ = state.items.save_collection("0xabc", save, None).await;
 //! }
 //! ```
 
@@ -247,6 +248,7 @@ struct Collection {
     published: bool,
     creator: Option<String>,
     managers: Vec<String>,
+    minters: Vec<String>,
 }
 
 impl Collection {
@@ -306,6 +308,10 @@ async fn collection(
         pending,
         published,
         creator: facts.as_ref().map(|f| f.creator.clone()),
+        minters: facts
+            .as_ref()
+            .map(|f| f.minters.clone())
+            .unwrap_or_default(),
         managers: facts.map(|f| f.managers).unwrap_or_default(),
     }))
 }
@@ -394,16 +400,62 @@ pub async fn committee(state: &SharedState, signer: &Signer) -> Result<OnCommitt
     })
 }
 
-/// `GET /v1/collections/:id`: any signer reads a published collection; the
-/// owner, an on-chain manager, the provider's manager and the committee read
-/// any.
+/// While the copy has a complete pass but a stale one: whether `id` is the
+/// signer's own draft, which the copy can't change: its stored owner is the
+/// signer and it is third-party, or standard and its contract isn't on the
+/// copy. The owner's own listing answers the same rows from the same pass.
+async fn own_draft_while_stale(
+    conn: &mut PgConnection,
+    signer: &Signer,
+    id: Uuid,
+) -> Result<bool, ApiError> {
+    let view = chain_state::for_read(conn).await?;
+    let row: Option<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT eth_address, third_party_id IS NOT NULL, contract_address FROM builder.collections WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((owner, third_party, contract)) = row else {
+        return Ok(false);
+    };
+    if owner != signer.as_str() {
+        return Ok(false);
+    }
+    Ok(match contract {
+        Some(contract) if !third_party => !chain_state::holds(conn, &view, &contract).await?,
+        _ => true,
+    })
+}
+
+/// The signer is on the committee by the read at hand, without waiting on
+/// the committee source: for a view only the committee widens.
+pub fn known_committee_member(state: &SharedState, signer: &Signer) -> Option<OnCommittee> {
+    known_committee(state, signer.as_str()).then(|| OnCommittee {
+        member: signer.as_str().to_string(),
+    })
+}
+
+/// `GET /v1/collections/:id`: any signer reads a published collection's
+/// public detail, and its minters and the committee (from the read at hand,
+/// without waiting) its full body; the owner, an on-chain manager, the
+/// provider's manager and the committee read any collection in full.
 pub async fn read_collection(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
 ) -> Result<CollectionRead, ApiError> {
     let id = parse(raw)?;
-    let (mut conn, view) = decision(state).await?;
+    let mut conn = state.items.pool().acquire().await?;
+    let view = match chain_state::for_decision(&mut conn).await {
+        Ok(view) => view,
+        Err(stale) => {
+            return match own_draft_while_stale(&mut conn, signer, id).await? {
+                true => Ok(CollectionRead { id, full: true }),
+                false => Err(stale),
+            };
+        }
+    };
     let c = collection(&mut conn, &view, id)
         .await?
         .ok_or_else(|| not_found(id, COLLECTIONS))?;
@@ -413,7 +465,8 @@ pub async fn read_collection(
         return Ok(CollectionRead { id, full: true });
     }
     if c.published {
-        return Ok(CollectionRead { id, full: false });
+        let full = c.minters.iter().any(|minter| minter == s) || known_committee(state, s);
+        return Ok(CollectionRead { id, full });
     }
     if on_committee(state, s).await? {
         return Ok(CollectionRead { id, full: true });
@@ -508,8 +561,7 @@ pub async fn read_item(
 }
 
 /// `PUT /v1/collections/:id`: anyone creates a collection under a new id;
-/// only the owner, or the provider's manager, saves an existing one, and
-/// not once it is published or while it is being published.
+/// only the owner, or the provider's manager, saves an existing one.
 pub async fn edit_collection(
     state: &SharedState,
     signer: &Signer,
@@ -524,33 +576,33 @@ pub async fn edit_collection(
     Ok(edit)
 }
 
-/// [`edit_collection`]'s decision again, inside the write's transaction.
+/// The state of a collection a save was confirmed for: whether it is
+/// published and whether the node's own publication of it is in progress.
+#[derive(Debug, Default)]
+pub struct EditState {
+    pub published: bool,
+    pub pending: bool,
+}
+
+/// [`edit_collection`]'s decision again, inside the write's transaction,
+/// with the state the save's own rules read.
 pub(crate) async fn confirm_collection_edit(
     conn: &mut PgConnection,
     view: &DecisionView,
     edit: &CollectionEdit,
-) -> Result<(), ApiError> {
+) -> Result<EditState, ApiError> {
     let Some(c) = collection(conn, view, edit.id).await? else {
-        return Ok(());
+        return Ok(EditState::default());
     };
-    let (id, s) = (edit.id.to_string(), edit.signer.as_str());
+    let s = edit.signer.as_str();
     if !c.owner(s) && !c.provider_manager(s) {
         return Err(ApiError::unauthorized("Unauthorized to upsert collection")
-            .with_data(json!({ "id": id, "eth_address": s })));
+            .with_data(json!({ "id": edit.id.to_string(), "eth_address": s })));
     }
-    if c.published && c.third_party {
-        return Err(ApiError::conflict(
-            "The third party collection already has published items. It can't be updated.",
-        )
-        .with_data(json!({ "id": id })));
-    }
-    if c.published {
-        return Err(ApiError::published(Subject::Collection, &id, "updated"));
-    }
-    if c.pending {
-        return Err(ApiError::locked(Subject::Collection, &id, "updated"));
-    }
-    Ok(())
+    Ok(EditState {
+        published: c.published,
+        pending: c.pending,
+    })
 }
 
 /// `PUT /v1/items/:id`: an item with no collection is saved by its owner

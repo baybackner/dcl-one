@@ -84,7 +84,7 @@ export function mergeCollectionThumbs(
   const thumbs = collectionThumbsFrom(items);
   return collections.map((c) => {
     if (c.thumbs.length > 0) return c;
-    const found = thumbs.get(c.id);
+    const found = thumbs.get(c.id) ?? (c.contract_address ? thumbs.get(c.contract_address) : undefined);
     return found && found.length > 0 ? { ...c, thumbs: found } : c;
   });
 }

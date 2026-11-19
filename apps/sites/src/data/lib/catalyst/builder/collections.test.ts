@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import fixture from "../../../fixtures/builder-collections.json";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./collections-schema";
 import {
   fetchCollections,
+  mergeCollectionThumbs,
   readSort,
   readTab,
   readView,
@@ -47,6 +48,43 @@ describe("schemas / parsers", () => {
 
   it("refuses a timestamp that is not an ISO-8601 string", () => {
     expect(parseCollections([{ ...(COLLECTIONS[0] as object), created_at: 1701388800000 }])).toEqual([]);
+  });
+});
+
+describe("when the node answers an address's collection rows", () => {
+  let rows: ReturnType<typeof parseCollections>;
+
+  beforeEach(() => {
+    rows = parseCollections(COLLECTIONS);
+  });
+
+  it("should read every row of the listing", () => {
+    expect(rows).toHaveLength(COLLECTIONS.length);
+  });
+
+  it("should count a collection's items from the string item_count", () => {
+    expect(rows.find((c) => c.name === "Genesis Threads")!.count).toBe(12);
+  });
+
+  it("should tell a third-party collection by its urn and read its provider from it", () => {
+    const linked = rows.find((c) => c.name === "Aether Linked Wearables")!;
+    expect([linked.type, linked.third_party_id, linked.pending]).toEqual(["third_party", "urn:decentraland:matic:collections-thirdparty:aether", true]);
+  });
+
+  it("should derive the status dot from the published and approved state", () => {
+    expect(rows.map((c) => [c.is_published, c.is_approved, c.status])).toEqual(
+      rows.map((c) => [c.is_published, c.is_approved, c.is_approved ? "synced" : c.is_published ? "under_review" : "unsynced"]),
+    );
+  });
+
+  it("should start every row without thumbnails, which the item rows fill", () => {
+    expect(rows.every((c) => c.thumbs.length === 0)).toBe(true);
+  });
+
+  it("should fill a collection's thumbnails from on-chain item rows, which name its contract", () => {
+    const genesis = rows.find((c) => c.name === "Genesis Threads")!;
+    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), collection_id: genesis.contract_address, image: "https://peer.test/thumbnail" }]);
+    expect(mergeCollectionThumbs(rows, [item]).find((c) => c.id === genesis.id)!.thumbs).toEqual(["https://peer.test/thumbnail"]);
   });
 });
 

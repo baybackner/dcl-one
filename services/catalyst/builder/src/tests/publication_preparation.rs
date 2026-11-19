@@ -17,10 +17,13 @@ async fn publication_uses_owned_persisted_files_and_stable_item_order() {
     let id = Uuid::new_v4();
     let collection: CollectionDraft =
         serde_json::from_value(json!({"id": id, "name": "Publication"})).unwrap();
-    store
-        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-        .await
-        .unwrap();
+    super::support::save_collection(
+        &store,
+        OWNER,
+        serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn}),
+    )
+    .await
+    .unwrap();
     assert!(
         store
             .prepare_publication(&granted::publisher(OWNER, id))
@@ -139,15 +142,19 @@ async fn published_draft(store: &crate::items::ItemsComponent, linked: bool) -> 
         "urn:decentraland:matic:collections-thirdparty:guard{}:c",
         id.simple()
     );
-    let mut draft = json!({ "id": id, "name": "Guarded" });
+    let mut draft =
+        json!({ "id": id, "name": format!("Guarded {}", &id.simple().to_string()[..8]) });
     if linked {
         draft["urn"] = json!(urn);
     }
     let draft: crate::drafts::CollectionDraft = serde_json::from_value(draft).unwrap();
-    store
-        .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
-        .await
-        .unwrap();
+    super::support::save_collection(
+        store,
+        OWNER,
+        serde_json::json!({"id": draft.id, "name": draft.name, "urn": draft.urn}),
+    )
+    .await
+    .unwrap();
     let item: ItemDraft = serde_json::from_value(json!({
         "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
         "data": {"category": "hat"}, "price": "0", "rarity": "rare"

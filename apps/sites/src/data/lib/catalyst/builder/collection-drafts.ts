@@ -3,9 +3,21 @@ import { CatalystError } from "../client";
 import { z } from "zod";
 import { draftRequest, type DraftOptions } from "./drafts";
 import { importCollectionItem } from "./collection-import";
+import { encodeFunctionData, parseAbi, type Address } from "viem";
+import { COLLECTION_BASE_URI } from "./collection-publication";
+
+const COLLECTION_RARITIES = "0x17113b44fdd661a156cc01b5031e3acf72c32eb3";
+const initializeAbi = parseAbi(["function initialize(string name,string symbol,string baseURI,address creator,bool shouldComplete,bool isApproved,address rarities,(string rarity,uint256 price,address beneficiary,string metadata)[] items)"]);
+
+/** The `initialize` calldata of a standard collection named `name` and created by `creator`, with no items: what `PUT /v1/collections/:id` computes its contract address from. */
+export function initializeCalldata(name: string, creator: string): string {
+  const symbol = `DCL-${[...name].filter(c => !/\s/.test(c) && !"aeiou".includes(c)).join("").toUpperCase()}`;
+  return encodeFunctionData({ abi: initializeAbi, functionName: "initialize",
+    args: [name, symbol, COLLECTION_BASE_URI, creator as Address, true, false, COLLECTION_RARITIES, []] });
+}
 
 const Collection = z.object({ id: z.string().uuid(), name: z.string(), is_published: z.boolean(),
-  is_approved: z.boolean().optional(), third_party_id: z.string().nullish(), item_count: z.number().int().nonnegative().optional() });
+  is_approved: z.boolean().optional(), third_party_id: z.string().nullish(), item_count: z.coerce.number().int().nonnegative().optional() });
 export type CollectionDraftSummary = z.infer<typeof Collection>;
 
 export async function listCollectionDrafts(opts: DraftOptions): Promise<CollectionDraftSummary[]> {
@@ -29,6 +41,8 @@ export function collectionDraftWriter(options: () => DraftOptions & { address?: 
       imports.push({ ...parsed, id: ids.get(item.file)! });
     }
     const opts = { ...options(), signal: args.signal };
+    const owner = opts.address?.toLowerCase();
+    if (!owner) throw new Error("Sign in to save this collection.");
     if (provider?.success) {
       if (!opts.address || !(await listLinkedProviders(opts.address, opts)).some(row => row.id === provider.data)) {
         throw new Error("This wallet no longer manages the selected provider. Choose another provider and retry.");
@@ -37,7 +51,9 @@ export function collectionDraftWriter(options: () => DraftOptions & { address?: 
     id ??= crypto.randomUUID();
     const saved = Collection.parse(await draftRequest(`/v1/collections/${id}`, opts, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ collection: { id, name: args.name.trim(), ...(provider?.success ? { urn: `${provider.data}:${id}` } : {}) } }),
+      body: JSON.stringify(provider?.success
+        ? { collection: { id, name: args.name.trim(), eth_address: owner, salt: null, contract_address: null, urn: `${provider.data}:${id}` } }
+        : { collection: { id, name: args.name.trim(), eth_address: owner, salt: null, contract_address: null }, data: initializeCalldata(args.name.trim(), owner) }),
     }));
     for (const item of imports) {
       const path = `/v1/items/${item.id}`;

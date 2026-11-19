@@ -4,7 +4,7 @@ use serde::Deserialize;
 use crate::SharedState;
 use crate::access::Wallet;
 use crate::http::{ApiData, ApiError};
-use crate::onchain::{self, BuilderCollectionOut, MARKETPLACE_DOWN, OrphanItemOut};
+use crate::onchain::{self, MARKETPLACE_DOWN, OrphanItemOut};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ItemsParams {
@@ -20,17 +20,8 @@ fn reader(state: &SharedState) -> Result<&crate::chain_index::ChainIndex, ApiErr
         .ok_or_else(|| ApiError::service_unavailable(MARKETPLACE_DOWN))
 }
 
-/// The readers behind `collections::get_address_collections` and
-/// `get_address_items`, for the wallet `access::own_address` admitted.
-pub async fn get_address_collections(
-    state: &SharedState,
-    wallet: &Wallet,
-) -> Result<Json<ApiData<Vec<BuilderCollectionOut>>>, ApiError> {
-    let market = reader(state)?;
-    let data = onchain::collections_for_address(market, wallet).await?;
-    Ok(Json(ApiData::ok(data)))
-}
-
+/// The reader behind `collections::get_address_items`, for the wallet
+/// `access::own_address` admitted.
 pub async fn get_address_items(
     state: &SharedState,
     wallet: &Wallet,
@@ -56,22 +47,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn collections_return_503_when_no_collections_reader_is_configured() {
-        for market in [
-            None,
-            Some(crate::tests::support::market_without_db(
-                crate::chain_index::IndexSettings::for_tests(),
-            )),
-        ] {
-            let state = state_without_db(market).await;
-            let err = get_address_collections(&state, &own())
-                .await
-                .expect_err("must be an error, not an empty 200");
-            assert_eq!(err.status(), 503);
-        }
-    }
-
-    #[tokio::test]
     async fn items_return_503_when_no_collections_reader_is_configured() {
         let state = state_without_db(None).await;
         let err = get_address_items(&state, &own(), ItemsParams::default())
@@ -88,10 +63,6 @@ mod tests {
         };
         let market = crate::tests::support::market_without_db(settings);
         let state = state_without_db(Some(market)).await;
-        let err = get_address_collections(&state, &own())
-            .await
-            .expect_err("an unreachable subgraph must error, never yield an empty list");
-        assert!(err.status() >= 500, "{err}");
         let err = get_address_items(&state, &own(), ItemsParams::default())
             .await
             .unwrap_err();

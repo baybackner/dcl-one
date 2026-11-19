@@ -44,7 +44,9 @@ struct Ledger {
     #[serde(default)]
     volatile_fields: Vec<String>,
     #[serde(default)]
-    deliberate_gaps: BTreeMap<String, String>,
+    deliberate_gaps: BTreeMap<String, DeliberateGap>,
+    #[serde(default)]
+    open_gaps: BTreeMap<String, OpenGap>,
     operations: Vec<Operation>,
 }
 
@@ -59,6 +61,30 @@ struct Operation {
     remaining_verification: String,
 }
 
+/// A difference the node keeps on purpose: its statement, the captures it
+/// explains notes on, and the notes (`anchors`) a capture must record before
+/// the gap explains any other note there.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeliberateGap {
+    text: String,
+    captures: Vec<String>,
+    #[serde(default)]
+    anchors: Vec<String>,
+}
+
+/// A difference the node doesn't keep on purpose: as [`DeliberateGap`], and
+/// the behavior of the node that closes it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenGap {
+    text: String,
+    closes: String,
+    captures: Vec<String>,
+    #[serde(default)]
+    anchors: Vec<String>,
+}
+
 #[derive(Deserialize)]
 struct Evidence {
     path: String,
@@ -67,6 +93,8 @@ struct Evidence {
     scope: String,
     #[serde(default)]
     replay: Option<Vec<String>>,
+    #[serde(default)]
+    explained_by: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -88,6 +116,7 @@ struct Defect {
 struct Seed {
     wallets: BTreeMap<String, String>,
     third_parties: Vec<SeedThirdParty>,
+    registry: Vec<SeedThirdParty>,
     collections: Vec<SeedCollection>,
     items: Vec<SeedItem>,
     chain: SeedChain,
@@ -99,6 +128,8 @@ struct SeedThirdParty {
     id: String,
     name: String,
     managers: Vec<String>,
+    #[serde(default)]
+    programmatic: bool,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +194,10 @@ struct SeedCollection {
     contract_address: Option<String>,
     third_party_id: Option<String>,
     urn_suffix: Option<String>,
+    #[serde(default)]
+    linked_contract_address: Option<String>,
+    #[serde(default)]
+    linked_contract_network: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -454,6 +489,44 @@ fn captures(files: &BTreeSet<String>) -> BTreeSet<String> {
         .collect()
 }
 
+/// The captures the gap `reference` (`deliberate:<name>` or `open:<name>`)
+/// lists and its anchors, when the ledger states it.
+fn stated_gap<'a>(
+    ledger: &'a Ledger,
+    reference: &str,
+) -> Option<(&'a Vec<String>, &'a Vec<String>)> {
+    if let Some(name) = reference.strip_prefix("deliberate:") {
+        return ledger
+            .deliberate_gaps
+            .get(name)
+            .map(|g| (&g.captures, &g.anchors));
+    }
+    let name = reference.strip_prefix("open:")?;
+    ledger
+        .open_gaps
+        .get(name)
+        .map(|g| (&g.captures, &g.anchors))
+}
+
+/// Captures in the order both sides run them: `live/` then `source/`, each
+/// by the number its name starts with. A name without a number, or two
+/// captures of one folder with the same number, is refused.
+fn replay_order(paths: BTreeSet<String>) -> Result<Vec<String>, String> {
+    let mut keyed = BTreeMap::new();
+    for path in paths {
+        let relative = path.strip_prefix(&format!("{FIXTURES}/")).unwrap_or(&path);
+        let (dir, name) = relative.rsplit_once('/').unwrap_or(("", relative));
+        let number: u32 = name
+            .split_once('-')
+            .and_then(|(n, _)| n.parse().ok())
+            .ok_or_else(|| format!("{relative}: a capture name starts with its number"))?;
+        if let Some(other) = keyed.insert((dir.to_string(), number), path.clone()) {
+            return Err(format!("{relative} and {other} share the number {number}"));
+        }
+    }
+    Ok(keyed.into_values().collect())
+}
+
 fn ledger_errors(
     ledger: &Ledger,
     routes: &BTreeSet<String>,
@@ -461,6 +534,9 @@ fn ledger_errors(
     captured: &BTreeMap<String, Value>,
 ) -> Vec<String> {
     let mut errors = Vec::new();
+    if let Err(e) = replay_order(captures(files)) {
+        errors.push(e);
+    }
     if ledger.schema_version != 1 {
         errors.push(format!("schema_version {}", ledger.schema_version));
     }
@@ -476,14 +552,32 @@ fn ledger_errors(
     }
     let replayed = captures(files);
     let mut cited = BTreeMap::new();
+    let mut attributed = BTreeSet::new();
     let mut deliberate = BTreeSet::new();
+    let mut open = BTreeSet::new();
     for op in &ledger.operations {
         let id = &op.id;
-        for name in op.gaps.iter().filter_map(|g| g.strip_prefix("deliberate:")) {
-            if !ledger.deliberate_gaps.contains_key(name) {
-                errors.push(format!("{id}: no deliberate gap named {name}"));
+        for gap in &op.gaps {
+            if let Some(name) = gap.strip_prefix("deliberate:") {
+                if !ledger.deliberate_gaps.contains_key(name) {
+                    errors.push(format!("{id}: no deliberate gap named {name}"));
+                }
+                deliberate.insert(name);
+            } else if let Some(name) = gap.strip_prefix("open:") {
+                if !ledger.open_gaps.contains_key(name) {
+                    errors.push(format!("{id}: no open gap named {name}"));
+                }
+                open.insert(name);
+            } else {
+                errors.push(format!("{id}: gap {gap} is neither deliberate: nor open:"));
             }
-            deliberate.insert(name);
+        }
+        let has_open = op.gaps.iter().any(|g| g.starts_with("open:"));
+        if op.status == "reviewed" && has_open {
+            errors.push(format!("{id}: reviewed with an open gap"));
+        }
+        if op.status == "known_gap" && !has_open {
+            errors.push(format!("{id}: known_gap names no open gap"));
         }
         if !STATUSES.contains(&op.status.as_str()) {
             errors.push(format!("{id}: status {}", op.status));
@@ -495,9 +589,6 @@ fn ledger_errors(
         }
         if op.status != "not_reviewed" && op.evidence.is_empty() {
             errors.push(format!("{id}: a review needs evidence"));
-        }
-        if op.status == "known_gap" && op.gaps.is_empty() {
-            errors.push(format!("{id}: a known gap names its difference"));
         }
         for evidence in &op.evidence {
             let path = &evidence.path;
@@ -541,8 +632,38 @@ fn ledger_errors(
                 if under_fixtures.is_none() {
                     errors.push(format!("{id}: replay of a non-capture {path}"));
                 }
-                if op.status == "reviewed" && !notes.is_empty() {
-                    errors.push(format!("{id}: reviewed with replay differences"));
+                let relative = under_fixtures.unwrap_or(path);
+                for (note, gap) in &evidence.explained_by {
+                    if !notes.contains(note) {
+                        errors.push(format!(
+                            "{relative}: explains {note}, which it does not record"
+                        ));
+                    }
+                    if !op.gaps.contains(gap) {
+                        errors.push(format!("{relative}: {gap}, which {id} does not list"));
+                    }
+                    attributed.insert((gap.as_str(), relative));
+                    match stated_gap(ledger, gap) {
+                        None => errors.push(format!("{relative}: {gap} is no stated gap")),
+                        Some((captures, _)) if !captures.iter().any(|c| c == relative) => {
+                            errors.push(format!("{relative}: {gap} does not list this capture"))
+                        }
+                        Some((_, anchors)) => {
+                            if !anchors.contains(note)
+                                && let Some(missing) = anchors.iter().find(|a| !notes.contains(a))
+                            {
+                                errors.push(format!(
+                                    "{relative}: {gap} explains {note} only beside {missing}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                for note in notes
+                    .iter()
+                    .filter(|n| !evidence.explained_by.contains_key(*n))
+                {
+                    errors.push(format!("{relative}: {note} is explained by no gap"));
                 }
                 if let Some(other) = cited.insert(path.clone(), id.clone()) {
                     errors.push(format!("{path} is evidence of {other} and {id}"));
@@ -557,9 +678,48 @@ fn ledger_errors(
             errors.push(format!("{id}: reviewed without a replayed capture"));
         }
     }
-    for name in ledger.deliberate_gaps.keys() {
-        if !deliberate.contains(name.as_str()) {
-            errors.push(format!("deliberate gap {name}: no operation references it"));
+    let stated = ledger
+        .deliberate_gaps
+        .iter()
+        .map(|(name, g)| {
+            (
+                "deliberate",
+                name,
+                &g.text,
+                &g.captures,
+                deliberate.contains(name.as_str()),
+            )
+        })
+        .chain(ledger.open_gaps.iter().map(|(name, g)| {
+            if g.closes.trim().is_empty() {
+                errors.push(format!("open gap {name}: says nothing of what closes it"));
+            }
+            (
+                "open",
+                name,
+                &g.text,
+                &g.captures,
+                open.contains(name.as_str()),
+            )
+        }))
+        .collect::<Vec<_>>();
+    for (kind, name, text, listed, referenced) in stated {
+        let label = format!("{kind} gap {name}");
+        if text.trim().is_empty() {
+            errors.push(format!("{label}: states nothing"));
+        }
+        if !referenced {
+            errors.push(format!("{label}: no operation references it"));
+        }
+        let reference = format!("{kind}:{name}");
+        for capture in listed {
+            if !replayed.contains(&format!("{FIXTURES}/{capture}")) {
+                errors.push(format!("{label}: lists {capture}, which is no capture"));
+            } else if !attributed.contains(&(reference.as_str(), capture.as_str())) {
+                errors.push(format!(
+                    "{label}: lists {capture}, which attributes no note to it"
+                ));
+            }
         }
     }
     for path in files {
@@ -672,6 +832,41 @@ fn refused(errors: &[String], expected: &str) {
 }
 
 #[test]
+fn captures_replay_in_the_order_of_their_number() {
+    let paths = [
+        "source/99-last.json",
+        "source/100-after.json",
+        "source/2-first.json",
+        "live/1-public.json",
+    ]
+    .map(fixture);
+    assert_eq!(
+        replay_order(paths.iter().cloned().collect()).unwrap(),
+        [
+            "live/1-public.json",
+            "source/2-first.json",
+            "source/99-last.json",
+            "source/100-after.json"
+        ]
+        .map(fixture)
+        .to_vec()
+    );
+    let error = replay_order(
+        ["source/05-one.json", "source/5-two.json"]
+            .map(fixture)
+            .into_iter()
+            .collect(),
+    )
+    .unwrap_err();
+    assert!(error.contains("number 5"), "{error}");
+    assert!(
+        replay_order(BTreeSet::from([fixture("source/unnumbered.json")]))
+            .unwrap_err()
+            .contains("unnumbered.json")
+    );
+}
+
+#[test]
 fn a_reviewed_operation_with_a_matching_capture_is_accepted() {
     let evidence =
         serde_json::json!([{"path": fixture("source/01-info.json"), "scope": "s", "replay": []}]);
@@ -680,6 +875,329 @@ fn a_reviewed_operation_with_a_matching_capture_is_accepted() {
         &["parity.json", "seed.json", "source/01-info.json"],
     );
     assert!(errors.is_empty(), "{errors:#?}");
+}
+
+const STATUS_NOTE: &str = "status: fixture=200 candidate=400";
+
+fn deliberate_gaps() -> Value {
+    serde_json::json!({
+        "stricter-input": {"text": "The node refuses an input upstream accepts.",
+            "captures": [], "anchors": [STATUS_NOTE]},
+        "fixed-message": {"text": "The node's message is fixed.", "captures": []}
+    })
+}
+
+fn open_gaps() -> Value {
+    serde_json::json!({
+        "registry": {"text": "The node reads no registry.", "closes": "The node reads the registry.",
+            "captures": []}
+    })
+}
+
+/// The checker's errors for the committed ledger after `edit`, against the
+/// committed captures.
+fn parity_errors_after(edit: impl FnOnce(&mut Value)) -> Vec<String> {
+    let path = root().join(FIXTURES).join("parity.json");
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    edit(&mut value);
+    let files = fixture_files();
+    let fixtures = captures(&files)
+        .into_iter()
+        .map(|path| {
+            let raw = raw_capture(&path);
+            (path, raw)
+        })
+        .collect();
+    ledger_errors(
+        &serde_json::from_value(value).unwrap(),
+        &in_scope_routes(),
+        &files,
+        &fixtures,
+    )
+}
+
+#[test]
+fn a_gap_explains_nothing_on_a_capture_it_does_not_list() {
+    let errors = parity_errors_after(|ledger| {
+        let evidence = ledger["operations"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .flat_map(|op| op["evidence"].as_array_mut().unwrap())
+            .find(|e| {
+                e["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("source/86-collection-save-rename.json")
+            })
+            .unwrap();
+        let notes = [
+            "status: fixture=200 candidate=401",
+            "data.salt missing",
+            "data.name missing",
+            "error extra",
+            "ok value",
+        ];
+        evidence["replay"] = serde_json::json!(notes);
+        evidence["explained_by"] = notes
+            .iter()
+            .map(|n| (n.to_string(), Value::from("open:third-party-registry")))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+    });
+    refused(
+        &errors,
+        "source/86-collection-save-rename.json: open:third-party-registry does not list this capture",
+    );
+}
+
+#[test]
+fn a_deliberate_gap_explains_nothing_on_a_capture_it_does_not_list() {
+    refused(
+        &ledger_with(
+            "reviewed",
+            serde_json::json!(["deliberate:fixed-message"]),
+            serde_json::json!([STATUS_NOTE]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:fixed-message" }),
+            deliberate_gaps(),
+            open_gaps(),
+        ),
+        "source/01-info.json: deliberate:fixed-message does not list this capture",
+    );
+}
+
+#[test]
+fn a_gap_listing_a_capture_that_attributes_nothing_to_it_is_refused() {
+    let mut deliberate = deliberate_gaps();
+    deliberate["stricter-input"]["captures"] = serde_json::json!(["source/01-info.json"]);
+    deliberate["fixed-message"]["captures"] = serde_json::json!(["source/01-info.json"]);
+    refused(
+        &ledger_with(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input", "deliberate:fixed-message"]),
+            serde_json::json!([STATUS_NOTE]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:stricter-input" }),
+            deliberate,
+            open_gaps(),
+        ),
+        "deliberate gap fixed-message: lists source/01-info.json, which attributes no note to it",
+    );
+}
+
+#[test]
+fn a_gap_listing_no_capture_is_refused() {
+    let mut deliberate = deliberate_gaps();
+    deliberate["stricter-input"]["captures"] =
+        serde_json::json!(["source/01-info.json", "source/99-gone.json"]);
+    refused(
+        &ledger_with(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!([STATUS_NOTE]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:stricter-input" }),
+            deliberate,
+            open_gaps(),
+        ),
+        "deliberate gap stricter-input: lists source/99-gone.json, which is no capture",
+    );
+}
+
+/// The checker's errors for one operation with `status` and `gaps` whose
+/// capture replays with `notes`, explained by `explained_by`, against the
+/// stated `deliberate` and `open` gaps.
+fn ledger_with(
+    status: &str,
+    gaps: Value,
+    notes: Value,
+    explained_by: Value,
+    deliberate: Value,
+    open: Value,
+) -> Vec<String> {
+    let mut op = operation(
+        status,
+        serde_json::json!([{"path": fixture("source/01-info.json"), "scope": "s",
+            "replay": notes, "explained_by": explained_by}]),
+    );
+    op["gaps"] = gaps;
+    let ledger: Ledger = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "volatile_fields": ["created_at", "updated_at"],
+        "deliberate_gaps": deliberate,
+        "open_gaps": open,
+        "operations": [op]
+    }))
+    .unwrap();
+    let files = ["parity.json", "seed.json", "source/01-info.json"]
+        .iter()
+        .map(|name| fixture(name))
+        .collect();
+    ledger_errors(
+        &ledger,
+        &BTreeSet::from([INFO.to_string()]),
+        &files,
+        &info_captures(&files),
+    )
+    .into_iter()
+    .filter(|e| !e.contains("no operation references it"))
+    .collect()
+}
+
+/// As [`ledger_with`] with one recorded difference, and each stated gap
+/// `explained_by` names listing the capture.
+fn with_difference(status: &str, gaps: Value, explained_by: Value) -> Vec<String> {
+    let (mut deliberate, mut open) = (deliberate_gaps(), open_gaps());
+    for gap in explained_by.as_object().unwrap().values() {
+        let (kind, name) = gap.as_str().unwrap().split_once(':').unwrap();
+        let stated = if kind == "open" {
+            &mut open
+        } else {
+            &mut deliberate
+        };
+        if let Some(stated) = stated.get_mut(name) {
+            stated["captures"] = serde_json::json!(["source/01-info.json"]);
+        }
+    }
+    ledger_with(
+        status,
+        gaps,
+        serde_json::json!([STATUS_NOTE]),
+        explained_by,
+        deliberate,
+        open,
+    )
+}
+
+#[test]
+fn a_reviewed_operation_whose_differences_its_deliberate_gaps_explain_is_accepted() {
+    let errors = with_difference(
+        "reviewed",
+        serde_json::json!(["deliberate:stricter-input"]),
+        serde_json::json!({ STATUS_NOTE: "deliberate:stricter-input" }),
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn a_reviewed_difference_no_gap_explains_is_refused() {
+    refused(
+        &with_difference(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!({}),
+        ),
+        "source/01-info.json: status: fixture=200 candidate=400 is explained by no gap",
+    );
+}
+
+#[test]
+fn a_known_gap_difference_no_gap_explains_is_refused() {
+    refused(
+        &with_difference(
+            "known_gap",
+            serde_json::json!(["open:registry"]),
+            serde_json::json!({}),
+        ),
+        "source/01-info.json: status: fixture=200 candidate=400 is explained by no gap",
+    );
+}
+
+#[test]
+fn an_open_gap_explains_a_known_gap_difference() {
+    let errors = with_difference(
+        "known_gap",
+        serde_json::json!(["open:registry"]),
+        serde_json::json!({ STATUS_NOTE: "open:registry" }),
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn a_reviewed_operation_with_an_open_gap_is_refused() {
+    refused(
+        &with_difference(
+            "reviewed",
+            serde_json::json!(["open:registry"]),
+            serde_json::json!({ STATUS_NOTE: "open:registry" }),
+        ),
+        "api_http:GET:/v1/info: reviewed with an open gap",
+    );
+}
+
+#[test]
+fn a_known_gap_without_an_open_gap_is_refused() {
+    refused(
+        &with_difference(
+            "known_gap",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:stricter-input" }),
+        ),
+        "api_http:GET:/v1/info: known_gap names no open gap",
+    );
+}
+
+#[test]
+fn a_gap_that_is_neither_deliberate_nor_open_is_refused() {
+    refused(
+        &with_difference(
+            "known_gap",
+            serde_json::json!(["open:registry", "the node differs"]),
+            serde_json::json!({ STATUS_NOTE: "open:registry" }),
+        ),
+        "api_http:GET:/v1/info: gap the node differs is neither deliberate: nor open:",
+    );
+}
+
+#[test]
+fn a_difference_explained_by_a_gap_its_operation_does_not_list_is_refused() {
+    refused(
+        &with_difference(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:fixed-message" }),
+        ),
+        "source/01-info.json: deliberate:fixed-message, which api_http:GET:/v1/info does not list",
+    );
+}
+
+#[test]
+fn a_refusal_gap_explains_nothing_on_a_capture_without_its_anchor() {
+    let mut deliberate = deliberate_gaps();
+    deliberate["stricter-input"]["captures"] = serde_json::json!(["source/01-info.json"]);
+    refused(
+        &ledger_with(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!(["data.salt missing"]),
+            serde_json::json!({ "data.salt missing": "deliberate:stricter-input" }),
+            deliberate,
+            open_gaps(),
+        ),
+        "source/01-info.json: deliberate:stricter-input explains data.salt missing only beside status: fixture=200 candidate=400",
+    );
+}
+
+#[test]
+fn a_difference_explained_by_an_unstated_gap_is_refused() {
+    refused(
+        &with_difference(
+            "reviewed",
+            serde_json::json!(["deliberate:unstated"]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:unstated" }),
+        ),
+        "no deliberate gap named unstated",
+    );
+}
+
+#[test]
+fn an_explanation_of_a_difference_the_capture_does_not_record_is_refused() {
+    refused(
+        &with_difference(
+            "reviewed",
+            serde_json::json!(["deliberate:stricter-input"]),
+            serde_json::json!({ STATUS_NOTE: "deliberate:stricter-input", "data.x missing": "deliberate:stricter-input" }),
+        ),
+        "source/01-info.json: explains data.x missing, which it does not record",
+    );
 }
 
 #[test]
@@ -922,9 +1440,14 @@ fn a_deliberate_gap_is_stated_once_and_referenced_by_name() {
     let mut op = operation("known_gap", serde_json::json!([]));
     op["gaps"] = serde_json::json!(["deliberate:unknown"]);
     let mut ledger = ledger_value(serde_json::json!([op]));
-    ledger
-        .deliberate_gaps
-        .insert("unused".into(), "a decision nothing cites".into());
+    ledger.deliberate_gaps.insert(
+        "unused".into(),
+        DeliberateGap {
+            text: "a decision nothing cites".into(),
+            captures: vec![],
+            anchors: vec![],
+        },
+    );
     let routes = BTreeSet::from([INFO.to_string()]);
     let errors = ledger_errors(&ledger, &routes, &BTreeSet::new(), &BTreeMap::new());
     refused(
@@ -1317,6 +1840,18 @@ async fn committee_subgraph(seed: &Seed) -> String {
 /// wallet that owns its collections, so a seeded provider must name exactly
 /// that wallet for both sides to decide alike.
 fn check_interim_providers(seed: &Seed) {
+    for registered in &seed.registry {
+        assert!(
+            registered.programmatic || !registered.managers.is_empty(),
+            "seed.json registry provider {} has no manager",
+            registered.id
+        );
+        assert!(
+            !seed.third_parties.iter().any(|p| p.id == registered.id),
+            "seed.json provider {} is both in the registry and a virtual third party",
+            registered.id
+        );
+    }
     for provider in &seed.third_parties {
         assert!(
             !provider.name.is_empty(),
@@ -1349,8 +1884,9 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
             .map(|(provider, suffix)| format!("{provider}:{suffix}"));
         sqlx::query(
             "INSERT INTO builder.collections \
-         (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, \
+          linked_contract_address, linked_contract_network, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(c.id)
         .bind(&c.name)
@@ -1359,6 +1895,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .bind(&c.contract_address)
         .bind(&c.third_party_id)
         .bind(urn)
+        .bind(&c.linked_contract_address)
+        .bind(&c.linked_contract_network)
         .bind(c.created_at.naive_utc())
         .bind(c.updated_at.naive_utc())
         .execute(pool)
@@ -1561,7 +2099,8 @@ async fn the_builder_captures_replay_against_the_mounted_router() {
         .collect();
     let mut paths = captures(&fixture_files());
     paths.extend(expected.keys().cloned());
-    let loaded: Vec<(String, Value)> = paths
+    let loaded: Vec<(String, Value)> = replay_order(paths)
+        .unwrap_or_else(|e| panic!("{e}"))
         .into_iter()
         .map(|path| {
             let raw = checked_capture(&path, &ledger.volatile_fields);

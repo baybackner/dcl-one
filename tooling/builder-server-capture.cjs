@@ -22,8 +22,8 @@ const FIXTURES = path.join(ROOT, 'services/catalyst/tests/fixtures/conformance/b
 const GUARD = path.join(__dirname, 'builder-server-offline.cjs')
 const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
 const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'thirdParties'])
-const SEED_KEYS = ['wallets', 'third_parties', 'collections', 'items', 'chain']
-const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'creator', 'managers_contains', 'minters_contains', 'collection', 'isCommitteeMember'])
+const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain']
+const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'id_gt', 'creator', 'managers_contains', 'minters_contains', 'managers_contains_nocase', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
 const MOVED_ITEM_FILE = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy'
 
@@ -58,6 +58,8 @@ function movedItem(id, collectionId) {
     }
   }
 }
+const OWNER_INITIALIZE = '0xd14fee77000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000180000000000000000000000000c1aba94a79ca07d9d15a62ff5c9b382777e0c70e0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017113b44fdd661a156cc01b5031e3acf72c32eb300000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000011436f6e666f726d616e6365207361766564000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e44434c2d434e46524d4e43535644000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004668747470733a2f2f706565722e646563656e7472616c616e642e6f72672f6c616d626461732f636f6c6c656374696f6e732f7374616e646172642f6572633732312f3133372f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+const STRANGER_INITIALIZE = '0xd14fee77000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000180000000000000000000000000cd6884d4258edc833f31ac773e24affe6a7d31540000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017113b44fdd661a156cc01b5031e3acf72c32eb300000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000011436f6e666f726d616e6365207361766564000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e44434c2d434e46524d4e43535644000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004668747470733a2f2f706565722e646563656e7472616c616e642e6f72672f6c616d626461732f636f6c6c656374696f6e732f7374616e646172642f6572633732312f3133372f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -436,8 +438,1555 @@ const CASES = [
     method: 'GET',
     path: '/v1/items/c011ec71-0000-4000-8000-0000000000b1',
     signer: 'committee'
+  },
+  {
+    name: '39-collections-committee-search',
+    description: 'GET /collections signed by a committee member, searching listing collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '40-collections-committee-page',
+    description: 'GET /collections signed by a committee member, paginated, first page of two',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      page: '1',
+      limit: '2'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '41-collections-committee-name-desc',
+    description: 'GET /collections signed by a committee member, sorted by name descending',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      sort: 'NAME_DESC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '42-collections-committee-most-relevant',
+    description: 'GET /collections signed by a committee member, sorted by relevance',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      sort: 'MOST_RELEVANT'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '43-collections-committee-last-activity',
+    description: 'GET /collections signed by a committee member, sorted by last activity, newest first',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      sort: 'LAST_ACTIVITY_DESC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '44-collections-committee-requested-at',
+    description: 'GET /collections signed by a committee member, sorted by request date, oldest first',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      sort: 'REQUESTED_AT_ASC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '45-collections-committee-to-review',
+    description: 'GET /collections signed by a committee member, filtered to collections to review',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      status: 'to_review'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '46-collections-committee-statuses',
+    description: 'GET /collections signed by a committee member, filtered to disabled or approved collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      status: [
+        'disabled',
+        'approved'
+      ]
+    },
+    signer: 'committee'
+  },
+  {
+    name: '47-collections-committee-pending',
+    description: 'GET /collections signed by a committee member, filtered to pending collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      status: 'pending'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '48-collections-committee-updates',
+    description: 'GET /collections signed by a committee member, filtered to reviews of updates',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      review_type: 'updates'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '49-collections-committee-unassigned',
+    description: 'GET /collections signed by a committee member, filtered to unassigned standard collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      assignee: 'unassigned',
+      type: 'standard'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '50-collections-committee-published',
+    description: 'GET /collections signed by a committee member, filtered to published collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '51-collections-committee-unpublished',
+    description: 'GET /collections signed by a committee member, filtered to unpublished collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'false'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '52-collections-committee-tag',
+    description: 'GET /collections signed by a committee member, filtered by an item tag in another case',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      tag: 'CONFORMANCE'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '53-collections-committee-empty-page',
+    description: 'GET /collections signed by a committee member, paginated with no match',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'nothing-matches',
+      page: '1',
+      limit: '5'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '54-collections-committee-invalid-status',
+    description: 'GET /collections signed by a committee member, with an unknown status',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      status: 'nope'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '55-collections-committee-two-review-types',
+    description: 'GET /collections signed by a committee member, with two review types',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      review_type: [
+        'new',
+        'updates'
+      ]
+    },
+    signer: 'committee'
+  },
+  {
+    name: '56-collections-committee-invalid-assignee',
+    description: 'GET /collections signed by a committee member, with an assignee that is not an address',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      assignee: 'not-an-address'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '57-collections-public-search-listing',
+    description: 'GET /collections unsigned, searching published listing collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true'
+    }
+  },
+  {
+    name: '58-collections-public-search-approved',
+    description: 'GET /collections unsigned, as the marketplace searches approved collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true',
+      status: 'approved',
+      limit: '5'
+    }
+  },
+  {
+    name: '59-collections-public-search-committee',
+    description: 'GET /collections signed by a committee member, searching published collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '60-collections-stranger',
+    description: 'GET /collections signed by a wallet that is not on the committee, without a search',
+    method: 'GET',
+    path: '/v1/collections',
+    signer: 'stranger'
+  },
+  {
+    name: '61-collections-unsigned',
+    description: 'GET /collections without a signature or a search',
+    method: 'GET',
+    path: '/v1/collections'
+  },
+  {
+    name: '62-address-collections-creator',
+    description: 'GET /{address}/collections signed by that address, every collection it may list',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    signer: 'creator'
+  },
+  {
+    name: '63-address-collections-page',
+    description: 'GET /{address}/collections signed by that address, paginated, first page of two',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      page: '1',
+      limit: '2'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '64-address-collections-draft',
+    description: 'GET /{address}/collections signed by that address, filtered to drafts',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      status: 'draft'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '65-address-collections-published',
+    description: 'GET /{address}/collections signed by that address, filtered to published collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      status: 'published'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '66-address-collections-disabled',
+    description: 'GET /{address}/collections signed by that address, filtered to disabled collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      status: 'disabled'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '67-address-collections-unpublished',
+    description: 'GET /{address}/collections signed by that address, filtered to unpublished collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'false'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '68-address-collections-third-party',
+    description: 'GET /{address}/collections signed by that address, filtered to third-party collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      type: 'third_party'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '69-address-collections-contract',
+    description: 'GET /{address}/collections signed by that address, filtered by a contract address',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      contract_address: '0x5eed000000000000000000000000000000000103'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '70-address-collections-search',
+    description: 'GET /{address}/collections signed by that address, searching by name, sorted by name',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      q: 'pending',
+      sort: 'NAME_ASC'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '71-address-collections-manager',
+    description: 'GET /{address}/collections signed by that address, an on-chain manager',
+    method: 'GET',
+    path: '/v1/0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0/collections',
+    signer: 'manager'
+  },
+  {
+    name: '72-address-collections-minter',
+    description: 'GET /{address}/collections signed by that address, an on-chain minter',
+    method: 'GET',
+    path: '/v1/0xc1eba15006e9d7f629bcad7a7dd41285f012b949/collections',
+    signer: 'minter'
+  },
+  {
+    name: '73-address-collections-new-creator',
+    description: 'GET /{address}/collections signed by that address, the chain creator of a collection another wallet stored',
+    method: 'GET',
+    path: '/v1/0xcd6884d4258edc833f31ac773e24affe6a7d3154/collections',
+    signer: 'stranger'
+  },
+  {
+    name: '74-address-collections-other',
+    description: 'GET /{address}/collections signed by another wallet',
+    method: 'GET',
+    path: '/v1/0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e/collections',
+    signer: 'creator'
+  },
+  {
+    name: '75-address-collections-invalid-status',
+    description: 'GET /{address}/collections signed by that address, with an unknown status',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      status: 'bogus'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '76-address-collections-invalid-contract',
+    description: 'GET /{address}/collections signed by that address, with a contract address that is not an address',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      contract_address: 'nope'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '77-address-collections-unsigned',
+    description: 'GET /{address}/collections without a signature',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections'
+  },
+  {
+    name: '78-collection-minter',
+    description: 'GET /collections/{id} signed by an on-chain minter of an approved collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000103',
+    signer: 'minter'
+  },
+  {
+    name: '79-collection-published-committee',
+    description: 'GET /collections/{id} signed by a committee member who holds no other role on a collection on chain',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000102',
+    signer: 'committee'
+  },
+  {
+    name: '80-collection-third-party-manager',
+    description: 'GET /collections/{id} signed by a manager of the provider of the third-party collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'creator'
+  },
+  {
+    name: '81-collection-third-party-stranger',
+    description: 'GET /collections/{id} signed by a wallet that manages no provider of the third-party collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'stranger'
+  },
+  {
+    name: '82-collection-missing',
+    description: 'GET /collections/{id} signed by the owner for an id no collection has',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000ff',
+    signer: 'owner'
+  },
+  {
+    name: '83-collection-malformed-id',
+    description: 'GET /collections/{id} signed by the owner with an id that is not a UUID',
+    method: 'GET',
+    path: '/v1/collections/not-a-uuid',
+    signer: 'owner'
+  },
+  {
+    name: '84-collection-approved-stranger',
+    description: 'GET /collections/{id} signed by a wallet that holds no role on an approved collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000103',
+    signer: 'stranger'
+  },
+  {
+    name: '85-collection-save-create',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft with initialize data that names it as the creator',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f1',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f1',
+        name: 'Conformance created',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '86-collection-save-rename',
+    description: 'PUT /collections/{id} signed by the owner, renaming its draft',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000001',
+        name: 'Conformance renamed',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: '0x72d18e0bfa67ba8dce8e9463c8953dce9bd7e4bd88f9149e54b63f974fabefea',
+        contract_address: '0x00cc1666ebe7da593c2a77d5bb9686e923f44e26',
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    },
+    volatile: [
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '87-collection-save-name-in-use',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft whose name another collection has in another case',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f2',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f2',
+        name: 'LISTING DRAFT',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '88-collection-save-ids-differ',
+    description: 'PUT /collections/{id} signed by the owner, with a body id that is not the path id',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f3',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f4',
+        name: 'Conformance ids',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '89-collection-save-without-data',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft without data',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f5',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f5',
+        name: 'Conformance without data',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      }
+    }
+  },
+  {
+    name: '90-collection-save-claims-publication',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft that claims to be published',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f6',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f6',
+        name: 'Conformance claims',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: true,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '91-collection-save-published',
+    description: 'PUT /collections/{id} signed by the owner of a collection on chain',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000006',
+        name: 'Chain renamed',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '92-collection-save-extra-field',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft whose body has a field the schema does not name',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f7',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f7',
+        name: 'Conformance extra',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        forum_post: 'x'
+      },
+      data: OWNER_INITIALIZE
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '93-collection-save-foreign-creator',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft with initialize data that names another wallet as the creator',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f8',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f8',
+        name: 'Conformance foreign',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: STRANGER_INITIALIZE
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '94-collection-save-third-party-create',
+    description: 'PUT /collections/{id} signed by a manager of the provider, creating a third-party collection',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000f9',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000f9',
+        name: 'Listing created',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-created'
+      },
+      data: ''
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '95-collection-save-third-party-urn-in-use',
+    description: 'PUT /collections/{id} signed by a manager of the provider, creating a third-party collection with a URN another collection has',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-0000000000fa',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-0000000000fa',
+        name: 'Listing duplicate',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-linked'
+      },
+      data: ''
+    }
+  },
+  {
+    name: '96-collection-save-third-party-rename-urn',
+    description: 'PUT /collections/{id} signed by a manager of the provider, changing the URN of an unpublished third-party collection',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000105',
+        name: 'Listing linked',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-renamed',
+        linked_contract_address: '0x5eed00000000000000000000000000000000c0de',
+        linked_contract_network: 'mainnet'
+      },
+      data: ''
+    },
+    volatile: [
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '97-collection-save-third-party-as-standard',
+    description: 'PUT /collections/{id} signed by the owner, saving a third-party collection without its URN',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000008',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000008',
+        name: 'Conformance linked A',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '98-collection-save-standard-as-third-party',
+    description: 'PUT /collections/{id} signed by the owner, saving its standard draft with a third-party URN',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000001',
+        name: 'Conformance renamed',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:conformance:converted'
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '99-collection-save-third-party-provider-change',
+    description: 'PUT /collections/{id} signed by a manager of the provider, moving its collection to another provider',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000105',
+        name: 'Listing linked',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:conformance:listing-renamed'
+      },
+      data: ''
+    }
+  }
+,
+  {
+    name: '100-address-collections-published-only',
+    description: 'GET /{address}/collections signed by that address, filtered to published collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'true'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '101-address-collections-published-search',
+    description: 'GET /{address}/collections signed by that address, filtered to published collections and searching by name',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'true',
+      q: 'approved'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '102-address-collections-published-no-match',
+    description: 'GET /{address}/collections signed by that address, filtered to published collections with a search nothing matches',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'true',
+      q: 'zzz'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '103-address-collections-published-page',
+    description: 'GET /{address}/collections signed by that address, filtered to published collections, paginated',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'true',
+      page: '1',
+      limit: '1'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '104-address-collections-unpublished-search',
+    description: 'GET /{address}/collections signed by that address, filtered to unpublished collections and searching by name',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      is_published: 'false',
+      q: 'draft'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '105-address-collections-standard',
+    description: 'GET /{address}/collections signed by that address, filtered to standard collections',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      type: 'standard'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '106-address-collections-page-two',
+    description: 'GET /{address}/collections signed by that address, filtered to standard collections, the second page of two',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      type: 'standard',
+      page: '2',
+      limit: '2'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '107-address-collections-oldest-first',
+    description: 'GET /{address}/collections signed by that address, filtered to standard collections, oldest first',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      type: 'standard',
+      sort: 'CREATED_AT_ASC'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '108-address-collections-none',
+    description: 'GET /{address}/collections signed by that address, which holds no collection',
+    method: 'GET',
+    path: '/v1/0x01eba3f0e992f53debaf51ed3738dc2f23e09aee/collections',
+    signer: 'committee'
+  },
+  {
+    name: '109-address-collections-committee-other',
+    description: 'GET /{address}/collections signed by a committee member for another address',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    signer: 'committee'
+  },
+  {
+    name: '110-collections-committee-curation-page',
+    description: 'GET /collections signed by a committee member, as the curation page asks for its first page',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      page: '1',
+      limit: '12',
+      is_published: 'true',
+      sort: 'MOST_RELEVANT'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '111-collections-committee-curation-page-two',
+    description: 'GET /collections signed by a committee member, as the curation page asks for a later page',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      page: '2',
+      limit: '2',
+      is_published: 'true',
+      sort: 'MOST_RELEVANT'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '112-collections-committee-third-party',
+    description: 'GET /collections signed by a committee member, filtered to third-party collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'conformance linked',
+      type: 'third_party'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '113-collections-committee-review-new',
+    description: 'GET /collections signed by a committee member, filtered to reviews of new collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      review_type: 'new'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '114-collections-committee-sort-name-asc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by NAME_ASC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'NAME_ASC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '115-collections-committee-sort-created-at-asc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by CREATED_AT_ASC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'CREATED_AT_ASC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '116-collections-committee-sort-created-at-desc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by CREATED_AT_DESC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'CREATED_AT_DESC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '117-collections-committee-sort-updated-at-asc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by UPDATED_AT_ASC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'UPDATED_AT_ASC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '118-collections-committee-sort-updated-at-desc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by UPDATED_AT_DESC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'UPDATED_AT_DESC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '119-collections-committee-sort-last-activity-asc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by LAST_ACTIVITY_ASC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'LAST_ACTIVITY_ASC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '120-collections-committee-sort-requested-at-desc',
+    description: 'GET /collections signed by a committee member, standard collections sorted by REQUESTED_AT_DESC',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      type: 'standard',
+      sort: 'REQUESTED_AT_DESC'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '121-collections-committee-assignee',
+    description: 'GET /collections signed by a committee member, filtered to a curator nobody assigned',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      assignee: '0x01eba3f0e992f53debaf51ed3738dc2f23e09aee'
+    },
+    signer: 'committee'
+  },
+  {
+    name: '122-collections-committee-rejected',
+    description: 'GET /collections signed by a committee member, filtered to rejected, under review and auto-reviewing collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      status: [
+        'rejected',
+        'under_review',
+        'auto_reviewing'
+      ]
+    },
+    signer: 'committee'
+  },
+  {
+    name: '123-collections-public-search-page',
+    description: 'GET /collections unsigned, searching published collections, paginated',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true',
+      page: '1',
+      limit: '1'
+    }
+  },
+  {
+    name: '124-collections-public-search-tag',
+    description: 'GET /collections unsigned, searching published collections with an item tag',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'listing',
+      is_published: 'true',
+      tag: 'hat'
+    }
+  },
+  {
+    name: '125-collections-public-search-type',
+    description: 'GET /collections unsigned, searching published standard collections',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'chain',
+      is_published: 'true',
+      type: 'standard'
+    }
+  },
+  {
+    name: '126-collection-new-chain-creator',
+    description: 'GET /collections/{id} signed by the chain creator of a collection another wallet stored',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000106',
+    signer: 'stranger'
+  },
+  {
+    name: '127-collection-stored-owner-after-transfer',
+    description: 'GET /collections/{id} signed by the stored owner of a collection whose chain creator is another wallet',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000106',
+    signer: 'creator'
+  },
+  {
+    name: '128-collection-third-party-committee',
+    description: 'GET /collections/{id} signed by a committee member who holds no other role on a third-party draft',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'committee',
+    volatile: [
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '129-collection-admin',
+    description: 'GET /collections/{id} signed by an ADMIN_ADDRESSES wallet on a collection on chain',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'admin'
+  },
+  {
+    name: '130-collection-save-draft-managers',
+    description: 'PUT /collections/{id} signed by the owner, saving its draft with a manager in the body',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000001',
+        name: 'Conformance renamed',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [
+          '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0'
+        ]
+      },
+      data: OWNER_INITIALIZE
+    },
+    volatile: [
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '131-collection-body-manager',
+    description: 'GET /collections/{id} signed by a wallet the draft names as manager in its body only',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'manager'
+  },
+  {
+    name: '132-collection-save-unsigned',
+    description: 'PUT /collections/{id} without a signature, with a valid body',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000201',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000201',
+        name: 'Conformance unsigned',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '133-collection-save-third-party-stranger',
+    description: 'PUT /collections/{id} signed by a wallet that manages no provider, saving an existing third-party collection',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'stranger',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000105',
+        name: 'Listing linked',
+        eth_address: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-renamed'
+      },
+      data: ''
+    }
+  },
+  {
+    name: '134-collection-save-name-of-third-party',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft named as a third-party collection',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000202',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000202',
+        name: 'Listing linked',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '135-collection-save-name-case-and-spaces',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft whose name differs from one in use only by case and spaces',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000203',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000203',
+        name: ' CONFORMANCE RENAMED ',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '136-collection-save-approval-claim',
+    description: 'PUT /collections/{id} signed by the owner, creating a draft that claims approval only',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000204',
+    signer: 'owner',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000204',
+        name: 'Conformance approval',
+        eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: true,
+        minters: [],
+        managers: []
+      },
+      data: OWNER_INITIALIZE
+    }
+  },
+  {
+    name: '137-collection-save-linked-contract-taken',
+    description: 'PUT /collections/{id} signed by a manager of the provider, creating a collection linked to a contract another collection of the provider links',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000205',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000205',
+        name: 'Listing duplicate link',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-duplicate',
+        linked_contract_address: '0x5eed00000000000000000000000000000000c0de',
+        linked_contract_network: 'mainnet'
+      },
+      data: ''
+    }
+  },
+  {
+    name: '138-collection-save-linked-contract-cleared',
+    description: 'PUT /collections/{id} signed by a manager of the provider, clearing the linked contract of its collection',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000105',
+    signer: 'creator',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000105',
+        name: 'Listing linked',
+        eth_address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:listing:listing-renamed',
+        linked_contract_address: null,
+        linked_contract_network: null
+      },
+      data: ''
+    }
+  },
+  {
+    name: '139-collection-save-registered-provider-stranger',
+    description: 'PUT /collections/{id} signed by a wallet that manages no provider, creating a collection under a provider the registry lists',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000206',
+    signer: 'stranger',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000206',
+        name: 'Registered summer',
+        eth_address: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:registered:summer'
+      },
+      data: ''
+    }
+  },
+  {
+    name: '140-collection-save-registered-provider-manager',
+    description: 'PUT /collections/{id} signed by a manager the registry lists, creating a collection under its provider',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000207',
+    signer: 'manager',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000207',
+        name: 'Registered winter',
+        eth_address: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:registered:winter'
+      },
+      data: ''
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '141-collection-registered-manager',
+    description: 'GET /collections/{id} signed by another manager the registry lists for the provider of a third-party collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000207',
+    signer: 'minter',
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '142-address-collections-registered-manager',
+    description: 'GET /{address}/collections signed by that address, a manager the registry lists for a provider',
+    method: 'GET',
+    path: '/v1/0xc1eba15006e9d7f629bcad7a7dd41285f012b949/collections',
+    signer: 'minter',
+    volatile: [
+      'data.created_at',
+      'data.updated_at',
+      'data.last_activity_at'
+    ]
+  },
+  {
+    name: '143-collections-committee-registered-provider',
+    description: 'GET /collections signed by a committee member, searching collections of a provider the registry lists',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'registered'
+    },
+    signer: 'committee',
+    volatile: [
+      'data.created_at',
+      'data.updated_at',
+      'data.last_activity_at'
+    ]
+  },
+  {
+    name: '144-collection-save-programmatic-provider',
+    description: 'PUT /collections/{id} signed by a manager the registry lists, creating a collection under its programmatic provider',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000208',
+    signer: 'manager',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000208',
+        name: 'Programmatic spring',
+        eth_address: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:programmatic:spring'
+      },
+      data: ''
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '145-collection-programmatic-provider',
+    description: 'GET /collections/{id} signed by the manager of the programmatic provider of a third-party collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000208',
+    signer: 'manager',
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '146-address-collections-programmatic-provider',
+    description: 'GET /{address}/collections signed by that address, a manager the registry lists for a programmatic provider',
+    method: 'GET',
+    path: '/v1/0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0/collections',
+    query: {
+      type: 'third_party'
+    },
+    signer: 'manager',
+    volatile: [
+      'data.created_at',
+      'data.updated_at',
+      'data.last_activity_at'
+    ]
+  },
+  {
+    name: '147-collections-committee-programmatic-provider',
+    description: 'GET /collections signed by a committee member, searching collections of a programmatic provider',
+    method: 'GET',
+    path: '/v1/collections',
+    query: {
+      q: 'spring'
+    },
+    signer: 'committee',
+    volatile: [
+      'data.created_at',
+      'data.updated_at',
+      'data.last_activity_at'
+    ]
+  },
+  {
+    name: '148-collection-save-registered-other-manager',
+    description: 'PUT /collections/{id} signed by a manager the registry lists, saving a collection another manager of the provider created',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000207',
+    signer: 'minter',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000207',
+        name: 'Registered winter',
+        eth_address: '0xc1eba15006e9d7f629bcad7a7dd41285f012b949',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: [],
+        urn: 'urn:decentraland:matic:collections-thirdparty:registered:winter'
+      },
+      data: ''
+    },
+    volatile: [
+      'data.created_at',
+      'data.updated_at'
+    ]
+  },
+  {
+    name: '149-address-collections-query-address-other',
+    description: 'GET /{address}/collections signed by that address, with an address query parameter naming another wallet',
+    method: 'GET',
+    path: '/v1/0x05bb381a642d932037707c4a626f93fb009696b2/collections',
+    query: {
+      address: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+      type: 'standard'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '150-address-collections-query-address-own',
+    description: 'GET /{address}/collections signed by another wallet, with an address query parameter naming the signer',
+    method: 'GET',
+    path: '/v1/0xcd6884d4258edc833f31ac773e24affe6a7d3154/collections',
+    query: {
+      address: '0x05bb381a642d932037707c4a626f93fb009696b2',
+      type: 'standard'
+    },
+    signer: 'creator'
+  },
+  {
+    name: '151-collection-query-id',
+    description: 'GET /collections/{id} signed by the owner, with an id query parameter naming another collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    query: {
+      id: 'c011ec71-0000-4000-8000-000000000006'
+    },
+    signer: 'owner',
+    volatile: [
+      'data.updated_at'
+    ]
   }
 ]
+
+/** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
+function caseOrderErrors(cases) {
+  const errors = []
+  let previous
+  for (const { name } of cases) {
+    const number = /^(\d+)-/.exec(name)?.[1]
+    if (number === undefined) {
+      errors.push(`${name}: a case name starts with its number`)
+      continue
+    }
+    if (previous && Number(number) <= Number(previous.number)) errors.push(`${name} runs after ${previous.name}`)
+    previous = { name, number }
+  }
+  return errors
+}
+
+/** The source captures a gap of `ledger` (parity.json) lists that no case of `cases` records. */
+function ledgerCaptureErrors(ledger, cases) {
+  const recorded = new Set(cases.map(({ name }) => `source/${name}.json`))
+  return ['deliberate', 'open'].flatMap(kind =>
+    Object.entries(ledger[`${kind}_gaps`] ?? {}).flatMap(([name, gap]) =>
+      gap.captures
+        .filter(capture => capture.startsWith('source/') && !recorded.has(capture))
+        .map(capture => `${kind} gap ${name}: lists ${capture}, which is no capture`)
+    )
+  )
+}
 
 function fail(message) {
   throw Error(message)
@@ -649,7 +2198,17 @@ function chainRows(seed, signers) {
     }
   })
   for (const collection of collections) collection.items = items.filter(item => item.collection.id === collection.id)
-  return { accounts, collections, items }
+  const registry = seed.registry.map(provider => ({
+    __typename: 'ThirdParty',
+    id: provider.id,
+    root: null,
+    managers: addresses(provider.managers),
+    maxItems: '100',
+    isApproved: true,
+    isProgrammatic: !!provider.programmatic,
+    metadata: { __typename: 'Metadata', type: 'third_party_v2', thirdParty: { __typename: 'ThirdPartyMetadata', name: provider.name, description: '', contracts: [] } }
+  }))
+  return { accounts, collections, items, registry }
 }
 
 /** The value of a GraphQL argument node, with its variables substituted. */
@@ -663,10 +2222,14 @@ function argumentValue(node, variables) {
 
 /** The rows of `field` its `where` argument selects; a filter the fake can't apply is reported. */
 function selected(field, rows, variables, unfaked) {
-  const whereNode = (field.arguments || []).find(a => a.name.value === 'where')
-  const where = whereNode ? argumentValue(whereNode.value, variables) : {}
+  const arg = name => {
+    const node = (field.arguments || []).find(a => a.name.value === name)
+    return node ? argumentValue(node.value, variables) : undefined
+  }
+  const where = arg('where') || {}
   const lower = value => String(value).toLowerCase()
-  return rows.filter(row => Object.entries(where).every(([key, value]) => {
+  const containsAll = (list, values, fold) => values.every(v => (list || []).map(fold).includes(fold(v)))
+  const matched = rows.filter(row => Object.entries(where).every(([key, value]) => {
     if (value === undefined || value === null) return true
     if (!FAKED_WHERE_KEYS.has(key)) {
       unfaked.push(`graph ${field.name.value} where ${key}`)
@@ -674,12 +2237,19 @@ function selected(field, rows, variables, unfaked) {
     }
     if (key === 'id') return row.id === lower(value)
     if (key === 'id_in') return value.map(lower).includes(row.id)
+    if (key === 'id_gt') return row.id > lower(value)
     if (key === 'isCommitteeMember') return row.isCommitteeMember === value
     if (key === 'creator') return row.creator === lower(value)
-    if (key === 'managers_contains') return value.map(lower).some(v => (row.managers || []).includes(v))
-    if (key === 'minters_contains') return value.map(lower).some(v => (row.minters || []).includes(v))
+    if (key === 'managers_contains') return containsAll(row.managers, value, String)
+    if (key === 'managers_contains_nocase') return containsAll(row.managers, value, lower)
+    if (key === 'minters_contains') return containsAll(row.minters, value, String)
     return row.collection?.id === lower(value)
   }))
+  const orderBy = arg('orderBy') || 'id'
+  const ordered = [...matched].sort((a, b) => (a[orderBy] < b[orderBy] ? -1 : a[orderBy] > b[orderBy] ? 1 : 0))
+  if (arg('orderDirection') === 'desc') ordered.reverse()
+  const skip = Number(arg('skip') || 0)
+  return ordered.slice(skip, skip + Number(arg('first') || 100))
 }
 
 function startFakes(req, unfaked, chain) {
@@ -693,13 +2263,20 @@ function startFakes(req, unfaked, chain) {
         response.end(JSON.stringify(body))
       }
       if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
+      if (request.method === 'POST' && request.url === '/rpc') {
+        const { id, method, params = [] } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        const deployed = address => chain.collections.some(c => c.id === String(address).toLowerCase())
+        const results = { eth_chainId: '0x89', net_version: '137', eth_getCode: deployed(params[0]) ? '0x6080' : '0x' }
+        if (!(method in results)) unfaked.push(`rpc ${method}`)
+        return send(200, { jsonrpc: '2.0', id, result: results[method] ?? null })
+      }
       if (request.method !== 'POST' || !request.url.startsWith('/graph/')) {
         unfaked.push(`${request.method} ${request.url}`)
         return send(404, { error: 'not faked' })
       }
       const { query, variables = {} } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       const operation = parse(query).definitions.find(d => d.kind === 'OperationDefinition')
-      const subgraph = request.url === '/graph/collections' ? chain : {}
+      const subgraph = request.url === '/graph/collections' ? chain : request.url === '/graph/third-parties' ? { thirdParties: chain.registry } : {}
       const data = {}
       for (const field of operation.selectionSet.selections) {
         if (!FAKED_GRAPH_FIELDS.has(field.name.value)) unfaked.push(`graph ${field.name.value}`)
@@ -712,7 +2289,7 @@ function startFakes(req, unfaked, chain) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)))
 }
 
-function upstreamEnvironment(fakeBase, url) {
+function upstreamEnvironment(fakeBase, url, admins) {
   return {
     CONNECTION_STRING: url,
     ANALYTICS_CONNECTION_STRING: url,
@@ -742,6 +2319,7 @@ function upstreamEnvironment(fakeBase, url) {
     FF_AUTO_CURATION_REVIEW_FLOW: 'false',
     FF_COLLECTION_API_ALT: 'false',
     SLACK_BOT_TOKEN: '',
+    ADMIN_ADDRESSES: admins,
     NODE_ENV: 'production'
   }
 }
@@ -768,8 +2346,8 @@ async function seedDatabase(client, seed, signers) {
   }
   for (const collection of seed.collections) {
     await client.query(
-      'INSERT INTO collections (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-      [collection.id, collection.name, signers[collection.owner].address, collection.salt, collection.contract_address, collection.third_party_id ?? null, collection.urn_suffix ?? null, collection.created_at, collection.updated_at]
+      'INSERT INTO collections (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, linked_contract_address, linked_contract_network, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+      [collection.id, collection.name, collection.third_party_id ? '' : signers[collection.owner].address, collection.salt, collection.contract_address, collection.third_party_id ?? null, collection.urn_suffix ?? null, collection.linked_contract_address ?? null, collection.linked_contract_network ?? null, collection.created_at, collection.updated_at]
     )
   }
   for (const item of seed.items) {
@@ -853,7 +2431,7 @@ function fixtureJson(fixture) {
 
 async function record(req, base, signers, volatileFields, item) {
   const query = item.query || {}
-  const search = new URLSearchParams(query).toString()
+  const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
   const headers = item.signer ? await signedHeaders(req, signers[item.signer], item) : { ...item.headers }
   if (item.body !== undefined) headers['content-type'] = 'application/json'
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
@@ -902,7 +2480,7 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
   const fakes = await startFakes(req, unfaked, chainRows(seed, signers))
   let listener, db
   try {
-    const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url)
+    const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url, signers.admin.address)
     migrate(upstream, environment)
     const { Client } = req('pg')
     const client = new Client({ connectionString: url })
@@ -934,6 +2512,9 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
 
 async function main() {
   const [root, output] = process.argv.slice(2)
+  const ledger = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'parity.json'), 'utf8'))
+  const planErrors = [...caseOrderErrors(CASES), ...ledgerCaptureErrors(ledger, CASES)]
+  if (planErrors.length) fail(planErrors.join('; '))
   const { refused } = require(GUARD)
   const { upstream } = assertPinnedSource(root, 'builder')
   if (!output) fail('Usage: node tooling/builder-server-capture.cjs <upstream-checkout> <output-directory>')
@@ -943,7 +2524,7 @@ async function main() {
   const capture = sourceCapture(upstream, { kind: 'builder' })
   const seed = readSeed()
   const signers = wallets(capture.req, seed)
-  const { volatile_fields: volatileFields } = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'parity.json'), 'utf8'))
+  const { volatile_fields: volatileFields } = ledger
   capture.record = (base, item) => record(capture.req, base, signers, volatileFields, item)
   const unfaked = []
   const { Client } = capture.req('pg')
@@ -972,4 +2553,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { recordedSign, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, caseOrderErrors, ledgerCaptureErrors,recordedSign, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

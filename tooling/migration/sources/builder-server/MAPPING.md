@@ -18,6 +18,9 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   every standard collection's draft, lowercased; NULL for a linked
   collection. `publication_pending` starts false: the upstream `lock` is a
   short-lived publish lock.
+- `collections.linked_contract_address` (lowercased) and
+  `linked_contract_network`: a third-party collection's linked contract, as
+  upstream stores it.
 - A collection's published and approved state is not imported. Upstream's
   `collections.is_published` and `is_approved` columns are not carried; the
   node derives both on read from its copy of the Polygon collections
@@ -55,7 +58,7 @@ stops the batch on any missing hash. `uploaded_by` is the item owner.
   keeps no scenes.
 - `collections.is_published`, `is_approved`: derived on the node, not stored.
 - `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`,
-  `lock`, `linked_contract_address`, `linked_contract_network`: no target column.
+  `lock`: no target column.
 - Left to the node: `collection_publications`, `linked_collection_publications`,
   `items.in_catalyst`, `items.catalyst_content_hash`,
   `newsletter_subscriptions` (upstream forwards opt-ins and stores none).

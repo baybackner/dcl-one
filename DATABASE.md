@@ -958,8 +958,8 @@ as a flag (`services/catalyst/builder/src/chain_state.rs`, decided in
 [the builder chain state ADR](docs/adr/2026-11-19-builder-derives-collection-chain-state.md)).
 It reads the shop's copy of the Polygon collections subgraph by shared SQL
 and never writes it: `shop.collections` (`network`, `contract_address`,
-`is_approved`, `creator`, `owner`, `managers`, `minters`, `reviewed_at`,
-`mirrored_at`) and `shop.mirror_state` (`last_complete_pass_at`,
+`name`, `is_approved`, `creator`, `owner`, `managers`, `minters`,
+`created_at`, `updated_at`, `reviewed_at`, `mirrored_at`) and `shop.mirror_state` (`last_complete_pass_at`,
 `pass_started_at` and `cursor_id` of `('collections', 'matic')`). The shop's
 `collections-mirror` job writes both; the builder reads `network = 'matic'`
 only, as upstream reads only the Polygon subgraph.
@@ -978,9 +978,11 @@ The builder's own rows: a `builder.collections` row is a creator's draft.
 - `publication_pending` freezes the draft and its items while either
   publication row is in flight.
 
-The address listings and the curation console's committee and under-review
-listings read the collections subgraph through the marketplace's subgraph
-readers and add no table.
+The address items listing and the curation console's committee and
+under-review listings read the collections subgraph through the
+marketplace's subgraph readers and add no table. The collection body and the
+collection listings read the copy ("Builder collection listings workload"
+below).
 
 Deployment: the node that serves the builder needs that copy, either by
 running the collections mirror (`MARKETPLACE_MIRRORS_ENABLED=true` with
@@ -1066,6 +1068,93 @@ and decisions answer 503 once the pass, the row or the absence is 30 minutes
 old. `shop.items.content_hash` (the subgraph `Item.contentHash`, written by
 the items mirror) follows the items pass, once per interval; a row the
 mirror hasn't walked since the column was added holds NULL.
+
+## Builder collection listings workload
+
+The builder answers a collection's body and its two listings from
+`builder.collections`, `builder.items` and the chain copy
+(`services/catalyst/builder/src/collections/`).
+
+- `GET /v1/collections`, the committee's listing: signed, current committee
+  members only; the curation page asks 12 rows at a time, sorted by
+  relevance, published only. At most 1,000 rows per response.
+- `GET /v1/collections?q=..&is_published=true`, the public search: anyone,
+  unbounded rate until rate limits arrive; the marketplace sends
+  `status=approved&limit=5` per keystroke. At most 1,000 rows.
+- `GET /v1/{address}/collections`: signed by that address; pages of 20, or
+  the address's unpublished collections unpaginated. At most 5,000 rows (the
+  largest owner holds 1,542 collections).
+- `GET` and `PUT /v1/collections/{id}`: one collection; a save locks its
+  row, takes an advisory lock on the name (standard) or URN (third party) it
+  claims, and checks that no other collection has it.
+
+Invariants:
+
+- Values reach a listing statement only as bound parameters; every
+  fragment, filter and sort is a constant chosen by matching.
+- A listing reads in one read-only repeatable-read transaction with JIT off:
+  the page, its total and its status counts agree, and the plans stay a few
+  milliseconds of work that JIT never paid back.
+- A page selects its ids first (narrow sort, `LIMIT`, `OFFSET`) and builds
+  bodies only for them (`c.id = ANY(ARRAY(...))`).
+- The public search resolves the published collections whose name matches
+  first, probing only the published ids (`items_minted_collection_idx` and
+  the submitted linked publications, then `collections_pkey` with the name
+  filter), and binds them; no statement reachable without a signature reads
+  every collection.
+- An address listing resolves the address's collection ids first (its
+  stored rows by `collections_owner_idx`, and the copy's rows naming it
+  creator, manager or minter), then binds them.
+- Names are unique among standard collections case-insensitively by the
+  save's check under its advisory lock (keyed by PostgreSQL's `lower()`),
+  not by an index: imported data holds 64 groups of duplicate names.
+- A linked contract belongs to one collection per provider:
+  `collections_linked_contract_key UNIQUE (third_party_id,
+  linked_contract_address, linked_contract_network)`, NULLs distinct, the
+  address stored lowercase. Once set, it is never cleared: the `BEFORE
+  UPDATE` trigger `collections_linked_contract_kept` refuses a row that
+  sets either column from a value to NULL. The reference data holds no
+  duplicate.
+- The public search's item tags are at most 5 values of at most 64
+  characters, each matched by a per-collection probe of the items
+  (`OFFSET 0` keeps it a probe), so it never scans every item.
+- Freshness: every save decides from a copy at most 30 minutes old; a read
+  of a draft too, except the stored owner's read of a third-party draft or
+  of a standard draft whose contract the copy doesn't hold, which a
+  complete pass of any age serves, as the owner's listing does.
+
+Indexes created with step `0053_builder_collection_listings` (the step adds the
+columns, checks and the unique constraint; the object pass that follows it
+builds the indexes, the function and the trigger):
+
+| Index | Serves | Cost on write |
+| --- | --- | --- |
+| `items_minted_collection_idx (collection_id) WHERE blockchain_item_id IS NOT NULL` | the published filter and the public search's driving set | one entry per minted item, written when a publication assigns on-chain ids |
+| `collections_standard_name_idx (lower(name)) WHERE third_party_id IS NULL` | the name-in-use check of every standard save | one entry per standard collection save that changes the name |
+| `collections_third_party_urn_idx (urn_suffix) WHERE third_party_id IS NOT NULL` | the URN-in-use check of every third-party save | one entry per third-party collection |
+
+Measured with `EXPLAIN (ANALYZE, BUFFERS)` on PostgreSQL 18 over 51,742
+collections and 89,043 items copied from a production-shaped database and
+52,000 copy rows (5,575 of them the builder's published contracts):
+
+| Query | Time |
+| --- | --- |
+| The committee's drafts listing it replaced, 1,000 rows | 172 ms |
+| Curation page: 12 rows, relevance, published only, and its count | 23 ms + 4 ms |
+| Committee, 1,000 rows unsorted | 11 ms |
+| Committee page of 12 by creation or update date / by name / by last activity | 6 ms / 47 ms / 176 ms |
+| Committee `status=to_review` count; item tag count | 32 ms; 93 ms |
+| Public search, the matching published ids then the page: 1 character (1,000 rows) / 3 characters / no match / 256 characters | 18 / 9.5 / 7.5 / 13 ms |
+| Public search as the marketplace sends it (5 approved rows) | 7.8 ms |
+| Public search, 1 character, 5 tags of 64 characters (the worst the bounds allow) | 13 ms |
+| Address ids, owner of 1,542 / a manager-only wallet | 16 / 22 ms (the copy's role lists are scanned; a signed request about the signer's own wallet) |
+| Address listing, owner of 1,542, page of 20 + total + status counts | 7 + 13 + 60 ms |
+| Address listing, owner of 1,542, unpaginated | 30 ms |
+| One collection's body | 0.22 ms |
+| Save: row lock, advisory lock, name in use, URN in use | 0.11, 0.01, 0.17, 0.10 ms |
+
+No index on the copy is added: a GIN index on its role lists would cost a
+write on every mirror pass for 16 to 22 ms on a signed request.
 
 ## Notification writer
 

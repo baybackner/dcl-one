@@ -529,7 +529,9 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
         format!("/v1/collections/{collection}/publication"),
         format!("/v1/collections/{collection}/linked-publication"),
     ];
-    let new_collection = json!({ "collection": { "id": created, "name": "Created" } });
+    let owner = format!("{:#x}", wallet(OWNER_KEY).address());
+    let new_collection =
+        super::support::collection_body(json!({ "id": created, "name": "Created" }), &owner);
     let new_item = json!({ "item": { "id": created_item, "name": "Created", "type": "wearable", "collection_id": collection, "data": {} } });
     let kept_item = json!({ "item": { "id": item, "name": "Renamed", "type": "wearable", "collection_id": collection, "data": {} } });
     let writes = [
@@ -541,7 +543,7 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
         (
             "PUT",
             format!("/v1/collections/{collection}"),
-            json!({ "collection": { "id": collection, "name": "Renamed" } }),
+            super::support::collection_body(json!({ "id": collection, "name": "Renamed" }), &owner),
         ),
         ("PUT", format!("/v1/items/{created_item}"), new_item.clone()),
         ("PUT", format!("/v1/items/{item}"), kept_item.clone()),
@@ -588,12 +590,18 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
             "{path}: a stale copy serves reads: {body}"
         );
     }
-    for path in &decision_reads {
+    let (status, body) = send(&app, "GET", &decision_reads[0], Value::Null).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the owner reads its own draft from a stale copy, as its own listing does: {body}"
+    );
+    for path in &decision_reads[1..] {
         let (status, body) = send(&app, "GET", path, Value::Null).await;
         assert_eq!(
             status,
             StatusCode::SERVICE_UNAVAILABLE,
-            "{path}: a by-id read is an access decision and a preparation guards against a published collection, so a stale copy refuses them: {body}"
+            "{path}: a preparation guards against a published collection, so a stale copy refuses it: {body}"
         );
     }
     for (method, path, body) in &writes {

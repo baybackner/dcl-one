@@ -50,12 +50,17 @@ async fn rpc(State(state): State<Arc<Mutex<Value>>>, Json(req): Json<Value>) -> 
 
 async fn draft(store: &ItemsComponent) -> (CollectionDraft, ItemDraft) {
     let id = Uuid::new_v4();
-    let collection: CollectionDraft =
-        serde_json::from_value(json!({"id":id, "name":"Transaction collection"})).unwrap();
-    store
-        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-        .await
-        .unwrap();
+    let collection: CollectionDraft = serde_json::from_value(
+        json!({"id":id, "name":format!("Transaction {}", &id.simple().to_string()[..8])}),
+    )
+    .unwrap();
+    super::support::save_collection(
+        store,
+        OWNER,
+        serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn}),
+    )
+    .await
+    .unwrap();
     let mut item: ItemDraft = serde_json::from_value(json!({"id":Uuid::new_v4(), "name":"Hat", "type":"wearable", "collection_id":id,
         "price":"1000000000000000001", "rarity":"rare", "thumbnail":"thumbnail.png",
         "data":{"category":"hat", "representations":[{"mainFile":"model.glb", "contents":["model.glb"], "bodyShapes":["urn:decentraland:off-chain:base-avatars:BaseMale"]}]}})).unwrap();
@@ -125,10 +130,13 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         prepared.revision
     );
     assert!(
-        store
-            .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
-            .await
-            .is_err()
+        super::support::save_collection(
+            &store,
+            OWNER,
+            serde_json::json!({"id": collection.id, "name": collection.name, "urn": collection.urn})
+        )
+        .await
+        .is_err()
     );
     assert!(
         store

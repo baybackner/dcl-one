@@ -11,5 +11,7 @@ SELECT c.id,
        END AS urn_suffix,
        c.third_party_id,
        c.created_at AT TIME ZONE 'UTC' AS created_at,
-       c.updated_at AT TIME ZONE 'UTC' AS updated_at
+       c.updated_at AT TIME ZONE 'UTC' AS updated_at,
+       lower(c.linked_contract_address) AS linked_contract_address,
+       c.linked_contract_network
 FROM collections c

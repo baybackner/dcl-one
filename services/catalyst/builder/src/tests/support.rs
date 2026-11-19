@@ -73,6 +73,44 @@ pub async fn on_chain(pool: &sqlx::PgPool, id: Uuid, approved: bool) -> String {
     contract
 }
 
+/// A client-shaped `PUT /v1/collections/:id` body for `signer`: the
+/// schema's required fields around `collection`, and `initialize` calldata
+/// naming `signer` unless `collection` brings its own `data`.
+pub fn collection_body(collection: serde_json::Value, signer: &str) -> serde_json::Value {
+    let mut fields =
+        serde_json::json!({ "eth_address": signer, "salt": null, "contract_address": null });
+    let mut collection = collection.as_object().cloned().unwrap_or_default();
+    let data = collection
+        .remove("data")
+        .unwrap_or_else(|| crate::collections::contract::initialize_calldata(signer).into());
+    fields.as_object_mut().unwrap().extend(collection);
+    serde_json::json!({ "collection": fields, "data": data })
+}
+
+/// Saves `collection` (its `id`, `name` and, for a third-party one, `urn`)
+/// as `PUT /v1/collections/:id` saves it for `signer`, with `initialize`
+/// calldata naming `signer` for a standard one, under a test grant.
+pub async fn save_collection(
+    store: &ItemsComponent,
+    signer: &str,
+    collection: serde_json::Value,
+) -> Result<serde_json::Value, crate::http::ApiError> {
+    use crate::collections::save;
+    let request = save::parse(&collection_body(collection, signer))?;
+    let deployment = match request.urn.as_deref().and_then(save::third_party_urn) {
+        Some(_) => None,
+        None => Some(save::standard_deployment(&request, signer)?),
+    };
+    let id = Uuid::parse_str(&request.id).unwrap();
+    store
+        .save_collection(
+            &crate::access::granted::edit(signer, id),
+            &request,
+            deployment,
+        )
+        .await
+}
+
 /// Undoes [`on_chain`].
 pub async fn off_chain(pool: &sqlx::PgPool, contract: &str) {
     sqlx::query("DELETE FROM shop.collections WHERE network = 'matic' AND contract_address = $1")
