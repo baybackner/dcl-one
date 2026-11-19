@@ -260,6 +260,25 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             self.assertTrue(other.exists())
             self.assertEqual(prune(deps, receipts), 0)
 
+    def test_smoke_recognizes_copied_binaries_by_contents(self):
+        prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
+        with tempfile.TemporaryDirectory() as temporary:
+            deps = Path(temporary) / 'deps'
+            deps.mkdir()
+            app = deps.parent / 'catalyst'
+            app.write_bytes(b'current')
+            first, second, stale = [deps / ('catalyst-' + c * 16) for c in 'abc']
+            for copy in (first, second):
+                copy.write_bytes(app.read_bytes())
+            stale.write_bytes(b'expired')
+            stamp = app.stat().st_mtime_ns
+            os.utime(stale, ns=(stamp, stamp))
+            lib = deps / ('libcrate-' + 'a' * 16 + '.rlib')
+            lib.touch()
+            receipts = json.dumps({'reason': 'compiler-artifact', 'filenames': [str(lib), str(app)]})
+            self.assertEqual(prune(deps, receipts), 7)
+            self.assertEqual(set(deps.iterdir()), {first, second, lib})
+
     def test_smoke_gives_unchanged_sources_the_snapshot_file_times(self):
         # Cargo decides by file time. The snapshot is of no use to Cargo unless the checkout's
         # unchanged files get the times they had when the snapshot was built.

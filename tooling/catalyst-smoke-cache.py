@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Drop superseded Rust build artifacts before saving the CI smoke build snapshot."""
+import filecmp
 import json
 from pathlib import Path
 import re
@@ -29,11 +30,16 @@ def prune(deps, messages):
     if not active:
         raise ValueError("Cargo reported no Rust libraries in the smoke target")
 
-    # Cargo reports debug/catalyst. Only its hard link identifies the active hashed binary.
-    binaries = [p for p in deps.glob("catalyst-*") if executable.fullmatch(p.name)
-                and not p.is_symlink() and p.is_file()]
-    retained = {p for p in binaries if app in reported and app.is_file() and p.samefile(app)}
-    obsolete = set(binaries) - retained - reported if retained else set()
+    # Cargo publishes debug/catalyst as a hard link or a copy of the hashed executable.
+    obsolete = set()
+    if app in reported and app.is_file():
+        binaries = {p for p in deps.glob("catalyst-*") if executable.fullmatch(p.name)
+                    and not p.is_symlink() and p.is_file()}
+        retained = {p for p in binaries if p.samefile(app)}
+        if not retained:
+            retained = {p for p in binaries if filecmp.cmp(app, p, shallow=False)}
+        if retained:
+            obsolete.update(binaries - retained - reported)
     for path in deps.iterdir():
         match = library.fullmatch(path.name)
         if match and (stems := active.get(family(match))) and path.stem not in stems:
