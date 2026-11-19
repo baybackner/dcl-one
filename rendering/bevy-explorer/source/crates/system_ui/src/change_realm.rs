@@ -112,7 +112,7 @@ fn change_realm_dialog(
     ) {
         Ok(components) => components,
         Err(e) => {
-            warn!("change-realm dialog not shown: {e}");
+            error!("change-realm dialog not shown: {e}");
             commands.entity(root_id).despawn();
             return;
         }

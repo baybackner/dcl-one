@@ -474,9 +474,16 @@ mod tests {
 
     #[test]
     fn builtin_emote_urns_match_parsed_bare_names() {
-        for name in ["idle_male", "jump", "walk", "run", "double_jump", "glide"] {
-            let full: &'static str = format!("{}:{name}", urn::UNKNOWN_SOURCE_COLLECTION).leak();
-            assert_eq!(EmoteUrn::builtin(full), EmoteUrn::new(name).unwrap());
+        for full in [
+            "urn:decentraland:off-chain:unknown-source:idle_male",
+            "urn:decentraland:off-chain:unknown-source:jump",
+            "urn:decentraland:off-chain:unknown-source:walk",
+            "urn:decentraland:off-chain:unknown-source:run",
+            "urn:decentraland:off-chain:unknown-source:double_jump",
+            "urn:decentraland:off-chain:unknown-source:glide",
+        ] {
+            let bare = full.rsplit(':').next().unwrap();
+            assert_eq!(EmoteUrn::builtin(full), EmoteUrn::new(bare).unwrap());
         }
         assert_eq!(
             EmoteUrn::new("Idle_Male").unwrap(),
