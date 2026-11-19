@@ -1564,7 +1564,7 @@ impl ActiveDialog {
             .clone()
             .try_acquire_owned()
             .ok()
-            .map(|p| DialogPermit { _p: Some(p) })
+            .map(|p| DialogPermit { _p: p })
     }
 
     pub fn in_use(&self) -> bool {
@@ -1574,13 +1574,7 @@ impl ActiveDialog {
 
 #[derive(Component)]
 pub struct DialogPermit {
-    _p: Option<OwnedSemaphorePermit>,
-}
-
-impl DialogPermit {
-    pub fn take(&mut self) -> Self {
-        Self { _p: self._p.take() }
-    }
+    _p: OwnedSemaphorePermit,
 }
 
 #[derive(Event, Clone)]

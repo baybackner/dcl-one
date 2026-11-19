@@ -663,7 +663,8 @@ impl FromStr for TestScenes {
 pub struct TestingData {
     pub test_mode: bool,
     pub inspect_hash: Option<String>,
-    pub test_scenes: Option<TestScenes>,
+    /// The app runs the automated scene tests (`AutomaticTestingPlugin`).
+    pub scene_snapshots: bool,
 }
 
 #[derive(Component)]
@@ -1534,8 +1535,8 @@ fn load_active_entities(
             Some((std::mem::take(parcels), std::mem::take(lookup), task_result))
         })
     {
-        *pointer_request = None;
         // process active scenes in the requested set
+        *pointer_request = None;
 
         let retrieved_parcels = match task_result {
             Ok(res) => {

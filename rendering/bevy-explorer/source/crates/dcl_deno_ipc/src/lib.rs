@@ -459,7 +459,7 @@ pub fn spawn_scene(
 
 /// Writes one length-prefixed message and returns the first write error.
 pub async fn write_msg<T: Serialize>(stream: &mut SendHalf, value: &T) -> std::io::Result<()> {
-    let bytes = rmp_encode(value).unwrap();
+    let bytes = rmp_encode(value).map_err(std::io::Error::other)?;
     stream
         .write_all(&(bytes.len() as u64).to_le_bytes())
         .await?;
