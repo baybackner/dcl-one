@@ -1025,8 +1025,9 @@ fn cast_down(
 }
 
 /// Ground snap: the end `position` of a walking step from `start`, moved down onto the ground
-/// when the ground falls away by at most [`GROUND_SNAP_DROP`] beyond the slope of that ground, or
-/// of the steepest ground the step `followed`, over the distance moved.
+/// when the ground falls away by at most [`GROUND_SNAP_DROP`] beyond the slope of that ground, of
+/// the steepest ground the step `followed`, or of the ground it started on (the foot of a slope
+/// the step ran down), over the distance moved.
 fn snap_to_ground(
     scenes: &mut Query<(Entity, &mut SceneColliderData)>,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
@@ -1036,16 +1037,35 @@ fn snap_to_ground(
 ) -> DVec3 {
     let moved = (position - start).with_y(0.0).length();
     let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
+    let within = |drop: f64, slope: f64| drop <= f64::from(GROUND_SNAP_DROP) + moved * slope;
     if let Some((drop, normal)) = cast_down(scenes, disabled, position, reach) {
-        let slope = normal.with_y(0.0).length() / normal.y;
         if walkable(normal)
             && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
-            && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope.max(followed)
+            && (within(drop, slope(normal).max(followed))
+                || within(drop, start_slope(scenes, disabled, start)))
         {
             position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
         }
     }
     position
+}
+
+/// Rise over run of ground with this `normal`.
+fn slope(normal: DVec3) -> f64 {
+    normal.with_y(0.0).length() / normal.y
+}
+
+/// The slope of the walkable ground a walking step starts on, within [`PLAYER_GROUND_THRESHOLD`]
+/// below `start` (0 for none).
+fn start_slope(
+    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    disabled: &HashMap<Entity, HashSet<ColliderId>>,
+    start: DVec3,
+) -> f64 {
+    match cast_down(scenes, disabled, start, f64::from(PLAYER_GROUND_THRESHOLD)) {
+        Some((_, normal)) if walkable(normal) => slope(normal),
+        _ => 0.0,
+    }
 }
 
 /// Height over the ground below which an avatar standing still is not settled onto it.
@@ -1610,6 +1630,47 @@ mod tests {
         assert!(end.x > 4.85, "slowed to {end}");
         let on_ramp = (end.x - 1.0) * 30f32.to_radians().tan();
         assert!((end.y - on_ramp).abs() < 0.05, "left the ramp at {end}");
+    }
+
+    /// The highest the avatar's feet hover over the ground in a walk at `speed` m/s down a 45
+    /// degree ramp from `x` onto the floor at its foot, in 60 Hz frames.
+    fn hover_down_to_the_foot_of_a_ramp(x: f32, speed: f32) -> f32 {
+        // standing on the ramp: its surface under the centre, plus the lower sphere's lift there
+        let lift = PLAYER_COLLIDER_RADIUS * (std::f32::consts::SQRT_2 - 1.0);
+        let start = Vec3::new(x, x - 1.0 + lift, 0.0);
+        let frame = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        let (mut app, player) = movement_app_at(&[ramp(45.0)], start, frame);
+        app.update();
+        set_velocity(&mut app, player, Vec3::new(-speed, 0.0, 0.0));
+        let mut hover = 0.0_f32;
+        while app.world().get::<Transform>(player).unwrap().translation.x > 0.0 {
+            app.update();
+            let height = app
+                .world()
+                .get::<AvatarDynamicState>(player)
+                .unwrap()
+                .ground_height;
+            hover = hover.max(height);
+        }
+        hover
+    }
+
+    #[test]
+    fn walking_down_a_slope_onto_flat_ground_keeps_to_the_ground_at_the_foot() {
+        // a jog and a run down a 45 degree ramp (the scene's 8 and 10 m/s, 1.29 times faster
+        // downhill) take more than GROUND_SNAP_DROP of descent in a frame; from start points one
+        // frame apart, so that the last frame on the ramp ends anywhere before its foot
+        let mut hovered = Vec::new();
+        for speed in [10.29, 12.86] {
+            for k in 0..22 {
+                let x = 4.0 + k as f32 * 0.01;
+                let hover = hover_down_to_the_foot_of_a_ramp(x, speed);
+                if hover > PLAYER_GROUND_THRESHOLD {
+                    hovered.push((speed, x, hover));
+                }
+            }
+        }
+        assert!(hovered.is_empty(), "(m/s, from x, hovered m): {hovered:?}");
     }
 
     #[test]
