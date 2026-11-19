@@ -9,7 +9,7 @@
 use std::f32::consts::PI;
 
 use bevy::{math::Vec3, render::render_resource::ShaderDefVal};
-use common::sky_preset::LIGHT_UNIT_LUX;
+use common::sky_preset::{ambient_trilight, LIGHT_UNIT_LUX};
 
 /// The half-Lambert below which the base colour gives way to the shades
 pub const BASE_COLOR_STEP: f32 = 0.2;
@@ -28,6 +28,16 @@ pub const UNLIT_INTENSITY: f32 = 4.0;
 /// The least ambient light the floor takes, before `UNLIT_INTENSITY`: with no light at all an
 /// avatar is lit at a fifth of noon
 pub const UNLIT_FLOOR: f32 = 0.05;
+/// The gain on the ambient light that lights the eyes, eyebrows and mouth
+pub const FACIAL_AMBIENT_GAIN: f32 = 4.0;
+/// The ambient light, in light units, that lights the eyes, eyebrows and mouth in a view without
+/// the sky environment map (the Backpack preview, a photo booth): the noon Trilight's equator
+/// colour, about what the sky gives a surface facing the horizon at noon. Such a view's flat
+/// ambient is set to light the body flat, far above any sky, so it is not read here.
+pub fn facial_flat_ambient() -> Vec3 {
+    ambient_trilight(0.5)[1]
+}
+
 /// The rim light's width: the rim is the silhouette term to the power `2^(3 - 3 * RIM_POWER)`, so
 /// 0 keeps it at the very edge and 1 spreads it over the body
 pub const RIM_POWER: f32 = 0.3;
@@ -68,6 +78,7 @@ pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
         ("TOON_SECOND_SHADE", SECOND_SHADE),
         ("TOON_UNLIT_INTENSITY", UNLIT_INTENSITY),
         ("TOON_UNLIT_FLOOR", UNLIT_FLOOR),
+        ("TOON_FACIAL_AMBIENT_GAIN", FACIAL_AMBIENT_GAIN),
         ("TOON_RIM_POWER", RIM_POWER),
         ("TOON_RIM_INSIDE_MASK", RIM_INSIDE_MASK),
         ("TOON_RIM_MASK_LEVEL", RIM_MASK_LEVEL),
@@ -80,6 +91,14 @@ pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
         ("TOON_OUTLINE_EDGE_PX", OUTLINE_EDGE_PX),
     ]
     .into_iter()
+    .chain({
+        let flat = facial_flat_ambient();
+        [
+            ("TOON_FACIAL_FLAT_AMBIENT_R", flat.x),
+            ("TOON_FACIAL_FLAT_AMBIENT_G", flat.y),
+            ("TOON_FACIAL_FLAT_AMBIENT_B", flat.z),
+        ]
+    })
     .map(|(name, value)| ShaderDefVal::UInt(name.to_owned(), value.to_bits()))
     .collect()
 }
@@ -141,6 +160,13 @@ pub fn toon_ambient(up: Vec3, down: Vec3) -> Vec3 {
 /// `LIGHT_UNIT_LUX / PI`.
 pub fn toon_flat_ambient(ambient_color: Vec3) -> Vec3 {
     ambient_color.max(Vec3::ZERO) * PI / LIGHT_UNIT_LUX
+}
+
+/// The multiplier on the base colour of an eye, eyebrow or mouth under `ambient`, the ambient
+/// light a surface facing its normal receives, in light units: the ambient times
+/// `FACIAL_AMBIENT_GAIN`, with no sun and no saturation. toon.wgsl's `facial_feature_lighting`.
+pub fn facial_feature_light(ambient: Vec3) -> Vec3 {
+    ambient.max(Vec3::ZERO) * FACIAL_AMBIENT_GAIN
 }
 
 /// The outline's width in pixels on a fragment `view_z` metres deep, for an avatar
@@ -312,6 +338,25 @@ mod tests {
     }
 
     #[test]
+    fn facial_features_take_the_ambient_alone() {
+        // a quarter light unit of ambient lights them at the white of a sun of one light unit
+        assert_eq!(facial_feature_light(Vec3::splat(0.25)), Vec3::ONE);
+        // unsaturated: a bright sky lifts them past white, where the body is capped at 1
+        assert!(close(
+            facial_feature_light(Vec3::new(0.4, 0.3, 0.5)),
+            Vec3::new(1.6, 1.2, 2.0)
+        ));
+        // no floor: without ambient light they are black, where the body keeps its minimum
+        assert_eq!(facial_feature_light(Vec3::ZERO), Vec3::ZERO);
+        assert_eq!(facial_feature_light(Vec3::splat(-1.0)), Vec3::ZERO);
+        // a view without the sky takes the noon horizon, about twice the base colour, a little
+        // blue: brighter than the body there, which that view lights flat at 1
+        let flat = facial_feature_light(facial_flat_ambient());
+        assert!((flat - Vec3::new(1.978, 1.515, 2.328)).abs().max_element() < 0.01);
+        assert!(flat.min_element() > 1.0);
+    }
+
+    #[test]
     fn edges_line_overlaps_of_a_few_pixels() {
         // 1080p at 60 degrees vertical, an avatar 2 m away: a pixel spans about 2 mm
         let focal = 540.0 / (30f32.to_radians()).tan();
@@ -346,6 +391,7 @@ mod tests {
             ("TOON_SECOND_SHADE", SECOND_SHADE),
             ("TOON_UNLIT_INTENSITY", UNLIT_INTENSITY),
             ("TOON_UNLIT_FLOOR", UNLIT_FLOOR),
+            ("TOON_FACIAL_AMBIENT_GAIN", FACIAL_AMBIENT_GAIN),
             ("TOON_RIM_POWER", RIM_POWER),
             ("TOON_RIM_INSIDE_MASK", RIM_INSIDE_MASK),
             ("TOON_RIM_MASK_LEVEL", RIM_MASK_LEVEL),
@@ -356,6 +402,9 @@ mod tests {
             ("TOON_OUTLINE_COLOR", OUTLINE_COLOR),
             ("TOON_OUTLINE_MAX_SQR_DISTANCE", OUTLINE_MAX_SQR_DISTANCE),
             ("TOON_OUTLINE_EDGE_PX", OUTLINE_EDGE_PX),
+            ("TOON_FACIAL_FLAT_AMBIENT_R", facial_flat_ambient().x),
+            ("TOON_FACIAL_FLAT_AMBIENT_G", facial_flat_ambient().y),
+            ("TOON_FACIAL_FLAT_AMBIENT_B", facial_flat_ambient().z),
         ];
         let defs = toon_shader_defs();
         assert_eq!(defs.len(), expected.len());

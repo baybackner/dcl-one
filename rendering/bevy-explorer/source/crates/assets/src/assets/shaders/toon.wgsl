@@ -7,6 +7,8 @@
 //   environment map's where the view has it, and the view's flat ambient light where it has not,
 //   so a camera lit flat lights avatars flat;
 // - a white rim light on the silhouette, in the same light colour.
+// The eyes, eyebrows and mouth are lit apart (facial_feature_lighting): by the ambient light
+// alone, times a gain, with no sun, no bands and no saturation.
 // No point or spot light reaches the avatar (decisions.md).
 //
 // The constants are scene_material::toon's, carried as defs by its toon_shader_defs: a float is
@@ -94,6 +96,48 @@ fn toon_irradiance(normal: vec3<f32>, world_position: vec3<f32>, clusterable_obj
 }
 #endif
 
+// the emission, in output units (see toon_lighting)
+fn toon_emission(pbr_input: PbrInput) -> vec3<f32> {
+    // emissive alpha is the exposure weight, as in bevy_pbr: bound_material
+    // writes 0, so the emission is already in output units and must not be
+    // scaled down by the view exposure (~0.001) like the lit term.
+    let emissive_exposure = mix(1.0, view.exposure, pbr_input.material.emissive.a);
+    return pbr_input.material.emissive.rgb * emissive_exposure * EMISSIVE_SCALE;
+}
+
+// the eyes, eyebrows and mouth: the base colour under the ambient light a surface facing the
+// fragment's normal receives, in light units, times a gain. No sun, no bands and no saturation,
+// so a face feature is as bright as the ambient makes it: brighter than the body under a bright
+// sky, darker at night. The ambient is the sky environment map's irradiance, as toon_lighting
+// reads it, where the view has it
+fn facial_feature_lighting(pbr_input: PbrInput) -> vec4<f32> {
+    let base_color = pbr_input.material.base_color;
+    let unit = bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u) * view.exposure / PI;
+#ifdef ENVIRONMENT_MAP
+    let world_position = pbr_input.world_position;
+    let view_z = dot(vec4<f32>(
+        view.view_from_world[0].z,
+        view.view_from_world[1].z,
+        view.view_from_world[2].z,
+        view.view_from_world[3].z
+    ), world_position);
+    let cluster_index = clustered_forward::fragment_cluster_index(pbr_input.frag_coord.xy, view_z, pbr_input.is_orthographic);
+    var clusterable_object_index_ranges = clustered_forward::unpack_clusterable_object_index_ranges(cluster_index);
+    let ambient = toon_irradiance(pbr_input.N, world_position.xyz, &clusterable_object_index_ranges) * view.exposure / unit;
+#else
+    // a view without the sky: its flat ambient is set to light the body flat, far above any sky,
+    // so the face features take the noon sky's horizon instead (scene_material::toon)
+    let ambient = vec3(
+        bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_R}u),
+        bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_G}u),
+        bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_B}u),
+    );
+#endif
+    let light = max(ambient, vec3(0.0)) * bitcast<f32>(#{TOON_FACIAL_AMBIENT_GAIN}u);
+    let color = base_color.rgb * light * unit + toon_emission(pbr_input);
+    return vec4<f32>(color, base_color.a);
+}
+
 fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
     let base_color = pbr_input.material.base_color;
     // the bands take the vertex normal, so a normal map does not break up the cel steps, and the
@@ -173,11 +217,7 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
 
     // the rim adds on top of the lit colours
     var color = (base_color.rgb * diffuse + rim * light) * unit;
-    // emissive alpha is the exposure weight, as in bevy_pbr: bound_material
-    // writes 0, so the emission is already in output units and must not be
-    // scaled down by the view exposure (~0.001) like the lit term.
-    let emissive_exposure = mix(1.0, view.exposure, pbr_input.material.emissive.a);
-    color += pbr_input.material.emissive.rgb * emissive_exposure * EMISSIVE_SCALE;
+    color += toon_emission(pbr_input);
 
     return vec4<f32>(color, base_color.a);
 }

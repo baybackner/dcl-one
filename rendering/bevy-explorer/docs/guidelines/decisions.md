@@ -36,6 +36,16 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   are drawn towards. A photo booth (the profile renders of `avatar_render` included) has no
   ambient to speak of, so it carries a key light of its own, a directional light of one light
   unit; without it avatars there would sit at the `0.05 * _Unlit_Intensity` floor.
+- **Face features are lit by the ambient alone.** Unity draws the eyes, eyebrows and mouth with
+  their own shader (`DCL_Avatar_Facial_Feature_ForwardPass.hlsl`), which returns the base
+  colour times the spherical-harmonics ambient at the surface normal times 4, with no sun, no
+  bands and no saturation, so under a noon sky they are about twice their base colour, brighter
+  than the body. Here the same holds with the sky envmap's irradiance in light units
+  (`facial_feature_lighting`, `toon.wgsl`). A view without the sky envmap has a flat ambient
+  set to light the body flat, five light units in the Backpack preview, which would light them
+  twentyfold; there they take the noon Trilight's equator colour instead
+  (`facial_flat_ambient`), where Unity's preview, drawn in the world, takes the sky of the
+  moment. The masks keep the body's outline, which Unity's face shader does not draw.
 - **Toon avatars' outline is a screen-space line.** Unity draws an inverted hull
   (`DCL_ToonOutline.hlsl`) for the avatars within 8 m; here the line is the prepass edge
   detection, with Unity's colour (`_Outline_Color * base * base`, unlit), width

@@ -14,7 +14,7 @@
 
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
 #import "embedded://shaders/bound_material_effect.wgsl"::{camera_dither, reveal_discard, toon_outline}
-#import "embedded://shaders/toon.wgsl"::toon_lighting
+#import "embedded://shaders/toon.wgsl"::{facial_feature_lighting, toon_lighting}
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
 
@@ -149,7 +149,11 @@ fn fragment(
 
     // apply lighting
     if (pbr_input.material.flags & bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
-        if (mesh_tag & #{TOON_MESH_TAG}) != 0u {
+        if (mesh_tag & #{FACIAL_FEATURE_MESH_TAG}) != 0u {
+            // the eyes, eyebrows and mouth without a mask texture: the face features' own
+            // light model, by the ambient light (toon.wgsl)
+            out.color = facial_feature_lighting(pbr_input);
+        } else if (mesh_tag & #{TOON_MESH_TAG}) != 0u {
             // avatars: cel shading, a light model of its own (toon.wgsl) lit by the sun and
             // the ambient light; the sun's cast shadow pushes surfaces towards the shades
             out.color = toon_lighting(pbr_input);

@@ -35,8 +35,8 @@ use console::DoAddConsoleCommand;
 use hover_glow::set_hover_glows;
 use scene_material::{
     SceneBound, SceneBounds, SceneMaterial, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
-    SCENE_MATERIAL_NO_DITHERING_MESH_TAG, SCENE_MATERIAL_OUTLINE_MESH_TAG,
-    SCENE_MATERIAL_TOON_MESH_TAG,
+    SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG, SCENE_MATERIAL_NO_DITHERING_MESH_TAG,
+    SCENE_MATERIAL_OUTLINE_MESH_TAG, SCENE_MATERIAL_TOON_MESH_TAG,
 };
 
 pub mod animate;
@@ -697,10 +697,11 @@ impl AvatarRenderDefinition {
         self.model_tag(self.body.model.as_ref())
     }
 
-    /// The eyes, eyebrows and mouth are drawn on the body's head, so they shade, outline and
-    /// fade as the body does.
+    /// The eyes, eyebrows and mouth are drawn on the body's head, so they outline and fade as
+    /// the body does; they are lit by the ambient light alone (toon.wgsl's
+    /// `facial_feature_lighting`).
     fn mask_tag(&self) -> u32 {
-        self.body_tag()
+        self.body_tag() | SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG
     }
 }
 

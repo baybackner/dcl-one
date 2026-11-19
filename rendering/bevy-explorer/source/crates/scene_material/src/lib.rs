@@ -32,6 +32,9 @@ pub const SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG: u32 = 0x04000000;
 pub const SCENE_MATERIAL_TOON_MESH_TAG: u32 = 0x08000000;
 // the tone-on-tone avatar outline (bound_material.wgsl, mask_material.wgsl)
 pub const SCENE_MATERIAL_OUTLINE_MESH_TAG: u32 = 0x10000000;
+// an avatar's eyes, eyebrows or mouth: lit by the ambient light alone (toon.wgsl's
+// facial_feature_lighting) instead of the toon bands
+pub const SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG: u32 = 0x20000000;
 /// an avatar being revealed bottom-up from its ghost: the shaders discard fragments above the
 /// reveal height, carried in the tag's low byte: 0 is no reveal, and 1..=255 span the range from
 /// `SCENE_MATERIAL_REVEAL_HIDE_HEIGHT` to `SCENE_MATERIAL_REVEAL_FULL_HEIGHT` above the mesh
@@ -77,6 +80,10 @@ pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
         ),
         ("TOON_MESH_TAG", SCENE_MATERIAL_TOON_MESH_TAG),
         ("OUTLINE_MESH_TAG", SCENE_MATERIAL_OUTLINE_MESH_TAG),
+        (
+            "FACIAL_FEATURE_MESH_TAG",
+            SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG,
+        ),
     ]
     .into_iter()
     .map(|(name, tag)| ShaderDefVal::UInt(name.to_owned(), tag))

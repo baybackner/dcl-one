@@ -9,7 +9,7 @@
 }
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
 #import "embedded://shaders/bound_material_effect.wgsl"::{camera_dither, reveal_discard, toon_outline}
-#import "embedded://shaders/toon.wgsl"::toon_lighting
+#import "embedded://shaders/toon.wgsl"::facial_feature_lighting
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 
@@ -113,8 +113,8 @@ fn fragment(
     pbr_input.material.base_color = color;
 
     var out: FragmentOutput;
-    // apply lighting: cel shading, as the body
-    out.color = toon_lighting(pbr_input);
+    // apply lighting: the face features' own, by the ambient light (toon.wgsl)
+    out.color = facial_feature_lighting(pbr_input);
 
     if (mesh_tag & #{OUTLINE_MESH_TAG}) != 0u {
         // the avatar outline, in the tone of the mask's own colour

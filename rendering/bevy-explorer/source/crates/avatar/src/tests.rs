@@ -818,21 +818,25 @@ fn render_definition(avatar_outline: bool, disable_dither: bool) -> AvatarRender
     }
 }
 
-/// the face masks carry the body's tag: always toon, outlined exactly when the body is, and
-/// faded by the camera dither exactly when the body is
+/// the face masks carry the body's tag, so they are outlined and faded by the camera dither
+/// exactly when the body is, plus the face-feature tag that lights them by the ambient alone
 #[test]
 fn mask_tag_matches_the_body() {
     let dither = SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG;
+    let face = SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG;
     let outlined = render_definition(true, false);
     assert_eq!(
         outlined.mask_tag(),
-        SCENE_MATERIAL_TOON_MESH_TAG | SCENE_MATERIAL_OUTLINE_MESH_TAG | dither
+        SCENE_MATERIAL_TOON_MESH_TAG | SCENE_MATERIAL_OUTLINE_MESH_TAG | dither | face
     );
-    assert_eq!(outlined.mask_tag(), outlined.body_tag());
+    assert_eq!(outlined.mask_tag(), outlined.body_tag() | face);
 
     let plain = render_definition(false, false);
-    assert_eq!(plain.mask_tag(), SCENE_MATERIAL_TOON_MESH_TAG | dither);
-    assert_eq!(plain.mask_tag(), plain.body_tag());
+    assert_eq!(
+        plain.mask_tag(),
+        SCENE_MATERIAL_TOON_MESH_TAG | dither | face
+    );
+    assert_eq!(plain.mask_tag(), plain.body_tag() | face);
 
     let undithered = render_definition(true, true);
     assert_eq!(
@@ -841,8 +845,12 @@ fn mask_tag_matches_the_body() {
             | SCENE_MATERIAL_OUTLINE_MESH_TAG
             | SCENE_MATERIAL_NO_DITHERING_MESH_TAG
             | dither
+            | face
     );
-    assert_eq!(undithered.mask_tag(), undithered.body_tag());
+    assert_eq!(undithered.mask_tag(), undithered.body_tag() | face);
+
+    // the body itself is not a face feature
+    assert_eq!(outlined.body_tag() & face, 0);
 }
 
 /// a wearable opts out of the hover glow with `outlineCompatible: false`, with the outline
