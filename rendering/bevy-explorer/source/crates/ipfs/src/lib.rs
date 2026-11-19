@@ -2527,7 +2527,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
-    async fn content_retry_stops_after_four_attempts() {
+    async fn content_retry_stops_after_four_attempts() -> anyhow::Result<()> {
         use std::io::Write;
         use std::sync::Arc;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2564,7 +2564,7 @@ mod tests {
             }
         });
         let ipfs = Arc::new(super::IpfsIo::new(
-            super::http_client().unwrap(),
+            super::http_client()?,
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,
@@ -2584,11 +2584,12 @@ mod tests {
             .await
             .is_err());
         server.join().unwrap();
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
-    async fn engine_request_keeps_its_slot_until_the_body_finishes() {
+    async fn engine_request_keeps_its_slot_until_the_body_finishes() -> anyhow::Result<()> {
         use std::io::Write;
         use std::sync::{mpsc, Arc};
         use std::time::Duration;
@@ -2607,7 +2608,7 @@ mod tests {
             stream.write_all(b"x").unwrap();
         });
         let ipfs = Arc::new(super::IpfsIo::new(
-            super::http_client().unwrap(),
+            super::http_client()?,
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,
@@ -2646,11 +2647,12 @@ mod tests {
         assert!(matches!(result, Ok(response) if response.body == b"x"));
         assert!(ipfs.request_slots.try_acquire().is_some());
         server.join().unwrap();
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
-    async fn unsigned_content_fetch_retries_503_and_reports_terminal_404() {
+    async fn unsigned_content_fetch_retries_503_and_reports_terminal_404() -> anyhow::Result<()> {
         use std::io::Write;
         use std::sync::Arc;
         use std::time::Duration;
@@ -2677,7 +2679,7 @@ mod tests {
             }
         });
         let ipfs = Arc::new(super::IpfsIo::new(
-            super::http_client().unwrap(),
+            super::http_client()?,
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,
@@ -2711,6 +2713,7 @@ mod tests {
             matches!(missing, Err(platform::FetchError::Status(status, _)) if status.as_u16() == 404)
         );
         server.join().unwrap();
+        Ok(())
     }
 
     #[test]

@@ -61,7 +61,9 @@ use wallet::WalletPlugin;
 
 use super::{initialize_scene::SceneLoading, PrimaryUser};
 
-pub struct TestPlugins;
+pub struct TestPlugins {
+    pub client: ipfs::HttpClient,
+}
 
 pub static LOG_ADDED: Lazy<Mutex<bool>> = Lazy::new(Default::default);
 
@@ -90,7 +92,7 @@ impl PluginGroup for TestPlugins {
             .add(TransformPlugin)
             .add(DiagnosticsPlugin)
             .add(IpfsIoPlugin {
-                client: ipfs::http_client().unwrap(),
+                client: self.client,
                 preview: false,
                 assets_root: test_path.to_str().map(ToOwned::to_owned),
                 starting_realm: Default::default(),
@@ -117,7 +119,7 @@ impl PluginGroup for TestPlugins {
     }
 }
 
-fn init_test_app(entity_json: &str) -> App {
+fn init_test_app(entity_json: &str) -> anyhow::Result<App> {
     init_runtime().unwrap();
     let mut app = App::new();
 
@@ -130,7 +132,9 @@ fn init_test_app(entity_json: &str) -> App {
         },
         ..Default::default()
     });
-    app.add_plugins(TestPlugins);
+    app.add_plugins(TestPlugins {
+        client: ipfs::http_client()?,
+    });
     app.init_asset::<Shader>();
     app.init_asset::<AnimationClip>();
     app.init_asset::<Image>();
@@ -245,7 +249,7 @@ fn init_test_app(entity_json: &str) -> App {
         sleeper: SpinSleeper::default(),
     });
 
-    app
+    Ok(app)
 }
 
 // check output vs file
@@ -457,7 +461,7 @@ fn make_reparent_buffer(parent: u16) -> Vec<u8> {
 // }
 
 #[test]
-fn cyclic_recovery() {
+fn cyclic_recovery() -> anyhow::Result<()> {
     let states = [(603, 601), (601, 602), (602, 603), (603, 0)]
         .into_iter()
         .enumerate()
@@ -474,7 +478,7 @@ fn cyclic_recovery() {
 
     for messages in states.permutations(4) {
         // create new app instance
-        let mut app = init_test_app("empty_scene.entity_definition");
+        let mut app = init_test_app("empty_scene.entity_definition")?;
         // add lww state
         let scene_entity = app
             .world_mut()
@@ -535,6 +539,7 @@ fn cyclic_recovery() {
         let graph = make_graph(&mut app);
         check_or_write!(graph, "expected/cyclic_recovery.dot");
     }
+    Ok(())
 }
 
 #[test]
