@@ -198,7 +198,11 @@ fn address(state: &WorkerContext) -> Result<String, WasmError> {
         None => {
             // the player signed in after the scene started: open their file, for a later call
             if let Some(scene_dir) = SCENE_DIR.with(|slot| slot.borrow_mut().take()) {
-                spawn_local(load(Rc::downgrade(&state.state), scene_dir, address));
+                spawn_local(load(
+                    Rc::downgrade(&state.local_storage),
+                    scene_dir,
+                    address,
+                ));
             }
             Err(
                 anyhow::anyhow!("localStorage is not available: the player's storage is not open")
