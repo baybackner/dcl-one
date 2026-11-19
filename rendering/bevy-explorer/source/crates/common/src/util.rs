@@ -834,15 +834,17 @@ pub async fn resolve_public_addrs(
 }
 
 /// A colour ramp keyed by a normalized parameter in `[0, 1)` (e.g. time of day).
-/// Stops are sorted ascending; sampling wraps across the ends (last -> first).
+/// Stops are sorted ascending; sampling wraps across the ends (last -> first). No stops sample
+/// as black.
 pub struct Gradient(pub &'static [(f32, Vec3)]);
 
 impl Gradient {
     pub fn sample(&self, t: f32) -> Vec3 {
         let stops = self.0;
         let t = t.rem_euclid(1.0);
-        let first = stops.first().unwrap();
-        let last = stops.last().unwrap();
+        let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+            return Vec3::ZERO;
+        };
         if t <= first.0 {
             // wrap: blend from last stop to first
             let span = first.0 + (1.0 - last.0);
@@ -869,15 +871,17 @@ impl Gradient {
     }
 }
 
-/// A scalar ramp, sampled the same way as [`Gradient`] (wraps across the ends).
+/// A scalar ramp, sampled the same way as [`Gradient`] (wraps across the ends). No stops sample
+/// as zero.
 pub struct Curve(pub &'static [(f32, f32)]);
 
 impl Curve {
     pub fn sample(&self, t: f32) -> f32 {
         let stops = self.0;
         let t = t.rem_euclid(1.0);
-        let first = stops.first().unwrap();
-        let last = stops.last().unwrap();
+        let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+            return 0.0;
+        };
         if t <= first.0 {
             let span = first.0 + (1.0 - last.0);
             let f = if span > 0.0 {

@@ -441,7 +441,9 @@ fn automatic_testing(
                 .iter()
                 .any(|f| f == "scene load"),
         ));
-        testing_data.test_scenes.as_mut().unwrap().0.pop_front();
+        if let Some(test_scenes) = testing_data.test_scenes.as_mut() {
+            test_scenes.0.pop_front();
+        }
         return;
     }
 
@@ -452,7 +454,9 @@ fn automatic_testing(
 
     if plan.is_empty() {
         info!("plan completed for scene @ {:?}", context.base);
-        testing_data.test_scenes.as_mut().unwrap().0.pop_front();
+        if let Some(test_scenes) = testing_data.test_scenes.as_mut() {
+            test_scenes.0.pop_front();
+        }
     }
 }
 

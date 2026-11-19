@@ -369,23 +369,16 @@ impl Settings {
         name: &str,
         value: f32,
     ) -> Result<(), anyhow::Error> {
-        let apply = self
-            .settings
-            .iter_mut()
-            .find(|s| s.info.name == name)
-            .ok_or(anyhow!(format!("{name} not found")))?
-            .apply
-            .take()
-            .unwrap();
-        let res = (apply)(config, value)?;
         let setting = self
             .settings
             .iter_mut()
             .find(|s| s.info.name == name)
-            .unwrap();
-
-        setting.apply = Some(apply);
-        setting.info.value = res;
+            .ok_or(anyhow!(format!("{name} not found")))?;
+        let apply = setting
+            .apply
+            .as_ref()
+            .ok_or_else(|| anyhow!("{name} cannot be set"))?;
+        setting.info.value = apply(config, value)?;
         Ok(())
     }
 

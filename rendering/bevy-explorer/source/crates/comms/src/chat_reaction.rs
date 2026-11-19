@@ -137,7 +137,9 @@ fn dotnet_double_string(value: f64) -> String {
     }
     let sign = if value < 0.0 { "-" } else { "" };
     let scientific = format!("{:.14e}", value.abs());
-    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let Some((mantissa, exponent)) = scientific.split_once('e') else {
+        return value.to_string();
+    };
     let exponent = exponent.parse::<i32>().unwrap();
     let digits = mantissa.replace('.', "");
     let digits = digits.trim_end_matches('0');
