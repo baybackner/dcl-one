@@ -1,4 +1,7 @@
-use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, PoisonError, RwLock, RwLockReadGuard,
+};
 
 use anyhow::anyhow;
 use bevy::prelude::*;
@@ -28,11 +31,20 @@ pub struct KnownMicrophone {
 /// share one list, which the setting's choices read; [`MicrophoneDevices::replace`] does not mark
 /// the resource changed.
 #[derive(Resource, Default, Debug, Clone)]
-pub struct MicrophoneDevices(Arc<RwLock<Vec<KnownMicrophone>>>);
+pub struct MicrophoneDevices {
+    known: Arc<RwLock<Vec<KnownMicrophone>>>,
+    /// The host has reported its inputs at least once.
+    reported: Arc<AtomicBool>,
+}
 
 impl MicrophoneDevices {
     pub fn read(&self) -> RwLockReadGuard<'_, Vec<KnownMicrophone>> {
-        self.0.read().unwrap_or_else(PoisonError::into_inner)
+        self.known.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the host reported its inputs and `id` was not among them.
+    pub fn missing(&self, id: &str) -> bool {
+        self.reported.load(Ordering::SeqCst) && !self.contains(id)
     }
 
     /// Whether the host offers `id` now.
@@ -44,7 +56,8 @@ impl MicrophoneDevices {
 
     /// Takes the host's current inputs; returns false when nothing changed.
     pub fn replace(&self, reported: Vec<MicrophoneDevice>) -> bool {
-        let mut known = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        self.reported.store(true, Ordering::SeqCst);
+        let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         let before = known.clone();
         for entry in known.iter_mut() {
             entry.present = false;

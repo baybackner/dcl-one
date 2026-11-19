@@ -227,7 +227,7 @@ impl MicrophonePublication {
         let Some(id) = choice else {
             return true;
         };
-        if !devices.contains(id) {
+        if devices.missing(id) {
             self.fell_back.store(true, Ordering::SeqCst);
             return true;
         }
@@ -1075,7 +1075,15 @@ mod routing_tests {
         assert!(default.captures_choice(None, &devices));
         assert!(!default.captures_choice(Some("headset"), &devices));
 
+        // built on a saved choice before the page reported any input: no fallback is assumed
+        let mut early = pending(&runtime, &drain);
+        early.device = Some("headset".to_owned());
+        assert!(early.captures_choice(Some("headset"), &devices));
+        devices.replace(vec![headset.clone()]);
+        assert!(early.captures_choice(Some("headset"), &devices));
+
         // built while the headset is missing, then plugged in
+        devices.replace(Vec::new());
         let mut fallen_back = pending(&runtime, &drain);
         fallen_back.device = Some("headset".to_owned());
         assert!(fallen_back.captures_choice(Some("headset"), &devices));
