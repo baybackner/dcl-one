@@ -348,8 +348,10 @@ mod tests {
 
     #[test]
     fn a_saved_choice_not_yet_reported_shows_as_chosen_by_its_saved_name() {
-        let mut config = AppConfig::default();
-        config.microphone = Some("headset".to_owned());
+        let config = AppConfig {
+            microphone: Some("headset".to_owned()),
+            ..Default::default()
+        };
         let mut app = App::new();
         app.insert_resource(config.clone());
         let mut settings = Settings {
