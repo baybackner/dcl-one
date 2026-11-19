@@ -143,7 +143,7 @@ extern "C" {
 pub async fn wasm_init_scene() -> Result<WorkerContext, JsValue> {
     let scene_initialization_data: SceneInitializationData = SCENE_QUEUE
         .get()
-        .expect("scene queue not initialized")
+        .ok_or_else(|| JsValue::from_str("scene queue not initialized"))?
         .lock()
         .await
         .pop()

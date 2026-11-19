@@ -853,7 +853,7 @@ impl SceneColliderData {
         );
 
         result.and_then(|(handle, intersection)| {
-            let id = self.get_id(handle).unwrap().clone();
+            let id = self.get_id(handle)?.clone();
             let position = self
                 .collider_set
                 .get(handle)?

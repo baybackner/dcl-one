@@ -874,6 +874,7 @@ impl AtlasPage {
             let dst = ((pos.y as usize + y) * self.size as usize + pos.x as usize) * bpp;
             data[dst..dst + row].copy_from_slice(&src[y * row..(y + 1) * row]);
         }
+        Ok(())
     }
 
     /// Place a raster, growing the page if needed.
@@ -997,8 +998,13 @@ impl GlyphAtlas {
         let (w, h) = (Self::WHITE.width(), Self::WHITE.height());
         let white = self.sdf.allocate(w, h).unwrap();
         debug_assert_eq!(white, Self::WHITE.min);
-        self.sdf
-            .write(images, white, w, h, &vec![255u8; (w * h) as usize]);
+        if self
+            .sdf
+            .write(images, white, w, h, &vec![255u8; (w * h) as usize])
+            .is_err()
+        {
+            bevy::log::error!("glyph atlas page image is missing");
+        }
     }
 
     fn page(&self, page: Page) -> Option<&AtlasPage> {

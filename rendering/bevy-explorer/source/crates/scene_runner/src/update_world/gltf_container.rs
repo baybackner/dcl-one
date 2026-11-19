@@ -796,7 +796,7 @@ impl NodeProcessing<'_, '_> {
                     let mut ptr = parent.parent();
                     while ptr != bevy_scene_entity {
                         let Ok((maybe_name, _, parent, ..)) = gltf_spawned_entities.get(ptr) else {
-                            warn!("gltf node {ptr:?} is missing from the spawned hierarchy");
+                            error!("gltf node {ptr:?} is missing from the spawned hierarchy");
                             break 'path None;
                         };
                         if let Some(parent_name) = maybe_name {
