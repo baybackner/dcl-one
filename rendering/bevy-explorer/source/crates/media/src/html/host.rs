@@ -16,7 +16,7 @@ use futures_lite::StreamExt;
 use js_sys::{Function, Reflect};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlMediaElement, HtmlVideoElement, VideoFrame, Worker};
+use web_sys::{Document, HtmlMediaElement, HtmlVideoElement, VideoFrame, Worker};
 
 use super::{HOST, HostCommand, HostHandle, MediaEvent, MediaId};
 use crate::{
@@ -36,9 +36,9 @@ thread_local! {
     static PAGE: RefCell<Option<(UnboundedSender<MediaEvent>, Worker)>> = const { RefCell::new(None) };
 }
 
-/// Page entry: starts serving media commands, transferring video frames to `render_worker`.
-/// Call after the module is initialised on the page.
-pub fn media_host_main(render_worker: Worker) {
+/// Page entry: starts serving media commands, creating elements in `document` and transferring
+/// video frames to `render_worker`. Call after the module is initialised on the page.
+pub fn media_host_main(render_worker: Worker, document: Document) {
     let (commands_tx, mut commands_rx) = unbounded::<HostCommand>();
     let (events_tx, events_rx) = unbounded::<MediaEvent>();
     if HOST
@@ -53,37 +53,34 @@ pub fn media_host_main(render_worker: Worker) {
     PAGE.with(|page| *page.borrow_mut() = Some((events_tx.clone(), render_worker.clone())));
 
     // A `play()` the browser refused (no user gesture yet) is retried on the next gesture.
-    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
-        let on_gesture = Closure::<dyn FnMut()>::new(|| {
-            let refused: Vec<_> = MEDIA.with(|media| {
-                media
-                    .borrow()
-                    .iter()
-                    .filter(|(_, m)| {
-                        m.play_refusal == PlayRefusal::Refused && m.state.wants_element_playback()
-                    })
-                    .map(|(id, m)| (*id, m.media.clone()))
-                    .collect()
-            });
-            for (id, media) in refused {
-                try_play(id, &media);
-            }
+    let on_gesture = Closure::<dyn FnMut()>::new(|| {
+        let refused: Vec<_> = MEDIA.with(|media| {
+            media
+                .borrow()
+                .iter()
+                .filter(|(_, m)| {
+                    m.play_refusal == PlayRefusal::Refused && m.state.wants_element_playback()
+                })
+                .map(|(id, m)| (*id, m.media.clone()))
+                .collect()
         });
-        for event in ["pointerdown", "keydown"] {
-            document
-                .add_event_listener_with_callback(event, on_gesture.as_ref().unchecked_ref())
-                .report();
+        for (id, media) in refused {
+            try_play(id, &media);
         }
-        on_gesture.forget();
-    } else {
-        warn!("no document: a refused play is not retried on a gesture");
+    });
+    for event in ["pointerdown", "keydown"] {
+        document
+            .add_event_listener_with_callback(event, on_gesture.as_ref().unchecked_ref())
+            .report();
     }
+    on_gesture.forget();
 
     wasm_bindgen_futures::spawn_local(async move {
         while let Some(command) = commands_rx.next().await {
             match command {
                 HostCommand::Create { id, url, has_video } => {
                     let media = HostMedia::new(
+                        &document,
                         id,
                         url,
                         has_video,
@@ -332,13 +329,13 @@ struct HostMedia {
 
 impl HostMedia {
     fn new(
+        document: &Document,
         id: MediaId,
         url: Option<String>,
         has_video: bool,
         events: UnboundedSender<MediaEvent>,
         render_worker: Worker,
     ) -> (Self, MediaSourceCmd) {
-        let document = web_sys::window().unwrap().document().unwrap();
         let video = document
             .create_element("video")
             .unwrap()

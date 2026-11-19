@@ -65,19 +65,20 @@ pub(crate) fn send(command: AudioCommand) {
 /// Page entry: starts serving audio commands. Call after the module is initialised on the page
 /// and before the engine worker starts (exported by the root crate's `web.rs`).
 pub fn audio_host_main() {
+    // without a context no host is set
+    let context = match AudioContext::new() {
+        Ok(context) => context,
+        Err(e) => {
+            warn!("no AudioContext, scene audio is silent: {e:?}");
+            return;
+        }
+    };
     let (tx, mut rx) = unbounded::<AudioCommand>();
     if HOST.set(tx).is_err() {
         panic!("audio host already started");
     }
 
     wasm_bindgen_futures::spawn_local(async move {
-        let context = match AudioContext::new() {
-            Ok(context) => context,
-            Err(e) => {
-                warn!("no AudioContext, scene audio is silent: {e:?}");
-                return;
-            }
-        };
         let mut buffers: HashMap<AssetId<bevy_kira_audio::AudioSource>, AudioBuffer> =
             HashMap::default();
         let mut graphs: HashMap<InstanceId, Graph> = HashMap::default();
