@@ -1,7 +1,6 @@
 import type { MouseEvent } from "react";
-import SitesChrome from "../frames/SitesChrome";
-import { asset } from "../../asset";
-import logo from "../../atoms/assets/decentraland-logo.svg?url";
+import banner from "../assets/creator-hub-banner.png";
+import logo from "../assets/dcl-logo.svg";
 import styles from "./StCreatorHubDownload.module.css";
 
 const L = {
@@ -52,7 +51,7 @@ function DclLogo() {
 
 /** The 752x500 banner picture of decentraland.org's Creator Hub download page. */
 function BannerArt() {
-  return <img className={styles.banner} src={asset("assets/creator-hub-banner.png")} width={752} height={500} alt="Decentraland Creator Hub" />;
+  return <img className={styles.banner} src={banner} width={752} height={500} alt="Decentraland Creator Hub" />;
 }
 
 const DownloadGlyph = ({ src, alt }: { src: string; alt: string }) => (
@@ -72,51 +71,49 @@ export default function StCreatorHubDownload({
   onDownload = undefined,
 }: StCreatorHubDownloadProps) {
   return (
-    <SitesChrome active="none" overlayNav>
-      <main className={styles.root}>
-        <div className={styles.card}>
-          <div className={styles.info}>
-            <DclLogo />
-            <h1 className={styles.title}>{L.title}</h1>
+    <main className={styles.root}>
+      <div className={styles.card}>
+        <div className={styles.info}>
+          <DclLogo />
+          <h1 className={styles.title}>{L.title}</h1>
 
-            {primaryOption?.link && (
-              <div className={styles.actions}>
-                <a
-                  className={styles.cta}
-                  href={primaryOption.link}
-                  data-os={primaryOption.text}
-                  onClick={onDownload && ((e) => onDownload(primaryOption, e))}
-                >
-                  <span className={styles.ctaLabel}>
-                    {L.downloadFor(primaryOption.text)}
-                  </span>
-                  <DownloadGlyph src={primaryOption.image} alt="" />
-                </a>
+          {primaryOption?.link && (
+            <div className={styles.actions}>
+              <a
+                className={styles.cta}
+                href={primaryOption.link}
+                data-os={primaryOption.text}
+                onClick={onDownload && ((e) => onDownload(primaryOption, e))}
+              >
+                <span className={styles.ctaLabel}>
+                  {L.downloadFor(primaryOption.text)}
+                </span>
+                <DownloadGlyph src={primaryOption.image} alt="" />
+              </a>
 
-                {secondaryOptions.length > 0 && (
-                  <div className={styles.also}>
-                    <span className={styles.alsoText}>{L.alsoAvailable}</span>
-                    {secondaryOptions.map((option) => (
-                      <a
-                        key={option.text}
-                        className={styles.altIcon}
-                        href={option.link}
-                        data-os={option.text}
-                        aria-label={L.downloadFor(option.text)}
-                        onClick={onDownload && ((e) => onDownload(option, e))}
-                      >
-                        <img src={option.image} alt="" width="20" height="20" />
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <BannerArt />
+              {secondaryOptions.length > 0 && (
+                <div className={styles.also}>
+                  <span className={styles.alsoText}>{L.alsoAvailable}</span>
+                  {secondaryOptions.map((option) => (
+                    <a
+                      key={option.text}
+                      className={styles.altIcon}
+                      href={option.link}
+                      data-os={option.text}
+                      aria-label={L.downloadFor(option.text)}
+                      onClick={onDownload && ((e) => onDownload(option, e))}
+                    >
+                      <img src={option.image} alt="" width="20" height="20" />
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      </main>
-    </SitesChrome>
+
+        <BannerArt />
+      </div>
+    </main>
   );
 }

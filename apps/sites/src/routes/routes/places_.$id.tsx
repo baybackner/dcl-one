@@ -2,7 +2,7 @@ import { useLocation, useNavigate, useNavigation } from "react-router";
 import { useEffect, useState } from "react";
 
 import { PlaceDetail } from "@dcl/one-ui/apps/sites/places/PlaceDetail";
-import { isPlaceholderThumbnail, type PlaceViewer } from "@ui/data/catalyst/places";
+import { isPlaceholderThumbnail, type PlaceViewer } from "@web-core/place-view";
 import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import UpstreamUnavailable from "@/features/components/UpstreamUnavailable";

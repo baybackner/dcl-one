@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { redirect } from "react-router";
 
-import LdCreatorHubDownloadPage from "@ui/landings/pages/LdCreatorHubDownloadPage";
+import LdCreatorHubDownloadPage from "@dcl/one-ui/apps/sites/download/LdCreatorHubDownloadPage";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import {
   loadLatestRelease,
@@ -81,12 +82,14 @@ export default function CreatorHubDownloadRoute({ loaderData }: Route.ComponentP
   }
 
   return (
-    <LdCreatorHubDownloadPage
-      version={d.version}
-      primary={d.primary}
-      secondary={d.secondary}
-      onDownload={onDownload}
-    />
+    <SitesLayout active="none" overlayNav>
+      <LdCreatorHubDownloadPage
+        version={d.version}
+        primary={d.primary}
+        secondary={d.secondary}
+        onDownload={onDownload}
+      />
+    </SitesLayout>
   );
 }
 

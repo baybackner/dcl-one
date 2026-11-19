@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isPlaceholderThumbnail } from "@ui/data/catalyst/places";
+import { isPlaceholderThumbnail } from "@web-core/place-view";
 import { readCopy, type CopyStamp } from "@web-core/freshness/copyAsOf";
 import type { AuthIdentity } from "../../auth/types";
 import { getJSON, signedGetJSON, type GetOptions } from "../client";

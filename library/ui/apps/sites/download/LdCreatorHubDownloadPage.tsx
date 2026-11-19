@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 
-import StCreatorHubDownload, { ICON } from "../../web/pages/StCreatorHubDownload";
+import StCreatorHubDownload, { ICON } from "./StCreatorHubDownload";
 import styles from "./LdCreatorHubDownloadPage.module.css";
 
 type LdChdOsKey = "windows" | "macos";

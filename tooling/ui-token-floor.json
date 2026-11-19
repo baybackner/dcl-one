@@ -179,10 +179,6 @@
     "primitives": 4,
     "tokens": 24
   },
-  "apps/ui3/src/web/pages/StCreatorHubDownload.module.css": {
-    "primitives": 0,
-    "tokens": 18
-  },
   "apps/ui3/src/web/pages/siteshome.css": {
     "primitives": 22,
     "tokens": 0
@@ -242,6 +238,10 @@
   "library/ui/apps/sites/cast/stcastwatcher.css": {
     "primitives": 0,
     "tokens": 8
+  },
+  "library/ui/apps/sites/download/StCreatorHubDownload.module.css": {
+    "primitives": 0,
+    "tokens": 18
   },
   "library/ui/components/Button/Button.module.css": {
     "primitives": 0,
