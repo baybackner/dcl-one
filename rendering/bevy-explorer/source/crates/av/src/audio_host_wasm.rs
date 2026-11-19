@@ -3,7 +3,7 @@
 //! task on the page's event loop; nothing here may block.
 
 use bevy::{
-    log::{debug, error, warn},
+    log::{debug, warn},
     platform::collections::HashMap,
     prelude::AssetId,
 };
@@ -74,7 +74,7 @@ pub fn audio_host_main() {
         let context = match AudioContext::new() {
             Ok(context) => context,
             Err(e) => {
-                error!("no AudioContext, scene audio is silent: {e:?}");
+                warn!("no AudioContext, scene audio is silent: {e:?}");
                 return;
             }
         };

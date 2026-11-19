@@ -464,7 +464,7 @@ impl HostMedia {
             .ok()
             .and_then(|rvc| rvc.dyn_into::<Function>().ok())
         else {
-            error!("media {id}: no requestVideoFrameCallback; its frames are not shown");
+            warn!("media {id}: no requestVideoFrameCallback; its frames are not shown");
             return;
         };
 

@@ -272,12 +272,12 @@ impl From<serde_wasm_bindgen::Error> for WasmError {
 }
 
 /// `value` as plain JS data: maps become objects and `None` becomes `null`.
-pub fn to_json_value<T: serde::Serialize + ?Sized>(value: &T) -> Result<JsValue, WasmError> {
+pub(crate) fn to_json_value<T: serde::Serialize + ?Sized>(value: &T) -> Result<JsValue, WasmError> {
     Ok(value.serialize(&serde_wasm_bindgen::Serializer::json_compatible())?)
 }
 
 /// `items` as a JS array, each item converted by `serde_wasm_bindgen::to_value`.
-pub fn to_js_array<T: serde::Serialize>(
+pub(crate) fn to_js_array<T: serde::Serialize>(
     items: impl IntoIterator<Item = T>,
 ) -> Result<js_sys::Array, WasmError> {
     items
