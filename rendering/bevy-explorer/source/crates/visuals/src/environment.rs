@@ -463,7 +463,7 @@ mod tests {
         use crate::{
             sky_envmap::{SkyAmbient, SkyEnvmapSettings},
             stylized_sky::StylizedSky,
-            FogDensity, ShadowBiasOverride,
+            CloudCover, FogDensity, ShadowBiasOverride,
         };
         use bevy_atmosphere::prelude::AtmosphereModel;
         use common::structs::{AppConfig, FogSetting};
@@ -476,6 +476,7 @@ mod tests {
             .insert_resource(config)
             .insert_resource(TimeOfDay { time: 43200.0 })
             .init_resource::<FogDensity>()
+            .init_resource::<CloudCover>()
             .init_resource::<SkyAmbient>()
             .insert_resource(SceneGlobalLight {
                 dir_color: Color::WHITE,

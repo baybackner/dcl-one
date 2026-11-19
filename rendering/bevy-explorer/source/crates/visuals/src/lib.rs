@@ -70,17 +70,7 @@ impl Plugin for VisualsPlugin {
         app.insert_resource(DirectionalLightShadowMap { size: 4096 })
             .init_resource::<SceneGlobalLight>()
             .init_resource::<FogDensity>()
-            .insert_resource(CloudCover {
-                cover: 0.375,
-                speed: 5.0,
-                density_cap: 0.8,
-                shadow: 0.05,
-                scale: 1.5,
-                steps: 44,
-                lacunarity: 2.0,
-                sharpness: 50.0,
-                sharp_mid: 0.1,
-            })
+            .init_resource::<CloudCover>()
             .add_plugins(WireframePlugin::default())
             .add_plugins(DayNightPlugin)
             .add_plugins(ShellTexturingPlugin)
@@ -120,14 +110,6 @@ impl Plugin for VisualsPlugin {
         app.add_console_command::<FogConsoleCommand, _>(fog_console_command);
         app.add_console_command::<DofConsoleCommand, _>(dof_console_command);
         app.add_console_command::<CloudConsoleCommand, _>(cloud_console_command);
-        app.add_console_command::<CloudDensityConsoleCommand, _>(cloud_density_console_command);
-        app.add_console_command::<CloudShadowConsoleCommand, _>(cloud_shadow_console_command);
-        app.add_console_command::<CloudScaleConsoleCommand, _>(cloud_scale_console_command);
-        app.add_console_command::<CloudStepsConsoleCommand, _>(cloud_steps_console_command);
-        app.add_console_command::<CloudLacunarityConsoleCommand, _>(
-            cloud_lacunarity_console_command,
-        );
-        app.add_console_command::<CloudSharpConsoleCommand, _>(cloud_sharp_console_command);
         app.add_console_command::<TonemapConsoleCommand, _>(tonemap_console_command);
         app.add_console_command::<ExposureConsoleCommand, _>(exposure_console_command);
         app.add_console_command::<GammaConsoleCommand, _>(gamma_console_command);
@@ -212,6 +194,7 @@ fn apply_global_light(
     mut sky_ambient: ResMut<SkyAmbient>,
     fog_density: Res<FogDensity>,
     shadow_bias: Res<ShadowBiasOverride>,
+    cloud: Res<CloudCover>,
     mut prev: Local<(f32, SceneGlobalLight)>,
 ) {
     let (scene_global_light, environment) = scene_light;
@@ -262,7 +245,6 @@ fn apply_global_light(
     // replace the preset's
     let clock_fraction = day_fraction(time_of_day.elapsed_secs() / 3600.0);
     atmosphere.phase = time_to_phase(clock_fraction);
-    atmosphere.time += time.delta_secs();
     atmosphere.tick = atmosphere.tick.wrapping_add(1);
     let band = |color: Option<Vec3>| color.map(|c| c.extend(1.0)).unwrap_or(Vec4::ZERO);
     atmosphere.scene_zenith = band(environment.zenith);
@@ -274,11 +256,13 @@ fn apply_global_light(
         atmosphere.phase,
         environment.cloud_color.filter(|_| procedural_clouds),
     );
-    atmosphere.cloud_opacity = environment.cloud_opacity.unwrap_or(1.0);
-    // whole turns are dropped, so the scroll stays exact however long it runs
-    atmosphere.cloud_scroll = (atmosphere.cloud_scroll
-        + cloud_scroll_rates(environment.cloud_speed) * time.delta_secs())
-    .fract_gl();
+    advance_sky_clouds(
+        &mut atmosphere,
+        environment.cloud_opacity,
+        environment.cloud_speed,
+        &cloud,
+        time.delta_secs(),
+    );
     atmosphere.scene_sun_visible = if next_light.sun_hidden { 0.0 } else { 1.0 };
 
     // the disc is where the light comes from, so it follows the swing between the sun's arc and
@@ -646,33 +630,34 @@ fn update_dof(
     dof.focal_distance = current_distance;
 }
 
-/// cloud cover 0..1 (0 = clear, 1 = overcast; 0.35 is the default look) and
-/// drift speed.
+/// `/cloud <cover> [speed]`: the strips' cover and the sky's speed. `--speed` sets the speed
+/// alone, for the debug panel's slider; no argument reports both.
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/cloud")]
 struct CloudConsoleCommand {
-    cover: f32,
+    cover: Option<f32>,
+    #[arg(conflicts_with = "speed_flag")]
     speed: Option<f32>,
+    #[arg(long = "speed")]
+    speed_flag: Option<f32>,
 }
 
+/// The user's sky settings. A scene's `PBSkybox` cloud opacity and speed apply on top of them.
 #[derive(Resource)]
 pub struct CloudCover {
+    /// Multiplies every strip's opacity: 0 clears the sky, 1 draws the strips as authored.
     pub cover: f32,
+    /// Scales the strips' scroll and the horizon noise's drift: 0 freezes the sky's motion.
     pub speed: f32,
-    /// accumulated density that reads as fully opaque (lower = thicker clouds).
-    pub density_cap: f32,
-    /// shadow / minimum cloud brightness (the dark side of clouds).
-    pub shadow: f32,
-    /// cloud noise sample scale (higher = finer/smaller features).
-    pub scale: f32,
-    /// cloud ray-march step count (higher = smoother/more detail, more cost).
-    pub steps: u32,
-    /// per-octave frequency step of the cloud noise (default 2.345).
-    pub lacunarity: f32,
-    /// steepness of the logistic contrast curve on cloud coverage (0 = off).
-    pub sharpness: f32,
-    /// coverage value the contrast curve is centred on.
-    pub sharp_mid: f32,
+}
+
+impl Default for CloudCover {
+    fn default() -> Self {
+        Self {
+            cover: 1.0,
+            speed: 1.0,
+        }
+    }
 }
 
 fn cloud_console_command(
@@ -680,148 +665,34 @@ fn cloud_console_command(
     mut cloud: ResMut<CloudCover>,
 ) {
     if let Some(Ok(command)) = input.take() {
-        cloud.cover = shader_cover(command.cover);
-
-        if let Some(speed) = command.speed {
+        if let Some(cover) = command.cover {
+            cloud.cover = cover.max(0.0);
+        }
+        if let Some(speed) = command.speed.or(command.speed_flag) {
             cloud.speed = speed;
         }
 
         input.reply_ok(format!(
             "cloud cover {}, speed {}",
-            command.cover, cloud.speed
+            cloud.cover, cloud.speed
         ));
     }
 }
 
-/// The shader's cover for the user's 0..1. The shader shows wisps from ~0.2 and solid cloud at
-/// ~0.7 with the default sharpening, so 0..1 maps onto that; 0 is the shader's 0, a sky with no
-/// cloud at all, which neither the day's noise seed nor the drift changes.
-pub(crate) fn shader_cover(cover: f32) -> f32 {
-    if cover <= 0.0 {
-        0.0
-    } else {
-        0.2 + cover * 0.5
-    }
-}
-
-/// The user's 0..1 for the shader's cover (`shader_cover`'s inverse).
-pub(crate) fn user_cover(cover: f32) -> f32 {
-    if cover <= 0.0 {
-        0.0
-    } else {
-        (cover - 0.2) / 0.5
-    }
-}
-
-/// max accumulated density that reads as fully opaque; lower = thicker clouds.
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/clouddensity")]
-struct CloudDensityConsoleCommand {
-    cap: f32,
-}
-
-fn cloud_density_console_command(
-    mut input: ConsoleCommand<CloudDensityConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
+/// Advances the sky's motion by a frame and sets the strips' opacity: the scene's opacity (1
+/// without one) times the user's cover, and the scrolls and the shader time at the user's speed.
+fn advance_sky_clouds(
+    sky: &mut StylizedSky,
+    scene_opacity: Option<f32>,
+    scene_speed: Option<f32>,
+    cloud: &CloudCover,
+    delta_secs: f32,
 ) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.density_cap = command.cap;
-        input.reply_ok(format!("cloud density cap {}", command.cap));
-    }
-}
-
-/// shadow / minimum cloud brightness (the dark side of clouds).
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/cloudshadow")]
-struct CloudShadowConsoleCommand {
-    value: f32,
-}
-
-fn cloud_shadow_console_command(
-    mut input: ConsoleCommand<CloudShadowConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
-) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.shadow = command.value;
-        input.reply_ok(format!("cloud shadow {}", command.value));
-    }
-}
-
-/// cloud noise sample scale; higher = finer/smaller features, lower = larger.
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/cloudscale")]
-struct CloudScaleConsoleCommand {
-    scale: f32,
-}
-
-fn cloud_scale_console_command(
-    mut input: ConsoleCommand<CloudScaleConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
-) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.scale = command.scale;
-        input.reply_ok(format!("cloud scale {}", command.scale));
-    }
-}
-
-/// cloud ray-march step count; higher = smoother/more detail, more cost.
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/cloudsteps")]
-struct CloudStepsConsoleCommand {
-    steps: u32,
-}
-
-fn cloud_steps_console_command(
-    mut input: ConsoleCommand<CloudStepsConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
-) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.steps = command.steps.max(1);
-        input.reply_ok(format!("cloud steps {}", cloud.steps));
-    }
-}
-
-/// per-octave frequency step of the cloud noise (how much finer each successive
-/// wave is); default 2.345.
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/cloudlacunarity")]
-struct CloudLacunarityConsoleCommand {
-    lacunarity: f32,
-}
-
-fn cloud_lacunarity_console_command(
-    mut input: ConsoleCommand<CloudLacunarityConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
-) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.lacunarity = command.lacunarity;
-        input.reply_ok(format!("cloud lacunarity {}", command.lacunarity));
-    }
-}
-
-/// contrast curve on cloud coverage: logistic steepness (0 = off, default 50)
-/// and the coverage it is centred on (default 0.1).
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/cloudsharp")]
-struct CloudSharpConsoleCommand {
-    sharpness: f32,
-    mid: Option<f32>,
-}
-
-fn cloud_sharp_console_command(
-    mut input: ConsoleCommand<CloudSharpConsoleCommand>,
-    mut cloud: ResMut<CloudCover>,
-) {
-    if let Some(Ok(command)) = input.take() {
-        cloud.sharpness = command.sharpness;
-        if let Some(mid) = command.mid {
-            cloud.sharp_mid = mid;
-        }
-        input.reply_ok(format!(
-            "cloud sharpness {}, mid {}",
-            cloud.sharpness, cloud.sharp_mid
-        ));
-    }
+    let delta = delta_secs * cloud.speed;
+    sky.time += delta;
+    sky.cloud_opacity = scene_opacity.unwrap_or(1.0) * cloud.cover;
+    // whole turns are dropped, so the scroll stays exact however long it runs
+    sky.cloud_scroll = (sky.cloud_scroll + cloud_scroll_rates(scene_speed) * delta).fract_gl();
 }
 
 // --- environment grading commands ---
@@ -965,16 +836,39 @@ fn bloom_console_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{next_shadow_bias, shader_cover, user_cover};
+    use super::{advance_sky_clouds, next_shadow_bias, CloudCover};
+    use crate::stylized_sky::StylizedSky;
 
     #[test]
     fn cloud_cover_zero_is_a_cloudless_shader_cover() {
-        assert_eq!(shader_cover(0.0), 0.0);
-        assert_eq!(user_cover(0.0), 0.0);
-        // the default look, 0.35, keeps its shader value and reads back
-        assert!((shader_cover(0.35) - 0.375).abs() < 1e-6);
-        assert!((user_cover(0.375) - 0.35).abs() < 1e-6);
-        assert!((shader_cover(1.0) - 0.7).abs() < 1e-6);
+        // `/cloud 0 0`: no strip is drawn and nothing in the sky moves
+        let cloud = CloudCover {
+            cover: 0.0,
+            speed: 0.0,
+        };
+        let mut sky = StylizedSky::default();
+        advance_sky_clouds(&mut sky, Some(0.8), Some(1.0), &cloud, 0.5);
+        let (scroll, time) = (sky.cloud_scroll, sky.time);
+        advance_sky_clouds(&mut sky, Some(0.8), Some(1.0), &cloud, 0.5);
+        assert_eq!(sky.cloud_opacity, 0.0);
+        assert_eq!(sky.cloud_scroll, scroll);
+        assert_eq!(sky.time, time);
+    }
+
+    #[test]
+    fn cloud_cover_multiplies_the_scene_opacity_and_speed_scales_the_motion() {
+        let mut fast = StylizedSky::default();
+        let cloud = CloudCover {
+            cover: 0.5,
+            speed: 2.0,
+        };
+        advance_sky_clouds(&mut fast, Some(0.8), None, &cloud, 0.1);
+        assert!((fast.cloud_opacity - 0.4).abs() < 1e-6);
+        assert!((fast.time - 0.2).abs() < 1e-6);
+        let mut normal = StylizedSky::default();
+        advance_sky_clouds(&mut normal, None, None, &CloudCover::default(), 0.2);
+        assert_eq!(normal.cloud_opacity, 1.0);
+        assert!((normal.cloud_scroll - fast.cloud_scroll).length() < 1e-6);
     }
 
     #[test]

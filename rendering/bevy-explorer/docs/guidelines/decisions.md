@@ -50,26 +50,41 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   ambient keys are interpolated linearly; Unity's curve tangents are not carried.
 - **The sky below the horizon is the horizon colour.** The sky cube is Unity's lookup by day
   phase and elevation (`stylized_sky.wgsl`), and as in Unity the elevation clamps at the
-  horizon, so every direction under it holds the horizon colour; the cube does not fade to
-  black there. A scene's authored sky colours blend over that colour, not over black. The
-  reflection map is unaffected: it reads directions under the horizon from their mirror image
-  above it unless a scene authors a nadir. One difference from Unity: the horizon noise is
-  sampled at its full resolution, because the cube is drawn by a compute shader, which has no
-  screen derivatives to choose a mip from.
-- **A scene's cloud values drive the three cloud strips.** The sky's clouds are Unity's three
-  strips (`CloudsV2.hlsl`), each with its own speed in the preset. A scene's `PBSkybox` cloud
-  speed, in radians per second around the sky, replaces all three: one speed turns every strip
-  together, backwards when negative, and the strips carry on from where they were. Its cloud
-  opacity scales every strip, and its cloud colour is the lit colour. The shadowed colour is
-  that colour times one number: the luminance (Rec. 709) of the preset's shadow over that of
-  its lit colour at that phase, at most 1. The strips keep the preset's contrast and the
-  authored hue, and a shadow is never brighter than the lit colour; the preset's own shadow
-  tint (blue at sunrise) is not carried over.
-  Unity's environment profile at `0a8bafca9e62ced7f34ac182158b11edd0c842a4` writes the three
+  horizon, so the sky holds the horizon colour from a few degrees below the horizon down; the
+  horizon noise can lift directions just under it (direction y above about -0.1), as in Unity.
+  The cube does not fade to black there. A scene's authored sky colours blend over that colour,
+  not over black. The reflection map is unaffected: it reads directions under the horizon from
+  their mirror image above it unless a scene authors a nadir. One difference from Unity: the
+  horizon noise is sampled at its full resolution, because the cube is drawn by a compute
+  shader, which has no screen derivatives to choose a mip from.
+- **The stylized sky is the sky for every scene, `PBSkybox` ones included.** Unity switches a
+  sky that a scene controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look; here the
+  scene's values override the StylizedV1 lookup instead, and a scene with none sees the preset.
+  Each `PBSkybox` field maps as follows:
+  - `zenith`, `horizon`, `nadir`, `rim` replace the lookup's colour in their band, with
+    pole, horizon and rim weights; the rim follows the horizon when unset, and an authored nadir
+    colours the lower sky.
+  - `clouds.color` is the lit colour of the three cloud strips. The shadowed colour is that
+    colour times one number: the luminance (Rec. 709) of the preset's shadow over that of its
+    lit colour at that phase, at most 1. The strips keep the preset's contrast and the authored
+    hue, and a shadow is never brighter than the lit colour; the preset's own shadow tint
+    (blue at sunrise) is not carried over.
+  - `clouds.opacity` scales every strip.
+  - `clouds.speed`, in radians per second around the sky, replaces the three preset speeds:
+    one speed turns every strip together, backwards when negative, and the strips carry on from
+    where they were.
+  - `stars.brightness` scales the stars (see "Stars are added over the sky").
+  - `PBSun.visible = false` hides the sun and the moon; the stars stay.
+  - `skybox_texture` shows the panorama instead, with no clouds or stars.
+
+  Unity's environment profile at `0a8bafca9e62ced7f34ac182158b11edd0c842a4` writes the cloud
   values to the old cloud cubemap's material, which the strips do not read. The strips are
-  sampled at their full resolution, for the reason the horizon noise is; a strip texel is
-  about the size of a cube texel, so there is little to filter. The growth flow the preset switches off
-  is not ported.
+  fixed art sampled at their full resolution, for the reason the horizon noise is; a strip texel
+  is about the size of a cube texel, so there is little to filter. The growth flow the preset
+  switches off is not ported. `/cloud <cover> [speed]` is the user's own setting on top: cover
+  multiplies every strip's opacity (the scene's opacity times it), speed scales the strips'
+  scroll and the horizon noise's drift, so `/cloud 0 0` clears the strips and freezes the sky's
+  motion. A scene's values still apply while it is active; the star twinkle ignores the speed.
 - **A scene's sun direction draws the sun's whole disc.** Unity switches a sky that a scene
   controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look, which computes no celestial
   path. Here a scene-controlled sky stays on StylizedV1. A scene that fixes the sun's direction

@@ -260,7 +260,7 @@ InWorld spec `smart-wearables` previews ([scenes/README.md](scenes/README.md)).
 960x540 window, turns the nametags off and holds the landscape's trees still (`/nametags false`:
 the scenes hide avatars, not the nametag over the hidden guest, whose name changes every run;
 `/tree_wind false`: the trees and bushes sway in the wind, so no two frames of them agree),
-clears the sky (`/cloud 0 0`: the clouds drift from boot, seeded by the day of the month), turns
+clears the sky (`/cloud 0 0`: the cloud strips are fixed art that scrolls from boot and the horizon noise drifts, so cover 0 clears the strips and speed 0 freezes all sky motion), turns
 the empty parcels' grass off for the session (`/session_graphics grass off`: its stacked shells
 are not drawn in a fixed order, so its pixels move with each bevy pin), teleports to each scene, waits for its entities and its settle time, and compares the engine's frame (`/screenshot`, the canvas without the HUD) with `references/<id>.png`: a pixel
 differs when any RGB channel differs by more than 8, and the scene passes when at most 0.3% of the

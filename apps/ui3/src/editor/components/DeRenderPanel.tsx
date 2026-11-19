@@ -24,11 +24,7 @@ interface RenderState {
   fog: boolean;
   timeOfDay: number;
   cloudCover: number;
-  cloudDensity: number;
-  cloudShadow: number;
-  cloudScale: number;
-  cloudSteps: number;
-  cloudLacunarity: number;
+  cloudSpeed: number;
   dofEnabled: boolean;
   dofFocalExtra: number;
   dofSensorHeight: number;
@@ -52,12 +48,8 @@ const RENDER_DEFAULTS: RenderState = {
   shadows: true,
   fog: true,
   timeOfDay: 12,
-  cloudCover: 0.35,
-  cloudDensity: 0.8,
-  cloudShadow: 0.05,
-  cloudScale: 1.5,
-  cloudSteps: 44,
-  cloudLacunarity: 2,
+  cloudCover: 1,
+  cloudSpeed: 1,
   dofEnabled: true,
   dofFocalExtra: 50,
   dofSensorHeight: 0.06,
@@ -91,17 +83,8 @@ function commandFor(key: keyof RenderState, s: RenderState): string {
     case "timeOfDay":
       return `/time ${round2(s.timeOfDay)} 0`;
     case "cloudCover":
-      return `/cloud ${round2(s.cloudCover)}`;
-    case "cloudDensity":
-      return `/clouddensity ${round2(s.cloudDensity)}`;
-    case "cloudShadow":
-      return `/cloudshadow ${round2(s.cloudShadow)}`;
-    case "cloudScale":
-      return `/cloudscale ${round2(s.cloudScale)}`;
-    case "cloudSteps":
-      return `/cloudsteps ${Math.round(s.cloudSteps)}`;
-    case "cloudLacunarity":
-      return `/cloudlacunarity ${round2(s.cloudLacunarity)}`;
+    case "cloudSpeed":
+      return `/cloud ${round2(s.cloudCover)} ${round2(s.cloudSpeed)}`;
     case "dofEnabled":
     case "dofFocalExtra":
     case "dofSensorHeight":
@@ -133,11 +116,7 @@ const ORDERED_KEYS: Array<keyof RenderState> = [
   "fog",
   "timeOfDay",
   "cloudCover",
-  "cloudDensity",
-  "cloudShadow",
-  "cloudScale",
-  "cloudSteps",
-  "cloudLacunarity",
+  "cloudSpeed",
   "dofEnabled",
   "grassLayers",
 ];
@@ -228,11 +207,7 @@ export default function DeRenderPanel({
         }
         const cloud = (data.cloud ?? {}) as Record<string, unknown>;
         if (num(cloud.cover)) patch.cloudCover = cloud.cover;
-        if (num(cloud.density_cap)) patch.cloudDensity = cloud.density_cap;
-        if (num(cloud.shadow)) patch.cloudShadow = cloud.shadow;
-        if (num(cloud.scale)) patch.cloudScale = cloud.scale;
-        if (num(cloud.steps)) patch.cloudSteps = cloud.steps;
-        if (num(cloud.lacunarity)) patch.cloudLacunarity = cloud.lacunarity;
+        if (num(cloud.speed)) patch.cloudSpeed = cloud.speed;
         const rawDof = data.dof;
         if (rawDof === null) {
           patch.dofEnabled = false;
@@ -346,18 +321,7 @@ export default function DeRenderPanel({
 
       <div className="erp-section">Clouds</div>
       <SliderRow label="Cover" value={s.cloudCover} min={0} max={1} step={0.01} onChange={(v) => set("cloudCover", v)} />
-      <SliderRow label="Density" value={s.cloudDensity} min={0} max={2} step={0.05} onChange={(v) => set("cloudDensity", v)} />
-      <SliderRow label="Shadow" value={s.cloudShadow} min={0} max={1} step={0.01} onChange={(v) => set("cloudShadow", v)} />
-      <SliderRow label="Scale" value={s.cloudScale} min={0.25} max={4} step={0.05} onChange={(v) => set("cloudScale", v)} />
-      <SliderRow label="Steps" value={s.cloudSteps} min={1} max={128} step={1} onChange={(v) => set("cloudSteps", v)} />
-      <SliderRow
-        label="Lacunarity"
-        value={s.cloudLacunarity}
-        min={1}
-        max={4}
-        step={0.05}
-        onChange={(v) => set("cloudLacunarity", v)}
-      />
+      <SliderRow label="Speed" value={s.cloudSpeed} min={0} max={4} step={0.05} onChange={(v) => set("cloudSpeed", v)} />
 
       <div className="erp-section">Depth of field</div>
       <div className="erp-checks">
