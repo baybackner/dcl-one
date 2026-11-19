@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod atmosphere_params;
 mod coast;
 mod day_night;
@@ -35,7 +37,7 @@ use common::{
     sets::SetupSets,
     structs::{
         sun_cascades, AppConfig, DofConfig, FogSetting, PrimaryCamera, PrimaryCameraRes,
-        PrimaryUser, SceneGlobalLight, TimeOfDay, AMBIENT_BRIGHTNESS_DEFAULT,
+        PrimaryUser, SceneGlobalLight, StageLight, TimeOfDay, AMBIENT_BRIGHTNESS_DEFAULT,
         PRIMARY_AVATAR_LIGHT_LAYER,
     },
 };
@@ -182,7 +184,6 @@ fn setup(
 
 static TRANSITION_TIME: f32 = 1.0;
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn apply_global_light(
     mut commands: Commands,
     setting: Res<AppConfig>,
@@ -465,7 +466,8 @@ struct ShadowConsoleCommand {
 
 fn shadow_console_command(
     mut input: ConsoleCommand<ShadowConsoleCommand>,
-    mut lights: Query<&mut DirectionalLight>,
+    // the lobby stage light follows the Shadows setting, not this switch
+    mut lights: Query<&mut DirectionalLight, Without<StageLight>>,
 ) {
     if let Some(Ok(command)) = input.take() {
         for mut light in lights.iter_mut() {

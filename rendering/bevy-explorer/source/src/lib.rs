@@ -2,6 +2,7 @@
 // the headless binary takes the same launch options
 pub mod automation;
 mod autopilot;
+mod client_window_focus;
 mod commands;
 mod debug_panel;
 mod deep_link;
@@ -10,6 +11,7 @@ mod gpu_memory;
 mod memory;
 #[cfg(test)]
 mod memory_tests;
+pub mod perf;
 #[cfg(target_arch = "wasm32")]
 mod web;
 pub mod world_state;
@@ -260,7 +262,7 @@ pub struct DecentralandArguments {
     /// `--features inspect`
     #[arg(long, value_name = "scene_hash", help_heading = DEBUG)]
     pub inspect: Option<String>,
-    /// Target fps (default 60; overridden by the refresh rate when vsync is on). Also `/fps`
+    /// Target fps (default 60; 999 is Max; with vsync on, capped at the refresh rate). Also `/fps`
     #[arg(long = "fps", value_name = "n", help_heading = SETTINGS)]
     pub fps_target: Option<usize>,
     /// Run the portable/startup scenes in preview mode
@@ -276,7 +278,7 @@ pub struct DecentralandArguments {
     /// `/allowed/failures`
     #[arg(long = "test_scenes", value_name = "x,y;x,y", help_heading = DEBUG)]
     pub test_scenes: Option<TestScenes>,
-    /// Vsync (default off)
+    /// VSync (default on): caps the frame rate at the monitor's refresh rate, `--fps` still applies
     #[arg(long, value_name = "true|false", help_heading = SETTINGS)]
     pub vsync: Option<bool>,
     /// Scene load distance in meters (default 100). Also `/scene_distance`
@@ -776,6 +778,21 @@ impl DecentralandApp {
         // clients; after every plugin that adds a render-graph node, which its brackets enclose
         // (the first render frame warns, under `gpu_time`, about any node they do not)
         app.add_plugins(GpuTimePlugin);
+
+        // what the explorer measures about itself: the sampler, the frame-time breakdown and their
+        // debug panel section; with the `performance-profiler` feature, the scope profiler, Bevy's
+        // per-pass render timings (not in a `tracy` build, whose GPU context they would double)
+        // and its system information on Windows and Linux
+        app.add_plugins(client_window_focus::ClientWindowFocusPlugin);
+        app.add_plugins(perf::PerformanceMonitoringPlugin);
+        #[cfg(all(
+            feature = "performance-profiler",
+            not(feature = "tracy"),
+            not(target_arch = "wasm32")
+        ))]
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+        #[cfg(all(feature = "performance-profiler", any(windows, target_os = "linux")))]
+        app.add_plugins(bevy::diagnostic::SystemInformationDiagnosticsPlugin);
 
         // Systems
         app.configure_sets(Startup, SetupSets::Init.before(SetupSets::Main));

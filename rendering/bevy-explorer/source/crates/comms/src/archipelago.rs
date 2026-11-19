@@ -199,7 +199,6 @@ fn island_connected(
     health.get(island).is_ok_and(ConnectionHealth::is_connected)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn manage_islands(
     mut commands: Commands,
     mut manager: AdapterManager,
@@ -319,7 +318,6 @@ fn manage_islands(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn settle_island(
     mut commands: Commands,
     mut owners: Query<(Entity, &ArchipelagoTransport, &mut IslandAssignment)>,
@@ -436,7 +434,6 @@ fn refresh_island(
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn connect_websocket(
     mut commands: Commands,
     mut new_websockets: Query<
@@ -500,6 +497,16 @@ fn reconnect_websocket(
     for (entity, mut transport, mut connection, mut recovery, health, refreshable) in
         &mut websockets
     {
+        if recovery.failure == Some(FailureKind::IdentityConflict) {
+            // Ended while open, for another device of this wallet (Pulse's `DuplicateSession`):
+            // dropping the task closes the socket, and the conflict keeps it from dialing again.
+            health.disconnected();
+            transport.generation = transport.generation.wrapping_add(1);
+            commands
+                .entity(entity)
+                .try_remove::<ArchipelagoConnection>();
+            continue;
+        }
         if health.is_connected() && !connection.authenticated {
             connection.authenticated = true;
             recovery.failure = None;
@@ -724,8 +731,10 @@ async fn handshake_reply(
             already_connected,
             ..
         }) => {
-            // Also set for this device's own stale socket, which sign-in replaces; a real
-            // conflict arrives as Kicked(KrNewSession).
+            // Set for any open socket of this wallet. Sign-in replaces, and tells with
+            // Kicked(KrNewSession), only this device's own stale socket (same session key); the
+            // socket of another device stays open and hears nothing more, so Pulse's
+            // DuplicateSession is what ends that device's island.
             if already_connected {
                 debug!("archipelago reports an existing session for this wallet");
             }
@@ -1215,6 +1224,46 @@ mod tests {
         assert_eq!(
             kicked.downcast_ref::<AdmissionError>().unwrap().kind,
             FailureKind::IdentityConflict
+        );
+    }
+
+    /// Pulse's `DuplicateSession` puts the open socket in identity conflict: it closes, and is not
+    /// dialed again.
+    #[test]
+    fn an_identity_conflict_closes_the_open_socket_for_good() {
+        let mut app = island_app();
+        let mut wallet = Wallet::default();
+        wallet.finalize_as_guest_with_seed([7; 32]);
+        app.insert_resource(wallet);
+        let owner = owner(app.world_mut(), 7);
+        let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+        app.world_mut()
+            .get_mut::<ArchipelagoTransport>(owner)
+            .unwrap()
+            .receiver = Some(receiver);
+        let task = IoTaskPool::get_or_init(bevy::tasks::TaskPool::default)
+            .spawn(futures_lite::future::pending());
+        app.world_mut()
+            .entity_mut(owner)
+            .insert(ArchipelagoConnection {
+                task,
+                authenticated: true,
+            });
+        let health = app.world().get::<ConnectionHealth>(owner).unwrap().clone();
+        health.connected();
+        app.world_mut()
+            .get_mut::<RoomRecovery>(owner)
+            .unwrap()
+            .failure = Some(FailureKind::IdentityConflict);
+
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<ArchipelagoConnection>(owner).is_none());
+        assert!(!health.is_connected());
+        assert_eq!(
+            app.world().get::<RoomRecovery>(owner).unwrap().failure,
+            Some(FailureKind::IdentityConflict)
         );
     }
 

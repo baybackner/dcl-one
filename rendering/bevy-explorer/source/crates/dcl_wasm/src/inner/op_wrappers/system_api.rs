@@ -192,8 +192,25 @@ pub async fn op_accept_terms(state: &WorkerContext) -> Result<(), WasmError> {
 }
 
 #[wasm_bindgen]
+pub async fn op_get_world_access(
+    state: &WorkerContext,
+    world: String,
+) -> Result<JsValue, WasmError> {
+    serde_result!(dcl_js::system_api::op_get_world_access(state.rc(), world).await)
+}
+
+#[wasm_bindgen]
 pub async fn op_get_satellite_view(state: &WorkerContext) -> Result<JsValue, WasmError> {
     serde_result!(dcl_js::system_api::op_get_satellite_view(state.rc()).await)
+}
+
+#[wasm_bindgen]
+pub fn op_set_lobby_stage(state: &WorkerContext, stage: JsValue) -> Result<(), WasmError> {
+    // map_err rather than serde_parse!'s unwrap: a malformed stage throws in JS, as on Deno.
+    let stage = serde_wasm_bindgen::from_value(stage)
+        .map_err(|e| WasmError::from(anyhow::anyhow!("setLobbyStage: {e}")))?;
+    dcl_js::system_api::op_set_lobby_stage(state.rc(), stage);
+    Ok(())
 }
 
 #[wasm_bindgen]
@@ -459,6 +476,19 @@ pub async fn op_read_world_access_stream(
                 .unwrap()
         })
         .map_err(WasmError::from)
+}
+
+#[wasm_bindgen]
+pub async fn op_get_platform_ban_stream(state: &WorkerContext) -> u32 {
+    dcl_js::system_api::op_get_platform_ban_stream(state.rc()).await
+}
+
+#[wasm_bindgen]
+pub async fn op_read_platform_ban_stream(
+    state: &WorkerContext,
+    rid: u32,
+) -> Result<JsValue, WasmError> {
+    serde_result!(dcl_js::system_api::op_read_platform_ban_stream(state.rc(), rid).await)
 }
 
 #[wasm_bindgen]
@@ -878,6 +908,19 @@ pub async fn op_read_block_update_stream(
 }
 
 #[wasm_bindgen]
+pub async fn op_deploy_outfits(
+    state: &WorkerContext,
+    address: String,
+    outfits: JsValue,
+) -> Result<(), WasmError> {
+    let outfits = serde_wasm_bindgen::from_value(outfits)
+        .map_err(|e| WasmError::from(anyhow::anyhow!("deployOutfits: {e}")))?;
+    dcl_js::system_api::op_deploy_outfits(state.rc(), address, outfits)
+        .await
+        .map_err(WasmError::from)
+}
+
+#[wasm_bindgen]
 pub async fn op_get_portables_stream(state: &WorkerContext) -> u32 {
     dcl_js::system_api::op_get_portables_stream(state.rc()).await
 }
@@ -888,4 +931,17 @@ pub async fn op_read_portables_stream(
     rid: u32,
 ) -> Result<JsValue, WasmError> {
     serde_result!(dcl_js::system_api::op_read_portables_stream(state.rc(), rid).await)
+}
+
+#[wasm_bindgen]
+pub async fn op_get_map_pins_stream(state: &WorkerContext) -> u32 {
+    dcl_js::system_api::op_get_map_pins_stream(state.rc()).await
+}
+
+#[wasm_bindgen]
+pub async fn op_read_map_pins_stream(
+    state: &WorkerContext,
+    rid: u32,
+) -> Result<JsValue, WasmError> {
+    serde_result!(dcl_js::system_api::op_read_map_pins_stream(state.rc(), rid).await)
 }

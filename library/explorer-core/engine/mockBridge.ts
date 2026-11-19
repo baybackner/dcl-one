@@ -42,7 +42,7 @@ import { mockEventList, mockEventPlaces, setMockReminder } from './mockEvents'
 import type { Color3, PortableInfo, PortableState } from './generated/index'
 import { GENESIS_SATELLITE_VIEW } from '../features/map/atlas'
 import { fixMapPublicReads } from '../features/map/mapApi'
-import { MOCK_NEARBY_PLAYERS, MOCK_PEERS, MOCK_POIS, mockMapReply } from './mockMap'
+import { MOCK_MAP_PINS, MOCK_NEARBY_PLAYERS, MOCK_PEERS, MOCK_POIS, mockMapReply } from './mockMap'
 import { DEFAULT_REALM } from '@hud-host'
 
 // The empty account's events are the reference client's calendar page: five days of seven cards,
@@ -332,9 +332,9 @@ const mockWearables: Wearable[] = BASE.map((b, i) => {
 const BASE_MALE = 'urn:decentraland:off-chain:base-avatars:BaseMale'
 const mockOutfit = (urns: string[]): Outfit => ({
   bodyShape: BASE_MALE,
-  eyes: { color: { r: 0.37, g: 0.22, b: 0.19 } },
-  hair: { color: { r: 0.6, g: 0.36, b: 0.2 } },
-  skin: { color: { r: 0.8, g: 0.6, b: 0.47 } },
+  eyes: { color: { r: 0.37, g: 0.22, b: 0.19, a: 1 } },
+  hair: { color: { r: 0.6, g: 0.36, b: 0.2, a: 1 } },
+  skin: { color: { r: 0.8, g: 0.6, b: 0.47, a: 1 } },
   wearables: urns,
   forceRender: []
 })
@@ -477,7 +477,7 @@ const defaultBindings = (): BindingEntry[] => [
   [{ System: 'PhotoTiltLeft' }, ['KeyQ', 'Gamepad DPadLeft']],
   [{ System: 'PhotoTiltRight' }, ['KeyE', 'Gamepad DPadRight']],
   [{ System: 'PointAt' }, ['Mouse Middle', 'KeyQ']],
-  [{ System: 'Microphone' }, ['KeyV']],
+  [{ System: 'Microphone' }, ['KeyT']],
   [{ System: 'Map' }, ['KeyM', 'Tab']],
   [{ System: 'Chat' }, ['Enter', 'NumpadEnter']],
   [{ System: 'CameraUp' }, ['ArrowUp']],
@@ -502,7 +502,7 @@ const defaultBindings = (): BindingEntry[] => [
   [{ System: 'Gallery' }, ['KeyG']],
   [{ System: 'Settings' }, ['KeyP']],
   [{ System: 'Friends' }, ['KeyL']],
-  [{ System: 'ChatPanel' }, ['KeyT']]
+  [{ System: 'ChatPanel' }, []]
 ]
 
 // Saved profile edits, in order. Applied over the mock's stock passport so an edit made in ?mock=1
@@ -1076,6 +1076,8 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
       for (let done = 0; done <= total; done++) setTimeout(() => reply(at(done, 'running')), 3000 + done * 500)
       setTimeout(() => reply(at(total, 'ready')), 3000 + (total + 1) * 500)
     }
+    // ?mockpins=1 → two quest pins on both maps, one with a broken icon url to show the fallback.
+    if (new URLSearchParams(location.search).get('mockpins') === '1') reply({ kind: 'mapPins', pins: MOCK_MAP_PINS })
     // ?mockportables=1 → the portables list, so the rail button and its popover are exercisable.
     if (new URLSearchParams(location.search).get('mockportables') === '1') sendPortables()
     // ?perm=1 → fire a sample scene permission prompt so the dialog is exercisable in the mock, and
@@ -1446,6 +1448,14 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
     if (msg.kind === 'setEventAttending') {
       setMockReminder(msg.eventId, msg.attending)
       setTimeout(() => reply({ kind: 'eventAttending', eventId: msg.eventId, attending: msg.attending }), 300)
+      return
+    }
+    if (msg.kind === 'getPlace') {
+      setTimeout(() => reply({ kind: 'place', requestId: msg.requestId, place: { id: msg.id, user_like: false, user_dislike: false, user_favorite: false, user_visits: 1234, updated_at: new Date().toISOString() } }), 300)
+      return
+    }
+    if (msg.kind === 'getWorldAccess') {
+      setTimeout(() => reply({ kind: 'worldAccess', requestId: msg.requestId, access: 'allowed' }), 300)
       return
     }
     if (msg.kind === 'getEventPlaces') {
@@ -1835,6 +1845,7 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
       })
       return
     }
+    if (msg.kind === 'quit') return
     if (msg.kind === 'deleteGalleryPhoto') {
       const i = mockGallery.findIndex((p) => p.id === msg.id)
       if (i >= 0) mockGallery.splice(i, 1)
