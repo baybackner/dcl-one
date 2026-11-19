@@ -7,7 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEventsCopy } from "@dcl/one-ui/apps/sites/events/locale";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import SitesLayout from "@/features/components/chrome/SitesLayout";
+import SitesLayout from "../../components/chrome/SitesLayout";
 import { useAuth } from "@/data/lib/auth/context";
 import { getIdentity } from "@/data/lib/auth/session";
 import type { AuthIdentity } from "@/data/lib/auth/types";

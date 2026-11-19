@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import banner from "@dcl/one-ui/apps/sites/assets/creator-hub-banner.png";
 import logo from "./creator-hub-download-logo.svg?url";
-import SitesLayout from "@/features/components/chrome/SitesLayout";
+import SitesLayout from "../components/chrome/SitesLayout";
 
 import type { DownloadOption, OsKey } from "@/data/lib/download/creator-hub.server";
 import { detectMacChip, isTouchMac, preferChip } from "@/data/lib/download/mac-chip";
