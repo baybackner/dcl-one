@@ -653,7 +653,7 @@ fn save_and_zip_callback<T>(
 }
 
 /// Writes `path` into the archive at `output_path` as `target_file`, keeping the archive's other
-/// files. The caller holds the archive's lock.
+/// files. Takes no lock on the archive.
 fn add_to_zip(
     path: &std::path::Path,
     output_path: &std::path::Path,
