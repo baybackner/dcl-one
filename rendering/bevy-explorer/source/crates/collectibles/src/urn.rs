@@ -200,8 +200,8 @@ impl<T: CollectibleType> CollectibleUrn<T> {
     }
 
     /// Borrows `urn` without allocating. Panics, which is a compile error in a const context,
-    /// unless `urn` is `UNKNOWN_SOURCE_COLLECTION`, `:`, then a non-empty name without `:`,
-    /// uppercase ASCII or a `b64-` prefix.
+    /// unless `urn` is `UNKNOWN_SOURCE_COLLECTION`, `:`, then a non-empty name without `:` or
+    /// uppercase ASCII.
     pub(crate) const fn unknown_source(urn: &'static str) -> Self {
         let prefix = UNKNOWN_SOURCE_COLLECTION.as_bytes();
         let bytes = urn.as_bytes();
@@ -221,14 +221,6 @@ impl<T: CollectibleType> CollectibleUrn<T> {
         assert!(
             head[prefix.len()] == b':',
             "built-in urn is not under the unknown-source collection"
-        );
-        assert!(
-            !(name.len() >= 4
-                && name[0] == b'b'
-                && name[1] == b'6'
-                && name[2] == b'4'
-                && name[3] == b'-'),
-            "built-in urn name starts with b64-"
         );
         let mut i = 0;
         while i < name.len() {
