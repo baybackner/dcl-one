@@ -645,7 +645,7 @@ export function Chat({
   onTeleport?: (x: number, y: number) => void
   /** A world name (e.g. boedo.dcl.eth) in a message was clicked → prompt to jump there. */
   onVisitWorld?: (name: string) => void
-  /** A URL in a message was clicked; unset, the link opens in a new tab. */
+  /** A URL in a message was clicked; unset, the link is a plain anchor. */
   onOpenUrl?: (url: string) => void
   /** The blocked-input "DM settings" link. */
   onOpenSettings?: () => void

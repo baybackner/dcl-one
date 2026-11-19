@@ -24,7 +24,7 @@ export function MessageText({
   onLocation: (x: number, y: number) => void
   /** A world name (e.g. boedo.dcl.eth) was clicked → prompt to jump to that realm. */
   onWorld?: (name: string) => void
-  /** A URL was clicked; when set, the link opens only through it. */
+  /** A URL was activated; when set, the link opens only through it. */
   onUrl?: (url: string) => void
 }): React.JSX.Element {
   const index = buildNameIndex(members)
@@ -32,21 +32,35 @@ export function MessageText({
     <>
       {parseMessage(text).map((t, i) => {
         if (t.type === 'url') {
+          if (!onUrl) {
+            return (
+              <a key={i} className={styles.url} href={t.value} target="_blank" rel="noreferrer noopener">
+                {t.value}
+              </a>
+            )
+          }
+          // No href: the browser's own ways to open a link (context menu, drag) would skip onUrl.
+          const open = (): void => onUrl(t.value)
           return (
             <a
               key={i}
               className={styles.url}
-              href={t.value}
-              target="_blank"
-              rel="noreferrer noopener"
-              onClick={
-                onUrl &&
-                ((e) => {
-                  e.preventDefault()
-                  onUrl(t.value)
-                })
-              }
-              onAuxClick={onUrl && ((e) => e.preventDefault())}
+              role="link"
+              tabIndex={0}
+              onClick={(e) => {
+                e.preventDefault()
+                open()
+              }}
+              onAuxClick={(e) => {
+                if (e.button !== 1) return
+                e.preventDefault()
+                open()
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                open()
+              }}
             >
               {t.value}
             </a>

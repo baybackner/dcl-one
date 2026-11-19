@@ -521,7 +521,7 @@ function Hud({ integratedGpu, host }: { integratedGpu: GpuAdapterInfo | null; ho
             chat={session.chat}
             hidden={session.friends.open || !chrome}
             me={session.profile.data}
-            onTeleport={(x, y) => void confirmTeleport(x, y, session.map.teleport)}
+            onTeleport={(x, y) => void confirmTeleport(x, y, session.minimap.linkRealm, session.map.teleport)}
             onVisitWorld={(name) => openWorldVisit({ worldName: name, onConfirm: () => session.map.changeRealm(name) })}
             onOpenUrl={(url) => void confirmOpenLink(url, session.openExternalUrl)}
             onOpenSettings={session.settings.toggle}

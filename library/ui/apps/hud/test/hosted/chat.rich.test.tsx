@@ -54,11 +54,15 @@ describe('chat rich messages', () => {
     expect(link).toHaveAttribute('target', '_blank')
   })
 
-  it('with onOpenUrl, a URL click goes through it instead of navigating', () => {
+  it('with onOpenUrl, click, middle-click and Enter on a URL go through it', () => {
     const onOpenUrl = vi.fn()
     renderChat({ messages: [line('visit https://decentraland.org now')], onOpenUrl })
-    const notPrevented = fireEvent.click(screen.getByRole('link', { name: 'https://decentraland.org' }))
-    expect(notPrevented).toBe(false)
+    const link = screen.getByRole('link', { name: 'https://decentraland.org' })
+    expect(link).not.toHaveAttribute('href')
+    fireEvent.click(link)
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
+    fireEvent.keyDown(link, { key: 'Enter' })
+    expect(onOpenUrl).toHaveBeenCalledTimes(3)
     expect(onOpenUrl).toHaveBeenCalledWith('https://decentraland.org')
   })
 
