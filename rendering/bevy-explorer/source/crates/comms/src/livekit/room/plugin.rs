@@ -82,9 +82,6 @@ fn initiate_room_connection(
     livekit_runtime: LivekitRuntimeRes,
     connection_availability: Res<State<ConnectionAvailability>>,
 ) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
     let entity = trigger.target();
     if paused.contains(entity) {
         debug!("Can't connect because the room is paused.");
@@ -100,6 +97,12 @@ fn initiate_room_connection(
         commands.entity(trigger.target()).try_remove::<Connecting>();
         return;
     }
+
+    let Some(livekit_runtime) = livekit_runtime else {
+        recovery.failure = Some(FailureKind::Invalid);
+        commands.entity(entity).try_remove::<Connecting>();
+        return;
+    };
 
     let remote_address = &livekit_transport.address;
 

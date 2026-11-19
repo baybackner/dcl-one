@@ -11,10 +11,7 @@ use std::{
 
 use bevy::{
     app::AppExit,
-    log::{
-        tracing_subscriber::{Layer, Registry},
-        LogPlugin,
-    },
+    log::{tracing_subscriber::Layer, LogPlugin},
     prelude::*,
 };
 use clap::Parser;
@@ -70,10 +67,7 @@ fn main() {
                     .with_writer(non_blocking)
                     .with_ansi(false)
             });
-            let layer = <_ as Layer<Registry>>::and_then(
-                session_log_layer,
-                PerfLogLayer::new(&BENCHMARK_LOG),
-            );
+            let layer = PerfLogLayer::new(&BENCHMARK_LOG).and_then(session_log_layer);
             #[cfg(feature = "performance-profiler")]
             let layer =
                 layer.and_then(webgpu_build::perf::profiled_scopes::profiled_scopes_layer());

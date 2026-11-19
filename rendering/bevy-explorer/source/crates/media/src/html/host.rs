@@ -11,6 +11,7 @@ use bevy::{
     platform::collections::HashMap,
 };
 use common::util::ReportErr;
+use dcl_component::proto_components::sdk::components::VideoState;
 use futures_channel::mpsc::{UnboundedSender, unbounded};
 use futures_lite::StreamExt;
 use js_sys::{Function, Reflect};
@@ -88,7 +89,14 @@ pub fn media_host_main(render_worker: Worker) {
                         render_worker.clone(),
                     ) {
                         Some(media) => insert(id, media),
-                        None => error!("media {id}: can't create its video element"),
+                        None => {
+                            error!("media {id}: can't create its video element");
+                            let _ = events_tx.unbounded_send(MediaEvent::State {
+                                id,
+                                state: VideoState::VsError,
+                                duration: f64::NAN,
+                            });
+                        }
                     }
                 }
                 HostCommand::Command(id, command) => {

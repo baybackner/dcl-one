@@ -661,15 +661,15 @@ pub fn setup_primary_profile(
             *last_announce = time.elapsed_secs_f64();
 
             // send to event receivers
-            if let Some(user_id) = &profile.content.user_id {
-                senders.retain(|sender| {
+            senders.retain(|sender| {
+                if let Some(user_id) = &profile.content.user_id {
                     let _ = sender.send(format!(
                         "{{ \"ethAddress\": \"{}\", \"version\": \"{}\" }}",
                         user_id, profile.version
                     ));
-                    !sender.is_closed()
-                });
-            }
+                }
+                !sender.is_closed()
+            });
 
             // deploy to server
             if !current_profile.is_deployed && !current_profile.deploy_held {

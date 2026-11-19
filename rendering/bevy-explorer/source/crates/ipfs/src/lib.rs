@@ -612,7 +612,11 @@ impl Plugin for IpfsIoPlugin {
             // use app folder for unit tests
             Some(default_reader.root_path().join("cache"))
         } else {
-            project_directories().map(|dirs| dirs.data_local_dir().join("cache"))
+            let cache_root = project_directories().map(|dirs| dirs.data_local_dir().join("cache"));
+            if cache_root.is_none() {
+                error!("no data directory: the disk cache is off");
+            }
+            cache_root
         };
         #[cfg(target_arch = "wasm32")]
         let cache_root = None;

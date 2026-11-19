@@ -419,7 +419,9 @@ pub fn spawn_scene(
 
     let (main_sx, thread_rx) = tokio::sync::mpsc::unbounded_channel::<RendererResponse>();
 
-    let ipc_out = NEW_SCENE_SENDER.read().unwrap();
+    let ipc_out = NEW_SCENE_SENDER
+        .read()
+        .unwrap_or_else(PoisonError::into_inner);
     let Some(ipc_out) = ipc_out.as_ref() else {
         error!("scene {id:?} not started: ipc runtime is not initialized");
         return (main_sx, None);

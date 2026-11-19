@@ -731,7 +731,8 @@ pub(crate) fn initialize_scene(
             _ => panic!("bad state"),
         };
         let Some(global_updates) = global_updates else {
-            fail("global updates were already taken");
+            error!("{root:?} failed to initialize scene: global updates were already taken");
+            commands.entity(root).try_insert(SceneLoading::Failed);
             continue;
         };
 
