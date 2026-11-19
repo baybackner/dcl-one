@@ -5,6 +5,7 @@ import {
   type ChromeNavigate
 } from '../../../components/chrome/chrome-nav'
 import wordmark from '../assets/dcl_name.svg'
+import { sitesFooterCopy, type SitesFooterCopy } from './footer-copy'
 import {
   SITES_LANGUAGES,
   SitesLocaleContext,
@@ -14,72 +15,50 @@ import {
 } from './sites-locale'
 import styles from './SitesFooter.module.css'
 
-type FooterLink = { label: string; href: string }
-
-function footerColumns(docsUrl: (path?: string) => string, copy?: FooterCopy) {
+function footerColumns(docsUrl: (path?: string) => string, copy: SitesFooterCopy) {
   return [
     {
       id: 'getting-started',
-      title: copy?.getting_started.title ?? 'Getting Started',
+      title: copy.getting_started.title,
       links: [
         {
-          label: copy?.getting_started.what_is ?? 'About Decentraland',
+          label: copy.getting_started.what_is,
           href: docsUrl('player/introduction/about-decentraland')
         },
-        { label: copy?.getting_started.download ?? 'Download Decentraland', href: '/download' },
+        { label: copy.getting_started.download, href: '/download' },
         {
-          label: copy?.getting_started.system_requirements ?? 'System Requirements',
+          label: copy.getting_started.system_requirements,
           href: docsUrl('player/decentraland-in-world/settings-and-performance')
         },
         {
-          label: copy?.getting_started.faqs ?? 'FAQs',
+          label: copy.getting_started.faqs,
           href: docsUrl('player/faqs/decentraland-101')
         },
-        { label: copy?.getting_started.contact_support ?? 'Contact Support', href: '/help' }
+        { label: copy.getting_started.contact_support, href: '/help' }
       ]
     },
     {
       id: 'resources',
-      title: copy?.resources.title ?? 'Resources',
+      title: copy.resources.title,
       links: [
-        { label: copy?.resources.marketplace ?? 'Shop', href: '/shop' },
-        { label: copy?.resources.creator_hub ?? 'Creator Hub', href: '/create' },
-        { label: copy?.resources.docs ?? 'Docs', href: docsUrl() },
-        { label: copy?.resources.blog ?? 'Blog', href: '/blog' },
-        { label: copy?.resources.vote ?? 'Vote', href: 'https://decentraland.org/dao' }
+        { label: copy.resources.marketplace, href: '/shop' },
+        { label: copy.resources.creator_hub, href: '/create' },
+        { label: copy.resources.docs, href: docsUrl() },
+        { label: copy.resources.blog, href: '/blog' },
+        { label: copy.resources.vote, href: 'https://decentraland.org/dao' }
       ]
     }
   ]
 }
 
-const LEGAL: FooterLink[] = [
-  { label: 'Privacy Policy', href: '/privacy' },
-  { label: 'Terms of Use', href: '/terms' },
-  { label: 'Content Policy', href: '/content-policy' },
-  { label: 'Code of Ethics', href: '/ethics' }
-]
+const LEGAL = [
+  ['privacy', '/privacy'],
+  ['terms', '/terms'],
+  ['content', '/content-policy'],
+  ['ethics', '/ethics']
+] as const
 
-export type FooterCopy = {
-  newsletter: { title: string; placeholder: string; cta: string }
-  connect: string
-  menu: string
-  getting_started: {
-    title: string
-    what_is: string
-    download: string
-    system_requirements: string
-    faqs: string
-    contact_support: string
-  }
-  resources: {
-    title: string
-    marketplace: string
-    creator_hub: string
-    docs: string
-    blog: string
-    vote: string
-  }
-}
+export type FooterCopy = SitesFooterCopy
 
 const LANG_STORAGE_KEY = 'dcl:lang'
 
@@ -175,10 +154,10 @@ function footerLinkProps(href: string, go: ChromeNavigate | undefined) {
 }
 
 type NewsletterState =
-  { phase: 'idle' } | { phase: 'sending' } | { phase: 'ok' } | { phase: 'error'; message: string }
+  { phase: 'idle' } | { phase: 'sending' } | { phase: 'ok' } | { phase: 'error'; reason: 'invalidEmail' | 'failed' }
 
 export default function SitesFooter({
-  footerCopy,
+  footerCopy = sitesFooterCopy.en,
   docsUrl,
   onSubscribe
 }: {
@@ -194,7 +173,7 @@ export default function SitesFooter({
     e.preventDefault()
     const value = email.trim()
     if (!EMAIL_RE.test(value)) {
-      setNews({ phase: 'error', message: 'Enter a valid email address.' })
+      setNews({ phase: 'error', reason: 'invalidEmail' })
       return
     }
     setNews({ phase: 'sending' })
@@ -204,7 +183,7 @@ export default function SitesFooter({
         setEmail('')
       })
       .catch(() => {
-        setNews({ phase: 'error', message: 'Something went wrong. Please try again.' })
+        setNews({ phase: 'error', reason: 'failed' })
       })
   }
 
@@ -269,14 +248,14 @@ export default function SitesFooter({
           />
           <div className={styles.news}>
             <p className={styles.newstitle}>
-              {copy?.newsletter.title ?? 'Get the weekly highlights in your inbox'}
+              {copy.newsletter.title}
             </p>
             <form className={styles.newsform} onSubmit={submitNewsletter} noValidate>
               <input
                 className={styles.newsinput}
                 type="email"
-                placeholder={copy?.newsletter.placeholder ?? 'Enter Your Email'}
-                aria-label={copy?.newsletter.placeholder ?? 'Email'}
+                placeholder={copy.newsletter.placeholder}
+                aria-label={copy.newsletter.emailLabel}
                 value={email}
                 onChange={(e) => {
                   setEmail(e.target.value)
@@ -286,24 +265,24 @@ export default function SitesFooter({
               />
               <button type="submit" className={styles.newsbtn} disabled={news.phase === 'sending'}>
                 {news.phase === 'sending'
-                  ? 'Sending\u{2026}'
-                  : (copy?.newsletter.cta ?? 'Subscribe')}
+                  ? copy.newsletter.sending
+                  : copy.newsletter.cta}
               </button>
             </form>
             {news.phase === 'ok' && (
               <p className={`${styles.newsnote} ${styles.newsnoteOk}`} role="status">
-                Subscribed!
+                {copy.newsletter.subscribed}
               </p>
             )}
             {news.phase === 'error' && (
               <p className={`${styles.newsnote} ${styles.newsnoteError}`} role="alert">
-                {news.message}
+                {copy.newsletter[news.reason]}
               </p>
             )}
           </div>
           <Connect
             className={`${styles.connect} ${styles.connectDesktop}`}
-            label={copy?.connect ?? 'Connect'}
+            label={copy.connect}
           />
         </div>
 
@@ -321,7 +300,7 @@ export default function SitesFooter({
         </div>
 
         <div className={styles.footmenu}>
-          <p className={styles.footmenulabel}>{copy?.menu ?? 'Menu'}</p>
+          <p className={styles.footmenulabel}>{copy.menu}</p>
           {columns.map((col) => (
             <div key={col.id}>
               <button
@@ -349,7 +328,7 @@ export default function SitesFooter({
         </div>
         <Connect
           className={`${styles.connect} ${styles.connectMobile}`}
-          label={copy?.connect ?? 'Connect'}
+          label={copy.connect}
         />
       </div>
 
@@ -359,7 +338,7 @@ export default function SitesFooter({
             <button
               type="button"
               className={styles.lang}
-              aria-label={`Change language: ${lang.label}`}
+              aria-label={`${copy.language.change}: ${lang.label}`}
               aria-haspopup="listbox"
               aria-expanded={langOpen}
               onClick={() => setLangOpen((o) => !o)}
@@ -369,7 +348,7 @@ export default function SitesFooter({
               <FootChevron />
             </button>
             {langOpen && (
-              <div className={styles.langmenu} role="listbox" aria-label="Language">
+              <div className={styles.langmenu} role="listbox" aria-label={copy.language.label}>
                 {SITES_LANGUAGES.map((l) => (
                   <button
                     key={l.code}
@@ -387,9 +366,9 @@ export default function SitesFooter({
             )}
           </div>
           <div className={styles.legal}>
-            {LEGAL.map((l) => (
-              <a key={l.label} href={l.href} className={styles.legallink}>
-                {l.label}
+            {LEGAL.map(([key, href]) => (
+              <a key={key} href={href} className={styles.legallink}>
+                {copy.legal[key]}
               </a>
             ))}
           </div>

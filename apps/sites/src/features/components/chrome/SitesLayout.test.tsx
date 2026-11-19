@@ -13,6 +13,7 @@ import { sitesShopClient } from "@/data/lib/auth/shop-client";
 import SitesLayout from "./SitesLayout";
 
 vi.mock("@/data/lib/auth/shop-client", () => ({ sitesShopClient: vi.fn() }));
+vi.mock("@/data/lib/shop/marketplace-access", () => ({ useMarketplaceHere: () => false }));
 
 vi.hoisted(() => Object.assign(window, {
   __vite_plugin_react_preamble_installed__: true,

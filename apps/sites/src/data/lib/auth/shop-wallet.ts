@@ -6,7 +6,7 @@
 
 import type { AuthIdentity } from "@web-core/auth/identity";
 import type { ShellShopWallet } from "@ui/play/shell/shop/purchase";
-import type { WalletKind } from "@ui/shop/wallet/session";
+import type { WalletKind } from "@dcl/one-ui/apps/shop/session";
 
 import { signInKindFor, type SignInKind } from "./signin-kind";
 import { getThirdwebSession, type ThirdwebSession } from "./thirdweb/session";

@@ -3,7 +3,7 @@
 // every flag is off, so they come from this server's reading (/internal/dapps-flags). Read once per document: a page
 // the server rendered, or an earlier navigation, has already primed them.
 
-import { primeRemoteFlags, remoteFlagsPrimed } from "@ui/shop/discovery/lib/remoteFlags";
+import { primeRemoteFlags, remoteFlagsPrimed } from "@dcl/one-ui/apps/shop/remote-flags";
 
 const TIMEOUT_MS = 1_500;
 
