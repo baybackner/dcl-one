@@ -466,16 +466,54 @@ fn the_snapshot_reports_what_the_gate_holds() {
             held_emote: false,
             held_input: true,
             probes: 0,
-        }
-    );
-    gate.observe(stalled, settled(2));
-    gate.admit(Vec::new(), stalled);
-    assert_eq!(
-        gate.snapshot(stalled),
-        UplinkSnapshot {
-            unacknowledged_reliable: 1,
+            input_holds: 1,
             ..Default::default()
         }
+    );
+    let later = stalled + Duration::from_millis(300);
+    assert_eq!(
+        gate.snapshot(later).longest_input_hold,
+        Duration::from_millis(300)
+    );
+    gate.observe(later, settled(2));
+    gate.admit(Vec::new(), later);
+    assert_eq!(
+        gate.snapshot(later),
+        UplinkSnapshot {
+            unacknowledged_reliable: 1,
+            input_holds: 1,
+            input_held_for: Duration::from_millis(300),
+            longest_input_hold: Duration::from_millis(300),
+            ..Default::default()
+        }
+    );
+}
+
+/// Holds add up over the connection, and the longest is kept; the round trip and the spacing it
+/// sets are reported as observed.
+#[test]
+fn the_snapshot_counts_input_holds_and_reports_the_round_trip() {
+    let mut gate = UplinkGate::default();
+    let start = Instant::now();
+    let round_trip = Duration::from_millis(900);
+    let mut at = start;
+    for (mark, hold) in [(1, 200u64), (2, 50)] {
+        gate.observe(at, with_round_trip(in_flight(0, mark), round_trip));
+        at += STALL_AFTER;
+        assert!(gate.admit(vec![frame(FrameKind::Input, 1)], at).is_empty());
+        at += Duration::from_millis(hold);
+        gate.observe(at, with_round_trip(settled(mark + 1), round_trip));
+        assert_eq!(gate.admit(Vec::new(), at).len(), 1);
+    }
+
+    let snapshot = gate.snapshot(at);
+    assert_eq!(snapshot.input_holds, 2);
+    assert_eq!(snapshot.input_held_for, Duration::from_millis(250));
+    assert_eq!(snapshot.longest_input_hold, Duration::from_millis(200));
+    assert_eq!(snapshot.round_trip, round_trip);
+    assert_eq!(
+        snapshot.input_spacing,
+        (round_trip + STALL_AFTER) / INPUTS_PER_STALL_WINDOW
     );
 }
 

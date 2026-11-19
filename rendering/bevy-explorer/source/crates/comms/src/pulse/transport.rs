@@ -10,6 +10,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
@@ -183,7 +184,8 @@ pub struct PulseTransportConfig {
     pub cert_hash: Option<Vec<u8>>,
 }
 
-/// What the native driver's uplink gate holds back, as of its last pass, for the debug panel.
+/// What the native driver's uplink gate holds back, as of its last pass, for the debug panel and
+/// the Pulse state reply.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UplinkSnapshot {
     /// Reliable traffic has gone unacknowledged long enough that inputs are held.
@@ -192,9 +194,21 @@ pub struct UplinkSnapshot {
     pub unacknowledged_reliable: usize,
     pub held_teleport: bool,
     pub held_emote: bool,
+    /// The latest input waits for the uplink (only one ever waits). An input waiting only for its
+    /// spacing is not held.
     pub held_input: bool,
     /// Pings sent to probe the uplink.
     pub probes: u64,
+    /// ENet's smoothed round trip.
+    pub round_trip: Duration,
+    /// The least time between two inputs; zero below the round trip that paces them.
+    pub input_spacing: Duration,
+    /// Times an input was held since the connection came up, the one going on included.
+    pub input_holds: u64,
+    /// Their total length.
+    pub input_held_for: Duration,
+    /// The longest of them.
+    pub longest_input_hold: Duration,
 }
 
 /// The driver's latest [`UplinkSnapshot`]; `None` from a driver without a gate (WebTransport).

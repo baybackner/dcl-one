@@ -447,10 +447,15 @@ fn a_healthy_link_with_a_long_round_trip_never_holds_inputs() {
         let holds = sim.holds();
         let start = sim.passes.first().map_or(0, |pass| pass.at);
         let sent = sim.inputs_sent(start, start + 30_000);
+        let snapshot = sim
+            .gate
+            .snapshot(sim.base + Duration::from_millis(sim.time()));
         println!(
-            "healthy {round_trip} ms: {}, {:.1} inputs a second",
+            "healthy {round_trip} ms: {}, {:.1} inputs a second, round trip {:?}, spacing {:?}",
             describe(&holds, 30_000),
-            sent as f64 / 30.0
+            sent as f64 / 30.0,
+            snapshot.round_trip,
+            snapshot.input_spacing
         );
         if !holds.is_empty() {
             failures.push(round_trip);

@@ -56,6 +56,10 @@ impl Plugin for PulseDebugPlugin {
                     ),
                     ("Held (teleport / emote / input)", "uplink.held"),
                     ("Uplink probes sent", "uplink.probes"),
+                    ("Uplink round trip (ms)", "uplink.roundTripMs"),
+                    ("Input spacing (ms)", "uplink.inputSpacingMs"),
+                    ("Input holds", "uplink.inputHolds"),
+                    ("Longest input hold (ms)", "uplink.longestInputHoldMs"),
                 ],
                 actions: &[],
                 inputs: &inputs,
@@ -174,6 +178,11 @@ fn uplink_json(link: Option<Option<UplinkSnapshot>>) -> (serde_json::Value, Opti
                 "unacknowledgedReliable": snapshot.unacknowledged_reliable,
                 "held": [snapshot.held_teleport, snapshot.held_emote, snapshot.held_input],
                 "probes": snapshot.probes,
+                "roundTripMs": snapshot.round_trip.as_millis() as u64,
+                "inputSpacingMs": snapshot.input_spacing.as_millis() as u64,
+                "inputHolds": snapshot.input_holds,
+                "inputHeldMs": snapshot.input_held_for.as_millis() as u64,
+                "longestInputHoldMs": snapshot.longest_input_hold.as_millis() as u64,
             }),
             None,
         ),
@@ -216,6 +225,8 @@ fn pulse_connection(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -227,6 +238,11 @@ mod tests {
             held_emote: false,
             held_input: true,
             probes: 3,
+            round_trip: Duration::from_millis(820),
+            input_spacing: Duration::from_millis(177),
+            input_holds: 2,
+            input_held_for: Duration::from_millis(450),
+            longest_input_hold: Duration::from_millis(300),
         })));
 
         assert_eq!(
@@ -236,6 +252,11 @@ mod tests {
                 "unacknowledgedReliable": 8,
                 "held": [true, false, true],
                 "probes": 3,
+                "roundTripMs": 820,
+                "inputSpacingMs": 177,
+                "inputHolds": 2,
+                "inputHeldMs": 450,
+                "longestInputHoldMs": 300,
             })
         );
         assert_eq!(unavailable, None);

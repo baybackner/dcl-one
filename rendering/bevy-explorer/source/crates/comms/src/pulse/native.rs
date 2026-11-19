@@ -358,6 +358,10 @@ struct UplinkGate {
     input_sent_at: Option<Instant>,
     /// Since when an input has waited for the uplink, not for its spacing.
     input_held_since: Option<Instant>,
+    /// Holds of an input that have ended, their total and the longest.
+    input_holds: u64,
+    input_held_for: Duration,
+    longest_input_hold: Duration,
 }
 
 impl UplinkGate {
@@ -392,9 +396,10 @@ impl UplinkGate {
         due
     }
 
-    /// What the gate holds back at `now`, for the debug panel.
+    /// What the gate holds back at `now`, for the debug panel and the Pulse state reply.
     fn snapshot(&self, now: Instant) -> UplinkSnapshot {
         let holds = |kind| self.held.iter().any(|held| held.kind == kind);
+        let holding = self.input_held_since.map(|since| now.duration_since(since));
         UplinkSnapshot {
             stalled: self.stalled(now),
             unacknowledged_reliable: self.unacknowledged_reliable,
@@ -402,6 +407,11 @@ impl UplinkGate {
             held_emote: holds(FrameKind::Emote),
             held_input: self.input_held_since.is_some(),
             probes: self.probes,
+            round_trip: self.round_trip,
+            input_spacing: self.input_spacing(),
+            input_holds: self.input_holds + u64::from(holding.is_some()),
+            input_held_for: self.input_held_for + holding.unwrap_or_default(),
+            longest_input_hold: self.longest_input_hold.max(holding.unwrap_or_default()),
         }
     }
 
@@ -450,7 +460,13 @@ impl UplinkGate {
             && self.held.iter().any(waits_for_uplink);
         match (self.input_held_since, input_held) {
             (None, true) => self.input_held_since = Some(now),
-            (Some(_), false) => self.input_held_since = None,
+            (Some(since), false) => {
+                let held = now.duration_since(since);
+                self.input_holds += 1;
+                self.input_held_for += held;
+                self.longest_input_hold = self.longest_input_hold.max(held);
+                self.input_held_since = None;
+            }
             _ => {}
         }
         match (was_holding, self.held.is_empty()) {
