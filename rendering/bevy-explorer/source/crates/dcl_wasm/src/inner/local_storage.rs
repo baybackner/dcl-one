@@ -1,4 +1,4 @@
-use super::{gotham_state::GothamState, WasmError, WorkerContext};
+use super::{WasmError, WorkerContext};
 use bevy::{
     log::{debug, warn},
     platform::collections::HashMap,
@@ -21,7 +21,7 @@ use web_sys::{
 // TODO: init / store
 
 #[derive(Default, Serialize, Deserialize, Clone)]
-struct LocalStorage(HashMap<String, String>);
+pub(crate) struct LocalStorage(HashMap<String, String>);
 
 const STORAGE_DIR: &str = "scene_storage";
 const STORAGE_FILE: &str = "data";
@@ -109,7 +109,7 @@ async fn store(data: &str) -> Result<(), JsValue> {
 
 // Opens the player's file and loads what it holds. FILE is set last: the ops raise until it is.
 async fn load(
-    state: Weak<RefCell<GothamState>>,
+    local_storage: Weak<RefCell<LocalStorage>>,
     scene_dir: FileSystemDirectoryHandle,
     address: String,
 ) {
@@ -124,8 +124,8 @@ async fn load(
     match read(&file).await {
         Ok(Some(buf)) => match serde_json::from_str::<LocalStorage>(&buf) {
             Ok(storage) => {
-                if let Some(state) = state.upgrade() {
-                    state.borrow_mut().put(storage);
+                if let Some(local_storage) = local_storage.upgrade() {
+                    *local_storage.borrow_mut() = storage;
                 }
             }
             Err(_) => warn!("failed to deserialize storage"),
@@ -162,13 +162,13 @@ pub async fn init(state: &WorkerContext) {
 
     let address = storage_address(&*state.state.borrow());
     match address {
-        Ok(address) => load(Rc::downgrade(&state.state), scene_dir, address).await,
+        Ok(address) => load(Rc::downgrade(&state.local_storage), scene_dir, address).await,
         Err(_) => SCENE_DIR.with(|slot| *slot.borrow_mut() = Some(scene_dir)),
     }
 }
 
 fn write(state: &WorkerContext) {
-    let storage = state.state.borrow().borrow::<LocalStorage>().clone();
+    let storage = state.local_storage.borrow().clone();
 
     spawn_local(async move {
         let Ok(data) = serde_json::to_string(&storage) else {
@@ -212,28 +212,21 @@ fn strip_prefix(key: &mut String) {
     *key = key.split_once(':').unwrap().1.to_owned()
 }
 
-fn with_storage<R>(
-    state: &WorkerContext,
-    f: impl Fn(&mut HashMap<String, String>) -> R,
-) -> Result<R, WasmError> {
-    let mut state = state.state.borrow_mut();
-    let storage = state
-        .borrow_mut_or_default::<LocalStorage>()
-        .ok_or_else(|| anyhow::anyhow!("local storage slot holds another type"))?;
-    Ok(f(&mut storage.0))
+fn with_storage<R>(state: &WorkerContext, f: impl Fn(&mut HashMap<String, String>) -> R) -> R {
+    f(&mut state.local_storage.borrow_mut().0)
 }
 
 // returns filtered keys matching current user, including the prefix
 fn iterate_keys(state: &WorkerContext) -> Result<Vec<String>, WasmError> {
     let address = address(state)?;
     let address = &address;
-    with_storage(state, |storage| {
+    Ok(with_storage(state, |storage| {
         storage
             .keys()
             .filter(|k| k.starts_with(address))
             .map(ToOwned::to_owned)
             .collect()
-    })
+    }))
 }
 
 #[wasm_bindgen]
@@ -259,7 +252,7 @@ pub fn op_webstorage_set(
     let address = address(state)?;
     with_storage(state, |storage| {
         storage.insert(format!("{address}:{key_name}"), value.to_owned())
-    })?;
+    });
     write(state);
     Ok(())
 }
@@ -270,11 +263,11 @@ pub fn op_webstorage_get(
     key_name: &str,
 ) -> Result<Option<String>, WasmError> {
     let address = address(state)?;
-    with_storage(state, |storage| {
+    Ok(with_storage(state, |storage| {
         storage
             .get(&format!("{address}:{key_name}"))
             .map(ToOwned::to_owned)
-    })
+    }))
 }
 
 #[wasm_bindgen]
@@ -282,7 +275,7 @@ pub fn op_webstorage_remove(state: &WorkerContext, key_name: &str) -> Result<(),
     let address = address(state)?;
     with_storage(state, |storage| {
         storage.remove(&format!("{address}:{key_name}"))
-    })?;
+    });
     write(state);
     Ok(())
 }
@@ -294,7 +287,7 @@ pub fn op_webstorage_clear(state: &WorkerContext) -> Result<(), WasmError> {
         for key in &keys {
             storage.remove(key);
         }
-    })?;
+    });
     write(state);
     Ok(())
 }
@@ -309,7 +302,7 @@ pub fn op_webstorage_iterate_keys(state: &WorkerContext) -> Result<Vec<String>, 
 #[wasm_bindgen]
 pub fn op_webstorage_has(state: &WorkerContext, key_name: &str) -> Result<bool, WasmError> {
     let address = address(state)?;
-    with_storage(state, |storage| {
+    Ok(with_storage(state, |storage| {
         storage.contains_key(&format!("{address}:{key_name}"))
-    })
+    }))
 }
