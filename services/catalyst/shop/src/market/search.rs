@@ -156,8 +156,8 @@ const CREATOR_DIRECTORY_SQL: &str = "WITH creators AS ( \
        FROM shop.items WHERE search_is_collection_approved = true AND creator IS NOT NULL GROUP BY 1 \
      ) \
      SELECT c.address, c.items, c.collections, d.entity_id, \
-            NULLIF(trim(d.entity_metadata->'avatars'->0->>'name'), '') AS name, \
-            d.entity_metadata->'avatars'->0->'avatar'->'snapshots'->>'face256' AS face, \
+            NULLIF(trim(d.entity_metadata->'v'->'avatars'->0->>'name'), '') AS name, \
+            d.entity_metadata->'v'->'avatars'->0->'avatar'->'snapshots'->>'face256' AS face, \
             COALESCE((SELECT array_agg(n.ens_subdomain ORDER BY n.minted_block, n.ens_subdomain) FROM shop.nft n \
                       WHERE n.owner = c.address AND n.ens_subdomain IS NOT NULL), '{}') AS names \
      FROM creators c \
@@ -625,7 +625,7 @@ mod tests {
         )
         .bind(&creator)
         .bind(&entity)
-        .bind(json!({ "avatars": [{ "name": "Quackmaster", "avatar": { "snapshots": { "face256": "bafyface" } } }] }).to_string())
+        .bind(json!({ "v": { "avatars": [{ "name": "Quackmaster", "avatar": { "snapshots": { "face256": "bafyface" } } }] } }).to_string())
         .execute(&pool)
         .await
         .unwrap();
