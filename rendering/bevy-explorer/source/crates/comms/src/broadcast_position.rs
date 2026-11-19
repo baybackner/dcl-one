@@ -13,7 +13,7 @@ use wallet::Wallet;
 use crate::{
     anim_announce::{Announcement, ClipAnnouncer},
     broadcast, broadcast_to,
-    movement_animation::{ClipMotion, JumpCount, WireAnimation},
+    movement_animation::{wire_animation, ClipMotion, JumpCount},
     pulse::movement_pacing::{Change, MovementPacer},
     BroadcastTarget,
 };
@@ -251,8 +251,9 @@ fn broadcast_position(
 
     // The animation state other clients read: the movement blend from the horizontal speed at the
     // player's locomotion speeds (`gait`), falls from the vertical speed, and jumps, the glider and
-    // a hard landing from the clip (see `movement_animation`).
-    let wire = WireAnimation::new(
+    // a hard landing from the clip (see `movement_animation`). The packet below takes its animation
+    // fields from it.
+    let animation = wire_animation(
         dynamics.velocity,
         &speeds.copied().unwrap_or_default(),
         grounded,
@@ -277,19 +278,11 @@ fn broadcast_position(
         velocity_x: dynamics.velocity.x,
         velocity_y: dynamics.velocity.y,
         velocity_z: -dynamics.velocity.z,
-        movement_blend_value: wire.movement_blend_value,
         slide_blend_value: 0.0,
-        is_grounded: wire.is_grounded,
-        is_jumping: wire.is_jumping,
         is_long_jump: false,
-        is_long_fall: wire.is_long_fall,
-        is_falling: wire.is_falling,
-        is_stunned: wire.is_stunned,
         is_emoting: dynamics.move_kind == MoveKind::Emote,
         // Interpolation hint other clients read; this sender never teleports through it.
         is_instant: false,
-        jump_count: wire.jump_count,
-        glide_state: wire.glide_state,
         head_ik_yaw_enabled: head_sync.yaw_enabled,
         head_ik_pitch_enabled: head_sync.pitch_enabled,
         head_yaw: head_sync.yaw_deg,
@@ -303,6 +296,7 @@ fn broadcast_position(
         // Receive-side only (the Pulse decoder stamps it); never set on the send path, so it stays
         // out of the serialized packet.
         position_precision: None,
+        ..animation
     };
 
     debug!("sending movement: {movement_uncompressed:?}");

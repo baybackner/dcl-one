@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use common::structs::{LocomotionSpeeds, MoveKind};
-use dcl_component::proto_components::kernel::comms::rfc4::movement::GlideState;
+use dcl_component::proto_components::kernel::comms::rfc4::{self, movement::GlideState};
 
 use crate::gait;
 
@@ -124,39 +124,28 @@ impl JumpCount {
     }
 }
 
-/// The animation fields of an rfc4 `Movement` the engine derives.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WireAnimation {
-    pub movement_blend_value: f32,
-    pub is_grounded: bool,
-    pub is_jumping: bool,
-    pub is_falling: bool,
-    pub is_long_fall: bool,
-    pub is_stunned: bool,
-    pub jump_count: i32,
-    pub glide_state: i32,
-}
-
-impl WireAnimation {
-    /// `is_jumping` (deprecated) marks a jump in the air not yet falling.
-    pub fn new(
-        velocity: Vec3,
-        speeds: &LocomotionSpeeds,
-        grounded: bool,
-        motion: ClipMotion,
-        jump_count: u32,
-    ) -> Self {
-        let is_falling = gait::is_falling(grounded, velocity.y);
-        Self {
-            movement_blend_value: gait::movement_blend(velocity.xz().length(), speeds),
-            is_grounded: grounded,
-            is_jumping: !grounded && jump_count > 0 && !is_falling,
-            is_falling,
-            is_long_fall: !grounded && velocity.y < LONG_FALLING_SPEED,
-            is_stunned: motion == ClipMotion::HardLanding,
-            jump_count: jump_count as i32,
-            glide_state: motion.glide_state() as i32,
-        }
+/// An rfc4 `Movement` with the animation fields the engine derives set (`movement_blend_value`,
+/// `is_grounded`, `is_jumping`, `is_falling`, `is_long_fall`, `is_stunned`, `jump_count`,
+/// `glide_state`) and every other field left at its default for the sender to fill.
+/// `is_jumping` (deprecated) marks a jump in the air not yet falling.
+pub fn wire_animation(
+    velocity: Vec3,
+    speeds: &LocomotionSpeeds,
+    grounded: bool,
+    motion: ClipMotion,
+    jump_count: u32,
+) -> rfc4::Movement {
+    let is_falling = gait::is_falling(grounded, velocity.y);
+    rfc4::Movement {
+        movement_blend_value: gait::movement_blend(velocity.xz().length(), speeds),
+        is_grounded: grounded,
+        is_jumping: !grounded && jump_count > 0 && !is_falling,
+        is_falling,
+        is_long_fall: !grounded && velocity.y < LONG_FALLING_SPEED,
+        is_stunned: motion == ClipMotion::HardLanding,
+        jump_count: jump_count as i32,
+        glide_state: motion.glide_state() as i32,
+        ..Default::default()
     }
 }
 
@@ -251,7 +240,7 @@ mod tests {
     #[test]
     fn falls_come_from_the_vertical_speed_off_the_ground() {
         let wire = |velocity, grounded, motion, jumps| {
-            WireAnimation::new(velocity, &GAITS, grounded, motion, jumps)
+            wire_animation(velocity, &GAITS, grounded, motion, jumps)
         };
         let rising = wire(Vec3::new(0.0, 4.0, 8.0), false, ClipMotion::Jump, 1);
         assert!(rising.is_jumping && !rising.is_falling && !rising.is_grounded);
