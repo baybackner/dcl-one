@@ -910,7 +910,7 @@ impl NodeProcessing<'_, '_> {
             } else {
                 // fix up the mesh
                 let Some(mesh_data) = meshes.get_mut(h_gltf_mesh.0.id()) else {
-                    error!("gltf contained mesh not loaded?!");
+                    error!("gltf mesh missing between read and write");
                     return Ok(());
                 };
                 mesh_data.normalize_joint_weights();
@@ -2133,9 +2133,7 @@ fn expose_gltfs(
                     //     },
                     // )
                 }
-                if let Some((material, base)) = maybe_material
-                    .and_then(|material| mats.get(material.id()).map(|base| (material, base)))
-                {
+                if let Some(material) = maybe_material {
                     debug!("link material ({} / {:?})", src, maybe_mat_name);
                     // hide
                     commands
@@ -2145,32 +2143,34 @@ fn expose_gltfs(
                     // copy
                     commands.entity(ent).try_insert(material.clone());
                     // set base
-                    if base.base.unlit {
-                        commands.entity(ent).try_insert(NotShadowCaster);
-                    } else {
-                        commands.entity(ent).try_remove::<NotShadowCaster>();
-                    }
-                    commands.entity(ent).try_insert(BaseMaterial {
-                        material: base.base.clone(),
-                        gltf: src.to_owned(),
-                        name: maybe_mat_name.unwrap().0.clone(),
-                    });
+                    if let Some(base) = mats.get(material.id()) {
+                        if base.base.unlit {
+                            commands.entity(ent).try_insert(NotShadowCaster);
+                        } else {
+                            commands.entity(ent).try_remove::<NotShadowCaster>();
+                        }
+                        commands.entity(ent).try_insert(BaseMaterial {
+                            material: base.base.clone(),
+                            gltf: src.to_owned(),
+                            name: maybe_mat_name.unwrap().0.clone(),
+                        });
 
-                    // write to scene
-                    scene.update_crdt(
-                        SceneComponentId::MATERIAL,
-                        CrdtType::LWW_ANY,
-                        scene_ent.id,
-                        &PbMaterial {
-                            material: Some(dcl_material_from_standard_material(
-                                &base.base, &images,
-                            )),
-                            gltf: maybe_mat_name.map(|name| pb_material::GltfMaterial {
-                                gltf_src: src.to_owned(),
-                                name: name.0.clone(),
-                            }),
-                        },
-                    );
+                        // write to scene
+                        scene.update_crdt(
+                            SceneComponentId::MATERIAL,
+                            CrdtType::LWW_ANY,
+                            scene_ent.id,
+                            &PbMaterial {
+                                material: Some(dcl_material_from_standard_material(
+                                    &base.base, &images,
+                                )),
+                                gltf: maybe_mat_name.map(|name| pb_material::GltfMaterial {
+                                    gltf_src: src.to_owned(),
+                                    name: name.0.clone(),
+                                }),
+                            },
+                        );
+                    }
                 }
 
                 if let Some(point) = maybe_point {
@@ -2463,10 +2463,7 @@ fn update_gltf_linked_transforms(
                         None
                     }
                     MoveState::Scene => {
-                        let Some((_, parents)) = stored_transforms_and_parents.get(&gltf_ent)
-                        else {
-                            return None;
-                        };
+                        let (_, parents) = stored_transforms_and_parents.get(&gltf_ent)?;
                         for parent in parents.iter() {
                             if node_movement_state.get(parent).is_some() {
                                 // retain till all parents are processed

@@ -404,16 +404,13 @@ impl SceneColliderData {
             if let Some(collider) = self.collider_set.get_mut(handle) {
                 let (req_scale, req_rotation, req_translation) =
                     transform.to_scale_rotation_translation();
-                let Some(ColliderState {
+                let ColliderState {
                     base_collider,
                     translation: init_translation,
                     scale: init_scale,
                     rotation: init_rotation,
                     ..
-                }) = self.collider_state.get(id)
-                else {
-                    return None;
-                };
+                } = self.collider_state.get(id)?;
 
                 if (&req_scale, &req_rotation, &req_translation)
                     != (init_scale, init_rotation, init_translation)

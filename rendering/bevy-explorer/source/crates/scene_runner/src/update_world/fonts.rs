@@ -450,7 +450,7 @@ fn update_scene_fonts(mut fonts: SceneFontServer, scenes: Query<(), With<Rendere
                     family.stage = match assets.get(handle.id()) {
                         Some(font) => Stage::Single(font.clone()),
                         None => {
-                            warn!("font `{}` loaded but is missing from assets", key.src);
+                            error!("font `{}` loaded but is missing from assets", key.src);
                             Stage::Failed
                         }
                     };

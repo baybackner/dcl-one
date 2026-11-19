@@ -78,7 +78,10 @@ pub fn user_font(name: FontName, weight: WeightName) -> Handle<Font> {
         .get()
         .and_then(|fonts| fonts.get(&(name, weight)))
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_else(|| {
+            bevy::log::warn_once!("font {name:?} {weight:?} is not registered");
+            Handle::default()
+        })
 }
 
 /// Create the SDK font assets from the embedded font files and register them with the
