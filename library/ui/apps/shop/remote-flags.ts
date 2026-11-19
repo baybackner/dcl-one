@@ -9,7 +9,7 @@
 // Flags a host (or a test) primes are kept: no read replaces them. As upstream, a variant keeps only its string
 // payload (an address list, for one).
 
-import { createContext, createElement, useContext, useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, createElement, useContext, useEffect, useLayoutEffect, useSyncExternalStore, type ReactNode } from "react";
 import {
   FLAGS_SERVICE,
   readFlagsFile,
@@ -112,7 +112,7 @@ export function refreshRemoteFlags(now = Date.now()): Promise<void> {
   return read;
 }
 
-/** Whether the flags were primed (by a server render, a host or a test) rather than read here. */
+/** Whether the browser snapshot was seeded by a loader answer, host or test. */
 export function remoteFlagsPrimed(): boolean {
   return snapshot?.primed === true;
 }
@@ -146,9 +146,9 @@ const unavailable: RemoteFlagsAnswer = { flags: {}, variants: {} };
 const getAnswer = (): RemoteFlagsAnswer | null => snapshot ?? (failedAt !== null ? unavailable : null);
 const getServerAnswer = () => null;
 
-/** A document's loader answer stays local to its render and seeds the shared browser store after hydration. */
+/** The loader answer is scoped during render and seeds the browser before its consumers' passive effects run. */
 export function RemoteFlagsProvider({ answer, children }: { answer: RemoteFlagsAnswer | null; children: ReactNode }) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (answer) primeRemoteFlags(answer.flags, answer.variants);
   }, [answer]);
   return createElement(RequestFlagsContext.Provider, { value: answer }, children);
