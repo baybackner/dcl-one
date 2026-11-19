@@ -510,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tampered_payload_fails_the_signature() {
+    fn an_altered_payload_fails_the_signature() {
         let c = chain(ChainSpec::default());
         let jws = c.transaction("1", "p", None);
         let mut parts: Vec<&str> = jws.split('.').collect();

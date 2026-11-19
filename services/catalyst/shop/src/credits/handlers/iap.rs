@@ -6,8 +6,8 @@
 //!   that does not verify answers 400; once verified, `ONE_TIME_CHARGE`
 //!   credits the wallet registered for the transaction's account token and
 //!   `REFUND` reverses it. Every other outcome answers 200 except the ones
-//!   Apple should retry: an unknown product and a node without App Store
-//!   configuration answer 503.
+//!   Apple should retry: an unknown product, a purchase over the node's daily
+//!   ceiling and a node without App Store configuration answer 503.
 //! - `POST /credits/iap/verify` (`/v1/iap/verify`, signed fetch): the device
 //!   posts StoreKit's `jwsRepresentation`; it credits the signer only when the
 //!   transaction's account token is the signer's. Business outcomes answer
@@ -32,7 +32,7 @@ use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::admin::{RequireAdmin, normalize_address};
 use crate::credits::errors::ApiError;
-use crate::credits::iap::{Channel, CreditOutcome, Iap, Purchase, RefundOutcome};
+use crate::credits::iap::{CapReason, Channel, CreditOutcome, Iap, Purchase, RefundOutcome};
 use crate::types::UsdCents;
 
 fn configured(state: &SharedState) -> Result<&Iap, ApiError> {
@@ -110,6 +110,10 @@ pub async fn webhook(
                 CreditOutcome::UnknownProduct => {
                     tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, product_id = %t.product_id, "app store purchase of a product outside IAP_PRODUCT_CATALOG_USD: paid but not credited");
                     Err(ApiError::service_unavailable("unknown_product"))
+                }
+                CreditOutcome::Capped(CapReason::ServiceDailyLimit) => {
+                    tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store purchase over IAP_DAILY_LIMIT_CENTS: answered for a later retry");
+                    Err(ApiError::service_unavailable("service_daily_limit"))
                 }
                 CreditOutcome::Capped(reason) => {
                     tracing::error!(notification_uuid = %uuid, transaction_id = %t.transaction_id, address = %address, reason = reason.as_str(), "app store purchase over a cap: paid but not credited, reconcile by hand");

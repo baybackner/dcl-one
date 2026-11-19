@@ -368,6 +368,28 @@ async fn the_caps_hold_on_quote_and_on_credit() {
     assert_eq!(out["error"], "wallet_cap_exceeded", "{out}");
     assert_eq!(available(&pool, &w.address).await, "100");
 
+    // A purchase over the node's daily ceiling is left for Apple to retry.
+    let node_capped = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 0,
+            wallet_daily_cents: 0,
+            daily_cents: 1500,
+        },
+    );
+    let w2 = scratch_wallet();
+    let (status, out) = notify(
+        &node_capped,
+        c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&tx_id(), PRODUCT, Some(&w2.address))),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{out}");
+    assert_eq!(available(&pool, &w2.address).await, "0");
+
     // An unknown product is retried by Apple.
     let (status, _) = notify(
         &app,
