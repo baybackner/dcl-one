@@ -37,7 +37,7 @@ pub async fn send_transaction(
 const RETRY_AFTER_SECS: u64 =
     crate::evm::RELAY_RATE_WINDOW.as_secs() / crate::evm::RELAY_REQUESTS_PER_WINDOW as u64;
 
-/// 429 with `Retry-After` once the caller's address ([`crate::shared::client_ip::client_ip`],
+/// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address ([`crate::shared::client_ip::client_ip`],
 /// pinned by the server) spent its window, before the body is parsed or validated. Requests
 /// without an address share one bucket.
 async fn refuse_over_client_limit(state: &SharedState, headers: &HeaderMap) -> Option<Response> {
@@ -50,9 +50,11 @@ async fn refuse_over_client_limit(state: &SharedState, headers: &HeaderMap) -> O
     if state.relay_limiter.check(&key) == crate::shared::limits::RateLimitDecision::Allow {
         return None;
     }
-    let mut response = not_sent(ApiError::RateLimited(format!(
-        "Too many requests. Retry in {RETRY_AFTER_SECS} seconds."
-    )))
+    let retry_at = chrono::Utc::now().timestamp() + RETRY_AFTER_SECS as i64;
+    let mut response = not_sent(ApiError::RateLimited {
+        message: format!("Too many requests. Retry in {RETRY_AFTER_SECS} seconds."),
+        retry_at,
+    })
     .await;
     response
         .headers_mut()
@@ -323,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn only_4xx_upstream_statuses_refund_the_quota_slot() {
+    fn a_4xx_upstream_status_refunds_the_quota_slot_except_a_timeout_or_a_dropped_request() {
         for status in [400u16, 404, 422, 429] {
             assert!(
                 refunds_quota_slot(status),
