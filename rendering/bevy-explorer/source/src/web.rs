@@ -618,7 +618,12 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
     let decentraland_app_config = DecentralandAppConfig::new(
         decentraland_serialized_app_config(),
         decentraland_app_arguments(&options),
-        WASM_ASSET_LOADER_HANDLE.get().cloned(),
+        Some(
+            WASM_ASSET_LOADER_HANDLE
+                .get()
+                .cloned()
+                .ok_or_else(|| JsValue::from_str("asset load thread not initialized"))?,
+        ),
         compute_threads as usize,
     );
 

@@ -66,6 +66,12 @@ pub struct FamilyKey {
     src: String,
 }
 
+impl From<&FamilyKey> for FamilyKey {
+    fn from(key: &FamilyKey) -> Self {
+        key.clone()
+    }
+}
+
 impl FamilyKey {
     pub fn scene(&self) -> Entity {
         self.scene
@@ -296,28 +302,22 @@ impl SceneFontServer<'_, '_> {
             } => (key, scene_hash, *fallback),
         };
 
-        if !self.families.families.contains_key(key) {
-            let stage = match self.ipfas.load_content_file::<Font>(&key.src, scene_hash) {
+        let ipfas = &self.ipfas;
+        let family = self.families.families.entry_ref(key).or_insert_with(|| {
+            let stage = match ipfas.load_content_file::<Font>(&key.src, scene_hash) {
                 Ok(handle) => Stage::ContentFile(handle),
                 Err(e) => {
                     warn!("font `{}` failed to load: {e}", key.src);
                     Stage::Failed
                 }
             };
-            self.families.families.insert(
-                key.clone(),
-                SceneFontFamily {
-                    fallback,
-                    stage,
-                    slots: HashMap::default(),
-                    metrics: None,
-                },
-            );
-        }
-
-        let Some(family) = self.families.families.get_mut(key) else {
-            return user_font(fallback, weight);
-        };
+            SceneFontFamily {
+                fallback,
+                stage,
+                slots: HashMap::default(),
+                metrics: None,
+            }
+        });
         if let Some(slot) = family.slots.get(&weight) {
             return slot.handle.clone();
         }

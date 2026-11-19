@@ -856,11 +856,18 @@ impl AtlasPage {
     }
 
     /// Copy a `width` x `height` raster to `pos`.
-    fn write(&self, images: &mut Assets<Image>, pos: UVec2, width: u32, height: u32, src: &[u8]) {
+    fn write(
+        &self,
+        images: &mut Assets<Image>,
+        pos: UVec2,
+        width: u32,
+        height: u32,
+        src: &[u8],
+    ) -> Result<(), AtlasFull> {
         let bpp = self.bytes_per_pixel as usize;
         let row = width as usize * bpp;
         let Some(image) = images.get_mut(&self.image) else {
-            return;
+            return Err(AtlasFull);
         };
         let data = image.data.as_mut().unwrap();
         for y in 0..height as usize {
@@ -883,7 +890,7 @@ impl AtlasPage {
             }
             self.grow(images)?;
         };
-        self.write(images, pos, width, height, src);
+        self.write(images, pos, width, height, src)?;
         Ok(URect::from_corners(pos, pos + UVec2::new(width, height)))
     }
 
