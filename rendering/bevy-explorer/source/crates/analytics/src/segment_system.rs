@@ -283,13 +283,16 @@ impl SegmentMetricsEvents {
                 self.events.pop_front();
                 continue;
             }
-            let item = build_segment_event_batch_item(
+            let Some(item) = build_segment_event_batch_item(
                 user_id.to_owned(),
                 &queued.common,
                 &queued.event,
                 queued.queued_at,
                 queued.message_id.clone(),
-            );
+            ) else {
+                self.events.pop_front();
+                continue;
+            };
             let json = serde_json::to_string(&item).expect("Failed to serialize event body");
             if json.len() > SEGMENT_EVENT_SIZE_LIMIT_BYTES {
                 error!("Event too large: {}", json.len());

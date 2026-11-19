@@ -96,9 +96,13 @@ fn automatic_testing(
         Local<Option<PendingCapture>>,
         Res<SnapshotRenderReadiness>,
     ),
-    (mut local_sender, mut local_receiver, mut screenshots, mut screenshot_in_progress): (
-        Local<Option<tokio::sync::mpsc::Sender<SnapshotResult>>>,
-        Local<Option<tokio::sync::mpsc::Receiver<SnapshotResult>>>,
+    (mut local_channel, mut screenshots, mut screenshot_in_progress): (
+        Local<
+            Option<(
+                tokio::sync::mpsc::Sender<SnapshotResult>,
+                tokio::sync::mpsc::Receiver<SnapshotResult>,
+            )>,
+        >,
         Local<Handle<LoadedFolder>>,
         ResMut<SnapshotInProgress>,
     ),
@@ -133,16 +137,8 @@ fn automatic_testing(
     }
 
     // init channels
-    if local_sender.is_none() {
-        let (sx, rx) = tokio::sync::mpsc::channel(10);
-        *local_sender = Some(sx);
-        *local_receiver = Some(rx);
-    }
-    let (Some(local_sender), Some(local_receiver)) =
-        (local_sender.as_ref(), local_receiver.as_mut())
-    else {
-        return;
-    };
+    let (local_sender, local_receiver) =
+        local_channel.get_or_insert_with(|| tokio::sync::mpsc::channel(10));
 
     if let Some(pending) = pending_capture
         .take_if(|pending| render_ready.0.load(Ordering::Acquire) >= pending.ready_after)

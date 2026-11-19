@@ -1460,74 +1460,71 @@ fn load_active_entities(
             .map(|(_, parcel)| parcel)
             .collect::<HashSet<_>>();
 
-        match scenes_urn {
-            None => {
-                // load required pointers
-                let pointers = required_parcels
-                    .iter()
-                    .map(|parcel| format!("{},{}", parcel.x, parcel.y))
-                    .collect::<Vec<_>>();
+        if let Some(scenes_urn) = scenes_urn {
+            // TODO perf might be worth caching available and required
+            let available_hashes = pointers
+                .pointers
+                .values()
+                .flat_map(|ptr| match ptr {
+                    PointerResult::Nothing => None,
+                    PointerResult::Exists { hash, .. } => Some(hash.as_str()),
+                })
+                .collect::<HashSet<_>>();
 
-                if !required_parcels.is_empty() {
-                    info!("requesting {} parcels", pointers.len());
+            let required_hashes_and_urns = scenes_urn
+                .iter()
+                .flat_map(|urn| {
+                    IpfsPath::new_from_urn::<EntityDefinition>(urn)
+                        .ok()
+                        .and_then(|path| {
+                            path.context_free_hash()
+                                .unwrap_or_default()
+                                .map(|hash| (hash, path, urn))
+                        })
+                })
+                .filter(|(hash, ..)| !available_hashes.contains(hash.as_str()))
+                .collect::<Vec<_>>();
 
-                    *pointer_request = Some((
-                        required_parcels,
-                        HashMap::default(),
-                        ipfas.ipfs().active_entities(
-                            ipfs::ActiveEntitiesRequest::Pointers(pointers),
-                            current_realm.config.city_loader_content_server.as_deref(),
-                        ),
-                    ));
-                }
+            let required_paths = required_hashes_and_urns
+                .iter()
+                .map(|(_, path, _)| path.clone())
+                .collect::<Vec<_>>();
+            let lookup = HashMap::from_iter(
+                required_hashes_and_urns
+                    .into_iter()
+                    .map(|(hash, _, urn)| (hash, urn.clone())),
+            );
+
+            // issue request if either parcels or urns are non-empty, so that we populate `PointerResult::Nothing`s
+            if !required_paths.is_empty() || !required_parcels.is_empty() {
+                debug!("requesting {} urns", required_paths.len());
+                *pointer_request = Some((
+                    required_parcels,
+                    lookup,
+                    ipfas.ipfs().active_entities(
+                        ipfs::ActiveEntitiesRequest::Urns(required_paths),
+                        current_realm.config.city_loader_content_server.as_deref(),
+                    ),
+                ));
             }
-            Some(scenes_urn) => {
-                // TODO perf might be worth caching available and required
-                let available_hashes = pointers
-                    .pointers
-                    .values()
-                    .flat_map(|ptr| match ptr {
-                        PointerResult::Nothing => None,
-                        PointerResult::Exists { hash, .. } => Some(hash.as_str()),
-                    })
-                    .collect::<HashSet<_>>();
+        } else {
+            // load required pointers
+            let pointers = required_parcels
+                .iter()
+                .map(|parcel| format!("{},{}", parcel.x, parcel.y))
+                .collect::<Vec<_>>();
 
-                let required_hashes_and_urns = scenes_urn
-                    .iter()
-                    .flat_map(|urn| {
-                        IpfsPath::new_from_urn::<EntityDefinition>(urn)
-                            .ok()
-                            .and_then(|path| {
-                                path.context_free_hash()
-                                    .unwrap_or_default()
-                                    .map(|hash| (hash, path, urn))
-                            })
-                    })
-                    .filter(|(hash, ..)| !available_hashes.contains(hash.as_str()))
-                    .collect::<Vec<_>>();
+            if !required_parcels.is_empty() {
+                info!("requesting {} parcels", pointers.len());
 
-                let required_paths = required_hashes_and_urns
-                    .iter()
-                    .map(|(_, path, _)| path.clone())
-                    .collect::<Vec<_>>();
-                let lookup = HashMap::from_iter(
-                    required_hashes_and_urns
-                        .into_iter()
-                        .map(|(hash, _, urn)| (hash, urn.clone())),
-                );
-
-                // issue request if either parcels or urns are non-empty, so that we populate `PointerResult::Nothing`s
-                if !required_paths.is_empty() || !required_parcels.is_empty() {
-                    debug!("requesting {} urns", required_paths.len());
-                    *pointer_request = Some((
-                        required_parcels,
-                        lookup,
-                        ipfas.ipfs().active_entities(
-                            ipfs::ActiveEntitiesRequest::Urns(required_paths),
-                            current_realm.config.city_loader_content_server.as_deref(),
-                        ),
-                    ));
-                }
+                *pointer_request = Some((
+                    required_parcels,
+                    HashMap::default(),
+                    ipfas.ipfs().active_entities(
+                        ipfs::ActiveEntitiesRequest::Pointers(pointers),
+                        current_realm.config.city_loader_content_server.as_deref(),
+                    ),
+                ));
             }
         }
     } else if let Some(task_result) = pointer_request.as_mut().and_then(|req| req.2.complete()) {

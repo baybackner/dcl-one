@@ -204,10 +204,21 @@ pub fn init_runtime() -> anyhow::Result<()> {
 
 #[allow(clippy::type_complexity)]
 pub async fn renderer_ipc_out(
+    stream: SendHalf,
+    new_scene: tokio::sync::mpsc::UnboundedReceiver<NewSceneCommand>,
+    ipc_router: tokio::sync::mpsc::UnboundedReceiver<(u64, IpcMessage)>,
+) {
+    if let Err(e) = renderer_ipc_out_until_write_error(stream, new_scene, ipc_router).await {
+        warn!("renderer_ipc_out exit on write failure: {e}");
+    }
+}
+
+#[allow(clippy::type_complexity)]
+async fn renderer_ipc_out_until_write_error(
     mut stream: SendHalf,
     mut new_scene: tokio::sync::mpsc::UnboundedReceiver<NewSceneCommand>,
     mut ipc_router: tokio::sync::mpsc::UnboundedReceiver<(u64, IpcMessage)>,
-) {
+) -> std::io::Result<()> {
     let (renderer_sx, mut renderer_rx) = tokio::sync::mpsc::unbounded_channel();
 
     // one receiver per live presence context, drained into the pipe as tagged
@@ -228,7 +239,7 @@ pub async fn renderer_ipc_out(
             new_scene = new_scene.recv() => {
                 let Some(NewSceneCommand{id,info,mut renderer_channel, global_channel, response_channel, system_api_sender }) = new_scene else {
                     warn!("renderer_ipc_out exit on new scene closed");
-                    return;
+                    return Ok(());
                 };
 
                 RENDERER_SENDER.set(Some(response_channel.channel().clone()));
@@ -242,10 +253,7 @@ pub async fn renderer_ipc_out(
                     loop {
                         match old_rx.try_recv() {
                             Ok(data) => {
-                                if let Err(e) = write_msg(&mut stream, &EngineToScene::GlobalUpdate(presence_context, data)).await {
-                                    warn!("renderer_ipc_out exit on write failure: {e}");
-                                    return;
-                                }
+                                write_msg(&mut stream, &EngineToScene::GlobalUpdate(presence_context, data)).await?;
                             }
                             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(count)) => {
                                 error!("global crdt state lagged, dropping {count} messages");
@@ -265,28 +273,19 @@ pub async fn renderer_ipc_out(
                     let _ = renderer_sender.send(EngineToScene::KillScene(id));
                 });
 
-                if let Err(e) = write_msg(&mut stream, &EngineToScene::NewScene(id, Box::new(info))).await {
-                    warn!("renderer_ipc_out exit on write failure: {e}");
-                    return;
-                }
+                write_msg(&mut stream, &EngineToScene::NewScene(id, Box::new(info))).await?;
             }
             renderer_update = renderer_rx.recv() => {
                 let Some(engine_to_scene) = renderer_update else {
                     warn!("renderer_ipc_out exit on inbound closed");
-                    return;
+                    return Ok(());
                 };
-                if let Err(e) = write_msg(&mut stream, &engine_to_scene).await {
-                    warn!("renderer_ipc_out exit on write failure: {e}");
-                    return;
-                }
+                write_msg(&mut stream, &engine_to_scene).await?;
             }
             (presence_context, received) = next_global_update(&mut global_receivers) => {
                 match received {
                     Ok(data) => {
-                        if let Err(e) = write_msg(&mut stream, &EngineToScene::GlobalUpdate(presence_context, data)).await {
-                            warn!("renderer_ipc_out exit on write failure: {e}");
-                            return;
-                        }
+                        write_msg(&mut stream, &EngineToScene::GlobalUpdate(presence_context, data)).await?;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
                         error!("global crdt state lagged, dropping {count} messages");
@@ -299,7 +298,7 @@ pub async fn renderer_ipc_out(
             ipc = ipc_router.recv() => {
                 let Some(ipc) = ipc else {
                     warn!("renderer_ipc_out exit on router closed");
-                    return;
+                    return Ok(());
                 };
                 debug!("ipc {} -> {}", ipc.0, !matches!(ipc.1, IpcMessage::Closed));
                 // the scene host doesn't echo our close back, so release the entry here
@@ -308,10 +307,7 @@ pub async fn renderer_ipc_out(
                         ctx.as_mut().unwrap().ipc_channel_registry.remove(&ipc.0)
                     });
                 }
-                if let Err(e) = write_msg(&mut stream, &EngineToScene::IpcMessage(ipc.0, ipc.1)).await {
-                    warn!("renderer_ipc_out exit on write failure: {e}");
-                    return;
-                }
+                write_msg(&mut stream, &EngineToScene::IpcMessage(ipc.0, ipc.1)).await?;
             }
         }
     }

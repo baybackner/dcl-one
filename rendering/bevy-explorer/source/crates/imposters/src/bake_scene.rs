@@ -705,10 +705,7 @@ fn bake_imposter_imposter(
             .iter()
             .all(|(_, cam)| cam.state == BakeState::Finished);
 
-        if all_cams_finished {
-            let Some((_, baking)) = baking.take() else {
-                return;
-            };
+        if let Some((_, baking)) = baking.take_if(|_| all_cams_finished) {
             debug!("all cams done");
             let Some(CurrentImposterImposterDetail { parcel, level, .. }) = current_imposter.0
             else {
