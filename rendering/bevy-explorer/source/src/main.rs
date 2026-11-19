@@ -53,7 +53,11 @@ fn main() {
     }
 
     decentraland_log_file();
-    create_logs_folder();
+    let log_dir = data_local_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("startup error: failed to create the log folder {log_dir:?}: {e}");
+        std::process::exit(1);
+    }
     create_log_files();
 
     let decentraland_app = DecentralandApp::new(LogPlugin {
@@ -309,13 +313,6 @@ fn default_ui_scene() -> Option<String> {
 fn data_local_dir() -> PathBuf {
     let dirs = platform::project_directories().unwrap();
     dirs.data_local_dir().to_owned()
-}
-
-fn create_logs_folder() {
-    let log_dir = data_local_dir();
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("failed to create log folder {log_dir:?}: {e}");
-    }
 }
 
 fn create_log_files() {
