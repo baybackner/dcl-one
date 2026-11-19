@@ -2606,6 +2606,65 @@ async fn a_creator_raises_a_world_rating_and_never_lowers_it() {
 }
 
 #[tokio::test]
+async fn a_settings_rating_before_the_world_row_is_held_to_the_operators() {
+    let Some(f) = fixture().await else { return };
+    let (world, owner) = (world_name(), Wallet::random().address);
+    sqlx::query(
+        "INSERT INTO explore.place_moderation (place_id, content_rating, set_by) \
+         VALUES ($1, 'A', '0xmoderator')",
+    )
+    .bind(world.key())
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let put = |rating: &str| WorldSettingsUpdate {
+        content_rating: Some(rating.into()),
+        ..Default::default()
+    };
+    let site = Some("https://decentraland.org/places");
+    let ratings = || async {
+        let own = store::get_world_settings(&f.pool, &world)
+            .await
+            .unwrap()
+            .unwrap()
+            .content_rating;
+        let operator: Option<String> = sqlx::query_scalar(
+            "SELECT content_rating FROM explore.place_moderation WHERE place_id = $1",
+        )
+        .bind(world.key())
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        (own, operator)
+    };
+
+    store::update_world_settings(&f.pool, &world, &owner, Some(&owner), &put("T"), site)
+        .await
+        .unwrap();
+    assert_eq!(
+        ratings().await,
+        (None, Some("A".into())),
+        "a laxer rating is kept out"
+    );
+    let kinds: Vec<String> = sqlx::query_scalar(
+        "SELECT kind FROM explore.moderation_hooks WHERE channel = 'places' AND subject = $1",
+    )
+    .bind(world.key())
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(kinds, ["rating_downgrade_refused"]);
+    store::update_world_settings(&f.pool, &world, &owner, Some(&owner), &put("R"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        ratings().await,
+        (Some("R".into()), Some("R".into())),
+        "a raise"
+    );
+}
+
+#[tokio::test]
 async fn settings_spawn_validation_runs_inside_the_update_transaction() {
     let Some(f) = fixture().await else { return };
     let owner = Wallet::random().address;

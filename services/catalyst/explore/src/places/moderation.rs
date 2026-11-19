@@ -90,14 +90,38 @@ fn creator_rank(code: &str) -> Option<u8> {
     }
 }
 
+/// The code a creator's rating is stored as: a [`RATINGS`] code, with `PR`
+/// as `RP` and `M` as `A`; `None` off the scale.
+pub fn creator_code(code: &str) -> Option<&'static str> {
+    match normalize_rating(code) {
+        "M" => Some("A"),
+        c => RATINGS.iter().copied().find(|r| *r == c),
+    }
+}
+
+/// The strictest of `codes` on the creator scale (the first of equal rank);
+/// off-scale codes are ignored.
+pub fn strictest<'a>(codes: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    codes
+        .into_iter()
+        .filter_map(|c| creator_rank(c).map(|r| (r, c)))
+        .fold(None, |best: Option<(u8, &str)>, (r, c)| match best {
+            Some((b, _)) if b >= r => best,
+            _ => Some((r, c)),
+        })
+        .map(|(_, c)| c)
+}
+
 /// What a creator's rating (a deployment's `contentRating`, a world's
 /// settings or publish) does to the stored one: a creator may raise a
 /// rating, never lower it; only an operator lowers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreatorRating {
-    /// Off the scale: the stored rating stays.
+    /// Off the scale, or a code off the old scale (`E`, `M`) of the stored
+    /// rank: the stored rating stays.
     Keep,
-    /// Nothing rated is stored, or the same rank: the proposal is stored.
+    /// Nothing rated is stored, the same code, or the scale's code of the
+    /// stored rank (`E` to `T`): the proposal is stored.
     Set,
     /// Stricter than the stored rating: stored, and moderation is told.
     Raise,
@@ -113,6 +137,13 @@ impl CreatorRating {
             (None, Some(_)) => Self::Set,
             (Some(s), Some(p)) if p > s => Self::Raise,
             (Some(s), Some(p)) if p < s => Self::Lower,
+            // The same rank: the scale's code, or the stored one, is taken.
+            (Some(_), Some(_))
+                if !RATING_SCALE.contains(&normalize_rating(proposed))
+                    && stored.map(normalize_rating) != Some(normalize_rating(proposed)) =>
+            {
+                Self::Keep
+            }
             _ => Self::Set,
         }
     }
@@ -679,12 +710,27 @@ mod tests {
         assert_eq!(CreatorRating::of(Some("R"), "RP"), Lower);
         assert_eq!(CreatorRating::of(Some("A"), "E"), Lower, "E reads as T");
         assert_eq!(CreatorRating::of(Some("E"), "A"), Raise);
-        assert_eq!(CreatorRating::of(Some("E"), "T"), Set, "the same rank");
+        assert_eq!(CreatorRating::of(Some("E"), "T"), Set, "the scale's code");
+        assert_eq!(CreatorRating::of(Some("T"), "E"), Keep, "the same rank");
+        assert_eq!(CreatorRating::of(Some("E"), "E"), Set);
+        assert_eq!(CreatorRating::of(Some("A"), "M"), Keep, "the same rank");
         assert_eq!(CreatorRating::of(Some("T"), "T"), Set);
+        assert_eq!(CreatorRating::of(Some("RP"), "PR"), Set, "one code");
         assert_eq!(CreatorRating::of(Some("T"), "X"), Keep, "off the scale");
         assert_eq!(CreatorRating::of(None, "A"), Set);
         assert_eq!(CreatorRating::of(Some("X"), "A"), Set);
         assert!(Raise.applies() && Set.applies() && !Lower.applies() && !Keep.applies());
+    }
+
+    #[test]
+    fn a_creator_code_is_stored_on_the_scale() {
+        assert_eq!(creator_code("M"), Some("A"));
+        assert_eq!(creator_code("PR"), Some("RP"));
+        assert_eq!(creator_code("E"), Some("E"));
+        assert_eq!(creator_code("X"), None);
+        assert_eq!(strictest(["T", "R", "A"]), Some("R"));
+        assert_eq!(strictest(["E", "T"]), Some("E"), "the first of a rank");
+        assert_eq!(strictest(["X"]), None);
     }
 
     #[test]

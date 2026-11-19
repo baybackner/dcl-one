@@ -175,16 +175,19 @@ pub async fn update_world_settings(
     }
 
     let proposed_rating = input.content_rating.as_deref();
-    let stored_rating = match (&locked, proposed_rating) {
-        (Some(r), Some(_)) => {
-            let own = r.get::<Option<String>, _>("content_rating");
+    // Held to an operator's rating even before the world row exists.
+    let stored_rating = match proposed_rating {
+        Some(_) => {
+            let own = locked
+                .as_ref()
+                .and_then(|r| r.get::<Option<String>, _>("content_rating"));
             world_rating_in_force(&mut tx, world.key(), own).await?
         }
-        _ => None,
+        None => None,
     };
-    let content_rating = proposed_rating
-        .filter(|r| locked.is_none() || CreatorRating::of(stored_rating.as_deref(), r).applies());
-    if let Some(rating) = content_rating.filter(|_| locked.is_some()) {
+    let content_rating =
+        proposed_rating.filter(|r| CreatorRating::of(stored_rating.as_deref(), r).applies());
+    if let Some(rating) = content_rating {
         follow_creator_world_rating(&mut tx, world.key(), rating).await?;
     }
     if let (Some(base), Some(stored), Some(proposed)) =

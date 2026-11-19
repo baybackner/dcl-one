@@ -146,11 +146,14 @@ pub fn derive(
     let contact = m.get("contact");
     let contact_name = non_empty(contact.and_then(|c| c.get("name")).and_then(Value::as_str));
     let contact_email = non_empty(contact.and_then(|c| c.get("email")).and_then(Value::as_str));
+    // Stored as a rating code (`M` as `A`); an unknown code reads as none.
     let content_rating = non_empty(
         m.get("policy")
             .and_then(|p| p.get("contentRating"))
             .and_then(Value::as_str),
-    );
+    )
+    .and_then(|c| moderation::creator_code(&c))
+    .map(str::to_string);
     let mut positions = str_array(scene.get("parcels"));
     if positions.is_empty() {
         positions.push(base.clone());
@@ -242,8 +245,9 @@ pub const SELECT_SCENES: &str = r#"
 /// preservation object: the pass rebuilds `raw` wholesale from the deployment,
 /// so a key it does not carry forward is erased by the next pass. The
 /// moderation overlay (`place_moderation`) decides `disabled`, `highlighted`
-/// and `content_rating` of a new row; an existing row keeps its own, but for a
-/// rating a new deployment raises ([`upsert_page`]). A row the
+/// and `content_rating` of a new row; an existing row keeps its own. The
+/// creator rating rule then settles the rating of a new deployment or a new
+/// row ([`upsert_page`]). A row the
 /// places mirror wrote is left to the mirror.
 const UPSERT: &str = r#"
     INSERT INTO explore.place
@@ -674,16 +678,46 @@ fn positions_of(p: &DerivedPlace) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// One transaction per page: a multi-row upsert, one overlap query for the fresh rows,
-/// and one batched curation update. Later duplicates of an id win, as they did row by row.
 /// A derived row's rating before this page: `(content_rating, deployed_at)`
 /// by id, locked until the page commits.
 const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.place \
      WHERE id = ANY($1) AND raw->>'source' = 'content' ORDER BY id FOR UPDATE";
 
-const RAISE_RATINGS: &str = "UPDATE explore.place SET content_rating = u.rating \
+/// The ratings a new row is held to: its own operator rating, and the rating
+/// of every other derived place its parcels overlap (the rows it replaces,
+/// which `PRUNE` removes; that row's operator rating first), disabled ones
+/// included. `$1` the new ids, `$2` each one's positions.
+const HELD_RATINGS: &str = r#"
+    SELECT f.id, false AS predecessor, m.content_rating AS rating
+    FROM unnest($1::text[]) AS f(id)
+    JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
+    UNION ALL
+    SELECT f.id, true, COALESCE(m.content_rating, p.content_rating)
+    FROM unnest($1::text[], $2::jsonb[]) AS f(id, positions)
+    JOIN explore.place p
+      ON p.id <> f.id AND p.world IS FALSE AND p.raw->>'source' = 'content'
+     AND p.raw->'positions' ?| ARRAY(SELECT jsonb_array_elements_text(f.positions))
+    LEFT JOIN explore.place_moderation m ON m.place_id = p.id
+"#;
+
+/// The page's operator rows, locked before its places as an operator's
+/// decision locks them (`moderation::apply_with`).
+const LOCK_OVERLAYS: &str = "SELECT 1 FROM explore.place_moderation \
+     WHERE place_id = ANY($1) ORDER BY place_id FOR UPDATE";
+
+const SET_RATINGS: &str = "UPDATE explore.place SET content_rating = u.rating \
      FROM unnest($1::text[], $2::text[]) AS u(id, rating) WHERE explore.place.id = u.id";
 
+/// An operator's rating follows the rating the row takes, so a later
+/// re-insert of the row (`UPSERT`'s overlay) keeps it.
+const FOLLOW_RATINGS: &str = "UPDATE explore.place_moderation m SET content_rating = u.rating \
+     FROM unnest($1::text[], $2::text[]) AS u(id, rating) \
+     WHERE m.place_id = u.id AND m.content_rating IS NOT NULL \
+       AND m.content_rating IS DISTINCT FROM u.rating";
+
+/// One transaction per page: a multi-row upsert, the creator rating rule
+/// ([`settle_ratings`]), one overlap query for the fresh rows, and one batched
+/// curation update. Later duplicates of an id win, as they did row by row.
 async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str>) -> Result<()> {
     let mut slot_of: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<usize> = Vec::with_capacity(page.len());
@@ -701,6 +735,10 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
         return Ok(());
     }
     let mut tx = pool.begin().await?;
+    sqlx::query(LOCK_OVERLAYS)
+        .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
+        .execute(&mut *tx)
+        .await?;
     let before: HashMap<String, (Option<String>, Option<NaiveDateTime>)> =
         sqlx::query(LOCK_RATINGS)
             .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
@@ -757,45 +795,7 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
             )
         })
         .collect();
-    // A new deployment's rating: a creator raises it, never lowers it
-    // (places::moderation::CreatorRating); a pass over the same deployment
-    // leaves the stored rating, an operator's included.
-    let mut raised: (Vec<String>, Vec<String>) = Default::default();
-    for p in &rows {
-        let Some((stored, deployed_at)) = before.get(&p.id) else {
-            continue;
-        };
-        if inserted.get(&p.id) != Some(&false) || *deployed_at == p.deployed_at {
-            continue;
-        }
-        // A scene without a rating is pending, as ingestion reads it.
-        let Some(proposed) = p
-            .content_rating
-            .as_deref()
-            .map(moderation::normalize_rating)
-            .or(stored.is_some().then_some("RP"))
-        else {
-            continue;
-        };
-        if CreatorRating::of(stored.as_deref(), proposed).applies() {
-            raised.0.push(p.id.clone());
-            raised.1.push(proposed.to_string());
-        }
-        if let (Some(base), Some(stored)) = (notify, stored.as_deref()) {
-            let row = RatedRow::Place {
-                id: &p.id,
-                base_position: &p.base_position,
-            };
-            moderation::capture_creator_rating(&mut tx, base, row, stored, proposed).await?;
-        }
-    }
-    if !raised.0.is_empty() {
-        sqlx::query(RAISE_RATINGS)
-            .bind(&raised.0)
-            .bind(&raised.1)
-            .execute(&mut *tx)
-            .await?;
-    }
+    settle_ratings(&mut tx, &rows, &before, &inserted, notify).await?;
     let fresh: Vec<(&DerivedPlace, Vec<String>)> = rows
         .iter()
         .filter(|p| inserted.get(&p.id).copied().unwrap_or(false))
@@ -883,6 +883,90 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
             .await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// The creator rating rule (`places::moderation::CreatorRating`) over a page:
+/// a new deployment of an existing row, or a new row, takes the scene's rating
+/// when it raises the one held, never a laxer one; a new row is held to its
+/// operator rating and to every place it replaces on its parcels. A pass over
+/// the same deployment leaves the stored rating, an operator's included. A
+/// scene that declares no rating keeps the held one, with no notice.
+async fn settle_ratings(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rows: &[&DerivedPlace],
+    before: &HashMap<String, (Option<String>, Option<NaiveDateTime>)>,
+    inserted: &HashMap<String, bool>,
+    notify: Option<&str>,
+) -> Result<()> {
+    let fresh: Vec<&DerivedPlace> = rows
+        .iter()
+        .copied()
+        .filter(|p| inserted.get(&p.id) == Some(&true))
+        .collect();
+    let mut held: HashMap<String, (Vec<String>, bool)> = HashMap::new();
+    if !fresh.is_empty() {
+        let ids: Vec<String> = fresh.iter().map(|p| p.id.clone()).collect();
+        let positions: Vec<Value> = fresh.iter().map(|p| Value::from(positions_of(p))).collect();
+        for r in sqlx::query(HELD_RATINGS)
+            .bind(&ids)
+            .bind(&positions)
+            .fetch_all(&mut **tx)
+            .await?
+        {
+            let entry = held
+                .entry(r.try_get::<String, _>("id").unwrap_or_default())
+                .or_default();
+            if let Some(rating) = r.try_get::<Option<String>, _>("rating").unwrap_or(None) {
+                entry.0.push(rating);
+            }
+            entry.1 |= r.try_get::<bool, _>("predecessor").unwrap_or(false);
+        }
+    }
+    let (mut ids, mut ratings) = (Vec::new(), Vec::new());
+    for p in rows {
+        // The rating held, and whether a creator's change to it is reported.
+        let fresh = inserted.get(&p.id) == Some(&true);
+        let (stored, report) = if fresh {
+            let (codes, predecessor) = held.remove(&p.id).unwrap_or_default();
+            let stored = moderation::strictest(codes.iter().map(String::as_str));
+            (stored.map(str::to_string), predecessor)
+        } else {
+            match before.get(&p.id) {
+                Some((stored, at)) if inserted.contains_key(&p.id) && *at != p.deployed_at => {
+                    (stored.clone(), true)
+                }
+                _ => continue,
+            }
+        };
+        let declared = p.content_rating.as_deref();
+        let rating = match declared {
+            Some(d) if CreatorRating::of(stored.as_deref(), d).applies() => Some(d.to_string()),
+            _ => stored.clone(),
+        };
+        if let (Some(base), Some(stored), Some(declared), true) =
+            (notify, stored.as_deref(), declared, report)
+        {
+            let row = RatedRow::Place {
+                id: &p.id,
+                base_position: &p.base_position,
+            };
+            moderation::capture_creator_rating(tx, base, row, stored, declared).await?;
+        }
+        if let Some(rating) = rating.filter(|r| fresh || Some(r) != stored.as_ref()) {
+            ids.push(p.id.clone());
+            ratings.push(rating);
+        }
+    }
+    if !ids.is_empty() {
+        for sql in [SET_RATINGS, FOLLOW_RATINGS] {
+            sqlx::query(sql)
+                .bind(&ids)
+                .bind(&ratings)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -1132,6 +1216,164 @@ mod tests {
             "a later raise applies"
         );
         assert_eq!(notices().await.len(), 2, "no notice without the webhook");
+    }
+
+    #[tokio::test]
+    async fn a_new_row_is_held_to_the_ratings_of_the_rows_it_replaces() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let (x, y) = (
+            u16::from_str_radix(&token[..4], 16).unwrap() as i32,
+            u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000,
+        );
+        let (a, b, c) = (
+            format!("{x},{y}"),
+            format!("{x},{}", y + 1),
+            format!("{x},{}", y + 2),
+        );
+        let deploy = |base: &str, parcels: &[&String], rating: Option<&str>, minute: u32| {
+            let mut meta = wrapped();
+            meta["v"]["scene"]["base"] = json!(base);
+            meta["v"]["scene"]["parcels"] = json!(parcels);
+            meta["v"]["policy"] = json!({ "contentRating": rating });
+            let at = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, minute, 0);
+            vec![derive("0xauthor", &[], at, &meta, None, "/content", true).unwrap()]
+        };
+        let (id_a, id_b) = (
+            super::super::parcel_place_id(&a),
+            super::super::parcel_place_id(&b),
+        );
+        let rating = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT content_rating FROM explore.place WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let operator_rating = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT content_rating FROM explore.place_moderation WHERE place_id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let kinds = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT kind FROM explore.moderation_hooks \
+                     WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+                )
+                .bind(id)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let prune = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("DELETE FROM explore.place WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        let operator = |id: String, code: &'static str| {
+            let pool = pool.clone();
+            async move {
+                moderation::apply(
+                    &pool,
+                    moderation::Target::Place(&id),
+                    &moderation::Decision::Rating(code.into()),
+                    "0xmoderator",
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            }
+        };
+        let site = Some("https://decentraland.org/places");
+
+        // Moving the base parcel keeps the stricter rating of the row it replaces.
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("A"), 0), site)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&b, &[&a, &b], Some("T"), 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_b.clone()).await.as_deref(), Some("A"));
+        assert_eq!(kinds(id_b.clone()).await, ["rating_downgrade_refused"]);
+
+        // An operator's rating of the replaced row holds too.
+        prune(id_a.clone()).await;
+        operator(id_b.clone(), "R").await;
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("T"), 2), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
+        assert_eq!(kinds(id_a.clone()).await, ["rating_downgrade_refused"]);
+
+        // A scene that declares no rating keeps the held one, with no notice.
+        upsert_page(&pool, deploy(&a, &[&a, &b], None, 3), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
+        assert_eq!(kinds(id_a.clone()).await.len(), 1);
+
+        // A raise moves the operator's rating, so a re-inserted row keeps it.
+        operator(id_a.clone(), "T").await;
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("A"), 4), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("A"));
+        assert_eq!(operator_rating(id_a.clone()).await.as_deref(), Some("A"));
+        prune(id_a.clone()).await;
+        prune(id_b.clone()).await;
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("T"), 5), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("A"));
+        // A stricter scene rating on a new row is taken over the operator's.
+        prune(id_a.clone()).await;
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("R"), 6), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
+        assert_eq!(operator_rating(id_a.clone()).await.as_deref(), Some("R"));
+
+        // Another code of the same rank keeps the stored code; `M` is stored as `A`.
+        operator(id_a.clone(), "T").await;
+        upsert_page(&pool, deploy(&a, &[&a, &b], Some("E"), 7), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_a.clone()).await.as_deref(), Some("T"));
+        let id_c = super::super::parcel_place_id(&c);
+        upsert_page(&pool, deploy(&c, &[&c], Some("M"), 7), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_c.clone()).await.as_deref(), Some("A"));
+        assert_eq!(
+            kinds(id_a).await,
+            ["rating_downgrade_refused", "rating_upgraded"],
+            "a new row with nothing it replaces reports nothing"
+        );
+        assert!(kinds(id_c).await.is_empty());
     }
 
     #[test]

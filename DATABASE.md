@@ -495,9 +495,10 @@ the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade
 notice of the same row takes the newer message instead of a new row. A local
-world's creator rating is held to the operator's rating in
-`explore.place_moderation` when one is set, and a rating the world takes moves
-that override with it.
+world's or a derived place's creator rating is held to the operator's rating in
+`explore.place_moderation` when one is set, and a rating the row takes moves
+that override with it. A newly inserted derived place is also held to the
+ratings of the derived places its parcels overlap, which the pass then prunes.
 
 Event notification delivery is owned by Social in
 `social.event_notification_intents`. Explore inserts an event transition snapshot
