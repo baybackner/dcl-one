@@ -64,6 +64,7 @@ impl ImplV8Handler for ListenBuilder {
         {
             LISTEN_EVENTS
                 .lock()
+                .unwrap()
                 .insert(id.string_value().into_string(), callback.clone());
         }
         1

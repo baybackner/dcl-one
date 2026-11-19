@@ -110,6 +110,7 @@ pub(crate) async fn process_events(
 fn take_ktx2_result(req: &AssetForProcessing) -> Option<Vec<u8>> {
     crate::ktx2::KTX2_RESULTS
         .lock()
+        .ok()?
         .remove(&req.base_path.to_string())
         .map(|(_, dds)| dds)
 }

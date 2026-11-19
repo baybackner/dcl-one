@@ -93,11 +93,11 @@ const NOT_FOUND: &[u8] =
     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 /// Serves `routes` (path -> 200 body; anything else 404) and logs every requested path.
-async fn serve(routes: Vec<(String, Vec<u8>)>) -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
+async fn serve(routes: Vec<(String, Vec<u8>)>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = log.clone();
     tokio::spawn(async move {
         while let Ok((socket, _)) = listener.accept().await {
@@ -118,7 +118,7 @@ async fn serve(routes: Vec<(String, Vec<u8>)>) -> (String, Arc<parking_lot::Mute
                         break;
                     }
                 }
-                seen.lock().push(path.clone());
+                seen.lock().unwrap().push(path.clone());
                 let response = match routes.iter().find(|(route, _)| *route == path) {
                     Some((_, body)) => [
                         format!(
@@ -311,7 +311,7 @@ async fn a_url_keyed_copy_is_dropped_once_and_downloaded_again() {
     std::fs::write(dir.join(&name), b"<html>not a picture</html>").unwrap();
 
     assert_eq!(read_all(&io, &path).await, b"<html>not a picture</html>");
-    assert!(log.lock().is_empty());
+    assert!(log.lock().unwrap().is_empty());
 
     assert_eq!(
         io.drop_bad_cached_entry(&path).await,
@@ -319,7 +319,7 @@ async fn a_url_keyed_copy_is_dropped_once_and_downloaded_again() {
     );
     assert!(!dir.join(&name).exists());
     assert_eq!(read_all(&io, &path).await, b"a picture");
-    let requests = log.lock().clone();
+    let requests = log.lock().unwrap().clone();
     assert_eq!(requests, vec!["/pic.png".to_owned()]);
 
     // the entry had its check: a later failure on it is that check's
@@ -439,7 +439,7 @@ struct SettingsTest;
 struct Level(u32);
 
 /// Records the bytes and settings of every load; bytes other than `good` fail.
-struct RecordingLoader(Arc<parking_lot::Mutex<Vec<(Vec<u8>, Level)>>>);
+struct RecordingLoader(Arc<std::sync::Mutex<Vec<(Vec<u8>, Level)>>>);
 
 impl AssetLoader for RecordingLoader {
     type Asset = SettingsTest;
@@ -454,7 +454,7 @@ impl AssetLoader for RecordingLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        self.0.lock().push((bytes.clone(), *settings));
+        self.0.lock().unwrap().push((bytes.clone(), *settings));
         if bytes == b"good" {
             Ok(SettingsTest)
         } else {
@@ -475,7 +475,7 @@ async fn a_healed_asset_loads_again_with_the_settings_it_was_first_loaded_with()
     let (path, name) = url_asset(&io, &format!("{base}/model.settingstest"), "settingstest").await;
     std::fs::write(dir.join(&name), b"bad").unwrap();
 
-    let loads = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let loads = Arc::new(std::sync::Mutex::new(Vec::new()));
     let reader = PassThroughReader { inner: io.clone() };
     let mut app = App::new();
     app.register_asset_source(
@@ -515,11 +515,11 @@ async fn a_healed_asset_loads_again_with_the_settings_it_was_first_loaded_with()
     }
 
     assert_eq!(
-        *loads.lock(),
+        *loads.lock().unwrap(),
         vec![(b"bad".to_vec(), Level(7)), (b"good".to_vec(), Level(7))]
     );
     assert_eq!(io.cache_heals.counts(), (1, 1));
-    assert_eq!(*log.lock(), vec!["/model.settingstest".to_owned()]);
+    assert_eq!(*log.lock().unwrap(), vec!["/model.settingstest".to_owned()]);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

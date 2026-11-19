@@ -410,8 +410,7 @@ mod tests {
         room_connection::{FailureKind, RoomRecovery, RoomSuspended},
     };
     use bevy_console::ConsoleCommandEntered;
-    use parking_lot::Mutex;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn spawn_island(app: &mut App) -> Entity {
         let (components, sender, _) = crate::livekit::standalone_room_components(String::new());
@@ -434,10 +433,12 @@ mod tests {
         app.world_mut().send_event(ConsoleCommandEntered {
             command_name: name.into(),
             args: args.iter().map(|arg| arg.to_string()).collect(),
-            responder: Some(Arc::new(move |result| *writer.lock() = Some(result))),
+            responder: Some(Arc::new(move |result| {
+                *writer.lock().unwrap() = Some(result)
+            })),
         });
         app.update();
-        let result = reply.lock().take().unwrap();
+        let result = reply.lock().unwrap().take().unwrap();
         result
     }
 

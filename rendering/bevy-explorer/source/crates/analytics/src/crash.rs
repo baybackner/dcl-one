@@ -4,7 +4,7 @@
 //! exposes it to boot.js's crash watchdog there. The trapped engine worker may hold any lock, so
 //! the snapshot is only ever `try_lock`ed on that path.
 
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 use bevy::prelude::*;
 use chrono::Utc;
@@ -32,18 +32,20 @@ pub fn refresh_crash_snapshot(config: Res<SegmentConfig>, app_config: Res<AppCon
     if !config.is_changed() && !app_config.is_changed() {
         return;
     }
-    *SNAPSHOT.lock() = Some(Snapshot {
-        user_id: config.user_id().to_owned(),
-        write_key: config.write_key().to_owned(),
-        consent: app_config.terms_accepted(),
-        common: config.common().clone(),
-    });
+    if let Ok(mut snapshot) = SNAPSHOT.lock() {
+        *snapshot = Some(Snapshot {
+            user_id: config.user_id().to_owned(),
+            write_key: config.write_key().to_owned(),
+            consent: app_config.terms_accepted(),
+            common: config.common().clone(),
+        });
+    }
 }
 
 /// The Segment request for an Explorer Error, `(url, body)`, with the common fields as the engine
 /// last knew them. None before the terms are accepted, or while the engine holds the snapshot.
 pub fn crash_batch(message: &str, source: &str) -> Option<(String, String)> {
-    let guard = SNAPSHOT.try_lock()?;
+    let guard = SNAPSHOT.try_lock().ok()?;
     let snapshot = guard.as_ref().filter(|s| s.consent)?;
     let item = build_segment_event_batch_item(
         snapshot.user_id.clone(),
@@ -72,7 +74,7 @@ mod tests {
     fn crash_batch_needs_consent_and_carries_the_snapshot() {
         let common = SegmentEventCommonExplorerFields::new("s".into(), "1.0".into(), None);
         let set = |consent| {
-            *SNAPSHOT.lock() = Some(Snapshot {
+            *SNAPSHOT.lock().unwrap() = Some(Snapshot {
                 user_id: "u".into(),
                 write_key: "k".into(),
                 consent,

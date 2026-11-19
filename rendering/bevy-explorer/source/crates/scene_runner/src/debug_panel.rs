@@ -643,8 +643,7 @@ mod tests {
     use bevy_console::{ConsoleCommandEntered, ConsoleResponder};
     use dcl_component::{DclReader, SceneComponentId, SceneCrdtTimestamp, SceneEntityId};
     use dcl_types::interface::{CrdtStore, CrdtType};
-    use parking_lot::Mutex;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn scene_state_app() -> App {
         let mut app = App::new();
@@ -666,7 +665,7 @@ mod tests {
         let result = Arc::new(Mutex::new(None));
         let responder: ConsoleResponder = {
             let result = result.clone();
-            Arc::new(move |reply| *result.lock() = Some(reply))
+            Arc::new(move |reply| *result.lock().unwrap() = Some(reply))
         };
         app.world_mut().send_event(ConsoleCommandEntered {
             command_name: "/current_scene_state".into(),
@@ -674,7 +673,7 @@ mod tests {
             responder: Some(responder),
         });
         app.update();
-        let reply = result.lock().take().unwrap().unwrap();
+        let reply = result.lock().unwrap().take().unwrap().unwrap();
         serde_json::from_str(&reply).unwrap()
     }
 

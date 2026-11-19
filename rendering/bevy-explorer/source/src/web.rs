@@ -21,10 +21,12 @@ use dcl_wasm::init_runtime;
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 use input_manager::InputPriorities;
 use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
 use perf_output::{layer::PerfLogLayer, stream::Stream};
 use scene_runner::vec3_to_parcel;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use system_bridge::{SystemApi, SystemBridge};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::js_sys;
@@ -88,7 +90,7 @@ pub fn engine_set_hud_main_thread_cost(
             style_and_layout_time_sum_ms,
         }),
     };
-    let Some(mut stored) = HUD_MAIN_THREAD_COST_WINDOW.try_lock() else {
+    let Ok(mut stored) = HUD_MAIN_THREAD_COST_WINDOW.try_lock() else {
         return false;
     };
     match stored.as_mut() {
@@ -836,7 +838,10 @@ pub(crate) fn viewport_active() -> bool {
 /// Takes the HUD cost windows the page stored since the last take, summed; `None` when none
 /// arrived.
 pub(crate) fn take_hud_main_thread_cost_window() -> Option<HudMainThreadCostDataPoint> {
-    HUD_MAIN_THREAD_COST_WINDOW.lock().take()
+    HUD_MAIN_THREAD_COST_WINDOW
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take()
 }
 
 fn update_text_focus(priorities: Res<InputPriorities>, mut prev: Local<bool>, _js: JsThread) {

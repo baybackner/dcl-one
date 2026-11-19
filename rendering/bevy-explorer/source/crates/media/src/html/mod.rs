@@ -10,8 +10,10 @@
 pub mod host;
 pub mod plugin;
 
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU32, Ordering},
+};
 
 use bevy::prelude::*;
 use common::util::watch_send_if_modified;
@@ -165,7 +167,7 @@ pub fn spawn_av(
         url,
         has_video,
     });
-    NEW_SOURCES.lock().push(source);
+    NEW_SOURCES.lock().unwrap().push(source);
     retry_receiver
 }
 
@@ -181,6 +183,6 @@ pub fn adopt_video(
     let (retry_sender, _) = tokio::sync::watch::channel(MediaRetryStatus::default());
     let source = AvSource::new(commands, video, state_sender, retry_sender, Some(image));
     let id = source.id;
-    NEW_SOURCES.lock().push(source);
+    NEW_SOURCES.lock().unwrap().push(source);
     id
 }

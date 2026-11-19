@@ -6,9 +6,8 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 mod processor;
 
-use parking_lot::Mutex;
 #[cfg(target_arch = "wasm32")]
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(target_arch = "wasm32")]
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -70,6 +69,6 @@ pub fn image_processor_init() {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn image_processor_run() {
-    let (req_rx, resp_sx) = CHANNELS.get().unwrap().lock().1.take().unwrap();
+    let (req_rx, resp_sx) = CHANNELS.get().unwrap().lock().unwrap().1.take().unwrap();
     processor::process_events(req_rx, resp_sx).await
 }

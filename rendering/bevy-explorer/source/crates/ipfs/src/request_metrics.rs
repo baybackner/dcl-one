@@ -65,7 +65,7 @@ impl DownloadStats {
 
 impl IpfsIo {
     pub(super) fn download_stats(&self) -> DownloadStats {
-        *self.request_metrics.downloads.lock()
+        *self.request_metrics.downloads.lock().unwrap()
     }
 
     /// Definitions returned in one completed scene lookup (pointers or a World's entity URNs).
@@ -73,6 +73,7 @@ impl IpfsIo {
         self.request_metrics
             .downloads
             .lock()
+            .unwrap()
             .scene_batches
             .record(size);
     }
@@ -82,6 +83,7 @@ impl IpfsIo {
         self.request_metrics
             .downloads
             .lock()
+            .unwrap()
             .attachment_batches
             .record(size);
     }

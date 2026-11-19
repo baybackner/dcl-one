@@ -2445,10 +2445,10 @@ fn debug_dump_avatar(
             std::fs::create_dir_all(&dump_folder).unwrap();
 
             // total / succeed / fail
-            let count = std::sync::Arc::new(parking_lot::Mutex::new((0, 0, 0)));
+            let count = std::sync::Arc::new(std::sync::Mutex::new((0, 0, 0)));
 
             for content_file in def.content.files() {
-                count.lock().0 += 1;
+                count.lock().unwrap().0 += 1;
                 let ipfs_path = IpfsPath::new(IpfsType::new_content_file(
                     scene_hash.to_owned(),
                     content_file.to_owned(),
@@ -2463,7 +2463,7 @@ fn debug_dump_avatar(
                 let send = console_relay.send.clone();
                 tasks.push(IoTaskPool::get().spawn(async move {
                     let report = |fail: Option<String>| {
-                        let mut count = count.lock();
+                        let mut count = count.lock().unwrap();
                         if let Some(fail) = fail {
                             count.2 += 1;
                             let _ = send.send(fail);

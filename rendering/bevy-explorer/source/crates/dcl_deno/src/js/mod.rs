@@ -265,7 +265,7 @@ pub(crate) fn scene_thread(
 
     // store handle
     let vm_handle = runtime.v8_isolate().thread_safe_handle();
-    let mut guard = VM_HANDLES.lock();
+    let mut guard = VM_HANDLES.lock().unwrap();
     guard.insert(scene_id, (vm_handle, kill_flag.clone()));
     drop(guard);
 

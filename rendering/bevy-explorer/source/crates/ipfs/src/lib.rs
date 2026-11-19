@@ -1117,12 +1117,12 @@ pub struct IpfsIo {
     // `file://` baseUrl can also be smuggled in a urn from a remote realm/portable, and those
     // must not read local disk.
     #[cfg(not(target_arch = "wasm32"))]
-    allowed_file_roots: parking_lot::RwLock<Vec<PathBuf>>,
+    allowed_file_roots: std::sync::RwLock<Vec<PathBuf>>,
     client: reqwest::Client,
     // downloads under way, by url (`share_download`)
     in_flight: InFlightDownloads,
     // urls that failed, answered from memory on a repeat request (`failed_remotes`)
-    failed_remotes: parking_lot::Mutex<FailedRemotes>,
+    failed_remotes: std::sync::Mutex<FailedRemotes>,
     pub(crate) bevy_variants: bevy_variants::BevyVariants,
     // cached entries checked after a failed load (`cache_heal`)
     pub(crate) cache_heals: cache_heal::CacheHeals,
@@ -1187,7 +1187,7 @@ impl IpfsIo {
     /// Allow `file://` reads under `root` (canonical). See `allowed_file_roots`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn add_allowed_file_root(&self, root: PathBuf) {
-        let mut roots = self.allowed_file_roots.write();
+        let mut roots = self.allowed_file_roots.write().unwrap();
         if !roots.contains(&root) {
             roots.push(root);
         }
@@ -2138,6 +2138,7 @@ impl IpfsIo {
                     .filter(|canonical| {
                         self.allowed_file_roots
                             .read()
+                            .unwrap()
                             .iter()
                             .any(|root| canonical.starts_with(root))
                     })
@@ -2197,7 +2198,8 @@ impl IpfsIo {
             let repeat = {
                 let mut failed = self
                     .failed_remotes
-                    .lock();
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if self.is_preview {
                     failed.forget(&remote);
                     None

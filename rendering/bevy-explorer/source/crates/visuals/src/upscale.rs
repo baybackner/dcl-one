@@ -602,11 +602,11 @@ mod tests {
                 "{pending} pipelines still compiling"
             );
         }
-        let drawn = std::sync::Arc::new(parking_lot::Mutex::new(None));
+        let drawn = std::sync::Arc::new(std::sync::Mutex::new(None));
         let sink = drawn.clone();
         app.world_mut().spawn(Screenshot::image(output)).observe(
             move |trigger: Trigger<ScreenshotCaptured>| {
-                *sink.lock() = Some(trigger.0.clone());
+                *sink.lock().unwrap() = Some(trigger.0.clone());
             },
         );
         for _ in 0..5 {
@@ -639,7 +639,11 @@ mod tests {
             .count();
         assert_eq!(compositor_pipelines, 1);
 
-        let drawn = drawn.lock().take().expect("the output was captured");
+        let drawn = drawn
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the output was captured");
         assert!(
             drawn
                 .data

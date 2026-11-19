@@ -1,8 +1,10 @@
 //! Where the log's bytes go: the one writer's destinations. [`LogSink`] takes whole events, so a
 //! sink never sees half a line or an exception block split by another thread's line.
 
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, PoisonError,
+};
 
 /// A destination for the log. `write` takes one event's bytes (one entry line, or the three
 /// parts of an exception) and must keep them together.
@@ -53,7 +55,11 @@ impl LogSink for FileSink {
     fn write(&self, bytes: &[u8]) {
         use std::io::Write;
         // a failing log must not fail the app, and there is nowhere to report it
-        let _ = self.0.lock().write_all(bytes);
+        let _ = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write_all(bytes);
     }
 }
 
@@ -81,7 +87,7 @@ impl DeferredSink {
 
     /// The destination is known: it gets what was held, then every later event.
     pub fn open(&self, sink: impl LogSink) {
-        let mut state = self.state.lock();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Deferred::Pending(held) = &*state {
             if !held.is_empty() {
                 sink.write(held);
@@ -94,7 +100,7 @@ impl DeferredSink {
     /// There is no destination: what was held is dropped, and later events are not kept.
     pub fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
-        *self.state.lock() = Deferred::Off;
+        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = Deferred::Off;
     }
 }
 
@@ -106,7 +112,7 @@ impl Default for DeferredSink {
 
 impl LogSink for DeferredSink {
     fn write(&self, bytes: &[u8]) {
-        match &mut *self.state.lock() {
+        match &mut *self.state.lock().unwrap_or_else(PoisonError::into_inner) {
             Deferred::Pending(held) => held.extend_from_slice(bytes),
             Deferred::Open(sink) => sink.write(bytes),
             Deferred::Off => {}
@@ -128,7 +134,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let sink = {
             let captured = captured.clone();
-            FnSink(move |bytes: &[u8]| captured.lock().extend_from_slice(bytes))
+            FnSink(move |bytes: &[u8]| captured.lock().unwrap().extend_from_slice(bytes))
         };
         (captured, sink)
     }
@@ -147,7 +153,7 @@ mod tests {
 ",
         );
         assert_eq!(
-            &*captured.lock(),
+            &*captured.lock().unwrap(),
             b"early
 late
 "
@@ -173,7 +179,7 @@ late
 ",
         );
         assert_eq!(
-            &*captured.lock(),
+            &*captured.lock().unwrap(),
             b"after
 "
         );

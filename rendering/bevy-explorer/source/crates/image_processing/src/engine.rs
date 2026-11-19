@@ -47,7 +47,7 @@ impl Plugin for ImageProcessingPlugin {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let (req_sx, resp_rx) = CHANNELS.get().unwrap().lock().0.take().unwrap();
+            let (req_sx, resp_rx) = CHANNELS.get().unwrap().lock().unwrap().0.take().unwrap();
             app.insert_resource(Channels { req_sx, resp_rx });
         }
 
@@ -110,7 +110,9 @@ struct ImgReprocessStats {
 /// is evicted by `ktx2::evict_stale_results`.
 fn drop_ktx2_result(ty: ProcessingAssetType, path: &AssetPath) {
     if matches!(ty, ProcessingAssetType::Ktx2Cache) {
-        crate::ktx2::KTX2_RESULTS.lock().remove(&path.to_string());
+        if let Ok(mut results) = crate::ktx2::KTX2_RESULTS.lock() {
+            results.remove(&path.to_string());
+        }
     }
 }
 

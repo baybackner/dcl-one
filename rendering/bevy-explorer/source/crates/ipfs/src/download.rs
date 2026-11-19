@@ -1,6 +1,6 @@
 use super::*;
-use parking_lot::Mutex;
 use priority_gate::{DownloadAttempts, DownloadReaders, GateClosed, Registration};
+use std::sync::Mutex;
 use tokio::sync::oneshot;
 
 pub(super) struct SharedDownload {
@@ -71,7 +71,7 @@ impl IpfsIo {
         SharedReader,
         Option<impl ConditionalSendFuture<Output = ()> + 'static>,
     ) {
-        let mut entries = self.in_flight.lock();
+        let mut entries = self.in_flight.lock().unwrap();
         if let Some(download) = entries.get(&remote).and_then(Weak::upgrade) {
             if let Some(reader) = download.readers.try_register(scene.clone()) {
                 debug!("[{token:?}]: remote url: `{remote}` joining in-flight download");
@@ -112,7 +112,7 @@ impl IpfsIo {
                 )) => Some(result),
             };
             // Another reader may already have started a new generation for the same URL.
-            let mut entries = io.in_flight.lock();
+            let mut entries = io.in_flight.lock().unwrap();
             if entries
                 .get(&remote)
                 .is_some_and(|entry| entry.ptr_eq(&identity))
@@ -368,7 +368,11 @@ impl IpfsIo {
                 #[cfg(not(target_arch = "wasm32"))]
                 if matches!(&e, platform::FetchError::Send(e) if e.downcast_ref::<reqwest::Error>().is_some_and(reqwest::Error::is_connect))
                 {
-                    self.request_metrics.downloads.lock().connect_failed += 1;
+                    self.request_metrics
+                        .downloads
+                        .lock()
+                        .unwrap()
+                        .connect_failed += 1;
                 }
                 // a catalyst only activates an entity once it holds all of its files, so a server
                 // that says a content hash's url is wrong says so for the rest of the session;
@@ -394,6 +398,7 @@ impl IpfsIo {
                 };
                 self.failed_remotes
                     .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .record(remote.clone(), session, Instant::now());
                 return ipfs_io_read_state.send_failure(Err(AssetReaderError::Io(Arc::new(
                     std::io::Error::other(format!(
@@ -414,7 +419,7 @@ impl IpfsIo {
         }
 
         if let Some(start) = timing.started {
-            self.request_metrics.downloads.lock().download(
+            self.request_metrics.downloads.lock().unwrap().download(
                 fetched.body.len(),
                 start.elapsed(),
                 timing.first_byte,
@@ -437,6 +442,7 @@ impl IpfsIo {
                     warn!("{message}");
                     self.failed_remotes
                         .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .record(remote.clone(), None, Instant::now());
                     return ipfs_io_read_state.send_failure(Err(AssetReaderError::Io(Arc::new(
                         std::io::Error::other(message),
@@ -479,7 +485,10 @@ impl IpfsIo {
         }
 
         debug!("[{token:?}]: completed remote url: `{remote}`");
-        self.failed_remotes.lock().forget(&remote);
+        self.failed_remotes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .forget(&remote);
         ipfs_io_read_state.send_success(data.len());
         Ok(data)
     }

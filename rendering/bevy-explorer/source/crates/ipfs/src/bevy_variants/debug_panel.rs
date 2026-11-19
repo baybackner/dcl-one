@@ -54,6 +54,7 @@ pub(super) fn snapshot(variants: &BevyVariants) -> Value {
     let mut manifests: Vec<String> = variants
         .manifests
         .lock()
+        .unwrap()
         .iter()
         .map(|(entity, state)| {
             let (slot, text) = match &*state.borrow() {
@@ -82,7 +83,7 @@ pub(super) fn snapshot(variants: &BevyVariants) -> Value {
         .collect();
     manifests.sort();
 
-    let session = variants.session.lock();
+    let session = variants.session.lock().unwrap();
     let state = match (variants.base(), &session.disabled, variants.bc.get()) {
         (None, _, _) => "off".to_owned(),
         (Some(_), Some(reason), _) => format!("off for this session: {reason}"),
