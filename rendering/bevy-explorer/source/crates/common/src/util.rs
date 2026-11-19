@@ -842,6 +842,7 @@ impl Gradient {
     pub fn sample(&self, t: f32) -> Vec3 {
         let stops = self.0;
         let t = t.rem_euclid(1.0);
+        dcl_assert!(!stops.is_empty(), "a ramp needs at least one stop");
         let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
             return Vec3::ZERO;
         };
@@ -879,6 +880,7 @@ impl Curve {
     pub fn sample(&self, t: f32) -> f32 {
         let stops = self.0;
         let t = t.rem_euclid(1.0);
+        dcl_assert!(!stops.is_empty(), "a ramp needs at least one stop");
         let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
             return 0.0;
         };
