@@ -64,8 +64,8 @@ export function promptMicrophonePermission() {
 
 /**
  * Reports the audio inputs now and whenever they change. The browser's "default" and
- * "communications" entries are aliases of real inputs and are left out; without microphone
- * permission the browser hides every input's id, so none is reported.
+ * "communications" entries are aliases of real inputs and are left out. Without microphone
+ * permission the browser hides the inputs' ids, and nothing is reported.
  * @param {function} on_change called with an array of { id, label }
  */
 export function watchMicrophoneDevices(on_change) {
@@ -76,10 +76,12 @@ export function watchMicrophoneDevices(on_change) {
         navigator.mediaDevices
             .enumerateDevices()
             .then((devices) => {
-                const inputs = devices.filter(
+                const audio = devices.filter((device) => device.kind === "audioinput");
+                if (audio.some((device) => !device.deviceId)) {
+                    return;
+                }
+                const inputs = audio.filter(
                     (device) =>
-                        device.kind === "audioinput" &&
-                        device.deviceId &&
                         device.deviceId !== "default" &&
                         device.deviceId !== "communications"
                 );

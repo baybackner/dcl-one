@@ -496,9 +496,9 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
             });
         }
         LivekitCommand::SetupMicrophonePermission => {
-            let events = events.clone();
+            let permission_events = events.clone();
             let on_change = Closure::new(move |permission: String| {
-                let _ = events.unbounded_send(LivekitEvent::Microphone {
+                let _ = permission_events.unbounded_send(LivekitEvent::Microphone {
                     available: is_microphone_available(),
                     permission,
                 });
@@ -507,7 +507,7 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
             // lives as long as the page
             on_change.forget();
 
-            let events = events.clone();
+            let device_events = events.clone();
             let on_devices = Closure::new(move |devices: JsValue| {
                 let devices = js_sys::Array::from(&devices)
                     .iter()
@@ -518,7 +518,7 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
                         })
                     })
                     .collect();
-                let _ = events.unbounded_send(LivekitEvent::MicrophoneDevices(devices));
+                let _ = device_events.unbounded_send(LivekitEvent::MicrophoneDevices(devices));
             });
             watch_microphone_devices(&on_devices);
             // lives as long as the page

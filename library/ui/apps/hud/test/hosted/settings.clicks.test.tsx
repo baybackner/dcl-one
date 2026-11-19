@@ -147,6 +147,15 @@ describe('settings panel microphone', () => {
     await userEvent.click(screen.getByRole('option', { name: 'USB Headset' }))
     expect(vi.mocked(settings.set)).toHaveBeenCalledWith('Microphone', 1)
   })
+
+  it('a choice renamed under the same value shows its new name', () => {
+    const headset = (name: string): Setting => ({ ...DEFAULT_ONLY, namedVariants: [...DEFAULT_ONLY.namedVariants, { name, description: '' }], maxValue: 2, value: 1 })
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [headset('USB Headset')], set: vi.fn() }
+    const { rerender } = render(panel(settings))
+    expect(screen.getByRole('button', { name: 'Microphone' })).toHaveTextContent('USB Headset')
+    rerender(panel({ ...settings, list: [headset('USB Headset (unplugged)')] }))
+    expect(screen.getByRole('button', { name: 'Microphone' })).toHaveTextContent('USB Headset (unplugged)')
+  })
 })
 
 describe('compact settings', () => {

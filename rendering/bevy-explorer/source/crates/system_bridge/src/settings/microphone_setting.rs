@@ -54,6 +54,20 @@ impl MicrophoneDevices {
             .any(|known| known.present && known.device.id == id)
     }
 
+    /// Lists a saved choice the host has not reported yet, as unplugged until it does.
+    fn remember(&self, id: &str) {
+        let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
+        if !known.iter().any(|entry| entry.device.id == id) {
+            known.push(KnownMicrophone {
+                device: MicrophoneDevice {
+                    id: id.to_owned(),
+                    label: "Saved microphone".to_owned(),
+                },
+                present: false,
+            });
+        }
+    }
+
     /// Takes the host's current inputs; returns false when nothing changed.
     pub fn replace(&self, reported: Vec<MicrophoneDevice>) -> bool {
         self.reported.store(true, Ordering::SeqCst);
@@ -121,6 +135,9 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
         .world_mut()
         .get_resource_or_init::<MicrophoneDevices>()
         .clone();
+    if let Some(id) = &config.audio.microphone {
+        devices.remember(id);
+    }
     let apply_devices = devices.clone();
     settings.settings.push(Setting {
         info: info(&devices.read(), config),
@@ -289,5 +306,34 @@ mod tests {
                 .as_deref(),
             Some("b")
         );
+    }
+
+    #[test]
+    fn a_saved_choice_not_yet_reported_shows_as_chosen_and_unplugged() {
+        let mut config = AppConfig::default();
+        config.audio.microphone = Some("headset".to_owned());
+        let mut app = App::new();
+        app.insert_resource(config.clone());
+        let mut settings = Settings {
+            settings: Vec::default(),
+        };
+        add(&mut app, &mut settings, &config);
+        app.insert_resource(settings);
+        app.update();
+        let shown_now = shown(&app);
+        assert_eq!(shown_now.value, 1.0);
+        assert_eq!(
+            shown_now.named_variants[1].name,
+            "Saved microphone (unplugged)"
+        );
+        assert!(!app
+            .world()
+            .resource::<MicrophoneDevices>()
+            .missing("headset"));
+
+        report(&mut app, &["a", "headset"]);
+        let shown_now = shown(&app);
+        assert_eq!(shown_now.value, 1.0);
+        assert_eq!(shown_now.named_variants[1].name, "headset label");
     }
 }
