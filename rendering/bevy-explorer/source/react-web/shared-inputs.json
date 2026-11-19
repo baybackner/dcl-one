@@ -9786,7 +9786,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
-      "sha256": "552d37049501276cbc42d47ad4dbb1e1bed4656df7accb0a33323838bd57b156"
+      "sha256": "17befc361b19dee82b067bb31d6bb112e97aba4ad286ef0218dbb7feda0fcae1"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MenuBackdrop.module.css",

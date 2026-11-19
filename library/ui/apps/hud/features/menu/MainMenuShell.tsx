@@ -34,7 +34,8 @@ const SELECTED_ART: Record<string, [string, number]> = {
 // runs AFTER the new shell renders, so reading this at render time correctly sees the outgoing shell.
 let openShells = 0
 // A shell that mounts this soon after the last one closed is a page switch too: a lazily loaded page
-// (Create) mounts its shell only once its code arrives, after the outgoing shell is gone.
+// (Create) mounts its shell only once its code arrives, after the outgoing shell is gone. Best effort:
+// slower code still opens as fresh, and a close and reopen this quick opens with no entrance.
 const SWITCH_GAP_MS = 200
 let lastShellClosedAt = Number.NEGATIVE_INFINITY
 

@@ -224,8 +224,9 @@ tag (name, badges, distance, opacity, scale) and `/nametag_bubble` shows a test 
       Mock has no engine, so the page's background stays.
 - [ ] **Full-screen view entrance** (`features/menu/MainMenuShell`): opening Map, Backpack or any other
       menu page from the world darkens the world to black, then reveals the page, in 0.2 s; the
-      Backpack's engine-drawn avatar appears only after the black frame. Switching between menu pages,
-      the first open of Create from another page included, plays no black frame. With reduced motion
+      Backpack's engine-drawn avatar appears only after the black frame. Switching between menu pages
+      plays no black frame, nor does a first open of Create from another page when its code loads
+      within 0.2 s; a menu closed and reopened within 0.2 s appears with no entrance. With reduced motion
       on, the page fades in without it.
 
 ---
