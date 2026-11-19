@@ -61,6 +61,7 @@ describe('chat rich messages', () => {
     expect(fireEvent.click(link)).toBe(false) // default navigation prevented
     expect(fireEvent.contextMenu(link)).toBe(false)
     expect(fireEvent.dragStart(link)).toBe(false)
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 2 })) // right button: not an open
     fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
     expect(onOpenUrl).toHaveBeenCalledTimes(2)
     expect(onOpenUrl).toHaveBeenCalledWith('https://decentraland.org')

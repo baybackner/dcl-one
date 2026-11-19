@@ -9182,7 +9182,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatLinkPrompts.tsx",
-      "sha256": "951e84d6b3f194ca8cb8fa472faa1b0deff12514de6e5dd745fa4c0baf2c2f48"
+      "sha256": "df81758006cbf6716a3acb0f13b90fb2d80ee98781c15467d2279764052cbaff"
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatText.tsx",
@@ -10466,7 +10466,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.rich.test.tsx",
-      "sha256": "750bee0dd25c363a8971cabe9665e6b9d58f4da6952d54a0d74bb2b99122605c"
+      "sha256": "4e028945b78749d2fc1713c37f3f6ebc71c36e0f63c5f3c35a96fa7be9b4b262"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.test.tsx",
@@ -10474,7 +10474,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatLinkPrompts.test.tsx",
-      "sha256": "7ecb6192fdf8597e53f29d15acb9d5d40c607ef2d0603c570f6f2c8cb1015138"
+      "sha256": "c3c3c2996587f9a125a58fce83af95022729aca12e1cc7ec4ed1cb12ee97f109"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatTranslation.test.tsx",

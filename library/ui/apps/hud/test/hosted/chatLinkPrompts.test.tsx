@@ -94,6 +94,17 @@ describe('link confirmation', () => {
     expect(openExternal).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['the real host of a user@host URL', 'https://decentraland.org@evil.example/', 'evil.example'],
+    ['the port', 'https://decentraland.org:8443/', 'decentraland.org:8443'],
+    ['a non-Latin host as punycode', 'https://d\u0435centraland.org/', 'xn--dcentraland-okj.org'] // Cyrillic е
+  ])('the host line shows %s', async (_, url, host) => {
+    const done = start(() => confirmOpenLink(url, vi.fn(async () => true)))
+    expect(await screen.findByText(host)).toBeTruthy()
+    act(() => closeTopPopup())
+    await done
+  })
+
   it('dismissal opens nothing', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     const done = start(() => confirmOpenLink('https://decentraland.org', vi.fn(async () => true)))

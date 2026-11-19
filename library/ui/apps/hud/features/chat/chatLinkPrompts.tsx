@@ -4,11 +4,12 @@ import { useEffect, useState } from 'react'
 import { DEFAULT_REALM, isNativeHud } from '@hud-host'
 import { fetchPlaceAt, isEmptyPlace } from '@explorer-core/features/map/mapApi'
 import { showConfirm, showToast } from '../../design'
+import type { OpenExternalUrl } from '../gallery/reelActions'
 import styles from './chatLinkPrompts.module.css'
 
 /** Asks before opening `url`, naming its host first, then opens the parsed URL that was shown. The native
  *  HUD has no tabs, so the engine opens it there, and only `https:`; the web opens `http:` and `https:`. */
-export async function confirmOpenLink(url: string, openExternal: (url: string) => Promise<boolean>): Promise<void> {
+export async function confirmOpenLink(url: string, openExternal: OpenExternalUrl): Promise<void> {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -41,7 +42,7 @@ export async function confirmTeleport(x: number, y: number, realm: string | null
 function LinkTarget({ url }: { url: URL }): React.JSX.Element {
   return (
     <>
-      <p className={styles.host}>{url.hostname}</p>
+      <p className={styles.host}>{url.host}</p>
       {url.protocol !== 'https:' && <p className={styles.insecure}>Not a secure (https) link</p>}
       <p className={styles.url} dir="ltr">
         {url.href}
