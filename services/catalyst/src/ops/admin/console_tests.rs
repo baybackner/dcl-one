@@ -50,7 +50,7 @@ async fn console(pool: &PgPool, ops_writes: bool, domains: Domains) -> (Router, 
 
 async fn post(app: &Router, cookie: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let (status, headers, body) = send(app, "POST", path, &[("cookie", cookie)], Some(body)).await;
-    let refusal = body["body"]["message"]
+    let refusal = body["body"][refusal_key(path)]
         .as_str()
         .is_some_and(|m| m.contains("_WRITES_ENABLED=false"));
     if status == StatusCode::SERVICE_UNAVAILABLE && refusal {
@@ -75,11 +75,27 @@ fn random_address() -> String {
     wallet(&PrivateKeySigner::random())
 }
 
+/// The field of a proxied answer that carries an area's refusal: the
+/// builder answers builder-server's envelope (`error`), every other area its
+/// own `message`.
+fn refusal_key(path: &str) -> &'static str {
+    if path.starts_with("/admin/api/builder/") {
+        "error"
+    } else {
+        "message"
+    }
+}
+
 fn assert_refused(status: StatusCode, body: &Value, switch: &str) {
+    assert_refused_in(status, body, switch, "message");
+}
+
+/// [`assert_refused`] for an area that answers its refusal in `key`.
+fn assert_refused_in(status: StatusCode, body: &Value, switch: &str, key: &str) {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["ok"], false, "{body}");
     assert_eq!(body["status"], 503, "{body}");
-    let message = body["body"]["message"].as_str().unwrap_or_default();
+    let message = body["body"][key].as_str().unwrap_or_default();
     assert!(
         message.contains(&format!("{switch}=false")),
         "the domain's own 503 names {switch}: {body}"
@@ -1053,7 +1069,7 @@ async fn creator_calls_follow_the_create_gate() {
         ),
     ] {
         let (status, body) = post(&app, &cookie, path, body).await;
-        assert_refused(status, &body, "CREATE_WRITES_ENABLED");
+        assert_refused_in(status, &body, "CREATE_WRITES_ENABLED", refusal_key(path));
     }
     assert!(console_rows(&pool, &actor).await.is_empty());
 
