@@ -538,13 +538,18 @@ function jpegSize(jpeg) {
 }
 
 describe('resizeView', { skip: noChrome }, () => {
-  const page = openPage({ isolated: true, mode: 'hud' });
+  // the frame fills the page and runs out of process, as the web client's app frame does
+  const page = openPage({ isolated: true, mode: 'hud', query: '&fill=1' });
+  const frameSize = async () => (await json(page.driver, '/fixture_state')).size;
 
-  test('lays the page out at the size given, and null returns it to the window', async () => {
+  test('lays the page and its app frame out at the size given, and null returns them to the window', async () => {
     const windowSize = jpegSize(await page.driver.screenshot());
+    assert.deepEqual(await frameSize(), windowSize);
     await page.driver.resizeView([640, 480]);
     assert.deepEqual(jpegSize(await page.driver.screenshot()), [640, 480]);
+    assert.deepEqual(await frameSize(), [640, 480]);
     await page.driver.resizeView(null);
     assert.deepEqual(jpegSize(await page.driver.screenshot()), windowSize);
+    assert.deepEqual(await frameSize(), windowSize);
   });
 });
