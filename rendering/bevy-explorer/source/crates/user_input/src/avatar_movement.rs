@@ -766,6 +766,7 @@ pub(crate) fn apply_movement(
         With<PrimaryUser>,
     >,
     mut scenes: Query<(Entity, &mut SceneColliderData)>,
+    containing_scenes: ContainingScene,
     time_res: Res<Time>,
     mut info: ResMut<AvatarMovementInfo>,
     mut last_step: ResMut<LastMovementStep>,
@@ -778,6 +779,15 @@ pub(crate) fn apply_movement(
     else {
         return;
     };
+    // the casts below test only the scenes around the capsule: those it can reach this frame. A
+    // scene moving the avatar more than a parcel in a frame sweeps the scenes a parcel around it.
+    let reach = frame_reach(movement.component.velocity, time_res.delta_secs()).min(PARCEL_SIZE);
+    let area =
+        containing_scenes.get_area_position(transform.translation, PLAYER_COLLIDER_RADIUS + reach);
+    let mut scenes = scenes
+        .iter_mut()
+        .filter(|(scene, _)| area.contains(scene))
+        .collect::<Vec<_>>();
     let step_push = &mut riser_push.0;
 
     info.0.step_time = time_res.delta_secs();
@@ -963,10 +973,10 @@ fn actual_velocity(from: DVec3, to: DVec3, delta: f64) -> DVec3 {
 }
 
 /// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
-/// `motion` is a velocity, distance when it is a unit direction), over every scene's colliders:
-/// the span to the hit and the collider's normal there.
+/// `motion` is a velocity, distance when it is a unit direction), over the colliders of the
+/// `scenes` around it: the span to the hit and the collider's normal there.
 fn cast_avatar(
-    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    scenes: &mut [(Entity, Mut<SceneColliderData>)],
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     motion: DVec3,
@@ -975,7 +985,7 @@ fn cast_avatar(
 ) -> Option<(f64, DVec3)> {
     let mut nearest = None;
     let mut span = span;
-    for (e, mut collider_data) in scenes.iter_mut() {
+    for (e, collider_data) in scenes.iter_mut() {
         if let Some(hit) = collider_data.cast_avatar_nearest(
             position,
             motion,
@@ -984,7 +994,7 @@ fn cast_avatar(
             skip_inside,
             false,
             disabled
-                .get(&e)
+                .get(&*e)
                 .map(|d| d.iter().collect())
                 .unwrap_or_default(),
             -PLAYER_COLLIDER_OVERLAP,
@@ -1001,7 +1011,7 @@ fn cast_avatar(
 /// by a rounding error larger than the sweep's overlap (micrometres a few hundred metres from the
 /// origin), and the cast would stop on the wall at once.
 fn cast_down(
-    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    scenes: &mut [(Entity, Mut<SceneColliderData>)],
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     reach: f64,
@@ -1029,7 +1039,7 @@ fn cast_down(
 /// the steepest ground the step `followed`, or of the ground it started on (the foot of a slope
 /// the step ran down), over the distance moved.
 fn snap_to_ground(
-    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    scenes: &mut [(Entity, Mut<SceneColliderData>)],
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     start: DVec3,
     mut position: DVec3,
@@ -1058,7 +1068,7 @@ fn slope(normal: DVec3) -> f64 {
 /// The slope of the walkable ground a walking step starts on, within [`PLAYER_GROUND_THRESHOLD`]
 /// below `start` (0 for none).
 fn start_slope(
-    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    scenes: &mut [(Entity, Mut<SceneColliderData>)],
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     start: DVec3,
 ) -> f64 {
@@ -1092,12 +1102,20 @@ fn step_push_speed() -> f64 {
     step_reach() / STEP_PUSH_FRAME
 }
 
+/// How far across the ground [`apply_movement`] can carry the capsule in a frame of `delta`
+/// seconds at the scene's `velocity`: the sweep, which ground following lengthens by up to
+/// 1 / cos [`MAX_GROUND_INCLINE`] and a slide can turn sideways, and one step offset's
+/// [`step_reach`]. A run (10 m/s) at 60 fps reaches about 0.33 m.
+fn frame_reach(velocity: Vec3, delta: f32) -> f32 {
+    velocity.length() * delta / MAX_GROUND_INCLINE.cos() + step_reach() as f32
+}
+
 /// Step offset from a riser too steep to stand on: up by at most [`MAX_STEP_HEIGHT`] (less under a
 /// ceiling), on along the horizontal move for the rest of the step's `time` and at least
 /// [`step_reach`], down onto the ground. The new position and the time it used; None unless it
 /// lands higher, on ground it can stand on, with the riser's top no higher than the step.
 fn step_up(
-    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    scenes: &mut [(Entity, Mut<SceneColliderData>)],
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     horizontal: DVec3,
@@ -1133,12 +1151,12 @@ fn walkable(normal: DVec3) -> bool {
     normal.y >= f64::from(MAX_GROUND_INCLINE.cos())
 }
 
-/// The feet's height above ground the player stands on, over every scene's colliders; at most the
-/// height above the world floor.
-fn ground_height(scenes: &mut Query<(Entity, &mut SceneColliderData)>, feet: Vec3) -> f32 {
+/// The feet's height above ground the player stands on, over the colliders of the `scenes` around
+/// it; at most the height above the world floor.
+fn ground_height(scenes: &mut [(Entity, Mut<SceneColliderData>)], feet: Vec3) -> f32 {
     scenes
         .iter_mut()
-        .fold(feet.y, |ground, (_, mut collider_data)| {
+        .fold(feet.y, |ground, (_, collider_data)| {
             ground.min(
                 collider_data
                     .get_ground(feet)
@@ -1162,7 +1180,6 @@ pub struct GroundCollider(pub Option<(Entity, ColliderId, GlobalTransform)>);
 
 fn record_ground_collider(
     mut player: Query<(
-        Entity,
         &Transform,
         &ActivePlayerComponent<AvatarMovement>,
         &mut GroundCollider,
@@ -1170,7 +1187,7 @@ fn record_ground_collider(
     containing_scenes: ContainingScene,
     mut scenes: Query<&mut SceneColliderData>,
 ) {
-    let Ok((player_ent, transform, movement, mut ground)) = player.single_mut() else {
+    let Ok((transform, movement, mut ground)) = player.single_mut() else {
         return;
     };
 
@@ -1182,7 +1199,9 @@ fn record_ground_collider(
 
     let mut best_height = PLAYER_GROUND_THRESHOLD;
 
-    for scene in containing_scenes.get_area(player_ent, PLAYER_COLLIDER_RADIUS) {
+    // around where the move left the player this frame
+    let area = containing_scenes.get_area_position(transform.translation, PLAYER_COLLIDER_RADIUS);
+    for scene in area {
         let Ok(mut collider_data) = scenes.get_mut(scene) else {
             continue;
         };
@@ -1558,6 +1577,7 @@ mod tests {
                 ..default()
             })
             .add_systems(PostUpdate, apply_movement);
+        add_scene_resources(&mut app);
         let mut colliders = SceneColliderData::default();
         let floor = (
             Vec3::new(start.x, -0.5, start.z),
@@ -1568,7 +1588,11 @@ mod tests {
             let id = ColliderId::new(SceneEntityId::ROOT, None, index as u32);
             colliders.set_wall(&id, *centre, *half, *rotation);
         }
-        app.world_mut().spawn(colliders);
+        let scene = app.world_mut().spawn(colliders).id();
+        // the start's parcel and those around it
+        let centre = scene_runner::vec3_to_parcel(start);
+        let around = (-1..=1).flat_map(|x| (-1..=1).map(move |y| centre + IVec2::new(x, y)));
+        place_scene(&mut app, scene, "floor", around);
         let movement = ActivePlayerComponent::<AvatarMovement>::from_config(&default());
         let player = app
             .world_mut()
@@ -1584,6 +1608,92 @@ mod tests {
             ))
             .id();
         (app, player)
+    }
+
+    /// The resources mapping a position to the scenes around it, with no scene placed yet.
+    fn add_scene_resources(app: &mut App) {
+        use scene_runner::initialize_scene::{LiveScenes, PortableScenes, ScenePointers};
+
+        app.init_resource::<LiveScenes>()
+            .init_resource::<PortableScenes>()
+            .init_resource::<ScenePointers>();
+    }
+
+    /// Makes `scene` the live scene `hash` on `parcels`.
+    fn place_scene(
+        app: &mut App,
+        scene: Entity,
+        hash: &str,
+        parcels: impl IntoIterator<Item = IVec2>,
+    ) {
+        use scene_runner::initialize_scene::{LiveScenes, PointerResult, ScenePointers};
+
+        let world = app.world_mut();
+        world
+            .resource_mut::<LiveScenes>()
+            .scenes
+            .insert(hash.to_owned(), scene);
+        let mut pointers = world.resource_mut::<ScenePointers>();
+        for parcel in parcels {
+            pointers.insert(
+                parcel,
+                PointerResult::Exists {
+                    hash: hash.to_owned(),
+                    urn: None,
+                },
+            );
+        }
+    }
+
+    /// Places a scene `hash` on `parcel` holding a wall: a box at `centre`, `half` its extents.
+    fn add_wall_scene(app: &mut App, hash: &str, parcel: IVec2, centre: Vec3, half: Vec3) {
+        let mut colliders = SceneColliderData::default();
+        let id = ColliderId::new(SceneEntityId::ROOT, None, 0);
+        colliders.set_wall(&id, centre, half, Quat::IDENTITY);
+        let scene = app.world_mut().spawn(colliders).id();
+        place_scene(app, scene, hash, [parcel]);
+    }
+
+    #[test]
+    fn a_wall_of_the_next_parcels_scene_stops_the_avatar_crossing_into_it() {
+        // the middle of parcel 0,0's east edge (x 16), and a wall 0.5 m into parcel 1,0
+        let start = Vec3::new(15.5, 0.0, -8.0);
+        let (mut app, player) = movement_app(&[], start);
+        let wall = (Vec3::new(17.0, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        add_wall_scene(&mut app, "next", IVec2::new(1, 0), wall.0, wall.1);
+        set_velocity(&mut app, player, Vec3::new(5.0, 0.0, 0.0));
+        for _ in 0..50 {
+            app.update();
+        }
+        let end = app.world().get::<Transform>(player).unwrap().translation;
+        // against the wall's face
+        let face = 16.5 - PLAYER_COLLIDER_RADIUS;
+        assert!((end.x - face).abs() < 0.01, "stopped at {end}");
+    }
+
+    #[test]
+    fn the_colliders_of_a_scene_away_from_the_avatar_are_not_cast_against() {
+        // a wall across the walk, held by a scene whose parcel is far away
+        let start = Vec3::new(8.0, 0.0, -8.0);
+        let (mut app, player) = movement_app(&[], start);
+        let wall = (Vec3::new(10.5, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        add_wall_scene(&mut app, "far", IVec2::new(5, 5), wall.0, wall.1);
+        set_velocity(&mut app, player, Vec3::new(5.0, 0.0, 0.0));
+        for _ in 0..50 {
+            app.update();
+        }
+        let end = app.world().get::<Transform>(player).unwrap().translation;
+        assert!(end.x > 11.0, "stopped at {end}");
+    }
+
+    #[test]
+    fn a_frames_reach_covers_its_move_and_a_step_offset() {
+        // a run at 60 fps
+        let reach = frame_reach(Vec3::new(10.0, 0.0, 0.0), 1.0 / 60.0);
+        assert!(reach > 10.0 / 60.0 + step_reach() as f32, "{reach}");
+        assert!((reach - 0.33).abs() < 0.01, "{reach}");
+        // standing still: a step offset
+        assert_eq!(frame_reach(Vec3::ZERO, 1.0 / 60.0), step_reach() as f32);
     }
 
     /// A ramp rising along +x at `degrees`, its surface from x 1 at y 0.

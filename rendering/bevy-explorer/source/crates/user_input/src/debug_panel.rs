@@ -224,6 +224,7 @@ mod tests {
         };
         use bevy::time::{TimePlugin, TimeUpdateStrategy};
         use common::structs::{EngineMovementControl, SceneDrivenAnimationFeedback};
+        use scene_runner::initialize_scene::{LiveScenes, PortableScenes, ScenePointers};
 
         let mut app = App::new();
         app.add_plugins(TimePlugin)
@@ -236,6 +237,9 @@ mod tests {
             .init_resource::<LastMovementStep>()
             .init_resource::<CentralCollisions>()
             .init_resource::<SceneDrivenAnimationFeedback>()
+            .init_resource::<LiveScenes>()
+            .init_resource::<PortableScenes>()
+            .init_resource::<ScenePointers>()
             .register_required_components::<PrimaryUser, RiserPush>()
             .register_required_components::<PrimaryUser, GroundAssist>()
             .insert_resource(EngineMovementControl {

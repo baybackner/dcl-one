@@ -853,16 +853,15 @@ impl ContainingScene<'_, '_> {
 
     // get all scenes within radius of the given entity, plus any global scenes
     pub fn get_area(&self, ent: Entity, radius: f32) -> HashSet<Entity> {
-        let Some(focus) = self.transforms.get(ent).ok().and_then(|(gt, oow)| {
-            if oow {
-                None
-            } else {
-                Some(gt.translation().xz() * Vec2::new(1.0, -1.0))
-            }
-        }) else {
-            return self.get_portables(false);
-        };
+        match self.transforms.get(ent) {
+            Ok((gt, false)) => self.get_area_position(gt.translation(), radius),
+            _ => self.get_portables(false),
+        }
+    }
 
+    // get all scenes within radius of the given position, plus any global scenes
+    pub fn get_area_position(&self, position: Vec3, radius: f32) -> HashSet<Entity> {
+        let focus = position.xz() * Vec2::new(1.0, -1.0);
         let min_point = focus - Vec2::splat(radius);
         let max_point = focus + Vec2::splat(radius);
 
