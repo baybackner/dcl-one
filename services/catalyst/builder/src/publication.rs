@@ -318,12 +318,16 @@ fn prepare_item(row: &Value, signer: &str) -> Result<PublicationItem, ApiError> 
 mod tests;
 
 /// The frozen draft: the collection row and its items in creation order,
-/// each with its `contents` map (`items_collection_created_idx`). The old
-/// `missing_content` probe (a content row whose hash was never uploaded) is
-/// gone: `item_contents.hash` is a foreign key to `uploaded_contents`.
+/// each with its `contents` map (`items_collection_created_idx`) and
+/// `missing_content`: whether it names a file its owner never uploaded (no
+/// `uploaded_contents` row for that hash by the item's `eth_address`), which
+/// every preparation and begin of both publications refuses.
 pub(super) const SNAPSHOT_QUERY: &str = "SELECT jsonb_build_object('collection', to_jsonb(c), 'items', \
              COALESCE((SELECT jsonb_agg(to_jsonb(i) || jsonb_build_object('contents', \
                COALESCE((SELECT jsonb_object_agg(ic.file, ic.hash) FROM builder.item_contents ic \
-                 WHERE ic.item_id=i.id), '{}'::jsonb)) ORDER BY i.created_at, i.id) \
+                 WHERE ic.item_id=i.id), '{}'::jsonb), 'missing_content', EXISTS (SELECT 1 \
+                 FROM builder.item_contents ic WHERE ic.item_id=i.id AND NOT EXISTS (SELECT 1 \
+                 FROM builder.uploaded_contents u WHERE u.hash=ic.hash AND u.uploaded_by=i.eth_address))) \
+                 ORDER BY i.created_at, i.id) \
                FROM builder.items i WHERE i.collection_id=c.id), '[]'::jsonb)) \
              FROM builder.collections c WHERE c.id=$1 AND c.eth_address=$2";

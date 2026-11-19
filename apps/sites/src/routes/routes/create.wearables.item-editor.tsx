@@ -214,7 +214,7 @@ export default function CreateWearableItemEditorRoute({
   }, [d.draft.itemId, isConnected, auth.fetch, retry]);
   const save = useCallback(async ({ draft, signal }: { draft: WearableDraft; signal?: AbortSignal }) => {
     if (!authRef.current.isConnected) throw new Error("Sign in to save this wearable.");
-    return saveWearableDraft(draft, { fetch: authRef.current.fetch, signal });
+    return saveWearableDraft(draft, { fetch: authRef.current.fetch, signal, address: authRef.current.address ?? undefined });
   }, []);
   const { name } = useChromeAuth();
   useEffect(() => {

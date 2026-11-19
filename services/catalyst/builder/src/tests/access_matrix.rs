@@ -27,6 +27,7 @@ const STRANGER_KEY: &str = "0x22222222222222222222222222222222222222222222222222
 const COMMITTEE_KEY: &str = "0x3333333333333333333333333333333333333333333333333333333333333333";
 const MANAGER_KEY: &str = "0x4444444444444444444444444444444444444444444444444444444444444444";
 const CREATOR_KEY: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
+const SIBLING_KEY: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
 const PROVIDER: &str = "urn:decentraland:matic:collections-thirdparty:matrix";
 const MOUNTS: [&str; 2] = ["", "/builder-api"];
 
@@ -38,10 +39,13 @@ enum Caller {
     Manager,
     Committee,
     Creator,
+    Sibling,
 }
 use Caller::*;
 
-const CALLERS: [Caller; 6] = [Anonymous, Owner, Stranger, Manager, Committee, Creator];
+const CALLERS: [Caller; 7] = [
+    Anonymous, Owner, Stranger, Manager, Committee, Creator, Sibling,
+];
 
 impl Caller {
     fn key(self) -> Option<&'static str> {
@@ -52,6 +56,7 @@ impl Caller {
             Manager => Some(MANAGER_KEY),
             Committee => Some(COMMITTEE_KEY),
             Creator => Some(CREATOR_KEY),
+            Sibling => Some(SIBLING_KEY),
         }
     }
 
@@ -282,16 +287,65 @@ async fn copy_row(pool: &PgPool, contract: &str, creator: Caller, approved: bool
     .unwrap();
 }
 
-async fn insert_item(pool: &PgPool, collection: Option<Uuid>, minted: bool) -> Uuid {
+/// The bytes of the one file every matrix item names, as `model.glb`.
+const MATRIX_FILE: &[u8] = b"matrix model";
+
+/// A client-shaped `PUT /v1/items/:id` body for the matrix item `id`.
+fn item_json(id: &str, collection: Option<Uuid>, urn: Option<String>) -> Value {
+    let mut item = json!({
+        "id": id, "name": "Matrix renamed", "description": "", "type": "wearable",
+        "eth_address": Owner.address(), "rarity": "common", "thumbnail": "thumbnail.png",
+        "collection_id": collection,
+        "contents": { "model.glb": dcl_auth::hash_bytes_v1(MATRIX_FILE) },
+        "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+        "data": {
+            "category": "hat", "replaces": [], "hides": [], "tags": [],
+            "representations": [{
+                "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"],
+                "mainFile": "model.glb", "contents": ["model.glb"],
+                "overrideHides": [], "overrideReplaces": []
+            }]
+        }
+    });
+    if let Some(urn) = urn {
+        item["urn"] = urn.into();
+    }
+    json!({ "item": item })
+}
+
+/// The URN of the matrix item of the third-party collection `urn`.
+fn item_urn(collection_urn: &str) -> String {
+    format!("{collection_urn}:matrix-item")
+}
+
+async fn insert_item(
+    pool: &PgPool,
+    collection: Option<Uuid>,
+    minted: bool,
+    third_party: Option<(&str, bool)>,
+) -> Uuid {
     let id = Uuid::new_v4();
+    let urn = third_party.map(|(urn, _)| item_urn(urn));
+    let submitted = third_party.is_some_and(|(_, submitted)| submitted);
     sqlx::query(
-        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, local_content_hash) \
-         VALUES ($1, $2, $3, 'Matrix item', 'wearable', $4, 'matrix-local-hash')",
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, local_content_hash, \
+           urn_suffix, is_published) \
+         VALUES ($1, $2, $3, 'Matrix item', 'wearable', $4, 'matrix-local-hash', $5, $6)",
     )
     .bind(id)
     .bind(collection)
     .bind(Owner.address())
-    .bind(minted.then_some("0"))
+    .bind(if submitted { Some("matrix-item") } else { minted.then_some("0") })
+    .bind(&urn)
+    .bind(submitted)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_contents (item_id, file, hash) VALUES ($1, 'model.glb', $2)",
+    )
+    .bind(id)
+    .bind(dcl_auth::hash_bytes_v1(MATRIX_FILE))
     .execute(pool)
     .await
     .unwrap();
@@ -308,7 +362,7 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
             ..Fixture::default()
         },
         Orphan => Fixture {
-            item: Some(insert_item(pool, None, false).await),
+            item: Some(insert_item(pool, None, false, None).await),
             ..Fixture::default()
         },
         Draft | Locked | ThirdParty | ThirdPartySubmitted => {
@@ -324,9 +378,10 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
                 .await
                 .unwrap();
             }
+            let third_party = urn.as_deref().map(|urn| (urn, kind == ThirdPartySubmitted));
             Fixture {
                 collection: Some(id),
-                item: Some(insert_item(pool, Some(id), false).await),
+                item: Some(insert_item(pool, Some(id), false, third_party).await),
                 minted: None,
                 urn,
             }
@@ -336,8 +391,8 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
             insert_collection(pool, id, false, Some(&contract), false).await;
             let creator = if kind == Transferred { Creator } else { Owner };
             copy_row(pool, &contract, creator, kind == Approved).await;
-            let minted = insert_item(pool, Some(id), true).await;
-            let unminted = insert_item(pool, Some(id), false).await;
+            let minted = insert_item(pool, Some(id), true, None).await;
+            let unminted = insert_item(pool, Some(id), false, None).await;
             Fixture {
                 collection: Some(id),
                 item: Some(if kind == Unminted { unminted } else { minted }),
@@ -423,9 +478,10 @@ async fn call(
                 format!("multipart/form-data; boundary={BOUNDARY}"),
             );
             Body::from(format!(
-                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"model.glb\"\r\n\
-                 Content-Type: application/octet-stream\r\n\r\nmatrix {}\r\n--{BOUNDARY}--\r\n",
-                Uuid::new_v4()
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"blob\"\r\n\
+                 Content-Type: application/octet-stream\r\n\r\n{}\r\n--{BOUNDARY}--\r\n",
+                dcl_auth::hash_bytes_v1(MATRIX_FILE),
+                String::from_utf8_lossy(MATRIX_FILE)
             ))
         }
     };
@@ -435,7 +491,7 @@ async fn call(
         .await
         .unwrap();
     let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+    let bytes = axum::body::to_bytes(response.into_body(), 64 << 20)
         .await
         .unwrap();
     (
@@ -700,15 +756,12 @@ impl Op {
             ),
             Op::SaveItem => {
                 let id = f.item_id(kind);
-                let item = json!({
-                    "id": id, "name": "Matrix renamed", "type": "wearable",
-                    "collection_id": if kind == Missing { None } else { f.collection },
-                    "data": { "category": "hat" }
-                });
+                let collection = if kind == Missing { None } else { f.collection };
+                let urn = f.urn.as_deref().map(item_urn);
                 (
                     "PUT",
                     format!("/v1/items/{id}"),
-                    Payload::Json(json!({ "item": item })),
+                    Payload::Json(item_json(&id, collection, urn)),
                 )
             }
             Op::DeleteItem => (
@@ -886,31 +939,29 @@ impl Op {
                 _ if kind.third_party() && !owner => {
                     refused(401, "The user is unauthorized to upsert the collection.")
                 }
-                ThirdPartySubmitted => third_party_item_published("inserted or updated"),
                 _ if !owner && !manager => {
                     refused(401, "You're not authorized to to change this collection.")
                 }
-                _ if kind.published() => item_published("inserted or updated"),
                 Locked => item_locked("inserted or updated"),
                 _ => ok(),
             },
-            Op::DeleteItem | Op::UploadFiles => {
-                let action = if self == Op::DeleteItem {
-                    "deleted"
-                } else {
-                    "inserted or updated"
-                };
-                match kind {
-                    Missing => not_found(&item, "items"),
-                    Malformed => invalid_uuid(&item),
-                    Orphan if caller == Owner => ok(),
-                    _ if !owner && !manager => unauthorized_user(&caller.address(), "items", &item),
-                    ThirdPartySubmitted => third_party_item_published(action),
-                    _ if kind.published() => item_published(action),
-                    Locked => item_locked(action),
-                    _ => ok(),
-                }
-            }
+            Op::DeleteItem => match kind {
+                Missing => not_found(&item, "items"),
+                Malformed => invalid_uuid(&item),
+                Orphan if caller == Owner => ok(),
+                _ if !owner && !manager => unauthorized_user(&caller.address(), "items", &item),
+                ThirdPartySubmitted => third_party_item_published("deleted"),
+                _ if kind.published() => item_published("deleted"),
+                Locked => item_locked("deleted"),
+                _ => ok(),
+            },
+            Op::UploadFiles => match kind {
+                Missing => not_found(&item, "items"),
+                Malformed => invalid_uuid(&item),
+                Orphan if caller == Owner => ok(),
+                _ if !owner && !manager => unauthorized_user(&caller.address(), "items", &item),
+                _ => ok(),
+            },
             _ => None,
         }
     }
@@ -960,7 +1011,39 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32) -> Option<Matr
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
         .nest("/builder-api", crate::router(state.clone()));
+    sibling_collection(&pool).await;
     Some(Matrix { pool, app, state })
+}
+
+/// A third-party collection under the matrix's provider that the sibling
+/// wallet created, with one item: it manages that collection and nothing
+/// else of the provider.
+async fn sibling_collection(pool: &PgPool) -> Uuid {
+    let id = Uuid::new_v4();
+    let urn = format!("{PROVIDER}:sibling-{}", id.simple());
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address, third_party_id, urn_suffix) \
+         VALUES ($1, 'Sibling', $2, $3, $4)",
+    )
+    .bind(id)
+    .bind(Sibling.address())
+    .bind(PROVIDER)
+    .bind(&urn)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix) \
+         VALUES ($1, $2, $3, 'Sibling item', 'wearable', $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .bind(Sibling.address())
+    .bind(item_urn(&urn))
+    .execute(pool)
+    .await
+    .unwrap();
+    id
 }
 
 fn ops() -> Vec<Op> {
@@ -1036,6 +1119,13 @@ async fn cell(
         _ => vec![],
     };
     let allowed = match op {
+        Op::ReadItem | Op::CollectionItems if kind.third_party() => {
+            let mut keys = upstream_keys("161-item-linked-owner");
+            if !sees_all {
+                keys.remove("local_content_hash");
+            }
+            keys
+        }
         Op::ReadItem | Op::CollectionItems if sees_all => upstream_keys("37-item-published-owner"),
         Op::ReadItem | Op::CollectionItems => upstream_keys("36-item-published-stranger"),
         _ => collection_keys(sees_all, kind.third_party()),
@@ -1087,6 +1177,9 @@ async fn cell(
             kind.owner(caller) || kind.manager(caller) || (committee_up && caller == Committee);
         let expected: Vec<String> = match (full, f.minted) {
             (false, Some(minted)) => vec![minted.to_string()],
+            (false, None) if kind == ThirdPartySubmitted => {
+                f.item.iter().map(Uuid::to_string).collect()
+            }
             (false, None) => vec![],
             (true, _) => {
                 let mut all: Vec<String> = sqlx::query_scalar(
@@ -1367,17 +1460,13 @@ async fn an_item_moves_into_or_out_of_a_third_party_collection_never() {
             None => None,
         };
         let id = source.item.unwrap();
-        let item = json!({
-            "id": id, "name": "Matrix moved", "type": "wearable",
-            "collection_id": target, "data": { "category": "hat" }
-        });
         let before = snapshot(&m.pool).await;
         let (status, body) = call(
             &m.app,
             caller,
             "PUT",
             &format!("/v1/items/{id}"),
-            Payload::Json(json!({ "item": item })),
+            Payload::Json(item_json(&id.to_string(), target, None)),
         )
         .await;
         let label = format!("{from:?} to {to:?} as {caller:?}: {status} {body}");
@@ -1602,5 +1691,50 @@ async fn an_expired_committee_read_never_widens_after_its_refresh_fails() {
             "round {round}: while the next refresh runs"
         );
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_sibling_collection_of_the_provider_grants_nothing_over_the_others() {
+    let committee = FakeCommittee::with(&[&Committee.address()]);
+    let Some(m) = matrix(&committee).await else {
+        return;
+    };
+    let f = fixture(&m.pool, ThirdParty).await;
+    let (status, body) = call(
+        &m.app,
+        Sibling,
+        "GET",
+        &format!("/v1/{}/items", Sibling.address()),
+        Payload::None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(listed.len(), 1, "only the sibling's own item: {body}");
+    assert!(
+        !listed.contains(&f.item.unwrap().to_string().as_str()),
+        "the sibling lists an item of the owner's collection: {body}"
+    );
+    for (method, path, payload) in [
+        Op::ReadItem.request(ThirdParty, &f),
+        Op::CollectionItems.request(ThirdParty, &f),
+        Op::SaveItem.request(ThirdParty, &f),
+        Op::UploadFiles.request(ThirdParty, &f),
+        Op::DeleteItem.request(ThirdParty, &f),
+    ] {
+        let before = snapshot(&m.pool).await;
+        let (status, body) = call(&m.app, Sibling, method, &path, payload).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+        assert_eq!(
+            snapshot(&m.pool).await,
+            before,
+            "{method} {path} changed rows"
+        );
     }
 }

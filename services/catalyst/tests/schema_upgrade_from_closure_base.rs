@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 32] = [
+const PREPARED_PENDING_STEPS: [&str; 33] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -44,6 +44,7 @@ const PREPARED_PENDING_STEPS: [&str; 32] = [
     "0051_shop_items_content_hash",
     "0052_builder_collection_flags_retired",
     "0053_builder_collection_listings",
+    "0054_builder_item_contents_order",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -2171,11 +2172,169 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
     release_result(pool, &release)
         .await
         .expect("a second run notes the flags are gone");
+    release_result(pool, &scenes_release()).await.unwrap();
+    release_result(pool, &item_documents_release())
+        .await
+        .unwrap();
 
     let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
         return;
     };
     let tables = ["builder.collections", "builder.items", "shop.items"];
+    assert_eq!(
+        layout(pool, &tables).await,
+        layout(&fresh.pool, &tables).await,
+        "an upgraded database matches a fresh one"
+    );
+    fresh.drop().await;
+    old.drop().await;
+}
+
+const BUILDER_ITEM_DOCUMENTS_AND_UPLOADERS: &str = include_str!(concat!(
+    env!("DCL_ONE_ROOT"),
+    "/schemas/releases/builder-item-documents-and-uploaders.sql"
+));
+
+const BUILDER_ITEM_CONTENTS_STEP: &str = "0054_builder_item_contents_order";
+
+fn scenes_release() -> String {
+    BUILDER_SCENES_RETIRED.replace("\\set ON_ERROR_STOP on\n", "")
+}
+
+fn item_documents_release() -> String {
+    let stop_on_error = "\\set ON_ERROR_STOP on\n";
+    assert_eq!(
+        BUILDER_ITEM_DOCUMENTS_AND_UPLOADERS
+            .matches(stop_on_error)
+            .count(),
+        1
+    );
+    BUILDER_ITEM_DOCUMENTS_AND_UPLOADERS.replace(stop_on_error, "")
+}
+
+async fn document_types(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns WHERE table_schema = 'builder' \
+         AND table_name = 'items' AND column_name IN ('data', 'metrics') ORDER BY column_name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+async fn item_documents(pool: &PgPool) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT jsonb_agg(jsonb_build_array(id, data::jsonb, metrics::jsonb, name, contents) ORDER BY id) \
+         FROM (SELECT i.*, (SELECT jsonb_agg(jsonb_build_array(file, hash, position) ORDER BY file) \
+               FROM builder.item_contents f WHERE f.item_id = i.id) AS contents FROM builder.items i) i",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_builder_item_documents_release_waits_for_its_step_then_retypes_them_keeping_every_value()
+ {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    catalyst::db::bootstrap(pool)
+        .await
+        .expect("the binary that keeps documents in order serves before the release");
+    assert_eq!(document_types(pool).await, ["jsonb", "jsonb"]);
+    sqlx::raw_sql(
+        "INSERT INTO builder.collections (id, name, eth_address) VALUES \
+           ('11111111-1111-4111-8111-000000000001', 'Kept', '0x' || repeat('a', 40)); \
+         INSERT INTO builder.items (id, collection_id, eth_address, name, type, data, metrics) VALUES \
+           ('22222222-2222-4222-8222-000000000001', '11111111-1111-4111-8111-000000000001', '0x' || repeat('a', 40), \
+            'Hat', 'wearable', '{\"tags\": [\"a\"], \"category\": \"hat\"}', '{\"triangles\": 1}'), \
+           ('22222222-2222-4222-8222-000000000002', NULL, '0x' || repeat('a', 40), 'Cap', 'wearable', '{}', NULL); \
+         INSERT INTO builder.item_contents (item_id, file, hash, position) VALUES \
+           ('22222222-2222-4222-8222-000000000001', 'b.png', 'bafkb', 0), \
+           ('22222222-2222-4222-8222-000000000001', 'a.glb', 'bafka', 1); \
+         INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES \
+           ('bafka', 1, '0x' || repeat('a', 40));",
+    )
+    .execute(pool)
+    .await
+    .expect("an item names a hash no upload records once the step ran");
+    let before = item_documents(pool).await;
+    let release = item_documents_release();
+
+    sqlx::query("DELETE FROM meta.schema_steps WHERE step = $1")
+        .bind(BUILDER_ITEM_CONTENTS_STEP)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "the new binary's schema migrate has not recorded its step"
+    );
+    assert_eq!(document_types(pool).await, ["jsonb", "jsonb"]);
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+
+    sqlx::raw_sql(
+        "ALTER TABLE builder.items DROP CONSTRAINT items_metrics_object_check; \
+         ALTER TABLE builder.items ALTER COLUMN metrics TYPE json USING metrics::json;",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "one document retyped by hand"
+    );
+    sqlx::raw_sql(
+        "ALTER TABLE builder.items ALTER COLUMN metrics TYPE jsonb USING metrics::jsonb; \
+         ALTER TABLE builder.items ADD CONSTRAINT items_metrics_object_check \
+           CHECK (metrics IS NULL OR jsonb_typeof(metrics) = 'object');",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "the scene tables still name an upload by key"
+    );
+    assert_eq!(document_types(pool).await, ["jsonb", "jsonb"]);
+    release_result(pool, &scenes_release()).await.unwrap();
+
+    release_result(pool, &release).await.unwrap();
+    assert_eq!(document_types(pool).await, ["json", "json"]);
+    assert_eq!(item_documents(pool).await, before, "every value is kept");
+    sqlx::query("INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ('bafka', 1, '0x' || repeat('b', 40))")
+        .execute(pool)
+        .await
+        .expect("a second wallet's upload of the same bytes is recorded");
+    assert!(
+        sqlx::query("UPDATE builder.items SET data = '[]' WHERE name = 'Cap'")
+            .execute(pool)
+            .await
+            .is_err(),
+        "a document is still an object"
+    );
+    catalyst::db::bootstrap(pool).await.unwrap();
+    release_result(pool, &release)
+        .await
+        .expect("a second run notes the documents are json");
+
+    let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
+        return;
+    };
+    let tables = [
+        "builder.items",
+        "builder.item_contents",
+        "builder.uploaded_contents",
+    ];
     assert_eq!(
         layout(pool, &tables).await,
         layout(&fresh.pool, &tables).await,

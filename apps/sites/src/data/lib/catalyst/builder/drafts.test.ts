@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { hashV1 } from "@ui/shop/seller/lib/entity";
 import { deleteWearableDraft, listItemDrafts, loadWearableDraft, saveWearableDraft, type WearableDraft } from "./drafts";
 
 const id = "fd84234c-55d4-40a8-afbc-ea5a6fe00761";
@@ -56,44 +57,7 @@ describe("wearable persistence", () => {
     expect(result).toEqual({ itemId: id, urn: "" });
     const item = JSON.parse(fetch.mock.calls[1][1].body).item;
     expect(item).toMatchObject({ description: stored.description, thumbnail: stored.thumbnail, beneficiary: stored.beneficiary,
-      contents: stored.contents, data: stored.data, price: "2000000000000000001", name: draft.name, rarity: "rare" });
-  });
-
-  it("uploads actual bytes before attaching content to a new item", async () => {
-    let saved: unknown;
-    const file = model();
-    const fetch = vi.fn(async (_url: string, init?: RequestInit): Promise<Response> => {
-      if (!init?.method) return Response.json({ message: "Item not found" }, { status: 404 });
-      if (init.method === "POST") {
-        const uploaded = (init.body as FormData).get("files") as File;
-        expect(await uploaded.arrayBuffer()).toEqual(await file.arrayBuffer());
-        return ok({ "new.glb": "new-cid" });
-      }
-      saved = JSON.parse(init.body as string).item;
-      return ok({ ...stored, ...saved as object, is_published: false });
-    });
-    await saveWearableDraft({ ...draft, model: file, modelFile: file.name }, { fetch });
-    const methods = fetch.mock.calls.map(([, init]) => init?.method ?? "GET");
-    expect(methods).toContain("POST");
-    expect(methods.indexOf("POST")).toBeLessThan(methods.lastIndexOf("PUT"));
-    expect(saved).toMatchObject({ contents: { "new.glb": "new-cid" }, data: { representations: [{ mainFile: "new.glb" }] } });
-  });
-
-  it("does not report success or attach a model when upload fails", async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(ok(stored)).mockResolvedValueOnce(Response.json({ message: "Upload unavailable" }, { status: 503 }));
-    await expect(saveWearableDraft({ ...draft, model: model() }, { fetch })).rejects.toThrow("Upload unavailable");
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch.mock.calls[1][1].method).toBe("POST");
-  });
-
-  it("keeps body-shape and override metadata when replacing an existing model", async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(ok(stored))
-      .mockResolvedValueOnce(ok({ "new.glb": "new-cid" }))
-      .mockImplementationOnce(async (_url, init) => ok({ ...stored, ...JSON.parse(init.body).item }));
-    await saveWearableDraft({ ...draft, model: model() }, { fetch });
-    const item = JSON.parse(fetch.mock.calls[2][1].body).item;
-    expect(item.data.representations[0]).toMatchObject({ bodyShapes: ["female"], mainFile: "new.glb" });
-    expect(item.contents["thumbnail.png"]).toBe("image-cid");
+      contents: stored.contents, data: { category: "upper_body", tags: ["original"] }, price: "2000000000000000001", name: draft.name, rarity: "rare" });
   });
 
   it("rejects glTF external assets instead of saving a broken model", async () => {
@@ -115,5 +79,100 @@ describe("wearable persistence", () => {
     expect(fetch).not.toHaveBeenCalled();
     await expect(saveWearableDraft(draft, { fetch })).rejects.toThrow("Unauthorized");
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+type DraftFetch = (url: string, init?: RequestInit) => Promise<Response>;
+const signer = "0x2222222222222222222222222222222222222222";
+
+describe("when a new wearable is saved with its model", () => {
+  let fetch: Mock<DraftFetch>;
+  let file: File;
+  let hash: string;
+
+  beforeEach(async () => {
+    file = model();
+    hash = await hashV1(new Uint8Array(await file.arrayBuffer()));
+    fetch = vi.fn<DraftFetch>(async (_url, init) => {
+      if (!init?.method) return Response.json({ ok: false, data: {}, error: "Couldn't find the item" }, { status: 404 });
+      if (init.method === "POST") return Response.json({ ok: true });
+      return ok({ ...stored, ...JSON.parse(init.body as string).item });
+    });
+    await saveWearableDraft({ ...draft, name: "Fresh jacket", model: file, modelFile: file.name }, { fetch, address: signer });
+  });
+
+  it("should save the item naming the model's content hash before uploading it", () => {
+    expect(fetch.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET", "PUT", "POST"]);
+  });
+
+  it("should send every key upstream's item schema requires", () => {
+    const item = JSON.parse(fetch.mock.calls[1][1]!.body as string).item;
+    expect(item).toEqual({
+      id, name: "Fresh jacket", description: "", eth_address: signer, collection_id: null, type: "wearable", rarity: "rare",
+      price: "2000000000000000001", beneficiary: null,
+      metrics: { meshes: 0, bodies: 0, materials: 0, textures: 0, triangles: 0, entities: 0 },
+      contents: { "new.glb": hash },
+      data: { category: "upper_body", hides: [], replaces: [], tags: [], representations: [{
+        bodyShapes: ["urn:decentraland:off-chain:base-avatars:BaseMale", "urn:decentraland:off-chain:base-avatars:BaseFemale"],
+        mainFile: "new.glb", contents: ["new.glb"], overrideHides: [], overrideReplaces: [] }] },
+    });
+  });
+
+  it("should upload the model's bytes under its content hash", async () => {
+    const form = fetch.mock.calls[2][1]!.body as FormData;
+    expect([[...form.keys()], new Uint8Array(await (form.get(hash) as File).arrayBuffer())]).toEqual([[hash], new Uint8Array(await file.arrayBuffer())]);
+  });
+});
+
+describe("when the model of an existing wearable is replaced", () => {
+  let fetch: Mock<DraftFetch>;
+  let hash: string;
+
+  beforeEach(async () => {
+    const file = model();
+    hash = await hashV1(new Uint8Array(await file.arrayBuffer()));
+    fetch = vi.fn<DraftFetch>(async (_url, init) => {
+      if (!init?.method) return ok(stored);
+      if (init.method === "POST") return Response.json({ ok: true });
+      return ok({ ...stored, ...JSON.parse(init.body as string).item });
+    });
+    await saveWearableDraft({ ...draft, model: file }, { fetch, address: signer });
+  });
+
+  it("should keep the body shapes and the other files while naming the new model", () => {
+    const item = JSON.parse(fetch.mock.calls[1][1]!.body as string).item;
+    expect([item.data.representations[0], item.contents]).toEqual([
+      { bodyShapes: ["female"], mainFile: "new.glb", contents: ["new.glb"], overrideHides: [], overrideReplaces: [] },
+      { "jacket.glb": "old-cid", "thumbnail.png": "image-cid", "new.glb": hash },
+    ]);
+  });
+});
+
+describe("when the upload of a saved wearable's model fails", () => {
+  let fetch: Mock<DraftFetch>;
+
+  beforeEach(() => {
+    fetch = vi.fn<DraftFetch>(async (_url, init) => {
+      if (!init?.method) return ok(stored);
+      if (init.method === "POST") return Response.json({ ok: false, data: {}, error: "Upload unavailable" }, { status: 503 });
+      return ok({ ...stored, ...JSON.parse(init.body as string).item });
+    });
+  });
+
+  it("should report the failure instead of success", async () => {
+    await expect(saveWearableDraft({ ...draft, model: model() }, { fetch, address: signer })).rejects.toThrow("Upload unavailable");
+  });
+});
+
+describe("when a wearable's name doesn't fit upstream's item schema", () => {
+  let fetch: Mock<DraftFetch>;
+
+  beforeEach(() => {
+    fetch = vi.fn<DraftFetch>();
+  });
+
+  it.each(["A name longer than thirty-two chars", "Colon: hat"])("should refuse %s before writing", async name => {
+    await expect(saveWearableDraft({ ...draft, name }, { fetch })).rejects.toThrow("32 characters");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

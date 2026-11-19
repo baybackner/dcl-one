@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, Request, header};
 use catalyst_testing::conformance::compare::{
     self, compare_body, query_string, status_and_header_notes,
 };
-use catalyst_testing::conformance::fixture::Fixture;
+use catalyst_testing::conformance::fixture::{Fixture, multipart_body};
 use catalyst_testing::conformance::volatility::Volatility;
 use tower::ServiceExt;
 
@@ -75,9 +75,13 @@ pub async fn replay_with(
     for (k, v) in auth {
         request = request.header(k, v);
     }
-    let body = match &fx.request.body {
-        Some(json) => Body::from(serde_json::to_vec(json).unwrap()),
-        None => Body::empty(),
+    let body = match (&fx.request.body, multipart_body(&fx.request.multipart)) {
+        (_, Some((content_type, bytes))) => {
+            request = request.header(header::CONTENT_TYPE, content_type);
+            Body::from(bytes)
+        }
+        (Some(json), None) => Body::from(serde_json::to_vec(json).unwrap()),
+        (None, None) => Body::empty(),
     };
     let request = request.body(body).unwrap();
     let response = app.clone().oneshot(request).await.unwrap();

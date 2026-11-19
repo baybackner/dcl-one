@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { decodeFunctionData, parseAbi } from "viem";
+import { hashV1 } from "@ui/shop/seller/lib/entity";
 import { collectionDraftWriter, listCollectionDrafts } from "./collection-drafts";
 
 it("lists local collections through the signed owner endpoint", async () => {
@@ -30,7 +31,7 @@ it("retries an interrupted collection import without duplicating items or erasin
     }
     if (init?.method === 'POST') {
       if (fail) { fail = false; return Response.json({ message: 'Upload offline' }, { status: 503 }); }
-      return Response.json({ data: { 'item.gltf': 'stored-cid' } });
+      return Response.json({ ok: true });
     }
     return items.has(id) ? Response.json({ data: items.get(id) }) : Response.json({ message: 'Item not found' }, { status: 404 });
   });
@@ -41,7 +42,7 @@ it("retries an interrupted collection import without duplicating items or erasin
   expect(new Set(collectionIds).size).toBe(1);
   expect(itemIds.size).toBe(1);
   expect(result).toMatchObject({ collectionId: collectionIds[0], contractAddress: '', simulated: false });
-  expect([...items.values()][0].contents).toEqual({ 'item.gltf': 'stored-cid' });
+  expect([...items.values()][0].contents).toEqual({ 'item.gltf': await hashV1(new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0' } }))) });
   expect(fetch.mock.calls.filter(([url, init]) => url.includes('/items/') && init?.method === 'PUT')).toHaveLength(2);
 });
 
@@ -63,7 +64,7 @@ it("saves linked drafts with the selected managed provider and refuses revoked a
       collections.push(collection);
       return Response.json({ data: { ...collection, is_published: false } });
     }
-    if (init?.method === "POST") return Response.json({ data: { "item.gltf": "stored-cid" } });
+    if (init?.method === "POST") return Response.json({ ok: true });
     return init?.method === "PUT" ? Response.json({ data: {} }) : Response.json({ error: "Missing" }, { status: 404 });
   });
   const writer = collectionDraftWriter(() => ({ fetch, address: "0xOwner", base: "https://local.test" }));
@@ -93,7 +94,7 @@ describe("when a standard collection is saved", () => {
         bodies.push(body);
         return Response.json({ data: { ...body.collection, is_published: false, is_approved: false, item_count: "0", urn: "urn:decentraland:matic:collections-v2:0x969194d18107025936324ddc6b1019a6755c94d5" } });
       }
-      if (init?.method === "POST") return Response.json({ data: { "item.gltf": "stored-cid" } });
+      if (init?.method === "POST") return Response.json({ ok: true });
       return init?.method === "PUT" ? Response.json({ data: {} }) : Response.json({ error: "Item not found" }, { status: 404 });
     });
     await collectionDraftWriter(() => ({ fetch, address: owner, base: "https://builder.test" }))({
@@ -122,5 +123,54 @@ describe("when a standard collection is saved without a signed-in wallet", () =>
   it("should refuse before writing anything", async () => {
     const writer = collectionDraftWriter(() => ({ fetch }));
     await expect(writer({ name: "Hats", type: "standard", items: [{ file: new File([JSON.stringify({ asset: { version: "2.0" } })], "item.gltf") }] })).rejects.toThrow("Sign in");
+  });
+});
+
+describe("when a collection's imported item is saved", () => {
+  const owner = "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e";
+  const model = JSON.stringify({ asset: { version: "2.0" } });
+  let fetch: Mock<DraftFetch>;
+  let itemCalls: Parameters<DraftFetch>[];
+
+  beforeEach(async () => {
+    fetch = vi.fn<DraftFetch>(async (url, init) => {
+      if (new URL(url).pathname.startsWith("/v1/collections/")) {
+        return Response.json({ data: { ...JSON.parse(init!.body as string).collection, is_published: false, item_count: "0" } });
+      }
+      if (init?.method === "POST") return Response.json({ ok: true });
+      return init?.method === "PUT" ? Response.json({ data: JSON.parse(init.body as string).item }) : Response.json({ error: "Item not found" }, { status: 404 });
+    });
+    await collectionDraftWriter(() => ({ fetch, address: owner, base: "https://builder.test" }))({
+      name: "Hats", type: "standard", items: [{ file: new File([model], "item.gltf") }],
+    });
+    itemCalls = fetch.mock.calls.filter(([url]) => new URL(url).pathname.startsWith("/v1/items/"));
+  });
+
+  it("should save the item naming each file's content hash and then upload the files under those hashes", async () => {
+    const hash = await hashV1(new TextEncoder().encode(model));
+    const item = JSON.parse(itemCalls[0][1]!.body as string).item;
+    const form = itemCalls[1][1]!.body as FormData;
+    expect([itemCalls.map(([, init]) => init?.method), item.contents, [...form.keys()]]).toEqual([["PUT", "POST"], { "item.gltf": hash }, [hash]]);
+  });
+
+  it("should send the keys upstream's item schema requires", () => {
+    const item = JSON.parse(itemCalls[0][1]!.body as string).item;
+    expect([item.eth_address, item.metrics, item.data.category, item.data.hides, item.data.replaces, item.data.tags]).toEqual([
+      owner, { meshes: 0, bodies: 0, materials: 0, textures: 0, triangles: 0, entities: 0 }, "upper_body", [], [], [],
+    ]);
+  });
+});
+
+describe("when an imported item's name doesn't fit upstream's item schema", () => {
+  let fetch: Mock<DraftFetch>;
+
+  beforeEach(() => {
+    fetch = vi.fn<DraftFetch>();
+  });
+
+  it("should refuse before writing anything", async () => {
+    const writer = collectionDraftWriter(() => ({ fetch, address: "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e" }));
+    await expect(writer({ name: "Hats", type: "standard", items: [{ file: new File([JSON.stringify({ asset: { version: "2.0" } })], "a-model-name-longer-than-thirty-two.gltf") }] })).rejects.toThrow("32 characters");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

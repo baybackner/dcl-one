@@ -1,21 +1,14 @@
-//! The builder's on-chain reads: an address's published collections and
-//! items (`GET /v1/{address}/collections`, `/v1/{address}/items`) and the
-//! curation console's under-review listing (its committee is
-//! [`crate::committee`]'s). The old crate
-//! read the marketplace squid over a side pool; v2 runs no squid, so these
-//! are the L1/L2 collections subgraph readers (`marketplace::graph`, the
-//! ONE guarded client with its retry ladder and body cap), shaped exactly as
-//! the squid rows were for the sites' `BuilderCollectionSchema`,
-//! `OrphanItemSchema` and `ReviewRow`. With no collections subgraph
-//! configured the address routes answer 503 and the curation listings empty,
-//! as the old node did with `BUILDER_MARKETPLACE_PG_CONNECTION_STRING` unset.
+//! The curation console's under-review listing, read from the L1/L2
+//! collections subgraphs (`marketplace::graph`, the ONE guarded client with
+//! its retry ladder and body cap) in the squid's `ReviewRow` shape, and the
+//! committee member row (its committee is [`crate::committee`]'s). With no
+//! collections subgraph configured the listing is empty.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::access::Wallet;
 use crate::chain_index::ChainIndex;
 use crate::chain_index::graph::{THE_GRAPH_PAGE_SIZE, any_collections_reader, graph_query};
 
@@ -60,19 +53,6 @@ pub enum CollectionType {
 pub enum CurationStatus {
     Approved,
     Rejected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(
-    feature = "ts",
-    derive(ts_rs::TS),
-    ts(export, export_to = "builder/", rename_all = "snake_case")
-)]
-pub enum ItemKind {
-    SmartWearable,
-    Emote,
-    Wearable,
 }
 
 /// Member of the curation committee (`GET /v1/collections/curation`).
@@ -122,45 +102,6 @@ pub struct ReviewRowOut {
     pub kind: CollectionType,
 }
 
-/// Row of `GET /v1/{address}/items`.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
-pub struct OrphanItemOut {
-    pub beneficiary: Option<String>,
-    /// The item's on-chain index in its collection, as builder-server names it.
-    /// The Shop counts an item as published only with it.
-    pub blockchain_item_id: Option<String>,
-    pub category: Option<String>,
-    pub collection_id: Option<String>,
-    /// The collection's contract: on-chain rows are keyed by it, so it equals `collection_id`.
-    pub contract_address: Option<String>,
-    #[serde(rename = "createdAt")]
-    #[serde(serialize_with = "iso_timestamp_opt")]
-    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
-    pub created_at: Option<DateTime<Utc>>,
-    pub grad: Option<String>,
-    pub id: String,
-    pub image: Option<String>,
-    pub is_published: bool,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub max_supply: Option<i64>,
-    pub name: String,
-    pub network: Option<String>,
-    pub price: Option<String>,
-    pub rarity: Option<String>,
-    pub status: CollectionStatus,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub total_supply: Option<i64>,
-    #[serde(rename = "type")]
-    pub kind: ItemKind,
-    #[serde(rename = "updatedAt")]
-    #[serde(serialize_with = "iso_timestamp_opt")]
-    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
-    pub updated_at: Option<DateTime<Utc>>,
-    pub urn: Option<String>,
-}
-
-const MAX_ROWS: usize = 1000;
 const MAX_REVIEW_ROWS: usize = 1000;
 /// Collections per `collection_in` chunk of the latest-curation lookup.
 const CURATION_CHUNK: usize = 100;
@@ -171,17 +112,14 @@ pub const MARKETPLACE_DOWN: &str = "marketplace data unavailable";
 #[derive(Clone, Copy)]
 struct Reader {
     url_of: fn(&ChainIndex) -> Option<&str>,
-    network: &'static str,
 }
 
 const READERS: [Reader; 2] = [
     Reader {
         url_of: |s| s.settings.eth_collections_subgraph_url.as_deref(),
-        network: "ETHEREUM",
     },
     Reader {
         url_of: |s| s.settings.matic_collections_subgraph_url.as_deref(),
-        network: "POLYGON",
     },
 ];
 
@@ -204,26 +142,6 @@ struct DbCollection {
     is_approved: Option<bool>,
     created_at: Option<i64>,
     reviewed_at: Option<i64>,
-}
-
-#[derive(Debug)]
-struct DbItem {
-    id: String,
-    blockchain_id: Option<String>,
-    item_type: Option<String>,
-    rarity: Option<String>,
-    price: Option<String>,
-    beneficiary: Option<String>,
-    total_supply: Option<i64>,
-    max_supply: Option<i64>,
-    urn: Option<String>,
-    image: Option<String>,
-    collection_id: Option<String>,
-    created_at: Option<i64>,
-    updated_at: Option<i64>,
-    name: Option<String>,
-    category: Option<String>,
-    network: Option<String>,
 }
 
 #[derive(Debug)]
@@ -271,44 +189,6 @@ fn parse_collection(v: &Value) -> Option<DbCollection> {
     })
 }
 
-fn parse_item(v: &Value, reader: &Reader) -> Option<DbItem> {
-    let meta = v.get("metadata").filter(|m| !m.is_null());
-    let leg = |key: &str| meta.and_then(|m| m.get(key)).filter(|m| !m.is_null());
-    let named = leg("wearable").or_else(|| leg("emote"));
-    Some(DbItem {
-        id: v.get("id")?.as_str()?.to_string(),
-        blockchain_id: opt_str(v, "blockchainId"),
-        item_type: opt_str(v, "itemType"),
-        rarity: opt_str(v, "rarity"),
-        price: v.get("price").map(|p| match p {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        }),
-        beneficiary: opt_str(v, "beneficiary"),
-        total_supply: opt_int(v, "totalSupply"),
-        max_supply: opt_int(v, "maxSupply"),
-        urn: opt_str(v, "urn"),
-        image: opt_str(v, "image"),
-        collection_id: v
-            .get("collection")
-            .and_then(|c| c.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        created_at: opt_int(v, "createdAt"),
-        updated_at: opt_int(v, "updatedAt"),
-        name: named.and_then(|m| opt_str(m, "name")),
-        category: named.and_then(|m| opt_str(m, "category")),
-        network: Some(reader.network.to_string()),
-    })
-}
-
-const ITEMS_QUERY: &str = "query builderItems($address: String!, $first: Int!) {\
-  items(first: $first, where: { creator: $address }, orderBy: createdAt, orderDirection: desc) {\
-    id blockchainId itemType rarity price beneficiary totalSupply maxSupply urn image collection { id } createdAt updatedAt \
-    metadata { wearable { name category } emote { name category } }\
-  }\
-}";
-
 const UNDER_REVIEW_QUERY: &str = "query underReview($first: Int!) {\
   collections(first: $first, where: { isCompleted: true, isApproved: false }, orderBy: createdAt, orderDirection: desc) {\
     id name creator itemsCount isCompleted isApproved createdAt reviewedAt\
@@ -326,41 +206,6 @@ fn list<'a>(data: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-}
-
-/// The address's on-chain items, newest first; `only_orphans` asks for
-/// collection-less items, which never exist on-chain, so it answers empty.
-pub async fn items_for_address(
-    market: &ChainIndex,
-    wallet: &Wallet,
-    only_orphans: bool,
-) -> Result<Vec<OrphanItemOut>, ApiError> {
-    if only_orphans {
-        return Ok(Vec::new());
-    }
-    let addr = wallet.address();
-    let mut rows: Vec<DbItem> = Vec::new();
-    for reader in &READERS {
-        let Some(url) = (reader.url_of)(market) else {
-            continue;
-        };
-        let data = graph_query(
-            market,
-            url,
-            ITEMS_QUERY,
-            json!({ "address": addr, "first": THE_GRAPH_PAGE_SIZE }),
-        )
-        .await
-        .map_err(upstream)?;
-        rows.extend(list(&data, "items").filter_map(|v| parse_item(v, reader)));
-    }
-    rows.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    rows.truncate(MAX_ROWS);
-    Ok(rows.into_iter().map(item_out).collect())
 }
 
 impl From<&crate::committee::Member> for CommitteeMemberOut {
@@ -508,76 +353,9 @@ fn review_row_out(r: DbReviewRow) -> ReviewRowOut {
     }
 }
 
-fn map_item_type(t: &str) -> ItemKind {
-    if t.starts_with("smart") {
-        ItemKind::SmartWearable
-    } else if t.starts_with("emote") {
-        ItemKind::Emote
-    } else {
-        ItemKind::Wearable
-    }
-}
-
-fn item_out(i: DbItem) -> OrphanItemOut {
-    let item_type = i.item_type.as_deref().unwrap_or("wearable_v2");
-    let mapped = map_item_type(item_type);
-
-    let name = i.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        i.urn
-            .as_deref()
-            .and_then(|u| u.rsplit(':').next())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| i.id.clone())
-    });
-    OrphanItemOut {
-        beneficiary: i.beneficiary,
-        blockchain_item_id: i.blockchain_id,
-        category: i.category,
-        contract_address: i.collection_id.clone(),
-        collection_id: i.collection_id,
-        created_at: to_time(i.created_at),
-        grad: None,
-        id: i.id,
-        image: i.image,
-        is_published: true,
-        max_supply: i.max_supply,
-        name,
-        network: i.network,
-        price: i.price,
-        rarity: i.rarity,
-        status: CollectionStatus::Synced,
-        total_supply: i.total_supply,
-        kind: mapped,
-        updated_at: to_time(i.updated_at),
-        urn: i.urn,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-
-    fn db_item() -> DbItem {
-        DbItem {
-            id: "item-1".into(),
-            blockchain_id: Some("3".into()),
-            item_type: Some("smart_wearable_v1".into()),
-            rarity: Some("epic".into()),
-            price: Some("1000000000000000000".into()),
-            beneficiary: Some("0xbenef".into()),
-            total_supply: Some(7),
-            max_supply: Some(100),
-            urn: Some("urn:decentraland:matic:collections-v2:0xc0ffee:0".into()),
-            image: Some("https://img".into()),
-            collection_id: Some("0xc0ffee".into()),
-            created_at: Some(1_700_000_000),
-            updated_at: None,
-            name: Some("Cap".into()),
-            category: Some("hat".into()),
-            network: Some("matic".into()),
-        }
-    }
 
     fn db_review_row(with_curation: bool) -> DbReviewRow {
         DbReviewRow {
@@ -604,71 +382,6 @@ mod tests {
             None => Value::Null,
             Some(other) => panic!("no fixture date for {other}"),
         }
-    }
-
-    /// Compared as parsed JSON: object key order is not part of the contract and flips
-    /// with serde_json's preserve_order feature.
-    /// A `\` line continuation drops the newline and the next line's indent, so a field at
-    /// the end of a line fuses with the first one of the next (`updatedAtmetadata`), and
-    /// the subgraph refuses the whole query.
-    #[test]
-    fn the_items_query_names_every_field_it_parses() {
-        let words: HashSet<&str> = ITEMS_QUERY
-            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            .collect();
-        for field in [
-            "id",
-            "blockchainId",
-            "itemType",
-            "rarity",
-            "price",
-            "beneficiary",
-            "totalSupply",
-            "maxSupply",
-            "urn",
-            "image",
-            "collection",
-            "createdAt",
-            "updatedAt",
-            "metadata",
-            "wearable",
-            "emote",
-            "name",
-            "category",
-        ] {
-            assert!(
-                words.contains(field),
-                "ITEMS_QUERY does not name `{field}` on its own"
-            );
-        }
-    }
-
-    #[test]
-    fn item_wire_bytes_match_the_old_json_macro() {
-        let i = db_item();
-        let old = json!({
-            "id": i.id,
-            "name": i.name,
-            "type": "smart_wearable",
-            "status": "synced",
-            "createdAt": iso_of(i.created_at),
-            "updatedAt": iso_of(i.updated_at),
-            "grad": Value::Null,
-            "rarity": i.rarity,
-            "category": i.category,
-            "price": i.price,
-            "beneficiary": i.beneficiary,
-            "total_supply": i.total_supply,
-            "max_supply": i.max_supply,
-            "urn": i.urn,
-            "image": i.image,
-            "collection_id": i.collection_id,
-            "contract_address": i.collection_id,
-            "blockchain_item_id": i.blockchain_id,
-            "is_published": true,
-            "network": i.network,
-        });
-        assert_eq!(serde_json::to_value(item_out(db_item())).unwrap(), old);
     }
 
     #[test]
@@ -725,37 +438,12 @@ mod tests {
 
     #[test]
     fn subgraph_rows_parse_into_the_squid_shapes() {
-        let reader = &READERS[1];
         let c = parse_collection(&json!({ "id": "0xc0ffee", "owner": "0xo", "creator": "0xc", "name": "Hats", "urn": "urn:x", "itemsCount": 3,
                      "isCompleted": true, "isApproved": false, "createdAt": "1700000000", "updatedAt": 1700000100, "reviewedAt": "0" }))
         .unwrap();
         assert_eq!(
             (c.items_count, c.is_completed, c.created_at, c.reviewed_at),
             (Some(3), Some(true), Some(1_700_000_000), Some(0))
-        );
-        let i = parse_item(
-            &json!({ "id": "0xc0ffee-0", "blockchainId": "0", "itemType": "emote_v1", "rarity": "rare", "price": "10", "beneficiary": "0xb", "totalSupply": "1",
-                     "maxSupply": "100", "urn": "urn:y", "image": null, "collection": { "id": "0xc0ffee" }, "createdAt": "5", "updatedAt": "6",
-                     "metadata": { "wearable": null, "emote": { "name": "Dance", "category": "dance" } } }),
-            reader,
-        )
-        .unwrap();
-        assert_eq!(
-            (
-                i.name.as_deref(),
-                i.category.as_deref(),
-                i.collection_id.as_deref()
-            ),
-            (Some("Dance"), Some("dance"), Some("0xc0ffee"))
-        );
-        let out = item_out(i);
-        assert_eq!(out.kind, ItemKind::Emote);
-        assert_eq!(
-            (
-                out.blockchain_item_id.as_deref(),
-                out.contract_address.as_deref()
-            ),
-            (Some("0"), Some("0xc0ffee"))
         );
         assert!(parse_collection(&json!({ "name": "no id" })).is_none());
     }

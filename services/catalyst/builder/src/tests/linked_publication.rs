@@ -5,11 +5,13 @@ use alloy_sol_types::{SolStruct, eip712_domain, sol};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::drafts::{CollectionDraft, ItemDraft};
+use crate::drafts::CollectionDraft;
 use crate::items::ItemsComponent;
 use crate::linked_publication::LinkedPublicationCheque;
 
-use super::support::{OWNER_KEY, cleanup, scratch_component, unique};
+use super::support::{
+    OWNER_KEY, cleanup, contents_of, save_item, scratch_component, unique, upload,
+};
 
 const OWNER: &str = "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a";
 const OTHER: &str = "0x2222222222222222222222222222222222222222";
@@ -69,37 +71,32 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
             .await
             .is_err()
     );
-    let mut item: ItemDraft = serde_json::from_value(json!({
+    let (model, thumbnail) = (unique("model"), unique("thumbnail"));
+    let mut item = json!({
         "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
         "thumbnail": "thumbnail.png", "data": {"category": "hat", "representations": [{
             "mainFile": "hat.glb", "contents": ["hat.glb"], "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"]
-        }]}, "metrics": {"triangles": 100}
-    })).unwrap();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-        .await
-        .unwrap();
+        }]}, "metrics": {"meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 100, "entities": 1}
+    });
+    let item_id = Uuid::parse_str(item["id"].as_str().unwrap()).unwrap();
+    save_item(&store, OWNER, &item).await.unwrap();
     assert!(
         store
             .prepare_linked_publication(&granted::publisher(OWNER, id))
             .await
             .is_err()
     );
-    item.contents = store
-        .save_item_files(
-            &granted::change(OWNER, item.id),
-            vec![
-                ("hat.glb".into(), unique("model")),
-                ("thumbnail.png".into(), unique("thumbnail")),
-            ],
-        )
+    item["contents"] = contents_of(&[("hat.glb", &model), ("thumbnail.png", &thumbnail)]);
+    save_item(&store, OWNER, &item).await.unwrap();
+    upload(&store, OWNER, item_id, &[&model, &thumbnail])
         .await
         .unwrap();
-    let hashes: Vec<String> = item.contents.values().cloned().collect();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-        .await
-        .unwrap();
+    let hashes: Vec<String> = item["contents"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|h| h.as_str().unwrap().to_string())
+        .collect();
     let stale = store
         .prepare_linked_publication(&granted::publisher(OWNER, id))
         .await
@@ -134,7 +131,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .prepare_linked_publication(&granted::publisher(OWNER, id))
         .await
         .unwrap();
-    assert_eq!(prepared.item_ids, vec![item.id.to_string()]);
+    assert_eq!(prepared.item_ids, vec![item_id.to_string()]);
     let (one, two) = (granted::publisher(OWNER, id), granted::publisher(OWNER, id));
     let (a, b) = tokio::join!(
         store.begin_linked_publication(&one, &prepared.revision),
@@ -152,18 +149,12 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .await
         .is_err()
     );
-    assert!(
-        store
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err()
+    assert_eq!(
+        save_item(&store, OWNER, &item).await.unwrap_err().status(),
+        423
     );
     assert!(
-        store
-            .save_item_files(
-                &granted::change(OWNER, item.id),
-                vec![("hat.glb".into(), unique("changed"))]
-            )
+        upload(&store, OWNER, item_id, &[&unique("changed")])
             .await
             .is_err()
     );
@@ -172,10 +163,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .await
         .unwrap();
     assert!(
-        store
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err(),
+        save_item(&store, OWNER, &item).await.is_err(),
         "standard cancellation must not unlock linked publication"
     );
     assert!(
@@ -188,10 +176,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .cancel_linked_publication(&granted::publisher(OWNER, id))
         .await
         .unwrap();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-        .await
-        .unwrap();
+    save_item(&store, OWNER, &item).await.unwrap();
     let prepared = store
         .prepare_linked_publication(&granted::publisher(OWNER, id))
         .await
@@ -313,12 +298,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
             .await
             .is_err()
     );
-    assert!(
-        reopened
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err()
-    );
+    assert!(save_item(&reopened, OWNER, &item).await.is_err());
     let snapshot: Value = sqlx::query_scalar(
         "SELECT snapshot FROM builder.linked_collection_publications WHERE collection_id=$1",
     )
@@ -326,7 +306,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     .fetch_one(store.pool())
     .await
     .unwrap();
-    assert_eq!(snapshot["items"][0]["contents"], json!(item.contents));
+    assert_eq!(snapshot["items"][0]["contents"], item["contents"]);
     assert_eq!(snapshot["collection"]["name"], "Updated hats");
     let published = store
         .collection_by_id(&granted::read(id))
@@ -401,4 +381,80 @@ async fn verify_answers_503_while_no_foundation_is_named() {
         status(super::support::state_with_settings(named).await, false).await,
         axum::http::StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn a_linked_publication_takes_only_files_the_items_owner_uploaded() {
+    use super::publication_preparation::{Uploader, name_files};
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    for uploaded in [Uploader::Nobody, Uploader::AnotherWallet, Uploader::Owner] {
+        let id = Uuid::new_v4();
+        super::support::save_collection(
+            &store,
+            OWNER,
+            json!({"id": id, "name": "Linked possession", "urn": format!("{PROVIDER}:{id}")}),
+        )
+        .await
+        .unwrap();
+        let mut item = json!({
+            "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
+            "thumbnail": "thumbnail.png", "data": {"category": "hat", "representations": [{
+                "mainFile": "hat.glb", "contents": ["hat.glb"], "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"]
+            }]}, "metrics": {"meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 100, "entities": 1}
+        });
+        let (model, thumbnail) = (
+            unique("linked possession model"),
+            unique("linked possession thumbnail"),
+        );
+        name_files(
+            &store,
+            OWNER,
+            OTHER,
+            &mut item,
+            [("hat.glb", &model), ("thumbnail.png", &thumbnail)],
+            uploaded,
+        )
+        .await;
+        let publisher = granted::publisher(OWNER, id);
+        let prepared = store.prepare_linked_publication(&publisher).await;
+        if uploaded == Uploader::Owner {
+            let revision = prepared.unwrap().revision;
+            store
+                .begin_linked_publication(&publisher, &revision)
+                .await
+                .unwrap();
+        } else {
+            let refused = prepared.unwrap_err();
+            assert_eq!(refused.status(), 400, "{uploaded:?}: {refused}");
+            assert!(
+                refused.to_string().contains("upload its files"),
+                "{uploaded:?}: {refused}"
+            );
+            let begun = store
+                .begin_linked_publication(&publisher, "any revision")
+                .await
+                .unwrap_err();
+            assert_eq!(begun.status(), 400, "{uploaded:?}: {begun}");
+            assert!(
+                begun.to_string().contains("upload its files"),
+                "{uploaded:?}: {begun}"
+            );
+            assert_eq!(
+                store
+                    .claim_linked_publication(&publisher, "any revision")
+                    .await
+                    .unwrap_err()
+                    .status(),
+                409,
+                "{uploaded:?}: claimed"
+            );
+        }
+        let hashes = [
+            dcl_auth::hash_bytes_v1(&model),
+            dcl_auth::hash_bytes_v1(&thumbnail),
+        ];
+        cleanup(&store, &[id], &hashes).await;
+    }
 }

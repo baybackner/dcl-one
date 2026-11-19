@@ -60,6 +60,163 @@ function movedItem(id, collectionId) {
 }
 const OWNER_INITIALIZE = '0xd14fee77000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000180000000000000000000000000c1aba94a79ca07d9d15a62ff5c9b382777e0c70e0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017113b44fdd661a156cc01b5031e3acf72c32eb300000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000011436f6e666f726d616e6365207361766564000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e44434c2d434e46524d4e43535644000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004668747470733a2f2f706565722e646563656e7472616c616e642e6f72672f6c616d626461732f636f6c6c656374696f6e732f7374616e646172642f6572633732312f3133372f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
 const STRANGER_INITIALIZE = '0xd14fee77000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000180000000000000000000000000cd6884d4258edc833f31ac773e24affe6a7d31540000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017113b44fdd661a156cc01b5031e3acf72c32eb300000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000011436f6e666f726d616e6365207361766564000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e44434c2d434e46524d4e43535644000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004668747470733a2f2f706565722e646563656e7472616c616e642e6f72672f6c616d626461732f636f6c6c656374696f6e732f7374616e646172642f6572633732312f3133372f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+const ITEM_MODEL = 'bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei'
+const ITEM_THUMBNAIL = 'bafkreicjyysmiyonyudrmq6ejc6b7m42uma5fcnqoy6h4frcmugd7jtfma'
+const ITEM_TEXTURE = 'bafkreihguhxlcxdu6hacttsy5lwuggfmehebqdb6ngpey2le77bibwl7xe'
+const ITEM_MODEL_V2 = 'bafkreiefylq3hbo4poewjyrt2yheyzadw3agtgqvt2xw5jypyyygqac4k4'
+const ITEM_OTHER_MODEL = 'bafkreidt4shc7ymjpyczl3qv7kuk4jf5r254fdi4lbycn5jjtiauqllvqa'
+const ITEM_EMPTY = 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku'
+const ADDRESS = {
+  owner: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+  stranger: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+  committee: '0x01eba3f0e992f53debaf51ed3738dc2f23e09aee',
+  manager: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0'
+}
+const LINKED = 'urn:decentraland:matic:collections-thirdparty:conformance:items-linked'
+const id = n => `c011ec71-0000-4000-8000-000000000${n}`
+
+/**
+ * An `item` body as the old builder web's `toRemoteItem` sends it, with every object's keys in
+ * sorted order so the replay, which re-serializes the body, sends them in the same order.
+ */
+function itemBody(fields) {
+  const item = {
+    beneficiary: null,
+    blockchain_item_id: null,
+    collection_id: null,
+    contents: { 'model.glb': ITEM_MODEL, 'thumbnail.png': ITEM_THUMBNAIL },
+    data: {
+      category: 'hat',
+      hides: [],
+      replaces: [],
+      representations: [{
+        bodyShapes: ['urn:decentraland:off-chain:base-avatars:BaseMale'],
+        contents: ['model.glb'],
+        mainFile: 'model.glb',
+        overrideHides: [],
+        overrideReplaces: []
+      }],
+      tags: ['conformance']
+    },
+    description: '',
+    eth_address: ADDRESS.owner,
+    is_approved: false,
+    is_published: false,
+    mappings: null,
+    metrics: { bodies: 1, entities: 1, materials: 1, meshes: 1, textures: 1, triangles: 100 },
+    price: null,
+    rarity: 'common',
+    thumbnail: 'thumbnail.png',
+    total_supply: 0,
+    type: 'wearable',
+    urn: null,
+    utility: null,
+    video: null,
+    ...fields
+  }
+  return { item: Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : 1))) }
+}
+
+const SAVED = ['data.created_at', 'data.updated_at']
+const UPDATED = ['data.updated_at']
+
+const ITEM_CASES = [
+  { name: '152-item-draft-owner', description: 'GET /items/{id} signed by the owner of a draft item in a draft collection', method: 'GET', path: `/v1/items/${id('3d1')}`, signer: 'owner' },
+  { name: '153-item-draft-stranger', description: 'GET /items/{id} signed by a wallet with no role on a draft item', method: 'GET', path: `/v1/items/${id('3d1')}`, signer: 'stranger' },
+  { name: '154-item-draft-committee', description: 'GET /items/{id} signed by a committee member on a draft item', method: 'GET', path: `/v1/items/${id('3d1')}`, signer: 'committee' },
+  { name: '155-item-unminted-published-manager', description: 'GET /items/{id} signed by an on-chain manager of a collection on chain, on an item it holds that is not minted', method: 'GET', path: `/v1/items/${id('3b2')}`, signer: 'manager' },
+  { name: '156-item-minted-manager', description: 'GET /items/{id} signed by an on-chain manager on a minted item whose chain price, beneficiary, rarity and supply differ from its row', method: 'GET', path: `/v1/items/${id('3b1')}`, signer: 'manager' },
+  { name: '157-item-minted-minter', description: 'GET /items/{id} signed by an on-chain minter on a minted item', method: 'GET', path: `/v1/items/${id('3b1')}`, signer: 'minter' },
+  { name: '158-item-minted-stranger', description: 'GET /items/{id} signed by a wallet with no role on a minted item whose chain values differ from its row', method: 'GET', path: `/v1/items/${id('3b1')}`, signer: 'stranger' },
+  { name: '159-item-approved-stranger', description: 'GET /items/{id} signed by a wallet with no role on a minted item of an approved collection', method: 'GET', path: `/v1/items/${id('3b3')}`, signer: 'stranger' },
+  { name: '160-item-linked-stranger', description: 'GET /items/{id} signed by a wallet with no role on a third-party item never submitted', method: 'GET', path: `/v1/items/${id('3c1')}`, signer: 'stranger' },
+  { name: '161-item-linked-owner', description: 'GET /items/{id} signed by the provider manager on a third-party item', method: 'GET', path: `/v1/items/${id('3c1')}`, signer: 'owner' },
+  { name: '162-item-orphan-owner', description: 'GET /items/{id} signed by the owner of an item with no collection', method: 'GET', path: `/v1/items/${id('3a1')}`, signer: 'owner' },
+  { name: '163-item-orphan-stranger', description: 'GET /items/{id} signed by another wallet on an item with no collection', method: 'GET', path: `/v1/items/${id('3a1')}`, signer: 'stranger' },
+  { name: '164-item-unknown', description: 'GET /items/{id} of an id no item has', method: 'GET', path: `/v1/items/${id('3ff')}`, signer: 'owner' },
+  { name: '165-item-malformed-id', description: 'GET /items/{id} with an id that is not a UUID', method: 'GET', path: '/v1/items/not-a-uuid', signer: 'owner' },
+  { name: '166-item-minted-admin', description: 'GET /items/{id} signed by an ADMIN_ADDRESSES wallet with no other role on a minted item', method: 'GET', path: `/v1/items/${id('3b1')}`, signer: 'admin' },
+  { name: '167-collection-items-draft-owner', description: 'GET /collections/{id}/items signed by the owner of a draft collection', method: 'GET', path: `/v1/collections/${id('301')}/items`, signer: 'owner' },
+  { name: '168-collection-items-draft-owner-page', description: 'GET /collections/{id}/items signed by the owner, first page of one item', method: 'GET', path: `/v1/collections/${id('301')}/items`, query: { page: '1', limit: '1' }, signer: 'owner' },
+  { name: '169-collection-items-draft-owner-page-two', description: 'GET /collections/{id}/items signed by the owner, second page of one item', method: 'GET', path: `/v1/collections/${id('301')}/items`, query: { page: '2', limit: '1' }, signer: 'owner' },
+  { name: '170-collection-items-published-stranger', description: 'GET /collections/{id}/items signed by a wallet with no role on a collection on chain holding a minted and an unminted item', method: 'GET', path: `/v1/collections/${id('302')}/items`, signer: 'stranger' },
+  { name: '171-collection-items-published-manager', description: 'GET /collections/{id}/items signed by an on-chain manager of that collection', method: 'GET', path: `/v1/collections/${id('302')}/items`, signer: 'manager' },
+  { name: '172-collection-items-published-minter', description: 'GET /collections/{id}/items signed by an on-chain minter of that collection', method: 'GET', path: `/v1/collections/${id('302')}/items`, signer: 'minter' },
+  { name: '173-collection-items-by-contract', description: 'GET /collections/{contract}/items signed by the owner, naming the collection by its contract address', method: 'GET', path: '/v1/collections/0x5eed000000000000000000000000000000000302/items', signer: 'owner' },
+  { name: '174-collection-items-by-contract-upper-case', description: 'GET /collections/{contract}/items signed by the owner, the contract address in upper case', method: 'GET', path: '/v1/collections/0x5EED000000000000000000000000000000000302/items', signer: 'owner' },
+  { name: '175-collection-items-name', description: 'GET /collections/{id}/items signed by the owner, filtered by a part of a name', method: 'GET', path: `/v1/collections/${id('301')}/items`, query: { name: 'CAP' }, signer: 'owner' },
+  { name: '176-collection-items-synced', description: 'GET /collections/{id}/items signed by the owner, filtered by synced=true', method: 'GET', path: `/v1/collections/${id('301')}/items`, query: { synced: 'true' }, signer: 'owner' },
+  { name: '177-collection-items-linked-owner', description: 'GET /collections/{id}/items signed by the provider manager of a third-party collection', method: 'GET', path: `/v1/collections/${id('304')}/items`, signer: 'owner' },
+  { name: '178-collection-items-linked-status', description: 'GET /collections/{id}/items of a third-party collection filtered by status=approved', method: 'GET', path: `/v1/collections/${id('304')}/items`, query: { status: 'approved' }, signer: 'owner' },
+  { name: '179-collection-items-linked-missing-mapping', description: 'GET /collections/{id}/items of a third-party collection filtered by mappingStatus=missing_mapping', method: 'GET', path: `/v1/collections/${id('304')}/items`, query: { mappingStatus: 'missing_mapping' }, signer: 'owner' },
+  { name: '180-collection-items-unknown-invalid-status', description: 'GET /collections/{id}/items of an id no collection has, with a status no curation has', method: 'GET', path: `/v1/collections/${id('3ff')}/items`, query: { status: 'bogus' }, signer: 'owner' },
+  { name: '181-collection-items-draft-admin', description: 'GET /collections/{id}/items signed by an ADMIN_ADDRESSES wallet with no other role on a draft collection', method: 'GET', path: `/v1/collections/${id('301')}/items`, signer: 'admin' },
+  { name: '182-address-items-owner-page', description: 'GET /{address}/items signed by that address, first page of 60 as the old builder web asks', method: 'GET', path: `/v1/${ADDRESS.owner}/items`, query: { page: '1', limit: '60' }, signer: 'owner' },
+  { name: '183-address-items-owner-orphans', description: 'GET /{address}/items signed by that address, the orphan probe the old builder web sends', method: 'GET', path: `/v1/${ADDRESS.owner}/items`, query: { page: '1', limit: '1', collectionId: 'null' }, signer: 'owner' },
+  { name: '184-address-items-owner-collection', description: 'GET /{address}/items signed by that address, filtered by one of its collections', method: 'GET', path: `/v1/${ADDRESS.owner}/items`, query: { page: '1', limit: '60', collectionId: id('301') }, signer: 'owner' },
+  { name: '185-address-items-owner-unpaginated', description: 'GET /{address}/items signed by that address, without page and limit', method: 'GET', path: `/v1/${ADDRESS.owner}/items`, signer: 'owner' },
+  { name: '186-address-items-other', description: 'GET /{address}/items signed by another wallet', method: 'GET', path: `/v1/${ADDRESS.owner}/items`, query: { page: '1', limit: '60' }, signer: 'stranger' },
+  { name: '187-address-items-stranger-own', description: 'GET /{address}/items signed by a wallet holding one item with no collection', method: 'GET', path: `/v1/${ADDRESS.stranger}/items`, query: { page: '1', limit: '60' }, signer: 'stranger' },
+  { name: '188-items-committee', description: 'GET /items signed by a committee member', method: 'GET', path: '/v1/items', signer: 'committee' },
+  { name: '189-items-stranger', description: 'GET /items signed by a wallet that is not on the committee', method: 'GET', path: '/v1/items', signer: 'stranger' },
+  { name: '190-item-save-draft-owner', description: 'PUT /items/{id} signed by the owner, renaming a draft item and setting its utility', method: 'PUT', path: `/v1/items/${id('3d1')}`, signer: 'owner', body: itemBody({ id: id('3d1'), collection_id: id('301'), name: 'Draft hat renamed', description: 'A conformance hat', utility: 'Conformance utility' }), volatile: UPDATED },
+  { name: '191-item-create-draft-owner', description: 'PUT /items/{id} signed by the owner, creating an item in its draft collection', method: 'PUT', path: `/v1/items/${id('3e1')}`, signer: 'owner', body: itemBody({ id: id('3e1'), collection_id: id('301'), name: 'Created hat' }), volatile: SAVED },
+  { name: '192-item-create-orphan-stranger', description: 'PUT /items/{id} signed by a wallet creating an item with no collection', method: 'PUT', path: `/v1/items/${id('3e2')}`, signer: 'stranger', body: itemBody({ id: id('3e2'), eth_address: ADDRESS.stranger, name: 'Stranger hat' }), volatile: SAVED },
+  { name: '193-item-save-draft-stranger', description: 'PUT /items/{id} signed by a wallet with no role on the draft collection', method: 'PUT', path: `/v1/items/${id('3d1')}`, signer: 'stranger', body: itemBody({ id: id('3d1'), collection_id: id('301'), name: 'Taken hat' }) },
+  { name: '194-item-save-draft-committee', description: 'PUT /items/{id} signed by a committee member on a draft item', method: 'PUT', path: `/v1/items/${id('3d1')}`, signer: 'committee', body: itemBody({ id: id('3d1'), collection_id: id('301'), name: 'Curated hat' }) },
+  { name: '195-item-save-orphan-other', description: 'PUT /items/{id} signed by another wallet on an item with no collection', method: 'PUT', path: `/v1/items/${id('3a1')}`, signer: 'stranger', body: itemBody({ id: id('3a1'), eth_address: ADDRESS.stranger, name: 'Taken orphan' }) },
+  { name: '196-item-save-minted-owner', description: 'PUT /items/{id} signed by the owner, renaming a minted item of a collection on chain', method: 'PUT', path: `/v1/items/${id('3b1')}`, signer: 'owner', body: itemBody({ id: id('3b1'), collection_id: id('302'), blockchain_item_id: '0', name: 'Minted hat renamed', urn: 'urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000302:0' }), volatile: UPDATED },
+  { name: '197-item-save-minted-manager', description: 'PUT /items/{id} signed by an on-chain manager, changing a minted item\'s description', method: 'PUT', path: `/v1/items/${id('3b1')}`, signer: 'manager', body: itemBody({ id: id('3b1'), collection_id: id('302'), blockchain_item_id: '0', name: 'Minted hat renamed', description: 'Managed', urn: 'urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000302:0' }), volatile: UPDATED },
+  { name: '198-item-save-minted-rarity', description: 'PUT /items/{id} signed by the owner, changing a minted item\'s rarity', method: 'PUT', path: `/v1/items/${id('3b1')}`, signer: 'owner', body: itemBody({ id: id('3b1'), collection_id: id('302'), blockchain_item_id: '0', name: 'Minted hat renamed', rarity: 'epic' }) },
+  { name: '199-item-save-unminted-published-owner', description: 'PUT /items/{id} signed by the owner on an unminted item of a collection on chain', method: 'PUT', path: `/v1/items/${id('3b2')}`, signer: 'owner', body: itemBody({ id: id('3b2'), collection_id: id('302'), name: 'Unminted cap renamed' }), volatile: UPDATED },
+  { name: '200-item-create-into-published', description: 'PUT /items/{id} signed by the owner, creating an item in a collection on chain', method: 'PUT', path: `/v1/items/${id('3e3')}`, signer: 'owner', body: itemBody({ id: id('3e3'), collection_id: id('302'), name: 'Late hat' }) },
+  { name: '201-item-remove-from-published', description: 'PUT /items/{id} signed by the owner, taking an item out of a collection on chain', method: 'PUT', path: `/v1/items/${id('3b2')}`, signer: 'owner', body: itemBody({ id: id('3b2'), name: 'Unminted cap renamed' }) },
+  { name: '202-item-move-into-published', description: 'PUT /items/{id} signed by the owner, moving a draft item into a collection on chain', method: 'PUT', path: `/v1/items/${id('3e1')}`, signer: 'owner', body: itemBody({ id: id('3e1'), collection_id: id('302'), name: 'Created hat' }) },
+  { name: '203-item-save-unknown-collection', description: 'PUT /items/{id} signed by the owner, creating an item in a collection id no collection has', method: 'PUT', path: `/v1/items/${id('3e4')}`, signer: 'owner', body: itemBody({ id: id('3e4'), collection_id: id('3ff'), name: 'Lost hat' }) },
+  { name: '204-item-save-id-mismatch', description: 'PUT /items/{id} whose body names another id', method: 'PUT', path: `/v1/items/${id('3e4')}`, signer: 'owner', body: itemBody({ id: id('3e5'), name: 'Mismatched hat' }) },
+  { name: '205-item-save-representation-outside-contents', description: 'PUT /items/{id} whose representation names a file its contents lack', method: 'PUT', path: `/v1/items/${id('3e4')}`, signer: 'owner', body: itemBody({ id: id('3e4'), name: 'Hollow hat', contents: { 'thumbnail.png': ITEM_THUMBNAIL } }) },
+  { name: '206-item-save-invalid-name', description: 'PUT /items/{id} whose name holds a colon', method: 'PUT', path: `/v1/items/${id('3e4')}`, signer: 'owner', body: itemBody({ id: id('3e4'), name: 'Colon: hat' }) },
+  { name: '207-item-save-extra-fields', description: 'PUT /items/{id} signed by the owner with keys the schema does not name, in the item and in its data', method: 'PUT', path: `/v1/items/${id('3d1')}`, signer: 'owner', body: (() => { const body = itemBody({ id: id('3d1'), collection_id: id('301'), name: 'Draft hat renamed', description: 'A conformance hat', utility: 'Conformance utility', zzz_extra: 'dropped' }); body.item.data.zzz_extra = true; return body })(), volatile: UPDATED },
+  { name: '208-item-create-too-many-tags', description: 'PUT /items/{id} signed by the owner, creating an item with 21 tags', method: 'PUT', path: `/v1/items/${id('3e4')}`, signer: 'owner', body: (() => { const body = itemBody({ id: id('3e4'), name: 'Tagged hat' }); body.item.data.tags = Array.from({ length: 21 }, (_, i) => `tag${String(i).padStart(2, '0')}`); return body })() },
+  { name: '209-item-save-unsigned', description: 'PUT /items/{id} without a signature', method: 'PUT', path: `/v1/items/${id('3d1')}`, body: itemBody({ id: id('3d1'), collection_id: id('301'), name: 'Anonymous hat' }) },
+  { name: '210-item-save-linked-by-urn', description: 'PUT /items/{urn} signed by the provider manager, saving a third-party item by its URN', method: 'PUT', path: `/v1/items/${LINKED}:hat-1`, signer: 'owner', body: (() => { const body = itemBody({ collection_id: id('304'), name: 'Linked hat renamed', rarity: null, urn: `${LINKED}:hat-1` }); delete body.item.id; return body })(), volatile: UPDATED },
+  { name: '211-item-save-linked-by-id', description: 'PUT /items/{id} signed by the provider manager, saving a third-party item by its id with its URN', method: 'PUT', path: `/v1/items/${id('3c2')}`, signer: 'owner', body: itemBody({ id: id('3c2'), collection_id: id('304'), name: 'Linked cap renamed', rarity: null, urn: `${LINKED}:cap-2` }), volatile: UPDATED },
+  { name: '212-item-save-linked-stranger', description: 'PUT /items/{id} signed by a wallet that does not manage the provider', method: 'PUT', path: `/v1/items/${id('3c2')}`, signer: 'stranger', body: itemBody({ id: id('3c2'), collection_id: id('304'), name: 'Taken cap', rarity: null, urn: `${LINKED}:cap-2` }) },
+  { name: '213-item-create-linked-by-urn', description: 'PUT /items/{urn} of a URN no item has', method: 'PUT', path: `/v1/items/${LINKED}:boots-9`, signer: 'owner', body: (() => { const body = itemBody({ collection_id: id('304'), name: 'Linked boots', rarity: null, urn: `${LINKED}:boots-9` }); delete body.item.id; return body })() },
+  { name: '214-item-save-linked-urn-taken', description: 'PUT /items/{id} renaming a third-party item\'s URN to one another item holds', method: 'PUT', path: `/v1/items/${id('3c2')}`, signer: 'owner', body: itemBody({ id: id('3c2'), collection_id: id('304'), name: 'Linked cap renamed', rarity: null, urn: `${LINKED}:hat-1` }) },
+  { name: '215-item-create-linked', description: 'PUT /items/{id} signed by the provider manager, creating a third-party item', method: 'PUT', path: `/v1/items/${id('3e5')}`, signer: 'owner', body: itemBody({ id: id('3e5'), collection_id: id('304'), name: 'Linked scarf', rarity: null, urn: `${LINKED}:scarf-3` }), volatile: SAVED },
+  { name: '216-item-create-linked-without-urn', description: 'PUT /items/{id} creating a third-party item with a null URN', method: 'PUT', path: `/v1/items/${id('3e6')}`, signer: 'owner', body: itemBody({ id: id('3e6'), collection_id: id('304'), name: 'Linked glove', rarity: null }) },
+  { name: '217-item-save-linked-urn-other-case', description: 'PUT /items/{urn} naming an existing third-party item\'s URN with its item part in upper case', method: 'PUT', path: `/v1/items/${LINKED}:HAT-1`, signer: 'owner', body: (() => { const body = itemBody({ collection_id: id('304'), name: 'Linked hat shouted', rarity: null, urn: `${LINKED}:HAT-1` }); delete body.item.id; return body })() },
+  { name: '218-item-save-linked-mappings', description: 'PUT /items/{id} signed by the provider manager, setting a third-party item\'s mappings', method: 'PUT', path: `/v1/items/${id('3c1')}`, signer: 'owner', body: itemBody({ id: id('3c1'), collection_id: id('304'), name: 'Linked hat renamed', rarity: null, urn: `${LINKED}:hat-1`, mappings: { mainnet: { '0x5eed00000000000000000000000000000000c0de': [{ type: 'any' }] } } }), volatile: UPDATED },
+  { name: '219-item-delete-stranger', description: 'DELETE /items/{id} signed by a wallet with no role on the draft collection', method: 'DELETE', path: `/v1/items/${id('3d2')}`, signer: 'stranger' },
+  { name: '220-item-delete-minted', description: 'DELETE /items/{id} signed by the owner on a minted item', method: 'DELETE', path: `/v1/items/${id('3b1')}`, signer: 'owner' },
+  { name: '221-item-delete-unminted-published-manager', description: 'DELETE /items/{id} signed by an on-chain manager on an unminted item of a collection on chain', method: 'DELETE', path: `/v1/items/${id('3b2')}`, signer: 'manager' },
+  { name: '222-item-delete-draft-owner', description: 'DELETE /items/{id} signed by the owner of the draft collection', method: 'DELETE', path: `/v1/items/${id('3d2')}`, signer: 'owner' },
+  { name: '223-item-delete-unknown', description: 'DELETE /items/{id} of an id no item has', method: 'DELETE', path: `/v1/items/${id('3ff')}`, signer: 'owner' },
+  { name: '224-item-delete-linked-owner', description: 'DELETE /items/{id} signed by the provider manager on a third-party item never submitted', method: 'DELETE', path: `/v1/items/${id('3c2')}`, signer: 'owner' },
+  { name: '225-item-delete-orphan-own', description: 'DELETE /items/{id} signed by the owner of an item with no collection', method: 'DELETE', path: `/v1/items/${id('3e2')}`, signer: 'stranger' },
+  { name: '226-item-files-owner', description: 'POST /items/{id}/files signed by the owner, uploading the model its item names, the field named by the file\'s hash', method: 'POST', path: `/v1/items/${id('3d1')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '227-item-files-two', description: 'POST /items/{id}/files signed by the owner, uploading two files its item names', method: 'POST', path: `/v1/items/${id('3e1')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }, { name: ITEM_THUMBNAIL, filename: 'blob', type: 'image/png', text: 'conformance thumbnail png' }] },
+  { name: '228-item-files-stranger', description: 'POST /items/{id}/files signed by a wallet with no role on the item', method: 'POST', path: `/v1/items/${id('3d1')}/files`, signer: 'stranger', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '229-item-files-committee', description: 'POST /items/{id}/files signed by a committee member', method: 'POST', path: `/v1/items/${id('3d1')}/files`, signer: 'committee', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '230-item-files-unknown', description: 'POST /items/{id}/files of an id no item has', method: 'POST', path: `/v1/items/${id('3ff')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '231-item-files-unsigned', description: 'POST /items/{id}/files without a signature', method: 'POST', path: `/v1/items/${id('3d1')}/files`, multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '232-item-files-published-manager', description: 'POST /items/{id}/files signed by an on-chain manager, uploading to a minted item', method: 'POST', path: `/v1/items/${id('3b1')}/files`, signer: 'manager', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '233-item-files-hash-mismatch', description: 'POST /items/{id}/files signed by the owner, a part whose field names a hash its bytes don\'t have', method: 'POST', path: `/v1/items/${id('3d1')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance texture png' }] },
+  { name: '234-item-files-not-named', description: 'POST /items/{id}/files signed by the owner, a file whose hash the item doesn\'t name', method: 'POST', path: `/v1/items/${id('3d1')}/files`, signer: 'owner', multipart: [{ name: ITEM_OTHER_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance other model glb' }] },
+  { name: '235-collection-lock-owner', description: 'POST /collections/{id}/lock signed by the owner of a draft collection', method: 'POST', path: `/v1/collections/${id('305')}/lock`, signer: 'owner' },
+  { name: '236-item-save-locked', description: 'PUT /items/{id} signed by the owner on an item of a locked collection', method: 'PUT', path: `/v1/items/${id('3f1')}`, signer: 'owner', body: itemBody({ id: id('3f1'), collection_id: id('305'), name: 'Locked hat renamed' }) },
+  { name: '237-item-create-locked', description: 'PUT /items/{id} signed by the owner, creating an item in a locked collection', method: 'PUT', path: `/v1/items/${id('3e7')}`, signer: 'owner', body: itemBody({ id: id('3e7'), collection_id: id('305'), name: 'Locked cap' }) },
+  { name: '238-item-delete-locked', description: 'DELETE /items/{id} signed by the owner on an item of a locked collection', method: 'DELETE', path: `/v1/items/${id('3f1')}`, signer: 'owner' },
+  { name: '239-item-files-locked', description: 'POST /items/{id}/files signed by the owner on an item of a locked collection', method: 'POST', path: `/v1/items/${id('3f1')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }] },
+  { name: '240-item-after-saves-owner', description: 'GET /items/{id} signed by the owner after its saves and upload', method: 'GET', path: `/v1/items/${id('3d1')}`, signer: 'owner', volatile: UPDATED },
+  { name: '241-collection-items-after-saves-owner', description: 'GET /collections/{id}/items signed by the owner after its items were saved, created and deleted', method: 'GET', path: `/v1/collections/${id('301')}/items`, signer: 'owner', volatile: ['data.updated_at', 'data.created_at'] },
+  { name: '242-item-linked-after-saves-owner', description: 'GET /items/{id} signed by the provider manager after its third-party item was saved with mappings', method: 'GET', path: `/v1/items/${id('3c1')}`, signer: 'owner', volatile: UPDATED },
+  { name: '243-item-create-folder-and-empty-entries', description: 'PUT /items/{id} signed by the owner, creating an item whose contents name a folder entry and an empty file as the old builder web packages them', method: 'PUT', path: `/v1/items/${id('3e8')}`, signer: 'owner', body: itemBody({ id: id('3e8'), collection_id: id('301'), name: 'Packaged hat', contents: { 'male/': ITEM_EMPTY, 'model.glb': ITEM_MODEL, 'notes.txt': ITEM_EMPTY, 'thumbnail.png': ITEM_THUMBNAIL } }), volatile: SAVED },
+  { name: '244-item-files-folder-and-empty-entries', description: 'POST /items/{id}/files signed by the owner, the model and the folder entry and empty file under the empty-content hash, as the old builder web sends them', method: 'POST', path: `/v1/items/${id('3e8')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }, { name: ITEM_EMPTY, filename: 'blob', type: 'application/octet-stream', text: '' }, { name: ITEM_EMPTY, filename: 'blob', type: 'application/octet-stream', text: '' }] },
+  { name: '245-item-after-folder-and-empty-entries', description: 'GET /items/{id} signed by the owner of the item saved with a folder entry and an empty file', method: 'GET', path: `/v1/items/${id('3e8')}`, signer: 'owner', volatile: SAVED }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -1957,7 +2114,8 @@ const CASES = [
     volatile: [
       'data.updated_at'
     ]
-  }
+  },
+  ...ITEM_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2235,25 +2393,53 @@ function selected(field, rows, variables, unfaked) {
       unfaked.push(`graph ${field.name.value} where ${key}`)
       return false
     }
-    if (key === 'id') return row.id === lower(value)
-    if (key === 'id_in') return value.map(lower).includes(row.id)
-    if (key === 'id_gt') return row.id > lower(value)
+    if (key === 'id') return row.id === value
+    if (key === 'id_in') return value.includes(row.id)
+    if (key === 'id_gt') return row.id > value
     if (key === 'isCommitteeMember') return row.isCommitteeMember === value
-    if (key === 'creator') return row.creator === lower(value)
+    if (key === 'creator') return row.creator === value
     if (key === 'managers_contains') return containsAll(row.managers, value, String)
     if (key === 'managers_contains_nocase') return containsAll(row.managers, value, lower)
     if (key === 'minters_contains') return containsAll(row.minters, value, String)
-    return row.collection?.id === lower(value)
+    return row.collection?.id === value
   }))
   const orderBy = arg('orderBy') || 'id'
   const ordered = [...matched].sort((a, b) => (a[orderBy] < b[orderBy] ? -1 : a[orderBy] > b[orderBy] ? 1 : 0))
   if (arg('orderDirection') === 'desc') ordered.reverse()
   const skip = Number(arg('skip') || 0)
-  return ordered.slice(skip, skip + Number(arg('first') || 100))
+  const first = Number(arg('first') ?? 100)
+  if (first > 1000) throw new Error('The `first` argument must be between 0 and 1000')
+  if (skip > 5000) throw new Error('The `skip` argument must be between 0 and 5000')
+  return ordered.slice(skip, skip + first)
+}
+
+/**
+ * The fake S3's answer to one request of upstream's AWS SDK: `PutObject`, `CopyObject` (a PUT
+ * naming `x-amz-copy-source`) and `DeleteObject` on the `conformance` bucket, kept in `objects`;
+ * undefined for anything else.
+ */
+function s3Answer(method, url, headers, bytes, objects) {
+  const key = decodeURIComponent(url.replace(/^\/s3\/conformance\//, '').split('?')[0])
+  if (method === 'PUT' && headers['x-amz-copy-source']) {
+    const source = decodeURIComponent(headers['x-amz-copy-source'].replace(/^\/?conformance\//, ''))
+    objects.set(key, objects.get(source) || Buffer.alloc(0))
+    const body = '<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><ETag>"conformance"</ETag><LastModified>2026-01-01T00:00:00.000Z</LastModified></CopyObjectResult>'
+    return { status: 200, headers: { 'content-type': 'application/xml' }, body }
+  }
+  if (method === 'PUT') {
+    objects.set(key, bytes)
+    return { status: 200, headers: { etag: '"conformance"' }, body: '' }
+  }
+  if (method === 'DELETE') {
+    objects.delete(key)
+    return { status: 204, headers: {}, body: '' }
+  }
+  return undefined
 }
 
 function startFakes(req, unfaked, chain) {
   const { parse } = req('graphql')
+  const s3Objects = new Map()
   const server = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -2263,6 +2449,15 @@ function startFakes(req, unfaked, chain) {
         response.end(JSON.stringify(body))
       }
       if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
+      if (request.url.startsWith('/s3/conformance/')) {
+        const answer = s3Answer(request.method, request.url, request.headers, Buffer.concat(chunks), s3Objects)
+        if (!answer) {
+          unfaked.push(`s3 ${request.method} ${request.url}`)
+          return send(404, { error: 'not faked' })
+        }
+        response.writeHead(answer.status, answer.headers)
+        return response.end(answer.body)
+      }
       if (request.method === 'POST' && request.url === '/rpc') {
         const { id, method, params = [] } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         const deployed = address => chain.collections.some(c => c.id === String(address).toLowerCase())
@@ -2281,7 +2476,11 @@ function startFakes(req, unfaked, chain) {
       for (const field of operation.selectionSet.selections) {
         if (!FAKED_GRAPH_FIELDS.has(field.name.value)) unfaked.push(`graph ${field.name.value}`)
         const rows = subgraph[field.name.value]
-        data[(field.alias || field.name).value] = rows ? selected(field, rows, variables, unfaked) : []
+        try {
+          data[(field.alias || field.name).value] = rows ? selected(field, rows, variables, unfaked) : []
+        } catch (error) {
+          return send(200, { errors: [{ message: error.message }] })
+        }
       }
       send(200, { data })
     })
@@ -2352,8 +2551,8 @@ async function seedDatabase(client, seed, signers) {
   }
   for (const item of seed.items) {
     await client.query(
-      'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
-      [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, '{}', item.created_at, item.updated_at]
+      'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, rarity, urn_suffix, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+      [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, JSON.stringify(item.contents || {}), item.rarity ?? null, item.urn_suffix ?? null, item.created_at, item.updated_at]
     )
   }
 }
@@ -2429,15 +2628,34 @@ function fixtureJson(fixture) {
   return JSON.stringify(fixture, null, 2) + '\n'
 }
 
+/**
+ * What `item` sends and what its capture records of it: a JSON `body`, or `multipart` parts
+ * (`name`, `filename`, `type` and the synthetic `text` of each file) sent as form data.
+ */
+function requestBody(item) {
+  if (item.multipart === undefined) {
+    return { body: item.body === undefined ? undefined : JSON.stringify(item.body), recorded: { body: item.body === undefined ? null : item.body } }
+  }
+  if (item.body !== undefined) fail(`${item.name}: a case sends a body or multipart parts, not both`)
+  const form = new FormData()
+  for (const part of item.multipart) {
+    const keys = Object.keys(part).sort().join(',')
+    if (keys !== 'filename,name,text,type') fail(`${item.name}: a multipart part names name, filename, type and text`)
+    form.append(part.name, new Blob([Buffer.from(part.text, 'utf8')], { type: part.type }), part.filename)
+  }
+  return { body: form, recorded: { body: null, multipart: item.multipart } }
+}
+
 async function record(req, base, signers, volatileFields, item) {
   const query = item.query || {}
   const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
   const headers = item.signer ? await signedHeaders(req, signers[item.signer], item) : { ...item.headers }
   if (item.body !== undefined) headers['content-type'] = 'application/json'
+  const sent = requestBody(item)
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
     method: item.method,
     headers,
-    body: item.body === undefined ? undefined : JSON.stringify(item.body),
+    body: sent.body,
     signal: AbortSignal.timeout(5000)
   })
   const bytes = Buffer.from(await response.arrayBuffer())
@@ -2449,7 +2667,7 @@ async function record(req, base, signers, volatileFields, item) {
   const recorded = { status: response.status, headers: kept }
   if ((kept['content-type'] || '').startsWith('application/json')) recorded.body_json = JSON.parse(bytes.toString('utf8'))
   else recorded.body_bytes_b64 = bytes.toString('base64')
-  refuseMarkers(item.name, { request: { headers, query, body: item.body }, response: recorded })
+  refuseMarkers(item.name, { request: { headers, query, ...sent.recorded }, response: recorded })
   const equalities = volatileEqualities(item, recorded.body_json)
   scrubVolatile(item, recorded.body_json, volatileFields)
   return {
@@ -2459,7 +2677,7 @@ async function record(req, base, signers, volatileFields, item) {
       path: item.path,
       query,
       headers: Object.fromEntries(Object.entries(headers).sort(([a], [b]) => a.localeCompare(b))),
-      body: item.body === undefined ? null : item.body
+      ...sent.recorded
     },
     response: recorded,
     captured_from: `${REPOSITORY}@${REVISION}`,
@@ -2553,4 +2771,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, caseOrderErrors, ledgerCaptureErrors,recordedSign, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

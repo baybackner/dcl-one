@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFunctionResult, keccak256, parseAbi, stringToHex } from "viem";
 import type { PublicationPreparation } from "@catalyst-api/builder/PublicationPreparation";
 import type { Eip1193Provider } from "../../auth/wallet";
 import { COLLECTION_BASE_URI, COLLECTION_FACTORY, COLLECTION_FORWARDER, COLLECTION_MANAGER, type PublicationQuote } from "./collection-publication";
 import type { measureItemModels } from "./model-metrics";
 import { FOUNDATION_BUILDER, foundationPublication } from "./foundation-publication";
+import { hashV1 } from "@ui/shop/seller/lib/entity";
 
 const owner="0x1111111111111111111111111111111111111111";
 const contract="0x2222222222222222222222222222222222222222";
@@ -33,7 +34,7 @@ function fixture() {
       if (method==="PUT") Object.assign(item,body.item);
       return reply(item);
     }
-    if (url===`https://local.test/v1/items/${itemId}/files`) return reply({"thumbnail.png":"generated-image"});
+    if (url===`https://local.test/v1/items/${itemId}/files`) return Response.json({ok:true});
     if (url===`${FOUNDATION_BUILDER}/collections/${id}`) return reply({...collection,contract_address:state.badAddress?owner:contract});
     if (url===`${FOUNDATION_BUILDER}/items/${itemId}`) return reply(body.item);
     if (url===`${FOUNDATION_BUILDER}/items/${itemId}/files`) return state.failFiles?Response.json({error:"storage offline"},{status:503}):Response.json({ok:true});
@@ -110,5 +111,25 @@ describe("Foundation collection publication",()=>{
     await f.api.submit(f.preparation,contract);expect(f.state.posts).toBe(1);
     f.collection.forum_link="https://other.example/t/stolen";
     await expect(f.api.submit(f.preparation,contract)).rejects.toThrow("invalid review topic");
+  });
+});
+
+describe("when an inspected item has no thumbnail and its model renders one", () => {
+  let f: ReturnType<typeof fixture>;
+  let hash: string;
+
+  beforeEach(async () => {
+    f = fixture();
+    f.item.thumbnail = null;
+    const image = new Blob(["rendered thumbnail"], { type: "image/png" });
+    hash = await hashV1(new Uint8Array(await image.arrayBuffer()));
+    f.measure.mockImplementationOnce(async (_type, _files, _contents, _signal, onThumbnail) => { onThumbnail?.(image); return metrics; });
+    await f.api.inspect(id);
+  });
+
+  it("should save the item naming the thumbnail's content hash and then upload it under that hash", () => {
+    const local = f.requests.filter(r => r.url.startsWith(`https://local.test/v1/items/${itemId}`) && r.method !== "GET");
+    expect([local.map(r => r.method), (local[0].body as { item: { contents: Record<string, string> } }).item.contents["thumbnail.png"], [...(local[1].body as FormData).keys()]])
+      .toEqual([["PUT", "POST"], hash, [hash]]);
   });
 });

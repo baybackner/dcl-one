@@ -12,6 +12,7 @@ import { measureItemModels } from "./model-metrics";
 import { COLLECTION_FACTORY, COLLECTION_FORWARDER, type PublicationQuote } from "./collection-publication";
 
 import { FOUNDATION_BUILDER } from "./foundation-fetch";
+import { hashV1 } from "@ui/shop/seller/lib/entity";
 export { FOUNDATION_BUILDER } from "./foundation-fetch";
 const Representation = z.object({bodyShapes:z.array(z.string()).min(1), mainFile:z.string(), contents:z.array(z.string()).min(1),
   overrideHides:z.array(z.string()).optional(), overrideReplaces:z.array(z.string()).optional()});
@@ -106,14 +107,19 @@ export function foundationPublication(options: () => DraftOptions, settings: {ba
           item.thumbnail?undefined:blob=>{thumbnail=blob;});
         const hashes={...item.contents};
         let thumbnailName=item.thumbnail;
+        let rendered:{hash:string;blob:Blob}|undefined;
         if (!thumbnailName) {
           if (!thumbnail) throw new Error(`${item.name}: include thumbnail.png in the emote ZIP before publishing.`);
-          const form=new FormData(); form.append("files",thumbnail,"thumbnail.png");
-          Object.assign(hashes,z.record(z.string(),z.string()).parse(await request(`/v1/items/${item.id}/files`,local(signal),{method:"POST",body:form})));
+          rendered={hash:await hashV1(new Uint8Array(await thumbnail.arrayBuffer())),blob:thumbnail};
+          hashes["thumbnail.png"]=rendered.hash;
           thumbnailName="thumbnail.png";
         }
         if (JSON.stringify(item.data)!==JSON.stringify(data) || JSON.stringify(item.metrics)!==JSON.stringify(metrics) || thumbnailName!==item.thumbnail) {
           await request(`/v1/items/${item.id}`,local(signal),{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({item:{...item,data,metrics,thumbnail:thumbnailName,contents:hashes}})});
+        }
+        if (rendered) {
+          const form=new FormData(); form.append(rendered.hash,rendered.blob,"thumbnail.png");
+          await request(`/v1/items/${item.id}/files`,local(signal),{method:"POST",body:form});
         }
       }
     },

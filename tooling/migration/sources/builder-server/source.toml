@@ -63,8 +63,8 @@ columns = [
   { name = "rarity", type = "text" },
   { name = "price", type = "text" },
   { name = "beneficiary", type = "text" },
-  { name = "data", type = "jsonb" },
-  { name = "metrics", type = "jsonb" },
+  { name = "data", type = "json" },
+  { name = "metrics", type = "json" },
   { name = "utility", type = "text" },
   { name = "mappings", type = "jsonb" },
   { name = "urn_suffix", type = "text" },
@@ -89,4 +89,5 @@ columns = [
   { name = "file", type = "text" },
   { name = "hash", type = "text" },
   { name = "owner", type = "text" },
+  { name = "position", type = "integer" },
 ]

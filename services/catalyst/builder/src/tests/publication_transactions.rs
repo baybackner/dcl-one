@@ -5,13 +5,15 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use crate::drafts::{CollectionDraft, ItemDraft};
+use crate::drafts::CollectionDraft;
 use crate::items::ItemsComponent;
 use crate::publication::{COLLECTION_FACTORY, COLLECTION_MANAGER};
 use crate::publication_chain::{PublicationChain, publication_calldata};
 use dcl_http::Outbound;
 
-use super::support::{cleanup, scratch_component, unique};
+use super::support::{
+    cleanup, contents_of, read_item, save_item, scratch_component, unique, upload,
+};
 
 const OWNER: &str = "0x1111111111111111111111111111111111111111";
 const OTHER: &str = "0x2222222222222222222222222222222222222222";
@@ -48,7 +50,13 @@ async fn rpc(State(state): State<Arc<Mutex<Value>>>, Json(req): Json<Value>) -> 
     Json(json!({"jsonrpc":"2.0", "id":req["id"], "result":result}))
 }
 
-async fn draft(store: &ItemsComponent) -> (CollectionDraft, ItemDraft) {
+struct Draft {
+    collection: CollectionDraft,
+    item: Value,
+    model: Vec<u8>,
+}
+
+async fn draft(store: &ItemsComponent) -> Draft {
     let id = Uuid::new_v4();
     let collection: CollectionDraft = serde_json::from_value(
         json!({"id":id, "name":format!("Transaction {}", &id.simple().to_string()[..8])}),
@@ -61,34 +69,31 @@ async fn draft(store: &ItemsComponent) -> (CollectionDraft, ItemDraft) {
     )
     .await
     .unwrap();
-    let mut item: ItemDraft = serde_json::from_value(json!({"id":Uuid::new_v4(), "name":"Hat", "type":"wearable", "collection_id":id,
+    let (model, image) = (unique("model"), unique("image"));
+    let item = json!({"id":Uuid::new_v4(), "name":"Hat", "type":"wearable", "collection_id":id,
         "price":"1000000000000000001", "rarity":"rare", "thumbnail":"thumbnail.png",
-        "data":{"category":"hat", "representations":[{"mainFile":"model.glb", "contents":["model.glb"], "bodyShapes":["urn:decentraland:off-chain:base-avatars:BaseMale"]}]}})).unwrap();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        "contents": contents_of(&[("model.glb", &model), ("thumbnail.png", &image)]),
+        "data":{"category":"hat", "representations":[{"mainFile":"model.glb", "contents":["model.glb"], "bodyShapes":["urn:decentraland:off-chain:base-avatars:BaseMale"]}]}});
+    save_item(store, OWNER, &item).await.unwrap();
+    upload(store, OWNER, item_id(&item), &[&model, &image])
         .await
         .unwrap();
-    item.contents = store
-        .save_item_files(
-            &granted::change(OWNER, item.id),
-            vec![
-                ("model.glb".into(), unique("model")),
-                ("thumbnail.png".into(), unique("image")),
-            ],
-        )
-        .await
-        .unwrap();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-        .await
-        .unwrap();
-    (collection, item)
+    Draft {
+        collection,
+        item,
+        model,
+    }
 }
 
-fn hashes_of(items: &[&ItemDraft]) -> Vec<String> {
+fn item_id(item: &Value) -> Uuid {
+    Uuid::parse_str(item["id"].as_str().unwrap()).unwrap()
+}
+
+fn hashes_of(items: &[&Value]) -> Vec<String> {
     items
         .iter()
-        .flat_map(|i| i.contents.values().cloned())
+        .flat_map(|i| i["contents"].as_object().unwrap().values())
+        .map(|h| h.as_str().unwrap().to_string())
         .collect()
 }
 
@@ -97,7 +102,11 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     let Some(store) = scratch_component().await else {
         return;
     };
-    let (collection, mut item) = draft(&store).await;
+    let Draft {
+        collection,
+        mut item,
+        model,
+    } = draft(&store).await;
     let id = collection.id;
     let prepared = store
         .prepare_publication(&granted::publisher(OWNER, id))
@@ -138,30 +147,20 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         .await
         .is_err()
     );
-    assert!(
-        store
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err()
+    assert_eq!(
+        save_item(&store, OWNER, &item).await.unwrap_err().status(),
+        423
     );
-    assert!(
-        store
-            .save_item_files(
-                &granted::change(OWNER, item.id),
-                vec![("model.glb".into(), unique("changed"))]
-            )
-            .await
-            .is_err()
-    );
-    item.collection_id = None;
-    assert!(
-        store
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err(),
+    upload(&store, OWNER, item_id(&item), &[&model])
+        .await
+        .expect("an upload of a file the item names takes no lock");
+    item["collection_id"] = json!(null);
+    assert_eq!(
+        save_item(&store, OWNER, &item).await.unwrap_err().status(),
+        423,
         "detaching cannot bypass a publication lock"
     );
-    item.collection_id = Some(id);
+    item["collection_id"] = json!(id);
     assert!(
         store
             .cancel_publication(&granted::publisher(OTHER, id))
@@ -191,10 +190,7 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         .cancel_publication(&granted::publisher(OWNER, id))
         .await
         .unwrap();
-    store
-        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-        .await
-        .unwrap();
+    save_item(&store, OWNER, &item).await.unwrap();
     assert!(
         store
             .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
@@ -326,21 +322,32 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
             .status,
         "published"
     );
-    let saved = store.item_draft(&granted::item(item.id)).await.unwrap();
-    assert_eq!(saved["is_published"], true);
+    let saved = read_item(&store, item_id(&item)).await.unwrap();
+    assert_eq!(
+        saved["is_published"], true,
+        "an item the node published reads as published before the chain copy holds it"
+    );
     assert_eq!(saved["blockchain_item_id"], "0");
     assert_eq!(
         saved["urn"],
         format!("urn:decentraland:matic:collections-v2:{CONTRACT}:0")
     );
     assert_eq!(saved["beneficiary"], OWNER);
-    assert!(
-        store
-            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-            .await
-            .is_err()
+    let mut rarer = item.clone();
+    rarer["rarity"] = json!("epic");
+    assert_eq!(
+        save_item(&store, OWNER, &rarer).await.unwrap_err().status(),
+        409,
+        "a published item keeps its rarity"
     );
-    let (second, second_item) = draft(&store).await;
+    save_item(&store, OWNER, &item)
+        .await
+        .expect("the owner edits an item of a published collection");
+    let Draft {
+        collection: second,
+        item: second_item,
+        ..
+    } = draft(&store).await;
     let preparation = store
         .prepare_publication(&granted::publisher(OWNER, second.id))
         .await
@@ -365,13 +372,7 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
             .status,
         "reverted"
     );
-    store
-        .save_item_draft(
-            &granted::save(OWNER, second_item.id, second_item.collection_id),
-            &second_item,
-        )
-        .await
-        .unwrap();
+    save_item(&store, OWNER, &second_item).await.unwrap();
     let preparation = store
         .prepare_publication(&granted::publisher(OWNER, second.id))
         .await
@@ -393,26 +394,27 @@ async fn concurrent_edit_and_publication_cannot_both_accept_the_old_revision() {
     let Some(store) = scratch_component().await else {
         return;
     };
-    let (collection, mut item) = draft(&store).await;
+    let Draft {
+        collection,
+        mut item,
+        ..
+    } = draft(&store).await;
     let prepared = store
         .prepare_publication(&granted::publisher(OWNER, collection.id))
         .await
         .unwrap();
-    item.name = "Changed while paying".into();
-    let (publisher, save) = (
-        granted::publisher(OWNER, collection.id),
-        granted::save(OWNER, item.id, item.collection_id),
-    );
+    item["name"] = json!("Changed while paying");
+    let publisher = granted::publisher(OWNER, collection.id);
     let (begin, edit) = tokio::join!(
         store.begin_publication(&publisher, &prepared.revision),
-        store.save_item_draft(&save, &item)
+        save_item(&store, OWNER, &item)
     );
     assert_ne!(
         begin.is_ok(),
         edit.is_ok(),
         "exactly one operation may accept the reviewed revision"
     );
-    let saved = store.item_draft(&granted::item(item.id)).await.unwrap();
+    let saved = read_item(&store, item_id(&item)).await.unwrap();
     if begin.is_ok() {
         assert_eq!(saved["name"], "Hat");
         assert_eq!(
@@ -437,7 +439,7 @@ async fn concurrent_edit_and_publication_cannot_both_accept_the_old_revision() {
 }
 
 #[tokio::test]
-async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
+async fn a_waiting_detach_rechecks_the_committed_publication_lock_and_an_upload_takes_none() {
     let Some(store) = scratch_component().await else {
         return;
     };
@@ -445,11 +447,15 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
     let mut created = Vec::new();
     let mut hashes = Vec::new();
     for detach in [true, false] {
-        let (collection, mut item) = draft(&store).await;
+        let Draft {
+            collection,
+            mut item,
+            model,
+        } = draft(&store).await;
         created.push(collection.id);
-        hashes.extend(item.contents.values().cloned());
-        let item_id = item.id;
-        let original = store.item_draft(&granted::item(item_id)).await.unwrap();
+        hashes.extend(hashes_of(&[&item]));
+        let item_id = item_id(&item);
+        let original = read_item(&store, item_id).await.unwrap();
         let writer_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
@@ -478,19 +484,10 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
         let writer = ItemsComponent::new(writer_pool.clone(), store.blobs.clone());
         let attempt = tokio::spawn(async move {
             if detach {
-                item.collection_id = None;
-                writer
-                    .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
-                    .await
-                    .map(|_| ())
+                item["collection_id"] = json!(null);
+                save_item(&writer, OWNER, &item).await.map(|_| ())
             } else {
-                writer
-                    .save_item_files(
-                        &granted::change(OWNER, item_id),
-                        vec![("model.glb".into(), unique("replacement"))],
-                    )
-                    .await
-                    .map(|_| ())
+                upload(&writer, OWNER, item_id, &[&model]).await
             }
         });
         assert!(
@@ -502,14 +499,12 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
             "writer must actually wait on the publication transaction"
         );
         blocker.commit().await.unwrap();
-        assert!(
-            attempt.await.unwrap().is_err(),
-            "waiting writer bypassed the committed publication lock: detach={detach}"
-        );
         assert_eq!(
-            store.item_draft(&granted::item(item_id)).await.unwrap(),
-            original
+            attempt.await.unwrap().is_err(),
+            detach,
+            "a waiting detach meets the committed publication lock; an upload of a named file takes none"
         );
+        assert_eq!(read_item(&store, item_id).await.unwrap(), original);
         writer_pool.close().await;
     }
     cleanup(&store, &created, &hashes).await;

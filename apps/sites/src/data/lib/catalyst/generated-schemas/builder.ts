@@ -2,7 +2,6 @@
 import { z } from "zod";
 
 import type { BulkItemStatusPatchOut } from "@catalyst-api/builder/BulkItemStatusPatchOut";
-import type { CollectionItemsOut } from "@catalyst-api/builder/CollectionItemsOut";
 import type { CollectionListingOut } from "@catalyst-api/builder/CollectionListingOut";
 import type { CollectionListingRowOut } from "@catalyst-api/builder/CollectionListingRowOut";
 import type { CollectionMetaOut } from "@catalyst-api/builder/CollectionMetaOut";
@@ -13,14 +12,13 @@ import type { CommitteeMemberOut } from "@catalyst-api/builder/CommitteeMemberOu
 import type { CurationCollectionsOut } from "@catalyst-api/builder/CurationCollectionsOut";
 import type { CurationStatus } from "@catalyst-api/builder/CurationStatus";
 import type { FullItemOut } from "@catalyst-api/builder/FullItemOut";
-import type { ItemKind } from "@catalyst-api/builder/ItemKind";
+import type { ItemsOut } from "@catalyst-api/builder/ItemsOut";
+import type { ItemsPageOut } from "@catalyst-api/builder/ItemsPageOut";
 import type { ItemStatusPatchOut } from "@catalyst-api/builder/ItemStatusPatchOut";
 import type { LinkedPublicationCheque } from "@catalyst-api/builder/LinkedPublicationCheque";
 import type { LinkedPublicationPreparation } from "@catalyst-api/builder/LinkedPublicationPreparation";
 import type { LinkedPublicationState } from "@catalyst-api/builder/LinkedPublicationState";
 import type { NewsletterSubscribeOut } from "@catalyst-api/builder/NewsletterSubscribeOut";
-import type { OrphanItemOut } from "@catalyst-api/builder/OrphanItemOut";
-import type { PaginatedFullItemsOut } from "@catalyst-api/builder/PaginatedFullItemsOut";
 import type { PublicationItem } from "@catalyst-api/builder/PublicationItem";
 import type { PublicationPreparation } from "@catalyst-api/builder/PublicationPreparation";
 import type { PublicationState } from "@catalyst-api/builder/PublicationState";
@@ -33,46 +31,6 @@ export const BulkItemStatusPatchOutSchema = z.object({
   status: z.string(),
   updated: z.number(),
 });
-
-export const FullItemOutSchema = z.object({
-  id: z.string(),
-  urn: z.string().nullable(),
-  name: z.string(),
-  description: z.string(),
-  thumbnail: z.string(),
-  video: z.string().optional(),
-  eth_address: z.string(),
-  collection_id: z.string().nullable(),
-  blockchain_item_id: z.string().nullable(),
-  price: z.string().nullable(),
-  beneficiary: z.string().nullable(),
-  rarity: z.string().nullable(),
-  type: z.string(),
-  data: z.record(z.string(), z.unknown()),
-  metrics: z.record(z.string(), z.unknown()),
-  utility: z.string().nullable(),
-  mappings: z.record(z.string(), z.unknown()).nullable(),
-  contents: z.record(z.string(), z.string()),
-  is_published: z.boolean(),
-  is_approved: z.boolean(),
-  in_catalyst: z.boolean(),
-  total_supply: z.coerce.bigint(),
-  content_hash: z.string().nullable(),
-  local_content_hash: z.string().nullable(),
-  catalyst_content_hash: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
-
-export const PaginatedFullItemsOutSchema = z.object({
-  total: z.coerce.bigint(),
-  limit: z.coerce.bigint(),
-  pages: z.coerce.bigint(),
-  page: z.coerce.bigint(),
-  results: z.array(FullItemOutSchema),
-});
-
-export const CollectionItemsOutSchema = z.union([z.array(FullItemOutSchema), PaginatedFullItemsOutSchema]);
 
 export const CollectionListingOutSchema = z.object({
   item_count: z.coerce.bigint(),
@@ -191,7 +149,36 @@ export const CurationCollectionsOutSchema = z.object({
   committee: z.array(CommitteeMemberOutSchema),
 });
 
-export const ItemKindSchema = z.enum(["smart_wearable", "emote", "wearable"]);
+export const FullItemOutSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  eth_address: z.string(),
+  collection_id: z.string().nullable(),
+  blockchain_item_id: z.string().nullable(),
+  price: z.string().nullable(),
+  beneficiary: z.string().nullable(),
+  rarity: z.string().nullable(),
+  type: z.string(),
+  data: z.record(z.string(), z.unknown()),
+  created_at: z.string(),
+  updated_at: z.string(),
+  metrics: z.record(z.string(), z.unknown()).nullable(),
+  thumbnail: z.string().nullable(),
+  contents: z.record(z.string(), z.string()),
+  total_supply: z.number(),
+  local_content_hash: z.string().nullable().optional(),
+  video: z.string().nullable(),
+  utility: z.string().nullable(),
+  mappings: z.record(z.string(), z.unknown()).nullable(),
+  urn: z.string().nullable(),
+  in_catalyst: z.boolean(),
+  is_approved: z.boolean(),
+  is_published: z.boolean(),
+  content_hash: z.string().nullable(),
+  catalyst_content_hash: z.string().nullable(),
+  isMappingComplete: z.boolean().optional(),
+});
 
 export const ItemStatusPatchOutSchema = z.object({
   collection_id: z.string(),
@@ -199,6 +186,16 @@ export const ItemStatusPatchOutSchema = z.object({
   status: z.string(),
   updated: z.number(),
 });
+
+export const ItemsPageOutSchema = z.object({
+  total: z.number().nullable(),
+  limit: z.number(),
+  pages: z.number().nullable(),
+  page: z.number(),
+  results: z.array(FullItemOutSchema),
+});
+
+export const ItemsOutSchema = z.union([z.array(FullItemOutSchema), ItemsPageOutSchema]);
 
 export const LinkedPublicationChequeSchema = z.object({
   qty: z.number(),
@@ -226,29 +223,6 @@ export const LinkedPublicationStateSchema = z.object({
 
 export const NewsletterSubscribeOutSchema = z.object({
   ok: z.boolean(),
-});
-
-export const OrphanItemOutSchema = z.object({
-  beneficiary: z.string().nullable(),
-  blockchain_item_id: z.string().nullable(),
-  category: z.string().nullable(),
-  collection_id: z.string().nullable(),
-  contract_address: z.string().nullable(),
-  createdAt: z.string().nullable(),
-  grad: z.string().nullable(),
-  id: z.string(),
-  image: z.string().nullable(),
-  is_published: z.boolean(),
-  max_supply: z.number().nullable(),
-  name: z.string(),
-  network: z.string().nullable(),
-  price: z.string().nullable(),
-  rarity: z.string().nullable(),
-  status: CollectionStatusSchema,
-  total_supply: z.number().nullable(),
-  type: ItemKindSchema,
-  updatedAt: z.string().nullable(),
-  urn: z.string().nullable(),
 });
 
 export const PublicationItemSchema = z.object({
@@ -286,7 +260,6 @@ type Mutual<A, B> = AssignableTo<A, B> extends true ? AssignableTo<B, A> : false
 type Assert<T extends true> = T;
 
 export type _AssertBulkItemStatusPatchOut = Assert<Mutual<BulkItemStatusPatchOut, z.infer<typeof BulkItemStatusPatchOutSchema>>>;
-export type _AssertCollectionItemsOut = Assert<Mutual<CollectionItemsOut, z.infer<typeof CollectionItemsOutSchema>>>;
 export type _AssertCollectionListingOut = Assert<Mutual<CollectionListingOut, z.infer<typeof CollectionListingOutSchema>>>;
 export type _AssertCollectionListingRowOut = Assert<Mutual<CollectionListingRowOut, z.infer<typeof CollectionListingRowOutSchema>>>;
 export type _AssertCollectionMetaOut = Assert<Mutual<CollectionMetaOut, z.infer<typeof CollectionMetaOutSchema>>>;
@@ -297,14 +270,13 @@ export type _AssertCommitteeMemberOut = Assert<Mutual<CommitteeMemberOut, z.infe
 export type _AssertCurationCollectionsOut = Assert<Mutual<CurationCollectionsOut, z.infer<typeof CurationCollectionsOutSchema>>>;
 export type _AssertCurationStatus = Assert<Mutual<CurationStatus, z.infer<typeof CurationStatusSchema>>>;
 export type _AssertFullItemOut = Assert<Mutual<FullItemOut, z.infer<typeof FullItemOutSchema>>>;
-export type _AssertItemKind = Assert<Mutual<ItemKind, z.infer<typeof ItemKindSchema>>>;
+export type _AssertItemsOut = Assert<Mutual<ItemsOut, z.infer<typeof ItemsOutSchema>>>;
+export type _AssertItemsPageOut = Assert<Mutual<ItemsPageOut, z.infer<typeof ItemsPageOutSchema>>>;
 export type _AssertItemStatusPatchOut = Assert<Mutual<ItemStatusPatchOut, z.infer<typeof ItemStatusPatchOutSchema>>>;
 export type _AssertLinkedPublicationCheque = Assert<Mutual<LinkedPublicationCheque, z.infer<typeof LinkedPublicationChequeSchema>>>;
 export type _AssertLinkedPublicationPreparation = Assert<Mutual<LinkedPublicationPreparation, z.infer<typeof LinkedPublicationPreparationSchema>>>;
 export type _AssertLinkedPublicationState = Assert<Mutual<LinkedPublicationState, z.infer<typeof LinkedPublicationStateSchema>>>;
 export type _AssertNewsletterSubscribeOut = Assert<Mutual<NewsletterSubscribeOut, z.infer<typeof NewsletterSubscribeOutSchema>>>;
-export type _AssertOrphanItemOut = Assert<Mutual<OrphanItemOut, z.infer<typeof OrphanItemOutSchema>>>;
-export type _AssertPaginatedFullItemsOut = Assert<Mutual<PaginatedFullItemsOut, z.infer<typeof PaginatedFullItemsOutSchema>>>;
 export type _AssertPublicationItem = Assert<Mutual<PublicationItem, z.infer<typeof PublicationItemSchema>>>;
 export type _AssertPublicationPreparation = Assert<Mutual<PublicationPreparation, z.infer<typeof PublicationPreparationSchema>>>;
 export type _AssertPublicationState = Assert<Mutual<PublicationState, z.infer<typeof PublicationStateSchema>>>;

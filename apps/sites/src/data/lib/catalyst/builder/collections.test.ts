@@ -42,8 +42,8 @@ describe("schemas / parsers", () => {
       { ...(COLLECTIONS[0] as object), created_at: "2023-12-01T00:00:00.000Z", updated_at: "2024-03-01T00:00:00.000Z", reviewed_at: null },
     ]);
     expect([collection.created_at, collection.updated_at, collection.reviewed_at]).toEqual([1701388800000, 1709251200000, null]);
-    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), createdAt: "2023-12-01T00:00:00.000Z", updatedAt: null }]);
-    expect([item.createdAt, item.updatedAt]).toEqual([1701388800000, null]);
+    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), created_at: "2023-12-01T00:00:00.000Z", updated_at: "2024-03-01T00:00:00.000Z" }]);
+    expect([item.createdAt, item.updatedAt]).toEqual([1701388800000, 1709251200000]);
   });
 
   it("refuses a timestamp that is not an ISO-8601 string", () => {
@@ -81,10 +81,32 @@ describe("when the node answers an address's collection rows", () => {
     expect(rows.every((c) => c.thumbs.length === 0)).toBe(true);
   });
 
-  it("should fill a collection's thumbnails from on-chain item rows, which name its contract", () => {
+  it("should fill a collection's thumbnails from the node's item rows, which name it by its builder id", () => {
     const genesis = rows.find((c) => c.name === "Genesis Threads")!;
-    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), collection_id: genesis.contract_address, image: "https://peer.test/thumbnail" }]);
-    expect(mergeCollectionThumbs(rows, [item]).find((c) => c.id === genesis.id)!.thumbs).toEqual(["https://peer.test/thumbnail"]);
+    const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), collection_id: genesis.id }], "https://builder.test");
+    expect(mergeCollectionThumbs(rows, [item]).find((c) => c.id === genesis.id)!.thumbs).toEqual([
+      "https://builder.test/v1/storage/contents/bafkreicjyysmiyonyudrmq6ejc6b7m42uma5fcnqoy6h4frcmugd7jtfma",
+    ]);
+  });
+});
+
+describe("when the node answers an address's item rows", () => {
+  let items: ReturnType<typeof parseOrphanItems>;
+
+  beforeEach(() => {
+    items = parseOrphanItems(ITEMS);
+  });
+
+  it("should read every row", () => {
+    expect(items).toHaveLength(ITEMS.length);
+  });
+
+  it("should derive each row's status dot from its published and approved state", () => {
+    expect(items.map((it) => it.status)).toEqual(["synced", "under_review", "unpublished", "unpublished", "unpublished", "synced"]);
+  });
+
+  it("should tell a smart wearable by a script among its contents", () => {
+    expect(items.map((it) => it.type)).toEqual(["wearable", "emote", "smart_wearable", "wearable", "wearable", "emote"]);
   });
 });
 

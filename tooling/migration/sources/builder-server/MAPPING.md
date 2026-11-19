@@ -35,6 +35,11 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 - `items.curation_status`: newest `item_curations.status`; else `approved` for
   a published item in an approved collection; else `pending`. `is_approved` is
   its projection. `content_hash` is the newest curation's content hash.
+- `items.data` and `items.metrics` are copied as the JSON text upstream
+  stores, keys in the order a save wrote them: the content hash of a
+  published or third-party item serializes them in that order. `item`
+  refuses a database whose `builder.items.data` is still `jsonb`: run
+  `schemas/releases/builder-item-documents-and-uploaders.sql` first.
 - Names are trimmed (node CHECK); empty `price`/`beneficiary`/`rarity` become
   NULL; addresses are lowercased. An item whose collection is missing
   upstream becomes a loose draft (`collection_id` NULL).
@@ -44,11 +49,16 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 
 ## Blobs
 
-`builder.item_contents.hash` is an FK to `uploaded_contents`, which records a
-blob the node holds and its size. The blob copy (out of scope) must record
-each hash in `dcl_migration.blob_inventory (source, object_key, hash, size)`
-with `source = 'builder-server'` and `object_key = hash`; `item_content`
-stops the batch on any missing hash. `uploaded_by` is the item owner.
+`builder.item_contents` keeps each file of an item's `contents` at its
+position in the stored object. `uploaded_contents` records, per hash and
+uploader, a blob the node holds and its size. Upstream keeps no uploader, so
+the import records each item's owner as an uploader of every hash the item
+names, whoever first sent the bytes; upstream served those files to anyone.
+What an imported record lets its wallet read is the file routes' decision,
+the same as for a record the node writes on upload. The blob copy (out of
+scope) must record each hash in `dcl_migration.blob_inventory (source,
+object_key, hash, size)` with `source = 'builder-server'` and
+`object_key = hash`; `item_content` stops the batch on any missing hash.
 
 ## Not migrated
 

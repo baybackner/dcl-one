@@ -141,6 +141,12 @@ struct SeedItem {
     collection_id: Option<uuid::Uuid>,
     blockchain_item_id: Option<String>,
     thumbnail: String,
+    #[serde(default)]
+    rarity: Option<String>,
+    #[serde(default)]
+    urn_suffix: Option<String>,
+    #[serde(default)]
+    contents: BTreeMap<String, String>,
     data: Value,
     metrics: Value,
     created_at: chrono::DateTime<chrono::Utc>,
@@ -1904,9 +1910,21 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .unwrap_or_else(|e| panic!("seed.json collection {}: {e}", c.id));
     }
     for i in &seed.items {
+        let urn = i.urn_suffix.as_ref().map(|suffix| {
+            let c = seed
+                .collections
+                .iter()
+                .find(|c| Some(c.id) == i.collection_id)
+                .unwrap_or_else(|| panic!("seed.json item {} has a URN but no collection", i.id));
+            format!(
+                "{}:{}:{suffix}",
+                c.third_party_id.as_deref().unwrap_or_default(),
+                c.urn_suffix.as_deref().unwrap_or_default()
+            )
+        });
         sqlx::query(
-            "INSERT INTO builder.items (id, name, eth_address, collection_id, blockchain_item_id, type, thumbnail, data, metrics, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, 'wearable', $6, $7, $8, $9, $10)",
+            "INSERT INTO builder.items (id, name, eth_address, collection_id, blockchain_item_id, type, thumbnail, rarity, urn_suffix, data, metrics, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, 'wearable', $6, $7, $8, $9::text::json, $10::text::json, $11, $12)",
         )
         .bind(i.id)
         .bind(&i.name)
@@ -1914,13 +1932,25 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .bind(i.collection_id)
         .bind(&i.blockchain_item_id)
         .bind(&i.thumbnail)
-        .bind(&i.data)
-        .bind(&i.metrics)
+        .bind(&i.rarity)
+        .bind(urn)
+        .bind(i.data.to_string())
+        .bind(i.metrics.to_string())
         .bind(i.created_at.naive_utc())
         .bind(i.updated_at.naive_utc())
         .execute(pool)
         .await
         .unwrap_or_else(|e| panic!("seed.json item {}: {e}", i.id));
+        for (position, (file, hash)) in i.contents.iter().enumerate() {
+            sqlx::query("INSERT INTO builder.item_contents (item_id, file, hash, position) VALUES ($1, $2, $3, $4)")
+                .bind(i.id)
+                .bind(file)
+                .bind(hash)
+                .bind(position as i32)
+                .execute(pool)
+                .await
+                .unwrap_or_else(|e| panic!("seed.json item {} contents: {e}", i.id));
+        }
     }
     for c in &seed.chain.collections {
         sqlx::query(

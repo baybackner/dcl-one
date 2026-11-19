@@ -78,6 +78,41 @@ class ContentMigrationCases:
         self.assertEqual(self.sql(db, f"SELECT linked_contract_address, linked_contract_network FROM builder.collections "
                                       f"WHERE id = '{COLLECTION}';\n").strip(), f"0x{'ab' * 20}\tmainnet")
 
+    def test_when_importing_an_item_it_should_keep_its_documents_and_contents_in_the_saved_order(self):
+        db = self.content_db('content_builder_item_order')
+        collection, _ = self.builder_rows('Ordered', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', 'Ordered', 'd', NULL, NULL, 'wearable', 'common', NULL, NULL, "
+                f"'{{\"tags\": [], \"category\": \"hat\"}}', '{{\"triangles\": 1, \"bodies\": 1}}', NULL, NULL, NULL, NULL, "
+                f"false, 'pending', 0, NULL, NULL, '2026-01-01Z', '2026-02-01Z'")
+        self.content_load(db, 'builder-server', 'item', [item])
+        self.assertEqual(self.sql(db, f"SELECT data::text, metrics::text FROM builder.items WHERE id = '{ITEM}';\n").strip(),
+                         '{"tags": [], "category": "hat"}\t{"triangles": 1, "bodies": 1}')
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkzthumb', 'bafkzthumb', 3, 'image/png'),"
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
+        self.content_load(db, 'builder-server', 'item_content', [
+            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 0",
+            f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1",
+        ])
+        self.assertEqual(self.sql(db, f"SELECT string_agg(file, ',' ORDER BY position) FROM builder.item_contents "
+                                      f"WHERE item_id = '{ITEM}';\n").strip(), 'thumbnail.png,model.glb')
+        self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || uploaded_by, ',' ORDER BY hash) "
+                                      "FROM builder.uploaded_contents;\n").strip(),
+                         f'bafkamodel {OWNER},bafkzthumb {OWNER}')
+
+    def test_when_the_item_documents_release_has_not_run_it_should_refuse_to_import_items(self):
+        db = self.content_db('content_builder_before_release')
+        collection, item = self.builder_rows('Early', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        self.sql(db, "ALTER TABLE builder.items DROP CONSTRAINT items_data_object_check;\n"
+                     "ALTER TABLE builder.items ALTER COLUMN data DROP DEFAULT;\n"
+                     "ALTER TABLE builder.items ALTER COLUMN data TYPE jsonb USING data::jsonb;\n")
+        with self.assertRaisesRegex(harness.migrate.MigrationError,
+                                    'schemas/releases/builder-item-documents-and-uploaders.sql'):
+            self.content_load(db, 'builder-server', 'item', [item])
+        self.assertEqual(self.sql(db, 'SELECT count(*) FROM builder.items;\n').strip(), '0')
+
     def test_when_the_node_wrote_builder_rows_after_upstream_it_should_keep_them_on_reimport(self):
         db = self.content_db('content_builder_node_wins')
         self.import_builder(db, 'Upstream', '2026-02-01Z')

@@ -1,4 +1,4 @@
-import { CatalystError, getJSON } from "../client";
+import { CatalystError, catalystBase, getJSON } from "../client";
 import type { GetOptions } from "../client";
 import { parseCollections, parseOrphanItems, COLLECTION_SORTS, type BuilderCollection, type CollectionSort, type OrphanItem } from "./collections-schema";
 
@@ -60,7 +60,7 @@ export async function fetchCreatorItems(
     `/v1/${encodeURIComponent(normalizeAddress(address))}/items`,
     opts,
   );
-  return parseOrphanItems(raw?.data ?? raw);
+  return parseOrphanItems(raw?.data ?? raw, catalystBase(opts.base));
 }
 
 const MAX_COLLECTION_THUMBS = 4;

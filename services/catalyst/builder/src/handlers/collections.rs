@@ -1,8 +1,7 @@
 use axum::Json;
-use axum::extract::{OriginalUri, Path, Query, RawQuery, State};
+use axum::extract::{OriginalUri, Path, RawQuery, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::SharedState;
@@ -11,36 +10,8 @@ use crate::auth::{Signed, signed_path, try_extract_signer};
 use crate::collections::listing::{CommitteeListing, ListQuery, OwnListing, PublicSearch};
 use crate::committee::Member;
 use crate::http::{ApiData, ApiError};
-use crate::items::{FullItemOut, ItemQuery};
+use crate::items::listing::ItemsOut;
 use crate::shared::signed_fetch::AUTH_CHAIN_HEADER_PREFIX;
-
-use super::onchain::ItemsParams;
-
-const CURATION_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
-
-const DEFAULT_LIMIT: i64 = 100_000;
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
-pub struct PaginatedFullItemsOut {
-    pub total: i64,
-    pub limit: i64,
-    pub pages: i64,
-    pub page: i64,
-    pub results: Vec<FullItemOut>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
-pub enum CollectionItemsOut {
-    Plain(Vec<FullItemOut>),
-    Paginated(PaginatedFullItemsOut),
-}
-
-fn should_paginate(page: Option<i64>, limit: Option<i64>) -> bool {
-    matches!((page, limit), (Some(p), Some(l)) if p != 0 && l != 0 && l < DEFAULT_LIMIT)
-}
 
 /// `GET /v1/collections/:id`, for whoever `access::read_collection` admits.
 pub async fn get_collection(
@@ -52,81 +23,23 @@ pub async fn get_collection(
     Ok(Json(ApiData::ok(state.items.collection(&read).await?)))
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct CollectionItemsParams {
-    pub status: Option<String>,
-    #[serde(rename = "mappingStatus")]
-    pub mapping_status: Option<String>,
-    pub synced: Option<bool>,
-    pub name: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
-
-/// The explorer's primary route: the collection's items as `FullItem`s,
-/// every item for a role holder or the committee and the published ones for
-/// any other signer of a published collection (`access::collection_items`);
-/// paginated only when `page` and `limit` are both truthy and `limit` is
-/// below the upstream default.
+/// `GET /v1/collections/:idOrContractAddress/items` (`getCollectionItems`):
+/// every item for a role holder, a minter or the committee, the published
+/// ones for any other signer of a published collection
+/// (`access::collection_items`, which checks `status` once the collection
+/// is found); paginated only when `page` and `limit` are both truthy.
 pub async fn get_collection_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
-    Query(params): Query<CollectionItemsParams>,
-) -> Result<Json<ApiData<Value>>, ApiError> {
-    if let Some(status) = &params.status
-        && !CURATION_STATUSES.contains(&status.as_str())
-    {
-        return Err(ApiError::bad_request("Invalid Status provided"));
-    }
-
-    let read = access::collection_items(&state, &signer, &id).await?;
-
-    let paginate = should_paginate(params.page, params.limit);
-
-    let q = ItemQuery {
-        status: params.status,
-        mapping_status: params.mapping_status,
-        synced: params.synced,
-        name: params.name,
-        page: params.page,
-        limit: params.limit,
-    };
-
-    let (items, total) = state.items.items_for_collection(&read, &q).await?;
-    let results: Vec<FullItemOut> = items.iter().map(|i| i.to_out()).collect();
-
-    let data = if paginate {
-        let limit = params.limit.unwrap_or(0);
-        let page = params.page.unwrap_or(0);
-        let pages = if limit > 0 {
-            (total + limit - 1) / limit
-        } else {
-            0
-        };
-        CollectionItemsOut::Paginated(PaginatedFullItemsOut {
-            total,
-            limit,
-            pages,
-            page,
-            results,
-        })
-    } else {
-        CollectionItemsOut::Plain(results)
-    };
-    let mut data = serde_json::to_value(data).map_err(|e| ApiError::internal(e.to_string()))?;
-    if !read.full() {
-        let items = match data.get_mut("results") {
-            Some(results) => results,
-            None => &mut data,
-        };
-        for item in items.as_array_mut().into_iter().flatten() {
-            if let Some(fields) = item.as_object_mut() {
-                fields.remove("local_content_hash");
-            }
-        }
-    }
-    Ok(Json(ApiData::ok(data)))
+    RawQuery(raw): RawQuery,
+) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
+    let q = ListQuery::parse(raw.as_deref());
+    let status = q.non_empty("status")?.map(str::to_string);
+    let read = access::collection_items(&state, &signer, &id, status.as_deref()).await?;
+    Ok(Json(ApiData::ok(
+        state.items.collection_items(&read, &q).await?,
+    )))
 }
 
 /// builder-server's `HTTPError('Unauthorized', { eth_address }, 401)`: a
@@ -195,17 +108,14 @@ async fn list_collections(
     Ok(Json(ApiData::ok(data)).into_response())
 }
 
-/// `GET /v1/items` (`getItems`): the committee lists every wallet's item
-/// drafts; a signed wallet that is not on it is refused with its address.
+/// `GET /v1/items` (`getItems`): the committee lists every item; a signed
+/// wallet that is not on it is refused with its address.
 pub async fn get_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
 ) -> Result<Response, ApiError> {
     let committee = access::committee(&state, &signer).await?;
-    Ok(Json(ApiData::ok(
-        state.items.item_drafts_of_everyone(&committee).await?,
-    ))
-    .into_response())
+    Ok(Json(ApiData::ok(state.items.every_item(&committee).await?)).into_response())
 }
 
 /// `GET /v1/{address}/collections` (`getAddressCollections`): the wallet
@@ -225,18 +135,22 @@ pub async fn get_address_collections(
     )))
 }
 
-/// `GET /v1/{address}/items` (`getAddressItems`): the same rule over the
-/// on-chain items (`onchain::get_address_items`).
+/// `GET /v1/{address}/items` (`getAddressItems`): the wallet itself,
+/// signed; anyone else is refused with the path's address. Its items from
+/// the builder's rows, merged with the chain copy (`items::listing`).
 pub async fn get_address_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(address): Path<String>,
-    Query(params): Query<ItemsParams>,
-) -> Result<Response, ApiError> {
+    RawQuery(raw): RawQuery,
+) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
     let wallet = access::own_address(&signer, &address)?;
-    Ok(super::onchain::get_address_items(&state, &wallet, params)
-        .await?
-        .into_response())
+    Ok(Json(ApiData::ok(
+        state
+            .items
+            .address_items(&wallet, &ListQuery::parse(raw.as_deref()))
+            .await?,
+    )))
 }
 
 /// `GET /v1/committee`: the current committee members, unauthenticated;
@@ -251,7 +165,6 @@ pub async fn get_committee(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::access::granted;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -393,20 +306,16 @@ mod tests {
         .await
         .unwrap();
         let item = Uuid::new_v4();
-        let item_draft: crate::drafts::ItemDraft = serde_json::from_value(json!({
-            "id": item, "name": "My wearable", "collection_id": draft,
-            "type": "wearable", "data": { "category": "upper_body" }, "rarity": "common", "price": "0",
-            "metrics": { "triangles": 42, "meshes": 1 }
-        }))
+        crate::tests::support::save_item(
+            &state.items,
+            &owner,
+            &json!({
+                "id": item, "name": "My wearable", "collection_id": draft,
+                "type": "wearable", "data": { "category": "upper_body" }, "rarity": "common", "price": "0",
+            }),
+        )
+        .await
         .unwrap();
-        state
-            .items
-            .save_item_draft(
-                &granted::save(&owner, item_draft.id, item_draft.collection_id),
-                &item_draft,
-            )
-            .await
-            .unwrap();
 
         for (kind, expected) in [("items", item), ("collections", draft)] {
             let path = format!("/v1/drafts/{kind}");
@@ -699,42 +608,5 @@ mod tests {
             }
         }
         cleanup(&state.items, &ids, &[]).await;
-    }
-
-    #[test]
-    fn pagination_truthiness_matches_upstream_js() {
-        assert!(should_paginate(Some(1), Some(10)));
-        assert!(should_paginate(Some(1), Some(99_999)));
-        assert!(!should_paginate(None, Some(10)));
-        assert!(!should_paginate(Some(1), None));
-        assert!(!should_paginate(None, None));
-        assert!(!should_paginate(Some(0), Some(10)));
-        assert!(!should_paginate(Some(1), Some(0)));
-        assert!(!should_paginate(Some(1), Some(100_000)));
-        assert!(!should_paginate(Some(1), Some(100_001)));
-    }
-
-    #[test]
-    fn collection_items_union_arms_serialize_correctly() {
-        let plain = ApiData::ok(CollectionItemsOut::Plain(vec![]));
-        assert_eq!(
-            serde_json::to_value(&plain).unwrap(),
-            json!({ "ok": true, "data": [] }),
-        );
-
-        let paginated = ApiData::ok(CollectionItemsOut::Paginated(PaginatedFullItemsOut {
-            total: 5,
-            limit: 2,
-            pages: 3,
-            page: 1,
-            results: vec![],
-        }));
-        assert_eq!(
-            serde_json::to_value(&paginated).unwrap(),
-            json!({
-                "ok": true,
-                "data": { "total": 5, "limit": 2, "pages": 3, "page": 1, "results": [] },
-            }),
-        );
     }
 }

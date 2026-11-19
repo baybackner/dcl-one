@@ -1,0 +1,466 @@
+//! `PUT /v1/items/:idOrURN` as builder-server's `upsertItem` answers it: the
+//! path names the item by its id or, for a third-party item, by its URN;
+//! [`prepare`] checks the body against the path and resolves the item, and
+//! [`ItemsComponent::save_item`] writes it in one transaction that locks the
+//! item's collections and the item, decides again
+//! ([`access::confirm_item_save`]) and writes the row, its contents in the
+//! order saved and the content hash a published item carries.
+//!
+//! A key the body leaves out keeps the stored value of an existing item
+//! (`thumbnail`, `video`, `price`, `beneficiary`, `rarity`, `utility`,
+//! `mappings`); `collection_id` left out keeps the item where it is. An item
+//! may name any content hash; naming one grants nothing over its bytes
+//! ([`super::upload`] records who uploaded what). Content an item stops
+//! naming, by a save or a delete, loses its upload records once no item
+//! names it, so the blob collector can take the bytes.
+
+use sqlx::{Postgres, Transaction};
+use uuid::Uuid;
+
+use crate::SharedState;
+use crate::access::{self, ItemChange, ItemSave, SaveIntent, SavePlan, UrnField};
+use crate::chain_state;
+use crate::content::JsJson;
+use crate::http::{ApiError, Subject};
+use crate::shared::signed_fetch::Signer;
+
+use super::ItemsComponent;
+use super::body::{FullItemOut, Reached};
+use super::hash::{self, Hashed};
+use super::listing;
+use super::schema::{ItemInput, ItemType};
+use super::urn::ThirdPartyItemUrn;
+
+const MAX_TAGS: usize = 20;
+const MAX_OUTCOMES: usize = 10;
+
+/// The item a save writes: its id and what the decision reads of the body.
+#[derive(Debug)]
+pub struct Target {
+    pub id: Uuid,
+    pub intent: SaveIntent,
+}
+
+fn array_len(value: Option<&JsJson>) -> Option<usize> {
+    value.and_then(JsJson::as_array).map(<[JsJson]>::len)
+}
+
+fn representations_named(input: &ItemInput) -> bool {
+    let files: Vec<&str> = input.contents.iter().map(|(f, _)| f.as_str()).collect();
+    input
+        .data
+        .get("representations")
+        .and_then(JsJson::as_array)
+        .unwrap_or_default()
+        .iter()
+        .all(|representation| {
+            let names: Vec<&str> = representation
+                .get("contents")
+                .and_then(JsJson::as_array)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(JsJson::as_str)
+                .collect();
+            representation
+                .get("mainFile")
+                .and_then(JsJson::as_str)
+                .is_some_and(|main| names.contains(&main))
+                && names.iter().all(|name| files.contains(name))
+        })
+}
+
+fn not_matching(path: &str, body: Option<&str>) -> ApiError {
+    let mut data = serde_json::json!({ "urlId": path });
+    if let Some(body) = body {
+        data["bodyId"] = body.into();
+    }
+    ApiError::bad_request("The body and URL item id or urn do not match").with_data(data)
+}
+
+/// The path against the body, builder-server's checks before its service,
+/// and the item they name: the id the body names, or the stored item of the
+/// URN the path names. Refusals in upstream's order: the path and the body
+/// disagree (400); a representation names a file the contents lack (400);
+/// more than 20 tags on a new item, or more on an item already over, and
+/// more than 10 emote outcomes (200 `ok:false`); a URN no item of the
+/// signer's third-party collections holds (404).
+pub async fn prepare(
+    state: &SharedState,
+    signer: &Signer,
+    path: &str,
+    input: &ItemInput,
+) -> Result<Target, ApiError> {
+    let path_urn = ThirdPartyItemUrn::parse(path);
+    let body_urn = input.urn.clone().flatten();
+    match &path_urn {
+        Some(_) if body_urn.as_deref() != Some(path) => {
+            return Err(not_matching(path, body_urn.as_deref()));
+        }
+        None if input.id.as_deref() != Some(path) => {
+            return Err(not_matching(path, input.id.as_deref()));
+        }
+        _ => {}
+    }
+    if !representations_named(input) {
+        return Err(ApiError::bad_request(
+            "Representation files must be part of the item's content",
+        )
+        .with_data(serde_json::json!({ "id": path })));
+    }
+    let by_urn = input.id.is_none().then_some(path_urn).flatten();
+    let pool = state.items.pool();
+    let stored_id: Option<Uuid> = match (&by_urn, &input.id) {
+        (Some(urn), _) => sqlx::query_scalar(
+            "SELECT i.id FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
+             WHERE c.third_party_id = $1 AND c.eth_address = $2 AND i.urn_suffix = c.urn_suffix || ':' || $3 \
+             ORDER BY i.created_at, i.id LIMIT 1",
+        )
+        .bind(&urn.third_party_id)
+        .bind(signer.as_str())
+        .bind(&urn.item)
+        .fetch_optional(pool)
+        .await?,
+        (None, Some(id)) => {
+            let id =
+                Uuid::parse_str(id).map_err(|_| ApiError::bad_request("Invalid request body"))?;
+            sqlx::query_scalar("SELECT id FROM builder.items WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?
+        }
+        (None, None) => None,
+    };
+    let stored: Option<(Option<Uuid>, Option<i32>)> = match stored_id {
+        Some(id) => {
+            sqlx::query_as(
+                "SELECT collection_id, CASE WHEN json_typeof(data->'tags') = 'array' \
+             THEN json_array_length(data->'tags') END FROM builder.items WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+        }
+        None => None,
+    };
+    let tags = array_len(input.data.get("tags")).unwrap_or(0);
+    if tags > MAX_TAGS {
+        let stored_tags = stored.as_ref().and_then(|(_, t)| *t).unwrap_or(0) as usize;
+        if stored.is_none() || (stored_tags > MAX_TAGS && tags > stored_tags) {
+            return Err(ApiError::http(
+                200,
+                format!("You hace exceeded the maximun amount of tags allowed ({MAX_TAGS})."),
+            ));
+        }
+    }
+    let social = input.data.get("startAnimation").is_some() && input.data.get("outcomes").is_some();
+    if input.item_type == ItemType::Emote
+        && social
+        && array_len(input.data.get("outcomes")).unwrap_or(0) > MAX_OUTCOMES
+    {
+        return Err(ApiError::http(
+            200,
+            format!("You have exceeded the maximum amount of outcomes allowed ({MAX_OUTCOMES})."),
+        ));
+    }
+    let id = match (by_urn, stored_id, &input.id) {
+        (Some(_), None, _) => {
+            return Err(
+                ApiError::not_found("The third party item can not be created by URN.")
+                    .with_data(serde_json::json!({ "urn": path })),
+            );
+        }
+        (_, Some(id), _) => id,
+        (None, None, Some(id)) => {
+            Uuid::parse_str(id).map_err(|_| ApiError::bad_request("Invalid request body"))?
+        }
+        (None, None, None) => return Err(ApiError::bad_request("Invalid request body")),
+    };
+    let collection = match &input.collection_id {
+        Some(Some(c)) => {
+            Some(Uuid::parse_str(c).map_err(|_| ApiError::bad_request("Invalid request body"))?)
+        }
+        Some(None) => None,
+        None => stored.and_then(|(c, _)| c),
+    };
+    let urn = match &input.urn {
+        None => UrnField::Absent,
+        Some(None) => UrnField::Null,
+        Some(Some(urn)) => {
+            ThirdPartyItemUrn::parse(urn).map_or(UrnField::Other, UrnField::ThirdParty)
+        }
+    };
+    Ok(Target {
+        id,
+        intent: SaveIntent {
+            collection,
+            rarity: input.rarity.clone().flatten(),
+            urn,
+            id_given: input.id.is_some(),
+            path_id: input.id.is_some().then(|| path.to_string()),
+        },
+    })
+}
+
+/// The item's collections (the one it is in and the one it moves to), then
+/// the item, `FOR UPDATE`: publication's parent-then-item order. 409 when
+/// another request moved the item in between.
+pub(crate) async fn lock_item(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    next_collection: Option<Uuid>,
+) -> Result<(), ApiError> {
+    let previous: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id=$1")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let previous_collection = previous.flatten();
+    let mut parents: Vec<_> = previous_collection
+        .into_iter()
+        .chain(next_collection)
+        .collect();
+    parents.sort();
+    parents.dedup();
+    for parent in parents {
+        sqlx::query("SELECT id FROM builder.collections WHERE id=$1 FOR UPDATE")
+            .bind(parent)
+            .fetch_optional(&mut **tx)
+            .await?;
+    }
+    let current: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if current.is_some_and(|parent| parent != previous_collection) {
+        return Err(ApiError::http(
+            409,
+            "Item moved to another collection. Reload it before saving.",
+        ));
+    }
+    Ok(())
+}
+
+/// Drops the upload records of `hashes` that no item names any more.
+pub(crate) async fn forget_unnamed(
+    tx: &mut Transaction<'_, Postgres>,
+    hashes: &[String],
+) -> Result<(), ApiError> {
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "DELETE FROM builder.uploaded_contents u WHERE u.hash = ANY($1) \
+         AND NOT EXISTS (SELECT 1 FROM builder.item_contents f WHERE f.hash = u.hash)",
+    )
+    .bind(hashes)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn refused_input() -> ApiError {
+    ApiError::bad_request("Invalid request body")
+}
+
+/// A field the body named, as the column takes it, and whether it was named.
+fn named<T: Clone>(field: &Option<Option<T>>) -> (bool, Option<T>) {
+    (field.is_some(), field.clone().flatten())
+}
+
+impl ItemsComponent {
+    /// Saves the item `save` was decided for, as `input` and `intent` ask, and
+    /// answers its body.
+    pub async fn save_item(
+        &self,
+        save: &ItemSave,
+        mut input: ItemInput,
+        intent: &SaveIntent,
+    ) -> Result<FullItemOut, ApiError> {
+        let name = input.name.trim().to_string();
+        if name.is_empty()
+            || [&input.price, &input.beneficiary]
+                .iter()
+                .any(|f| matches!(f, Some(Some(v)) if v.is_empty()))
+        {
+            return Err(refused_input());
+        }
+        input.sanitize();
+        let id = save.id();
+        let mut tx = self.pool.begin().await?;
+        let view = chain_state::for_decision(&mut tx).await?;
+        lock_item(&mut tx, id, intent.collection).await?;
+        if let UrnField::ThirdParty(urn) = &intent.urn {
+            sqlx::query(
+                "SELECT pg_advisory_xact_lock(hashtextextended('builder item urn ' || $1, 0))",
+            )
+            .bind(&urn.item)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let plan = access::confirm_item_save(&mut tx, &view, save, intent).await?;
+        let (owner, urn, keep_video, local_hash) = {
+            let hashed = Hashed {
+                name: &name,
+                description: input.description.as_deref(),
+                rarity: input.rarity.as_ref().map(|r| r.as_deref()),
+                item_type: input.item_type,
+                data: &input.data,
+                metrics: &input.metrics,
+                contents: &input.contents,
+                mappings: input.mappings.as_ref().and_then(Option::as_ref),
+            };
+            match &plan {
+                SavePlan::Standard {
+                    owner,
+                    blockchain_item_id,
+                    hash_contract,
+                    keep_video,
+                } => (
+                    owner.clone(),
+                    None,
+                    *keep_video,
+                    blockchain_item_id
+                        .as_deref()
+                        .zip(hash_contract.as_deref())
+                        .map(|(item, contract)| hash::standard(&hashed, contract, item)),
+                ),
+                SavePlan::ThirdParty { urn } => (
+                    save.signer().to_string(),
+                    Some(urn.clone()),
+                    false,
+                    Some(hash::third_party(&hashed, urn)),
+                ),
+            }
+        };
+        let (thumbnail_named, thumbnail) = (input.thumbnail.is_some(), input.thumbnail.clone());
+        let (video_named, video) = named(&input.video);
+        let (price_named, price) = named(&input.price);
+        let (beneficiary_named, beneficiary) = named(&input.beneficiary);
+        let (rarity_named, rarity) = named(&input.rarity);
+        let (utility_named, utility) = named(&input.utility);
+        let mappings_named = input.mappings.is_some();
+        let mappings = input
+            .mappings
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(crate::content::js_stringify);
+        sqlx::query(
+            "INSERT INTO builder.items AS i (id, collection_id, eth_address, name, description, thumbnail, video, type, \
+               rarity, price, beneficiary, data, metrics, utility, mappings, urn_suffix, local_content_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text::json, $13::text::json, $14, \
+               $15::text::jsonb, $16, $17) \
+             ON CONFLICT (id) DO UPDATE SET collection_id = EXCLUDED.collection_id, eth_address = EXCLUDED.eth_address, \
+               name = EXCLUDED.name, description = EXCLUDED.description, \
+               thumbnail = CASE WHEN $18 THEN EXCLUDED.thumbnail ELSE i.thumbnail END, \
+               video = CASE WHEN $19 AND NOT $25 THEN EXCLUDED.video ELSE i.video END, \
+               type = EXCLUDED.type, \
+               rarity = CASE WHEN $20 THEN EXCLUDED.rarity ELSE i.rarity END, \
+               price = CASE WHEN $21 THEN EXCLUDED.price ELSE i.price END, \
+               beneficiary = CASE WHEN $22 THEN EXCLUDED.beneficiary ELSE i.beneficiary END, \
+               data = EXCLUDED.data, metrics = EXCLUDED.metrics, \
+               utility = CASE WHEN $23 THEN EXCLUDED.utility ELSE i.utility END, \
+               mappings = CASE WHEN $24 THEN EXCLUDED.mappings ELSE i.mappings END, \
+               urn_suffix = COALESCE(EXCLUDED.urn_suffix, i.urn_suffix), \
+               local_content_hash = EXCLUDED.local_content_hash, \
+               updated_at = timezone('UTC', now())",
+        )
+        .bind(id)
+        .bind(intent.collection)
+        .bind(&owner)
+        .bind(&name)
+        .bind(&input.description)
+        .bind(&thumbnail)
+        .bind(&video)
+        .bind(input.item_type.as_str())
+        .bind(&rarity)
+        .bind(&price)
+        .bind(&beneficiary)
+        .bind(crate::content::js_stringify(&input.data))
+        .bind(crate::content::js_stringify(&input.metrics))
+        .bind(&utility)
+        .bind(&mappings)
+        .bind(&urn)
+        .bind(&local_hash)
+        .bind(thumbnail_named)
+        .bind(video_named)
+        .bind(rarity_named)
+        .bind(price_named)
+        .bind(beneficiary_named)
+        .bind(utility_named)
+        .bind(mappings_named)
+        .bind(keep_video)
+        .execute(&mut *tx)
+        .await?;
+        let previous: Vec<String> = sqlx::query_scalar(
+            "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING hash",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let files: Vec<&str> = input.contents.iter().map(|(f, _)| f.as_str()).collect();
+        let hashes: Vec<&str> = input.contents.iter().map(|(_, h)| h.as_str()).collect();
+        sqlx::query(
+            "INSERT INTO builder.item_contents (item_id, file, hash, position) \
+             SELECT $1, f, h, (n - 1)::int FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t(f, h, n)",
+        )
+        .bind(id)
+        .bind(&files)
+        .bind(&hashes)
+        .execute(&mut *tx)
+        .await?;
+        let dropped: Vec<String> = previous
+            .into_iter()
+            .filter(|h| !hashes.contains(&h.as_str()))
+            .collect();
+        forget_unnamed(&mut tx, &dropped).await?;
+        tx.commit().await?;
+        listing::item(&self.pool, id, Reached::ById, true).await
+    }
+}
+
+impl ItemsComponent {
+    /// `DELETE /v1/items/:id`: builder-server's `deleteItem` rules after the
+    /// decision, in one transaction with the item locked: a third-party item
+    /// waits while the node publishes its collection (423) and stays once
+    /// submitted (409); a standard item of a collection stays once the
+    /// collection is published (409) and waits while the node publishes it
+    /// (423). The item's contents go with it, and the upload records of the
+    /// files no other item names.
+    pub async fn delete_item(&self, change: &ItemChange) -> Result<(), ApiError> {
+        let id = change.id();
+        let mut tx = self.pool.begin().await?;
+        let view = chain_state::for_decision(&mut tx).await?;
+        lock_item(&mut tx, id, None).await?;
+        let state = access::confirm_item_change(&mut tx, &view, change).await?;
+        let third_party = state.third_party && state.urn.is_some();
+        if state.pending {
+            return Err(ApiError::locked(Subject::Item, &id.to_string(), "deleted"));
+        }
+        if third_party && state.submitted {
+            return Err(ApiError::conflict(
+                "The third party item is already published. It can't be deleted.",
+            )
+            .with_data(serde_json::json!({ "id": id, "urn": state.urn })));
+        }
+        if !third_party && state.published {
+            return Err(
+                ApiError::published(Subject::Item, &id.to_string(), "deleted")
+                    .with_data(serde_json::json!({ "id": id, "contract_address": state.contract })),
+            );
+        }
+        let hashes: Vec<String> = sqlx::query_scalar(
+            "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING hash",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM builder.items WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        forget_unnamed(&mut tx, &hashes).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+}

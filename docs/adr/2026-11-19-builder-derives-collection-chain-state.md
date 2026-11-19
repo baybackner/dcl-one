@@ -33,8 +33,9 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
   - the contract address computed before deployment;
   - each item's on-chain id;
   - its own publication records.
-- **Shared SQL, read only.** The builder reads `shop.collections` and
-  `shop.mirror_state` by shared SQL, Polygon rows only
+- **Shared SQL, read only.** The builder reads `shop.collections`,
+  `shop.items` (a minted item's chain values) and `shop.mirror_state` by
+  shared SQL, Polygon rows only
   (`network = 'matic'`), and never writes them. No crate dependency is added;
   the columns it reads are listed in the root `AGENTS.md` "Ownership" section
   and in `DATABASE.md`, "Builder chain state workload".

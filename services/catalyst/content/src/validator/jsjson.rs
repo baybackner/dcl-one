@@ -25,10 +25,10 @@ pub enum JsValue<const LEGACY: bool = false> {
     Object(Vec<(String, JsValue<LEGACY>)>),
 }
 
-pub(super) type LegacyValue = JsValue<true>;
+pub(crate) type LegacyValue = JsValue<true>;
 
 impl<const LEGACY: bool> JsValue<LEGACY> {
-    pub(super) fn as_object(&self) -> Option<&[(String, Self)]> {
+    pub fn as_object(&self) -> Option<&[(String, Self)]> {
         match self {
             JsValue::Object(entries) => Some(entries),
             _ => None,
@@ -194,7 +194,7 @@ fn array_index(key: &str) -> Option<u32> {
 }
 
 /// `JSON.stringify` of `value` appended to `out`.
-pub(super) fn write(value: &LegacyValue, out: &mut String) {
+pub(crate) fn write(value: &LegacyValue, out: &mut String) {
     match value {
         JsValue::Null => out.push_str("null"),
         JsValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),

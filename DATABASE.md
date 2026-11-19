@@ -959,10 +959,13 @@ as a flag (`services/catalyst/builder/src/chain_state.rs`, decided in
 It reads the shop's copy of the Polygon collections subgraph by shared SQL
 and never writes it: `shop.collections` (`network`, `contract_address`,
 `name`, `is_approved`, `creator`, `owner`, `managers`, `minters`,
-`created_at`, `updated_at`, `reviewed_at`, `mirrored_at`) and `shop.mirror_state` (`last_complete_pass_at`,
+`created_at`, `updated_at`, `reviewed_at`, `mirrored_at`), `shop.items`
+(`network`, `contract_address`, `item_id`, `urn`, `item_type`, `price`,
+`beneficiary`, `rarity`, `total_supply`, `content_hash`, by network, contract
+and item id: a minted item's body) and `shop.mirror_state` (`last_complete_pass_at`,
 `pass_started_at` and `cursor_id` of `('collections', 'matic')`). The shop's
-`collections-mirror` job writes both; the builder reads `network = 'matic'`
-only, as upstream reads only the Polygon subgraph.
+`collections-mirror` and items mirror jobs write them; the builder reads
+`network = 'matic'` only, as upstream reads only the Polygon subgraph.
 
 The builder's own rows: a `builder.collections` row is a creator's draft.
 
@@ -978,11 +981,11 @@ The builder's own rows: a `builder.collections` row is a creator's draft.
 - `publication_pending` freezes the draft and its items while either
   publication row is in flight.
 
-The address items listing and the curation console's committee and
-under-review listings read the collections subgraph through the
-marketplace's subgraph readers and add no table. The collection body and the
-collection listings read the copy ("Builder collection listings workload"
-below).
+The curation console's committee and under-review listings read the
+collections subgraph through the marketplace's subgraph readers and add no
+table. The collection body and the collection listings read the copy
+("Builder collection listings workload" below), and so do the item bodies and
+listings ("Builder items workload" below).
 
 Deployment: the node that serves the builder needs that copy, either by
 running the collections mirror (`MARKETPLACE_MIRRORS_ENABLED=true` with
@@ -1155,6 +1158,102 @@ collections and 89,043 items copied from a production-shaped database and
 
 No index on the copy is added: a GIN index on its role lists would cost a
 write on every mirror pass for 16 to 22 ms on a signed request.
+
+## Builder items workload
+
+The builder answers items as builder-server does
+(`services/catalyst/builder/src/items/`): one item by id, a collection's
+items, an address's items, every item for the committee, the save, the
+delete and the file upload.
+
+Tables and what they hold:
+
+- `builder.items`: one row per item. `data` and `metrics` are `json`
+  documents kept as the save wrote them, keys in order, because a published
+  item's content hash (`local_content_hash`) serializes them in that order.
+  `mappings` is `jsonb`. `urn_suffix` holds a third-party item's full URN and
+  the URN the node recorded when it published a standard item.
+  `is_published` is the node's record of its own publication (standard) or
+  submission (third-party).
+- `builder.item_contents`: one row per file an item names, with its
+  `position` in the item's `contents` (array-index names first, then the
+  order saved). An item may name any content hash; nothing references
+  `builder.uploaded_contents` by key.
+- `builder.uploaded_contents`: one row per hash and uploader, the record that
+  this wallet sent the bytes and the node stored them in the ONE blob store.
+  An upload stores only a hash its item names, verified against the bytes.
+
+Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
+(the reference data; measured on a scratch copy):
+
+| Statement | Index | Measured |
+| --- | --- | --- |
+| a collection's items, ids then bodies (largest collection 12,665 items) | `items_collection_created_idx` | ids 3 ms; a page of 50 under 1 ms; all 12,665 bodies about 110 to 160 ms |
+| an address's items (largest owner 12,669) | `items_owner_updated_idx`, `items_collection_created_idx` | about 45 ms for a page of 60 |
+| `GET /v1/items`, the 1,000 oldest | `items_created_idx`, then primary keys | ids under 1 ms; their 1,000 bodies about 10 ms |
+| one item by id with its chain merge | primary keys | under 0.3 ms |
+| a save's contents for 198 files, and the upload record cleanup | `item_contents_pkey`, `item_contents_hash_idx` | under 10 ms warm |
+
+Invariants:
+
+- Bounds. A collection's or an address's items answer at most 20,000 rows
+  per response, `GET /v1/items` 1,000; an upload carries at most 256 parts,
+  empty ones included, and 20 MiB in all. Filters are bound values over fixed SQL.
+- Pages first. A listing resolves the page's ids and the total, then reads
+  the bodies of that page only, in a read-only transaction without JIT.
+- One transaction per write. A save, a delete and an upload lock the item's
+  collections and the item (`FOR UPDATE`, collections first, as the
+  publications do) and decide again inside the transaction. A third-party
+  save also takes an advisory lock on its URN's item part, so two saves never
+  take the same item part in the provider's collections.
+- Upload records follow the names. When a save or a delete leaves a hash no
+  item names, its upload records go in the same transaction. The blob
+  collector keeps a blob while `builder.uploaded_contents.hash` names it; a
+  name in `builder.item_contents.hash` keeps nothing, so once the last record
+  goes the collector may take the bytes.
+- A publication takes only uploaded files. The publication snapshot
+  (`SNAPSHOT_QUERY` in `services/catalyst/builder/src/publication.rs`) marks
+  an item `missing_content` when it names a hash with no upload record by the
+  item's owner, and both the standard and the linked publication refuse such
+  an item before they start (tests
+  `a_standard_publication_takes_only_files_the_items_owner_uploaded` and
+  `a_linked_publication_takes_only_files_the_items_owner_uploaded`).
+
+Upgrade: step `0054_builder_item_contents_order` adds `item_contents.position`
+and drops the key from `item_contents.hash` to `uploaded_contents`. A step
+can't retype a column or change a primary key, so the release
+`schemas/releases/builder-item-documents-and-uploaders.sql` turns `data` and
+`metrics` into `json` and keys `uploaded_contents` by hash and uploader. It
+refuses a database without step 0054, one where a table still references
+`builder.uploaded_contents` by key (run `builder-scenes-retired.sql` first)
+and one where only one of the two documents is `json`; a second run notes
+it's done. Until it runs, item saves and uploads answer 503 naming the
+release and the item import refuses to load; item reads, listings and
+deletes keep working. A node asks the database once per write until the
+release holds and then stops asking.
+
+Rollout, in order:
+
+1. Deploy the binary on every replica with creator writes closed
+   (`CREATE_WRITES_ENABLED=false`) and run its `catalyst schema migrate`,
+   which records step 0054. Confirm no `serve` of an older build is left.
+   Once the release has run, an older binary answers 500 to every item file
+   upload (its upload record names a key the release replaces) and to a
+   collection listing filtered by tag, and its item saves store documents in
+   `jsonb` key order, which the content hashes don't match.
+2. Run `builder-scenes-retired.sql` if it hasn't run ("Retired builder
+   scenes" above), then this release once, with the administrative role:
+
+   ```sh
+   psql "$DATABASE_URL" -X -f schemas/releases/builder-item-documents-and-uploaders.sql
+   ```
+
+3. Open creator writes, then run the item import if the node takes upstream's
+   items.
+
+The retype holds an exclusive lock on `builder.items` and
+`builder.uploaded_contents` while it rewrites them, about ten seconds at the
+reference data's size without secondary indexes and longer with them.
 
 ## Notification writer
 

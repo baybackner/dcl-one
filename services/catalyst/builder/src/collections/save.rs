@@ -341,6 +341,7 @@ impl ItemsComponent {
                    linked_contract_address = EXCLUDED.linked_contract_address, \
                    linked_contract_network = EXCLUDED.linked_contract_network, updated_at = timezone('UTC', now()) \
                  WHERE NOT c.publication_pending AND c.third_party_id = EXCLUDED.third_party_id \
+                   AND c.eth_address = EXCLUDED.eth_address \
                  RETURNING id",
             )
             .bind(id)

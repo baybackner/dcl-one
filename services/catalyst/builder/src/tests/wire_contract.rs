@@ -178,14 +178,7 @@ async fn a_request_the_router_refuses_answers_the_envelope_without_the_parsers_w
             format!("/v1/items/{ID}"),
             "{not json",
             StatusCode::BAD_REQUEST,
-            "Bad Request",
-        ),
-        (
-            "GET",
-            format!("/v1/collections/{ID}/items?page=two"),
-            "",
-            StatusCode::BAD_REQUEST,
-            "Bad Request",
+            "Invalid request body",
         ),
         (
             "PATCH",

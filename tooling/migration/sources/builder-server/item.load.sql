@@ -1,8 +1,10 @@
--- An item whose collection is gone upstream (no FK there) becomes a loose
--- draft: builder.items.collection_id is a declared FK. Empty strings upstream
--- writes for "unset" price/beneficiary become NULL; rarity is compared
--- lowercase. in_catalyst and catalyst_content_hash are node-maintained.
--- A row the node wrote after upstream's last save is kept.
+DO $release$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'builder' AND table_name = 'items'
+                AND column_name = 'data' AND data_type = 'jsonb') THEN
+    RAISE EXCEPTION 'builder-server/item: builder.items.data is jsonb, which loses the saved key order; run schemas/releases/builder-item-documents-and-uploaders.sql first';
+  END IF; END $release$;
+
 INSERT INTO builder.items AS i
     (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
      price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,
@@ -61,13 +63,13 @@ ON CONFLICT (id) DO UPDATE SET
     created_at = EXCLUDED.created_at,
     updated_at = EXCLUDED.updated_at
 WHERE (i.collection_id, i.eth_address, i.name, i.description, i.thumbnail, i.video, i.type, i.rarity,
-       i.price, i.beneficiary, i.data, i.metrics, i.utility, i.mappings, i.urn_suffix,
+       i.price, i.beneficiary, i.data::text, i.metrics::text, i.utility, i.mappings, i.urn_suffix,
        i.blockchain_item_id, i.is_published, i.curation_status, i.total_supply,
        i.local_content_hash, i.content_hash, i.created_at, i.updated_at)
       IS DISTINCT FROM
       (EXCLUDED.collection_id, EXCLUDED.eth_address, EXCLUDED.name, EXCLUDED.description,
        EXCLUDED.thumbnail, EXCLUDED.video, EXCLUDED.type, EXCLUDED.rarity, EXCLUDED.price,
-       EXCLUDED.beneficiary, EXCLUDED.data, EXCLUDED.metrics, EXCLUDED.utility, EXCLUDED.mappings,
+       EXCLUDED.beneficiary, EXCLUDED.data::text, EXCLUDED.metrics::text, EXCLUDED.utility, EXCLUDED.mappings,
        EXCLUDED.urn_suffix, EXCLUDED.blockchain_item_id, EXCLUDED.is_published,
        EXCLUDED.curation_status, EXCLUDED.total_supply, EXCLUDED.local_content_hash,
        EXCLUDED.content_hash, EXCLUDED.created_at, EXCLUDED.updated_at)

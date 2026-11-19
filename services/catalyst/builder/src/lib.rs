@@ -38,15 +38,14 @@
 //!
 //! Deviations from the old crate, all deliberate: the signed-fetch window is
 //! the shared verifier's 5 minutes (the old required path allowed 30); the
-//! subgraph readers replace the squid side pool (503 on the address items
-//! route and empty curation listings without a collections subgraph, as the
-//! old node answered without its pool); `BUILDER_CONTENT_BUCKET_URL` is
+//! subgraph readers replace the squid side pool (empty curation listings
+//! without a collections subgraph, as the old node answered without its
+//! pool); `BUILDER_CONTENT_BUCKET_URL` is
 //! optional (unset: an unknown storage hash answers 404 instead of the 301);
 //! `BUILDER_POLYGON_RPC_URL`
 //! must be https to a public host (a plaintext verifier could be fed a fake
 //! receipt); `is_approved` is the declared projection of `curation_status`
-//! (`linked_publication_review::finish_linked_publication`); the item
-//! contents FK replaces the per-file "upload before saving" probe (same 400).
+//! (`linked_publication_review::finish_linked_publication`).
 //!
 //! Not carried, by the plan: `dcl-scene-cli` and what only it consumes
 //! (`dcl-scene-authoring`, `dcl-preview-tunnel`,

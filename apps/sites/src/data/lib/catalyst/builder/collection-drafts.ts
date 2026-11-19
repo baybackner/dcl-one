@@ -1,7 +1,7 @@
 import { linkedProviderId, listLinkedProviders } from "./linked-providers";
-import { CatalystError } from "../client";
 import { z } from "zod";
-import { draftRequest, type DraftOptions } from "./drafts";
+import { draftRequest, uploadItemFiles, type DraftOptions } from "./drafts";
+import { contentHashes, emptyMetrics, itemData, validItemName } from "./item-files";
 import { importCollectionItem } from "./collection-import";
 import { encodeFunctionData, parseAbi, type Address } from "viem";
 import { COLLECTION_BASE_URI } from "./collection-publication";
@@ -37,6 +37,8 @@ export function collectionDraftWriter(options: () => DraftOptions & { address?: 
       if (!item.file) throw new Error("Choose the original item files before saving.");
       args.signal?.throwIfAborted();
       const parsed = await importCollectionItem(item.file);
+      if (!validItemName(parsed.name)) throw new Error(`${parsed.name}: item names have 1 to 32 characters and no colon.`);
+      if ([...parsed.description].length > 64 || parsed.description.includes(":")) throw new Error(`${parsed.name}: item descriptions have at most 64 characters and no colon.`);
       if (!ids.has(item.file)) ids.set(item.file, crypto.randomUUID());
       imports.push({ ...parsed, id: ids.get(item.file)! });
     }
@@ -57,20 +59,12 @@ export function collectionDraftWriter(options: () => DraftOptions & { address?: 
     }));
     for (const item of imports) {
       const path = `/v1/items/${item.id}`;
-      const body = { id: item.id, name: item.name, description: item.description, type: item.type,
-        rarity: item.rarity, collection_id: id, price: "0", data: item.data, thumbnail: item.thumbnail,
-        contents: {} as Record<string, string> };
-      const write = () => draftRequest(path, opts, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item: body }) });
-      try { await draftRequest(path, opts); }
-      catch (error) {
-        if (!(error instanceof CatalystError && error.status === 404)) throw error;
-        await write();
-      }
-      const form = new FormData();
-      for (const file of item.files) form.append("files", file, file.name);
-      body.contents = z.record(z.string(), z.string()).parse(await draftRequest(`${path}/files`, opts, { method: "POST", body: form }));
-      if (item.files.some(file => !body.contents[file.name])) throw new Error("Builder did not store every item file. Retry the save.");
-      await write();
+      const contents = await contentHashes(item.files);
+      const body = { id: item.id, name: item.name.trim(), description: item.description, eth_address: owner, type: item.type,
+        rarity: item.rarity, collection_id: id, price: "0", data: itemData(item.type, item.data), metrics: emptyMetrics(item.type),
+        ...(item.thumbnail ? { thumbnail: item.thumbnail } : {}), contents };
+      await draftRequest(path, opts, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item: body }) });
+      await uploadItemFiles(path, opts, item.files, contents);
     }
     return { collectionId: saved.id, contractAddress: "", simulated: false };
   };

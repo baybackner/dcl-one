@@ -2,6 +2,7 @@ import { validateModelFile } from "./model-file";
 import { z } from "zod";
 import { formatUnits, parseUnits } from "viem";
 import { catalystBase, CatalystError } from "../client";
+import { contentHashes, emptyMetrics, itemData, strings, validItemName } from "./item-files";
 
 export type WearableDraft = {
   collectionId: string;
@@ -19,11 +20,14 @@ export type DraftOptions = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   base?: string;
   signal?: AbortSignal;
+  /** The signing wallet: what a save names as the item's `eth_address`. */
+  address?: string;
 };
 
 const Item = z.object({
   id: z.string().uuid(), name: z.string(), type: z.enum(["wearable", "emote"]),
   collection_id: z.string().nullable(), description: z.string().nullish().transform(value => value ?? ""), thumbnail: z.string().nullable(),
+  eth_address: z.string().optional(), metrics: z.record(z.string(), z.number()).nullish(),
   rarity: z.string().nullable(), price: z.string().nullable(), beneficiary: z.string().nullable(),
   is_published: z.boolean(), data: z.record(z.string(), z.unknown()),
   contents: z.record(z.string(), z.string()), urn: z.string().nullable().optional(),
@@ -33,9 +37,22 @@ export async function draftRequest(path: string, opts: DraftOptions, init: Reque
   const url = `${catalystBase(opts.base)}${path}`;
   const response = await opts.fetch(url, { ...init, signal: opts.signal, cache: "no-store" });
   const body = await response.json().catch(() => null) as { data?: unknown; message?: string; error?: string } | null;
-  if (!response.ok) throw new CatalystError(body?.message ?? body?.error ?? `Could not save the draft (${response.status}).`, url, response.status);
-  if (!body || !("data" in body)) throw new Error("Builder returned an invalid draft response.");
+  if (!response.ok || (body as { ok?: boolean } | null)?.ok === false) throw new CatalystError(body?.message ?? body?.error ?? `Could not save the draft (${response.status}).`, url, response.status);
+  if (!body || (!("data" in body) && (body as { ok?: boolean }).ok !== true)) throw new Error("Builder returned an invalid draft response.");
   return body.data;
+}
+
+/** `POST /v1/items/:id/files` after the item names the files: each file sent under the content hash the item names for it, once per hash. */
+export async function uploadItemFiles(path: string, opts: DraftOptions, files: readonly File[], hashes: Record<string, string>): Promise<void> {
+  const form = new FormData();
+  const sent = new Set<string>();
+  for (const file of files) {
+    const hash = hashes[file.name];
+    if (!hash || sent.has(hash)) continue;
+    sent.add(hash);
+    form.append(hash, file, file.name);
+  }
+  if (sent.size) await draftRequest(`${path}/files`, opts, { method: "POST", body: form });
 }
 
 function itemPath(id: string): string {
@@ -57,9 +74,10 @@ export async function loadWearableDraft(id: string, opts: DraftOptions): Promise
   };
 }
 
+const BOTH_BODY_SHAPES = ["urn:decentraland:off-chain:base-avatars:BaseMale", "urn:decentraland:off-chain:base-avatars:BaseFemale"];
 export async function saveWearableDraft(draft: WearableDraft, opts: DraftOptions): Promise<{ itemId: string; urn: string }> {
   const path = itemPath(draft.itemId);
-  if (!draft.name.trim() || draft.name.length > 64) throw new Error("Enter a wearable name of 1 to 64 characters.");
+  if (!validItemName(draft.name)) throw new Error("Enter a wearable name of 1 to 32 characters without a colon.");
   if (!draft.free && !/^\d+(\.\d{1,18})?$/.test(draft.price)) throw new Error("Enter a non-negative MANA price with at most 18 decimal places.");
   const price = draft.free ? "0" : parseUnits(draft.price, 18).toString();
   const model = draft.model;
@@ -70,35 +88,30 @@ export async function saveWearableDraft(draft: WearableDraft, opts: DraftOptions
   if (existing?.is_published) throw new Error("Published wearables cannot be edited as drafts.");
   if (existing && existing.type !== "wearable") throw new Error("Open emotes in the emote editor.");
   if (!model && !existing?.contents[draft.modelFile]) throw new Error("Choose a model before saving this wearable.");
-  const write = (item: unknown) => draftRequest(path, opts, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item }),
-  });
-  const item = {
-    id: draft.itemId, name: draft.name.trim(), type: "wearable",
-    collection_id: draft.collectionId || null, description: existing?.description ?? "",
-    thumbnail: existing?.thumbnail ?? null, rarity: draft.rarity, price,
-    beneficiary: existing?.beneficiary ?? null,
-    data: { ...existing?.data, category: draft.category }, contents: { ...existing?.contents },
-  };
-  if (!existing) await write(item);
+  const contents: Record<string, string> = { ...existing?.contents };
+  const data: Record<string, unknown> = { ...existing?.data, category: draft.category };
+  const hashes = model ? await contentHashes([model]) : {};
   if (model) {
-    const form = new FormData();
-    form.append("files", model, model.name);
-    const uploaded = z.record(z.string(), z.string()).parse(await draftRequest(`${path}/files`, opts, { method: "POST", body: form }));
-    if (!uploaded[model.name]) throw new Error("Builder did not store the selected model.");
-    Object.assign(item.contents, uploaded);
+    Object.assign(contents, hashes);
     const representations = z.array(z.record(z.string(), z.unknown())).safeParse(existing?.data.representations);
     const previous = representations.success ? representations.data : [];
     const mainFile = previous[0]?.mainFile;
-    Object.assign(item.data, { representations: previous.length ? previous.map(rep => rep.mainFile === mainFile ? {
+    data.representations = previous.length ? previous.map(rep => rep.mainFile === mainFile ? {
       ...rep, mainFile: model.name,
-      contents: [...(Array.isArray(rep.contents) ? rep.contents.filter(file => file !== mainFile && file !== model.name) : []), model.name],
-    } : rep) : [{
-      bodyShapes: ["urn:decentraland:off-chain:base-avatars:BaseMale", "urn:decentraland:off-chain:base-avatars:BaseFemale"],
-      mainFile: model.name, contents: [model.name], overrideHides: [], overrideReplaces: [],
-    }] });
+      contents: [...strings(rep.contents).filter(file => file !== mainFile && file !== model.name), model.name],
+    } : rep) : [{ bodyShapes: BOTH_BODY_SHAPES, mainFile: model.name, contents: [model.name], overrideHides: [], overrideReplaces: [] }];
   }
-  const saved = Item.parse(await write(item));
+  const item = {
+    id: draft.itemId, name: draft.name.trim(), description: existing?.description ?? "",
+    eth_address: (opts.address ?? existing?.eth_address ?? "").toLowerCase(), collection_id: draft.collectionId || null,
+    type: "wearable", rarity: draft.rarity, price, beneficiary: existing?.beneficiary ?? null,
+    ...(existing?.thumbnail ? { thumbnail: existing.thumbnail } : {}),
+    metrics: existing?.metrics ?? emptyMetrics("wearable"), contents, data: itemData("wearable", data),
+  };
+  const saved = Item.parse(await draftRequest(path, opts, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item }),
+  }));
+  if (model) await uploadItemFiles(path, opts, [model], hashes);
   return { itemId: saved.id, urn: saved.urn ?? "" };
 }
 

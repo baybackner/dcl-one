@@ -20,7 +20,9 @@ captures.
 
 Captures use the shared conformance fixture format
 (`services/catalyst/testing/src/conformance/fixture.rs`): `request` with
-`method`, `path`, `query`, `headers` and `body`; `response` with `status`,
+`method`, `path`, `query`, `headers` and `body`, or `multipart` parts (each
+part's field `name`, `filename`, `type` and synthetic `text`), which the replay
+sends as form data; `response` with `status`,
 the kept headers and `body_json` or `body_bytes_b64`; `captured_from`,
 `captured_at` and `volatile_paths`. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
@@ -136,7 +138,10 @@ each with the contract address its draft computed, and a third-party one with
 its provider id, URN suffix and, optionally, its linked contract address and
 network. The capture stores a third-party row with an empty `eth_address`, as
 upstream stores one; the replay stores the owner the seed names, which the
-node reads as the provider's manager. `items` are the builder's item rows.
+node reads as the provider's manager. `items` are the builder's item rows,
+with their `contents` (file to hash), `rarity` and, for a third-party item, the
+item part of its URN (`urn_suffix`; the replay stores the full URN the node
+keeps).
 `third_parties` are providers neither registry lists: the capture inserts
 them as upstream's virtual third parties; the node reads no registry and
 admits the wallet that owns a third-party collection as its provider's
@@ -185,13 +190,16 @@ Then it:
 3. Starts a loopback fake for the collections and third-party subgraphs,
    which answers the collections subgraph's `accounts`, `collections` and
    `items` fields with the `seed.json` `chain` rows their `where` argument
-   selects (by `id`, `id_in`, `creator`, `managers_contains`,
-   `minters_contains`, `collection` or `isCommitteeMember`; a collection
-   carries its items) and the third-party subgraph's `thirdParties` with
+   selects (by `id`, `id_in`, `id_gt`, `creator`, `managers_contains`,
+   `minters_contains`, `collection` or `isCommitteeMember`; ids, creators and
+   collections compare exactly, as The Graph does, and a `first` above 1,000
+   or a `skip` above 5,000 answers The Graph's error; a collection carries its
+   items) and the third-party subgraph's `thirdParties` with
    the `seed.json` `registry` rows (by `id`, `managers_contains` or
    `managers_contains_nocase`). It answers the catalyst's active-entities read with no entities
    and the Polygon JSON-RPC's `eth_chainId`, `net_version` and `eth_getCode`
-   (code only at a `chain` collection's contract), and points the peer, RPC,
+   (code only at a `chain` collection's contract), and stores, copies and
+   deletes the objects an upload sends to S3, and points the peer, RPC,
    forum, warehouse, S3, SNS and OpenSea settings at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
@@ -200,8 +208,8 @@ Then it:
    address is refused, as is a `dns.lookup` of any other hostname. The
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
-   apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC and the
-   active-entities read. A case
+   apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC, the
+   active-entities read and the S3 object writes. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
    process and on every thread of the migration process. It
@@ -265,7 +273,10 @@ order.
    `name` with the next number prefix, a `description`, `method`, `path`,
    optional `query` (each value a string, or a list of strings for a
    repeated parameter), `signer` (a `seed.json` role), `metadata`, `sign`,
-   `headers`, `body` and `volatile`. Both sides run the captures in the order of
+   `headers`, `body` or `multipart`, and `volatile`. Write a `body`'s keys in
+   sorted order at every level: the replay re-serializes it with sorted keys,
+   and an item's content hash depends on the order of its documents' keys.
+   Keep `multipart` text small and synthetic. Both sides run the captures in the order of
    their numbers against one database, so a capture sees what the writes
    before it left; the script and the ledger test refuse two captures with
    one number, and a case listed before a lower number.

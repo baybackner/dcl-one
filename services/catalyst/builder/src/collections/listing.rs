@@ -108,7 +108,7 @@ impl ListQuery {
         )
     }
 
-    fn all(&self, key: &str) -> Vec<&str> {
+    pub(crate) fn all(&self, key: &str) -> Vec<&str> {
         self.0
             .iter()
             .filter(|(k, _)| k == key)
@@ -117,7 +117,7 @@ impl ListQuery {
     }
 
     /// A parameter given once; a repeated one is refused.
-    fn one(&self, key: &str) -> Result<Option<&str>, ApiError> {
+    pub(crate) fn one(&self, key: &str) -> Result<Option<&str>, ApiError> {
         match self.all(key).as_slice() {
             [] => Ok(None),
             [value] => Ok(Some(value)),
@@ -134,7 +134,7 @@ impl ListQuery {
         self.all("q").iter().any(|q| !q.is_empty()) && self.all("is_published") == ["true"]
     }
 
-    fn non_empty(&self, key: &str) -> Result<Option<&str>, ApiError> {
+    pub(crate) fn non_empty(&self, key: &str) -> Result<Option<&str>, ApiError> {
         Ok(self.one(key)?.filter(|v| !v.is_empty()))
     }
 }
@@ -157,16 +157,16 @@ fn js_int(s: &str) -> Option<i64> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct Page {
-    limit: i64,
-    offset: i64,
-    page: Option<i64>,
+pub(crate) struct Page {
+    pub(crate) limit: i64,
+    pub(crate) offset: i64,
+    pub(crate) page: Option<i64>,
 }
 
 /// `getPaginationParams`: paginated when `page` and `limit` are both
 /// non-zero; `limit` at or above 100,000 counts as absent. The row count is
 /// capped at `cap`.
-fn page(q: &ListQuery, cap: i64) -> Result<Page, ApiError> {
+pub(crate) fn page(q: &ListQuery, cap: i64) -> Result<Page, ApiError> {
     let limit = q
         .non_empty("limit")?
         .and_then(js_int)
@@ -522,8 +522,8 @@ impl Listing {
                 Filter::Tags(tags) => {
                     sql.push(
                         "EXISTS (SELECT 1 FROM builder.items t WHERE t.collection_id = c.id \
-                         AND jsonb_typeof(t.data->'tags') = 'array' AND EXISTS (SELECT 1 FROM \
-                         jsonb_array_elements_text(t.data->'tags') tag WHERE lower(tag) = ANY(",
+                         AND json_typeof(t.data::json->'tags') = 'array' AND EXISTS (SELECT 1 FROM \
+                         json_array_elements_text(t.data::json->'tags') tag WHERE lower(tag) = ANY(",
                     )
                     .push_bind(tags.clone())
                     .push(")) OFFSET 0)");

@@ -127,12 +127,10 @@ pub const REFERENCE_SOURCES: &[&str] = &[
     "social.mls_commits.welcome_cid",
     "social.mls_message_refs.ciphertext_cid",
     "social.profile_images.blob_cid",
-    "builder.items.thumbnail",
     "builder.items.local_content_hash",
     "builder.items.content_hash",
     "builder.items.catalyst_content_hash",
     "builder.uploaded_contents.hash",
-    "builder.item_contents.hash",
     "camera_reel.images.image_hash",
     "camera_reel.images.thumbnail_hash",
     "shop.outfit_thumbnails.blob_cid",
@@ -140,6 +138,16 @@ pub const REFERENCE_SOURCES: &[&str] = &[
 
 /// Columns whose names look like store keys but are not, with the reason.
 pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
+    (
+        "builder.items.thumbnail",
+        "the file name of an item's thumbnail, a key of its contents: \
+         builder.uploaded_contents.hash holds the reference to that file's bytes",
+    ),
+    (
+        "builder.item_contents.hash",
+        "a name an item gives a file: builder.uploaded_contents.hash holds the reference while an \
+         item names an uploaded file",
+    ),
     (
         "content.snapshots.replaced_hashes",
         "the snapshot files a newer snapshot replaced: garbage for this collector",
@@ -886,6 +894,89 @@ mod tests {
                 "nonsense".into()
             ]),
             vec!["bafyx"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_in_an_item_protects_no_blob_and_an_upload_record_does() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let item = uuid::Uuid::new_v4();
+        let named = format!("bafkreinamed{}", item.simple());
+        let owner = "0x1111111111111111111111111111111111111111";
+        sqlx::query("INSERT INTO builder.items (id, eth_address, name, type) VALUES ($1, $2, 'Named', 'wearable')")
+            .bind(item)
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO builder.item_contents (item_id, file, hash) VALUES ($1, 'model.glb', $2)",
+        )
+        .bind(item)
+        .bind(&named)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let referenced = async || {
+            let mut conn = pool.acquire().await.unwrap();
+            referenced_rows_among_on(&mut conn, std::slice::from_ref(&named))
+                .await
+                .unwrap()
+                .contains(&named)
+        };
+        assert!(!referenced().await, "a name alone keeps the blob");
+        sqlx::query(
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 1, $2)",
+        )
+        .bind(&named)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(referenced().await, "an upload record keeps the blob");
+        sqlx::query("DELETE FROM builder.items WHERE id = $1")
+            .bind(item)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = $1")
+            .bind(&named)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_hash_named_as_an_items_thumbnail_protects_no_blob() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let item = uuid::Uuid::new_v4();
+        let named = format!("bafkreithumbnail{}", item.simple());
+        sqlx::query(
+            "INSERT INTO builder.items (id, eth_address, name, type, thumbnail) \
+             VALUES ($1, '0x1111111111111111111111111111111111111111', 'Named', 'wearable', $2)",
+        )
+        .bind(item)
+        .bind(&named)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let referenced = referenced_rows_among_on(&mut conn, std::slice::from_ref(&named))
+            .await
+            .unwrap();
+        drop(conn);
+        sqlx::query("DELETE FROM builder.items WHERE id = $1")
+            .bind(item)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !referenced.contains(&named),
+            "a thumbnail name alone keeps the blob"
         );
     }
 

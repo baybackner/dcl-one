@@ -65,6 +65,7 @@ use uuid::Uuid;
 use crate::SharedState;
 use crate::chain_state::{self, DecisionView};
 use crate::http::{ApiError, Subject};
+use crate::items::urn::ThirdPartyItemUrn;
 use crate::shared::signed_fetch::Signer;
 
 /// A signer's own wallet: what the per-wallet listings filter by.
@@ -113,7 +114,6 @@ pub struct ItemSave {
 pub struct ItemChange {
     id: Uuid,
     signer: String,
-    action: &'static str,
 }
 
 /// May run the node's publication of the collection.
@@ -219,6 +219,7 @@ impl Publisher {
 const COLLECTIONS: &str = "collections";
 const ITEMS: &str = "items";
 const UPSERT: &str = "inserted or updated";
+const CURATION_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
 
 /// `withModelExists`' 400 for an id that is not a UUID.
 fn invalid_uuid(raw: &str) -> ApiError {
@@ -243,6 +244,7 @@ fn parse(raw: &str) -> Result<Uuid, ApiError> {
 
 struct Collection {
     stored_owner: String,
+    contract: Option<String>,
     third_party: bool,
     pending: bool,
     published: bool,
@@ -260,23 +262,16 @@ impl Collection {
         self.managers.iter().any(|manager| manager == signer)
     }
 
+    fn minter(&self, signer: &str) -> bool {
+        self.minters.iter().any(|minter| minter == signer)
+    }
+
     fn provider_manager(&self, signer: &str) -> bool {
         self.third_party && self.stored_owner == signer
     }
 
     fn role(&self, signer: &str) -> bool {
         self.owner(signer) || self.manager(signer) || self.provider_manager(signer)
-    }
-
-    fn published_item(&self, id: Uuid, action: &str) -> ApiError {
-        if self.third_party {
-            ApiError::conflict(format!(
-                "The third party item is already published. It can't be {action}."
-            ))
-            .with_data(json!({ "id": id }))
-        } else {
-            ApiError::published(Subject::Item, &id.to_string(), action)
-        }
     }
 }
 
@@ -296,14 +291,15 @@ async fn collection(
         return Ok(None);
     };
     let published = chain_state::published(conn, view, id).await?;
-    let facts = match contract {
+    let facts = match &contract {
         Some(contract) if published && !third_party => {
-            chain_state::collection(conn, view, &contract).await?
+            chain_state::collection(conn, view, contract).await?
         }
         _ => None,
     };
     Ok(Some(Collection {
         stored_owner,
+        contract,
         third_party,
         pending,
         published,
@@ -465,7 +461,7 @@ pub async fn read_collection(
         return Ok(CollectionRead { id, full: true });
     }
     if c.published {
-        let full = c.minters.iter().any(|minter| minter == s) || known_committee(state, s);
+        let full = c.minter(s) || known_committee(state, s);
         return Ok(CollectionRead { id, full });
     }
     if on_committee(state, s).await? {
@@ -484,6 +480,7 @@ pub async fn collection_items(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
+    status: Option<&str>,
 ) -> Result<CollectionRead, ApiError> {
     let (mut conn, view) = decision(state).await?;
     let id = match Uuid::parse_str(raw) {
@@ -512,12 +509,16 @@ pub async fn collection_items(
         .await?
         .ok_or_else(|| not_found(id, COLLECTIONS))?;
     drop(conn);
+    if let Some(status) = status.filter(|s| !CURATION_STATUSES.contains(s)) {
+        return Err(ApiError::bad_request("Invalid Status provided")
+            .with_data(json!({ "id": raw, "status": status })));
+    }
     let s = signer.as_str();
     if c.role(s) {
         return Ok(CollectionRead { id, full: true });
     }
     if c.published {
-        let full = known_committee(state, s);
+        let full = c.minter(s) || known_committee(state, s);
         return Ok(CollectionRead { id, full });
     }
     if on_committee(state, s).await? {
@@ -551,7 +552,7 @@ pub async fn read_item(
         return Ok(ItemRead { id, full: true });
     }
     if let Some(c) = parent.filter(|c| !c.third_party && c.published && i.minted) {
-        let full = c.owner(s) || c.manager(s) || known_committee(state, s);
+        let full = c.owner(s) || c.manager(s) || c.minter(s) || known_committee(state, s);
         return Ok(ItemRead { id, full });
     }
     if on_committee(state, s).await? {
@@ -605,110 +606,344 @@ pub(crate) async fn confirm_collection_edit(
     })
 }
 
-/// `PUT /v1/items/:id`: an item with no collection is saved by its owner
-/// (or anyone, when new); an item in a collection, or moved into one, by
-/// that collection's owner, its on-chain manager or its provider's manager,
-/// and not once the collection is published or while it is being published.
-/// An existing item never moves into, out of or between third-party
-/// collections. `collection` is the collection the request moves the item
-/// into.
+/// `PUT /v1/items/:idOrURN`, decided with [`confirm_item_save`] outside a
+/// transaction; the save decides again inside its own.
 pub async fn save_item(
     state: &SharedState,
     signer: &Signer,
     id: Uuid,
-    collection: Option<Uuid>,
+    intent: &SaveIntent,
 ) -> Result<ItemSave, ApiError> {
     let save = ItemSave {
         id,
         signer: signer.as_str().to_string(),
-        collection,
+        collection: intent.collection,
     };
     let (mut conn, view) = decision(state).await?;
-    confirm_item_save(&mut conn, &view, &save).await?;
+    confirm_item_save(&mut conn, &view, &save, intent).await?;
     Ok(save)
 }
 
-/// [`save_item`]'s decision again, inside the write's transaction.
+/// The third-party URN a save's body names.
+#[derive(Debug, Clone)]
+pub enum UrnField {
+    Absent,
+    Null,
+    ThirdParty(ThirdPartyItemUrn),
+    Other,
+}
+
+/// What a save's body asks for, as the decision reads it.
+#[derive(Debug, Clone)]
+pub struct SaveIntent {
+    /// The collection the body puts the item in (`None`: no collection).
+    pub collection: Option<Uuid>,
+    pub rarity: Option<String>,
+    pub urn: UrnField,
+    /// The body names the item's id (a save by URN may not).
+    pub id_given: bool,
+    /// The id the path names, which builder-server's refusals repeat.
+    pub path_id: Option<String>,
+}
+
+/// How a confirmed save writes the item.
+#[derive(Debug, Clone)]
+pub enum SavePlan {
+    /// A standard item: the owner and on-chain id it keeps, the contract
+    /// address its content hash is computed for (a minted item of a
+    /// collection with a contract) and whether its stored video is kept.
+    Standard {
+        owner: String,
+        blockchain_item_id: Option<String>,
+        hash_contract: Option<String>,
+        keep_video: bool,
+    },
+    /// A third-party item, by its URN.
+    ThirdParty { urn: String },
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredItem {
+    owner: String,
+    collection: Option<Uuid>,
+    blockchain_item_id: Option<String>,
+    urn: Option<String>,
+    rarity: Option<String>,
+    submitted: bool,
+    smart: bool,
+}
+
+async fn stored_item(conn: &mut PgConnection, id: Uuid) -> Result<Option<StoredItem>, ApiError> {
+    Ok(sqlx::query_as(
+        "SELECT eth_address AS owner, collection_id AS collection, blockchain_item_id, \
+         urn_suffix AS urn, rarity, is_published AS submitted, \
+         type = 'wearable' AND EXISTS (SELECT 1 FROM builder.item_contents f \
+           WHERE f.item_id = i.id AND f.file LIKE '%.js') AS smart \
+         FROM builder.items i WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?)
+}
+
+async fn third_party_urn(
+    conn: &mut PgConnection,
+    id: Uuid,
+) -> Result<Option<(String, String)>, ApiError> {
+    Ok(sqlx::query_as(
+        "SELECT third_party_id, urn_suffix FROM builder.collections WHERE id = $1 \
+         AND third_party_id IS NOT NULL AND urn_suffix IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?)
+}
+
+/// Whether another item of the provider's collections that `manager`
+/// manages holds the item part `item`.
+async fn urn_in_use(
+    conn: &mut PgConnection,
+    id: Uuid,
+    third_party_id: &str,
+    manager: &str,
+    item: &str,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
+         WHERE i.id <> $1 AND c.third_party_id = $2 AND c.eth_address = $3 \
+           AND i.urn_suffix = c.urn_suffix || ':' || $4)",
+    )
+    .bind(id)
+    .bind(third_party_id)
+    .bind(manager)
+    .bind(item)
+    .fetch_one(conn)
+    .await?)
+}
+
+fn with_id(id: Option<&str>, mut data: serde_json::Value) -> serde_json::Value {
+    if let (Some(id), Some(fields)) = (id, data.as_object_mut()) {
+        fields.insert("id".into(), id.into());
+    }
+    data
+}
+
+fn missing_collection(id: Uuid) -> ApiError {
+    ApiError::not_found("The collection doesn't exist.").with_data(json!({ "collectionId": id }))
+}
+
+/// [`save_item`]'s decision, builder-server's `upsertItem` rules in its
+/// order: a missing collection (404); a move into, out of or between
+/// third-party collections (401); then the third-party rules (the
+/// provider's manager, 423 while the node publishes the collection, a URN
+/// another item holds or the URN of a submitted item, 409) or the standard
+/// ones (the owner of an item with no collection; each collection's owner,
+/// or its on-chain manager once published; on a published collection no
+/// new item, no move in or out and no rarity change, 409; 423 while the node
+/// publishes it). An existing item of a published collection otherwise takes
+/// its owner's and its managers' saves.
 pub(crate) async fn confirm_item_save(
     conn: &mut PgConnection,
     view: &DecisionView,
     save: &ItemSave,
-) -> Result<(), ApiError> {
+    intent: &SaveIntent,
+) -> Result<SavePlan, ApiError> {
     let (id, s) = (save.id, save.signer.as_str());
-    let stored = item(conn, id).await?;
+    let item_id = intent.id_given.then(|| id.to_string());
+    let stored = stored_item(conn, id).await?;
     let current = stored.as_ref().and_then(|i| i.collection);
-    let mut parents = Vec::new();
-    for parent_id in current.into_iter().chain(save.collection) {
-        if parents.iter().any(|(seen, _)| *seen == parent_id) {
-            continue;
-        }
-        let c = collection(conn, view, parent_id).await?.ok_or_else(|| {
-            ApiError::not_found("The collection doesn't exist.")
-                .with_data(json!({ "collectionId": parent_id }))
-        })?;
-        parents.push((parent_id, c));
-    }
-    let moves = stored.is_some() && current != save.collection;
-    if moves && parents.iter().any(|(_, c)| c.third_party) {
+    let moving = current.is_some() && save.collection.is_some() && current != save.collection;
+    let joining = stored.is_some() && current.is_none() && save.collection.is_some();
+    let home_id = current.or(save.collection);
+    let target_id = (moving || joining).then_some(save.collection).flatten();
+    let home = match home_id {
+        Some(c) => Some(
+            collection(conn, view, c)
+                .await?
+                .ok_or_else(|| missing_collection(c))?,
+        ),
+        None => None,
+    };
+    let target = match target_id {
+        Some(c) => Some(
+            collection(conn, view, c)
+                .await?
+                .ok_or_else(|| missing_collection(c))?,
+        ),
+        None => None,
+    };
+    let any_third_party = home.as_ref().is_some_and(|c| c.third_party)
+        || target.as_ref().is_some_and(|c| c.third_party);
+    if (moving && any_third_party) || (joining && target.as_ref().is_some_and(|c| c.third_party)) {
         return Err(
             ApiError::unauthorized("Item can't change between collections.")
-                .with_data(json!({ "id": id })),
+                .with_data(with_id(item_id.as_deref(), json!({}))),
         );
     }
-    if let Some(i) = &stored
-        && i.collection.is_none()
-        && i.owner != s
+    if let (Some(c), Some(home_id)) = (&home, home_id)
+        && c.third_party
     {
-        return Err(
-            ApiError::unauthorized("The user is unauthorized to upsert the collection.")
-                .with_data(json!({ "id": id, "eth_address": s })),
-        );
-    }
-    for (parent_id, c) in &parents {
-        if c.third_party && !c.provider_manager(s) {
+        if stored.is_some() && save.collection != current {
+            return Err(
+                ApiError::unauthorized("Item can't change between collections.")
+                    .with_data(with_id(item_id.as_deref(), json!({}))),
+            );
+        }
+        if matches!(intent.urn, UrnField::Null) {
+            return Err(ApiError::bad_request("The item URN is invalid."));
+        }
+        if !c.provider_manager(s) {
             return Err(ApiError::unauthorized(
                 "The user is unauthorized to upsert the collection.",
             )
-            .with_data(json!({ "id": id, "eth_address": s })));
+            .with_data(with_id(item_id.as_deref(), json!({ "eth_address": s }))));
         }
-        if !c.third_party && !c.owner(s) && !(c.published && c.manager(s)) {
-            return Err(ApiError::unauthorized(
-                "You're not authorized to to change this collection.",
-            )
-            .with_data(json!({ "id": id, "eth_address": s, "collection_id": parent_id })));
+        if c.pending {
+            return Err(ApiError::locked(Subject::Item, "", UPSERT)
+                .with_data(with_id(intent.path_id.as_deref(), json!({}))));
+        }
+        let UrnField::ThirdParty(urn) = &intent.urn else {
+            return Err(ApiError::http(
+                200,
+                "The given item URN is not TP compliant",
+            ));
+        };
+        let (third_party_id, collection_urn) =
+            third_party_urn(conn, home_id).await?.ok_or_else(|| {
+                ApiError::internal(format!("third-party collection {home_id} without a URN"))
+            })?;
+        let built = format!("{collection_urn}:{}", urn.item);
+        let in_use = |action: &str| {
+            ApiError::conflict(format!(
+                "The URN provided already belong to another item. The item can't be {action}."
+            ))
+            .with_data(with_id(intent.path_id.as_deref(), json!({ "urn": built })))
+        };
+        match &stored {
+            Some(item) if item.urn.as_deref() != Some(built.as_str()) => {
+                if item.submitted {
+                    return Err(ApiError::conflict(format!(
+                        "The third party item is already published. It can't be {UPSERT}."
+                    ))
+                    .with_data(with_id(
+                        intent.path_id.as_deref(),
+                        json!({ "urn": item.urn }),
+                    )));
+                }
+                if intent.id_given
+                    && urn_in_use(conn, id, &third_party_id, &c.stored_owner, &urn.item).await?
+                {
+                    return Err(in_use(UPSERT));
+                }
+            }
+            Some(_) => {}
+            None => {
+                if urn_in_use(conn, id, &third_party_id, &c.stored_owner, &urn.item).await? {
+                    return Err(in_use("inserted"));
+                }
+            }
+        }
+        return Ok(SavePlan::ThirdParty { urn: built });
+    }
+    if current.is_none()
+        && let Some(item) = &stored
+        && item.owner != s
+    {
+        return Err(
+            ApiError::unauthorized("The user is unauthorized to upsert the collection.")
+                .with_data(with_id(item_id.as_deref(), json!({ "eth_address": s }))),
+        );
+    }
+    let not_yours = || {
+        ApiError::unauthorized("You're not authorized to to change this collection.").with_data(
+            with_id(
+                item_id.as_deref(),
+                json!({ "eth_address": s, "collection_id": save.collection }),
+            ),
+        )
+    };
+    let published = |action: &str| {
+        ApiError::published(Subject::Item, "", action)
+            .with_data(with_id(item_id.as_deref(), json!({})))
+    };
+    let mut keep_video = false;
+    if let Some(c) = &home {
+        if !c.owner(s) && !(c.published && c.manager(s)) {
+            return Err(not_yours());
+        }
+        if c.published {
+            if moving || current.is_none() {
+                return Err(published(UPSERT));
+            }
+            if save.collection.is_none() {
+                return Err(published("deleted"));
+            }
+            let stored = stored.as_ref().expect("an item in a collection is stored");
+            if let (Some(next), Some(before)) = (intent.rarity.as_deref(), stored.rarity.as_deref())
+                && next != before
+            {
+                return Err(published("updated with a new rarity"));
+            }
+            keep_video = stored.smart;
+        } else if c.pending {
+            return Err(ApiError::locked(Subject::Item, "", UPSERT)
+                .with_data(with_id(intent.path_id.as_deref(), json!({}))));
         }
     }
-    for (_, c) in &parents {
-        if c.published || stored.as_ref().is_some_and(|i| i.published) {
-            return Err(c.published_item(id, UPSERT));
+    if let Some(c) = &target {
+        if !c.owner(s) && !(c.published && c.manager(s)) {
+            return Err(not_yours());
+        }
+        if c.published {
+            if moving {
+                return Err(published("inserted"));
+            }
+        } else if c.pending {
+            return Err(ApiError::locked(Subject::Item, "", UPSERT)
+                .with_data(with_id(intent.path_id.as_deref(), json!({}))));
         }
     }
-    if parents.iter().any(|(_, c)| c.pending) {
-        return Err(ApiError::locked(Subject::Item, &id.to_string(), UPSERT));
-    }
-    Ok(())
+    let blockchain_item_id = stored.as_ref().and_then(|i| i.blockchain_item_id.clone());
+    let hash_contract = blockchain_item_id
+        .as_ref()
+        .and(target.as_ref().or(home.as_ref()))
+        .and_then(|c| c.contract.clone());
+    Ok(SavePlan::Standard {
+        owner: stored.map_or_else(|| s.to_string(), |i| i.owner),
+        blockchain_item_id,
+        hash_contract,
+        keep_video,
+    })
 }
 
-/// `DELETE /v1/items/:id` (`deleted`) and `POST /v1/items/:id/files`
-/// (`inserted or updated`): the owner of an item with no collection; for an
-/// item in a collection, that collection's owner, on-chain manager or
-/// provider's manager, and not once the collection is published or while it
-/// is being published.
+/// `DELETE /v1/items/:id` and `POST /v1/items/:id/files`: the owner of an
+/// item with no collection; for an item in a collection, that collection's
+/// owner, on-chain manager or provider's manager.
 pub async fn change_item(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
-    action: &'static str,
 ) -> Result<ItemChange, ApiError> {
     let id = parse(raw)?;
     let change = ItemChange {
         id,
         signer: signer.as_str().to_string(),
-        action,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_change(&mut conn, &view, &change).await?;
     Ok(change)
+}
+
+/// The state of the item a change was confirmed for, which a delete's own
+/// rules read.
+#[derive(Debug, Default)]
+pub struct ChangeState {
+    pub third_party: bool,
+    pub published: bool,
+    pub pending: bool,
+    pub submitted: bool,
+    pub contract: Option<String>,
+    pub urn: Option<String>,
 }
 
 /// [`change_item`]'s decision again, inside the write's transaction.
@@ -716,37 +951,32 @@ pub(crate) async fn confirm_item_change(
     conn: &mut PgConnection,
     view: &DecisionView,
     change: &ItemChange,
-) -> Result<(), ApiError> {
+) -> Result<ChangeState, ApiError> {
     let (id, s) = (change.id, change.signer.as_str());
     let i = item(conn, id).await?.ok_or_else(|| not_found(id, ITEMS))?;
     let Some(parent_id) = i.collection else {
         if i.owner != s {
             return Err(unauthorized_user(s, ITEMS, id));
         }
-        if i.published {
-            return Err(ApiError::published(
-                Subject::Item,
-                &id.to_string(),
-                change.action,
-            ));
-        }
-        return Ok(());
+        return Ok(ChangeState::default());
     };
     let c = parent(conn, view, parent_id).await?;
     if !c.role(s) {
         return Err(unauthorized_user(s, ITEMS, id));
     }
-    if c.published || i.published {
-        return Err(c.published_item(id, change.action));
-    }
-    if c.pending {
-        return Err(ApiError::locked(
-            Subject::Item,
-            &id.to_string(),
-            change.action,
-        ));
-    }
-    Ok(())
+    let urn: Option<String> =
+        sqlx::query_scalar("SELECT urn_suffix FROM builder.items WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+    Ok(ChangeState {
+        third_party: c.third_party,
+        published: c.published,
+        pending: c.pending,
+        submitted: i.published,
+        contract: c.contract.clone(),
+        urn,
+    })
 }
 
 /// The node's own publication routes: the collection's stored owner, who is
@@ -811,7 +1041,6 @@ pub(crate) mod granted {
         ItemChange {
             id,
             signer: signer.to_string(),
-            action: "deleted",
         }
     }
 

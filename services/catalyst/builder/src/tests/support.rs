@@ -111,6 +111,164 @@ pub async fn save_collection(
         .await
 }
 
+/// `item` as a client sends it for `signer`: the keys the item schema
+/// requires that `item` leaves out (an empty description, the signer, a
+/// wearable's metrics and data, each representation's body shape and
+/// overrides, no contents) and, for an item of a third-party collection
+/// without one, a URN under that collection.
+pub async fn item_body(
+    store: &ItemsComponent,
+    signer: &str,
+    item: &serde_json::Value,
+) -> serde_json::Value {
+    let mut item = item.as_object().cloned().unwrap_or_default();
+    let defaults = serde_json::json!({
+        "description": "", "eth_address": signer, "type": "wearable", "contents": {},
+        "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+    });
+    for (key, value) in defaults.as_object().unwrap() {
+        item.entry(key.clone()).or_insert(value.clone());
+    }
+    let data = item
+        .entry("data")
+        .or_insert(serde_json::json!({}))
+        .as_object_mut()
+        .unwrap();
+    for (key, value) in [
+        ("category", serde_json::json!("hat")),
+        ("replaces", serde_json::json!([])),
+        ("hides", serde_json::json!([])),
+        ("tags", serde_json::json!([])),
+        (
+            "representations",
+            serde_json::json!([{ "mainFile": "model.glb", "contents": ["model.glb"] }]),
+        ),
+    ] {
+        data.entry(key).or_insert(value);
+    }
+    for representation in data["representations"].as_array_mut().unwrap() {
+        let representation = representation.as_object_mut().unwrap();
+        representation
+            .entry("bodyShapes")
+            .or_insert(serde_json::json!([
+                "urn:decentraland:off-chain:base-avatars:BaseMale"
+            ]));
+        representation
+            .entry("overrideHides")
+            .or_insert(serde_json::json!([]));
+        representation
+            .entry("overrideReplaces")
+            .or_insert(serde_json::json!([]));
+    }
+    if !item.contains_key("urn")
+        && let Some(collection) = item
+            .get("collection_id")
+            .and_then(|c| c.as_str())
+            .and_then(|c| Uuid::parse_str(c).ok())
+    {
+        let urn: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT urn_suffix FROM builder.collections WHERE id = $1 AND third_party_id IS NOT NULL",
+        )
+        .bind(collection)
+        .fetch_optional(store.pool())
+        .await
+        .unwrap();
+        if let Some(Some(urn)) = urn {
+            let id = item["id"].as_str().unwrap().replace('-', "");
+            item.insert("urn".into(), format!("{urn}:{id}").into());
+        }
+    }
+    serde_json::json!({ "item": item })
+}
+
+/// Saves `item` ([`item_body`]) as `PUT /v1/items/:id` saves a body with an
+/// id for `signer`, under a test grant.
+pub async fn save_item(
+    store: &ItemsComponent,
+    signer: &str,
+    item: &serde_json::Value,
+) -> Result<crate::items::body::FullItemOut, crate::http::ApiError> {
+    use crate::access::{SaveIntent, UrnField};
+    use crate::items::urn::ThirdPartyItemUrn;
+    let body = item_body(store, signer, item).await;
+    let input = crate::items::schema::parse(body.to_string().as_bytes())?;
+    let id = Uuid::parse_str(input.id.as_deref().unwrap()).unwrap();
+    let collection = input
+        .collection_id
+        .clone()
+        .flatten()
+        .map(|c| Uuid::parse_str(&c).unwrap());
+    let intent = SaveIntent {
+        collection,
+        rarity: input.rarity.clone().flatten(),
+        urn: match &input.urn {
+            None => UrnField::Absent,
+            Some(None) => UrnField::Null,
+            Some(Some(urn)) => {
+                ThirdPartyItemUrn::parse(urn).map_or(UrnField::Other, UrnField::ThirdParty)
+            }
+        },
+        id_given: true,
+        path_id: Some(id.to_string()),
+    };
+    store
+        .save_item(
+            &crate::access::granted::save(signer, id, collection),
+            input,
+            &intent,
+        )
+        .await
+}
+
+/// [`save_item`]'s body as JSON.
+pub async fn saved_item(
+    store: &ItemsComponent,
+    signer: &str,
+    item: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::to_value(save_item(store, signer, item).await.unwrap()).unwrap()
+}
+
+/// Item `id` as its owner side reads it, as JSON.
+pub async fn read_item(
+    store: &ItemsComponent,
+    id: Uuid,
+) -> Result<serde_json::Value, crate::http::ApiError> {
+    Ok(serde_json::to_value(store.item(&crate::access::granted::item(id)).await?).unwrap())
+}
+
+/// The contents map naming each `(file, bytes)` by its content hash.
+pub fn contents_of(files: &[(&str, &[u8])]) -> serde_json::Value {
+    files
+        .iter()
+        .map(|(file, bytes)| (file.to_string(), dcl_auth::hash_bytes_v1(bytes).into()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+/// Uploads each of `files` for item `id` as `signer`, under its content hash.
+pub async fn upload(
+    store: &ItemsComponent,
+    signer: &str,
+    id: Uuid,
+    files: &[&[u8]],
+) -> Result<(), crate::http::ApiError> {
+    store
+        .save_item_files(
+            &crate::access::granted::change(signer, id),
+            files
+                .iter()
+                .map(|bytes| {
+                    (
+                        dcl_auth::hash_bytes_v1(bytes),
+                        bytes::Bytes::copy_from_slice(bytes),
+                    )
+                })
+                .collect(),
+        )
+        .await
+}
+
 /// Undoes [`on_chain`].
 pub async fn off_chain(pool: &sqlx::PgPool, contract: &str) {
     sqlx::query("DELETE FROM shop.collections WHERE network = 'matic' AND contract_address = $1")

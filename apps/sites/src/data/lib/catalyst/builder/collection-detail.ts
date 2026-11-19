@@ -305,7 +305,8 @@ const OnchainItemRowSchema = z.object({
   collection_id: nullableStr,
   name: z.string(),
   type: z.string().nullish(),
-  category: nullableStr,
+  data: z.object({ category: nullableStr }).nullish(),
+  contents: z.record(z.string(), z.string()).nullish(),
   rarity: z.string().nullish(),
   price: nullableStr,
   total_supply: z.number().nullish(),
@@ -398,7 +399,7 @@ export async function fetchOnchainCollectionDetail(
     .map((it) => OnchainItemRowSchema.safeParse(it))
     .filter((r) => r.success)
     .map((r) => r.data)
-    .filter((it) => (it.collection_id ?? "").toLowerCase() === wanted);
+    .filter((it) => it.collection_id === row.id);
 
   const wearables: WearableItem[] = [];
   const emotes: EmoteItem[] = [];
@@ -418,7 +419,7 @@ export async function fetchOnchainCollectionDetail(
         id: it.id,
         name: it.name,
         rarity: onchainRarity(it.rarity),
-        category: it.category ?? "dance",
+        category: it.data?.category ?? "dance",
         playMode: "simple",
         price,
         supply,
@@ -430,11 +431,11 @@ export async function fetchOnchainCollectionDetail(
         id: it.id,
         name: it.name,
         rarity: onchainRarity(it.rarity),
-        category: it.category ?? "upper_body",
+        category: it.data?.category ?? "upper_body",
         price,
         supply,
         status: itemStatus,
-        smart: (it.type ?? "") === "smart_wearable",
+        smart: Object.keys(it.contents ?? {}).some((file) => file.endsWith(".js")),
         hue,
       });
     }

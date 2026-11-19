@@ -532,8 +532,24 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
     let owner = format!("{:#x}", wallet(OWNER_KEY).address());
     let new_collection =
         super::support::collection_body(json!({ "id": created, "name": "Created" }), &owner);
-    let new_item = json!({ "item": { "id": created_item, "name": "Created", "type": "wearable", "collection_id": collection, "data": {} } });
-    let kept_item = json!({ "item": { "id": item, "name": "Renamed", "type": "wearable", "collection_id": collection, "data": {} } });
+    let item_body = |id: Uuid, name: &str| {
+        json!({ "item": {
+            "id": id, "name": name, "description": "", "type": "wearable", "eth_address": owner,
+            "collection_id": collection,
+            "contents": { "model.glb": dcl_auth::hash_bytes_v1(b"model") },
+            "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+            "data": {
+                "category": "hat", "replaces": [], "hides": [], "tags": [],
+                "representations": [{
+                    "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"],
+                    "mainFile": "model.glb", "contents": ["model.glb"],
+                    "overrideHides": [], "overrideReplaces": []
+                }]
+            }
+        } })
+    };
+    let new_item = item_body(created_item, "Created");
+    let kept_item = item_body(item, "Renamed");
     let writes = [
         (
             "PUT",

@@ -325,7 +325,7 @@ test('the fake subgraph answers the rows its where argument selects and reports 
   })
   const unfaked = []
   const ids = found => found.map(row => row.id.slice(-1))
-  assert.deepEqual(ids(selected(field({ id: variable('id') }), rows, { id: '0x5EED000000000000000000000000000000000007' }, unfaked)), ['7'])
+  assert.deepEqual(ids(selected(field({ id: variable('id') }), rows, { id: '0x5eed000000000000000000000000000000000007' }, unfaked)), ['7'])
   assert.deepEqual(ids(selected(field({ id_in: { kind: 'ListValue', values: [variable('a')] } }), rows, { a: rows[0].id }, unfaked)), ['6'])
   assert.deepEqual(ids(selected(field({ managers_contains: variable('users') }), rows, { users: ['0xa1'] }, unfaked)), ['7'])
   assert.deepEqual(ids(selected(field({ minters_contains: variable('users') }), rows, { users: ['0xm1'] }, unfaked)), ['6'])
@@ -334,6 +334,30 @@ test('the fake subgraph answers the rows its where argument selects and reports 
   assert.deepEqual(unfaked, [])
   assert.deepEqual(selected(field({ isApproved: { kind: 'BooleanValue', value: true } }), rows, {}, unfaked), [])
   assert.deepEqual(unfaked, ['graph collections where isApproved', 'graph collections where isApproved'])
+})
+
+test('the fake subgraph compares ids and creators exactly and refuses pages The Graph refuses', () => {
+  const { selected } = require(script)
+  const rows = [{ id: '0xab', creator: '0xc1', managers: [], minters: [], collection: { id: '0xab' } }]
+  const string = value => ({ kind: 'StringValue', value })
+  const field = (where, args = {}) => ({
+    name: { value: 'items' },
+    arguments: [
+      { name: { value: 'where' }, value: { kind: 'ObjectValue', fields: Object.entries(where).map(([key, value]) => ({ name: { value: key }, value })) } },
+      ...Object.entries(args).map(([key, value]) => ({ name: { value: key }, value: { kind: 'IntValue', value } }))
+    ]
+  })
+  const unfaked = []
+  const ids = (where, args) => selected(field(where, args), rows, {}, unfaked).map(row => row.id)
+  assert.deepEqual(ids({ id: string('0xAB') }), [], 'a mixed-case id matches no lowercase id')
+  assert.deepEqual(ids({ id_in: { kind: 'ListValue', values: [string('0xAB')] } }), [])
+  assert.deepEqual(ids({ creator: string('0xC1') }), [], 'a mixed-case creator matches no lowercase creator')
+  assert.deepEqual(ids({ collection: string('0xAB') }), [])
+  assert.deepEqual(ids({ id: string('0xab'), creator: string('0xc1'), collection: string('0xab') }), ['0xab'])
+  assert.deepEqual(ids({}, { first: '1000', skip: '5000' }), [])
+  assert.throws(() => ids({}, { first: '1001' }), /first/)
+  assert.throws(() => ids({}, { skip: '5001' }), /skip/)
+  assert.deepEqual(unfaked, [])
 })
 
 test('cases run in the order of their numbers, which no two share', () => {
@@ -386,4 +410,35 @@ test('the fake subgraph filters, orders and pages as The Graph does', () => {
   assert.deepEqual(ids({}, { first: { kind: 'IntValue', value: '2' }, skip: { kind: 'IntValue', value: '1' } }), ['0xb', '0xc'], 'ordered by id, then skipped and bounded')
   assert.deepEqual(ids({}, { orderBy: { kind: 'EnumValue', value: 'id' }, orderDirection: { kind: 'EnumValue', value: 'desc' } }), ['0xc', '0xb', '0xa'])
   assert.deepEqual(unfaked, [])
+})
+
+test('a multipart case sends its parts as form data and records them', async () => {
+  const { requestBody } = require(script)
+  const parts = [{ name: 'bafkreiexample', filename: 'blob', type: 'application/octet-stream', text: 'conformance bytes' }]
+  const { body, recorded } = requestBody({ name: '01-upload', multipart: parts })
+  assert.ok(body instanceof FormData)
+  const file = body.get('bafkreiexample')
+  assert.equal(file.name, 'blob')
+  assert.equal(file.type, 'application/octet-stream')
+  assert.equal(await file.text(), 'conformance bytes')
+  assert.deepEqual(recorded, { body: null, multipart: parts })
+  assert.deepEqual(requestBody({ name: '02-json', body: { a: 1 } }).recorded, { body: { a: 1 } })
+  assert.equal(requestBody({ name: '03-none' }).body, undefined)
+  assert.throws(() => requestBody({ name: '04-both', body: {}, multipart: parts }), /04-both: a case sends a body or multipart parts, not both/)
+  assert.throws(() => requestBody({ name: '05-bad', multipart: [{ name: 'x', text: 'y' }] }), /05-bad: a multipart part names name, filename, type and text/)
+})
+
+test('the fake S3 stores, copies and deletes objects as the AWS SDK expects', () => {
+  const { s3Answer } = require(script)
+  const objects = new Map()
+  const put = s3Answer('PUT', '/s3/conformance/upload-1', {}, Buffer.from('abc'), objects)
+  assert.equal(put.status, 200)
+  assert.ok(put.headers.etag)
+  const copy = s3Answer('PUT', '/s3/conformance/contents/bafk1', { 'x-amz-copy-source': '/conformance/upload-1' }, Buffer.alloc(0), objects)
+  assert.equal(copy.status, 200)
+  assert.match(copy.body, /<CopyObjectResult>/)
+  assert.equal(s3Answer('DELETE', '/s3/conformance/upload-1', {}, Buffer.alloc(0), objects).status, 204)
+  assert.deepEqual([...objects.keys()], ['contents/bafk1'])
+  assert.equal(objects.get('contents/bafk1').toString(), 'abc')
+  assert.equal(s3Answer('GET', '/s3/conformance/contents/bafk1', {}, Buffer.alloc(0), objects), undefined)
 })

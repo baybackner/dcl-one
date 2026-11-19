@@ -1,8 +1,6 @@
-use std::collections::BTreeMap;
-
 use axum::Json;
 use axum::extract::{Path, State};
-use serde::Deserialize;
+use bytes::Bytes;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -10,14 +8,11 @@ use crate::SharedState;
 use crate::access;
 use crate::auth::Signed;
 use crate::collections::save;
-use crate::drafts::{CollectionListingOut, ItemDraft};
+use crate::drafts::CollectionListingOut;
 use crate::http::{ApiData, ApiError};
+use crate::items::body::FullItemOut;
+use crate::items::{save as item_save, schema, upload};
 use crate::publication::PublicationPreparation;
-
-#[derive(Deserialize)]
-pub struct ItemBody {
-    item: ItemDraft,
-}
 
 /// Local drafts use the verified signer; upstream global lists belong to the committee.
 pub async fn get_collection_drafts(
@@ -79,72 +74,58 @@ pub async fn put_collection(
     )))
 }
 
+/// `PUT /v1/items/:idOrURN` (`upsertItem`): the signer, the body's schema
+/// (`items::schema`), the path against the body (`items::save::prepare`),
+/// who may save it (`access::save_item`), then the save.
 pub async fn put_item(
     State(state): State<SharedState>,
     Signed(signer): Signed,
-    Path(id): Path<Uuid>,
-    Json(body): Json<ItemBody>,
-) -> Result<Json<ApiData<Value>>, ApiError> {
-    body.item.validate(id)?;
-    let save = access::save_item(&state, &signer, id, body.item.collection_id).await?;
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Result<Json<ApiData<FullItemOut>>, ApiError> {
+    let input = schema::parse(&body)?;
+    state.items.require_documents_release().await?;
+    let target = item_save::prepare(&state, &signer, &path, &input).await?;
+    let grant = access::save_item(&state, &signer, target.id, &target.intent).await?;
     Ok(Json(ApiData::ok(
-        state.items.save_item_draft(&save, &body.item).await?,
+        state.items.save_item(&grant, input, &target.intent).await?,
     )))
 }
 
+/// `DELETE /v1/items/:id` (`deleteItem`): `data` is `true`.
 pub async fn delete_item(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
-) -> Result<Json<ApiData<Value>>, ApiError> {
-    let change = access::change_item(&state, &signer, &id, "deleted").await?;
-    state.items.delete_item_draft(&change).await?;
-    Ok(Json(ApiData::ok(serde_json::json!({ "id": change.id() }))))
+) -> Result<Json<ApiData<bool>>, ApiError> {
+    let change = access::change_item(&state, &signer, &id).await?;
+    state.items.delete_item(&change).await?;
+    Ok(Json(ApiData::ok(true)))
 }
 
+/// `GET /v1/items/:id` (`getItem`).
 pub async fn get_item(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
-) -> Result<Json<ApiData<Value>>, ApiError> {
+) -> Result<Json<ApiData<FullItemOut>>, ApiError> {
     let read = access::read_item(&state, &signer, &id).await?;
-    Ok(Json(ApiData::ok(state.items.item_draft(&read).await?)))
+    Ok(Json(ApiData::ok(state.items.item(&read).await?)))
 }
 
+/// `POST /v1/items/:id/files` (`uploadItemFiles`): decided before the body
+/// is read (`items::upload`); answers `{ok: true}` without data.
 pub async fn post_item_files(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
-    mut multipart: axum::extract::Multipart,
-) -> Result<Json<ApiData<BTreeMap<String, String>>>, ApiError> {
-    let change = access::change_item(&state, &signer, &id, "inserted or updated").await?;
-    let mut files = Vec::new();
-    let mut size = 0;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::bad_request("Invalid multipart upload"))?
-    {
-        let name = field
-            .file_name()
-            .ok_or_else(|| ApiError::bad_request("Filename is required"))?
-            .to_owned();
-        if !crate::drafts::valid_filename(&name) || files.len() >= 100 {
-            return Err(ApiError::bad_request("Invalid filename or too many files"));
-        }
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|_| ApiError::bad_request("File upload exceeds 20 MB or is incomplete"))?;
-        size += bytes.len();
-        if size > 20 * 1024 * 1024 {
-            return Err(ApiError::bad_request("Upload exceeds 20 MB"));
-        }
-        files.push((name, bytes.to_vec()));
-    }
-    Ok(Json(ApiData::ok(
-        state.items.save_item_files(&change, files).await?,
-    )))
+    multipart: axum::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    let change = access::change_item(&state, &signer, &id).await?;
+    state.items.require_documents_release().await?;
+    let files = upload::read(multipart).await?;
+    state.items.save_item_files(&change, files).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 pub async fn get_publication(

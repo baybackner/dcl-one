@@ -1,29 +1,21 @@
-//! Collection and item drafts: the wire shapes the Creator Hub saves, their
-//! validation (the owner in the body must be the signer, no draft write can
-//! claim publication or approval), the owner-scoped listings and the guarded
-//! upserts. A draft write is refused once its collection is publishing or
-//! published (`publication_pending`, or published as [`crate::chain_state`]
-//! derives it, read after the parent rows are taken `FOR UPDATE` so a
-//! waiting writer re-reads the committed publication), and an item's owner
-//! always equals its collection's. Uploaded files go to the
-//! ONE blob store under their CIDv1 and `builder.uploaded_contents` keeps the
-//! acceptance record; a draft can only name a hash this node accepted (the
-//! `item_contents.hash` FK, the old "upload before saving" rule).
+//! The node's own draft listings ("my collections", "my item drafts"), the
+//! shapes its publication snapshots read (`CollectionDraft`, `ItemDraft` and
+//! their validation before a publication), and the reads of uploaded files
+//! by hash (`builder.uploaded_contents`, the bytes in the ONE blob store).
 
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::access::{self, ItemChange, ItemRead, ItemSave, OnCommittee, Wallet};
+use crate::access::Wallet;
 use crate::chain_state::{self, ReadView};
 use crate::storage::OpenedContent;
-use dcl_auth::{hash_bytes_v1, is_canonical_cid, is_eth_address};
+use dcl_auth::{is_canonical_cid, is_eth_address};
 
-use super::http::{ApiError, iso};
+use super::http::ApiError;
 use super::items::{CollectionMetaOut, CollectionMetaRow, ItemsComponent, collection_meta_columns};
 
 #[derive(Debug, sqlx::FromRow)]
@@ -211,31 +203,6 @@ pub fn valid_filename(file: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-/// The item fields any signer may read, named one by one (builder-server's
-/// public item); a column not named here is never answered.
-const PUBLIC_ITEM: &str = "jsonb_build_object('id', i.id, 'urn', i.urn_suffix, 'name', i.name, \
-    'description', i.description, 'thumbnail', i.thumbnail, 'video', i.video, 'eth_address', i.eth_address, \
-    'collection_id', i.collection_id, 'blockchain_item_id', i.blockchain_item_id, 'price', i.price, \
-    'beneficiary', i.beneficiary, 'rarity', i.rarity, 'type', i.type, 'data', i.data, 'metrics', i.metrics, \
-    'utility', i.utility, 'mappings', i.mappings, 'is_published', i.is_published, 'is_approved', i.is_approved, \
-    'in_catalyst', i.in_catalyst, 'total_supply', i.total_supply, 'content_hash', i.content_hash, \
-    'catalyst_content_hash', i.catalyst_content_hash, 'contents', \
-    COALESCE((SELECT jsonb_object_agg(file, hash) FROM builder.item_contents WHERE item_id = i.id), '{}'::jsonb))";
-/// [`PUBLIC_ITEM`] and what only the item's owner side reads.
-const FULL_ITEM: &str = "jsonb_build_object('local_content_hash', i.local_content_hash)";
-
-fn with_timestamps((mut row, created, updated): (Value, NaiveDateTime, NaiveDateTime)) -> Value {
-    row["created_at"] = iso(&created.and_utc()).into();
-    row["updated_at"] = iso(&updated.and_utc()).into();
-    row
-}
-
-const FK_VIOLATION: &str = "23503";
-
-/// The bound of the committee's item drafts listing: the per-owner ones are
-/// a wallet's own handful, this one spans every wallet.
-pub const LISTING_LIMIT: i64 = 1000;
-
 fn collection_listing(view: &ReadView) -> String {
     format!(
         "SELECT {}, (SELECT count(*) FROM builder.items i WHERE i.collection_id=c.id) AS item_count \
@@ -258,9 +225,6 @@ fn item_draft_predicate(view: &ReadView) -> String {
         view.published_subquery()
     )
 }
-
-const PARENT_NOT_PUBLISHING: &str = "NOT EXISTS (SELECT 1 FROM builder.collections c \
-    WHERE c.id=items.collection_id AND c.publication_pending)";
 
 fn listing_out(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
     rows.iter()
@@ -304,164 +268,6 @@ impl ItemsComponent {
         .await?)
     }
 
-    /// Every wallet's item drafts, newest first: the committee's `GET
-    /// /v1/items` (builder-server's `getItems`), at most [`LISTING_LIMIT`].
-    pub async fn item_drafts_of_everyone(
-        &self,
-        _committee: &OnCommittee,
-    ) -> Result<Vec<Value>, ApiError> {
-        let mut conn = self.pool.acquire().await?;
-        let view = chain_state::for_read(&mut conn).await?;
-        Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "{ITEM_DRAFT_LISTING} WHERE NOT is_published AND {} ORDER BY updated_at DESC LIMIT $1",
-            item_draft_predicate(&view)
-        )))
-        .bind(LISTING_LIMIT)
-        .fetch_all(&mut *conn)
-        .await?)
-    }
-
-    pub async fn item_draft(&self, read: &ItemRead) -> Result<Value, ApiError> {
-        item_by_id(&self.pool, read.id(), read.full()).await
-    }
-
-    /// One unpublished item by primary key. Use publication's parent-then-item
-    /// lock order; cascading content links go away, shared uploaded bytes remain.
-    pub async fn delete_item_draft(&self, change: &ItemChange) -> Result<(), ApiError> {
-        let id = change.id();
-        let mut tx = self.pool.begin().await?;
-        let view = chain_state::for_decision(&mut tx).await?;
-        lock_item(&mut tx, id, None).await?;
-        access::confirm_item_change(&mut tx, &view, change).await?;
-        let deleted = sqlx::query("DELETE FROM builder.items WHERE id=$1 AND NOT is_published")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        if deleted.rows_affected() == 0 {
-            return Err(ApiError::not_found("Item not found"));
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn save_item_draft(
-        &self,
-        save: &ItemSave,
-        draft: &ItemDraft,
-    ) -> Result<Value, ApiError> {
-        draft.validate(save.id())?;
-        if draft.collection_id != save.collection() {
-            return Err(ApiError::bad_request(
-                "The item's collection is not the one its save was decided for",
-            ));
-        }
-        let signer = save.signer();
-        let mut tx = self.pool.begin().await?;
-        let view = chain_state::for_decision(&mut tx).await?;
-        lock_item(&mut tx, draft.id, draft.collection_id).await?;
-        access::confirm_item_save(&mut tx, &view, save).await?;
-        let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO builder.items (id, name, eth_address, collection_id, description, thumbnail, type, rarity, price, beneficiary, data, metrics) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
-             ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, collection_id=EXCLUDED.collection_id, \
-             description=EXCLUDED.description, thumbnail=EXCLUDED.thumbnail, type=EXCLUDED.type, \
-             rarity=EXCLUDED.rarity, price=EXCLUDED.price, beneficiary=EXCLUDED.beneficiary, data=EXCLUDED.data, metrics=COALESCE(EXCLUDED.metrics,items.metrics), updated_at=timezone('UTC', now()) \
-             WHERE items.eth_address=$3 AND NOT items.is_published AND {PARENT_NOT_PUBLISHING} RETURNING id"
-        ))).bind(draft.id).bind(draft.name.trim()).bind(signer).bind(draft.collection_id)
-            .bind(&draft.description).bind(&draft.thumbnail).bind(&draft.item_type).bind(&draft.rarity)
-            .bind(&draft.price).bind(&draft.beneficiary).bind(&draft.data).bind(&draft.metrics).fetch_optional(&mut *tx).await?;
-        if changed.is_none() {
-            return Err(ApiError::unauthorized(
-                "The user is unauthorized to upsert the collection.",
-            )
-            .with_data(serde_json::json!({ "id": draft.id, "eth_address": signer })));
-        }
-        sqlx::query("DELETE FROM builder.item_contents WHERE item_id = $1")
-            .bind(draft.id)
-            .execute(&mut *tx)
-            .await?;
-        if !draft.contents.is_empty() {
-            let files: Vec<&str> = draft.contents.keys().map(String::as_str).collect();
-            let hashes: Vec<&str> = draft.contents.values().map(String::as_str).collect();
-            let inserted = sqlx::query(
-                "INSERT INTO builder.item_contents (item_id, file, hash) \
-                 SELECT $1, f, h FROM unnest($2::text[], $3::text[]) AS t(f, h)",
-            )
-            .bind(draft.id)
-            .bind(&files)
-            .bind(&hashes)
-            .execute(&mut *tx)
-            .await;
-            match inserted {
-                Ok(_) => {}
-                Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some(FK_VIOLATION) => {
-                    return Err(ApiError::bad_request(
-                        "Upload item content before saving its metadata",
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        tx.commit().await?;
-        item_by_id(&self.pool, draft.id, true).await
-    }
-}
-
-impl ItemsComponent {
-    /// The multipart upload: 1..100 files, 20 MB together. Each file's bytes
-    /// are stored under their CIDv1 in the ONE blob store before the row
-    /// that records the acceptance (the store is immutable and idempotent, so
-    /// a rolled-back transaction leaves nothing wrong behind).
-    pub async fn save_item_files(
-        &self,
-        change: &ItemChange,
-        files: Vec<(String, Vec<u8>)>,
-    ) -> Result<BTreeMap<String, String>, ApiError> {
-        let (id, signer) = (change.id(), change.signer());
-        if files.is_empty()
-            || files.len() > 100
-            || files.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() > 20 * 1024 * 1024
-        {
-            return Err(ApiError::bad_request(
-                "Upload 1 to 100 files totaling at most 20 MB",
-            ));
-        }
-        let mut tx = self.pool.begin().await?;
-        let view = chain_state::for_decision(&mut tx).await?;
-        lock_item(&mut tx, id, None).await?;
-        access::confirm_item_change(&mut tx, &view, change).await?;
-        let mut contents = BTreeMap::new();
-        for (file, bytes) in files {
-            if !valid_filename(&file) {
-                return Err(ApiError::bad_request("Invalid filename"));
-            }
-            let hash = hash_bytes_v1(&bytes);
-            let size = bytes.len() as i64;
-            if !self
-                .blobs
-                .exist(&hash)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            {
-                self.blobs
-                    .store(&hash, Bytes::from(bytes))
-                    .await
-                    .map_err(|e| ApiError::internal(format!("storing {hash}: {e}")))?;
-            }
-            sqlx::query("INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1,$2,$3) ON CONFLICT (hash) DO NOTHING")
-                .bind(&hash).bind(size).bind(signer).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO builder.item_contents (item_id,file,hash) VALUES ($1,$2,$3) ON CONFLICT (item_id,file) DO UPDATE SET hash=EXCLUDED.hash")
-                .bind(id).bind(&file).bind(&hash).execute(&mut *tx).await?;
-            contents.insert(file, hash);
-        }
-        sqlx::query("UPDATE builder.items SET updated_at=timezone('UTC', now()) WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(contents)
-    }
-
     pub async fn uploaded_content_exists(&self, hash: &str) -> Result<bool, ApiError> {
         Ok(sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM builder.uploaded_contents WHERE hash=$1)",
@@ -497,66 +303,6 @@ impl ItemsComponent {
             .await
             .map_err(|e| ApiError::internal(e.to_string()))
     }
-}
-
-async fn item_by_id<'e>(
-    executor: impl sqlx::PgExecutor<'e>,
-    id: Uuid,
-    full: bool,
-) -> Result<Value, ApiError> {
-    let fields = if full {
-        format!("{PUBLIC_ITEM} || {FULL_ITEM}")
-    } else {
-        PUBLIC_ITEM.to_string()
-    };
-    sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {fields}, i.created_at, i.updated_at FROM builder.items i WHERE i.id = $1"
-    )))
-    .bind(id)
-    .fetch_optional(executor)
-    .await?
-    .map(with_timestamps)
-    .ok_or_else(|| ApiError::not_found("Item not found"))
-}
-
-/// The item's collections (the one it is in and the one it moves to), then
-/// the item, `FOR UPDATE`: publication's parent-then-item order. 409 when
-/// another request moved the item in between.
-async fn lock_item(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: Uuid,
-    next_collection: Option<Uuid>,
-) -> Result<(), ApiError> {
-    let previous: Option<Option<Uuid>> =
-        sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id=$1")
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    let previous_collection = previous.flatten();
-    let mut parents: Vec<_> = previous_collection
-        .into_iter()
-        .chain(next_collection)
-        .collect();
-    parents.sort();
-    parents.dedup();
-    for parent in parents {
-        sqlx::query("SELECT id FROM builder.collections WHERE id=$1 FOR UPDATE")
-            .bind(parent)
-            .fetch_optional(&mut **tx)
-            .await?;
-    }
-    let current: Option<Option<Uuid>> =
-        sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    if current.is_some_and(|parent| parent != previous_collection) {
-        return Err(ApiError::http(
-            409,
-            "Item moved to another collection. Reload it before saving.",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

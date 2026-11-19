@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { fetchCollectionItems, fetchCollectionMeta } from "./collection-detail";
+import { beforeEach, describe, expect, it } from "vitest";
+import { fetchCollectionItems, fetchCollectionMeta, fetchOnchainCollectionDetail } from "./collection-detail";
 
 const item = {
   id: "draft", name: "Coat", rarity: "rare", type: "wearable",
@@ -43,5 +43,30 @@ describe("collection metadata", () => {
       } }),
     });
     expect(meta).toMatchObject({ name: "Hats", createdAt: 1701388800000, updatedAt: 1709251200000 });
+  });
+});
+
+describe("when a collection on chain is opened by its contract address", () => {
+  const contract = "0x5eed000000000000000000000000000000000302";
+  const collectionId = "c011ec71-0000-4000-8000-000000000302";
+  let detail: Awaited<ReturnType<typeof fetchOnchainCollectionDetail>>;
+
+  beforeEach(async () => {
+    const minted = {
+      id: "c011ec71-0000-4000-8000-0000000003b1", name: "Minted hat", description: null, collection_id: collectionId,
+      blockchain_item_id: "0", price: "2000000000000000000", rarity: "rare", type: "wearable", total_supply: 3,
+      data: { category: "hat", hides: [], replaces: [], tags: [], representations: [] }, contents: {}, is_published: true, is_approved: false,
+    };
+    const other = { ...minted, id: "c011ec71-0000-4000-8000-0000000003a1", name: "Elsewhere", collection_id: null };
+    detail = await fetchOnchainCollectionDetail("0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e", contract, {
+      fetchImpl: async (url) => Response.json({ ok: true, data: String(url).endsWith("/items") ? [minted, other] : [{
+        id: collectionId, name: "Items on chain", contract_address: contract, is_published: true, is_approved: false,
+        urn: `urn:decentraland:matic:collections-v2:${contract}`, created_at: "2025-12-10T00:00:00.000Z", updated_at: "2025-12-10T00:00:00.000Z", reviewed_at: null,
+      }] }),
+    });
+  });
+
+  it("should list the items the node's rows name by the collection's builder id, with their category", () => {
+    expect(detail.wearables.map(it => [it.name, it.category, it.rarity, it.price, it.supply])).toEqual([["Minted hat", "hat", "rare", "2", "3"]]);
   });
 });

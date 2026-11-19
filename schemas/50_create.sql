@@ -104,15 +104,6 @@ CREATE INDEX collections_third_party_urn_idx ON builder.collections (urn_suffix)
 
 -- ── items ──────────────────────────────────────────────────────────────────
 
--- An item draft (wearable or emote), owned by `eth_address`, optionally in a
--- collection of the same owner. `data`, `metrics` and `mappings` are the
--- Creator Hub documents read and written as a unit; `contents` is the
--- item_contents relation. `curation_status` is the committee's tristate and
--- `is_approved` its boolean projection (declared below, moved together by
--- the curation PATCH). The seven columns after `is_published` are the
--- explorer's BuilderApiDtos fields (wire compatibility); the copied code
--- writes urn_suffix/blockchain_item_id/local_content_hash on publication
--- and never in_catalyst/total_supply/content_hash/catalyst_content_hash.
 CREATE TABLE builder.items (
     id uuid NOT NULL,
     collection_id uuid,
@@ -125,8 +116,8 @@ CREATE TABLE builder.items (
     rarity text,
     price text,
     beneficiary text,
-    data jsonb NOT NULL DEFAULT '{}'::jsonb,
-    metrics jsonb,
+    data json NOT NULL DEFAULT '{}'::json,
+    metrics json,
     utility text,
     mappings jsonb,
     urn_suffix text,
@@ -151,8 +142,8 @@ CREATE TABLE builder.items (
         CHECK (rarity IS NULL OR rarity IN ('unique', 'mythic', 'exotic', 'legendary', 'epic', 'rare', 'uncommon', 'common')),
     CONSTRAINT items_price_check CHECK (price IS NULL OR price ~ '^[0-9]{1,78}$'),
     CONSTRAINT items_beneficiary_check CHECK (beneficiary IS NULL OR beneficiary ~ '^0x[0-9a-fA-F]{40}$'),
-    CONSTRAINT items_data_object_check CHECK (jsonb_typeof(data) = 'object'),
-    CONSTRAINT items_metrics_object_check CHECK (metrics IS NULL OR jsonb_typeof(metrics) = 'object'),
+    CONSTRAINT items_data_object_check CHECK (json_typeof(data) = 'object'),
+    CONSTRAINT items_metrics_object_check CHECK (metrics IS NULL OR json_typeof(metrics) = 'object'),
     CONSTRAINT items_curation_status_check CHECK (curation_status IN ('pending', 'approved', 'rejected')),
     CONSTRAINT items_approved_projection_check CHECK (is_approved = (curation_status = 'approved')),
     CONSTRAINT items_published_identity_check
@@ -173,40 +164,33 @@ CREATE INDEX items_owner_updated_idx ON builder.items (eth_address, updated_at D
 
 CREATE INDEX items_minted_collection_idx ON builder.items (collection_id) WHERE blockchain_item_id IS NOT NULL;
 
+CREATE INDEX items_created_idx ON builder.items (created_at, id);
+
 -- ── uploads ────────────────────────────────────────────────────────────────
 
--- The record that this node accepted `hash` through POST
--- /v1/items/{id}/files: the bytes are in the ONE blob store (never here),
--- `size` is what the 20 MB per-request cap was checked against,
--- `uploaded_by` the signer whose upload first stored it (a re-upload of the
--- same bytes is ON CONFLICT DO NOTHING). No request deletes a row: a draft may
--- still name the hash, and the blob store is immutable.
 CREATE TABLE builder.uploaded_contents (
     hash text NOT NULL,
     size bigint NOT NULL,
     uploaded_by text NOT NULL,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
-    CONSTRAINT uploaded_contents_pkey PRIMARY KEY (hash),
+    CONSTRAINT uploaded_contents_pkey PRIMARY KEY (hash, uploaded_by),
     CONSTRAINT uploaded_contents_size_check CHECK (size >= 0 AND size <= 20971520),
     CONSTRAINT uploaded_contents_uploaded_by_lowercase_check CHECK (uploaded_by = lower(uploaded_by))
 );
 
--- The item's `contents` map (file name -> content hash). The FK to
--- uploaded_contents is the old "upload item content before saving its
--- metadata" rule, declared: a draft can only name a hash this node accepted,
--- so the old snapshot's `missing_content` probe is always false here.
 CREATE TABLE builder.item_contents (
     item_id uuid NOT NULL,
     file text NOT NULL,
     hash text NOT NULL,
+    position integer NOT NULL DEFAULT 0,
     CONSTRAINT item_contents_pkey PRIMARY KEY (item_id, file),
     CONSTRAINT item_contents_item_id_fkey FOREIGN KEY (item_id)
         REFERENCES builder.items (id) ON DELETE CASCADE,
-    CONSTRAINT item_contents_hash_fkey FOREIGN KEY (hash)
-        REFERENCES builder.uploaded_contents (hash),
     CONSTRAINT item_contents_file_check
         CHECK (file <> '' AND char_length(file) <= 256 AND position('\' in file) = 0)
 );
+
+CREATE INDEX item_contents_hash_idx ON builder.item_contents (hash);
 
 -- ── publication ────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { warnInvalid } from "../warn";
-import type { OrphanItemOut as RsOrphanItemOut } from "@catalyst-api/builder/OrphanItemOut";
+import type { FullItemOut as RsFullItemOut } from "@catalyst-api/builder/FullItemOut";
 import type { CollectionListingRowOut as RsCollectionListingRowOut } from "@catalyst-api/builder/CollectionListingRowOut";
 
 const nullableStr = z.string().nullish().transform((v) => v ?? null);
@@ -84,18 +84,48 @@ const ORPHAN_ITEM_STATUSES = [
   "unpublished",
 ] as const;
 
+/** A row of `GET /v1/{address}/items`: builder-server's item body, read for the list's item card. */
 export const OrphanItemSchema = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.enum(ORPHAN_ITEM_TYPES),
-  status: z.enum(ORPHAN_ITEM_STATUSES),
-  createdAt: isoMillis,
-  updatedAt: isoMillis,
-  grad: nullableStr,
-  image: nullableStr,
+  type: z.string(),
   collection_id: nullableStr,
+  created_at: isoMillis,
+  updated_at: isoMillis,
+  thumbnail: nullableStr,
+  contents: z.record(z.string(), z.string()),
+  is_published: z.boolean(),
+  is_approved: z.boolean(),
 });
-export type OrphanItem = z.infer<typeof OrphanItemSchema>;
+export type OrphanItemRow = z.infer<typeof OrphanItemSchema>;
+
+/** The list's item card of `row`; `storage` is the node's base, which serves an item's files by hash. */
+export function orphanItem(row: OrphanItemRow, storage = ""): OrphanItem {
+  const thumbnail = row.thumbnail ? row.contents[row.thumbnail] : undefined;
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type === "emote" ? "emote" : Object.keys(row.contents).some((file) => file.endsWith(".js")) ? "smart_wearable" : "wearable",
+    status: row.is_published ? (row.is_approved ? "synced" : "under_review") : "unpublished",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    grad: null,
+    image: thumbnail ? `${storage}/v1/storage/contents/${encodeURIComponent(thumbnail)}` : null,
+    collection_id: row.collection_id,
+  };
+}
+
+export type OrphanItem = {
+  id: string;
+  name: string;
+  type: (typeof ORPHAN_ITEM_TYPES)[number];
+  status: (typeof ORPHAN_ITEM_STATUSES)[number];
+  createdAt: number | null;
+  updatedAt: number | null;
+  grad: string | null;
+  image: string | null;
+  collection_id: string | null;
+};
 
 function parseRows<S extends z.ZodTypeAny>(
   schema: S,
@@ -119,8 +149,8 @@ export function parseCollections(raw: unknown): BuilderCollection[] {
   return parseRows(BuilderCollectionSchema, "BuilderCollection", raw);
 }
 
-export function parseOrphanItems(raw: unknown): OrphanItem[] {
-  return parseRows(OrphanItemSchema, "OrphanItem", raw);
+export function parseOrphanItems(raw: unknown, storage = ""): OrphanItem[] {
+  return parseRows(OrphanItemSchema, "OrphanItem", raw).map((row) => orphanItem(row, storage));
 }
 
 type AssignableTo<Sub, Sup> = Sub extends Sup ? true : false;
@@ -132,6 +162,6 @@ export type _DriftBuilderCollection = Assert<
 >;
 
 export type _DriftOrphanItem = Assert<
-  AssignableTo<RsOrphanItemOut, z.input<typeof OrphanItemSchema>>
+  AssignableTo<RsFullItemOut, z.input<typeof OrphanItemSchema>>
 >;
 

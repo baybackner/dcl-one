@@ -1,11 +1,3 @@
--- builder.item_contents names an accepted upload (FK to uploaded_contents),
--- and an accepted upload is a blob already in the ONE store with its size.
--- Moving the bytes is out of scope for this import: the blob copy records
--- each stored hash and its size in dcl_migration.blob_inventory (created by the engine) (source
--- 'builder-server', object_key = the hash). A file whose hash is missing
--- there stops the batch rather than declaring an upload the node cannot
--- serve.
-
 DO $missing$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT s.hash) INTO n FROM stage s
    WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.blob_inventory b
@@ -15,14 +7,13 @@ DO $missing$ DECLARE n bigint; BEGIN
   ELSE NULL; END IF; END $missing$;
 
 INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
-SELECT DISTINCT ON (s.hash) s.hash, b.size, lower(s.owner)
+SELECT DISTINCT s.hash, b.size, lower(s.owner)
 FROM stage s
 JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
-ORDER BY s.hash, s.item_id
-ON CONFLICT (hash) DO NOTHING;
+ON CONFLICT (hash, uploaded_by) DO NOTHING;
 
-INSERT INTO builder.item_contents AS c (item_id, file, hash)
-SELECT s.item_id, s.file, s.hash
+INSERT INTO builder.item_contents AS c (item_id, file, hash, position)
+SELECT s.item_id, s.file, s.hash, s.position
 FROM stage s
-ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash
-WHERE c.hash IS DISTINCT FROM EXCLUDED.hash;
+ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash, position = EXCLUDED.position
+WHERE (c.hash, c.position) IS DISTINCT FROM (EXCLUDED.hash, EXCLUDED.position);
