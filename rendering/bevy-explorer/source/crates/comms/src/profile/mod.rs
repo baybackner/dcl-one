@@ -661,13 +661,16 @@ pub fn setup_primary_profile(
             *last_announce = time.elapsed_secs_f64();
 
             // send to event receivers
+            let user_id = profile
+                .content
+                .user_id
+                .as_deref()
+                .unwrap_or(&profile.content.eth_address);
             senders.retain(|sender| {
-                if let Some(user_id) = &profile.content.user_id {
-                    let _ = sender.send(format!(
-                        "{{ \"ethAddress\": \"{}\", \"version\": \"{}\" }}",
-                        user_id, profile.version
-                    ));
-                }
+                let _ = sender.send(format!(
+                    "{{ \"ethAddress\": \"{}\", \"version\": \"{}\" }}",
+                    user_id, profile.version
+                ));
                 !sender.is_closed()
             });
 

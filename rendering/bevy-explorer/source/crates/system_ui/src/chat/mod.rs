@@ -228,15 +228,17 @@ fn debug_chat(
                     input.reply_failed("chat is off");
                     return;
                 };
-                tab.add(
+                if let Err(e) = tab.add(
                     &mut commands,
                     &dui,
                     Some(3),
                     DuiButton::new_enabled("new tab", || {}),
                     false,
                     None,
-                )
-                .unwrap();
+                ) {
+                    input.reply_failed(format!("can't add the tab: {e}"));
+                    return;
+                }
             }
             _ => (),
         }
