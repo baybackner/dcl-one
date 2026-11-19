@@ -1677,20 +1677,20 @@ async fn a_plain_deploy_crossing_the_ttl_during_validation_skips_the_current_che
     };
     let (storage, tmp) = temp_storage("current-access-plain").await;
     let signer = deployer_address();
-    // Two seconds inside the TTL; the access step at its timestamp takes three.
-    let timestamp = chrono::Utc::now().timestamp_millis() - 10 * 60_000 + 2_000;
     let sold_block = block_minutes_ago(8);
     let slow = fake_chain::serve(move |q, block| match q {
         Query::Land { sender, .. } if block < sold_block => {
-            std::thread::sleep(Duration::from_secs(3));
+            std::thread::sleep(Duration::from_secs(6));
             Reply::Yes(*sender == signer)
         }
         Query::Land { .. } => Reply::Yes(false),
         other => panic!("unexpected question {other:?}"),
     })
     .await;
-    let (files, id, chain, _) = signed_scene_at(timestamp).await;
     let deployer = deployer_over_chain(&pool, &storage, &slow, false);
+    // Four seconds inside the TTL; the access step at its timestamp takes six.
+    let timestamp = chrono::Utc::now().timestamp_millis() - 10 * 60_000 + 4_000;
+    let (files, id, chain, _) = signed_scene_at(timestamp).await;
     let published = deployer.deploy_entity(files, &id, chain, "LOCAL").await;
     assert!(published.is_ok(), "got {published:?}");
     let _ = std::fs::remove_dir_all(&tmp);
