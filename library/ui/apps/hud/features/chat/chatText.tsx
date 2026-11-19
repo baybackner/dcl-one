@@ -12,7 +12,8 @@ export function MessageText({
   styles,
   onMention,
   onLocation,
-  onWorld
+  onWorld,
+  onUrl
 }: {
   text: string
   members: NearbyMember[]
@@ -23,6 +24,8 @@ export function MessageText({
   onLocation: (x: number, y: number) => void
   /** A world name (e.g. boedo.dcl.eth) was clicked → prompt to jump to that realm. */
   onWorld?: (name: string) => void
+  /** A URL was clicked; when set, the link opens only through it. */
+  onUrl?: (url: string) => void
 }): React.JSX.Element {
   const index = buildNameIndex(members)
   return (
@@ -30,7 +33,21 @@ export function MessageText({
       {parseMessage(text).map((t, i) => {
         if (t.type === 'url') {
           return (
-            <a key={i} className={styles.url} href={t.value} target="_blank" rel="noreferrer noopener">
+            <a
+              key={i}
+              className={styles.url}
+              href={t.value}
+              target="_blank"
+              rel="noreferrer noopener"
+              onClick={
+                onUrl &&
+                ((e) => {
+                  e.preventDefault()
+                  onUrl(t.value)
+                })
+              }
+              onAuxClick={onUrl && ((e) => e.preventDefault())}
+            >
               {t.value}
             </a>
           )

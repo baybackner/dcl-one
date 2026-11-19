@@ -27,6 +27,7 @@ function renderChat(
     messages?: ChatLine[]
     members?: NearbyMember[]
     onTeleport?: (x: number, y: number) => void
+    onOpenUrl?: (url: string) => void
     me?: { address?: string; name?: string } | null
     chatOver?: Partial<ChatState>
   } = {}
@@ -41,7 +42,7 @@ function renderChat(
     ...opts.chatOver
   }
   seedProfiles(chat.members) // what the session does on every roster message
-  const { container } = render(<Chat chat={chat} me={opts.me} onTeleport={opts.onTeleport} />)
+  const { container } = render(<Chat chat={chat} me={opts.me} onTeleport={opts.onTeleport} onOpenUrl={opts.onOpenUrl} />)
   return { chat, container }
 }
 
@@ -51,6 +52,14 @@ describe('chat rich messages', () => {
     const link = screen.getByRole('link', { name: 'https://decentraland.org' })
     expect(link).toHaveAttribute('href', 'https://decentraland.org')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('with onOpenUrl, a URL click goes through it instead of navigating', () => {
+    const onOpenUrl = vi.fn()
+    renderChat({ messages: [line('visit https://decentraland.org now')], onOpenUrl })
+    const notPrevented = fireEvent.click(screen.getByRole('link', { name: 'https://decentraland.org' }))
+    expect(notPrevented).toBe(false)
+    expect(onOpenUrl).toHaveBeenCalledWith('https://decentraland.org')
   })
 
   it('a location coord link teleports', async () => {
