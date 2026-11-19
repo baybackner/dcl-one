@@ -199,9 +199,13 @@ impl<T: CollectibleType> CollectibleUrn<T> {
         self.urn.as_str()
     }
 
-    /// The urn [`Self::new`] gives a bare name without `:`: the name lowercased, keyed under
-    /// `UNKNOWN_SOURCE_COLLECTION`.
+    /// The urn [`Self::new`] gives a non-empty bare name without `:` or a `b64-` prefix: the name
+    /// lowercased, keyed under `UNKNOWN_SOURCE_COLLECTION`.
     pub(crate) fn unknown_source(name: &'static str) -> Self {
+        debug_assert!(
+            !name.is_empty() && !name.contains(':') && !name.starts_with("b64-"),
+            "not a bare built-in name: {name}"
+        );
         Self {
             urn: format!("{UNKNOWN_SOURCE_COLLECTION}:{}", name.to_ascii_lowercase()),
             _p: PhantomData,
