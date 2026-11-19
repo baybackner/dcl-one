@@ -625,7 +625,9 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
         compute_threads as usize,
     );
 
-    let mut app = decentraland_app.build(decentraland_app_config);
+    let mut app = decentraland_app
+        .build(decentraland_app_config)
+        .map_err(|e| JsValue::from_str(&format!("can't build the app: {e}")))?;
 
     // on wasm we need to explicitly specify key binds for the platform
     let user_agent = js_sys::global()

@@ -98,12 +98,6 @@ fn initiate_room_connection(
         return;
     }
 
-    let Some(livekit_runtime) = livekit_runtime else {
-        recovery.failure = Some(FailureKind::Invalid);
-        commands.entity(entity).try_remove::<Connecting>();
-        return;
-    };
-
     let remote_address = &livekit_transport.address;
 
     let Ok((address, token)) = crate::adapter::livekit_credentials(remote_address) else {
@@ -130,9 +124,6 @@ fn poll_connecting_rooms(
     livekit_runtime: LivekitRuntimeRes,
     time: Res<Time>,
 ) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
     for (entity, mut connecting_livekit_room, mut recovery, refreshable, island) in
         livekit_rooms.into_inner()
     {
@@ -462,9 +453,6 @@ fn process_network_message(
     >,
     livekit_runtime: LivekitRuntimeRes,
 ) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
     for (mut room, mut network_message) in rooms {
         loop {
             match network_message.try_recv() {
@@ -644,9 +632,6 @@ fn unsubscribe_to_voice(
 }
 
 fn verify_room_tasks(rooms: Query<&mut LivekitRoom>, livekit_runtime: LivekitRuntimeRes) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
     for mut room in rooms {
         let mut i = 0;
         while i < room.publishes.len() {
@@ -671,9 +656,6 @@ fn verify_room_tasks(rooms: Query<&mut LivekitRoom>, livekit_runtime: LivekitRun
 }
 
 fn close_rooms_on_app_exit(rooms: Query<&LivekitRoom>, livekit_runtime: LivekitRuntimeRes) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
     for room in rooms {
         if let Err(err) = livekit_runtime.block_on(room.close()) {
             error!(

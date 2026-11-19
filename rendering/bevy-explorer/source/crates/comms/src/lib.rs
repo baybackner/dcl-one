@@ -95,7 +95,21 @@ pub mod chat_marker_things {
     pub const ALL: [char; 3] = [EMOTE, '␑', '␆'];
 }
 
-pub struct CommsPlugin;
+/// Made by [`CommsPlugin::new`], which inserts the LiveKit runtime its systems take.
+pub struct CommsPlugin {
+    _runtime: (),
+}
+
+impl CommsPlugin {
+    /// Inserts the LiveKit runtime into `app`; an error when the runtime can't start.
+    pub fn new(app: &mut App) -> std::io::Result<Self> {
+        #[cfg(feature = "livekit")]
+        livekit::LivekitRuntime::insert(app)?;
+        #[cfg(not(feature = "livekit"))]
+        let _ = app;
+        Ok(Self { _runtime: () })
+    }
+}
 
 impl Plugin for CommsPlugin {
     fn build(&self, app: &mut App) {

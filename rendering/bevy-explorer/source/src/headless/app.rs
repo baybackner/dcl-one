@@ -125,13 +125,14 @@ pub fn assemble(
     server_mode: bool,
     wallet: Wallet,
     http_client: ipfs::HttpClient,
-) {
+) -> std::io::Result<()> {
     // Skip the render-only scene plugins (scene UI, TextShape, scene materials, billboards,
     // lights, visibility, pointer results) and comms' microphone and video. Must precede the
     // plugins: the gates are read at plugin-build time.
     app.insert_resource(NoRenderApp);
 
     // ---- render-free plugin set (mirrors scene_runner TestPlugins) ----
+    let comms_plugin = CommsPlugin::new(app)?;
     app.add_plugins(FrameCountPlugin)
         .add_plugins(TimePlugin)
         .add_plugins((
@@ -162,7 +163,7 @@ pub fn assemble(
             add_bevy_console: false,
         })
         .add_plugins(WalletPlugin)
-        .add_plugins(CommsPlugin)
+        .add_plugins(comms_plugin)
         .add_plugins(ban_block::BanBlockPlugin)
         // emote metadata (the loop flag scenes are told) resolves through the collectible
         // manager; no clip or sound is ever loaded here
@@ -222,6 +223,7 @@ pub fn assemble(
     app.configure_sets(Startup, SetupSets::Init.before(SetupSets::Main));
     app.add_systems(Startup, setup.in_set(SetupSets::Init));
     app.add_systems(Update, drain_permissions);
+    Ok(())
 }
 
 /// Stands in for the render-only `ImageLoader`: without it the asset server errors

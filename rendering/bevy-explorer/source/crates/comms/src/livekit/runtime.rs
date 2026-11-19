@@ -51,6 +51,16 @@ impl LivekitRuntime {
 
         Ok(Self(runtime))
     }
+
+    /// Builds the runtime and inserts it into `app`, as a non-send resource on the web.
+    pub fn insert(app: &mut App) -> std::io::Result<()> {
+        let runtime = Self::new()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        app.insert_resource(runtime);
+        #[cfg(target_arch = "wasm32")]
+        app.insert_non_send_resource(runtime);
+        Ok(())
+    }
 }
 
 impl LivekitRuntime {
@@ -82,36 +92,15 @@ impl LivekitRuntime {
 
 /// How systems take the runtime. On the web it is a single-threaded tokio runtime, so it is a
 /// non-send resource: that keeps every system using it on the engine thread, where its tasks run.
-/// None when the runtime resource is absent.
 #[cfg(not(target_arch = "wasm32"))]
-pub type LivekitRuntimeRes<'w> = Option<Res<'w, LivekitRuntime>>;
+pub type LivekitRuntimeRes<'w> = Res<'w, LivekitRuntime>;
 #[cfg(target_arch = "wasm32")]
-pub type LivekitRuntimeRes<'w> = Option<NonSend<'w, LivekitRuntime>>;
-
-pub struct LivekitRuntimePlugin;
-
-impl Plugin for LivekitRuntimePlugin {
-    fn build(&self, app: &mut App) {
-        let runtime = match LivekitRuntime::new() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                error!("LiveKit is off: can't start its runtime: {e}");
-                return;
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        app.insert_resource(runtime);
-        #[cfg(target_arch = "wasm32")]
-        app.insert_non_send_resource(runtime);
-        #[cfg(target_arch = "wasm32")]
-        app.add_systems(First, yield_to_runtime);
-    }
-}
+pub type LivekitRuntimeRes<'w> = NonSend<'w, LivekitRuntime>;
 
 /// Tokio uses cooperative scheduling, so unless we explicitly yield time for
 /// it, it will never poll the tasks on wasm, native does not have this issue
 /// as it is multithreaded
 #[cfg(target_arch = "wasm32")]
-fn yield_to_runtime(livekit_runtime: NonSend<LivekitRuntime>) {
+pub(crate) fn yield_to_runtime(livekit_runtime: NonSend<LivekitRuntime>) {
     livekit_runtime.block_on(yield_now());
 }

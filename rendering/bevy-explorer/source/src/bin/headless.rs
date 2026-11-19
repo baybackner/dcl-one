@@ -415,7 +415,7 @@ fn main() -> AppExit {
             return AppExit::from_code(1);
         }
     };
-    webgpu_build::headless::assemble(
+    if let Err(e) = webgpu_build::headless::assemble(
         &mut app,
         config,
         &args.launch,
@@ -423,7 +423,10 @@ fn main() -> AppExit {
         args.server_mode,
         wallet,
         http_client,
-    );
+    ) {
+        eprintln!("[headless] can't build the app: {e}");
+        return AppExit::from_code(1);
+    }
     app.insert_resource(delegations);
     if !args.server_mode {
         // a test client answers `/world_state` (and, from the comms plugin, `/chat_history` and

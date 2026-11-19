@@ -427,7 +427,8 @@ impl DecentralandApp {
         Self(app)
     }
 
-    pub fn build(self, decentraland_app_config: DecentralandAppConfig) -> App {
+    /// An error when the LiveKit or social runtime can't start.
+    pub fn build(self, decentraland_app_config: DecentralandAppConfig) -> std::io::Result<App> {
         let mut app = self.0;
 
         // DefaultPlugins
@@ -706,6 +707,8 @@ impl DecentralandApp {
         app.insert_resource(decentraland_app_config.app_config);
 
         // Plugins
+        let comms_plugin = CommsPlugin::new(&mut app)?;
+        let social_plugin = SocialPlugin::new(&mut app)?;
         app.add_plugins((memory::MemoryStatusPlugin, gpu_memory::GpuMemoryPlugin))
             .add_plugins(SceneRunnerPlugin)
             .add_plugins(AVPlayerPlugin)
@@ -724,8 +727,8 @@ impl DecentralandApp {
                 no_fog: decentraland_app_config.arguments.no_fog,
             })
             .add_plugins(WalletPlugin)
-            .add_plugins(CommsPlugin)
-            .add_plugins(SocialPlugin)
+            .add_plugins(comms_plugin)
+            .add_plugins(social_plugin)
             .add_plugins(BanBlockPlugin)
             .add_plugins(ImageProcessingPlugin)
             .add_plugins(NftShapePlugin)
@@ -815,7 +818,7 @@ impl DecentralandApp {
         app.add_console_command::<SessionGraphicsCommand, _>(session_graphics);
         app.add_plugins(debug_panel::MemoryDebugPanelPlugin);
 
-        app
+        Ok(app)
     }
 }
 

@@ -100,8 +100,16 @@ fn main() {
                 startup_error(&format!("can't start the scene runtime: {e}"));
                 std::process::exit(1);
             }
+            let mut app = match decentraland_app.build(decentraland_app_config) {
+                Ok(app) => app,
+                Err(e) => {
+                    // exits with the crash marker left in place
+                    startup_error(&format!("can't build the app: {e}"));
+                    std::process::exit(1);
+                }
+            };
             // the autopilot ends its run with a code, success or failure
-            let exit = decentraland_app.build(decentraland_app_config).run();
+            let exit = app.run();
             // the app is gone, so its av threads are leaving: let them, rather than have
             // process teardown kill one inside ffmpeg
             #[cfg(feature = "ffmpeg")]

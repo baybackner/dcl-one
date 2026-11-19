@@ -205,12 +205,18 @@ fn main() -> AppExit {
             return AppExit::from_code(1);
         }
     };
-    let mut app = offline_app(
+    let mut app = match offline_app(
         final_config,
         &realm,
         content_server.unwrap_or(root),
         http_client,
-    );
+    ) {
+        Ok(app) => app,
+        Err(e) => {
+            eprintln!("avatar_render: can't build the app: {e}");
+            return AppExit::from_code(1);
+        }
+    };
 
     app.add_plugins((
         bevy_kira_audio::AudioPlugin,

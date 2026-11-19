@@ -40,12 +40,26 @@ use tokio::sync::{
 };
 use wallet::Wallet;
 
-pub struct SocialPlugin;
+/// Made by [`SocialPlugin::new`], which inserts the social runtime its systems take.
+pub struct SocialPlugin {
+    _runtime: (),
+}
+
+impl SocialPlugin {
+    /// Inserts the social runtime into `app`; an error when the runtime can't start.
+    pub fn new(app: &mut bevy::prelude::App) -> std::io::Result<Self> {
+        #[cfg(feature = "social")]
+        runtime::SocialRuntime::insert(app)?;
+        #[cfg(not(feature = "social"))]
+        let _ = app;
+        Ok(Self { _runtime: () })
+    }
+}
 
 impl Plugin for SocialPlugin {
     fn build(&self, app: &mut bevy::prelude::App) {
-        #[cfg(feature = "social")]
-        app.add_plugins(runtime::SocialRuntimePlugin);
+        #[cfg(all(feature = "social", target_arch = "wasm32"))]
+        app.add_systems(First, runtime::yield_to_runtime);
         app.add_event::<FriendshipEvent>();
         app.add_event::<ConnectivityEvent>();
         app.add_event::<CommunityConnectivityEvent>();
@@ -503,9 +517,6 @@ fn init_social_client(
     mut consumer_requested: ResMut<SocialConsumerRequested>,
     mut system_api_events: EventReader<SystemApi>,
 ) {
-    let Some(social_runtime) = social_runtime else {
-        return;
-    };
     for event in system_api_events.read() {
         if is_social_consumer_request(event) {
             consumer_requested.0 = true;

@@ -40,6 +40,16 @@ impl SocialRuntime {
 
         Ok(Self(runtime))
     }
+
+    /// Builds the runtime and inserts it into `app`, as a non-send resource on the web.
+    pub fn insert(app: &mut App) -> std::io::Result<()> {
+        let runtime = Self::new()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        app.insert_resource(runtime);
+        #[cfg(target_arch = "wasm32")]
+        app.insert_non_send_resource(runtime);
+        Ok(())
+    }
 }
 
 impl SocialRuntime {
@@ -71,35 +81,14 @@ impl SocialRuntime {
 
 /// How systems take the runtime. On the web it is a single-threaded tokio runtime, so it is a
 /// non-send resource: that keeps every system using it on the engine thread, where its tasks run.
-/// None when the runtime resource is absent.
 #[cfg(not(target_arch = "wasm32"))]
-pub type SocialRuntimeRes<'w> = Option<Res<'w, SocialRuntime>>;
+pub type SocialRuntimeRes<'w> = Res<'w, SocialRuntime>;
 #[cfg(target_arch = "wasm32")]
-pub type SocialRuntimeRes<'w> = Option<NonSend<'w, SocialRuntime>>;
-
-pub struct SocialRuntimePlugin;
-
-impl Plugin for SocialRuntimePlugin {
-    fn build(&self, app: &mut App) {
-        let runtime = match SocialRuntime::new() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                error!("social is off: can't start its runtime: {e}");
-                return;
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        app.insert_resource(runtime);
-        #[cfg(target_arch = "wasm32")]
-        app.insert_non_send_resource(runtime);
-        #[cfg(target_arch = "wasm32")]
-        app.add_systems(First, yield_to_runtime);
-    }
-}
+pub type SocialRuntimeRes<'w> = NonSend<'w, SocialRuntime>;
 
 /// Tokio uses cooperative scheduling, so unless we explicitly yield time for
 /// it, it will never poll the tasks on wasm.
 #[cfg(target_arch = "wasm32")]
-fn yield_to_runtime(social_runtime: NonSend<SocialRuntime>) {
+pub(crate) fn yield_to_runtime(social_runtime: NonSend<SocialRuntime>) {
     social_runtime.block_on(yield_now());
 }

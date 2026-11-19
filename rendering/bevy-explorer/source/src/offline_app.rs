@@ -38,7 +38,7 @@ pub fn offline_app(
     realm: &str,
     content_server: String,
     http_client: ipfs::HttpClient,
-) -> App {
+) -> std::io::Result<App> {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -100,6 +100,7 @@ pub fn offline_app(
 
     // never a participant in the realm's comms: no archipelago, no world room
     app.insert_resource(DisableRealmComms(true));
+    let comms_plugin = CommsPlugin::new(&mut app)?;
     app.add_plugins(UtilsPlugin)
         .add_plugins(UiCorePlugin)
         .add_plugins(ConsolePlugin {
@@ -108,7 +109,7 @@ pub fn offline_app(
         .add_plugins(SceneBoundPlugin)
         .add_plugins(SceneRunnerPlugin)
         .add_plugins(crate::client_window_focus::ClientWindowFocusPlugin)
-        .add_plugins(CommsPlugin)
+        .add_plugins(comms_plugin)
         .add_plugins(RestrictedActionsPlugin)
         .add_plugins(DclImposterPlugin {
             zip_output: None,
@@ -129,5 +130,5 @@ pub fn offline_app(
         })
         .insert_resource(DiscardPlayerUpdates(true));
 
-    app
+    Ok(app)
 }

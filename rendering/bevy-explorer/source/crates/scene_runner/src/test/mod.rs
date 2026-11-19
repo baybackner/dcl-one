@@ -63,6 +63,7 @@ use super::{initialize_scene::SceneLoading, PrimaryUser};
 
 pub struct TestPlugins {
     pub client: ipfs::HttpClient,
+    pub comms: CommsPlugin,
 }
 
 pub static LOG_ADDED: Lazy<Mutex<bool>> = Lazy::new(Default::default);
@@ -113,7 +114,7 @@ impl PluginGroup for TestPlugins {
                 add_bevy_console: false,
             })
             .add(WalletPlugin)
-            .add(CommsPlugin)
+            .add(self.comms)
             .add(DuiPlugin)
             .add(SystemBridgePlugin { bare: true })
     }
@@ -132,8 +133,10 @@ fn init_test_app(entity_json: &str) -> anyhow::Result<App> {
         },
         ..Default::default()
     });
+    let comms = CommsPlugin::new(&mut app)?;
     app.add_plugins(TestPlugins {
         client: ipfs::http_client()?,
+        comms,
     });
     app.init_asset::<Shader>();
     app.init_asset::<AnimationClip>();
