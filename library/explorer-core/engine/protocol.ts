@@ -991,11 +991,12 @@ export interface SigninStageReadyMessage {
 }
 
 /** Where the Shop's preview avatar has its nametag (scene → page): the engine's nametag anchor, over the head and
- *  what the avatar wears, as a share of the avatar window's height from its top. null while the avatar's body
- *  isn't measured or the Shop's stage isn't up: the page keeps its own place for the nametag then. */
+ *  what the avatar wears, as a point in the avatar's window: `x` a share of its width from its left, `y` of its
+ *  height from its top. null while it isn't known (the stage just came up or went, the avatar's body isn't measured,
+ *  a read failed): the page keeps its own place for the nametag then. */
 export interface PreviewNametagMessage {
   kind: 'previewNametag'
-  top: number | null
+  anchor: { x: number; y: number } | null
 }
 
 export interface SceneInfoMessage {

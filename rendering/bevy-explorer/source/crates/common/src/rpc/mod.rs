@@ -200,6 +200,15 @@ impl RpcOrigin {
     }
 }
 
+/// An avatar's nametag anchor from the avatar's origin, in metres in the world (the avatar's scale
+/// included), along a scene's axes: `x` east, `y` up, `z` north.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NametagAnchorOffset {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
 #[derive(Event, Debug, Clone)]
 pub struct RpcCallEvent {
     pub origin: RpcOrigin,
@@ -268,13 +277,12 @@ pub enum RpcCall {
         user: Option<String>,
         response: RpcResultSender<Result<SerializedProfile, ()>>,
     },
-    /// How high an avatar of the calling scene (its `AvatarShape` entity) has its nametag: the
-    /// nametag anchor's height above the avatar's origin, in world metres with the avatar's scale.
-    /// The engine sets that anchor over the head and what it wears; None until the avatar's body is
-    /// measured, or for an entity that isn't such an avatar.
-    AvatarNametagHeight {
+    /// Where an avatar of the calling scene (its `AvatarShape` entity) has its nametag: the nametag
+    /// anchor's offset from the avatar's origin. The engine sets that anchor over the head and what
+    /// it wears; None until the avatar's body is measured, or for an entity that isn't such an avatar.
+    AvatarNametagAnchor {
         entity: dcl_component::SceneEntityId,
-        response: RpcResultSender<Option<f32>>,
+        response: RpcResultSender<Option<NametagAnchorOffset>>,
     },
     /// The compact profiles of a list of addresses, in request order; an address that can't
     /// be resolved is left out.

@@ -543,9 +543,10 @@ export interface EventsState {
 export interface ShopState {
   open: boolean
   toggle: () => void
-  /** Where the engine puts the Shop avatar's nametag (previewNametag): over the head and what it wears, as a share
-   *  of the avatar window's height from its top. null or absent while it isn't known. */
-  nametagTop?: number | null
+  /** Where the engine puts the Shop avatar's nametag (previewNametag): over the head and what it wears, as a point
+   *  in the avatar's window (shares of its width from its left and of its height from its top). null or absent
+   *  while it isn't known. */
+  nametagAnchor?: { x: number; y: number } | null
 }
 
 // Unity's sidebar Skybox menu: time of day, driven through the engine's `/time <hours> <speed>`.
@@ -1306,7 +1307,7 @@ export function useEngineSession(createDriver: () => LoginDriver): EngineSession
   const [lobbyStageReady, setLobbyStageReady] = useState(false)
   const [communitiesLoaded, setCommunitiesLoaded] = useState(false)
   const [signinStageReady, setSigninStageReady] = useState(false)
-  const [previewNametagTop, setPreviewNametagTop] = useState<number | null>(null)
+  const [previewNametagAnchor, setPreviewNametagAnchor] = useState<{ x: number; y: number } | null>(null)
   lobbyRef.current = lobby
   // The welcome page: asked of the engine after each sign-in, null until it answers (or once accepted).
   const [welcome, setWelcome] = useState<{ terms: boolean; newProfile: boolean } | null>(null)
@@ -2464,7 +2465,7 @@ export function useEngineSession(createDriver: () => LoginDriver): EngineSession
           setSigninStageReady(true)
           break
         case 'previewNametag':
-          setPreviewNametagTop(msg.top)
+          setPreviewNametagAnchor(msg.anchor)
           break
         case 'welcome': {
           // an answer to an ask from before a sign-out is the signed-out account's: no page of a
@@ -5183,7 +5184,7 @@ export function useEngineSession(createDriver: () => LoginDriver): EngineSession
     minimap: minimapSlice,
     places: { open: placesOpen, toggle: togglePlaces, close: closePlaces, readSigned: readSignedPlace, worldAccess },
     events: { open: eventsOpen, toggle: toggleEvents, close: closeEvents, data: eventsData, memberOf: eventCommunities },
-    shop: { open: shopOpen, toggle: toggleShop, nametagTop: previewNametagTop },
+    shop: { open: shopOpen, toggle: toggleShop, nametagAnchor: previewNametagAnchor },
     create: { open: createOpen, toggle: toggleCreate, show: showCreate },
     photoMode: {
       snapshot: photoMode,

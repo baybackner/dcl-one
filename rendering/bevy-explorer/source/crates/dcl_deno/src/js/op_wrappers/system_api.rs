@@ -65,7 +65,7 @@ pub fn ops(super_user: bool) -> Vec<OpDecl> {
             op_read_bridge_stream(),
             op_get_user_profile(),
             op_get_compact_profiles(),
-            op_avatar_nametag_height(),
+            op_avatar_nametag_anchor(),
             op_quit(),
             op_get_permission_request_stream(),
             op_read_permission_request_stream(),
@@ -463,11 +463,12 @@ pub async fn op_get_compact_profiles(
 }
 
 #[op2(async)]
-pub async fn op_avatar_nametag_height(
+#[serde]
+pub async fn op_avatar_nametag_anchor(
     state: Rc<RefCell<OpState>>,
     entity: u32,
-) -> Result<Option<f32>, deno_core::anyhow::Error> {
-    dcl_js::system_api::op_avatar_nametag_height(state, entity).await
+) -> Result<Option<common::rpc::NametagAnchorOffset>, deno_core::anyhow::Error> {
+    dcl_js::system_api::op_avatar_nametag_anchor(state, entity).await
 }
 
 #[op2(fast)]

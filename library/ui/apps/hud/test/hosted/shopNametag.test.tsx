@@ -11,10 +11,10 @@ afterEach(() => {
 describe("the Shop avatar's nametag", () => {
   it('stands where the engine last said, and is unknown once the engine has none', async () => {
     const h = renderSession({ userId: null })
-    expect(h.session().shop.nametagTop ?? null).toBeNull()
-    act(() => h.driver.emit({ kind: 'previewNametag', top: 0.12 }))
-    await waitFor(() => expect(h.session().shop.nametagTop).toBe(0.12))
-    act(() => h.driver.emit({ kind: 'previewNametag', top: null }))
-    await waitFor(() => expect(h.session().shop.nametagTop).toBeNull())
+    expect(h.session().shop.nametagAnchor ?? null).toBeNull()
+    act(() => h.driver.emit({ kind: 'previewNametag', anchor: { x: 0.53, y: 0.12 } }))
+    await waitFor(() => expect(h.session().shop.nametagAnchor).toEqual({ x: 0.53, y: 0.12 }))
+    act(() => h.driver.emit({ kind: 'previewNametag', anchor: null }))
+    await waitFor(() => expect(h.session().shop.nametagAnchor).toBeNull())
   })
 })

@@ -22,7 +22,8 @@ import { currentLook } from './avatarDraft'
 import type { AvatarLook } from '@explorer-core/engine/avatarEquip'
 import { LOBBY_STAGE_PRESETS } from '@explorer-core/engine/lobbyStage'
 import { BevyApi } from '../bevy-api'
-import { shareFromTop, shiftWithin } from './previewView'
+import { createNametagFeed } from './previewNametagFeed'
+import { shiftWithin, windowPoint, type SceneOffset } from './previewView'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -63,10 +64,6 @@ const CAMERA_PITCH = 12
 const CAMERA_DISTANCE = 8
 // The Backpack's and the Shop's avatar stands with its feet at this height, in this scene's coordinates.
 const PREVIEW_FEET_Y = 0
-// How often the Shop asks the engine where its avatar's nametag is, and the least move told to the page (about a
-// pixel of the 942px window).
-const NAMETAG_READ_SECONDS = 0.25
-const NAMETAG_STEP = 0.001
 // The camera is pitched down, so its view centre sits this far below it at the avatar.
 const PITCH_DROP = CAMERA_DISTANCE * Math.tan((CAMERA_PITCH * Math.PI) / 180)
 // Drag-to-rotate sensitivity (from the SDK7 AvatarPreviewElement).
@@ -143,12 +140,6 @@ let cameraEntity: Entity | null = null
 let podiumEntities: Entity[] = []
 // The Shop's stage image on screen (previewStage), in place of the backdrop bands and the podium.
 let shopStage: Rect | null = null
-// The Shop's nametag over its avatar (previewNametag): the share of the window's height from its top told to the
-// page last (undefined: nothing told since the stage came up), whether a read of it is under way, and the time
-// to the next read.
-let nametagTold: number | null | undefined
-let nametagReading = false
-let nametagWait = 0
 // Bumped for every emote the Shop plays: the engine plays a trigger whose timestamp is new.
 let emoteTrigger = 0
 let lastShapeKey = ''
@@ -767,6 +758,19 @@ export function registerAvatarPreview(ctx: Ctx): void {
     applyFraming(framing)
   })
 
+  // The Shop's nametag stands where the engine puts its avatar's own: over the head and what it wears, following the
+  // head. While the Shop's stage is up the engine's anchor is read now and then and told to the page as a point in
+  // the avatar's window (./previewNametagFeed).
+  const nametag = createNametagFeed<Entity, SceneOffset>({
+    read: (avatar) => BevyApi.avatarNametagAnchor?.(avatar) ?? Promise.resolve(null),
+    project: (anchor) =>
+      windowPoint(anchor, framing, zoom, zoomShift, CAMERA_PITCH, rect != null && rect.height > 0 ? rect.width / rect.height : 1, PREVIEW_FEET_Y),
+    send: (anchor) => ctx.send({ kind: 'previewNametag', anchor })
+  })
+  ctx.push((dt) => {
+    nametag.tick(dt, shopStage != null && stage === 'backpack' && BevyApi.avatarNametagAnchor != null ? avatarEntity : null)
+  })
+
   // The Shop draws its stage around the avatar's window: the same image goes behind the avatar, standing on
   // the floor the image has, so the Backpack's podium steps aside.
   ctx.on('previewStage', (msg) => {
@@ -775,40 +779,7 @@ export function registerAvatarPreview(ctx: Ctx): void {
     framing = framingFrom = framingTo = shopStage != null ? SHOP_FRAMING : FRAMING.body
     framingT = 1
     applyFraming(framing)
-    // a page that (re)draws the stage hears where the nametag is from the next read, even if it hasn't moved
-    nametagTold = undefined
-    nametagWait = 0
-  })
-
-  // The Shop's nametag stands where the engine puts its avatar's own: over the head and what it wears. While the
-  // Shop's stage is up its height is read now and then and told to the page as a share of the window's height,
-  // once it moves; with no stage, or no avatar, the page is told there is none.
-  ctx.push((dt) => {
-    if (shopStage == null || stage !== 'backpack' || avatarEntity == null || BevyApi.avatarNametagHeight == null) {
-      if (nametagTold !== undefined && nametagTold !== null) ctx.send({ kind: 'previewNametag', top: null })
-      nametagTold = shopStage == null ? undefined : null
-      return
-    }
-    nametagWait -= dt
-    if (nametagReading || nametagWait > 0) return
-    nametagWait = NAMETAG_READ_SECONDS
-    nametagReading = true
-    const avatar = avatarEntity
-    BevyApi.avatarNametagHeight(avatar)
-      .then((height) => {
-        // an answer for an avatar or a stage that has gone since tells nothing
-        if (avatar !== avatarEntity || shopStage == null) return
-        const top = height == null || !Number.isFinite(height) ? null : nametagTop(height)
-        if (nametagTold !== undefined && (top === nametagTold || (top != null && nametagTold != null && Math.abs(top - nametagTold) < NAMETAG_STEP))) return
-        nametagTold = top
-        ctx.send({ kind: 'previewNametag', top })
-      })
-      .catch((e: unknown) => {
-        console.error('[avatarPreview] avatarNametagHeight failed', e)
-      })
-      .finally(() => {
-        nametagReading = false
-      })
+    nametag.restage()
   })
 
   // The page's drag over the preview turns the avatar, and its wheel zooms the camera: the page drives both,
@@ -887,12 +858,6 @@ function applyFraming(f: { range: number; centerY: number }, z: number = zoom, s
   const cam = TextureCamera.getMutableOrNull(cameraEntity)
   if (cam?.mode?.$case === 'orthographic') cam.mode.orthographic.verticalRange = f.range / z
   Transform.getMutable(cameraEntity).position = Vector3.create(8, f.centerY + shiftWithin(f, z, shift) + PITCH_DROP, 8 - CAMERA_DISTANCE)
-}
-
-/** Where the Shop avatar's nametag anchor, `height` metres over its feet (as the engine places it, over the head
- *  and what the avatar wears), falls in the avatar's window: a share of the window's height from its top. */
-function nametagTop(height: number): number {
-  return shareFromTop(PREVIEW_FEET_Y + height, framing, zoom, zoomShift, CAMERA_PITCH)
 }
 
 /** The preview avatar, whole body, facing forward, without the podium, as a PNG data URL — or null

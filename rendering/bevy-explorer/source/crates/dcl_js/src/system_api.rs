@@ -727,16 +727,16 @@ pub async fn op_get_user_profile(
         .map_err(|_| anyhow::anyhow!("Not found"))
 }
 
-/// How high one of the system scene's avatars (an `AvatarShape` entity, as the scene numbers it)
-/// has its nametag: its anchor's height above the avatar's origin, in world metres with the
-/// avatar's scale, or None until the engine has measured the avatar's body. The system scene's
-/// avatar preview places the page's nametag with it. Only the system scene may call it.
-pub async fn op_avatar_nametag_height(
+/// Where one of the system scene's avatars (an `AvatarShape` entity, as the scene numbers it) has
+/// its nametag: its anchor's offset from the avatar's origin, in world metres with the avatar's
+/// scale along the scene's axes, or None until the engine has measured the avatar's body. The
+/// system scene's avatar preview places the page's nametag with it. Only the system scene may call it.
+pub async fn op_avatar_nametag_anchor(
     state: Rc<RefCell<impl State>>,
     entity: u32,
-) -> Result<Option<f32>, anyhow::Error> {
+) -> Result<Option<common::rpc::NametagAnchorOffset>, anyhow::Error> {
     if !state.borrow().has::<SuperUserScene>() {
-        anyhow::bail!("avatarNametagHeight is only available to the system scene");
+        anyhow::bail!("avatarNametagAnchor is only available to the system scene");
     }
 
     let (sx, rx) = RpcResultSender::channel();
@@ -744,7 +744,7 @@ pub async fn op_avatar_nametag_height(
     state
         .borrow_mut()
         .borrow_mut::<RpcCalls>()
-        .push(RpcCall::AvatarNametagHeight {
+        .push(RpcCall::AvatarNametagAnchor {
             entity: dcl_component::SceneEntityId::from_proto_u32(entity),
             response: sx,
         })?;

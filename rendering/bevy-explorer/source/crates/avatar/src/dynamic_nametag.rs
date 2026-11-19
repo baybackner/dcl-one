@@ -3,10 +3,11 @@ use bevy::{
     prelude::*,
 };
 use common::{
-    rpc::{RpcCall, RpcCallEvent},
+    rpc::{NametagAnchorOffset, RpcCall, RpcCallEvent},
     sets::PostUpdateSets,
     structs::{AttachPoints, AvatarDynamicState, MoveKind},
 };
+use dcl_component::transform_and_parent::DclTranslation;
 use scene_runner::renderer_context::RendererSceneContext;
 
 use crate::ghost::AvatarGhost;
@@ -37,7 +38,7 @@ impl Plugin for DynamicNametagPlugin {
             PostUpdate,
             dynamic_nametag_position.in_set(PostUpdateSets::Nametag),
         );
-        app.add_systems(Update, serve_avatar_nametag_height);
+        app.add_systems(Update, serve_avatar_nametag_anchor);
 
         app.insert_resource(NametagsVisible(true))
             .add_console_command::<Nametags, _>(nametags_command);
@@ -65,41 +66,50 @@ fn nametags_command(mut cmd: ConsoleCommand<Nametags>, mut visible: ResMut<Namet
     cmd.reply_ok(serde_json::json!({"visible": visible.0}).to_string());
 }
 
-/// Answers `avatarNametagHeight`: for an avatar of the calling scene (its `AvatarShape` entity), how
-/// high its nametag anchor sits above the avatar's origin, in world metres with the avatar's scale,
-/// as `dynamic_nametag_position` last placed it. None for another scene's entity, an entity that is
-/// no such avatar, or an avatar whose body isn't measured yet (no `NametagHeadOffset`).
-fn serve_avatar_nametag_height(
+/// Answers `avatarNametagAnchor`: for an avatar of the calling scene (its `AvatarShape` entity),
+/// where its nametag anchor stands from the avatar's origin, as `dynamic_nametag_position` last
+/// placed it (over the head, clear of what the avatar wears, following the head across too), in
+/// world metres along the scene's axes. None for another scene's entity, an entity that is no such
+/// avatar, or an avatar whose body isn't measured yet (no `NametagHeadOffset`). Read in `Update`: the
+/// transforms as the last frame's `PostUpdate` propagated them.
+fn serve_avatar_nametag_anchor(
     mut requests: EventReader<RpcCallEvent>,
     scenes: Query<&RendererSceneContext>,
     avatars: Query<&AttachPoints, With<NametagHeadOffset>>,
     global_transforms: Query<&GlobalTransform>,
 ) {
     for event in requests.read() {
-        let RpcCall::AvatarNametagHeight { entity, response } = &event.call else {
+        let RpcCall::AvatarNametagAnchor { entity, response } = &event.call else {
             continue;
         };
-        let height = event
+        let anchor = event
             .origin
             .scene()
             .and_then(|scene| scenes.get(scene).ok())
             .and_then(|context| context.bevy_entity(*entity))
             .and_then(|avatar| avatars.get(avatar).ok())
             .and_then(|points| {
-                nametag_height_above(
+                nametag_anchor_from(
                     global_transforms.get(points.position).ok()?,
                     global_transforms.get(points.nametag).ok()?,
                 )
             });
-        response.send(height);
+        response.send(anchor);
     }
 }
 
-/// The nametag anchor's height above the avatar's origin, in world metres; None for a transform
-/// that isn't finite.
-fn nametag_height_above(origin: &GlobalTransform, nametag: &GlobalTransform) -> Option<f32> {
-    let height = nametag.translation().y - origin.translation().y;
-    height.is_finite().then_some(height)
+/// The nametag anchor's offset from the avatar's origin, in world metres along a scene's axes (the
+/// engine's z, reversed); None for a transform that isn't finite.
+fn nametag_anchor_from(
+    origin: &GlobalTransform,
+    nametag: &GlobalTransform,
+) -> Option<NametagAnchorOffset> {
+    let offset = nametag.translation() - origin.translation();
+    if !offset.is_finite() {
+        return None;
+    }
+    let [x, y, z] = DclTranslation::from_bevy_translation(offset).0;
+    Some(NametagAnchorOffset { x, y, z })
 }
 
 /// On an avatar: how far above the head bone their nametag sits, clear of what they wear, in
@@ -240,11 +250,11 @@ mod tests {
     use dcl_component::SceneEntityId;
 
     /// A scene, and one of its avatars (an `AvatarShape`'s attach points) whose origin and nametag
-    /// anchor stand at these heights in the world; `measured`: its body has given its offset.
+    /// anchor stand here in the world (the engine's axes); `measured`: its body has given its offset.
     fn scene_with_avatar(
         world: &mut World,
-        origin_y: f32,
-        nametag_y: f32,
+        origin: Vec3,
+        nametag: Vec3,
         measured: bool,
     ) -> (Entity, SceneEntityId) {
         let root = world.spawn_empty().id();
@@ -271,14 +281,10 @@ mod tests {
         world.flush();
         world
             .entity_mut(attach_points.position)
-            .insert(GlobalTransform::from_translation(Vec3::new(
-                8.0, origin_y, -8.0,
-            )));
+            .insert(GlobalTransform::from_translation(origin));
         world
             .entity_mut(attach_points.nametag)
-            .insert(GlobalTransform::from_translation(Vec3::new(
-                8.0, nametag_y, -8.0,
-            )));
+            .insert(GlobalTransform::from_translation(nametag));
         let mut avatar = world.spawn(attach_points);
         if measured {
             avatar.insert(NametagHeadOffset(0.3));
@@ -294,15 +300,15 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_event::<RpcCallEvent>()
-            .add_systems(Update, serve_avatar_nametag_height);
+            .add_systems(Update, serve_avatar_nametag_anchor);
         app
     }
 
-    fn ask(app: &mut App, origin: RpcOrigin, entity: SceneEntityId) -> Option<f32> {
+    fn ask(app: &mut App, origin: RpcOrigin, entity: SceneEntityId) -> Option<NametagAnchorOffset> {
         let (response, mut answer) = RpcResultSender::channel();
         app.world_mut().send_event(RpcCallEvent {
             origin,
-            call: RpcCall::AvatarNametagHeight { entity, response },
+            call: RpcCall::AvatarNametagAnchor { entity, response },
         });
         app.update();
         answer
@@ -311,24 +317,39 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_learns_how_high_its_avatar_has_its_nametag() {
+    fn a_scene_learns_where_its_avatar_has_its_nametag_along_its_own_axes() {
         let mut app = nametag_app();
-        let (scene, avatar) = scene_with_avatar(app.world_mut(), 0.5, 4.1, true);
+        // the head leans east and toward the engine's -z, which is the scene's north
+        let (scene, avatar) = scene_with_avatar(
+            app.world_mut(),
+            Vec3::new(8.0, 0.5, -8.0),
+            Vec3::new(8.2, 4.1, -8.3),
+            true,
+        );
         let from_scene = RpcOrigin::Scene {
             entity: scene,
             hash: "scene".into(),
         };
-        let height = ask(&mut app, from_scene.clone(), avatar).expect("a measured avatar");
-        assert!((height - 3.6).abs() < 1e-5, "{height}");
+        let anchor = ask(&mut app, from_scene.clone(), avatar).expect("a measured avatar");
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(
+            close(anchor.x, 0.2) && close(anchor.y, 3.6) && close(anchor.z, 0.3),
+            "{anchor:?}"
+        );
         // the engine itself is no scene, and an entity the scene doesn't hold is no avatar
         assert_eq!(ask(&mut app, RpcOrigin::Engine, avatar), None);
         assert_eq!(ask(&mut app, from_scene, SceneEntityId::new(601, 0)), None);
     }
 
     #[test]
-    fn an_avatar_whose_body_isnt_measured_has_no_nametag_height_yet() {
+    fn an_avatar_whose_body_isnt_measured_has_no_nametag_anchor_yet() {
         let mut app = nametag_app();
-        let (scene, avatar) = scene_with_avatar(app.world_mut(), 0.5, 4.1, false);
+        let (scene, avatar) = scene_with_avatar(
+            app.world_mut(),
+            Vec3::new(8.0, 0.5, -8.0),
+            Vec3::new(8.0, 4.1, -8.0),
+            false,
+        );
         let from_scene = RpcOrigin::Scene {
             entity: scene,
             hash: "scene".into(),

@@ -146,18 +146,19 @@ describe('the in-world Shop’s Names', () => {
     serve()
     const { rerender } = renderShop()
     await openNames()
-    const tag = nametag()!
-    const stage = tag.closest<HTMLElement>('[style*="--nametag-anchor"]')
+    const anchored = (): HTMLElement | null => nametag()!.closest<HTMLElement>('[style*="--nametag-y"]')
     // unknown: the design's place, no anchor on the stage
-    expect(stage).toBeNull()
-    expect(tag.className).not.toMatch(/nametagAnchored/)
-    // the engine's anchor, 12% down the 942px window: the tag's foot on it
-    rerender({ shop: { open: true, toggle: vi.fn(), nametagTop: 0.12 } })
-    expect(nametag()!.className).toMatch(/nametagAnchored/)
-    expect(nametag()!.closest<HTMLElement>('[style*="--nametag-anchor"]')!.style.getPropertyValue('--nametag-anchor')).toBe(`${0.12 * 942}px`)
-    // and back to the design's place once the engine has none
-    rerender({ shop: { open: true, toggle: vi.fn(), nametagTop: null } })
+    expect(anchored()).toBeNull()
     expect(nametag()!.className).not.toMatch(/nametagAnchored/)
+    // the engine's anchor, a little right of the middle and 12% down the 573×942px window: the tag's foot on it
+    rerender({ shop: { open: true, toggle: vi.fn(), nametagAnchor: { x: 0.53, y: 0.12 } } })
+    expect(nametag()!.className).toMatch(/nametagAnchored/)
+    expect(anchored()!.style.getPropertyValue('--nametag-x')).toBe(`${0.53 * 573}px`)
+    expect(anchored()!.style.getPropertyValue('--nametag-y')).toBe(`${0.12 * 942}px`)
+    // and back to the design's place once the engine has none
+    rerender({ shop: { open: true, toggle: vi.fn(), nametagAnchor: null } })
+    expect(nametag()!.className).not.toMatch(/nametagAnchored/)
+    expect(anchored()).toBeNull()
   })
 
   it('opens on UNIQUE NAME, the nametag over the avatar reading the placeholder until a NAME is typed', async () => {

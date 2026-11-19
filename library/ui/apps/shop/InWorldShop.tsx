@@ -69,8 +69,8 @@ const SEARCH_DEBOUNCE_MS = 350
 const THUMB_LENGTH = 203
 /** The stage image (assets/stage.jpg) is the design's 1920×1080 frame, its top 70px under the top bar. */
 const STAGE = { width: 1920, height: 1080, top: 70 }
-/** The avatar's window, the design's Avatar slot (.stage, .preview): 942px tall. */
-const AVATAR_WINDOW_HEIGHT = 942
+/** The avatar's window, the design's Avatar slot (.preview, at the left of .stage): 573×942px. */
+const AVATAR_WINDOW = { width: 573, height: 942 }
 /** How long "1 Item Added to Cart" stays up. */
 const TOAST_MS = 3000
 type Rect = { x: number; y: number; width: number; height: number }
@@ -150,7 +150,8 @@ export default function InWorldShop({ shop, profile, onNavigate, setEngineViewpo
   // A zoomed preview hides the nametag: it would sit over the avatar's head.
   const [zoomed, setZoomed] = useState(false)
   // Names' nametag: on the engine's nametag anchor once it is known, else where the design puts it.
-  const nametagClass = shop.nametagTop != null ? `${styles.nametag} ${styles.nametagAnchored}` : styles.nametag
+  const anchor = shop.nametagAnchor ?? null
+  const nametagClass = anchor != null ? `${styles.nametag} ${styles.nametagAnchored}` : styles.nametag
   // Each ADD TO CART shows the toast again (its key restarts it).
   const [toast, setToast] = useState(0)
   const cartArea = useRef<HTMLDivElement>(null)
@@ -625,7 +626,11 @@ export default function InWorldShop({ shop, profile, onNavigate, setEngineViewpo
         <div
           className={styles.stage}
           // Where the engine puts the avatar's nametag, over its head and what it wears: Names' nametag stands on it.
-          style={shop.nametagTop != null ? ({ '--nametag-anchor': `${shop.nametagTop * AVATAR_WINDOW_HEIGHT}px` } as React.CSSProperties) : undefined}
+          style={
+            anchor != null
+              ? ({ '--nametag-x': `${anchor.x * AVATAR_WINDOW.width}px`, '--nametag-y': `${anchor.y * AVATAR_WINDOW.height}px` } as React.CSSProperties)
+              : undefined
+          }
         >
           {/* The engine draws the avatar preview here, seen through the backdrop's hole. */}
           <div className={styles.preview}>

@@ -143,12 +143,12 @@ module.exports.getCompactProfiles = async function(addresses) {
     return await Deno.core.ops.op_get_compact_profiles(addresses);
 }
 
-// how high one of this (system) scene's avatars has its nametag: the height of the nametag anchor of
-// an AvatarShape entity above the avatar's origin, in metres with the avatar's scale. The engine sets
-// that anchor over the head and what it wears.
-// -> number | null (null until the avatar's body is measured)
-module.exports.avatarNametagHeight = async function(entity) {
-    return await Deno.core.ops.op_avatar_nametag_height(entity);
+// where one of this (system) scene's avatars has its nametag: the offset of the nametag anchor of an
+// AvatarShape entity from the avatar's origin, in metres with the avatar's scale, along the scene's
+// axes (x east, y up, z north). The engine sets that anchor over the head and what it wears.
+// -> { x: number, y: number, z: number } | null (null until the avatar's body is measured)
+module.exports.avatarNametagAnchor = async function(entity) {
+    return await Deno.core.ops.op_avatar_nametag_anchor(entity);
 }
 
 // get the next key/button pressed by the user, identified as a string
