@@ -21,7 +21,9 @@
 //! holdings and the request's seeds (`neighbours`, built from the nft
 //! index), with the trending floor filling the rest and answering alone
 //! until a build exists (`personalized: false`). Coupons are stored and
-//! served by `/v1/coupons` (`coupons`).
+//! served by `/v1/coupons` (`coupons`). `/v3/catalog/trending` and the
+//! browse reads of `/v3/catalog/unified` are memoized 30 s; item pages and
+//! checkout name their item and read fresh.
 
 #[path = "shop_queries.rs"]
 mod queries;
@@ -51,6 +53,7 @@ pub use recommendations::{aggregate_sales, rank_trending};
 
 use crate::types::{ASSET_TYPE_ERC20, ASSET_TYPE_USD_PEGGED_MANA, ManaUsdRate};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -68,7 +71,7 @@ use super::catalog::{
     unified_trades_cte_of,
 };
 use super::items::{USD_WEI_PER_CREDIT, mana_usd_rate, rate_to_numeric_string, recent_sales};
-use super::readers::{self, Ttl, cached};
+use super::readers::{self, Ttl, cached, memoized};
 use super::wire::{
     ApiError, ChainId, DataTotal, Network, Params, body_shapes_for_genders, emote_play_mode_clause,
     network_and_chain, where_from,
@@ -1265,6 +1268,27 @@ pub async fn get_legacy_catalog(
     }
 }
 
+/// The memo key of a browse read (the overview rails, the browse pages),
+/// built from the parsed filters so that parameter order, spelling and
+/// unknown keys share one entry. A read that names a collection, an item, a
+/// creator or a search (item pages, checkout, creator pages, typed searches)
+/// has no key and reads fresh.
+fn unified_browse_key(group_by: UnifiedGroupBy, f: &UnifiedCatalogFilters) -> Option<String> {
+    let b = &f.base;
+    let named = f.contract_addresses.is_some()
+        || f.item_ids.is_some()
+        || b.contract_address.is_some()
+        || b.item_id.is_some()
+        || !b.creator.is_empty()
+        || b.search.is_some();
+    (!named).then(|| format!("unified:{group_by:?}:{f:?}"))
+}
+
+fn body_of(v: impl Serialize) -> Result<Value, ApiError> {
+    serde_json::to_value(v).map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// Served from a 30 s memo for a browse read; the readiness gates still run per request.
 pub async fn get_unified_catalog(
     State(state): State<SharedState>,
     Query(pairs): Query<Vec<(String, String)>>,
@@ -1273,19 +1297,29 @@ pub async fn get_unified_catalog(
         return r;
     }
     let filters = parse_unified_filters(&pairs);
+    let group_by = parse_unified_group_by(&pairs);
     let rate = match mana_usd_rate(&state).await {
         Ok(rate) => rate,
         Err(envelope) => return envelope,
     };
-    let result = match parse_unified_group_by(&pairs) {
-        UnifiedGroupBy::Item => unified_items(&state, &filters, rate)
-            .await
-            .map(|(data, total)| Json(DataTotal { data, total }).into_response()),
-        UnifiedGroupBy::Listing => unified_listings(&state, &filters, rate)
-            .await
-            .map(|(data, total)| Json(DataTotal { data, total }).into_response()),
+    let read = || async {
+        match group_by {
+            UnifiedGroupBy::Item => unified_items(&state, &filters, rate)
+                .await
+                .and_then(|(data, total)| body_of(DataTotal { data, total })),
+            UnifiedGroupBy::Listing => unified_listings(&state, &filters, rate)
+                .await
+                .and_then(|(data, total)| body_of(DataTotal { data, total })),
+        }
     };
-    result.unwrap_or_else(IntoResponse::into_response)
+    let result = match unified_browse_key(group_by, &filters) {
+        Some(key) => memoized(&state, Ttl::S30, key, read).await,
+        None => read().await.map(Arc::new),
+    };
+    match result {
+        Ok(body) => Json(body.as_ref()).into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 pub async fn get_importable_listings(
@@ -1348,6 +1382,7 @@ pub async fn get_related_catalog(
     Json(RelatedResponseBody { data }).into_response()
 }
 
+/// Served from a 30 s memo per clamped request; the readiness gates still run per request.
 pub async fn get_trending_catalog(
     State(state): State<SharedState>,
     Query(pairs): Query<Vec<(String, String)>>,
@@ -1360,8 +1395,18 @@ pub async fn get_trending_catalog(
         Ok(rate) => rate,
         Err(envelope) => return envelope,
     };
-    match trending_items(&state, req.first, req.days, &req.filters, rate).await {
-        Ok(data) => (hour_cache(), Json(TrendingResponseBody { data })).into_response(),
+    let (first, days) = (
+        trending_clamp_first(req.first),
+        trending_clamp_days(req.days),
+    );
+    let key = format!("trending:{first}:{days}:{:?}", req.filters);
+    let body = memoized(&state, Ttl::S30, key, || async {
+        let data = trending_items(&state, Some(first), Some(days), &req.filters, rate).await?;
+        body_of(TrendingResponseBody { data }).map_err(IntoResponse::into_response)
+    })
+    .await;
+    match body {
+        Ok(body) => (hour_cache(), Json(body.as_ref())).into_response(),
         Err(r) => r,
     }
 }
@@ -1493,6 +1538,63 @@ mod tests {
         list.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn browse_reads_share_one_memo_key_and_named_reads_have_none() {
+        let key = |q: &[(&str, &str)]| {
+            let p = pairs(q);
+            unified_browse_key(parse_unified_group_by(&p), &parse_unified_filters(&p))
+        };
+        let newest = key(&[
+            ("first", "12"),
+            ("sortBy", "newest"),
+            ("listingType", "primary"),
+            ("groupBy", "item"),
+        ]);
+        assert!(newest.is_some());
+        assert_eq!(
+            newest,
+            key(&[
+                ("groupBy", "item"),
+                ("utm_source", "x"),
+                ("listingType", "primary"),
+                ("sortBy", "newest"),
+                ("first", "12")
+            ]),
+            "order and unknown keys do not split the entry"
+        );
+        assert_ne!(
+            newest,
+            key(&[
+                ("first", "12"),
+                ("sortBy", "discount"),
+                ("discounted", "true"),
+                ("listingType", "primary"),
+                ("groupBy", "item")
+            ])
+        );
+        assert_ne!(
+            newest,
+            key(&[
+                ("first", "12"),
+                ("sortBy", "newest"),
+                ("listingType", "primary")
+            ]),
+            "grouped by listing"
+        );
+        let c = "0x1111111111111111111111111111111111111111";
+        let item = format!("{c}-1");
+        for named in [
+            ("contractAddress", c),
+            ("contractAddress", "junk"),
+            ("itemId", "1"),
+            ("items", item.as_str()),
+            ("creator", c),
+            ("search", "hat"),
+        ] {
+            assert_eq!(key(&[("first", "5"), named]), None, "{named:?}");
+        }
     }
 
     #[test]

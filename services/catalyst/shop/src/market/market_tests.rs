@@ -1367,6 +1367,7 @@ async fn the_mirrors_walk_the_subgraph_and_every_market_route_answers_over_them(
         ),
         (Some("1"), Some(6))
     );
+    let trending = body;
     let (status, body) = get(app(), "/v3/catalog/suggested?first=2").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -1457,6 +1458,26 @@ async fn the_mirrors_walk_the_subgraph_and_every_market_route_answers_over_them(
     let (status, body) = get(app(), &format!("/v2/catalog?id={c1}-1")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body["data"][0]["tradeId"].is_null(), "{}", body["data"][0]);
+    // An item read stays fresh; the trending rail answers from its 30 s memo until it lapses.
+    let (_, body) = get(
+        app(),
+        &format!("/v3/catalog/unified?groupBy=item&contractAddress={c1}&itemId=1&source=native"),
+    )
+    .await;
+    assert_eq!(unified_total(&body), 0, "{body}");
+    let carries_primary = |body: &Value| {
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["tradeId"] == primary_id.as_str())
+    };
+    assert!(carries_primary(&trending), "{trending}");
+    let (_, body) = get(app(), "/v3/catalog/trending?first=3").await;
+    assert_eq!(body["data"], trending["data"]);
+    state.readers.clear();
+    let (_, body) = get(app(), "/v3/catalog/trending?first=3").await;
+    assert!(!carries_primary(&body), "{body}");
 
     sqlx::query("DELETE FROM shop.usage_grants WHERE grantee_address = $1")
         .bind(WALLET_A)

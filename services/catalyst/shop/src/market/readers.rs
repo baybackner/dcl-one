@@ -103,6 +103,20 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<Value, String>>,
 {
+    memoized(state, ttl, key, fetch).await
+}
+
+/// [`cached`] for a fetch whose failure is the route's own answer; a failure is not kept.
+pub async fn memoized<F, Fut, E>(
+    state: &MarketplaceState,
+    ttl: Ttl,
+    key: String,
+    fetch: F,
+) -> Result<Arc<Value>, E>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, E>>,
+{
     state
         .readers
         .map(ttl)
