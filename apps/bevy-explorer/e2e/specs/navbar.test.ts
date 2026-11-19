@@ -131,8 +131,6 @@ scenario('the System button opens a panel with the help rows, Escape closes it',
 
 /** The view sizes Unity's HUD fits whole, tall then wide. */
 const VIEW_SIZES: Array<[number, number]> = [[700, 900], [1600, 400]]
-/** The HUD's reference canvas: it scales by the smaller of the view's width and height ratios to it. */
-const REFERENCE_VIEW: [number, number] = [1920, 1080]
 /** Only a browser lays the page out at another size inside the same window. */
 const NO_VIEW_RESIZE = target.transport === 'native' ? 'the standalone: the suite cannot resize its window' : undefined
 
@@ -147,24 +145,13 @@ async function railButtonsOffView(explorer: Explorer, [width, height]: [number, 
   return off
 }
 
-/** Wait until the Me button is `height` px high: the HUD has scaled for the view just set. */
-async function meHeightBecomes(explorer: Explorer, height: number, what: string): Promise<void> {
-  await until(() => explorer.hud.get(ME), (me) => Math.abs(me.height - height) <= 1, { timeoutMs: PRESENT_TIMEOUT_MS, what })
-}
-
-// `resizeView` returns before the HUD has scaled, and the layout of the previous size may fit the
-// next one, so each size first waits for the rail to be scaled for it.
+// `resizeView` resolves once the app frame has the size and has drawn since, so the HUD has scaled
+// for it: the rail read next is the new layout, not the previous size's.
 scenario('the rail stays whole and clickable in a tall and in a wide view', async ({ explorer, restore }) => {
   await explorer.hud.wait(ME, { timeoutMs: CONTROL_TIMEOUT_MS })
   restore(() => explorer.resizeView(null))
-  await explorer.resizeView(REFERENCE_VIEW)
-  // the HUD scales on the frame after the resize: give it a few before reading the reference
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  const referenceHeight = (await explorer.hud.get(ME)).height
   for (const size of VIEW_SIZES) {
     await explorer.resizeView(size)
-    const scale = Math.min(size[0] / REFERENCE_VIEW[0], size[1] / REFERENCE_VIEW[1])
-    await meHeightBecomes(explorer, referenceHeight * scale, `the HUD to scale for a ${size[0]}x${size[1]} view`)
     await until(() => railButtonsOffView(explorer, size), (off) => off.length === 0, {
       timeoutMs: PRESENT_TIMEOUT_MS,
       what: `every rail button to be inside a ${size[0]}x${size[1]} view and clickable`

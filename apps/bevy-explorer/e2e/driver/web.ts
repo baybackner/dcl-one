@@ -23,7 +23,7 @@ interface WebDriver {
   frameTargets(): unknown[]
   consoleMessages(): { at: number; target: string; kind: string; text: string }[]
   screenshot(): Promise<Buffer>
-  resizeView(size: [number, number] | null): Promise<void>
+  resizeView(size: [number, number] | null, options?: { timeout?: number }): Promise<void>
   close(): Promise<void> | void
   readonly product?: string
 }
@@ -137,8 +137,9 @@ export class WebConsole implements Console {
     }
   }
 
+  /** A loaded GPU runner may take more than the driver's default to draw at the new size. */
   async resizeView(size: [number, number] | null): Promise<void> {
-    await this.#driver.resizeView(size)
+    await this.#driver.resizeView(size, { timeout: 20_000 })
   }
 
   async close(): Promise<void> {

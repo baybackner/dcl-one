@@ -504,14 +504,39 @@ class Driver {
   }
 
   /** Lay the page out at `width` x `height` CSS px, inside the same window; `null` returns it to
-   *  the window's size. The page gets a `resize` as for a resized window. */
-  async resizeView(size) {
-    if (size === null) {
-      await this.#send('Emulation.clearDeviceMetricsOverride', {}, this.#page);
-      return;
+   *  the window's size. The page gets a `resize` as for a resized window. Resolves once the app
+   *  frame has drawn two frames since it last changed: an app frame that filled the page fills it
+   *  again first, at the new size. */
+  async resizeView(size, { timeout = PRESENT_TIMEOUT_MS } = {}) {
+    const fills = await this.#appFillsPage();
+    if (size === null) await this.#send('Emulation.clearDeviceMetricsOverride', {}, this.#page);
+    else await this.#send('Emulation.setDeviceMetricsOverride', { width: size[0], height: size[1], deviceScaleFactor: 0, mobile: false }, this.#page);
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      // the app frame may run in its own process, which gets the new size on its own schedule
+      if (!fills || (await this.#appFillsPage(size))) {
+        const context = await this.#findApp();
+        const drawn = context && (await this.#send(
+          'Runtime.evaluate',
+          { expression: 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))', contextId: context.id, awaitPromise: true, returnByValue: true },
+          context.session
+        ).catch(() => null));
+        if (drawn?.result?.value === true) return;
+      }
+      if (Date.now() >= deadline) throw new Error(`the app frame did not settle at ${size ? size.join('x') : "the window's size"} within ${timeout} ms`);
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
-    const [width, height] = size;
-    await this.#send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 0, mobile: false }, this.#page);
+  }
+
+  /** Whether the app frame's viewport is the page's, and `size` when one is given. */
+  async #appFillsPage(size) {
+    const viewport = 'JSON.stringify([window.innerWidth, window.innerHeight])';
+    const page = await this.#send('Runtime.evaluate', { expression: viewport, returnByValue: true }, this.#page).catch(() => null);
+    const context = await this.#findApp();
+    const app = context && (await this.#send('Runtime.evaluate', { expression: viewport, contextId: context.id, returnByValue: true }, context.session).catch(() => null));
+    const [pageSize, appSize] = [page?.result?.value, app?.result?.value];
+    if (pageSize == null || appSize == null || pageSize !== appSize) return false;
+    return size == null || appSize === JSON.stringify(size);
   }
 
   // --- the app frame: ready and console commands ---

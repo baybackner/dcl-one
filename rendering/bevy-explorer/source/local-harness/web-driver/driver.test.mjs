@@ -541,25 +541,15 @@ describe('resizeView', { skip: noChrome }, () => {
   // the frame fills the page and runs out of process, as the web client's app frame does
   const page = openPage({ isolated: true, mode: 'hud', query: '&fill=1' });
   const frameSize = async () => (await json(page.driver, '/fixture_state')).size;
-  // the frame runs in its own process, which gets the new size on its own schedule
-  const frameSizeBecomes = async (want, timeoutMs = 5_000) => {
-    const deadline = Date.now() + timeoutMs;
-    let got = await frameSize();
-    while ((got[0] !== want[0] || got[1] !== want[1]) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      got = await frameSize();
-    }
-    assert.deepEqual(got, want);
-  };
 
-  test('lays the page and its app frame out at the size given, and null returns them to the window', async () => {
+  test('resolves once the page and its app frame are at the size given, and null returns them to the window', async () => {
     const windowSize = jpegSize(await page.driver.screenshot());
-    await frameSizeBecomes(windowSize);
+    assert.deepEqual(await frameSize(), windowSize);
     await page.driver.resizeView([640, 480]);
+    assert.deepEqual(await frameSize(), [640, 480]);
     assert.deepEqual(jpegSize(await page.driver.screenshot()), [640, 480]);
-    await frameSizeBecomes([640, 480]);
     await page.driver.resizeView(null);
+    assert.deepEqual(await frameSize(), windowSize);
     assert.deepEqual(jpegSize(await page.driver.screenshot()), windowSize);
-    await frameSizeBecomes(windowSize);
   });
 });
