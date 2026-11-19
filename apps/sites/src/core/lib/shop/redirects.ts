@@ -6,7 +6,7 @@
 // and the hash. Only GET pages redirect: a write is never redirected and a signed API request never
 // reaches these routes. Pure, so the SSR loaders and the Explorer's native runtime share it.
 
-import { landIdentity, landRedirectTarget } from "@ui/shop/land/redirects";
+import { landIdentity, landRedirectTarget } from "./land-redirects";
 import { isNameRegistrar, landCategoryOf } from "@shop/land/contracts";
 import { aliasTarget, resolveShopAlias, SHOP_BASE } from "@shop/route-aliases";
 

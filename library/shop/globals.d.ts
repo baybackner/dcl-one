@@ -14,6 +14,7 @@ declare var URLSearchParams: {
     append(name: string, value: string): void;
     set(name: string, value: string): void;
     get(name: string): string | null;
+    has(name: string): boolean;
     toString(): string;
     [Symbol.iterator](): IterableIterator<[name: string, value: string]>;
   };

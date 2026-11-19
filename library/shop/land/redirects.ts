@@ -1,15 +1,14 @@
-import { landTokenId } from "../../data/catalyst/landListing";
-import { landChainId } from "./chain";
-import { landNetwork } from "@shop/land/contracts";
+import { landNetwork, landTokenId } from "./contracts";
 
 export type LandRedirect = "lands" | "rent" | "transfer" | "operator" | "assign-ens";
 
 type Identity = { contract: string; tokenId: string };
+type Query = InstanceType<typeof URLSearchParams>;
 
 const IDENTITY_KEYS = ["id", "landId", "contractAddress", "contract", "tokenId", "x", "y", "estateId", "category"];
 
-export function landIdentity(q: URLSearchParams, chainId?: number): Identity | null {
-  const net = landNetwork(chainId ?? landChainId());
+export function landIdentity(q: Query, chainId: number): Identity | null {
+  const net = landNetwork(chainId);
   const contract = (q.get("contractAddress") ?? q.get("contract"))?.toLowerCase();
   const tokenId = q.get("tokenId");
   if (contract && /^0x[0-9a-f]{40}$/.test(contract) && tokenId && /^[0-9]+$/.test(tokenId)) return { contract, tokenId };
@@ -29,18 +28,18 @@ export function landIdentity(q: URLSearchParams, chainId?: number): Identity | n
   return null;
 }
 
-function rest(q: URLSearchParams, drop: readonly string[]): URLSearchParams {
+function rest(q: Query, drop: readonly string[]): Query {
   const out = new URLSearchParams();
   for (const [k, v] of q) if (!drop.includes(k)) out.append(k, v);
   return out;
 }
 
-function withQuery(path: string, q: URLSearchParams): string {
+function withQuery(path: string, q: Query): string {
   const s = q.toString();
   return s ? `${path}${path.includes("?") ? "&" : "?"}${s}` : path;
 }
 
-export function landRedirectTarget(kind: LandRedirect, search: string, chainId?: number): string {
+export function landRedirectTarget(kind: LandRedirect, search: string, chainId: number): string {
   const q = new URLSearchParams(search);
   if (kind === "lands") {
     const out = rest(q, ["category"]);

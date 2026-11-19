@@ -125,7 +125,7 @@ function target(file: string, specifier: string): string | null {
 }
 
 const FORBIDDEN =
-  /^(shop\/api\/(host|index)|shop\/discovery\/(flags|reads|lib\/remoteFlags)|shop\/discovery\/components\/.*|shop\/checkout\/(purchase|chain)\/.*|shop\/land\/(chain|evm)|shop\/names\/(names|offer|reads)|shop\/market\/lib\/mana|shop\/wallet\/.*|data\/(auth|catalyst)(\/.*)?|(?:\.\.\/){3}library\/web-core\/auth(\/.*)?)$/;
+  /^(shop\/api\/(host|index)|shop\/discovery\/(flags|reads|lib\/remoteFlags)|shop\/discovery\/components\/.*|shop\/checkout\/(purchase|chain)\/.*|shop\/land\/(chain|evm)|shop\/names\/(names|offer|reads)|shop\/market\/lib\/mana|shop\/wallet\/.*|data\/(auth|catalyst)(\/.*)?|(?:\.\.\/){3}library\/web-core\/(auth(\/.*)?|shop-chain-env))$/;
 
 function hostImports(file: string, source: string): string[] {
   const { named, opaque } = specifiers(source);
@@ -216,6 +216,7 @@ describe("the host seam of the Shop's read modules", () => {
     expect(hostImports(file, 'import { ASSET_TYPE } from "../purchase/encoding";')).toHaveLength(1);
     expect(hostImports(file, 'import { ethereumChainId } from "../chain/config";')).toHaveLength(1);
     expect(hostImports(file, 'import { landChainId } from "../../land/chain";')).toHaveLength(1);
+    expect(hostImports(file, 'import { shopChainEnvironment } from "@web-core/shop-chain-env";')).toHaveLength(1);
     expect(hostImports(file, 'import { rpcReader } from "../../land/evm";')).toHaveLength(1);
     expect(hostImports(file, 'import { parseManaInput } from "../../market/lib/mana";')).toHaveLength(1);
     expect(hostImports(file, 'import { readBannedNames } from "../../names/reads";')).toHaveLength(1);
