@@ -271,6 +271,8 @@ CREATE TABLE credits.iap_transactions (
     refund_ref text,
     refund_reason text,
     refunded_at timestamp without time zone,
+    -- The refund blocked the wallet; its reversal lifts that block once the balance covers the live pledges.
+    raised_block boolean NOT NULL DEFAULT false,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     CONSTRAINT iap_transactions_pkey PRIMARY KEY (transaction_id),

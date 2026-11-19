@@ -19,19 +19,22 @@
 //! A paid purchase that is not credited (a cap, the ceiling, an unknown
 //! product or quantity, an account token naming no wallet) is kept as a
 //! `held` row an operator lists (`held_iap`); the next delivery or an
-//! operator credit re-checks it and credits it.
+//! operator credit re-checks it and credits it, with the product and
+//! quantity Apple signed (an operator credit naming others is refused).
 //!
 //! A refund charges the purchase's Credits back, or Apple's
 //! `revocationPercentage` share of them, from the wallet in the refund's
 //! transaction (`Credits::revoke_in_tx`, floored at zero, the wallet
 //! blocked when the balance net of live pledges cannot cover it). When it
-//! cannot, the wallet's newest live signed credits covering the uncovered
-//! part are queued for `revokeCredits` on chain (`credits.revocations`). A
-//! refund of a transaction never credited leaves a `refunded` row that
-//! keeps it from being credited later; an operator refund of an unknown id
+//! cannot, the wallet's newest unexpired signed credits not queued yet,
+//! covering what they pledge beyond the balance, are queued for
+//! `revokeCredits` on chain (`credits.revocations`). A refund of a
+//! transaction never credited, or held, leaves a `refunded` row that keeps
+//! it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
-//! what was charged back, or clears the `refunded` row of a purchase never
-//! credited so it can be credited.
+//! what was charged back, withdraws its revocations not sent yet and lifts
+//! a block it raised once the balance covers the live pledges, or clears
+//! the `refunded` row of a purchase never credited so it can be credited.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -183,7 +186,8 @@ pub struct Purchase<'a> {
     pub transaction_id: &'a str,
     pub original_transaction_id: Option<&'a str>,
     pub product_id: &'a str,
-    pub quantity: i64,
+    /// `None` (an operator credit only): the held row's quantity, else 1.
+    pub quantity: Option<i64>,
     pub revoked: bool,
     pub channel: Channel,
 }
@@ -253,12 +257,19 @@ pub enum RefundOutcome {
     AlreadyRefunded,
     /// Not credited on this node: a `refunded` row now keeps it from being credited.
     NotCredited,
+    /// A `held` purchase, now `refunded`, so it is never credited.
+    HeldRefunded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReinstateOutcome {
     /// The charged-back Credits were granted again.
-    Reinstated { address: String, credits: String },
+    Reinstated {
+        address: String,
+        credits: String,
+        /// Revocations this refund queued that were withdrawn before being sent.
+        withdrawn: u64,
+    },
     /// The refund of a transaction never credited was cleared, so it can be credited.
     Cleared,
     /// No refund of this transaction to reverse.
@@ -316,6 +327,11 @@ fn grant_key(transaction_id: &str) -> String {
     format!("apple-iap:{transaction_id}")
 }
 
+/// `credits.revocations.reason` of the revocations one refund queued.
+fn revocation_reason(transaction_id: &str) -> String {
+    format!("reversed:{}", grant_key(transaction_id))
+}
+
 impl Credits {
     /// Purchases credited by this node or imported, refunded or not; held ones are not counted.
     pub async fn iap_totals<'e, E: sqlx::PgExecutor<'e>>(
@@ -345,13 +361,14 @@ impl Credits {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(p.transaction_id)).await?;
         let existing = sqlx::query(
-            "SELECT status, address, floor(credits)::bigint AS credits FROM credits.iap_transactions \
-             WHERE transaction_id = $1",
+            "SELECT status, address, floor(credits)::bigint AS credits, product_id, quantity \
+             FROM credits.iap_transactions WHERE transaction_id = $1",
         )
         .bind(p.transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
         let mut held_for = None;
+        let mut held_as: Option<(String, Option<i64>)> = None;
         if let Some(row) = existing {
             let status: String = row.get("status");
             let address: Option<String> = row.get("address");
@@ -364,7 +381,10 @@ impl Credits {
                         already: true,
                     });
                 }
-                ("held", address) => held_for = address,
+                ("held", address) => {
+                    held_for = address;
+                    held_as = Some((row.get("product_id"), row.get("quantity")));
+                }
                 _ => return Ok(CreditOutcome::Refunded),
             }
         }
@@ -396,13 +416,23 @@ impl Credits {
             (None, Some(h)) => h,
             (None, None) => return hold(tx, &p, None, None, HoldReason::UnknownWallet).await,
         };
+        // An operator credits a held purchase as Apple signed it, never as the request names it.
+        if let (Channel::Operator, Some((product, quantity))) = (p.channel, &held_as)
+            && (product != p.product_id || p.quantity.is_some_and(|q| Some(q) != *quantity))
+        {
+            return Err(ApiError::conflict(format!(
+                "this transaction is held for {product} with quantity {}",
+                quantity.map_or("unknown".into(), |q| q.to_string())
+            )));
+        }
+        let quantity = p.quantity.or(held_as.and_then(|(_, q)| q)).unwrap_or(1);
         let Some(per_unit) = iap.credits_per_unit(p.product_id) else {
             return hold(tx, &p, Some(&address), None, HoldReason::UnknownProduct).await;
         };
-        if !(1..=MAX_QUANTITY).contains(&p.quantity) {
+        if !(1..=MAX_QUANTITY).contains(&quantity) {
             return hold(tx, &p, Some(&address), None, HoldReason::Quantity).await;
         }
-        let credits = per_unit * p.quantity;
+        let credits = per_unit * quantity;
         let cents = UsdCents::from_credits(credits)
             .ok_or_else(|| ApiError::bad_request("credits out of range"))?
             .get();
@@ -440,7 +470,7 @@ impl Credits {
         .bind(&address)
         .bind(credits.to_string())
         .bind(cents)
-        .bind(p.quantity)
+        .bind(quantity)
         .bind(p.channel.as_str())
         .execute(&mut *tx)
         .await?;
@@ -448,7 +478,7 @@ impl Credits {
             "source": "apple",
             "transactionId": p.transaction_id,
             "productId": p.product_id,
-            "quantity": p.quantity,
+            "quantity": quantity,
             "creditedBy": p.channel.as_str(),
         });
         let key = grant_key(p.transaction_id);
@@ -528,7 +558,7 @@ impl Credits {
                 .execute(&mut *tx)
                 .await?;
                 tx.commit().await?;
-                Ok(RefundOutcome::NotCredited)
+                Ok(RefundOutcome::HeldRefunded)
             }
             // Credited upstream: its Credits are plain ledger grants, never charged back here.
             ("imported", _) => Ok(RefundOutcome::NotCredited),
@@ -577,6 +607,12 @@ impl Credits {
         }
         let detail =
             json!({ "source": "apple", "transactionId": transaction_id, "refundRef": refund_ref });
+        let was_blocked: Option<bool> = sqlx::query_scalar(
+            "SELECT is_blocked_for_claiming FROM credits.wallets WHERE address = $1 FOR UPDATE",
+        )
+        .bind(&address)
+        .fetch_optional(&mut *tx)
+        .await?;
         let revoked = self
             .revoke_in_tx(
                 &mut tx,
@@ -589,14 +625,22 @@ impl Credits {
             .await?;
         // What was actually removed: a reversed refund grants back this, not the shortfall.
         sqlx::query(
-            "UPDATE credits.iap_transactions SET revoked_credits = $2::numeric WHERE transaction_id = $1",
+            "UPDATE credits.iap_transactions SET revoked_credits = $2::numeric, raised_block = $3 \
+             WHERE transaction_id = $1",
         )
         .bind(transaction_id)
         .bind(&revoked.removed)
+        .bind(revoked.uncovered && was_blocked != Some(true))
         .execute(&mut *tx)
         .await?;
         let revocations = if revoked.uncovered {
-            revoke_live_credits_in_tx(&mut tx, &address, &revoked.uncovered_amount).await?
+            revoke_live_credits_in_tx(
+                &mut tx,
+                &address,
+                &revoked.uncovered_amount,
+                &revocation_reason(transaction_id),
+            )
+            .await?
         } else {
             0
         };
@@ -613,7 +657,9 @@ impl Credits {
     }
 
     /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited purchase
-    /// gets back what its refund charged back, and a refund of a transaction
+    /// gets back what its refund charged back, its revocations not sent yet
+    /// are withdrawn (a sent one is final) and a block it raised is lifted
+    /// once the balance covers the live pledges; a refund of a transaction
     /// never credited is cleared so the purchase can be credited.
     pub async fn reinstate_iap(
         &self,
@@ -623,7 +669,7 @@ impl Credits {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         let row = sqlx::query(
-            "SELECT status, address, credited_by, revoked_credits::text AS revoked, \
+            "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
                     refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
@@ -651,7 +697,7 @@ impl Credits {
         sqlx::query(
             "UPDATE credits.iap_transactions \
              SET status = 'paid', revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
-                 refunded_at = NULL, updated_at = timezone('UTC', now()) \
+                 refunded_at = NULL, raised_block = false, updated_at = timezone('UTC', now()) \
              WHERE transaction_id = $1",
         )
         .bind(transaction_id)
@@ -675,8 +721,30 @@ impl Credits {
             )
             .await?;
         }
+        let withdrawn =
+            sqlx::query("DELETE FROM credits.revocations WHERE reason = $1 AND status = 'pending'")
+                .bind(revocation_reason(transaction_id))
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        if row.get::<bool, _>("raised_block") {
+            sqlx::query(
+                "UPDATE credits.wallets SET is_blocked_for_claiming = false, updated_at = timezone('UTC', now()) \
+                 WHERE address = $1 AND available * $2::numeric >= ( \
+                     SELECT COALESCE(SUM(usd_cents), 0) FROM credits.authorizations \
+                     WHERE address = $1 AND status IN ('authorized', 'retired'))",
+            )
+            .bind(&address)
+            .bind(UsdCents::CENTS_PER_CREDIT)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
-        Ok(ReinstateOutcome::Reinstated { address, credits })
+        Ok(ReinstateOutcome::Reinstated {
+            address,
+            credits,
+            withdrawn,
+        })
     }
 
     /// Paid purchases not credited yet, oldest first.
@@ -787,22 +855,34 @@ async fn hold(
     Ok(CreditOutcome::Held(reason))
 }
 
-/// Queues the newest unexpired signed credits of `address` for
-/// `revokeCredits` until their value covers `uncovered` Credits.
+/// Queues the newest unexpired signed credits of `address` not queued yet
+/// for `revokeCredits` until they cover what those credits pledge beyond the
+/// balance, at most `uncovered` Credits. An expired credit cannot be spent
+/// on chain, so it is neither revoked nor counted.
 async fn revoke_live_credits_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     address: &str,
     uncovered: &str,
+    reason: &str,
 ) -> Result<usize, ApiError> {
     let rows = sqlx::query(
-        "SELECT id, credit_hash, chain_id, contract FROM ( \
-             SELECT id, credit_hash, chain_id, contract, \
-                    SUM(usd_cents) OVER (ORDER BY created_at DESC, id) - usd_cents AS before \
-             FROM credits.authorizations \
+        "WITH live AS ( \
+             SELECT id, credit_hash, chain_id, contract, usd_cents, created_at \
+             FROM credits.authorizations a \
              WHERE address = $1 AND status IN ('authorized', 'retired') \
                AND expires_at > timezone('UTC', now()) \
-               AND credit_hash IS NOT NULL AND chain_id IS NOT NULL AND contract IS NOT NULL \
-         ) a WHERE before < $2::numeric * $3::numeric",
+               AND NOT EXISTS (SELECT 1 FROM credits.revocations r WHERE r.credit_hash = a.credit_hash) \
+         ), need AS ( \
+             SELECT LEAST($2::numeric * $3::numeric, \
+                          (SELECT COALESCE(SUM(usd_cents), 0) FROM live) \
+                          - COALESCE((SELECT available FROM credits.wallets WHERE address = $1), 0) * $3::numeric) AS cents \
+         ) \
+         SELECT id, credit_hash, chain_id, contract FROM ( \
+             SELECT id, credit_hash, chain_id, contract, \
+                    SUM(usd_cents) OVER (ORDER BY created_at DESC, id) - usd_cents AS before \
+             FROM live \
+             WHERE credit_hash IS NOT NULL AND chain_id IS NOT NULL AND contract IS NOT NULL \
+         ) a WHERE before < (SELECT cents FROM need)",
     )
     .bind(address)
     .bind(uncovered)
@@ -817,7 +897,7 @@ async fn revoke_live_credits_in_tx(
             r.get("chain_id"),
             r.get("contract"),
         );
-        if enqueue_revocation(tx, &hash, &id, chain_id, &contract, "reversed").await? {
+        if enqueue_revocation(tx, &hash, &id, chain_id, &contract, reason).await? {
             queued += 1;
         }
     }

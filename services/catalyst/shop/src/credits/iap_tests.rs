@@ -323,7 +323,8 @@ async fn a_refund_the_balance_cannot_cover_queues_signed_credits_up_to_the_uncov
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!((reason.as_str(), status.as_str()), ("reversed", "pending"));
+    assert!(reason.starts_with("reversed:apple-iap:"), "{reason}");
+    assert_eq!(status, "pending");
     let blocked: bool = sqlx::query_scalar(
         "SELECT is_blocked_for_claiming FROM credits.wallets WHERE address = $1",
     )
@@ -1361,4 +1362,240 @@ async fn an_imported_purchase_is_neither_credited_nor_charged_back_again() {
     assert_eq!(out["action"], "not_refunded", "{out}");
     assert_eq!(row(&pool, &mana).await.unwrap().0, "refunded");
     assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+/// A signed credit of `address` pledging `cents`, `age_secs` old, expiring
+/// `expires_in_secs` from now; returns its hash.
+async fn pledge(
+    pool: &PgPool,
+    address: &str,
+    cents: i64,
+    age_secs: i64,
+    expires_in_secs: i64,
+) -> String {
+    let id = format!("auth-{}", uuid::Uuid::new_v4().simple());
+    let hash = format!(
+        "0x{}",
+        hex::encode(alloy_primitives::keccak256(id.as_bytes()))
+    );
+    sqlx::query(
+        "INSERT INTO credits.authorizations (id, address, usd_cents, amount_wei, status, expires_at, chain_id, contract, credit_hash, created_at) \
+         VALUES ($1, $2, $3, 1, 'authorized', timezone('UTC', now()) + make_interval(secs => $4), 137, $5, $6, \
+                 timezone('UTC', now()) - make_interval(secs => $7))",
+    )
+    .bind(&id)
+    .bind(address)
+    .bind(cents)
+    .bind(expires_in_secs as f64)
+    .bind("0x00000000000000000000000000000000000000c2")
+    .bind(&hash)
+    .bind(age_secs as f64)
+    .execute(pool)
+    .await
+    .unwrap();
+    hash
+}
+
+async fn queued(pool: &PgPool, hash: &str) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM credits.revocations WHERE credit_hash = $1)")
+        .bind(hash)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn blocked(pool: &PgPool, address: &str) -> bool {
+    sqlx::query_scalar("SELECT is_blocked_for_claiming FROM credits.wallets WHERE address = $1")
+        .bind(address)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Credits `n` signed purchases of `PRODUCT` to `w`; returns their signed transactions.
+async fn buy(app: &Router, c: &Chain, w: &Wallet, n: usize) -> Vec<String> {
+    let mut signed = Vec::new();
+    for _ in 0..n {
+        let t = c.transaction(&tx_id(), PRODUCT, Some(&w.address));
+        let (_, out) = notify(app, c.notification("ONE_TIME_CHARGE", Some(t.clone()))).await;
+        assert_eq!(out["action"], "minted", "{out}");
+        signed.push(t);
+    }
+    signed
+}
+
+#[tokio::test]
+async fn an_operator_credits_a_held_purchase_as_apple_signed_it() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let id = tx_id();
+    let mut p = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&w.address));
+    p["quantity"] = json!(10);
+    let (_, out) = notify(&app, c.notification("ONE_TIME_CHARGE", Some(c.sign(&p)))).await;
+    assert_eq!(out["held"], true, "{out}");
+
+    for body in [
+        json!({ "userAddress": w.address, "appleTransactionId": id, "appleProductId": PRODUCT, "quantity": 1 }),
+        json!({ "userAddress": w.address, "appleTransactionId": id, "appleProductId": "org.example.other" }),
+    ] {
+        let (status, _, out) =
+            send(&app, "POST", "/credits/credits/iap", bearer(), Some(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{out}");
+        assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+    }
+
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": w.address, "appleTransactionId": id, "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["credits"], 1000);
+    assert_eq!(available(&pool, &w.address).await, "1000");
+}
+
+#[tokio::test]
+async fn an_operator_refund_of_a_held_purchase_reports_it() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["held"], true, "{out}");
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap/refund",
+        bearer(),
+        Some(json!({ "appleTransactionId": id, "refundId": "r-1", "reason": "support" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["held"], true);
+    assert_eq!(out["removed"], "0");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+}
+
+#[tokio::test]
+async fn a_later_refund_revokes_credits_an_earlier_one_did_not_queue() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 3).await;
+    // 300 available; a newer 200 and an older 90 pledged.
+    let newer = pledge(&pool, &w.address, 2000, 0, 300).await;
+    let older = pledge(&pool, &w.address, 900, 60, 300).await;
+
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+    assert!(queued(&pool, &newer).await);
+    assert!(!queued(&pool, &older).await);
+    // 100 left covers the older 90.
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[1].clone()))).await;
+    assert_eq!(out["revocations"], 0, "{out}");
+    assert!(!queued(&pool, &older).await);
+    // Nothing left: the older credit is revoked, though the newer one fills the window.
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[2].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+    assert!(queued(&pool, &older).await);
+}
+
+#[tokio::test]
+async fn an_expired_pledge_does_not_widen_the_revocations() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 2).await;
+    // 200 available; 150 on a credit past its expiry (not swept yet), 50 and 40 live.
+    let expired = pledge(&pool, &w.address, 1500, 0, -60).await;
+    let live_newer = pledge(&pool, &w.address, 500, 30, 300).await;
+    let live_older = pledge(&pool, &w.address, 400, 60, 300).await;
+
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    // The 100 left covers the 90 still spendable.
+    assert_eq!(out["revocations"], 0, "{out}");
+    for hash in [&expired, &live_newer, &live_older] {
+        assert!(!queued(&pool, hash).await);
+    }
+    assert!(
+        blocked(&pool, &w.address).await,
+        "the block still counts every pledge"
+    );
+}
+
+#[tokio::test]
+async fn a_reversed_refund_withdraws_its_unsent_revocations_and_lifts_its_block() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+
+    // The refund blocked the wallet and queued two credits; one was sent since.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let unsent = pledge(&pool, &w.address, 400, 0, 300).await;
+    let sent = pledge(&pool, &w.address, 400, 60, 300).await;
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["revocations"], 2, "{out}");
+    assert!(blocked(&pool, &w.address).await);
+    sqlx::query(
+        "UPDATE credits.revocations SET status = 'sent', tx_hash = $2 WHERE credit_hash = $1",
+    )
+    .bind(&sent)
+    .bind(format!("0x{}", "ab".repeat(32)))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert_eq!(out["revocationsWithdrawn"], 1, "{out}");
+    assert!(!queued(&pool, &unsent).await);
+    assert!(queued(&pool, &sent).await, "a sent revocation is final");
+    assert!(!blocked(&pool, &w.address).await);
+
+    // A wallet already blocked stays blocked.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    pledge(&pool, &w.address, 800, 0, 300).await;
+    sqlx::query("UPDATE credits.wallets SET is_blocked_for_claiming = true WHERE address = $1")
+        .bind(&w.address)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert!(blocked(&pool, &w.address).await);
 }

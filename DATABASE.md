@@ -1562,15 +1562,19 @@ wallet's rows and the node's last 24 hours, inserts the row and grants the
 Credits in one transaction. A paid purchase it cannot credit (a cap, the
 node's ceiling, an unknown product or quantity, an account token naming no
 wallet) is upserted as `held` with its reason, unless an operator asked; a
-later delivery or an operator credit re-checks a held row and turns it `paid`.
+later delivery or an operator credit re-checks a held row and turns it `paid`
+(an operator credit with the held row's product and quantity only).
 A reversal takes the same transaction lock, flips the row to `refunded`,
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
 records what was removed in `revoked_credits` and the refunded USD in
 `refunded_cents` and, when the balance net of
 live pledges cannot cover it, queues the wallet's newest unexpired signed
-credits covering the uncovered part in `credits.revocations`, in one
-transaction. `REFUND_REVERSED` grants `revoked_credits` back (a `refund`
-ledger row) and returns the row to `paid`, or deletes a `refunded` row never
+credits not queued yet that pledge beyond the balance in `credits.revocations`
+(reason `reversed:apple-iap:<transaction id>`) and records in `raised_block`
+whether it blocked the wallet, in one transaction. `REFUND_REVERSED` grants
+`revoked_credits` back (a `refund` ledger row), deletes its revocations still
+`pending` (a sent one is final), lifts the block it raised when `available`
+covers the wallet's live pledges, and returns the row to `paid`, or deletes a `refunded` row never
 credited (not an imported upstream marker) so the purchase can be credited. Readers are the wallet's credit
 orders (`address, created_at DESC`, rows this node credited), the caps
 (`address` and `created_at` partial indexes; rows credited here or
@@ -1594,7 +1598,7 @@ Invariants: a transaction id credits at most once and never after a refund;
 a notification's or device's refund of a transaction never credited, or a
 transaction revoked when first seen, leaves a `refunded` row, so its later
 delivery credits nothing (an operator refund of an unknown id records
-nothing and answers 404). The Credits come from the product in Apple's signed
+nothing and answers 404; of a held one, turns it `refunded`). The Credits come from the product in Apple's signed
 transaction (`IAP_PRODUCT_CATALOG_USD`, whole Credits), never from the
 request. `revoked_credits` never exceeds `credits`. The bootstrap defines
 both tables; an existing database gains them from the object pass, so no step

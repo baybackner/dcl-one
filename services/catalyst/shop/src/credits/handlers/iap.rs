@@ -106,16 +106,19 @@ pub async fn webhook(
                 RefundOutcome::AlreadyRefunded => {
                     Ok(Json(json!({ "ok": true, "action": "already_refunded" })))
                 }
-                RefundOutcome::NotCredited => {
+                RefundOutcome::NotCredited | RefundOutcome::HeldRefunded => {
                     tracing::warn!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store refund of a transaction never credited: recorded so it is never credited");
                     Ok(Json(json!({ "ok": true, "action": "unknown_credit" })))
                 }
             }
         }
         "REFUND_REVERSED" => match state.credits.reinstate_iap(&t.transaction_id, uuid).await? {
-            ReinstateOutcome::Reinstated { credits, .. } => Ok(Json(
-                json!({ "ok": true, "action": "reinstated", "creditId": t.transaction_id, "credits": credits }),
-            )),
+            ReinstateOutcome::Reinstated {
+                credits, withdrawn, ..
+            } => Ok(Json(json!({
+                "ok": true, "action": "reinstated", "creditId": t.transaction_id, "credits": credits,
+                "revocationsWithdrawn": withdrawn,
+            }))),
             ReinstateOutcome::Cleared => charge(&state, iap, uuid, &t).await,
             ReinstateOutcome::NotRefunded => {
                 Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
@@ -150,7 +153,7 @@ async fn charge(
                 transaction_id: &t.transaction_id,
                 original_transaction_id: t.original_transaction_id.as_deref(),
                 product_id: &t.product_id,
-                quantity: t.quantity,
+                quantity: Some(t.quantity),
                 revoked: t.revoked,
                 channel: Channel::Notification,
             },
@@ -237,7 +240,7 @@ pub async fn verify(
                 transaction_id: &t.transaction_id,
                 original_transaction_id: t.original_transaction_id.as_deref(),
                 product_id: &t.product_id,
-                quantity: t.quantity,
+                quantity: Some(t.quantity),
                 revoked: t.revoked,
                 channel: Channel::Device,
             },
@@ -311,6 +314,7 @@ pub async fn quote(
         Some(_) => None,
     };
     let remaining = |cap: i64, used: i64| (cap > 0).then(|| (cap - used).max(0) as f64 / 100.0);
+    // Upstream's USD-rail shape: `denomination` names the rail, `amount` is whole Credits, `balance` dollars.
     let data = json!({
         "productId": product_id,
         "denomination": "USD",
@@ -342,12 +346,8 @@ pub struct AdminCreditBody {
     apple_original_transaction_id: Option<String>,
     #[serde(rename = "appleProductId")]
     apple_product_id: String,
-    #[serde(default = "one")]
-    quantity: i64,
-}
-
-fn one() -> i64 {
-    1
+    /// Omitted: a held purchase's own quantity, else 1.
+    quantity: Option<i64>,
 }
 
 fn validate_id(name: &str, v: &str) -> Result<(), ApiError> {
@@ -450,6 +450,10 @@ pub async fn admin_refund(
         RefundOutcome::AlreadyRefunded => {
             Err(ApiError::conflict("this transaction was already refunded"))
         }
+        RefundOutcome::HeldRefunded => Ok(Json(json!({
+            "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id,
+            "refundId": b.refund_id, "removed": "0", "shortfall": "0", "revocations": 0, "held": true,
+        }))),
         RefundOutcome::NotCredited => Err(ApiError::not_found(
             "no credited App Store transaction with this id",
         )),
