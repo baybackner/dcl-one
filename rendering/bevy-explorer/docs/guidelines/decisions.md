@@ -44,7 +44,11 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   Unity measures once per avatar to the head anchor (`AvatarShapeVisibilitySystem.cs:93`), so
   the outline comes and goes at a slightly different camera distance, and a mesh whose origin
   is not the avatar's can gain or lose its line apart from the rest. A line thinner than a pixel covers that
-  fraction of the pixel and fades, where Unity's hull aliases. And there is no frustum test:
+  fraction of the pixel and fades, where Unity's hull aliases. The hull lines any overlap, a
+  chin over the neck or a lock over the face; here a surface is lined where what lies behind
+  it is three pixel footprints deeper (`OUTLINE_EDGE_PX`, `scene_material::toon`), below which
+  a curved surface's own rise towards its silhouette would draw lines, so overlaps closer than
+  that (about 6 mm at 2 m in 1080p) have none. And there is no frustum test:
   Unity skips avatars out of view, while an off-screen avatar has no fragments to draw a line
   on, so the test would save nothing. The edge detection also darkens normal creases inside
   the silhouette (the surface times 0.6320754, `bound_material_effect.wgsl`), which Unity's

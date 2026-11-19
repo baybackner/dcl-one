@@ -47,6 +47,12 @@ pub const OUTLINE_FARTHEST_M: f32 = 100.0;
 pub const OUTLINE_COLOR: f32 = 0.6320754;
 /// The squared camera distance beyond which an avatar has no outline in a perspective view: 8 m
 pub const OUTLINE_MAX_SQR_DISTANCE: f32 = 64.0;
+/// How far behind a fragment the mean of its four diagonal neighbours must lie for the line, in
+/// pixel footprints (the metres one step to the neighbours spans at the fragment's depth). A
+/// straight edge has half its neighbours behind it, so the surface behind needs a gap of three
+/// footprints: a chin over the neck, an ear or a lock of hair is lined, as an inverted hull lines
+/// any overlap, while a curved surface's own rise towards its silhouette stays below it.
+pub const OUTLINE_EDGE_PX: f32 = 1.5;
 
 /// The constants above, and `LIGHT_UNIT_LUX` as `TOON_LIGHT_UNIT_LUX`, for the pipeline of every
 /// shader that imports toon.wgsl or bound_material_effect.wgsl's `toon_outline`. A def carries
@@ -71,6 +77,7 @@ pub fn toon_shader_defs() -> Vec<ShaderDefVal> {
         ("TOON_OUTLINE_FARTHEST_M", OUTLINE_FARTHEST_M),
         ("TOON_OUTLINE_COLOR", OUTLINE_COLOR),
         ("TOON_OUTLINE_MAX_SQR_DISTANCE", OUTLINE_MAX_SQR_DISTANCE),
+        ("TOON_OUTLINE_EDGE_PX", OUTLINE_EDGE_PX),
     ]
     .into_iter()
     .map(|(name, value)| ShaderDefVal::UInt(name.to_owned(), value.to_bits()))
@@ -145,6 +152,19 @@ pub fn outline_width_px(camera_distance: f32, view_z: f32, focal_px: f32) -> f32
     let t = ((camera_distance - OUTLINE_NEAREST_M) / (OUTLINE_FARTHEST_M - OUTLINE_NEAREST_M))
         .clamp(0.0, 1.0);
     OUTLINE_WIDTH_M * (1.0 - t * t * (3.0 - 2.0 * t)) * focal_px / view_z
+}
+
+/// The depth, in metres, by which the mean of a fragment's diagonal neighbours `step_px` pixels
+/// away must lie behind it for the line, on a fragment `view_z` metres deep under a vertical focal
+/// length of `focal_px` pixels (an orthographic view's pixels per metre, at any depth).
+/// bound_material_effect.wgsl's `apply_outline` with `OUTLINE_EDGE_PX`.
+pub fn outline_edge_depth_m(step_px: f32, view_z: f32, focal_px: f32, orthographic: bool) -> f32 {
+    let pixel_m = if orthographic {
+        1.0 / focal_px
+    } else {
+        view_z / focal_px
+    };
+    OUTLINE_EDGE_PX * step_px * pixel_m
 }
 
 /// Whether a mesh whose origin is `sqr_distance` square metres from the camera has an outline.
@@ -292,6 +312,30 @@ mod tests {
     }
 
     #[test]
+    fn edges_line_overlaps_of_a_few_pixels() {
+        // 1080p at 60 degrees vertical, an avatar 2 m away: a pixel spans about 2 mm
+        let focal = 540.0 / (30f32.to_radians()).tan();
+        let pixel_m = 2.0 / focal;
+        let mean = outline_edge_depth_m(1.0, 2.0, focal, false);
+        assert!((mean - 1.5 * pixel_m).abs() < 1e-7);
+        // a straight edge needs twice that: a chin a few centimetres before the neck is lined
+        assert!(2.0 * mean < 0.01);
+        // the depth a 15 cm curve gains one footprint short of its silhouette stays below it:
+        // its second difference over the steps half, one and a half and two and a half
+        // footprints in is about 0.08 * sqrt(2 * r * footprint)
+        let curve = 0.0807 * (2.0 * 0.15 * pixel_m).sqrt();
+        assert!(curve < mean);
+        // the footprint grows with the depth and the step
+        assert!((outline_edge_depth_m(2.0, 4.0, focal, false) - 4.0 * mean).abs() < 1e-7);
+        // an orthographic view has one footprint at every depth
+        assert_eq!(
+            outline_edge_depth_m(1.0, 2.0, 100.0, true),
+            outline_edge_depth_m(1.0, 20.0, 100.0, true)
+        );
+        assert!((outline_edge_depth_m(1.0, 20.0, 100.0, true) - 0.015).abs() < 1e-7);
+    }
+
+    #[test]
     fn wgsl_defs_mirror_the_constants() {
         let expected = [
             ("TOON_BASE_COLOR_STEP", BASE_COLOR_STEP),
@@ -311,6 +355,7 @@ mod tests {
             ("TOON_OUTLINE_FARTHEST_M", OUTLINE_FARTHEST_M),
             ("TOON_OUTLINE_COLOR", OUTLINE_COLOR),
             ("TOON_OUTLINE_MAX_SQR_DISTANCE", OUTLINE_MAX_SQR_DISTANCE),
+            ("TOON_OUTLINE_EDGE_PX", OUTLINE_EDGE_PX),
         ];
         let defs = toon_shader_defs();
         assert_eq!(defs.len(), expected.len());

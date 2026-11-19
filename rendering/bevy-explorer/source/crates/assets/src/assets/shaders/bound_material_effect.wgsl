@@ -27,8 +27,14 @@ fn reveal_discard(mesh_tag: u32, world_y: f32, instance_index: u32) -> bool {
 #endif
 
 #ifdef DEPTH_PREPASS
+// the prepass's distance in front of the camera at this pixel, in metres
 fn get_depth(pos: vec4<f32>, si: u32) -> f32 {
-    return view.clip_from_view[3][2] / prepass_depth(pos, si); 
+    let ndc = prepass_depth(pos, si);
+    if view.clip_from_view[3].w == 1.0 {
+        // orthographic: the depth is linear in the distance
+        return (view.clip_from_view[3][2] - ndc) / view.clip_from_view[2][2];
+    }
+    return view.clip_from_view[3][2] / ndc;
 }
 
 // a neighbouring prepass pixel the dither discarded holds whatever lies behind the mesh, so it
@@ -49,13 +55,14 @@ fn neighbour_depth(position: vec4<f32>, offset: vec2<f32>, fallback: f32, dither
 
 #ifdef NORMAL_PREPASS
 // a neighbour on another surface (seen through the dither holes, or in front of this fragment)
-// can't form a crease with it: the silhouette between them is the nearer surface's depth edge
-fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>, center_depth: f32, dither_opacity: f32, si: u32) -> vec3<f32> {
+// can't form a crease with it: the silhouette between them is the nearer surface's depth edge.
+// surface_gap_m: the depth difference, in metres, beyond which the neighbour is another surface
+fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>, center_depth: f32, surface_gap_m: f32, dither_opacity: f32, si: u32) -> vec3<f32> {
     if neighbour_dithered(position, offset, dither_opacity) {
         return fallback;
     }
     let p = position + vec4(offset, 0.0, 0.0);
-    if abs(get_depth(p, si) / center_depth - 1.0) > 0.03 {
+    if abs(get_depth(p, si) - center_depth) > surface_gap_m {
         return fallback;
     }
     return prepass_normal(p, si);
@@ -67,22 +74,29 @@ fn neighbour_normal(position: vec4<f32>, offset: vec2<f32>, fallback: vec3<f32>,
 // becomes outline_rgb, and a crease multiplies the surface by crease.
 // width_px: the line's width in pixels; below one pixel the line covers that fraction of the
 // pixel, so a thin line fades instead of breaking up
+// edge_px: how far behind this fragment, in pixel footprints (the metres a pixel spans at its
+// depth), the mean of its diagonal neighbours must lie for a depth edge. A straight edge has half
+// of them behind it, so it needs a gap of twice that: a few pixels' worth lines every overlap the
+// eye reads as one (a chin over the neck, hair over the face), and stays clear of the depth a
+// curved surface gains towards its own silhouette
 // dither_opacity: this fragment's discard_dither opacity; 1 when it isn't dithered
-fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32>, crease: vec3<f32>, width_px: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
+fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32>, crease: vec3<f32>, width_px: f32, edge_px: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
     var out = color_in;
 #ifdef DEPTH_PREPASS
 
     var edge1 = false;
     var edge2 = false;
 
-    let is_orthographic = view.clip_from_view[3].w == 1.0;
     let center = get_depth(position, sample_index);
-    var mid = center;
-    if is_orthographic {
-        mid = 2.0 / view.clip_from_view[1].y;
-    }
     let d = max(width_px, 1.0);
     let strength = saturate(width_px);
+    // the metres a pixel spans at this depth: focal_px is the pixels a metre covers one metre
+    // deep, and at any depth in an orthographic view
+    let focal_px = view.clip_from_view[1][1] * view.viewport.w * 0.5;
+    var pixel_m = 1.0 / focal_px;
+    if view.clip_from_view[3].w != 1.0 {
+        pixel_m *= center;
+    }
 
     let pxpy = neighbour_depth(position, vec2(d, d), center, dither_opacity, sample_index);
     let pxmy = neighbour_depth(position, vec2(d, -d), center, dither_opacity, sample_index);
@@ -91,17 +105,19 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32
 
     let expected = (pxpy + pxmy + mxpy + mxmy) / 4.0;
 
-    if (expected / mid - 1) > 0.03 {
+    if expected - center > edge_px * d * pixel_m {
         edge1 = true;
     }
 
 #ifdef NORMAL_PREPASS
     let nd = 1.0;
     let nmid = prepass_normal(position, sample_index);
-    let npxpy = neighbour_normal(position, vec2(nd, nd), nmid, center, dither_opacity, sample_index);
-    let npxmy = neighbour_normal(position, vec2(nd, -nd), nmid, center, dither_opacity, sample_index);
-    let nmxpy = neighbour_normal(position, vec2(-nd, nd), nmid, center, dither_opacity, sample_index);
-    let nmxmy = neighbour_normal(position, vec2(-nd, -nd), nmid, center, dither_opacity, sample_index);
+    // the gap a straight depth edge one pixel away needs
+    let surface_gap_m = 2.0 * edge_px * nd * pixel_m;
+    let npxpy = neighbour_normal(position, vec2(nd, nd), nmid, center, surface_gap_m, dither_opacity, sample_index);
+    let npxmy = neighbour_normal(position, vec2(nd, -nd), nmid, center, surface_gap_m, dither_opacity, sample_index);
+    let nmxpy = neighbour_normal(position, vec2(-nd, nd), nmid, center, surface_gap_m, dither_opacity, sample_index);
+    let nmxmy = neighbour_normal(position, vec2(-nd, -nd), nmid, center, surface_gap_m, dither_opacity, sample_index);
 
     let nexpected = (npxpy + nmxmy) / 2.0;
     let nexpected2 = (npxmy + nmxpy) / 2.0;
@@ -151,7 +167,7 @@ fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, insta
     let outline_rgb = bitcast<f32>(#{TOON_OUTLINE_COLOR}u) * base * base * unit;
     // a crease darkens the surface by the outline's grey
     let crease = vec3(bitcast<f32>(#{TOON_OUTLINE_COLOR}u));
-    return apply_outline(position, color_in, outline_rgb, crease, width_px, sample_index, dither_opacity);
+    return apply_outline(position, color_in, outline_rgb, crease, width_px, bitcast<f32>(#{TOON_OUTLINE_EDGE_PX}u), sample_index, dither_opacity);
 }
 #endif
 
