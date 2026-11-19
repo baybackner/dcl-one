@@ -88,6 +88,12 @@ impl<E: ExternalCalls, B: BlockchainChecker> ContentValidator<'_, E, B> {
         }
     }
 
+    /// The access step alone, within its own deadline.
+    pub async fn validate_access_only(&self, deployment: &Deployment<'_>) -> ValidationResponse {
+        let deadline = tokio::time::Instant::now() + self.access_budget();
+        self.validate_access(deployment, deadline).await
+    }
+
     pub async fn validate(&self, deployment: &Deployment<'_>) -> ValidationResponse {
         let deadline = tokio::time::Instant::now() + self.access_budget();
         let result = self.validate_common_prefix(deployment).await;

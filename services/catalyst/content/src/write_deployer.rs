@@ -931,6 +931,30 @@ impl WriteDeployer {
         }
     }
 
+    /// Access at the current chain state, for a local scene older than
+    /// `REQUEST_TTL_BACKWARDS` (only a partial upload's publication gets
+    /// there): access at its timestamp alone may predate a LAND transfer.
+    async fn validate_current_access(
+        &self,
+        entity: &Entity,
+        auth_chain: &AuthChain,
+    ) -> Result<(), DeployFailure> {
+        match &self.validator {
+            LocalValidation::Content(sources) => {
+                let ctx = super::validator::Context {
+                    sources,
+                    auth_chain,
+                };
+                super::validator::validate_current_access(entity, &ctx)
+                    .await
+                    .map_err(super::validator::into_deploy_failure)
+            }
+            // Its LAND check already reads the current state.
+            #[cfg(any(test, feature = "test-support"))]
+            LocalValidation::PartialChecks => Ok(()),
+        }
+    }
+
     async fn is_content_unchanged(&self, entity: &Entity) -> bool {
         let Some(pointer) = entity.pointers.first() else {
             return false;
@@ -1233,6 +1257,16 @@ impl WriteDeployer {
                 );
                 return Err(DeployFailure::Unverifiable(errors));
             }
+        }
+
+        if context == "LOCAL"
+            && entity.entity_type == EntityType::Scene
+            && chrono::Utc::now().timestamp_millis() - entity.timestamp
+                > self.request_ttl_backwards_ms()
+            && let Err(failure) = self.validate_current_access(&entity, &auth_chain).await
+        {
+            warn!(entity_id, errors = ?failure, "deployment refused: no current access");
+            return Err(failure);
         }
 
         let validation_us = validation_started.elapsed().as_micros() as u64;

@@ -1481,3 +1481,102 @@ async fn binding_sql_supersession_has_a_typed_rejection() {
     assert_eq!(failure.errors(), &[newer_entity_message(&entity)]);
     let _ = std::fs::remove_dir_all(tmp);
 }
+
+/// A scene published past `REQUEST_TTL_BACKWARDS` (a partial upload's
+/// publication, its TTL measured from the upload's start) needs access at
+/// the current chain state, not only at its timestamp.
+#[tokio::test]
+async fn a_scene_published_past_the_request_ttl_needs_current_access() {
+    use crate::validator::fake_chain::{self, GENESIS, INTERVAL, Query, Reply};
+    use alloy::signers::local::PrivateKeySigner;
+    let Some(pool) = test_pool(4).await else {
+        return;
+    };
+    let (storage, tmp) = temp_storage("current-access").await;
+    let key: PrivateKeySigner = DEPLOYER_KEY.parse().unwrap();
+    let signer = key.address();
+    let buyer: alloy_primitives::Address = "0xcccc000000000000000000000000000000000003"
+        .parse()
+        .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let timestamp = now - 15 * 60_000;
+    // The parcel changed hands eight minutes ago, after the upload started.
+    let sold_block = ((now / 1000 - 8 * 60 - GENESIS) / INTERVAL) as u64;
+    let sold = fake_chain::serve(move |q, block| match q {
+        Query::Land { sender, .. } => Reply::Yes(if block < sold_block {
+            *sender == signer
+        } else {
+            *sender == buyer
+        }),
+        other => panic!("unexpected question {other:?}"),
+    })
+    .await;
+    let kept = fake_chain::serve(move |q, _| match q {
+        Query::Land { sender, .. } => Reply::Yes(*sender == signer),
+        other => panic!("unexpected question {other:?}"),
+    })
+    .await;
+    let deployer_over = |chain: &fake_chain::FakeChain| {
+        let settings = crate::validator::Settings {
+            eth_network: "mainnet".into(),
+            l1_rpc_url: Some(chain.url.clone()),
+            l2_rpc_url: Some(chain.url.clone()),
+            ..Default::default()
+        };
+        let sources = crate::validator::Sources::new(
+            pool.clone(),
+            storage.clone(),
+            crate::http::Outbound::for_tests(),
+            None,
+            settings,
+        );
+        let deployer = WriteDeployer::new(pool.clone(), storage.clone(), None, Arc::new(sources));
+        deployer.configure(&DeployLimits {
+            request_ttl_backwards_ms: 10 * 60_000,
+            ..Default::default()
+        });
+        deployer
+    };
+
+    let n = uuid::Uuid::new_v4().as_u128();
+    let parcel = format!("{},{}", 130 + (n % 20) as i32, 130 + ((n >> 8) % 20) as i32);
+    let model = Bytes::from_static(b"current access model");
+    let (bytes, id, chain) = signed_entity_of(serde_json::json!({
+        "version": "v3",
+        "type": "scene",
+        "pointers": [parcel],
+        "timestamp": timestamp,
+        "content": [{"file": "model.glb", "hash": hash_bytes_v1(&model)}],
+        "metadata": {"main": "bin/index.js", "scene": {"base": parcel, "parcels": [parcel]}}
+    }))
+    .await;
+    let publish = |deployer: WriteDeployer| {
+        let (bytes, model, id, chain) = (bytes.clone(), model.clone(), id.clone(), chain.clone());
+        async move {
+            deployer
+                .deploy_entity_anchored(
+                    vec![bytes, model],
+                    &id,
+                    chain,
+                    "LOCAL",
+                    Some(timestamp + 60_000),
+                )
+                .await
+        }
+    };
+
+    match publish(deployer_over(&sold)).await {
+        Err(DeployFailure::Rejected(RejectionKind::Validation, errors)) => assert_eq!(
+            errors,
+            [format!(
+                "The provided Eth Address does not have access to the following parcel: ({parcel})"
+            )]
+        ),
+        other => panic!("a parcel sold since the upload started must be refused, got {other:?}"),
+    }
+    assert!(
+        publish(deployer_over(&kept)).await.is_ok(),
+        "a deployer still holding the parcel publishes"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
