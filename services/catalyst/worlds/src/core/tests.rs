@@ -2563,6 +2563,46 @@ async fn a_creator_raises_a_world_rating_and_never_lowers_it() {
         "{}",
         sent[1].1
     );
+
+    // An operator's rating, which the catalogue serves first, is the one held.
+    let operator = |rating: &'static str| {
+        sqlx::query(
+            "INSERT INTO explore.place_moderation (place_id, content_rating, set_by) \
+             VALUES ($1, $2, '0xmoderator') \
+             ON CONFLICT (place_id) DO UPDATE SET content_rating = EXCLUDED.content_rating",
+        )
+        .bind(world.key())
+        .bind(rating)
+        .execute(&f.pool)
+    };
+    let operator_rating = || async {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT content_rating FROM explore.place_moderation WHERE place_id = $1",
+        )
+        .bind(world.key())
+        .fetch_one(&f.pool)
+        .await
+        .unwrap()
+    };
+    operator("T").await.unwrap();
+    store::update_world_settings(&f.pool, &world, &owner, Some(&owner), &put("A"), None)
+        .await
+        .unwrap();
+    assert_eq!(stored().await.0.as_deref(), Some("A"), "a raise over T");
+    assert_eq!(operator_rating().await.as_deref(), Some("A"), "served");
+    operator("R").await.unwrap();
+    publish_rated(&f, &world, &owner, "bafyrated4", "A").await;
+    assert_eq!(
+        operator_rating().await.as_deref(),
+        Some("R"),
+        "never lowered"
+    );
+    let sent = notices().await;
+    assert!(
+        sent.iter().any(|(k, p)| k == "rating_downgrade_refused"
+            && p.contains("Actual rating: R - Proposed rating: A")),
+        "{sent:?}"
+    );
 }
 
 #[tokio::test]

@@ -493,8 +493,11 @@ creator's rating change: a stricter rating, which the row takes
 (`rating_downgrade_refused`; step `0051_explore_rating_downgrade_notice` admits
 the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
-write, and only while the places webhook is configured; an unsent notice of the
-same row and kind takes the newer message instead of a new row.
+write, and only while the places webhook is configured; an unsent downgrade
+notice of the same row takes the newer message instead of a new row. A local
+world's creator rating is held to the operator's rating in
+`explore.place_moderation` when one is set, and a rating the world takes moves
+that override with it.
 
 Event notification delivery is owned by Social in
 `social.event_notification_intents`. Explore inserts an event transition snapshot

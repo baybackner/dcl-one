@@ -483,8 +483,8 @@ pub enum RatedRow<'a> {
 /// Queues the notice of a creator's [`CreatorRating::Raise`] (`rating_upgraded`,
 /// by Content Creator) or [`CreatorRating::Lower`] (`rating_downgrade_refused`)
 /// in the write's transaction, linking into the places site at `base`; any
-/// other outcome queues nothing. The caller holds the row's lock, and a notice
-/// of the same kind not yet sent takes the new message instead of a new row.
+/// other outcome queues nothing. The caller holds the row's lock, and a
+/// downgrade notice not yet sent takes the new message instead of a new row.
 pub async fn capture_creator_rating(
     tx: &mut Transaction<'_, Postgres>,
     base: &str,
@@ -525,21 +525,60 @@ pub async fn capture_creator_rating(
         ),
         CreatorRating::Keep | CreatorRating::Set => return Ok(()),
     };
-    // One undelivered notice per row and kind: a newer change replaces its message.
-    let pending = sqlx::query(
-        "UPDATE explore.moderation_hooks SET payload = $3 WHERE channel = 'places' \
-         AND subject = $1 AND kind = $2 AND completed_at IS NULL AND attempts = 0",
-    )
-    .bind(&resolved.id)
-    .bind(kind)
-    .bind(&message)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    if pending > 0 {
-        return Ok(());
+    // One undelivered downgrade notice per row: a newer attempt replaces its
+    // message. Upgrades share their kind with the operator's, so each is kept.
+    if kind == "rating_downgrade_refused" {
+        let pending = sqlx::query(
+            "UPDATE explore.moderation_hooks SET payload = $3 WHERE channel = 'places' \
+             AND subject = $1 AND kind = $2 AND completed_at IS NULL AND attempts = 0",
+        )
+        .bind(&resolved.id)
+        .bind(kind)
+        .bind(&message)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+        if pending > 0 {
+            return Ok(());
+        }
     }
     capture(tx, &resolved.id, kind, &message).await
+}
+
+/// The rating a creator's write to the local world `key` is held to: an
+/// operator's rating (`explore.place_moderation`, which the catalogue serves
+/// first), else the world's own `stored`. Locks the operator's row.
+pub async fn world_rating_in_force(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &str,
+    stored: Option<String>,
+) -> Result<Option<String>, sqlx::Error> {
+    let operator: Option<String> = sqlx::query_scalar(
+        "SELECT content_rating FROM explore.place_moderation WHERE place_id = $1 FOR UPDATE",
+    )
+    .bind(key)
+    .fetch_optional(&mut **tx)
+    .await?
+    .flatten();
+    Ok(operator.or(stored))
+}
+
+/// Moves an operator's rating of the local world `key` to the creator's
+/// `rating` the world takes, so the catalogue serves it.
+pub async fn follow_creator_world_rating(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &str,
+    rating: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE explore.place_moderation SET content_rating = $2 \
+         WHERE place_id = $1 AND content_rating IS NOT NULL",
+    )
+    .bind(key)
+    .bind(rating)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Queues one notice in the decision's transaction.

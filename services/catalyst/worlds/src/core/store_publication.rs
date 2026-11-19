@@ -1,6 +1,9 @@
 //! Worlds publication persistence on the shared pool.
 use super::*;
-use crate::explore::places::moderation::{CreatorRating, RatedRow, capture_creator_rating};
+use crate::explore::places::moderation::{
+    CreatorRating, RatedRow, capture_creator_rating, follow_creator_world_rating,
+    world_rating_in_force,
+};
 
 /// `$delete` (a `DELETE FROM worlds.world_scenes ...`) moving the rows it
 /// removes into `worlds.retired_world_scenes` (a re-retired id restarts its TTL).
@@ -235,8 +238,15 @@ pub async fn deploy_scene_with_on(
         if sole_occupant {
             // A creator raises the world's rating, never lowers it.
             let proposed = s.content_rating.as_deref();
+            let stored_rating = match proposed {
+                Some(_) => world_rating_in_force(&mut tx, world.key(), stored_rating).await?,
+                None => None,
+            };
             let content_rating =
                 proposed.filter(|r| CreatorRating::of(stored_rating.as_deref(), r).applies());
+            if let Some(rating) = content_rating {
+                follow_creator_world_rating(&mut tx, world.key(), rating).await?;
+            }
             if let (Some(base), Some(stored), Some(proposed)) =
                 (places_notices, stored_rating.as_deref(), proposed)
             {

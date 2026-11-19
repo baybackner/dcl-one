@@ -1,6 +1,9 @@
 //! Worlds settings persistence on the shared pool.
 use super::*;
-use crate::explore::places::moderation::{CreatorRating, RatedRow, capture_creator_rating};
+use crate::explore::places::moderation::{
+    CreatorRating, RatedRow, capture_creator_rating, follow_creator_world_rating,
+    world_rating_in_force,
+};
 use crate::index::content_file_hash;
 
 /// What a deployed scene expresses about its world's settings; a value out
@@ -171,12 +174,19 @@ pub async fn update_world_settings(
         }
     }
 
-    let stored_rating: Option<String> = locked
-        .as_ref()
-        .and_then(|r| r.get::<Option<String>, _>("content_rating"));
     let proposed_rating = input.content_rating.as_deref();
+    let stored_rating = match (&locked, proposed_rating) {
+        (Some(r), Some(_)) => {
+            let own = r.get::<Option<String>, _>("content_rating");
+            world_rating_in_force(&mut tx, world.key(), own).await?
+        }
+        _ => None,
+    };
     let content_rating = proposed_rating
         .filter(|r| locked.is_none() || CreatorRating::of(stored_rating.as_deref(), r).applies());
+    if let Some(rating) = content_rating.filter(|_| locked.is_some()) {
+        follow_creator_world_rating(&mut tx, world.key(), rating).await?;
+    }
     if let (Some(base), Some(stored), Some(proposed)) =
         (notify, stored_rating.as_deref(), proposed_rating)
     {
