@@ -59,8 +59,6 @@ pub struct StylizedSky {
     pub phase: f32,
     /// World direction toward the drawn disc, the sun or the moon.
     pub body_direction: Vec3,
-    /// 1 while the disc is the moon.
-    pub moon_active: f32,
     pub disc_opacity: f32,
     pub disc_size: f32,
     /// The size of the circle that cuts the moon's disc to a crescent; 0 leaves a disc whole.
@@ -97,7 +95,6 @@ impl Default for StylizedSky {
             time: 0.0,
             phase: 0.5,
             body_direction: Vec3::Y,
-            moon_active: 0.0,
             disc_opacity: 0.0,
             disc_size: 0.0,
             mask_size: 0.0,
@@ -132,7 +129,6 @@ mod uniform {
         pub tick: u32,
         pub time: f32,
         pub phase: f32,
-        pub moon_active: f32,
         pub body_direction: Vec3,
         pub disc_opacity: f32,
         pub disc_color: Vec3,
@@ -169,7 +165,6 @@ impl From<&StylizedSky> for StylizedSkyUniform {
             tick: sky.tick,
             time: sky.time,
             phase: sky.phase,
-            moon_active: sky.moon_active,
             body_direction: sky.body_direction,
             disc_opacity: sky.disc_opacity,
             disc_color: sky.disc_color,
@@ -286,25 +281,29 @@ pub fn disc_params(day_fraction: f32, scene_direction: bool) -> DiscParams {
     }
 }
 
-/// The colour of the disc and its halo at `day_fraction`: a scene's sun colour as authored, or
-/// the moon's ramp along its rise to set while it is the body, or the sun's ramp at the phase.
-/// Unity's `DiscColor`.
+/// The colour of the disc and its halo at `day_fraction`: the moon's ramp along its rise to set
+/// while it is the body, or the sun's ramp at the phase (Unity's `DiscColor`). A scene's sun
+/// colour tints it: its hue at that preset's brightness, times its own brightness above 1.
 pub fn disc_color(disc: &DiscParams, day_fraction: f32, scene: Option<Vec3>) -> Vec3 {
-    scene.unwrap_or_else(|| {
-        if disc.moon_active {
-            sample_ramp(
-                &MOON_COLOR_RAMP,
-                moon_progress(day_fraction).clamp(0.0, 1.0),
-            )
-        } else {
-            sample_ramp(&SUN_COLOR_RAMP, time_to_phase(day_fraction))
+    let preset = if disc.moon_active {
+        sample_ramp(
+            &MOON_COLOR_RAMP,
+            moon_progress(day_fraction).clamp(0.0, 1.0),
+        )
+    } else {
+        sample_ramp(&SUN_COLOR_RAMP, time_to_phase(day_fraction))
+    };
+    match scene {
+        None => preset,
+        Some(authored) => {
+            let brightest = authored.max_element();
+            authored / brightest.max(1e-4) * preset.max_element() * brightest.max(1.0)
         }
-    })
+    }
 }
 
 impl StylizedSky {
     pub fn set_disc(&mut self, disc: &DiscParams) {
-        self.moon_active = if disc.moon_active { 1.0 } else { 0.0 };
         self.disc_opacity = disc.opacity;
         self.disc_size = disc.size;
         self.mask_size = disc.mask_size;
@@ -871,20 +870,31 @@ mod tests {
             disc_color(&sun, 0.5, None),
             sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5))
         );
-        // a scene's sun colour is the disc's as authored, whichever body is up
+        // a scene's sun colour tints the disc: its hue at the active body's preset brightness,
+        // times the authored brightness above 1
         let authored = Vec3::new(0.0, 4.0, 0.5);
-        assert_eq!(disc_color(&moon, midnight, Some(authored)), authored);
-        assert_eq!(disc_color(&sun, 0.5, Some(authored)), authored);
+        let hue = Vec3::new(0.0, 1.0, 0.125);
+        let moon_preset = disc_color(&moon, midnight, None);
+        let sun_preset = disc_color(&sun, 0.5, None);
+        assert!(disc_color(&moon, midnight, Some(authored))
+            .abs_diff_eq(hue * moon_preset.max_element() * 4.0, 1e-5));
+        assert!(disc_color(&sun, 0.5, Some(authored))
+            .abs_diff_eq(hue * sun_preset.max_element() * 4.0, 1e-5));
+        // white at noon is the preset's brightness, not a tenth of it; black is black
+        let white = disc_color(&sun, 0.5, Some(Vec3::ONE));
+        assert!(white.abs_diff_eq(Vec3::splat(sun_preset.max_element()), 1e-5));
+        assert!(white.max_element() > 5.0);
+        assert_eq!(disc_color(&sun, 0.5, Some(Vec3::ZERO)), Vec3::ZERO);
+        // below 1 the authored brightness does not dim it
+        let dim = disc_color(&sun, 0.5, Some(Vec3::splat(0.2)));
+        assert!(dim.abs_diff_eq(white, 1e-4));
     }
 
     #[test]
     fn the_uniform_carries_the_disc() {
         let mut sky = StylizedSky::default();
         sky.set_disc(&disc_params(day_fraction(0.0), false));
-        assert_eq!(
-            (sky.moon_active, sky.disc_opacity, sky.disc_size),
-            (1.0, 1.0, 0.12)
-        );
+        assert_eq!((sky.disc_opacity, sky.disc_size), (1.0, 0.12));
         let uniform = StylizedSkyUniform::from(&sky);
         assert_eq!(uniform.mask_size, 0.16);
         assert_eq!(uniform.mask_offset, Vec2::new(-0.009, -0.007));

@@ -61,9 +61,10 @@ for (const scene of SCENES) {
       // landscape's trees and bushes around the scene sway in the wind, so no two frames of them
       // agree: held still for the frame. The sky's strips are fixed art that scrolls from
       // boot, and its horizon noise drifts with the clock: `/cloud 0 0` clears the strips and
-      // freezes all sky motion, so the sky reads the same on any day. The grass on the empty parcels
-      // around the scene is drawn as stacked shells whose order is not fixed from one bevy pin to
-      // the next, so its pixels drift between builds: off for the session.
+      // holds them and the horizon noise in a fixed pose, so the sky reads the same on any day. The
+      // stars keep twinkling, but the scenes are at noon and show none. The grass on the empty
+      // parcels around the scene is drawn as stacked shells whose order is not fixed from one
+      // bevy pin to the next, so its pixels drift between builds: off for the session.
       restore(async () => {
         await explorer.json('/nametags true')
         await explorer.json('/tree_wind true')

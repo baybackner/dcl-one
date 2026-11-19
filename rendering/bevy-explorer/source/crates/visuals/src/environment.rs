@@ -631,10 +631,7 @@ mod tests {
         app.update();
         let atmosphere = sky(&app);
         assert!(atmosphere.body_direction.abs_diff_eq(-moonlight, 1e-6));
-        assert_eq!(
-            (atmosphere.moon_active, atmosphere.mask_size),
-            (1.0, MOON_MASK_SIZE)
-        );
+        assert_eq!(atmosphere.mask_size, MOON_MASK_SIZE);
         assert_eq!(
             (atmosphere.disc_opacity, atmosphere.backlight_weight),
             (1.0, 1.0)
@@ -651,13 +648,13 @@ mod tests {
         app.update();
         let atmosphere = sky(&app);
         assert!(atmosphere.body_direction.abs_diff_eq(-moonlight, 1e-6));
-        assert_eq!((atmosphere.moon_active, atmosphere.mask_size), (0.0, 0.0));
+        assert_eq!(atmosphere.mask_size, 0.0);
         assert_eq!(
             atmosphere.disc_color,
             sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0))
         );
 
-        // and its sun colour is the disc's as authored, above 1 included
+        // and its sun colour tints the disc, at the preset's brightness times the authored one above 1
         let scene = app
             .world_mut()
             .spawn(Sun {
@@ -669,7 +666,10 @@ mod tests {
             .id();
         app.world_mut().resource_mut::<SceneGlobalLight>().source = Some(scene);
         app.update();
-        assert_eq!(sky(&app).disc_color, Vec3::X * 4.0);
+        let preset = sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0));
+        assert!(sky(&app)
+            .disc_color
+            .abs_diff_eq(Vec3::X * preset.max_element() * 4.0, 1e-5));
     }
 
     #[test]

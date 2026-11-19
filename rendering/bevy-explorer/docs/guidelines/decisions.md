@@ -79,12 +79,18 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 
   Unity's environment profile at `0a8bafca9e62ced7f34ac182158b11edd0c842a4` writes the cloud
   values to the old cloud cubemap's material, which the strips do not read. The strips are
-  fixed art sampled at their full resolution, for the reason the horizon noise is; a strip texel
-  is about the size of a cube texel, so there is little to filter. The growth flow the preset
-  switches off is not ported. `/cloud <cover> [speed]` is the user's own setting on top: cover
-  multiplies every strip's opacity (the scene's opacity times it), speed scales the strips'
-  scroll and the horizon noise's drift, so `/cloud 0 0` clears the strips and freezes the sky's
-  motion. A scene's values still apply while it is active; the star twinkle ignores the speed.
+  fixed art sampled at their full resolution, for the reason the horizon noise is. That loses
+  nothing near the horizon, where a strip texel is about the size of a cube texel, but the
+  overhead strip is seen to about 70 degrees up, where its U is minified about 3 times, and the
+  horizon noise is minified about 8 times in V, with no mips; Unity samples both with gradients
+  and mips, so they alias a little more here. The growth flow the preset switches off is not
+  ported. `/cloud <cover> [speed]` is the user's own setting on top: cover multiplies every
+  strip's opacity (the scene's opacity times it), speed scales the strips' scroll and the horizon
+  noise's drift, so `/cloud 0 0` clears the strips and holds them and the horizon noise in a
+  fixed pose (the shader time is 0 and every scroll 0). A non-finite value is refused, and cover
+  is held to 0 to 1. The shader time wraps at 500 s, one repeat of the horizon noise at the
+  preset's speed. A scene's values still apply while it is active; the star twinkle ignores the
+  speed.
 - **A scene's sun direction draws the sun's whole disc.** Unity switches a sky that a scene
   controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look, which computes no celestial
   path. Here a scene-controlled sky stays on StylizedV1. A scene that fixes the sun's direction
@@ -92,6 +98,11 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   crescent, where Unity's Legacy look draws a sun-coloured crescent there at midnight, and no
   Legacy sun opacity curve. The disc still dips out through the two windows in which the light
   swings between the sun's arc and the moon's.
+  A scene's `PBSun.color` tints the disc: the authored hue at the brightness the disc has
+  without it (the sun's ramp at the phase, or the moon's along its rise to set), times the
+  authored colour's brightest channel when that is above 1. Unity feeds the colour raw, but the
+  preset's disc is HDR (about 10 at noon), so a raw white would dim the sun about tenfold; a
+  black colour gives a black disc.
 - **Stars are added over the sky, not drawn under it.** The stars are Unity's Stars v2 and
   shooting stars (`SkyLut_Stars`), with the preset's values. Unity draws them inside its sky
   shader, so the clouds and the disc cover them. Here they stay a pass of their own at screen

@@ -647,7 +647,7 @@ struct CloudConsoleCommand {
 pub struct CloudCover {
     /// Multiplies every strip's opacity: 0 clears the sky, 1 draws the strips as authored.
     pub cover: f32,
-    /// Scales the strips' scroll and the horizon noise's drift: 0 freezes the sky's motion.
+    /// Scales the strips' scroll and the horizon noise's drift: 0 holds the sky in a fixed pose.
     pub speed: f32,
 }
 
@@ -660,16 +660,39 @@ impl Default for CloudCover {
     }
 }
 
+/// Sets the user's cloud cover and speed. A value that is not finite is refused, whole, before
+/// either is set; cover is held to 0 to 1.
+fn apply_cloud_settings(
+    cloud: &mut CloudCover,
+    cover: Option<f32>,
+    speed: Option<f32>,
+) -> Result<(), String> {
+    if cover.is_some_and(|cover| !cover.is_finite())
+        || speed.is_some_and(|speed| !speed.is_finite())
+    {
+        return Err("cloud cover and speed must be finite numbers".to_string());
+    }
+    if let Some(cover) = cover {
+        cloud.cover = cover.clamp(0.0, 1.0);
+    }
+    if let Some(speed) = speed {
+        cloud.speed = speed;
+    }
+    Ok(())
+}
+
 fn cloud_console_command(
     mut input: ConsoleCommand<CloudConsoleCommand>,
     mut cloud: ResMut<CloudCover>,
 ) {
     if let Some(Ok(command)) = input.take() {
-        if let Some(cover) = command.cover {
-            cloud.cover = cover.max(0.0);
-        }
-        if let Some(speed) = command.speed.or(command.speed_flag) {
-            cloud.speed = speed;
+        if let Err(error) = apply_cloud_settings(
+            &mut cloud,
+            command.cover,
+            command.speed.or(command.speed_flag),
+        ) {
+            input.reply_failed(error);
+            return;
         }
 
         input.reply_ok(format!(
@@ -678,6 +701,9 @@ fn cloud_console_command(
         ));
     }
 }
+
+/// Seconds in one repeat of the horizon noise's drift (0.002 turns a second).
+const HORIZON_NOISE_PERIOD_SECS: f32 = 500.0;
 
 /// Advances the sky's motion by a frame and sets the strips' opacity: the scene's opacity (1
 /// without one) times the user's cover, and the scrolls and the shader time at the user's speed.
@@ -689,10 +715,20 @@ fn advance_sky_clouds(
     delta_secs: f32,
 ) {
     let delta = delta_secs * cloud.speed;
-    sky.time += delta;
+    // speed 0 is a fixed pose: the horizon noise and the strips sit at their origin. The time
+    // wraps at 500 s, one repeat of the horizon noise at the preset's speed, so it stays small
+    sky.time = if cloud.speed == 0.0 {
+        0.0
+    } else {
+        (sky.time + delta).rem_euclid(HORIZON_NOISE_PERIOD_SECS)
+    };
     sky.cloud_opacity = scene_opacity.unwrap_or(1.0) * cloud.cover;
     // whole turns are dropped, so the scroll stays exact however long it runs
-    sky.cloud_scroll = (sky.cloud_scroll + cloud_scroll_rates(scene_speed) * delta).fract_gl();
+    sky.cloud_scroll = if cloud.speed == 0.0 {
+        Vec3::ZERO
+    } else {
+        (sky.cloud_scroll + cloud_scroll_rates(scene_speed) * delta).fract_gl()
+    };
 }
 
 // --- environment grading commands ---
@@ -836,8 +872,9 @@ fn bloom_console_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{advance_sky_clouds, next_shadow_bias, CloudCover};
+    use super::{advance_sky_clouds, apply_cloud_settings, next_shadow_bias, CloudCover};
     use crate::stylized_sky::StylizedSky;
+    use bevy::math::Vec3;
 
     #[test]
     fn cloud_cover_zero_is_a_cloudless_shader_cover() {
@@ -848,11 +885,42 @@ mod tests {
         };
         let mut sky = StylizedSky::default();
         advance_sky_clouds(&mut sky, Some(0.8), Some(1.0), &cloud, 0.5);
+        // a run at speed, then the fixed pose
+        sky.time = 7.0;
+        sky.cloud_scroll = Vec3::new(0.3, 0.2, 0.1);
+        advance_sky_clouds(&mut sky, Some(0.8), Some(1.0), &cloud, 0.5);
+        assert_eq!(sky.time, 0.0);
+        assert_eq!(sky.cloud_scroll, Vec3::ZERO);
         let (scroll, time) = (sky.cloud_scroll, sky.time);
         advance_sky_clouds(&mut sky, Some(0.8), Some(1.0), &cloud, 0.5);
         assert_eq!(sky.cloud_opacity, 0.0);
         assert_eq!(sky.cloud_scroll, scroll);
         assert_eq!(sky.time, time);
+    }
+
+    #[test]
+    fn a_non_finite_cloud_setting_is_rejected_and_cover_is_capped_at_1() {
+        let mut cloud = CloudCover::default();
+        assert!(apply_cloud_settings(&mut cloud, Some(1.0), Some(f32::NAN)).is_err());
+        assert!(apply_cloud_settings(&mut cloud, Some(f32::INFINITY), None).is_err());
+        assert_eq!((cloud.cover, cloud.speed), (1.0, 1.0));
+        let mut sky = StylizedSky::default();
+        advance_sky_clouds(&mut sky, None, None, &cloud, 0.5);
+        assert!(sky.time.is_finite() && sky.cloud_scroll.is_finite());
+        apply_cloud_settings(&mut cloud, Some(5.0), None).unwrap();
+        assert_eq!(cloud.cover, 1.0);
+        apply_cloud_settings(&mut cloud, Some(-2.0), None).unwrap();
+        assert_eq!(cloud.cover, 0.0);
+    }
+
+    #[test]
+    fn the_shader_time_wraps_at_one_horizon_noise_repeat() {
+        let mut sky = StylizedSky {
+            time: 499.9,
+            ..Default::default()
+        };
+        advance_sky_clouds(&mut sky, None, None, &CloudCover::default(), 0.25);
+        assert!((sky.time - 0.15).abs() < 1e-3);
     }
 
     #[test]

@@ -10,7 +10,6 @@ struct StylizedSky {
     time: f32,
     // 0 and 1 night, 0.25 sunrise, 0.5 day, 0.75 sunset
     phase: f32,
-    moon_active: f32,
     body_direction: vec3<f32>,
     disc_opacity: f32,
     disc_color: vec3<f32>,
@@ -163,9 +162,10 @@ fn disc(dir: vec3<f32>) -> vec3<f32> {
     return body * sky.disc_color * sky.disc_opacity * sky.disc_opacity * mask;
 }
 
-// The glow around the body toward `dir`: Unity's SunRadiance sub-graph. It is whole within the
-// radius of the body and gone a radian further out. The graph's colour is a vec4, so its length
-// counts an alpha of 1.
+// The glow around the body toward `dir`: Unity's SunRadiance sub-graph. Its strength is the
+// intensity times (1 + radius - angle), kept to 0 to 1: it falls off linearly with the angle from
+// the body and is gone at 1 + radius radians. The graph's colour is a vec4, so its length counts
+// an alpha of 1.
 fn halo(dir: vec3<f32>) -> vec3<f32> {
     let angle = acos(clamp(dot(sky.body_direction, dir), -1.0, 1.0));
     return saturate((1.0 - angle + sky.halo.x) * sky.halo.y) * normalize(vec4<f32>(sky.disc_color, 1.0)).rgb;
