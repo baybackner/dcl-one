@@ -1,35 +1,6 @@
 import { DeepReadonlyObject, PBAvatarLocomotionSettings, PBInputModifier } from "@dcl/sdk/ecs";
 import { settings } from "./settings";
-import { AIR_JUMP_COUNT, DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED, JUMP_HOLD_SCALE, LANDING_STUN_TIME } from "./constants";
-
-// Set once getExplorerConfiguration settles, resolved or failed: it tells how the engine's jump heights read, so no
-// ground jump starts before it. Walking does not wait.
-var explorerConfigured = false;
-// The configuration has no avatarMovementAssist key, or failed: an engine that predates this model, whose own jump and
-// run-jump heights are the apex of a held jump rather than a tapped one.
-var engineHeightsHeld = false;
-
-export function setExplorerConfiguration(announcesAssist: boolean) {
-    explorerConfigured = true;
-    engineHeightsHeld = !announcesAssist;
-}
-
-// Whether the locomotion settings are an older engine's own: with no parcel scene setting AvatarLocomotionSettings it
-// sends every speed and jump height from its player settings, a hardLandingCooldown of 0 and no double-jump or glide
-// value. A parcel scene's settings are taken as set.
-function olderEngineOwnSettings(locomotion: DeepReadonlyObject<PBAvatarLocomotionSettings>): boolean {
-    return locomotion.walkSpeed !== undefined && locomotion.jogSpeed !== undefined && locomotion.runSpeed !== undefined
-        && locomotion.jumpHeight !== undefined && locomotion.runJumpHeight !== undefined
-        && locomotion.hardLandingCooldown === 0 && locomotion.doubleJumpHeight === undefined
-        && locomotion.glidingSpeed === undefined && locomotion.glidingFallingSpeed === undefined;
-}
-
-// The factor from an engine jump height to the tapped apex this model jumps to. A held jump rises about 1 /
-// JUMP_HOLD_SCALE times as high as a tapped one, so an older engine's held 1.9 m / 2.95 m become 0.95 m / 1.475 m tapped
-// and still reach about the same height held.
-function engineJumpHeightScale(locomotion: DeepReadonlyObject<PBAvatarLocomotionSettings> | undefined): number {
-    return engineHeightsHeld && locomotion !== undefined && olderEngineOwnSettings(locomotion) ? JUMP_HOLD_SCALE : 1;
-}
+import { AIR_JUMP_COUNT, DOUBLE_JUMP_HEIGHT, GLIDE_FALL_SPEED, GLIDE_HORIZONTAL_SPEED, LANDING_STUN_TIME } from "./constants";
 
 export var sprintSpeed = 0;
 export var jogSpeed = 0;
@@ -57,9 +28,8 @@ export function initParamters(
     const baseJogSpeed = locomotion?.jogSpeed ?? settings.jogSpeed;
     const baseWalkSpeed = locomotion?.walkSpeed ?? settings.walkSpeed;
 
-    const jumpScale = engineJumpHeightScale(locomotion);
-    const baseJumpHeight = (locomotion?.jumpHeight ?? settings.jumpHeight) * jumpScale;
-    const baseSprintJumpHeight = (locomotion?.runJumpHeight ?? settings.sprintJumpHeight) * jumpScale;
+    const baseJumpHeight = locomotion?.jumpHeight ?? settings.jumpHeight;
+    const baseSprintJumpHeight = locomotion?.runJumpHeight ?? settings.sprintJumpHeight;
 
     // Double-jump height and glide speeds have no entry in settings.ts; the constants
     // are the defaults, overridden by the engine locomotion component.
@@ -74,7 +44,7 @@ export function initParamters(
     const runEnabled = !modifiers?.mode?.standard.disableRun && !modifiers?.mode?.standard.disableAll;
     const anyEnabled = jogEnabled || walkEnabled || runEnabled;
 
-    const jumpEnabled = explorerConfigured && !modifiers?.mode?.standard.disableJump && !modifiers?.mode?.standard.disableAll;
+    const jumpEnabled = !modifiers?.mode?.standard.disableJump && !modifiers?.mode?.standard.disableAll;
     // Air-jump and glide are independent of the ground-jump gate so that, with
     // disableJump set, the player can still air-jump or glide after walking
     // off a cliff (the air-jump slot is replenished on every grounded frame).

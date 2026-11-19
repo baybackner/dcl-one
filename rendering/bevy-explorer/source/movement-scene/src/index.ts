@@ -4,7 +4,7 @@ import { getExplorerConfiguration } from '~system/EnvironmentApi';
 import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
 import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
-import { initParamters as initParameters, setExplorerConfiguration } from './parameters';
+import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
@@ -162,13 +162,9 @@ export function main() {
     engineAssist.slopeLimit = assist.includes('slopeLimit');
     engineAssist.snap = assist.includes('snap');
     engineAssist.step = assist.includes('step');
-    // the key's presence marks an engine whose jump heights are tapped ones (parameters.ts)
-    setExplorerConfiguration(config.configurations?.['avatarMovementAssist'] !== undefined);
   }).catch((error) => {
-    // engineAssist stays all false: the model does the slope limit, snap and step itself, and the jump heights read as
-    // an older engine's
+    // engineAssist stays all false: the model does the slope limit, snap and step itself
     console.log(`explorer configuration unavailable: ${error}`);
-    setExplorerConfiguration(false);
   })
 
   // Pre-load every movement clip up front so playback never hitches on first use.
