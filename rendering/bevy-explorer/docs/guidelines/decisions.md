@@ -77,6 +77,16 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   crescent, where Unity's Legacy look draws a sun-coloured crescent there at midnight, and no
   Legacy sun opacity curve. The disc still dips out through the two windows in which the light
   swings between the sun's arc and the moon's.
+- **Stars are added over the sky, not drawn under it.** The stars are Unity's Stars v2 and
+  shooting stars (`SkyLut_Stars`), with the preset's values. Unity draws them inside its sky
+  shader, so the clouds and the disc cover them. Here they stay a pass of their own at screen
+  resolution, added over the frame wherever nothing was drawn and faded by the sky cube's
+  alpha, its cloud cover: the disc and its halo do not hide a star behind them. The dim patches
+  read the horizon noise with Unity's seam-safe derivatives, but the image has no mip chain
+  here, so every sample is its top level. A scene's `PBSkybox` star brightness scales the
+  preset's stars from the protocol's default of 4.62 and leaves the shooting stars alone; a
+  scene that hides the sun or shows a panorama gets neither. Unity gives a scene-controlled sky
+  its Legacy look, which has no Stars v2.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
   UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
   the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
