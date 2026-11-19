@@ -136,14 +136,6 @@ fn main() {
 
 fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
     let mut arguments = decentraland_app_arguments()?;
-    let http_client = match ipfs::http_client() {
-        Ok(http_client) => http_client,
-        Err(e) => {
-            // exits with the crash marker left in place
-            startup_error(&format!("can't create the http client: {e}"));
-            std::process::exit(1);
-        }
-    };
     open_benchmark_log(
         arguments.log_file.as_deref(),
         &BENCHMARK_LOG,
@@ -162,6 +154,14 @@ fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
         warn!("failed to write the session id to the crash marker: {e}");
     }
 
+    let http_client = match ipfs::http_client() {
+        Ok(http_client) => http_client,
+        Err(e) => {
+            // exits with the crash marker left in place
+            startup_error(&format!("can't create the http client: {e}"));
+            std::process::exit(1);
+        }
+    };
     Ok(DecentralandAppConfig::new(
         app_config,
         arguments,

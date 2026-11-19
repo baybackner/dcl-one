@@ -40,7 +40,8 @@ use tokio::sync::{
 };
 use wallet::Wallet;
 
-/// Made by [`SocialPlugin::new`], which inserts the social runtime its systems take.
+/// Made by [`SocialPlugin::new`], which inserts the social runtime its systems take into an app;
+/// add the plugin to that same app.
 pub struct SocialPlugin {
     _runtime: (),
 }

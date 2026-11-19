@@ -103,8 +103,8 @@ async fn until(condition: impl Fn() -> bool) {
 #[tokio::test]
 async fn retry_uses_live_priorities_after_another_download_completes_in_backoff(
 ) -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         io.register_download_priority("retry", LoadPriority::TOP);
         io.register_download_priority("competitor", LoadPriority::SCENE_PENDING);
@@ -198,8 +198,8 @@ async fn retry_uses_live_priorities_after_another_download_completes_in_backoff(
 
 #[tokio::test]
 async fn preview_delay_leaves_the_slot_free_and_shared_readers_can_cancel() -> anyhow::Result<()> {
+    let mut io = ipfs()?;
     timeout(LIMIT, async {
-        let mut io = ipfs()?;
         Arc::get_mut(&mut io).unwrap().is_preview = true;
         io.preview_delay_ms.store(60_000, Ordering::Relaxed);
         let server = Server::start().await;
@@ -221,8 +221,8 @@ async fn preview_delay_leaves_the_slot_free_and_shared_readers_can_cancel() -> a
 
 #[tokio::test]
 async fn a_503_without_retry_after_is_retried_after_a_growing_wait() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let (_reader, attempts) = DownloadReaders::first(&io.request_slots, None, None, None);
         let waits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -266,8 +266,8 @@ async fn a_503_without_retry_after_is_retried_after_a_growing_wait() -> anyhow::
 
 #[tokio::test]
 async fn a_content_fetch_uses_exactly_one_ticket_on_its_own_gate() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let previous = io.request_slots.ticket(None).seq;
         let request = io.client.get(server.url("content")).build().unwrap();
@@ -288,8 +288,8 @@ async fn a_content_fetch_uses_exactly_one_ticket_on_its_own_gate() -> anyhow::Re
 #[tokio::test]
 async fn dropping_shared_readers_withdraws_only_the_last_claim_of_each_owner() -> anyhow::Result<()>
 {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         io.register_download_priority("near", LoadPriority::TOP);
         io.register_download_priority("mid", LoadPriority::SCENE_PENDING);
@@ -317,8 +317,8 @@ async fn dropping_shared_readers_withdraws_only_the_last_claim_of_each_owner() -
 
 #[tokio::test]
 async fn last_shared_reader_cancels_a_queued_attempt_and_a_retry_timer() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let blocker = io.request_slots.try_acquire().unwrap();
         let queued = shared(&io, &server, "queued", "scene");
@@ -348,8 +348,8 @@ async fn last_shared_reader_cancels_a_queued_attempt_and_a_retry_timer() -> anyh
 
 #[tokio::test]
 async fn immediate_timeout_retry_yields_to_an_older_unowned_request() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let request = io.client.get(server.url("retry")).build().unwrap();
         let blocker = io.request_slots.try_acquire().unwrap();
@@ -386,8 +386,8 @@ async fn immediate_timeout_retry_yields_to_an_older_unowned_request() -> anyhow:
 #[tokio::test]
 async fn a_stale_upgrade_cannot_revive_a_download_after_its_last_reader_left() -> anyhow::Result<()>
 {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let old = shared(&io, &server, "same", "first-scene");
         server.reply("same", BUSY).await;
@@ -482,8 +482,8 @@ async fn shared_downloads_keep_arrival_order_when_workers_poll_in_reverse() -> a
     use std::future::{poll_fn, Future};
     use std::task::Poll;
 
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let share = |name: &str| {
             io.share_download(
@@ -540,8 +540,8 @@ async fn fail_shared(
 #[tokio::test]
 async fn a_content_hash_that_answers_a_client_error_is_remembered_for_the_session(
 ) -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let later = Instant::now() + Duration::from_secs(3600);
         for (path, status, code) in [
@@ -574,8 +574,8 @@ async fn a_content_hash_that_answers_a_client_error_is_remembered_for_the_sessio
 
 #[tokio::test]
 async fn transient_and_url_keyed_failures_keep_the_retry_window() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let mut urls = Vec::new();
         for (path, status) in [
@@ -679,8 +679,8 @@ async fn read_missing(
 
 #[tokio::test]
 async fn a_preview_client_asks_again_for_a_missing_file_at_once() -> anyhow::Result<()> {
+    let mut io = ipfs()?;
     timeout(LIMIT, async {
-        let mut io = ipfs()?;
         Arc::get_mut(&mut io).unwrap().is_preview = true;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
@@ -697,8 +697,8 @@ async fn a_preview_client_asks_again_for_a_missing_file_at_once() -> anyhow::Res
 
 #[tokio::test]
 async fn a_preview_client_does_not_keep_a_content_failure_for_the_session() -> anyhow::Result<()> {
+    let mut io = ipfs()?;
     timeout(LIMIT, async {
-        let mut io = ipfs()?;
         Arc::get_mut(&mut io).unwrap().is_preview = true;
         let server = Server::start().await;
         let key = CacheKey::Content("bafkmissing".into());
@@ -732,8 +732,8 @@ fn seed_session_404_at(io: &Arc<IpfsIo>, server: &Server, at: Instant) {
 
 #[tokio::test]
 async fn a_session_failure_is_answered_by_read_without_a_request() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
         seed_session_404(&io, &server);
@@ -755,8 +755,8 @@ async fn a_session_failure_is_answered_by_read_without_a_request() -> anyhow::Re
 
 #[tokio::test]
 async fn a_session_failure_answers_only_content_reads() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
         let long_ago = Instant::now().checked_sub(Duration::from_secs(11)).unwrap();
@@ -783,8 +783,8 @@ async fn a_session_failure_answers_only_content_reads() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn a_successful_download_clears_a_failure_of_its_url() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let url = server.url("found");
         io.failed_remotes.lock().unwrap().record(
@@ -806,8 +806,8 @@ async fn a_successful_download_clears_a_failure_of_its_url() -> anyhow::Result<(
 
 #[tokio::test]
 async fn a_preview_client_ignores_a_session_failure() -> anyhow::Result<()> {
+    let mut io = ipfs()?;
     timeout(LIMIT, async {
-        let mut io = ipfs()?;
         Arc::get_mut(&mut io).unwrap().is_preview = true;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
@@ -823,8 +823,8 @@ async fn a_preview_client_ignores_a_session_failure() -> anyhow::Result<()> {
 #[tokio::test]
 async fn a_loopback_404_is_answered_from_memory_only_within_the_retry_window() -> anyhow::Result<()>
 {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
         assert!(read_missing(&io, &server, &path).await.is_err());
@@ -857,8 +857,8 @@ async fn a_loopback_404_is_answered_from_memory_only_within_the_retry_window() -
 
 #[tokio::test]
 async fn a_poisoned_failure_memory_keeps_answering() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let path = loopback_realm(&io, &server).await;
         let poisoner = std::thread::scope(|scope| {
@@ -901,8 +901,8 @@ async fn download_x(
 
 #[tokio::test]
 async fn a_download_that_does_not_match_its_hash_fails_and_is_not_cached() -> anyhow::Result<()> {
+    let (io, dir) = cache_fixture("hash-mismatch")?;
     timeout(LIMIT, async {
-        let (io, dir) = cache_fixture("hash-mismatch")?;
         let server = Server::start().await;
         let hash = crate::content_hash::raw_cid(b"y");
         let error = download_x(&io, &server, "other", CacheKey::Content(hash.clone()))
@@ -921,8 +921,8 @@ async fn a_download_that_does_not_match_its_hash_fails_and_is_not_cached() -> an
 
 #[tokio::test]
 async fn a_hash_mismatch_is_asked_for_again_after_the_retry_window() -> anyhow::Result<()> {
+    let io = ipfs()?;
     timeout(LIMIT, async {
-        let io = ipfs()?;
         let server = Server::start().await;
         let url = server.url("flaky");
         let wrong = CacheKey::Content(crate::content_hash::raw_cid(b"y"));
@@ -952,8 +952,8 @@ async fn a_hash_mismatch_is_asked_for_again_after_the_retry_window() -> anyhow::
 
 #[tokio::test]
 async fn a_download_that_matches_its_hash_is_read_and_cached() -> anyhow::Result<()> {
+    let (io, dir) = cache_fixture("hash-match")?;
     timeout(LIMIT, async {
-        let (io, dir) = cache_fixture("hash-match")?;
         let server = Server::start().await;
         let hash = crate::content_hash::raw_cid(b"x");
         let bytes = download_x(&io, &server, "same", CacheKey::Content(hash.clone()))
@@ -971,8 +971,8 @@ async fn a_download_that_matches_its_hash_is_read_and_cached() -> anyhow::Result
 
 #[tokio::test]
 async fn a_name_the_hash_check_cannot_verify_is_read_and_not_cached() -> anyhow::Result<()> {
+    let (io, dir) = cache_fixture("hash-unknown")?;
     timeout(LIMIT, async {
-        let (io, dir) = cache_fixture("hash-unknown")?;
         let server = Server::start().await;
         // not a hash `content_hash` computes: a realm's own name, a cid of another codec or hash
         let short_qm = "Qm".to_owned() + &crate::content_hash::raw_cid(b"y")[2..20];

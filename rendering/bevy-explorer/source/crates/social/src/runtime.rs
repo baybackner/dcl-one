@@ -42,7 +42,7 @@ impl SocialRuntime {
     }
 
     /// Builds the runtime and inserts it into `app`, as a non-send resource on the web.
-    pub fn insert(app: &mut App) -> std::io::Result<()> {
+    pub(crate) fn insert(app: &mut App) -> std::io::Result<()> {
         let runtime = Self::new()?;
         #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(runtime);

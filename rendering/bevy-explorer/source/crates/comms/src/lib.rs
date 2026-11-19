@@ -95,7 +95,8 @@ pub mod chat_marker_things {
     pub const ALL: [char; 3] = [EMOTE, '␑', '␆'];
 }
 
-/// Made by [`CommsPlugin::new`], which inserts the LiveKit runtime its systems take.
+/// Made by [`CommsPlugin::new`], which inserts the LiveKit runtime its systems take into an app;
+/// add the plugin to that same app.
 pub struct CommsPlugin {
     _runtime: (),
 }
