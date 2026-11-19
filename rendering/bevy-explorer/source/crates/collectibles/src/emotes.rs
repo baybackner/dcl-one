@@ -50,9 +50,11 @@ pub type EmoteUrn = CollectibleUrn<Emote>;
 pub type EmoteInstance = CollectibleInstance<Emote>;
 
 impl EmoteUrn {
-    /// The urn of a built-in emote's bare name (`"idle_male"`, no `:`), built without parsing.
-    pub fn builtin(name: &'static str) -> Self {
-        Self::unknown_source(name)
+    /// Borrows a built-in emote's unknown-source urn
+    /// (`"urn:decentraland:off-chain:unknown-source:idle_male"`) without parsing or allocating.
+    /// A malformed urn is a compile error in a const context.
+    pub const fn builtin(urn: &'static str) -> Self {
+        Self::unknown_source(urn)
     }
 
     pub fn scene_emote(&self) -> Option<&str> {

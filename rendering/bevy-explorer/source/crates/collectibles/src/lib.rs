@@ -474,17 +474,26 @@ mod tests {
 
     #[test]
     fn builtin_emote_urns_match_parsed_bare_names() {
-        for name in [
-            "idle_male",
-            "Idle_Male",
-            "jump",
-            "walk",
-            "run",
-            "double_jump",
-            "glide",
-        ] {
-            assert_eq!(EmoteUrn::builtin(name), EmoteUrn::new(name).unwrap());
+        for name in ["idle_male", "jump", "walk", "run", "double_jump", "glide"] {
+            let full: &'static str = format!("{}:{name}", urn::UNKNOWN_SOURCE_COLLECTION).leak();
+            assert_eq!(EmoteUrn::builtin(full), EmoteUrn::new(name).unwrap());
         }
+        assert_eq!(
+            EmoteUrn::new("Idle_Male").unwrap(),
+            EmoteUrn::builtin("urn:decentraland:off-chain:unknown-source:idle_male")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "uppercase")]
+    fn builtin_emote_urn_rejects_uppercase() {
+        EmoteUrn::builtin("urn:decentraland:off-chain:unknown-source:Idle_Male");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown-source collection")]
+    fn builtin_emote_urn_rejects_other_collections() {
+        EmoteUrn::builtin("urn:decentraland:off-chain:base-emotes:wave");
     }
 
     #[test]

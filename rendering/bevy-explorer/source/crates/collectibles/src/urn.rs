@@ -1,5 +1,5 @@
 use bevy::log::warn;
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData};
 
 use itertools::Itertools;
 
@@ -17,7 +17,7 @@ pub struct CollectibleUrnErr {
 
 #[derive(Debug, PartialOrd, Ord)]
 pub struct CollectibleUrn<T: CollectibleType> {
-    urn: String,
+    urn: Cow<'static, str>,
     _p: PhantomData<fn() -> T>,
 }
 
@@ -67,7 +67,7 @@ impl<T: CollectibleType> TryFrom<&str> for CollectibleUrn<T> {
 
 impl<T: CollectibleType> From<CollectibleUrn<T>> for String {
     fn from(value: CollectibleUrn<T>) -> Self {
-        value.urn
+        value.urn.into_owned()
     }
 }
 
@@ -137,7 +137,7 @@ impl<T: CollectibleType> CollectibleUrn<T> {
 
         Ok((
             Self {
-                urn,
+                urn: Cow::Owned(urn),
                 _p: PhantomData,
             },
             token,
@@ -196,18 +196,50 @@ impl<T: CollectibleType> CollectibleUrn<T> {
     }
 
     pub fn as_str(&self) -> &str {
-        self.urn.as_str()
+        &self.urn
     }
 
-    /// Builds `UNKNOWN_SOURCE_COLLECTION:<name lowercased>` for a non-empty bare name without `:`
-    /// or a `b64-` prefix.
-    pub(crate) fn unknown_source(name: &'static str) -> Self {
-        debug_assert!(
-            !name.is_empty() && !name.contains(':') && !name.starts_with("b64-"),
-            "not a bare built-in name: {name}"
+    /// Borrows `urn` without allocating. Panics, which is a compile error in a const context,
+    /// unless `urn` is `UNKNOWN_SOURCE_COLLECTION`, `:`, then a non-empty name without `:`,
+    /// uppercase ASCII or a `b64-` prefix.
+    pub(crate) const fn unknown_source(urn: &'static str) -> Self {
+        let prefix = UNKNOWN_SOURCE_COLLECTION.as_bytes();
+        let bytes = urn.as_bytes();
+        assert!(
+            bytes.len() > prefix.len() + 1,
+            "built-in urn has no name after the unknown-source collection"
         );
+        let (head, name) = bytes.split_at(prefix.len() + 1);
+        let mut i = 0;
+        while i < prefix.len() {
+            assert!(
+                head[i] == prefix[i],
+                "built-in urn is not under the unknown-source collection"
+            );
+            i += 1;
+        }
+        assert!(
+            head[prefix.len()] == b':',
+            "built-in urn is not under the unknown-source collection"
+        );
+        assert!(
+            !(name.len() >= 4
+                && name[0] == b'b'
+                && name[1] == b'6'
+                && name[2] == b'4'
+                && name[3] == b'-'),
+            "built-in urn name starts with b64-"
+        );
+        let mut i = 0;
+        while i < name.len() {
+            assert!(
+                name[i] != b':' && !name[i].is_ascii_uppercase(),
+                "built-in urn name holds ':' or uppercase ASCII"
+            );
+            i += 1;
+        }
         Self {
-            urn: format!("{UNKNOWN_SOURCE_COLLECTION}:{}", name.to_ascii_lowercase()),
+            urn: Cow::Borrowed(urn),
             _p: PhantomData,
         }
     }
