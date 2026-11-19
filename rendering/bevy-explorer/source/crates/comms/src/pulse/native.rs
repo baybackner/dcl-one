@@ -53,17 +53,33 @@ const MAX_HELD_RELIABLE: usize = 65_536;
 /// connection fails alike.
 const MAX_HELD_BYTES: usize = 16 * 1024 * 1024;
 
-/// How often the uplink is probed with a ping when nothing reliable is in flight. ENet pings only
-/// when nothing arrives, and the server streams to us, so without this an uplink that stalls while
-/// only inputs flow would go unnoticed.
+/// How often the uplink is probed with a ping, whatever is in flight. ENet's own ping goes out
+/// only `ping_interval` (500 ms) after the last acknowledgement, and only while nothing reliable is
+/// in flight (`enet_protocol_send_outgoing_commands` in the vendored `src/c/protocol.rs`, where
+/// `last_receive_time` is written only by `enet_protocol_handle_acknowledge`). So it never has
+/// more than one ping out, an acknowledgement comes back at best once per round trip, and a lost
+/// one waits for ENet's retransmission timeout (the round trip and four times its variance,
+/// doubling on each retry). Probing every interval keeps acknowledgements arriving about that
+/// often on a working uplink at any round trip. A ping carries no packet, so ENet's send window,
+/// which counts packet bytes in transit, does not hold it back.
 const PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How long reliable traffic (a probe at least) may be in flight with no acknowledgement arriving
-/// before the uplink counts as stalled and inputs are held: what is sent meanwhile can land at once when it recovers, and the
-/// servers charge their input budget (burst 16) on arrival. A stall goes unnoticed for at most a
-/// probe interval, a loop pass and this, under a second; `movement_pacing` keeps what it sends in
-/// that time under the burst (its bound holds for stalls up to about 1.3 s).
+/// before the uplink counts as stalled and inputs are held: what is sent meanwhile can land at
+/// once when it recovers, and the servers charge their input budget (burst 16) on arrival. On a
+/// working uplink that takes two probes or acknowledgements lost in a row, or one where jitter
+/// widens the gap it leaves past this. An acknowledgement shows the uplink was up a round trip
+/// earlier, so the gate closes about a round trip, this and a loop pass after a stall begins;
+/// [`UplinkGate::input_spacing`] keeps what is sent in that time within the burst.
 const STALL_AFTER: Duration = Duration::from_millis(600);
+
+/// The smoothed round trip from which inputs are spaced by it ([`UplinkGate::input_spacing`]).
+const PACE_INPUTS_FROM: Duration = Duration::from_millis(600);
+
+/// Inputs that may go out in a round trip and [`STALL_AFTER`] from [`PACE_INPUTS_FROM`] on: half
+/// the servers' input burst of 16, which leaves room for jitter, a loop pass and a held input
+/// let out when the uplink is confirmed.
+const INPUTS_PER_STALL_WINDOW: u32 = 8;
 
 /// Reliable messages that may be unacknowledged before teleports and emotes wait: half the servers'
 /// burst of 16, so ENet retransmitting all of them at once after a stall still fits. Handshakes,
@@ -299,6 +315,8 @@ struct PeerAcks {
     packets: usize,
     /// Changes whenever an acknowledgement arrives.
     last_acknowledgement: u32,
+    /// ENet's smoothed round trip.
+    round_trip: Duration,
 }
 
 impl PeerAcks {
@@ -307,6 +325,7 @@ impl PeerAcks {
             unacknowledged: peer.has_unacknowledged_reliable(),
             packets: peer.unacknowledged_reliable_packets(),
             last_acknowledgement: peer.last_acknowledgement(),
+            round_trip: peer.round_trip_time(),
         }
     }
 }
@@ -317,7 +336,8 @@ impl PeerAcks {
 /// emotes wait while [`MAX_UNACKNOWLEDGED_RELIABLE`] reliable messages are unacknowledged, and
 /// inputs wait while traffic is in flight with no acknowledgement for [`STALL_AFTER`]. Only the
 /// latest frame of each kind waits; an input also waits behind a waiting teleport or emote, whose
-/// start carries an older pose.
+/// start carries an older pose. From a round trip of [`PACE_INPUTS_FROM`], inputs are also spaced
+/// by it (see [`UplinkGate::input_spacing`]).
 #[derive(Default)]
 struct UplinkGate {
     /// Since when reliable traffic has been in flight with no acknowledgement arriving.
@@ -332,6 +352,12 @@ struct UplinkGate {
     probed_at: Option<Instant>,
     /// Probes sent.
     probes: u64,
+    /// ENet's smoothed round trip as last observed.
+    round_trip: Duration,
+    /// When an input last went out.
+    input_sent_at: Option<Instant>,
+    /// Since when an input has waited for the uplink, not for its spacing.
+    input_held_since: Option<Instant>,
 }
 
 impl UplinkGate {
@@ -340,6 +366,7 @@ impl UplinkGate {
         let acknowledged = acks.last_acknowledgement != self.last_acknowledgement;
         self.last_acknowledgement = acks.last_acknowledgement;
         self.unacknowledged_reliable = acks.packets;
+        self.round_trip = acks.round_trip;
         if !acks.unacknowledged {
             self.unacknowledged_since = None;
         } else if acknowledged {
@@ -350,13 +377,14 @@ impl UplinkGate {
         }
     }
 
-    /// Whether to ping now: nothing reliable is in flight to show the uplink works, and no probe
-    /// went out for [`PROBE_INTERVAL`].
+    /// Whether to ping now: no probe went out for [`PROBE_INTERVAL`], whatever is in flight. With
+    /// several probes in flight, an acknowledgement arrives about every interval on a working
+    /// uplink at any round trip, and a lost probe or acknowledgement leaves a gap of one interval
+    /// more rather than one retransmission timeout.
     fn wants_probe(&mut self, now: Instant) -> bool {
-        let due = self.unacknowledged_since.is_none()
-            && self
-                .probed_at
-                .is_none_or(|at| now.duration_since(at) >= PROBE_INTERVAL);
+        let due = self
+            .probed_at
+            .is_none_or(|at| now.duration_since(at) >= PROBE_INTERVAL);
         if due {
             self.probed_at = Some(now);
             self.probes += 1;
@@ -372,9 +400,38 @@ impl UplinkGate {
             unacknowledged_reliable: self.unacknowledged_reliable,
             held_teleport: holds(FrameKind::Teleport),
             held_emote: holds(FrameKind::Emote),
-            held_input: holds(FrameKind::Input),
+            held_input: self.input_held_since.is_some(),
             probes: self.probes,
         }
+    }
+
+    /// The least time between two inputs. Inputs sent between the start of a stall and the gate
+    /// closing, about a round trip and [`STALL_AFTER`] later, reach the servers together when a
+    /// stall that queued them ends. Below [`PACE_INPUTS_FROM`] that is at most about 1.3 s, in
+    /// which `movement_pacing` sends at most 16 (its burst of 3 and 10 a second); from it on,
+    /// inputs are spaced so that at most [`INPUTS_PER_STALL_WINDOW`] go out in that time.
+    fn input_spacing(&self) -> Duration {
+        if self.round_trip < PACE_INPUTS_FROM {
+            return Duration::ZERO;
+        }
+        (self.round_trip + STALL_AFTER) / INPUTS_PER_STALL_WINDOW
+    }
+
+    /// How long until a held input may go by its spacing, when that is what it waits for; the
+    /// driver wakes then, rather than at its next maintenance tick.
+    fn paced_for(&self, now: Instant) -> Option<Duration> {
+        if !self.held.iter().any(|held| held.kind == FrameKind::Input) {
+            return None;
+        }
+        let due = self.input_sent_at? + self.input_spacing();
+        (due > now).then(|| due - now)
+    }
+
+    /// How long the driver may block with nothing to do: until a paced input is due, and at most
+    /// [`MAINTENANCE_INTERVAL`].
+    fn wake_within(&self, now: Instant) -> Duration {
+        self.paced_for(now)
+            .map_or(MAINTENANCE_INTERVAL, |due| due.min(MAINTENANCE_INTERVAL))
     }
 
     fn stalled(&self, now: Instant) -> bool {
@@ -387,7 +444,15 @@ impl UplinkGate {
     fn admit(&mut self, frames: Vec<PulseFrame>, now: Instant) -> Vec<PulseFrame> {
         let stalled = self.stalled(now);
         let was_holding = !self.held.is_empty();
-        let out = self.admit_inner(frames, stalled);
+        let out = self.admit_inner(frames, stalled, now);
+        let waits_for_uplink = |held: &PulseFrame| stalled || DiscreteEventPacer::paces(held.kind);
+        let input_held = self.held.iter().any(|held| held.kind == FrameKind::Input)
+            && self.held.iter().any(waits_for_uplink);
+        match (self.input_held_since, input_held) {
+            (None, true) => self.input_held_since = Some(now),
+            (Some(_), false) => self.input_held_since = None,
+            _ => {}
+        }
         match (was_holding, self.held.is_empty()) {
             (false, false) => bevy::log::debug!("pulse: uplink unconfirmed, holding frames"),
             (true, true) => bevy::log::debug!("pulse: uplink confirmed, held frames sent"),
@@ -396,7 +461,13 @@ impl UplinkGate {
         out
     }
 
-    fn admit_inner(&mut self, frames: Vec<PulseFrame>, stalled: bool) -> Vec<PulseFrame> {
+    fn admit_inner(
+        &mut self,
+        frames: Vec<PulseFrame>,
+        stalled: bool,
+        now: Instant,
+    ) -> Vec<PulseFrame> {
+        let input_due = self.input_sent_at.map(|at| at + self.input_spacing());
         // Withdraw first, so nothing waits a pass behind a teleport for the realm left.
         if frames
             .iter()
@@ -420,6 +491,7 @@ impl UplinkGate {
                         .held
                         .iter()
                         .any(|held| DiscreteEventPacer::paces(held.kind))
+                    || input_due.is_some_and(|due| now < due)
             } else {
                 false
             };
@@ -429,6 +501,9 @@ impl UplinkGate {
             } else {
                 if frame.reliability == PulseReliability::Reliable {
                     self.unacknowledged_reliable += 1;
+                }
+                if frame.kind == FrameKind::Input {
+                    self.input_sent_at = Some(now);
                 }
                 out.push(frame);
             }
@@ -494,7 +569,7 @@ async fn drive(
         let outbound = tokio::select! {
             frame = channels.outbound.recv() => Some(frame),
             _ = host.socket().0.readable() => None,
-            _ = tokio::time::sleep(MAINTENANCE_INTERVAL) => None,
+            _ = tokio::time::sleep(gate.wake_within(Instant::now())) => None,
         };
         let mut batch = Vec::new();
         match outbound {
@@ -512,18 +587,7 @@ async fn drive(
         // its newest before it reaches the peer. While the uplink is unconfirmed the gate holds the
         // latest of each kind instead, and lets it out once it is.
         let now = Instant::now();
-        let acks = if connected {
-            PeerAcks::of(host.peer(peer))
-        } else {
-            PeerAcks::default()
-        };
-        gate.observe(now, acks);
-        if connected && gate.wants_probe(now) {
-            host.peer_mut(peer).ping();
-        }
-        for frame in gate.admit(collapse_inputs(batch), now) {
-            queue_frame(&mut host, peer, &frame);
-        }
+        pass(&mut host, peer, connected, &mut gate, batch, now);
         if let Ok(mut report) = channels.uplink.lock() {
             *report = Some(gate.snapshot(now));
         }
@@ -587,6 +651,32 @@ async fn drive(
         .try_send(PulseStatus::Disconnected(PulseDisconnect::Graceful));
 }
 
+/// One pass of the gate over the peer at `now`: what the peer says, a probe when one is due, and
+/// the frames of `batch` that may go, queued. Returns the frames queued.
+fn pass<S: enet::Socket>(
+    host: &mut enet::Host<S>,
+    peer: enet::PeerID,
+    connected: bool,
+    gate: &mut UplinkGate,
+    batch: Vec<PulseFrame>,
+    now: Instant,
+) -> Vec<PulseFrame> {
+    let acks = if connected {
+        PeerAcks::of(host.peer(peer))
+    } else {
+        PeerAcks::default()
+    };
+    gate.observe(now, acks);
+    if connected && gate.wants_probe(now) {
+        host.peer_mut(peer).ping();
+    }
+    let admitted = gate.admit(collapse_inputs(batch), now);
+    for frame in &admitted {
+        queue_frame(host, peer, frame);
+    }
+    admitted
+}
+
 fn packet_for_frame(frame: &PulseFrame) -> (u8, enet::Packet) {
     match frame.reliability {
         PulseReliability::Reliable => (0, enet::Packet::reliable(frame.bytes.as_slice())),
@@ -607,7 +697,7 @@ fn packet_for_frame(frame: &PulseFrame) -> (u8, enet::Packet) {
 /// Queue one outbound [`PulseFrame`] onto the peer. Channel and packet kind together reproduce the
 /// server's `ENetChannel` wire commands: reliable → `SEND_RELIABLE`, unreliable-sequenced →
 /// `SEND_UNRELIABLE`, unreliable-unsequenced → `SEND_UNSEQUENCED`.
-fn queue_frame(host: &mut enet::Host<PulseSocket>, peer: enet::PeerID, frame: &PulseFrame) {
+fn queue_frame<S: enet::Socket>(host: &mut enet::Host<S>, peer: enet::PeerID, frame: &PulseFrame) {
     let (channel_id, packet) = packet_for_frame(frame);
     if let Err(err) = host.peer_mut(peer).send(channel_id, &packet) {
         bevy::log::warn!("pulse: peer send failed: {err}");
@@ -683,3 +773,5 @@ mod tests {
 
 #[cfg(test)]
 mod driver_tests;
+#[cfg(test)]
+mod link_sim_tests;

@@ -244,6 +244,7 @@ fn in_flight(packets: usize, acknowledged: u32) -> PeerAcks {
         unacknowledged: true,
         packets,
         last_acknowledgement: acknowledged,
+        ..Default::default()
     }
 }
 
@@ -253,6 +254,7 @@ fn settled(acknowledged: u32) -> PeerAcks {
         unacknowledged: false,
         packets: 0,
         last_acknowledgement: acknowledged,
+        ..Default::default()
     }
 }
 
@@ -477,18 +479,61 @@ fn the_snapshot_reports_what_the_gate_holds() {
     );
 }
 
+/// A probe goes out every interval whatever is in flight, so on a link with a long round trip
+/// several are in flight and their acknowledgements arrive about an interval apart.
 #[test]
-fn the_uplink_is_probed_only_when_nothing_reliable_is_in_flight() {
+fn the_uplink_is_probed_every_interval_whatever_is_in_flight() {
     let mut gate = UplinkGate::default();
     let now = Instant::now();
 
     assert!(gate.wants_probe(now));
     assert!(!gate.wants_probe(now + PROBE_INTERVAL / 2));
     gate.observe(now + PROBE_INTERVAL, in_flight(0, 1));
-    assert!(!gate.wants_probe(now + PROBE_INTERVAL));
-    gate.observe(now + PROBE_INTERVAL * 2, settled(2));
+    assert!(gate.wants_probe(now + PROBE_INTERVAL));
+    gate.observe(now + PROBE_INTERVAL * 2, in_flight(3, 1));
     assert!(gate.wants_probe(now + PROBE_INTERVAL * 2));
-    assert_eq!(gate.snapshot(now).probes, 2);
+    assert_eq!(gate.snapshot(now).probes, 3);
+}
+
+fn with_round_trip(acks: PeerAcks, round_trip: Duration) -> PeerAcks {
+    PeerAcks { round_trip, ..acks }
+}
+
+/// Below `PACE_INPUTS_FROM` inputs go as they come; from it on, at most one per spacing, the
+/// latest, with the driver woken when it is due. Waiting for its spacing is not a hold.
+#[test]
+fn inputs_are_spaced_by_a_long_round_trip() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, with_round_trip(settled(1), PACE_INPUTS_FROM / 2));
+    for step in 0..3u8 {
+        let at = now + Duration::from_millis(10) * u32::from(step);
+        assert_eq!(gate.admit(vec![frame(FrameKind::Input, step)], at).len(), 1);
+    }
+
+    let round_trip = Duration::from_secs(2);
+    gate.observe(now, with_round_trip(settled(1), round_trip));
+    let spacing = (round_trip + STALL_AFTER) / INPUTS_PER_STALL_WINDOW;
+    assert_eq!(gate.input_spacing(), spacing);
+    // The last input went at 20 ms.
+    let sent = now + Duration::from_millis(20) + spacing;
+    assert_eq!(gate.admit(vec![frame(FrameKind::Input, 10)], sent).len(), 1);
+    let early = sent + spacing / 2;
+    assert!(gate
+        .admit(vec![frame(FrameKind::Input, 11)], early)
+        .is_empty());
+    assert!(gate
+        .admit(vec![frame(FrameKind::Input, 12)], early)
+        .is_empty());
+    assert!(!gate.snapshot(early).held_input);
+    assert_eq!(
+        gate.wake_within(early),
+        (spacing / 2).min(MAINTENANCE_INTERVAL)
+    );
+
+    let due = sent + spacing;
+    assert_eq!(gate.wake_within(due), MAINTENANCE_INTERVAL);
+    assert_eq!(tags(&gate.admit(Vec::new(), due)), [(FrameKind::Input, 12)]);
 }
 
 /// The driver itself, against a loopback server: probes go out on an idle link, and an input held
