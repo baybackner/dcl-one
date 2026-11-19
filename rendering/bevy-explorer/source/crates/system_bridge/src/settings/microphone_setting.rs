@@ -24,6 +24,8 @@ pub struct MicrophoneDevice {
 pub struct KnownMicrophone {
     pub device: MicrophoneDevice,
     pub present: bool,
+    /// How many reports found it gone: after one listing it, or as the first report.
+    absences: u32,
 }
 
 /// Every audio input the host reported this session, in first-report order. An input keeps its
@@ -42,20 +44,37 @@ impl MicrophoneDevices {
         self.known.read().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether the host reported its inputs and `id` was not among them.
-    pub fn missing(&self, id: &str) -> bool {
-        self.reported.load(Ordering::SeqCst) && !self.contains(id)
+    fn reported(&self) -> bool {
+        self.reported.load(Ordering::SeqCst)
     }
 
-    /// Whether the host offers `id` now.
-    pub fn contains(&self, id: &str) -> bool {
+    fn contains(&self, id: &str) -> bool {
         self.read()
             .iter()
             .any(|known| known.present && known.device.id == id)
     }
 
-    /// Lists a saved choice the host has not reported yet, as unplugged until it does.
-    fn remember(&self, id: &str) {
+    /// Whether the host reported its inputs and `id` was not among them.
+    pub fn missing(&self, id: &str) -> bool {
+        self.reported() && !self.contains(id)
+    }
+
+    /// Whether the host reported its inputs and `id` was among them.
+    pub fn offers(&self, id: &str) -> bool {
+        self.reported() && self.contains(id)
+    }
+
+    /// How many reports found `id` gone; a change means it went missing in between.
+    pub fn absences(&self, id: &str) -> u32 {
+        self.read()
+            .iter()
+            .find(|known| known.device.id == id)
+            .map_or(0, |known| known.absences)
+    }
+
+    /// Lists a chosen input the host has not reported yet, so the first report that lacks it
+    /// counts as an absence.
+    pub fn remember(&self, id: &str) {
         let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         if !known.iter().any(|entry| entry.device.id == id) {
             known.push(KnownMicrophone {
@@ -64,17 +83,23 @@ impl MicrophoneDevices {
                     label: "Saved microphone".to_owned(),
                 },
                 present: false,
+                absences: 0,
             });
         }
     }
 
     /// Takes the host's current inputs; returns false when nothing changed.
     pub fn replace(&self, reported: Vec<MicrophoneDevice>) -> bool {
-        self.reported.store(true, Ordering::SeqCst);
+        let first = !self.reported.swap(true, Ordering::SeqCst);
         let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         let before = known.clone();
         for entry in known.iter_mut() {
-            entry.present = false;
+            if !reported.iter().any(|device| device.id == entry.device.id) {
+                if entry.present || first {
+                    entry.absences += 1;
+                }
+                entry.present = false;
+            }
         }
         for device in reported {
             match known.iter_mut().find(|entry| entry.device.id == device.id) {
@@ -85,27 +110,37 @@ impl MicrophoneDevices {
                 None => known.push(KnownMicrophone {
                     device,
                     present: true,
+                    absences: 0,
                 }),
             }
         }
-        *known != before
+        first || *known != before
     }
 }
 
-fn choice(known: &[KnownMicrophone], config: &AppConfig) -> f32 {
+fn choice(devices: &MicrophoneDevices, config: &AppConfig) -> f32 {
     config
         .audio
         .microphone
         .as_ref()
-        .and_then(|id| known.iter().position(|entry| &entry.device.id == id))
+        .and_then(|id| {
+            devices
+                .read()
+                .iter()
+                .position(|entry| &entry.device.id == id)
+        })
         .map_or(0.0, |index| (index + 1) as f32)
 }
 
-fn info(known: &[KnownMicrophone], config: &AppConfig) -> SettingInfo {
+fn info(devices: &MicrophoneDevices, config: &AppConfig) -> SettingInfo {
     let variant = |name: String| NamedVariant {
         name,
         description: DESCRIPTION.to_owned(),
     };
+    let value = choice(devices, config);
+    // before the first report nothing is known to be unplugged
+    let reported = devices.reported();
+    let known = devices.read();
     SettingInfo {
         name: TITLE.to_owned(),
         category: SettingCategory::Audio.to_string(),
@@ -114,14 +149,14 @@ fn info(known: &[KnownMicrophone], config: &AppConfig) -> SettingInfo {
         max_value: (known.len() + 1) as f32,
         named_variants: std::iter::once(variant("System Default".to_owned()))
             .chain(known.iter().map(|entry| {
-                variant(if entry.present {
+                variant(if entry.present || !reported {
                     entry.device.label.clone()
                 } else {
                     format!("{} (unplugged)", entry.device.label)
                 })
             }))
             .collect(),
-        value: choice(known, config),
+        value,
         default: 0.0,
         step_size: 1.0,
     }
@@ -139,8 +174,9 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
         devices.remember(id);
     }
     let apply_devices = devices.clone();
+    let info = info(&devices, config);
     settings.settings.push(Setting {
-        info: info(&devices.read(), config),
+        info,
         apply: Some(Box::new(
             move |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
                 let index = value as usize;
@@ -159,7 +195,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
                 Ok(index as f32)
             },
         )),
-        load: Box::new(move |config: &AppConfig| choice(&devices.read(), config)),
+        load: Box::new(move |config: &AppConfig| choice(&devices, config)),
     });
     app.add_systems(
         Update,
@@ -173,7 +209,7 @@ fn sync_choices(
     mut settings: ResMut<Settings>,
 ) {
     if let Some(setting) = settings.settings.iter_mut().find(|s| s.info.name == TITLE) {
-        setting.info = info(&devices.read(), &config);
+        setting.info = info(&devices, &config);
     }
 }
 
@@ -322,10 +358,7 @@ mod tests {
         app.update();
         let shown_now = shown(&app);
         assert_eq!(shown_now.value, 1.0);
-        assert_eq!(
-            shown_now.named_variants[1].name,
-            "Saved microphone (unplugged)"
-        );
+        assert_eq!(shown_now.named_variants[1].name, "Saved microphone");
         assert!(!app
             .world()
             .resource::<MicrophoneDevices>()
