@@ -1064,7 +1064,7 @@ pub struct AudioSettings {
     pub scene: i32,
     pub system: i32,
     pub avatar: i32,
-    /// The microphone pauses while the client window lacks focus.
+    /// Whether [`Self::microphone_focus`] passes the client window's focus through.
     pub mute_mic_in_background: bool,
 }
 
@@ -1083,8 +1083,7 @@ impl Default for AudioSettings {
 }
 
 impl AudioSettings {
-    /// The focus the microphone follows: the client window's, or always `Focused` while the mic
-    /// stays live in the background.
+    /// `focus` while `mute_mic_in_background` is on, `Focused` while it is off.
     pub const fn microphone_focus(&self, focus: ClientWindowFocus) -> ClientWindowFocus {
         if self.mute_mic_in_background {
             focus

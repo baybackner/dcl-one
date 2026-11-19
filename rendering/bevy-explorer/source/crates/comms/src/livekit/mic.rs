@@ -341,8 +341,7 @@ fn suppress_nearby_voice_on_refusal(
     }
 }
 
-/// The focus every mic decision reads: the client window's while Mute Mic in Background is on,
-/// always `Focused` while it is off.
+/// The client window's focus as [`AudioSettings::microphone_focus`] adjusts it.
 #[derive(SystemParam)]
 pub(crate) struct MicrophoneFocus<'w> {
     focus: Res<'w, ClientWindowFocus>,

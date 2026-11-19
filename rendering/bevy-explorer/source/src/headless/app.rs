@@ -160,7 +160,7 @@ pub fn assemble(
             add_bevy_console: false,
         })
         .add_plugins(WalletPlugin)
-        // no client window: the mic's focus never pauses it
+        // no client window: always focused
         .insert_resource(ClientWindowFocus::Focused)
         .add_plugins(CommsPlugin)
         .add_plugins(ban_block::BanBlockPlugin)

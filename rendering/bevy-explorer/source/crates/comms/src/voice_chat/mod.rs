@@ -422,7 +422,7 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// The state as the HUD sees it; the mic shows off while `focus` (the microphone's) is `NoFocus`.
+    /// The state as the HUD sees it; `mic_enabled` is false while `focus` is `NoFocus`.
     pub fn snapshot(
         &self,
         mic: &CallMic,
