@@ -22,10 +22,10 @@ use common::{
     rpc::RpcCallEvent,
     sets::SetupSets,
     structs::{
-        AppConfig, AvatarDynamicState, CursorLocks, EngineMovementControl, GraphicsSettings,
-        HeadSync, NoRenderApp, PermissionType, PermissionUsed, PermissionValue, PointAtSync,
-        PrimaryCamera, PrimaryCameraRes, PrimaryPlayerRes, PrimaryUser, SceneGlobalLight,
-        SceneLoadDistance, SystemAudio, TimeOfDay, ToolTips,
+        AppConfig, AvatarDynamicState, ClientWindowFocus, CursorLocks, EngineMovementControl,
+        GraphicsSettings, HeadSync, NoRenderApp, PermissionType, PermissionUsed, PermissionValue,
+        PointAtSync, PrimaryCamera, PrimaryCameraRes, PrimaryPlayerRes, PrimaryUser,
+        SceneGlobalLight, SceneLoadDistance, SystemAudio, TimeOfDay, ToolTips,
     },
     util::UtilsPlugin,
 };
@@ -160,6 +160,8 @@ pub fn assemble(
             add_bevy_console: false,
         })
         .add_plugins(WalletPlugin)
+        // no client window: the mic's focus never pauses it
+        .insert_resource(ClientWindowFocus::Focused)
         .add_plugins(CommsPlugin)
         .add_plugins(ban_block::BanBlockPlugin)
         // emote metadata (the loop flag scenes are told) resolves through the collectible

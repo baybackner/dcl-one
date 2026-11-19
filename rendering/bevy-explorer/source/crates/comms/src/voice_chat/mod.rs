@@ -17,7 +17,7 @@ use bevy::{
     prelude::*,
 };
 use bevy_console::ConsoleCommand;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 use common::structs::AudioSettings;
 use common::{
     rpc::RpcStreamSender,
@@ -1093,6 +1093,8 @@ fn voice_command(mut input: ConsoleCommand<VoiceCommand>, mut events: EventWrite
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use common::structs::AudioSettings;
 
     use super::*;
 
