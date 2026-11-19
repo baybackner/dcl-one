@@ -59,8 +59,8 @@ fn set_choices(setting: &mut Setting, devices: &MicrophoneDevices, config: &AppC
     setting.load = Box::new(move |config: &AppConfig| choice(&ids, config));
 }
 
-/// Adds the setting; its choices follow [`MicrophoneDevices`], which the livekit plugin creates
-/// and fills.
+/// Adds the setting; its choices follow [`MicrophoneDevices`], which the comms plugin creates,
+/// seeds with the saved choice and fills.
 // Only the web host reports devices.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
@@ -70,28 +70,12 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
         load: Box::new(|_: &AppConfig| 0.0),
         runtime_choices: true,
     };
-    set_choices(&mut setting, &saved(config), config);
+    set_choices(&mut setting, &MicrophoneDevices::default(), config);
     settings.settings.push(setting);
-    app.add_systems(Startup, remember_saved_choice);
     app.add_systems(
         Update,
         sync_choices.run_if(resource_changed::<MicrophoneDevices>),
     );
-}
-
-/// A list holding only the saved choice, as the first report will find it.
-fn saved(config: &AppConfig) -> MicrophoneDevices {
-    let mut devices = MicrophoneDevices::default();
-    if let Some(id) = &config.microphone {
-        devices.remember(id);
-    }
-    devices
-}
-
-fn remember_saved_choice(mut devices: ResMut<MicrophoneDevices>, config: Res<AppConfig>) {
-    if let Some(id) = &config.microphone {
-        devices.remember(id);
-    }
 }
 
 fn sync_choices(
@@ -228,7 +212,10 @@ mod tests {
         };
         let mut app = App::new();
         app.insert_resource(config.clone());
-        app.init_resource::<MicrophoneDevices>();
+        // as the comms plugin seeds it
+        let mut devices = MicrophoneDevices::default();
+        devices.remember("headset");
+        app.insert_resource(devices);
         let mut settings = Settings {
             settings: Vec::default(),
         };

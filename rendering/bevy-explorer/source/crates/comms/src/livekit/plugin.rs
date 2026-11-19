@@ -51,9 +51,6 @@ impl Plugin for LivekitPlugin {
         #[cfg(target_arch = "wasm32")]
         app.init_non_send_resource::<PlayerUpdateTasks>();
         app.init_state::<ConnectionAvailability>();
-        // the web page reports the inputs; the microphone routes and the Microphone setting read
-        // them
-        app.init_resource::<common::structs::MicrophoneDevices>();
 
         #[cfg(target_arch = "wasm32")]
         {
