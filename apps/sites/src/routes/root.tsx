@@ -18,7 +18,6 @@ import "@dcl/one-ui/foundations/layout/layout.css";
 import "@ui/atoms/primitives.css";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
-import SignInModalHost from "@/features/components/auth/SignInModalHost";
 import { QUERY_CLIENT_CONFIG } from "@/core/lib/query/defaults";
 import ChromeAuthBridge from "@/features/components/chrome/ChromeAuthBridge";
 import ChromeNavBridge from "@/features/components/chrome/ChromeNavBridge";
@@ -322,7 +321,6 @@ export default function App() {
           <RoutePending />
           <Outlet />
           <EmbedBridge />
-          <SignInModalHost />
           <SyncEngineBridge />
         </ChromeNavBridge>
       </ChromeAuthBridge>

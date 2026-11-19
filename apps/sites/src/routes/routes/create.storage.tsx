@@ -13,6 +13,7 @@ import CreatorHubChrome from "@ui/creatorhub/frames/CreatorHubChrome";
 import "@ui/creatorhub/frames/creatorhubchrome.css";
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
+import { useSignInRequired } from "@/features/components/auth/useSignInRequired";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   clearEnvKeys,
@@ -134,7 +135,7 @@ export default function CreatorHubWorldsStorage({
   const [, setSearchParams] = useSearchParams();
 
   const rescoping = isConnected && Boolean(address) && !d.address;
-  const needsConnect = !d.address && !rescoping;
+  useSignInRequired(true, isConnected);
 
   useEffect(() => {
     if (isConnected && address && !d.address) {
@@ -168,7 +169,7 @@ export default function CreatorHubWorldsStorage({
             Loading your storage&#x2026;
           </span>
         </div>
-      ) : needsConnect ? (
+      ) : !isConnected ? (
         <EmptyState
           className="es--card"
           title="Sign in to manage your storage"
@@ -406,8 +407,7 @@ function WorldsStorageView({ data: d }: { data: LoaderData }) {
             namespace: d.namespace,
           };
           if (!identity) {
-            // The dialog holds the key and value just typed: sign in without leaving it.
-            openSignIn({ inPlace: true });
+            openSignIn();
             track(
               "ch_worlds_storage_value_saved",
               { ...label, stub: true, reason: "not_connected" },

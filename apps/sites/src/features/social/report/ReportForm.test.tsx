@@ -5,7 +5,6 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { closeSignIn, useSignInOpen } from "../../components/auth/signin-store";
 import ReportForm from "./ReportForm";
 
 vi.hoisted(() =>
@@ -23,12 +22,7 @@ vi.mock("@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground", (
   AnimatedBackground: () => <div data-testid="animated-background" />,
 }));
 
-function SignInState() {
-  return <output aria-label="Sign-in modal">{useSignInOpen() ? "open" : "closed"}</output>;
-}
-
 afterEach(() => {
-  closeSignIn();
   cleanup();
   sessionStorage.clear();
   vi.unstubAllGlobals();
@@ -72,7 +66,6 @@ describe("when a signed-out visitor fills the report form", () => {
     render(
       <MemoryRouter>
         <ReportForm trackCtx={{ sid: "sid", story: "report" } as never} />
-        <SignInState />
       </MemoryRouter>,
     );
     const button = screen.getByRole("button", { name: "Sign In" });
@@ -81,7 +74,6 @@ describe("when a signed-out visitor fills the report form", () => {
     await user.click(button);
     vi.unstubAllGlobals();
     expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Freport-user%3Fplayer%3D0xab");
-    expect(screen.getByLabelText("Sign-in modal").textContent).toBe("closed");
   });
 });
 

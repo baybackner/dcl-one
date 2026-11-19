@@ -12,6 +12,7 @@ import "@ui/creatorhub/components/chmodaldeleteproject.css";
 import CreatorHubBreadcrumb from "@ui/creatorhub/components/CreatorHubBreadcrumb";
 import { useAuth } from "@/data/lib/auth/index";
 import { openSignIn } from "@/features/components/auth/signin-store";
+import { useSignInRequired } from "@/features/components/auth/useSignInRequired";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import {
   parcelCount,
@@ -115,8 +116,27 @@ function withCreator(params: Record<string, string>, creator: string): string {
 
 export default function DeleteProjectRoute({ loaderData }: Route.ComponentProps) {
   const d = loaderData;
+  const { isConnected } = useAuth();
+  const confirming = d.step === "confirm";
+  useSignInRequired(confirming, isConnected);
 
-  if (d.step === "confirm" && d.selected) {
+  if (confirming && !isConnected) {
+    return (
+      <CreatorHubChrome active="scenes" signedIn={false} account="" onSignIn={() => openSignIn()}>
+        <EmptyState
+          title="Sign in to delete a scene"
+          subtitle="Sign in to review and confirm the deletion."
+          icon={undefined}
+          actions={<Button variant="secondary" onClick={() => openSignIn()}>Sign in</Button>}
+          variant={undefined}
+          tone={undefined}
+          actionsGap={undefined}
+          style={undefined}
+        />
+      </CreatorHubChrome>
+    );
+  }
+  if (confirming && d.selected) {
     return <ConfirmStep d={d} />;
   }
   return <ScenesStep d={d} />;
@@ -504,8 +524,7 @@ function ConfirmStep({ d }: { d: LoaderData }) {
 
     let id = identity;
     if (!isConnected || !id) {
-      // The reader has picked the scene and its options: sign in without leaving them.
-      openSignIn({ inPlace: true });
+      openSignIn();
       setPhase("error");
       setErrorMsg("Sign in to delete this scene, then try again.");
       return;
