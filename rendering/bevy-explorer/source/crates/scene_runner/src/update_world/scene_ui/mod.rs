@@ -965,13 +965,13 @@ fn update_canvas_atlas(
                 );
             }
             let new_size = req.min(max_size).max(current);
-            if let Some(image) = images.get_mut(atlas.image.id()) {
-                image.texture_descriptor.size = Extent3d {
-                    width: new_size.x,
-                    height: new_size.y,
-                    depth_or_array_layers: 1,
-                };
-            }
+            #[allow(clippy::unwrap_used, reason = "the same lookup succeeded above")]
+            let image = images.get_mut(atlas.image.id()).unwrap();
+            image.texture_descriptor.size = Extent3d {
+                width: new_size.x,
+                height: new_size.y,
+                depth_or_array_layers: 1,
+            };
             if let Ok((mut camera, mut projection)) = cameras.get_mut(atlas.camera) {
                 world_ui::set_camera_target_size(&mut camera, &mut projection, new_size);
             }
@@ -1310,9 +1310,8 @@ fn layout_scene_ui(
                 false
             };
 
-            let Some(link) = valid_nodes.get(&scene_id) else {
-                continue;
-            };
+            #[allow(clippy::unwrap_used, reason = "both branches above insert `scene_id`")]
+            let link = valid_nodes.get(&scene_id).unwrap();
 
             // update style
             if !existing || transform_is_changed {

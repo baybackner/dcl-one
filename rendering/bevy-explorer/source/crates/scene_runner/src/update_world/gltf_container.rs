@@ -909,10 +909,8 @@ impl NodeProcessing<'_, '_> {
                 (h_mesh, cached_data.clone())
             } else {
                 // fix up the mesh
-                let Some(mesh_data) = meshes.get_mut(h_gltf_mesh.0.id()) else {
-                    error!("gltf mesh missing between read and write");
-                    return Ok(());
-                };
+                #[allow(clippy::unwrap_used, reason = "the same lookup succeeded above")]
+                let mesh_data = meshes.get_mut(h_gltf_mesh.0.id()).unwrap();
                 mesh_data.normalize_joint_weights();
 
                 if maybe_hash.is_some() {

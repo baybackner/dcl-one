@@ -251,7 +251,12 @@ pub fn process_streams(
                 }
             }
 
-            if let Some(context) = next_index.and_then(|index| streams.get_mut(index)) {
+            if let Some(index) = next_index {
+                #[allow(
+                    clippy::unwrap_used,
+                    reason = "`next_index` comes from enumerating `streams`"
+                )]
+                let context = streams.get_mut(index).unwrap();
                 context.send_frame();
             }
         }

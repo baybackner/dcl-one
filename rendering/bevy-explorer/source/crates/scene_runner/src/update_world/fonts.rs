@@ -539,9 +539,11 @@ fn update_scene_fonts(mut fonts: SceneFontServer, scenes: Query<(), With<Rendere
             let Some(font) = font else {
                 continue;
             };
-            let Some(slot) = family.slots.get_mut(&weight) else {
-                continue;
-            };
+            #[allow(
+                clippy::unwrap_used,
+                reason = "`landed` holds only weights read from `family.slots`"
+            )]
+            let slot = family.slots.get_mut(&weight).unwrap();
             assets.insert(slot.handle.id(), font);
             slot.source = SlotSource::Done;
         }

@@ -428,9 +428,11 @@ fn automatic_testing(
         });
         return;
     };
-    let Ok(context) = scenes.get(current_scene) else {
-        return;
-    };
+    #[allow(
+        clippy::unwrap_used,
+        reason = "`current_scene` was found through this query above"
+    )]
+    let context = scenes.get(current_scene).unwrap();
 
     // A scene that failed to load never sends a plan: it fails by name (`scene load`, which its
     // `allow_failures` may list, as a step's name) and the run goes on.

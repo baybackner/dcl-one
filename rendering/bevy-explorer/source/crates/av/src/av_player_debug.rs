@@ -144,9 +144,11 @@ fn av_player_on_add<T: AVPlayer>(
 ) {
     let entity = trigger.target();
     let (av_player_debug_ui_entity, children) = av_player_debug_ui.into_inner();
-    let Ok(av_player) = av_players.get(entity) else {
-        return;
-    };
+    #[allow(
+        clippy::unwrap_used,
+        reason = "the observed OnAdd put T on this entity"
+    )]
+    let av_player = av_players.get(entity).unwrap();
 
     let next_row = av_player_columns
         .iter_many(children.collection())
@@ -222,9 +224,11 @@ fn av_player_on_insert<T: AVPlayer>(
     av_player_references: Query<(Entity, &AvPlayerRef), With<AvPlayerColumn>>,
 ) {
     let entity = trigger.target();
-    let Ok(av_player) = av_players.get(entity) else {
-        return;
-    };
+    #[allow(
+        clippy::unwrap_used,
+        reason = "the observed OnInsert put T on this entity"
+    )]
+    let av_player = av_players.get(entity).unwrap();
 
     let Some(node) =
         av_player_references

@@ -158,9 +158,11 @@ fn transport_on_add(
 ) {
     let entity = trigger.target();
     let (transport_debug_ui_entity, children) = transport_debug_ui.into_inner();
-    let Ok((transport, has_scene_room)) = transports.get(entity) else {
-        return;
-    };
+    #[allow(
+        clippy::unwrap_used,
+        reason = "the observed OnAdd put Transport on this entity"
+    )]
+    let (transport, has_scene_room) = transports.get(entity).unwrap();
 
     let next_row = transport_columns
         .iter_many(children.collection())
@@ -235,9 +237,11 @@ fn transport_on_insert(
     transport_references: Query<(Entity, &TransportRef), With<TransportColumn>>,
 ) {
     let entity = trigger.target();
-    let Ok(transport) = transports.get(entity) else {
-        return;
-    };
+    #[allow(
+        clippy::unwrap_used,
+        reason = "the observed OnInsert put Transport on this entity"
+    )]
+    let transport = transports.get(entity).unwrap();
 
     let Some(node) =
         transport_references

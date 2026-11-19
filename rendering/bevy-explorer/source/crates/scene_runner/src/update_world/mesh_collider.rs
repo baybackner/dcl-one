@@ -441,11 +441,11 @@ impl SceneColliderData {
                         }
                     }
 
-                    if let Some(state_mut) = self.collider_state.get_mut(id) {
-                        state_mut.translation = req_translation;
-                        state_mut.rotation = req_rotation;
-                        state_mut.scale = new_scale;
-                    }
+                    #[allow(clippy::unwrap_used, reason = "the same lookup succeeded above")]
+                    let state_mut = self.collider_state.get_mut(id).unwrap();
+                    state_mut.translation = req_translation;
+                    state_mut.rotation = req_rotation;
+                    state_mut.scale = new_scale;
 
                     collider.set_position(Isometry::from_parts(
                         req_translation.as_dvec3().into(),

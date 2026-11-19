@@ -278,10 +278,10 @@ pub fn update_worldui_materials(
         let bottomright = translation.xy() + node.size() / 2.0;
         let required_uvs = Vec4::new(topleft.x, topleft.y, bottomright.x, bottomright.y);
         if mat.extension.data.uvs != required_uvs {
-            if let Some(mat) = mats.get_mut(ref_mat.0) {
-                mat.extension.data.uvs = required_uvs;
-                updated_aabbs.insert(ref_mat.0, world_ui_quad_aabb(&mat.extension.data));
-            }
+            #[allow(clippy::unwrap_used, reason = "the same lookup succeeded above")]
+            let mat = mats.get_mut(ref_mat.0).unwrap();
+            mat.extension.data.uvs = required_uvs;
+            updated_aabbs.insert(ref_mat.0, world_ui_quad_aabb(&mat.extension.data));
         }
         debug!(
             "[{}] img {:?}, {ent:?} uvs set to {} (size: {}, translation: {})",
@@ -323,13 +323,13 @@ pub fn update_worldui_materials(
                 }
                 let req_size = req_size.min(max_size).max(image.size());
                 debug!("resized to {}", req_size);
-                if let Some(image) = images.get_mut(id) {
-                    image.texture_descriptor.size = Extent3d {
-                        width: req_size.x,
-                        height: req_size.y,
-                        depth_or_array_layers: 1,
-                    };
-                }
+                #[allow(clippy::unwrap_used, reason = "the same lookup succeeded above")]
+                let image = images.get_mut(id).unwrap();
+                image.texture_descriptor.size = Extent3d {
+                    width: req_size.x,
+                    height: req_size.y,
+                    depth_or_array_layers: 1,
+                };
                 for (mut camera, mut projection, target) in cameras.iter_mut() {
                     if target.0.id() == id {
                         set_camera_target_size(&mut camera, &mut projection, req_size);

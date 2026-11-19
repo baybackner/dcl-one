@@ -304,9 +304,11 @@ pub fn handle_scene_permissions(
     // send out resolved items, and tell the streams any request they were shown is no longer open
     for (index, result) in resolved.iter().rev() {
         let id = permission_ids.remove(*index);
-        let Some(perm) = manager.pending.remove(*index) else {
-            continue;
-        };
+        #[allow(
+            clippy::unwrap_used,
+            reason = "`permission_ids` has one entry per pending request"
+        )]
+        let perm = manager.pending.remove(*index).unwrap();
         perm.sender.send(*result);
 
         if let Some(id) = id {

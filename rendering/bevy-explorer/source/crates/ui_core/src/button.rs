@@ -492,9 +492,9 @@ impl TabSelection {
 
         commands.entity(id).try_push_children(&[components.root]);
         self.active_entities.insert(ix, components);
-        self.active_entities
-            .get(ix)
-            .ok_or_else(|| anyhow!("tab {ix} is missing after insert"))
+        #[allow(clippy::unwrap_used, reason = "`ix` was inserted above")]
+        let tab = self.active_entities.get(ix).unwrap();
+        Ok(tab)
     }
 
     pub fn tab_count(&self) -> usize {
