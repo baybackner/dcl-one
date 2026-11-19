@@ -486,6 +486,10 @@ impl Plugin for SceneRunnerPlugin {
     }
 }
 
+/// The frame rate the scene loop assumes under vsync when the display's refresh rate is unknown
+/// (always on the web).
+const UNKNOWN_REFRESH_RATE_FPS: f64 = 60.0;
+
 fn run_scene_loop(world: &mut World) {
     let mut window_query = world.query_filtered::<Entity, With<PrimaryWindow>>();
     let winit_windows = world.get_non_send_resource::<WinitWindows>();
@@ -496,16 +500,21 @@ fn run_scene_loop(world: &mut World) {
         .and_then(|window| window.current_monitor())
         .and_then(|monitor| monitor.refresh_rate_millihertz());
     let config = world.resource::<AppConfig>();
-    let fps_target = world
-        .get_resource::<SessionGraphics>()
-        .map_or(config.graphics.fps_target, |session| {
-            session.fps_target(config)
-        });
+    let session = world.get_resource::<SessionGraphics>();
+    let fps_target = session.map_or(config.graphics.fps_target, |session| {
+        session.fps_target(config)
+    });
     let fps = if config.graphics.vsync {
         // TODO this should use video mode if we add fullscreen video modes
+        // the player's target is disabled under vsync; a host's session cap still holds
         refresh_rate
             .map(|rr| ((rr as f64 + 999.0) / 1000.0).ceil())
-            .unwrap_or(fps_target as f64)
+            .or_else(|| {
+                session
+                    .and_then(|session| session.fps_target)
+                    .map(|fps| fps as f64)
+            })
+            .unwrap_or(UNKNOWN_REFRESH_RATE_FPS)
     } else {
         fps_target as f64
     };

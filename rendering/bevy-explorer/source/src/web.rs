@@ -858,10 +858,9 @@ pub fn update_winit_fps(
     mut winit: ResMut<WinitSettings>,
     mut last_target: Local<Option<usize>>,
 ) {
-    // with vsync the render worker's animation frames pace the app; the wait only stops a frame
-    // starting sooner
+    // with vsync the render worker's animation frames pace the app, under a host's session cap
     let fps_target = if config.graphics.vsync {
-        UNCAPPED_FPS
+        session.fps_target.unwrap_or(UNCAPPED_FPS)
     } else {
         session.fps_target(&config)
     };

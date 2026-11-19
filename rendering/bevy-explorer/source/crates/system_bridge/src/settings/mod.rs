@@ -386,7 +386,7 @@ impl Settings {
             .apply
             .take()
             .unwrap();
-        let res = (apply)(config, value)?;
+        (apply)(config, value)?;
         let setting = self
             .settings
             .iter_mut()
@@ -394,7 +394,6 @@ impl Settings {
             .unwrap();
 
         setting.apply = Some(apply);
-        setting.info.value = res;
         // a value can disable another setting; the next `GetSettings` may be answered before
         // `refresh_settings` runs
         self.refresh(config);
@@ -603,6 +602,13 @@ mod tests {
         };
         settings.add_enum_setting::<VsyncSetting>(&config);
         settings.add_enum_setting::<FpsTargetSetting>(&config);
+        let thirty = FpsTargetSetting::variants()
+            .iter()
+            .position(|v| v.name() == "30 fps")
+            .unwrap() as f32;
+        settings
+            .set_value(&mut config, &FpsTargetSetting::title(), thirty)
+            .unwrap();
         let fps_target = |settings: &Settings| {
             settings
                 .get()
@@ -619,18 +625,15 @@ mod tests {
         let info = fps_target(&settings);
         assert!(info.disabled);
         // the value stays, so turning vsync off restores the cap
-        assert_eq!(
-            info.value,
-            FpsTargetSetting::variants()
-                .iter()
-                .position(|v| *v == FpsTargetSetting::load(&config))
-                .unwrap() as f32
-        );
+        assert_eq!(info.value, thirty);
 
         settings
             .set_value(&mut config, &VsyncSetting::title(), 0.0)
             .unwrap();
-        assert!(!fps_target(&settings).disabled);
+        let info = fps_target(&settings);
+        assert!(!info.disabled);
+        assert_eq!(info.value, thirty);
+        assert_eq!(config.graphics.fps_target, 30);
     }
 
     #[test]

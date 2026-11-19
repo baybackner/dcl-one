@@ -136,6 +136,19 @@ describe('settings panel disabled controls', () => {
     expect(select.textContent).toContain('60 fps')
     await userEvent.click(select)
     expect(screen.queryByRole('listbox')).toBeNull()
+    expect(settings.set).not.toHaveBeenCalled()
+  })
+
+  it('a disabled toggle and slider do not set', async () => {
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [{ ...TOGGLE, category: 'graphics', disabled: true }, { ...SLIDER, category: 'graphics', disabled: true }], set: vi.fn() }
+    render(<SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={settings} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />)
+    const toggle = screen.getByRole('switch', { name: 'fullscreen' })
+    expect(toggle).toBeDisabled()
+    await userEvent.click(toggle)
+    expect(screen.getByRole('slider', { name: 'fov' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'decrease' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'increase' })).toBeDisabled()
+    expect(settings.set).not.toHaveBeenCalled()
   })
 
   it('greys out a shown control when only its disabled flag changes', () => {

@@ -85,10 +85,9 @@ use system_api_types::launch_options::{
     help_heading::{DEBUG, SETTINGS, SYSTEM_SCENES},
     ClientOptions, LaunchOptions,
 };
-use system_bridge::{
-    settings::{vsync_setting::VsyncSetting, AppSetting, NewCameraEvent},
-    NativeUi, SystemBridgePlugin,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use system_bridge::settings::{vsync_setting::VsyncSetting, AppSetting};
+use system_bridge::{settings::NewCameraEvent, NativeUi, SystemBridgePlugin};
 #[cfg(not(target_arch = "wasm32"))]
 use system_ui::crash_report::CrashReportPlugin;
 use system_ui::SystemUiPlugin;
