@@ -222,6 +222,11 @@ tag (name, badges, distance, opacity, scale) and `/nametag_bubble` shows a test 
       out only once the engine reports `signinStageReady`, and comes back at once on Back. Picking a
       look or body type changes the avatar in place. Check a 16:9 window and a much wider or taller one.
       Mock has no engine, so the page's background stays.
+- [ ] **Full-screen view entrance** (`features/menu/MainMenuShell`): opening Map, Backpack or any other
+      menu page from the world darkens the world to black, then reveals the page, in 0.2 s; the
+      Backpack's engine-drawn avatar appears only after the black frame. Switching between menu pages,
+      the first open of Create from another page included, plays no black frame. With reduced motion
+      on, the page fades in without it.
 
 ---
 

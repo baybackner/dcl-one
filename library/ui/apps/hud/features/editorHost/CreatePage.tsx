@@ -42,13 +42,58 @@ function Home({ entry, close }: { entry: EditorEntry; close: () => void }): Reac
   return (
     <div className={styles.body}>
       <div ref={ref} id="dcl-editor-home" className={styles.home} />
-      {entry.loading && (
-        <div className={styles.opening} role="status">
-          <Spinner size={20} />
-          Opening Create…
-        </div>
-      )}
+      {entry.loading && <Opening />}
     </div>
+  )
+}
+
+function Opening(): React.JSX.Element {
+  return (
+    <div className={styles.opening} role="status">
+      <Spinner size={20} />
+      Opening Create…
+    </div>
+  )
+}
+
+/** What the Create page shows while the editor host is still loading. */
+export function CreateLoading(): React.JSX.Element {
+  return (
+    <div className={styles.body}>
+      <Opening />
+    </div>
+  )
+}
+
+/** The Create page's menu shell, shown while Create is open. */
+export function CreateShell({
+  create,
+  profile,
+  onNavigate,
+  children
+}: {
+  create: EngineSession['create']
+  profile: ProfileState
+  onNavigate: (page: string) => void
+  children: React.ReactNode
+}): React.JSX.Element | null {
+  if (!create.open) return null
+  const p = profile.data
+  return (
+    // this page is outside the HUD's in-world tree, where App provides it
+    <EditorOffered.Provider value>
+      <MainMenuShell
+        active="create"
+        profileName={p?.name}
+        profilePicture={p?.picture}
+        profileAddress={p?.address}
+        profileClaimed={p?.hasClaimedName}
+        onNavigate={onNavigate}
+        onClose={() => create.show(false)}
+      >
+        {children}
+      </MainMenuShell>
+    </EditorOffered.Provider>
   )
 }
 
@@ -62,24 +107,10 @@ export function CreatePage({
   create: EngineSession['create']
   profile: ProfileState
   onNavigate: (page: string) => void
-}): React.JSX.Element | null {
-  if (!create.open) return null
-  const p = profile.data
-  const close = (): void => create.show(false)
+}): React.JSX.Element {
   return (
-    // this page is outside the HUD's in-world tree, where App provides it
-    <EditorOffered.Provider value>
-      <MainMenuShell
-        active="create"
-        profileName={p?.name}
-        profilePicture={p?.picture}
-        profileAddress={p?.address}
-        profileClaimed={p?.hasClaimedName}
-        onNavigate={onNavigate}
-        onClose={close}
-      >
-        <Home entry={entry} close={close} />
-      </MainMenuShell>
-    </EditorOffered.Provider>
+    <CreateShell create={create} profile={profile} onNavigate={onNavigate}>
+      <Home entry={entry} close={() => create.show(false)} />
+    </CreateShell>
   )
 }

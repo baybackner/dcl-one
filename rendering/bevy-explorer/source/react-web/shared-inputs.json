@@ -7078,7 +7078,7 @@
     },
     {
       "path": "library/ui/apps/hud/App.tsx",
-      "sha256": "2183b40421bdf14d490bd3327693c153d3bb9f68302ec670f241158751aae32a"
+      "sha256": "f3117c1131c7beb1eb7229e291ac60b0431136ff27a8e5b5d5838ddc9441e1ad"
     },
     {
       "path": "library/ui/apps/hud/assets/backpack/add-gradient.webp",
@@ -9282,7 +9282,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
-      "sha256": "5291915b7abebbfe573a70b6f42990f0b1a1367a6ce8fb29568971bc687442a6"
+      "sha256": "53ac9ade8463bc15b4d86b12a86ce3ba5941e2cd22dbb8bd95aa3ba73fe33e05"
     },
     {
       "path": "library/ui/apps/hud/features/editorHost/DeployConfirm.module.css",
@@ -9782,7 +9782,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
-      "sha256": "ba05a947aa39e8bfc1ad17db9ac4fb9c6db17e49d3f80a85156b78c1fddfdfe2"
+      "sha256": "3ff6674f7078578f4545c68484661b81417064bde105816e2de82ba7ea525cc1"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
@@ -10686,7 +10686,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
-      "sha256": "5f9049877f01fe4fed91ec4507d3bba09be8b0bb1f7dc339f05a6a8e4424f6d4"
+      "sha256": "b04a58a9ff5cdc30bd3aa6a084636d33e3725ac4e9be8144fa1d94c1a80481b2"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
@@ -10830,7 +10830,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/menu.clicks.test.tsx",
-      "sha256": "2ca2540286cc3a092ee0a04263672827785c729567ab39ed2a85c3938945e8d5"
+      "sha256": "3b0e356a64ae81ca07a1aefb89e6c164c416ced2a506ef2686702beba8e0ed26"
     },
     {
       "path": "library/ui/apps/hud/test/pageWindow.test.ts",
@@ -13942,6 +13942,21 @@
     },
     {
       "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/editorHost/EditorHost.tsx",
       "kind": "native:dynamic"
     },
@@ -14268,21 +14283,6 @@
     {
       "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/map/MapPage.tsx",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/App.tsx",
-      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
       "kind": "test:runtime"
     },
     {
@@ -43687,6 +43687,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/features/editorHost/CreatePage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
       "to": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
       "kind": "native:runtime"
     },
@@ -43728,6 +43743,21 @@
     {
       "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
       "to": "library/ui/apps/hud/features/menu/ProfileChip.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/menu.clicks.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
     {

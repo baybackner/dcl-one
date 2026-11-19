@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
+import { lazy, Suspense } from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MainMenuShell } from '../features/menu/MainMenuShell'
 import { ProfileChip } from '../features/menu/ProfileChip'
 import shellStyles from '../features/menu/MainMenuShell.module.css'
+import { CreateLoading, CreateShell } from '../features/editorHost/CreatePage'
+import { fakeSession } from './harness'
 
 describe('main menu shell nav', () => {
   function shell() {
@@ -71,6 +74,39 @@ describe('main menu shell entrance', () => {
     rerender(page('backpack'))
     expect(screen.getByText('backpack')).toBeTruthy()
     expect(darkFrames(container)).toBe(0)
+  })
+
+  it('a first Create load from another page stays a page switch', () => {
+    const Loading = lazy(() => new Promise<never>(() => {}))
+    const session = fakeSession()
+    session.create.open = true
+    const { container, rerender } = render(
+      <MainMenuShell active="map" onNavigate={vi.fn()} onClose={vi.fn()}>
+        <div>map</div>
+      </MainMenuShell>
+    )
+    rerender(
+      <Suspense
+        fallback={
+          <CreateShell create={session.create} profile={session.profile} onNavigate={vi.fn()}>
+            <CreateLoading />
+          </CreateShell>
+        }
+      >
+        <Loading />
+      </Suspense>
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Opening Create…')
+    expect(darkFrames(container)).toBe(0)
+  })
+
+  it('the Create shell shows nothing while Create is closed', () => {
+    const { container } = render(
+      <CreateShell create={fakeSession().create} profile={fakeSession().profile} onNavigate={vi.fn()}>
+        <CreateLoading />
+      </CreateShell>
+    )
+    expect(container).toBeEmptyDOMElement()
   })
 })
 

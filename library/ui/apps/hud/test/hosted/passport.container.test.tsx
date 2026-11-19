@@ -63,7 +63,7 @@ describe('Passport container', () => {
     expect(screen.getByText('gm from the plaza')).toBeTruthy()
   })
 
-  it('openPassport darkens the world behind it with the passport scrim', async () => {
+  it('openPassport puts the passport scrim on its backdrop', async () => {
     receiveProfile('0xabc', RICH)
     await renderWithSession(<PopupHost />)
     act(() => {
