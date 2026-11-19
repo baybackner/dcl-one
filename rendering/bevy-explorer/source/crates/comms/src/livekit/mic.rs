@@ -198,8 +198,9 @@ pub(crate) struct MicrophonePublication {
     task: JoinHandle<()>,
     /// The input chosen when the route started.
     device: Option<String>,
-    /// The chosen input was not among the reported ones, so the capture fell back to another.
-    fell_back: bool,
+    /// The chosen input went missing from the reported ones while the route lived, so the
+    /// capture fell back to another input.
+    fell_back: AtomicBool,
 }
 
 impl MicrophonePublication {
@@ -218,10 +219,19 @@ impl MicrophonePublication {
     }
 
     /// A different choice, or the chosen input returning after the route fell back, needs a new
-    /// route.
+    /// route. Records a fallback while the chosen input is missing.
     fn captures_choice(&self, choice: Option<&str>, devices: &MicrophoneDevices) -> bool {
-        self.device.as_deref() == choice
-            && !(self.fell_back && choice.is_some_and(|id| devices.contains(id)))
+        if self.device.as_deref() != choice {
+            return false;
+        }
+        let Some(id) = choice else {
+            return true;
+        };
+        if !devices.contains(id) {
+            self.fell_back.store(true, Ordering::SeqCst);
+            return true;
+        }
+        !self.fell_back.load(Ordering::SeqCst)
     }
 
     fn should_remove(&self, eligible: bool) -> bool {
@@ -765,7 +775,6 @@ fn reconcile_publications(
         #[cfg(not(target_arch = "wasm32"))]
         let (sample_rate, channels) = (format.sample_rate, format.channels);
         let device = config.audio.microphone.clone();
-        let fell_back = device.as_deref().is_some_and(|id| !devices.contains(id));
         #[cfg(target_arch = "wasm32")]
         let task_device = device.clone();
 
@@ -862,7 +871,7 @@ fn reconcile_publications(
             drain: drain.clone(),
             task,
             device,
-            fell_back,
+            fell_back: AtomicBool::new(false),
         }
         .queue_insert(&mut commands, entity, start);
     }
@@ -1046,7 +1055,7 @@ mod routing_tests {
             drain: drain.clone(),
             task: runtime.spawn(std::future::pending()),
             device: None,
-            fell_back: false,
+            fell_back: AtomicBool::new(false),
         }
     }
 
@@ -1066,17 +1075,22 @@ mod routing_tests {
         assert!(default.captures_choice(None, &devices));
         assert!(!default.captures_choice(Some("headset"), &devices));
 
+        // built while the headset is missing, then plugged in
         let mut fallen_back = pending(&runtime, &drain);
         fallen_back.device = Some("headset".to_owned());
-        fallen_back.fell_back = true;
         assert!(fallen_back.captures_choice(Some("headset"), &devices));
-        devices.replace(vec![headset]);
+        devices.replace(vec![headset.clone()]);
         assert!(!fallen_back.captures_choice(Some("headset"), &devices));
 
+        // built on the headset, unplugged, then plugged back in
         let mut on_headset = pending(&runtime, &drain);
         on_headset.device = Some("headset".to_owned());
         assert!(on_headset.captures_choice(Some("headset"), &devices));
         assert!(!on_headset.captures_choice(None, &devices));
+        devices.replace(Vec::new());
+        assert!(on_headset.captures_choice(Some("headset"), &devices));
+        devices.replace(vec![headset]);
+        assert!(!on_headset.captures_choice(Some("headset"), &devices));
     }
 
     #[test]

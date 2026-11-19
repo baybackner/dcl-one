@@ -7,7 +7,7 @@ use common::structs::AppConfig;
 use super::{NamedVariant, Setting, SettingCategory, SettingInfo, Settings};
 
 const TITLE: &str = "Microphone";
-const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem Default follows the device's own choice. A chosen microphone that is unplugged falls back to it.";
+const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem Default follows the device's own choice. While a chosen microphone is unplugged, voice chat uses the system default.";
 
 /// An audio input the host offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,43 +16,67 @@ pub struct MicrophoneDevice {
     pub label: String,
 }
 
-/// The audio inputs the host offers, in its order. Clones share one list, which the setting's
-/// choices read; [`MicrophoneDevices::replace`] does not mark the resource changed.
+/// An input reported during this session, kept after it is unplugged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownMicrophone {
+    pub device: MicrophoneDevice,
+    pub present: bool,
+}
+
+/// Every audio input the host reported this session, in first-report order. An input keeps its
+/// place once seen, so a choice index read from an older list still names the same input. Clones
+/// share one list, which the setting's choices read; [`MicrophoneDevices::replace`] does not mark
+/// the resource changed.
 #[derive(Resource, Default, Debug, Clone)]
-pub struct MicrophoneDevices(Arc<RwLock<Vec<MicrophoneDevice>>>);
+pub struct MicrophoneDevices(Arc<RwLock<Vec<KnownMicrophone>>>);
 
 impl MicrophoneDevices {
-    pub fn read(&self) -> RwLockReadGuard<'_, Vec<MicrophoneDevice>> {
+    pub fn read(&self) -> RwLockReadGuard<'_, Vec<KnownMicrophone>> {
         self.0.read().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether the host offers `id` now.
     pub fn contains(&self, id: &str) -> bool {
-        self.read().iter().any(|device| device.id == id)
+        self.read()
+            .iter()
+            .any(|known| known.present && known.device.id == id)
     }
 
-    /// Returns false when the list was already `devices`.
-    pub fn replace(&self, devices: Vec<MicrophoneDevice>) -> bool {
-        let mut current = self.0.write().unwrap_or_else(PoisonError::into_inner);
-        if *current == devices {
-            return false;
+    /// Takes the host's current inputs; returns false when nothing changed.
+    pub fn replace(&self, reported: Vec<MicrophoneDevice>) -> bool {
+        let mut known = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        let before = known.clone();
+        for entry in known.iter_mut() {
+            entry.present = false;
         }
-        *current = devices;
-        true
+        for device in reported {
+            match known.iter_mut().find(|entry| entry.device.id == device.id) {
+                Some(entry) => {
+                    entry.device.label = device.label;
+                    entry.present = true;
+                }
+                None => known.push(KnownMicrophone {
+                    device,
+                    present: true,
+                }),
+            }
+        }
+        *known != before
     }
 }
 
-fn choice(devices: &[MicrophoneDevice], config: &AppConfig) -> f32 {
+fn choice(known: &[KnownMicrophone], config: &AppConfig) -> f32 {
     config
         .audio
         .microphone
         .as_ref()
-        .and_then(|id| devices.iter().position(|device| &device.id == id))
+        .and_then(|id| known.iter().position(|entry| &entry.device.id == id))
         .map_or(0.0, |index| (index + 1) as f32)
 }
 
-fn info(devices: &[MicrophoneDevice], config: &AppConfig) -> SettingInfo {
-    let variant = |name: &str| NamedVariant {
-        name: name.to_owned(),
+fn info(known: &[KnownMicrophone], config: &AppConfig) -> SettingInfo {
+    let variant = |name: String| NamedVariant {
+        name,
         description: DESCRIPTION.to_owned(),
     };
     SettingInfo {
@@ -60,11 +84,17 @@ fn info(devices: &[MicrophoneDevice], config: &AppConfig) -> SettingInfo {
         category: SettingCategory::Audio.to_string(),
         description: DESCRIPTION.to_owned(),
         min_value: 0.0,
-        max_value: (devices.len() + 1) as f32,
-        named_variants: std::iter::once(variant("System Default"))
-            .chain(devices.iter().map(|device| variant(&device.label)))
+        max_value: (known.len() + 1) as f32,
+        named_variants: std::iter::once(variant("System Default".to_owned()))
+            .chain(known.iter().map(|entry| {
+                variant(if entry.present {
+                    entry.device.label.clone()
+                } else {
+                    format!("{} (unplugged)", entry.device.label)
+                })
+            }))
             .collect(),
-        value: choice(devices, config),
+        value: choice(known, config),
         default: 0.0,
         step_size: 1.0,
     }
@@ -91,6 +121,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
                             .read()
                             .get(index - 1)
                             .ok_or(anyhow!("invalid variant index"))?
+                            .device
                             .id
                             .clone(),
                     ),
@@ -204,13 +235,39 @@ mod tests {
     }
 
     #[test]
-    fn an_unplugged_choice_shows_the_system_default_and_keeps_its_id() {
+    fn an_unplugged_choice_stays_chosen_and_keeps_its_place() {
         let mut app = app();
         report(&mut app, &["a", "b"]);
         set(&mut app, 2.0).unwrap();
 
         report(&mut app, &["a"]);
-        assert_eq!(shown(&app).value, 0.0);
+        let shown_now = shown(&app);
+        assert_eq!(shown_now.value, 2.0);
+        assert_eq!(shown_now.named_variants[2].name, "b label (unplugged)");
+        assert!(!app.world().resource::<MicrophoneDevices>().contains("b"));
+
+        report(&mut app, &["b", "a"]);
+        assert_eq!(shown(&app).value, 2.0);
+        assert_eq!(shown(&app).named_variants[2].name, "b label");
+        assert!(app.world().resource::<MicrophoneDevices>().contains("b"));
+    }
+
+    #[test]
+    fn an_index_from_an_older_list_names_the_input_it_named_then() {
+        let mut app = app();
+        report(&mut app, &["a", "b"]);
+        // a new input plugged in ahead of the others joins the end
+        report(&mut app, &["c", "a"]);
+        set(&mut app, 1.0).unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<AppConfig>()
+                .audio
+                .microphone
+                .as_deref(),
+            Some("a")
+        );
+        set(&mut app, 2.0).unwrap();
         assert_eq!(
             app.world()
                 .resource::<AppConfig>()
@@ -219,8 +276,5 @@ mod tests {
                 .as_deref(),
             Some("b")
         );
-
-        report(&mut app, &["b", "a"]);
-        assert_eq!(shown(&app).value, 1.0);
     }
 }

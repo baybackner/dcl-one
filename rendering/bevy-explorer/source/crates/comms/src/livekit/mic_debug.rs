@@ -144,13 +144,17 @@ fn microphone_info(
             devices
                 .read()
                 .iter()
-                .find(|device| &device.id == id)
-                .map_or("Chosen device (unplugged)".to_owned(), |device| {
-                    device.label.clone()
+                .find(|known| &known.device.id == id)
+                .map_or("Chosen device (unknown)".to_owned(), |known| {
+                    if known.present {
+                        known.device.label.clone()
+                    } else {
+                        format!("{} (unplugged)", known.device.label)
+                    }
                 })
         });
         report["device"] = json!(chosen.as_deref().unwrap_or("System Default"));
-        report["devices"] = json!(devices.read().len());
+        report["devices"] = json!(devices.read().iter().filter(|known| known.present).count());
     }
     input.reply_ok(report.to_string());
 }
