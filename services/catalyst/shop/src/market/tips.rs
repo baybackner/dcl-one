@@ -22,6 +22,8 @@
 //! A transfer below the minimum amount, or mined longer than the maximum age
 //! before its claim, is rejected (`TipSettings`). The notification id is a
 //! uuid v5 of the transaction hash.
+//! The route answers CORS as the old service's `@dcl/http-server` did
+//! ([`CORS`]), so the auth dApp can forward from its own origin.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -45,6 +47,7 @@ use uuid::Uuid;
 use super::SharedState;
 use super::chain_walk::{self, ChainNet, INDEXER_MANA};
 use crate::jobs::{Jobs, PeriodicCfg};
+use crate::shared::cors::HttpServerCors;
 use crate::shared::identity::Address;
 use crate::shared::notifications::{NewNotification, insert_notifications};
 use crate::shared::signed_fetch::{self, PayloadPolicy, SignedPath};
@@ -120,9 +123,23 @@ pub fn notification_id(transaction_hash: &str) -> Uuid {
     )
 }
 
+/// The old service's CORS (`createServerComponent` with these methods,
+/// `maxAge: 86400` and no `origin`, as the Registry's): every `OPTIONS` is a
+/// 204 preflight with origin `*` and the requested headers reflected, so the
+/// open-ended signed-fetch headers (`X-Identity-Auth-Chain-N`,
+/// `X-Identity-Timestamp`, `X-Identity-Metadata`) pass; any other answer gets
+/// origin `*` only for a request with `Origin`, and never credentials.
+const CORS: HttpServerCors = HttpServerCors {
+    methods: Some("GET,HEAD,OPTIONS,DELETE,POST,PUT"),
+    max_age: "86400",
+    nosniff: false,
+    preflight_echoes_request: false,
+};
+
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/forward-blockchain", post(forward))
+        .layer(axum::middleware::from_fn(|req, next| CORS.run(req, next)))
         .with_state(state)
 }
 
@@ -1422,6 +1439,79 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// The auth dApp's cross-origin forward: its preflight, naming the
+    /// signed-fetch headers, is answered for its origin as for any other, and
+    /// the signed POST then reaches the handler with origin `*`.
+    #[tokio::test]
+    async fn a_cross_origin_forward_is_preflighted_and_answered() {
+        use tower::ServiceExt;
+        let app = forward_app(&[]);
+        let requested = "content-type,x-identity-auth-chain-0,x-identity-auth-chain-1,\
+                         x-identity-auth-chain-2,x-identity-metadata,x-identity-timestamp";
+        let preflight = |origin: Option<&'static str>| {
+            let mut req = axum::http::Request::builder()
+                .method(axum::http::Method::OPTIONS)
+                .uri(PATH)
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, requested);
+            if let Some(origin) = origin {
+                req = req.header(header::ORIGIN, origin);
+            }
+            app.clone()
+                .oneshot(req.body(axum::body::Body::empty()).unwrap())
+        };
+        for origin in [
+            Some("https://auth.example.org"),
+            Some("https://other.example"),
+            None,
+        ] {
+            let res = preflight(origin).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NO_CONTENT, "{origin:?}");
+            let h = res.headers();
+            assert_eq!(h[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*", "{origin:?}");
+            assert_eq!(
+                h[header::ACCESS_CONTROL_ALLOW_METHODS],
+                "GET,HEAD,OPTIONS,DELETE,POST,PUT"
+            );
+            assert_eq!(h[header::ACCESS_CONTROL_ALLOW_HEADERS], requested);
+            assert_eq!(h[header::ACCESS_CONTROL_MAX_AGE], "86400");
+            assert_eq!(h[header::VARY], "Access-Control-Request-Headers");
+            assert!(h.get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+        }
+
+        let w = crate::outfits::testkit::scratch_wallet();
+        for origin in [Some("https://auth.example.org"), None] {
+            let mut req = axum::http::Request::post(PATH).extension(ConnectInfo(SocketAddr::new(
+                "10.9.3.1".parse().unwrap(),
+                4242,
+            )));
+            if let Some(origin) = origin {
+                req = req.header(header::ORIGIN, origin);
+            }
+            for (k, v) in &crate::outfits::testkit::signed_headers(&w, "post", PATH).await {
+                req = req.header(k, v);
+            }
+            let res = app
+                .clone()
+                .oneshot(req.body(axum::body::Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "past the signature to the body check: {origin:?}"
+            );
+            let h = res.headers();
+            assert_eq!(
+                h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .map(|v| v.to_str().unwrap()),
+                origin.map(|_| "*")
+            );
+            assert!(h.get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
+            assert!(h.get(header::ACCESS_CONTROL_EXPOSE_HEADERS).is_none());
+        }
     }
 
     #[test]
