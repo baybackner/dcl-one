@@ -53,28 +53,31 @@ pub fn media_host_main(render_worker: Worker) {
     PAGE.with(|page| *page.borrow_mut() = Some((events_tx.clone(), render_worker.clone())));
 
     // A `play()` the browser refused (no user gesture yet) is retried on the next gesture.
-    let document = web_sys::window().unwrap().document().unwrap();
-    let on_gesture = Closure::<dyn FnMut()>::new(|| {
-        let refused: Vec<_> = MEDIA.with(|media| {
-            media
-                .borrow()
-                .iter()
-                .filter(|(_, m)| {
-                    m.play_refusal == PlayRefusal::Refused && m.state.wants_element_playback()
-                })
-                .map(|(id, m)| (*id, m.media.clone()))
-                .collect()
+    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        let on_gesture = Closure::<dyn FnMut()>::new(|| {
+            let refused: Vec<_> = MEDIA.with(|media| {
+                media
+                    .borrow()
+                    .iter()
+                    .filter(|(_, m)| {
+                        m.play_refusal == PlayRefusal::Refused && m.state.wants_element_playback()
+                    })
+                    .map(|(id, m)| (*id, m.media.clone()))
+                    .collect()
+            });
+            for (id, media) in refused {
+                try_play(id, &media);
+            }
         });
-        for (id, media) in refused {
-            try_play(id, &media);
+        for event in ["pointerdown", "keydown"] {
+            document
+                .add_event_listener_with_callback(event, on_gesture.as_ref().unchecked_ref())
+                .report();
         }
-    });
-    for event in ["pointerdown", "keydown"] {
-        document
-            .add_event_listener_with_callback(event, on_gesture.as_ref().unchecked_ref())
-            .report();
+        on_gesture.forget();
+    } else {
+        warn!("no document: a refused play is not retried on a gesture");
     }
-    on_gesture.forget();
 
     wasm_bindgen_futures::spawn_local(async move {
         while let Some(command) = commands_rx.next().await {
@@ -240,6 +243,15 @@ fn clear_screen(id: MediaId) {
     render_worker.post_message(&message).report();
 }
 
+/// The render worker's message carrying `frame` of media `id`.
+fn video_frame_message(id: MediaId, frame: &VideoFrame) -> Result<js_sys::Object, JsValue> {
+    let message = js_sys::Object::new();
+    Reflect::set(&message, &"type".into(), &"VIDEO_FRAME".into())?;
+    Reflect::set(&message, &"id".into(), &JsValue::from(id))?;
+    Reflect::set(&message, &"frame".into(), frame)?;
+    Ok(message)
+}
+
 /// Whether the browser refused the last `play()` (autoplay policy) since the last pause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlayRefusal {
@@ -344,7 +356,7 @@ impl HostMedia {
         events: UnboundedSender<MediaEvent>,
         render_worker: Worker,
     ) -> (Self, MediaSourceCmd) {
-        let media = video.clone().dyn_into::<HtmlMediaElement>().unwrap();
+        let media = HtmlMediaElement::from(video.clone());
         let reopen_policy = match url {
             Some(_) => MediaReopenPolicy::Reopen,
             None => MediaReopenPolicy::Never,
@@ -448,11 +460,13 @@ impl HostMedia {
         video.set_cross_origin(Some("anonymous"));
 
         // video frame callback - no wasm_bindgen for this!
-        let rvc_prop = Reflect::get(&video, &"requestVideoFrameCallback".into()).unwrap();
-        if rvc_prop.is_undefined() {
-            panic!("no requestVideoFrameCallback");
-        }
-        let rvc_fn = rvc_prop.dyn_into::<Function>().unwrap();
+        let Some(rvc_fn) = Reflect::get(&video, &"requestVideoFrameCallback".into())
+            .ok()
+            .and_then(|rvc| rvc.dyn_into::<Function>().ok())
+        else {
+            error!("media {id}: no requestVideoFrameCallback; its frames are not shown");
+            return;
+        };
 
         let callback: RcClosure = Rc::new(RefCell::new(None));
         let callback_handle: Rc<RefCell<Option<u32>>> = Rc::new(RefCell::new(None));
@@ -472,13 +486,11 @@ impl HostMedia {
                         let visible_rect = frame.visible_rect().unwrap();
                         let (width, height) =
                             (visible_rect.width() as u32, visible_rect.height() as u32);
-                        let message = js_sys::Object::new();
-                        Reflect::set(&message, &"type".into(), &"VIDEO_FRAME".into()).unwrap();
-                        Reflect::set(&message, &"id".into(), &JsValue::from(id)).unwrap();
-                        Reflect::set(&message, &"frame".into(), &frame).unwrap();
                         let transfer = js_sys::Array::of1(&frame);
-                        if render_worker
-                            .post_message_with_transfer(&message, &transfer)
+                        if video_frame_message(id, &frame)
+                            .and_then(|message| {
+                                render_worker.post_message_with_transfer(&message, &transfer)
+                            })
                             .is_ok()
                         {
                             let _ = events.unbounded_send(MediaEvent::Frame {
@@ -521,11 +533,9 @@ impl Drop for HostMedia {
         debug!("shutdown");
         if let Some(handle) = self.frame_callback_handle.borrow_mut().take() {
             Reflect::get(&self.video, &"cancelVideoFrameCallback".into())
-                .unwrap()
-                .dyn_into::<Function>()
-                .unwrap()
-                .call1(&self.video, &JsValue::from(handle))
-                .unwrap();
+                .and_then(|cancel| cancel.dyn_into::<Function>())
+                .and_then(|cancel| cancel.call1(&self.video, &JsValue::from(handle)))
+                .report();
         }
         self.frame_closure.take();
         for (event, listener) in &self.listeners {
