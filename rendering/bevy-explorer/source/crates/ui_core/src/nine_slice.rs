@@ -227,7 +227,7 @@ impl DuiTemplate for Ui9SliceTemplate {
         let properties = &sheet
             .iter()
             .next()
-            .ok_or(anyhow!("failed to parse slice-border value `{border}`"))?
+            .ok_or_else(|| anyhow!("failed to parse slice-border value `{border}`"))?
             .properties;
 
         let center_region = properties

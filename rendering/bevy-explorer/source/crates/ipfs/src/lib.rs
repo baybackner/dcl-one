@@ -213,7 +213,7 @@ impl AssetLoader for EntityDefinitionLoader {
                 .and_then(|file_name| file_name.to_str())
                 .and_then(|file_name| file_name.split_once('.'))
                 .map(|(id, _)| id.to_owned())
-                .ok_or_else(|| anyhow::anyhow!("entity path `{path}` names no entity id"))
+                .ok_or_else(|| anyhow::anyhow!("entity path {path:?} names no entity id"))
         };
 
         self.load_internal(reader, settings, id_fn)
