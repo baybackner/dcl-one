@@ -73,6 +73,42 @@ describe('downloadGithubRepo', () => {
     });
   });
 
+  describe('when the zipball headers arrive after the 5 s default timeout', () => {
+    beforeEach(async () => {
+      const shared = await vi.importActual<{ fetch: typeof mocks.fetch }>('/shared/fetch');
+      mocks.fetch.mockImplementation(shared.fetch);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_url: string, init: RequestInit) =>
+            new Promise((resolve, reject) => {
+              init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+              setTimeout(() => resolve(new Response(new ArrayBuffer(0))), 6_000);
+            }),
+        ),
+      );
+      mocks.extract.mockImplementation(async (_zip: string, options: any) => {
+        await fs.mkdir(path.join(options.dir, 'owner-repo-abc'));
+        await fs.writeFile(path.join(options.dir, 'owner-repo-abc', 'scene.json'), '{}');
+      });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    it('should download the zip with no timeout and no retry', async () => {
+      const download = downloadGithubRepo('https://github.com/owner/repo', destination);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await download;
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(await fs.readdir(destination)).toEqual(['scene.json']);
+    });
+  });
+
   describe('when GitHub answers with a server error and then the zip', () => {
     let cancel: ReturnType<typeof vi.fn>;
 
