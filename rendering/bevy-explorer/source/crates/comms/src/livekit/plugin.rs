@@ -390,7 +390,7 @@ fn handle_input(
 fn respond_to_system_api(
     mut events: EventReader<SystemApi>,
     mut mic: ResMut<MicState>,
-    focus: super::mic::MicrophoneFocus,
+    focus: super::mic::MicrophoneFocusRes,
 ) {
     for ev in events.read() {
         match ev {

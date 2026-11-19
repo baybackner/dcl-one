@@ -582,7 +582,7 @@ fn drive_voice_chat(
     mut commands: Commands,
     mut voice: ResMut<VoiceChat>,
     mut call_mic: ResMut<CallMic>,
-    focus: crate::livekit::mic::MicrophoneFocus,
+    focus: crate::livekit::mic::MicrophoneFocusRes,
     mut last_focus: Local<Option<ClientWindowFocus>>,
     mut inputs: ResMut<VoiceInputs>,
     mut system_api: EventReader<SystemApi>,
