@@ -8,3 +8,8 @@
 .url {
   overflow-wrap: anywhere;
 }
+
+/* A link that is not https says so. */
+.insecure {
+  color: var(--error-text);
+}

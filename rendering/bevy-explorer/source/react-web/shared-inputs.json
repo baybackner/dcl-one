@@ -9114,7 +9114,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.module.css",
-      "sha256": "b59b1b5158d958f81882c25826419d90f33f852e972260bade040bfa92586732"
+      "sha256": "7dd39fd9c1a609432216e73a1401f8d4c96540e216c7311807ad9ed204449b6f"
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.tsx",
@@ -9178,15 +9178,15 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatLinkPrompts.module.css",
-      "sha256": "35c79d97ebffb5eee7b29ea44345b2fb9ee74a06682994cb9ec9389a8aa98be2"
+      "sha256": "8cef6c46ce44cd86d0580e9088c936063fc3ef1a93cdbdd87655745d44742b04"
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatLinkPrompts.tsx",
-      "sha256": "4a1e65b4a4c159c0792426e74da0f33252c3332b6f3099243b08c400011545cc"
+      "sha256": "b9ce3ef80514269ad406b843f066fe6bd7f67afb9dcb464ab27ba89e7d166e72"
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatText.tsx",
-      "sha256": "41eff378e37458da3e26d02040fafbaf8f3ebe6bdb7a94549fa228f0a4e1c8b0"
+      "sha256": "825f4c6263b5e3aab58b131f30635e8628b132e90bbf5ea17b2b981eae84fc9c"
     },
     {
       "path": "library/ui/apps/hud/features/chat/dmStateCopy.ts",
@@ -10466,7 +10466,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.rich.test.tsx",
-      "sha256": "cd11eb0211bf76356203d583c78b6c2d5a00e068722d13d2d8a954e31a096daf"
+      "sha256": "81f422ed0cfc5658639e7754348d24bc4405a5944ba0fdb5d82d4d9a91f12a9e"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.test.tsx",
@@ -10474,7 +10474,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatLinkPrompts.test.tsx",
-      "sha256": "5541134f7555154c168b9bdd699a1f18671053b85e554db13332800f108ce2b1"
+      "sha256": "5e26e58bc79a9920e5f82bef2aca81ef3a9507f7b050397ee2083439a7465dc5"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatTranslation.test.tsx",

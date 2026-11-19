@@ -103,15 +103,41 @@ describe('link confirmation', () => {
     expect(open).not.toHaveBeenCalled()
   })
 
+  it('shows and opens the parsed URL, so bidi controls in the path are percent-encoded', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const done = start(() => confirmOpenLink('https://evil.example/\u202Egro.dnalartnecd', vi.fn(async () => true)))
+    expect(await screen.findByText('evil.example')).toBeTruthy()
+    expect(screen.getByText('https://evil.example/%E2%80%AEgro.dnalartnecd')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await done
+    expect(open).toHaveBeenCalledWith('https://evil.example/%E2%80%AEgro.dnalartnecd', '_blank', 'noopener,noreferrer')
+  })
+
+  it('marks a link that is not https on web', async () => {
+    const done = start(() => confirmOpenLink('http://example.com', vi.fn(async () => true)))
+    expect(await screen.findByText('Not a secure (https) link')).toBeTruthy()
+    act(() => closeTopPopup())
+    await done
+  })
+
   it('on the native HUD the engine opens it, and a refusal is shown', async () => {
     host.native = true
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     const openExternal = vi.fn(async () => false)
-    const done = start(() => confirmOpenLink('http://example.com', openExternal))
+    const done = start(() => confirmOpenLink('https://example.com/', openExternal))
     await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
     await done
-    expect(openExternal).toHaveBeenCalledWith('http://example.com')
+    expect(openExternal).toHaveBeenCalledWith('https://example.com/')
     expect(open).not.toHaveBeenCalled()
     expect(await screen.findByText("Couldn't open this link")).toBeTruthy()
+  })
+
+  it('on the native HUD an http link is refused without a prompt', async () => {
+    host.native = true
+    const openExternal = vi.fn(async () => true)
+    await start(() => confirmOpenLink('http://example.com', openExternal))
+    expect(await screen.findByText('Only https links can be opened')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    expect(openExternal).not.toHaveBeenCalled()
   })
 })

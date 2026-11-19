@@ -6,15 +6,28 @@ import { fetchPlaceAt, isEmptyPlace } from '@explorer-core/features/map/mapApi'
 import { showConfirm, showToast } from '../../design'
 import styles from './chatLinkPrompts.module.css'
 
-/** Asks before opening `url`, naming its host first. The native HUD has no tabs, so the engine opens it there. */
+/** Asks before opening `url`, naming its host first, then opens the parsed URL that was shown. The native
+ *  HUD has no tabs, so the engine opens it there, and only `https:`. */
 export async function confirmOpenLink(url: string, openExternal: (url: string) => Promise<boolean>): Promise<void> {
-  const ok = await showConfirm({ title: 'Open this link?', body: <LinkTarget url={url} />, confirmLabel: 'Continue' })
-  if (!ok) return
-  if (!isNativeHud()) {
-    window.open(url, '_blank', 'noopener,noreferrer')
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    showToast("This link can't be opened", { tone: 'error' })
     return
   }
-  const opened = await openExternal(url).catch(() => false)
+  const native = isNativeHud()
+  if (native && parsed.protocol !== 'https:') {
+    showToast('Only https links can be opened', { tone: 'error' })
+    return
+  }
+  const ok = await showConfirm({ title: 'Open this link?', body: <LinkTarget url={parsed} />, confirmLabel: 'Continue' })
+  if (!ok) return
+  if (!native) {
+    window.open(parsed.href, '_blank', 'noopener,noreferrer')
+    return
+  }
+  const opened = await openExternal(parsed.href).catch(() => false)
   if (!opened) showToast("Couldn't open this link", { tone: 'error' })
 }
 
@@ -24,19 +37,14 @@ export async function confirmTeleport(x: number, y: number, realm: string | null
   if (ok) teleport(x, y)
 }
 
-/** The host on its own line, then the whole URL kept left-to-right, so bidi controls cannot reorder it. */
-function LinkTarget({ url }: { url: string }): React.JSX.Element {
-  let host: string | null = null
-  try {
-    host = new URL(url).hostname
-  } catch {
-    host = null
-  }
+/** The host on its own line, then the parsed URL, whose path and query percent-encode bidi controls. */
+function LinkTarget({ url }: { url: URL }): React.JSX.Element {
   return (
     <>
-      {host != null && <p className={styles.host}>{host}</p>}
+      <p className={styles.host}>{url.hostname}</p>
+      {url.protocol !== 'https:' && <p className={styles.insecure}>Not a secure (https) link</p>}
       <p className={styles.url} dir="ltr">
-        <bdi>{url}</bdi>
+        {url.href}
       </p>
     </>
   )

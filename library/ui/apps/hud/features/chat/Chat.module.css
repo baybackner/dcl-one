@@ -1068,8 +1068,9 @@ button.avatarBtn {
 .url {
   color: var(--chat-link);
   text-decoration: none;
-  cursor: pointer;
+  text-align: inherit; /* a wrapped URL button keeps the message's alignment */
 }
+.url,
 .location,
 .mention,
 .world {

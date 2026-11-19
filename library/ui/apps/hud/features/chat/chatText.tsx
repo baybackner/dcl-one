@@ -39,31 +39,22 @@ export function MessageText({
               </a>
             )
           }
-          // No href: the browser's own ways to open a link (context menu, drag) would skip onUrl.
-          const open = (): void => onUrl(t.value)
+          // A button, not an anchor: the browser's own ways to open a link (context menu, drag) would skip onUrl.
           return (
-            <a
+            <button
               key={i}
-              className={styles.url}
+              type="button"
               role="link"
-              tabIndex={0}
-              onClick={(e) => {
-                e.preventDefault()
-                open()
-              }}
+              className={styles.url}
+              onClick={() => onUrl(t.value)}
               onAuxClick={(e) => {
                 if (e.button !== 1) return
                 e.preventDefault()
-                open()
-              }}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter') return
-                e.preventDefault()
-                open()
+                onUrl(t.value)
               }}
             >
               {t.value}
-            </a>
+            </button>
           )
         }
         if (t.type === 'world') {
