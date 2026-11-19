@@ -165,8 +165,8 @@ function hint(s: Setting): string {
 
 function Control({ s, onSet, describedBy }: { s: Setting; onSet: (name: string, value: number) => void; describedBy?: string }): React.JSX.Element {
   // A negative value is the engine saying the setting is not known yet (e.g. a server-owned
-  // one before the service answers): shown, but not editable. A disabled one is overridden by
-  // another setting (Target Frame Rate under VSync): its value shows, greyed out.
+  // one before the service answers): shown, but not editable. A disabled one shows its value,
+  // greyed out.
   const unset = s.value < 0
   const locked = unset || s.disabled
   if (isBinary(s)) {
@@ -211,7 +211,7 @@ const SettingField = memo(
         </div>
         <div className={styles.control}>
           <Control s={s} onSet={onSet} describedBy={s.disabled && description ? reasonId : undefined} />
-          {/* a disabled control takes no focus or hover: its description says why */}
+          {/* a disabled control's description, for screen readers */}
           {s.disabled && description ? <span id={reasonId} className={styles.srOnly}>{description}</span> : null}
         </div>
       </div>

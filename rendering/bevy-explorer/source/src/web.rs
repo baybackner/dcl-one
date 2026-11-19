@@ -858,7 +858,7 @@ pub fn update_winit_fps(
     mut winit: ResMut<WinitSettings>,
     mut last_target: Local<Option<usize>>,
 ) {
-    // without a cap the render worker's animation frames pace the app
+    // without an applied cap, winit waits the shortest delay
     let fps_target = session.applied_fps_target(&config).unwrap_or(UNCAPPED_FPS);
     let target = if VIEWPORT_ACTIVE.load(Ordering::Relaxed) {
         fps_target.max(1)

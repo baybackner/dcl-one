@@ -304,8 +304,7 @@ pub trait AppSetting: Eq + Send + Sync + 'static {
     fn category() -> SettingCategory;
     fn load(config: &AppConfig) -> Self;
     fn save(&self, config: &mut AppConfig);
-    /// True while another setting overrides this one (reported as `disabled`, which the panel
-    /// shows greyed out with its value kept).
+    /// True while another setting's value overrides this one.
     fn is_disabled(_config: &AppConfig) -> bool {
         false
     }
@@ -395,8 +394,7 @@ impl Settings {
 
         setting.apply = Some(apply);
         applied?;
-        // a value can disable another setting; the next `GetSettings` may be answered before
-        // `refresh_settings` runs
+        // a value can change any setting's `disabled` flag: re-read them all now
         self.refresh(config);
         Ok(())
     }
@@ -624,7 +622,7 @@ mod tests {
         assert!(config.graphics.vsync);
         let info = fps_target(&settings);
         assert!(info.disabled);
-        // the value stays, so turning vsync off restores the cap
+        // the stored value is kept
         assert_eq!(info.value, thirty);
 
         settings

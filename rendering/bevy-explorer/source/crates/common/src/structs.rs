@@ -1038,8 +1038,8 @@ impl SessionGraphics {
         self.fps_target.unwrap_or(config.graphics.fps_target)
     }
 
-    /// The fps target that caps the frame rate: under vsync only this session's own, since vsync
-    /// disables the player's; `None` when the display alone sets the rate.
+    /// The fps target that caps the frame rate: without vsync, `fps_target`; under vsync only
+    /// this session's own, `None` without one.
     pub fn applied_fps_target(&self, config: &AppConfig) -> Option<usize> {
         if config.graphics.vsync {
             self.fps_target

@@ -171,8 +171,8 @@ pub fn latest_entity_count(diagnostics: &DiagnosticsStore) -> Option<u32> {
         .map(|count| count as u32)
 }
 
-/// The effective frame-rate target: the session override, else the configured target, which vsync
-/// disables (the monitor sets the rate); `None` without one or uncapped.
+/// The effective frame-rate target: the session's applied target, else the configured one unless
+/// vsync is on; `None` without one or uncapped.
 pub fn effective_target_fps(config: &AppConfig, session: Option<&SessionGraphics>) -> Option<f32> {
     let target = match session {
         Some(session) => session.applied_fps_target(config)?,

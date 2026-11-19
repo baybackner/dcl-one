@@ -12,7 +12,7 @@ interface ToggleProps {
   /** light: the switch sits on a light panel, so its off track is dark. */
   surface?: 'dark' | 'light'
   'aria-label'?: string
-  /** Ids of elements that describe the control, e.g. why it is disabled. */
+  /** Ids of elements that describe the control. */
   'aria-describedby'?: string
 }
 

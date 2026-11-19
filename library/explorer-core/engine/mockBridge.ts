@@ -444,7 +444,7 @@ const mockSettings: Setting[] = [
   choice('Language', 'chat', ['English', 'Español', 'Français', 'Deutsch', 'Português', '中文', '日本語', '한국어'], 0),
   choice('Chat Reactions', 'chat', ON_OFF, 0)
 ]
-// VSync overrides the frame-rate cap, as in the engine
+// FPS Limit is disabled while VSync is on
 function syncDisabled(): void {
   const fpsLimit = mockSettings.find((x) => x.name === 'FPS Limit')
   if (fpsLimit) fpsLimit.disabled = mockSettings.find((x) => x.name === 'VSync')?.value === 1

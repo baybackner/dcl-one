@@ -486,8 +486,8 @@ impl Plugin for SceneRunnerPlugin {
     }
 }
 
-/// The frame rate the scene loop targets under vsync when the display's refresh rate is unknown:
-/// always on the web, and on native displays that report none.
+/// The frame rate the scene loop targets under vsync when the window's monitor reports no refresh
+/// rate.
 const UNKNOWN_REFRESH_RATE_FPS: f64 = 60.0;
 
 fn run_scene_loop(world: &mut World) {

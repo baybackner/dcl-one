@@ -124,8 +124,7 @@ describe('settings panel unset controls', () => {
   })
 })
 
-// A disabled setting is overridden by another (Target Frame Rate under VSync): its value stays
-// visible, the control does not change it.
+// A disabled setting keeps its value visible; its control does not change it.
 describe('settings panel disabled controls', () => {
   it('a disabled select keeps its value and does not set', async () => {
     const FPS = base({ name: 'Target Frame Rate', category: 'graphics', namedVariants: [{ name: '30 fps', description: 'Disabled while VSync is on.' }, { name: '60 fps', description: 'Disabled while VSync is on.' }], value: 1, default: 1, maxValue: 2, disabled: true })

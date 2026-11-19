@@ -3,6 +3,6 @@ import type { NamedVariant } from "./NamedVariant";
 
 export type SettingInfo = { name: string, category: string, description: string, minValue: number, maxValue: number, namedVariants: Array<NamedVariant>, stepSize: number, value: number, default: number, 
 /**
- * Overridden by another setting: shown with its value, not editable.
+ * True while another setting's value overrides this one.
  */
 disabled: boolean, };

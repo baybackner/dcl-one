@@ -15,7 +15,7 @@ interface SliderProps {
    *  rail: a navigation popover's 12px track with a 12x26 pin; `--slider-rail-track` sets the unfilled colour. */
   variant?: 'thin' | 'thick' | 'pin' | 'rail'
   'aria-label'?: string
-  /** Ids of elements that describe the control, e.g. why it is disabled. */
+  /** Ids of elements that describe the control. */
   'aria-describedby'?: string
 }
 

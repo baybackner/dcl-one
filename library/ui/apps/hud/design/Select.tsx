@@ -17,7 +17,7 @@ interface SelectProps {
   /** dark (default, on dark panels) or light (white field, e.g. Settings). */
   variant?: 'dark' | 'light'
   'aria-label'?: string
-  /** Ids of elements that describe the control, e.g. why it is disabled. */
+  /** Ids of elements that describe the control. */
   'aria-describedby'?: string
   /** Shown in the field while no option has the value (a picker that adds rather than selects). */
   placeholder?: string
