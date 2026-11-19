@@ -8,7 +8,7 @@
   --undefined-modal-bg: rgba(255, 255, 255, 0.95);
   --undefined-modal-ink: #161518;
   --undefined-modal-muted: #666;
-  --undefined-join-grad: linear-gradient(90deg, var(--brand) 0%, #ff6b82 100%);
+  --undefined-join-grad: linear-gradient(90deg, var(--dcl-action-primary) 0%, #ff6b82 100%);
   --undefined-join-grad-hover: linear-gradient(90deg, #e02849 0%, #e65970 100%);
   --undefined-control-circle: #ffffff;
 
@@ -16,8 +16,8 @@
   display: flex;
   flex-direction: column;
   background: var(--undefined-stage-grad);
-  font-family: var(--font-sans);
-  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+  color: var(--dcl-text-primary);
 }
 
 .stcastwatcher__layout {
@@ -76,7 +76,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: var(--brand-cta);
+  background: var(--dcl-action-primary-pressed);
   border-radius: 24px;
   font-weight: bold;
   font-size: 13px;
@@ -221,7 +221,7 @@
 }
 .stcastwatcher__msg { display: flex; flex-direction: column; gap: 4px; }
 .stcastwatcher__msgmeta { display: flex; align-items: center; gap: 8px; }
-.stcastwatcher__msgname { font-size: 13px; font-weight: 700; color: var(--brand-hover); }
+.stcastwatcher__msgname { font-size: 13px; font-weight: 700; color: #f8919d; }
 .stcastwatcher__msgtime { font-size: 11px; color: rgba(255, 255, 255, 0.45); }
 .stcastwatcher__msgbody { font-size: 14px; line-height: 1.45; color: rgba(255, 255, 255, 0.92); }
 .stcastwatcher__chatfoot {
@@ -230,7 +230,7 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.6);
   line-height: 1.5;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid rgb(255 255 255 / 8%);
 }
 
 .stcastwatcher__controlsarea {
@@ -270,12 +270,12 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--brand-cta);
-  border: 1px solid var(--brand-cta);
+  background: var(--dcl-action-primary-pressed);
+  border: 1px solid var(--dcl-action-primary-pressed);
   color: #fff;
   font-weight: bold;
   padding: 10px 20px;
-  border-radius: var(--r-control);
+  border-radius: var(--dcl-radius-xs);
   cursor: pointer;
   font-family: inherit;
   text-transform: uppercase;
@@ -307,7 +307,7 @@
   position: absolute;
   top: -4px;
   right: -4px;
-  background: var(--brand-cta);
+  background: var(--dcl-action-primary-pressed);
   color: #fff;
   border-radius: 12px;
   padding: 2px 6px;
@@ -475,14 +475,6 @@
   box-shadow: 0 8px 24px rgba(255, 45, 85, 0.4);
 }
 .stcastwatcher__joininglogo svg { width: 100%; height: 100%; }
-.stcastwatcher__spinner {
-  width: 48px;
-  height: 48px;
-  border: 4px solid rgba(255, 255, 255, 0.2);
-  border-top: 4px solid var(--brand);
-  border-radius: 50%;
-  animation: u-spin 1s linear infinite;
-}
 .stcastwatcher__joiningtext {
   color: #fff;
   font-size: 24px;
@@ -494,7 +486,7 @@
   position: fixed;
   top: 16px;
   right: 16px;
-  z-index: var(--z-toast);
+  z-index: 200;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -531,7 +523,7 @@
 .stcastwatcher__toastclose svg { width: 18px; height: 18px; }
 .stcastwatcher__toastaction {
   align-self: flex-start;
-  background: var(--brand-cta);
+  background: var(--dcl-action-primary-pressed);
   color: #fff;
   font-weight: 600;
   font-size: 12px;

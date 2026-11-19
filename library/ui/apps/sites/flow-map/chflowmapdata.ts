@@ -9,8 +9,8 @@ import {
   sep,
   state,
   step,
-} from "../../flowmap/flowmapdata";
-import type { FlowSection } from "../../flowmap/flowmapdata";
+} from "../../../../web-core/flow-map";
+import type { FlowSection } from "../../../../web-core/flow-map";
 
 const EDITOR = (chains?: string[]) =>
   state("EDITOR", {

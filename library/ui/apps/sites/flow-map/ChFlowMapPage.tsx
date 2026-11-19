@@ -1,15 +1,15 @@
 import type { ComponentType } from "react";
 
-import FlowMapPage, { Hourglass } from "../../flowmap/FlowMapPage";
-import type { LinkComponentProps } from "../../flowmap/FlowMapPage";
-import { CREATOR_HUB_HOME } from "@web-core/creator-hub-host";
+import FlowMapPage, { Hourglass } from "./FlowMapPage";
+import type { LinkComponentProps } from "./FlowMapPage";
 import { ASCII_SOURCE, SECTIONS, STATS } from "./chflowmapdata";
 
 type ChFlowMapPageProps = {
   LinkComponent?: ComponentType<LinkComponentProps>;
+  homeHref: string;
 };
 
-export default function ChFlowMapPage({ LinkComponent = undefined }: ChFlowMapPageProps) {
+export default function ChFlowMapPage({ LinkComponent, homeHref }: ChFlowMapPageProps) {
   return (
     <FlowMapPage
       LinkComponent={LinkComponent}
@@ -17,7 +17,7 @@ export default function ChFlowMapPage({ LinkComponent = undefined }: ChFlowMapPa
       stats={STATS}
       ascii={ASCII_SOURCE}
       copy={{
-        backHref: CREATOR_HUB_HOME,
+        backHref: homeHref,
         backLabel: "\u{2190} Creator Hub",
         crumb: "sites / creator-hub / map",
         lede: (

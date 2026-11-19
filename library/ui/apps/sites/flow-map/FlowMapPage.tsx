@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 
-import type { FlowEdge, FlowNode, FlowSection, FlowStats, Track } from "./flowmapdata";
+import type { FlowEdge, FlowNode, FlowSection, FlowStats, Track } from "../../../../web-core/flow-map";
 import "./flowmappage.css";
 
 export type LinkComponentProps = {

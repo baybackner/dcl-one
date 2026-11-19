@@ -1,5 +1,5 @@
 .stcast {
-  --stcast-ruby: var(--brand);
+  --stcast-ruby: var(--dcl-action-primary);
   --stcast-ruby-hover: #e02849;
   --stcast-ruby-soft: #ff6b82;
   --stcast-video: #1a0b2e;
@@ -11,7 +11,7 @@
   min-height: calc(100dvh - 92px);
   background: var(--stcast-surface);
   box-sizing: border-box;
-  font-family: var(--font-sans);
+  font-family: Inter, system-ui, sans-serif;
 }
 
 .stcast__onboard {
@@ -180,14 +180,6 @@
   box-shadow: 0 8px 24px rgba(255, 45, 85, 0.4);
 }
 .stcast__joiningtext { color: #fff; font-size: 24px; font-weight: 500; }
-.stcast__spinner {
-  width: 48px;
-  height: 48px;
-  border: 4px solid rgba(255, 255, 255, 0.2);
-  border-top: 4px solid var(--stcast-ruby);
-  border-radius: 50%;
-  animation: u-spin 1s linear infinite;
-}
 .stcast__view {
   display: flex;
   flex-direction: column;
@@ -235,7 +227,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: var(--brand-cta, #d80029);
+  background: var(--dcl-action-primary-pressed);
   border-radius: 24px;
   font-weight: 700;
   font-size: 13px;
@@ -360,13 +352,13 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--brand-cta, #d80029);
-  border: 1px solid var(--brand-cta, #d80029);
+  background: var(--dcl-action-primary-pressed);
+  border: 1px solid var(--dcl-action-primary-pressed);
   color: #fff;
   font: inherit;
   font-weight: 700;
   padding: 10px 20px;
-  border-radius: var(--r-control);
+  border-radius: var(--dcl-radius-xs);
   text-transform: uppercase;
   font-size: 13px;
   letter-spacing: 0.5px;
@@ -412,7 +404,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: var(--z-overlay);
+  z-index: 60;
   padding: 16px;
 }
 .stcast__errcard {
@@ -451,14 +443,14 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: var(--brand-cta, #d80029);
-  border: 1px solid var(--brand-cta, #d80029);
+  background: var(--dcl-action-primary-pressed);
+  border: 1px solid var(--dcl-action-primary-pressed);
   color: #fff;
   font: inherit;
   font-weight: 700;
   font-size: 14px;
   padding: 10px 24px;
-  border-radius: var(--r-control);
+  border-radius: var(--dcl-radius-xs);
   cursor: pointer;
   transition: background 0.12s ease, transform 0.1s ease;
 }
@@ -475,7 +467,7 @@
   position: fixed;
   top: 108px;
   right: 16px;
-  z-index: var(--z-toast);
+  z-index: 200;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -515,7 +507,7 @@
 .stcast__toastclose:hover { color: #fff; }
 .stcast__toastaction {
   align-self: flex-start;
-  background: var(--brand-cta, #d80029);
+  background: var(--dcl-action-primary-pressed);
   color: #fff;
   border: none;
   font: inherit;

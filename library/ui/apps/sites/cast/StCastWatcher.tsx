@@ -1,5 +1,6 @@
+import { Spinner } from "../../../components/Spinner/Spinner";
+import spinnerStyles from "./CastProgress.module.css";
 import type { ReactNode } from "react";
-import { SitesChromeMaybe } from "../frames/SitesChrome";
 import "./stcastwatcher.css";
 
 const TvIcon = () => (
@@ -151,7 +152,6 @@ type WatcherToastAction = { label?: string; onClick?: () => void };
 type WatcherToast = { title: ReactNode; message: ReactNode; action?: string | WatcherToastAction };
 
 type StCastWatcherProps = {
-  chrome?: boolean;
   streamName?: string;
   state?: WatcherState;
   sidebarOpen?: boolean;
@@ -175,7 +175,6 @@ type StCastWatcherProps = {
 };
 
 export default function StCastWatcher({
-  chrome = true,
   streamName = "Genesis Plaza",
   state = "live",
   sidebarOpen = true,
@@ -231,7 +230,7 @@ export default function StCastWatcher({
           <span className="stcastwatcher__joininglogo">
             <DclLogo />
           </span>
-          <span className="stcastwatcher__spinner" aria-hidden="true" />
+          <Spinner className={spinnerStyles.ring} variant="light" aria-hidden="true" />
           <p className="stcastwatcher__joiningtext">{joiningLabel}</p>
         </div>
       </div>
@@ -325,37 +324,35 @@ export default function StCastWatcher({
   }
 
   return (
-    <SitesChromeMaybe chrome={chrome} active="legal">
-      <div className="stcastwatcher">
-        {body}
+    <div className="stcastwatcher">
+      {body}
 
-        {toasts.length > 0 && (
-          <div className="stcastwatcher__toasts">
-            {toasts.map((toast, i) => (
-              <div key={i} className="stcastwatcher__toast" role="status">
-                <div className="stcastwatcher__toastrow">
-                  <div className="stcastwatcher__toasttext">
-                    <div className="stcastwatcher__toasttitle">{toast.title}</div>
-                    <div className="stcastwatcher__toastmsg">{toast.message}</div>
-                  </div>
-                  <button type="button" className="stcastwatcher__toastclose" aria-label="Dismiss">
-                    <CloseIcon />
-                  </button>
+      {toasts.length > 0 && (
+        <div className="stcastwatcher__toasts">
+          {toasts.map((toast, i) => (
+            <div key={i} className="stcastwatcher__toast" role="status">
+              <div className="stcastwatcher__toastrow">
+                <div className="stcastwatcher__toasttext">
+                  <div className="stcastwatcher__toasttitle">{toast.title}</div>
+                  <div className="stcastwatcher__toastmsg">{toast.message}</div>
                 </div>
-                {toast.action && (
-                  <button
-                    type="button"
-                    className="stcastwatcher__toastaction"
-                    onClick={typeof toast.action === "string" ? undefined : toast.action.onClick}
-                  >
-                    {typeof toast.action === "string" ? toast.action : toast.action.label}
-                  </button>
-                )}
+                <button type="button" className="stcastwatcher__toastclose" aria-label="Dismiss">
+                  <CloseIcon />
+                </button>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </SitesChromeMaybe>
+              {toast.action && (
+                <button
+                  type="button"
+                  className="stcastwatcher__toastaction"
+                  onClick={typeof toast.action === "string" ? undefined : toast.action.onClick}
+                >
+                  {typeof toast.action === "string" ? toast.action : toast.action.label}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

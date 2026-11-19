@@ -1,7 +1,5 @@
-import { Button } from "@dcl/one-ui";
+import { Button } from "../../../components/Button/Button";
 
-import { siteBase } from "../../data/site";
-import SitesChrome from "../frames/SitesChrome";
 import styles from "./StCastNotFound.module.css";
 
 // The Material icons that decentraland.org's cast not-found page shows: SportsEsports, Home, MenuBook.
@@ -40,46 +38,44 @@ export default function StCastNotFound({
   description = "This Cast 2.0 stream doesn't exist. Stream links are generated on-demand by the Admin Smart Item in Decentraland scenes. If you followed a valid link and still see this error, the stream may have ended.",
   goHomeLabel = "Go Home",
   viewDocsLabel = "View Documentation",
-  homeHref = siteBase(),
+  homeHref = "/",
   docsHref = "https://docs.decentraland.org/creator/worlds/cast/",
   onGoHome = undefined,
   onViewDocs = undefined,
 }: StCastNotFoundProps) {
   return (
-    <SitesChrome active="legal" overlayNav>
-      <div className={styles.root}>
-        <div className={styles.icon} aria-hidden="true">
-          <SportsEsportsIcon />
-        </div>
-
-        <h1 className={styles.title}>{title}</h1>
-        <p className={styles.description}>{description}</p>
-
-        <div className={styles.actions}>
-          <Button
-            variant="primary"
-            size="md"
-            className={styles.goHome}
-            href={homeHref}
-            onClick={onGoHome}
-            leadingIcon={<HomeIcon className={`${styles.glyph} ${styles.goHomeIcon}`} />}
-          >
-            {goHomeLabel}
-          </Button>
-          <Button
-            variant="secondary"
-            size="lg"
-            className={styles.viewDocs}
-            href={docsHref}
-            onClick={onViewDocs}
-            target="_blank"
-            rel="noopener noreferrer"
-            leadingIcon={<MenuBookIcon className={`${styles.glyph} ${styles.viewDocsGlyph}`} />}
-          >
-            {viewDocsLabel}
-          </Button>
-        </div>
+    <div className={styles.root}>
+      <div className={styles.icon} aria-hidden="true">
+        <SportsEsportsIcon />
       </div>
-    </SitesChrome>
+
+      <h1 className={styles.title}>{title}</h1>
+      <p className={styles.description}>{description}</p>
+
+      <div className={styles.actions}>
+        <Button
+          variant="primary"
+          size="md"
+          className={styles.goHome}
+          href={homeHref}
+          onClick={onGoHome}
+          leadingIcon={<HomeIcon className={`${styles.glyph} ${styles.goHomeIcon}`} />}
+        >
+          {goHomeLabel}
+        </Button>
+        <Button
+          variant="secondary"
+          size="lg"
+          className={styles.viewDocs}
+          href={docsHref}
+          onClick={onViewDocs}
+          target="_blank"
+          rel="noopener noreferrer"
+          leadingIcon={<MenuBookIcon className={`${styles.glyph} ${styles.viewDocsGlyph}`} />}
+        >
+          {viewDocsLabel}
+        </Button>
+      </div>
+    </div>
   );
 }

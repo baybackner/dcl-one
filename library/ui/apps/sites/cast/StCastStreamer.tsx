@@ -1,5 +1,6 @@
+import { Spinner } from "../../../components/Spinner/Spinner";
+import spinnerStyles from "./CastProgress.module.css";
 import type { CSSProperties, ReactNode } from "react";
-import { SitesChromeMaybe } from "../frames/SitesChrome";
 import "./stcaststreamer.css";
 
 type GlyphProps = { size?: number; fill?: string };
@@ -102,7 +103,6 @@ function CircleControl({ glyph, label, withChevron }: { glyph: ReactNode; label:
 type CastState = "onboarding" | "joining" | "live" | "error";
 
 type StCastStreamerProps = {
-  chrome?: boolean;
   state?: CastState;
   streamName?: string;
   displayName?: string;
@@ -123,7 +123,6 @@ type StCastStreamerProps = {
 };
 
 export default function StCastStreamer({
-  chrome = true,
   state = "live",
   streamName = "",
   displayName = "",
@@ -141,136 +140,134 @@ export default function StCastStreamer({
   onNameChange,
 }: StCastStreamerProps) {
   return (
-    <SitesChromeMaybe chrome={chrome} active="legal">
-      <div className={"stcast stcast--" + state}>
-        {state === "onboarding" && (
-          <div className="stcast__onboard">
-            <div className="stcast__bg" aria-hidden="true" />
-            <div className="stcast__modal" role="dialog" aria-label="Stream setup">
-              <div className="stcast__logocircle">
-                <DiamondGlyph />
-              </div>
-              <h1 className="stcast__title">
-                {streamName ? `Casting to ${streamName}, Decentraland` : "Casting to Decentraland"}
-              </h1>
-              <p className="stcast__tag">Speaker</p>
-
-              <input
-                className="stcast__name"
-                type="text"
-                placeholder="Insert Your Name (Optional)"
-                aria-label="Your name"
-                maxLength={64}
-                {...(onNameChange
-                  ? { value: displayName, onChange: (e) => onNameChange(e.target.value) }
-                  : { defaultValue: displayName })}
-              />
-
-              <div className="stcast__devices">
-                <DeviceRow glyph={<MicGlyph size={20} fill="currentColor" />} label="Default - Microphone" tooltip="Microphone" />
-                <DeviceRow glyph={<VolumeGlyph size={20} fill="currentColor" />} label="Default - Speakers" tooltip="Speaker" />
-                <DeviceRow glyph={<VideocamGlyph size={20} fill="currentColor" />} label="FaceTime HD Camera" tooltip="Camera" />
-              </div>
-
-              <button type="button" className="stcast__join">JOIN NOW</button>
+    <div className={"stcast stcast--" + state}>
+      {state === "onboarding" && (
+        <div className="stcast__onboard">
+          <div className="stcast__bg" aria-hidden="true" />
+          <div className="stcast__modal" role="dialog" aria-label="Stream setup">
+            <div className="stcast__logocircle">
+              <DiamondGlyph />
             </div>
-          </div>
-        )}
+            <h1 className="stcast__title">
+              {streamName ? `Casting to ${streamName}, Decentraland` : "Casting to Decentraland"}
+            </h1>
+            <p className="stcast__tag">Speaker</p>
 
-        {state === "joining" && (
-          <div className="stcast__onboard">
-            <div className="stcast__bg" aria-hidden="true" />
-            <div className="stcast__joining">
-              <div className="stcast__joinlogo">
-                <DiamondGlyph />
-              </div>
-              <div className="stcast__joiningtext">Joining...</div>
-              <div className="stcast__spinner" aria-hidden="true" />
+            <input
+              className="stcast__name"
+              type="text"
+              placeholder="Insert Your Name (Optional)"
+              aria-label="Your name"
+              maxLength={64}
+              {...(onNameChange
+                ? { value: displayName, onChange: (e) => onNameChange(e.target.value) }
+                : { defaultValue: displayName })}
+            />
+
+            <div className="stcast__devices">
+              <DeviceRow glyph={<MicGlyph size={20} fill="currentColor" />} label="Default - Microphone" tooltip="Microphone" />
+              <DeviceRow glyph={<VolumeGlyph size={20} fill="currentColor" />} label="Default - Speakers" tooltip="Speaker" />
+              <DeviceRow glyph={<VideocamGlyph size={20} fill="currentColor" />} label="FaceTime HD Camera" tooltip="Camera" />
             </div>
+
+            <button type="button" className="stcast__join">JOIN NOW</button>
           </div>
-        )}
+        </div>
+      )}
 
-        {state === "live" && (
-          <div className="stcast__view">
-            <div className="stcast__main">
-              <div className="stcast__videocontainer">
-                <div className="stcast__videoarea">
-                  <div className="stcast__livepill">
-                    <LiveDotGlyph size={16} fill="#fff" />
-                    LIVE
-                  </div>
+      {state === "joining" && (
+        <div className="stcast__onboard">
+          <div className="stcast__bg" aria-hidden="true" />
+          <div className="stcast__joining">
+            <div className="stcast__joinlogo">
+              <DiamondGlyph />
+            </div>
+            <div className="stcast__joiningtext">Joining...</div>
+            <Spinner className={spinnerStyles.ring} variant="light" aria-hidden="true" />
+          </div>
+        </div>
+      )}
 
-                  {stage ? (
-                    <div className="stcast__stage">{stage}</div>
-                  ) : (
-                    <div className="stcast__empty">
-                      <div className="stcast__avatarpulse">
-                        <CastAvatar name={displayName || "Streamer"} size={100} />
-                      </div>
-                      <div className="stcast__namepill">{displayName || "Streamer"}</div>
+      {state === "live" && (
+        <div className="stcast__view">
+          <div className="stcast__main">
+            <div className="stcast__videocontainer">
+              <div className="stcast__videoarea">
+                <div className="stcast__livepill">
+                  <LiveDotGlyph size={16} fill="#fff" />
+                  LIVE
+                </div>
+
+                {stage ? (
+                  <div className="stcast__stage">{stage}</div>
+                ) : (
+                  <div className="stcast__empty">
+                    <div className="stcast__avatarpulse">
+                      <CastAvatar name={displayName || "Streamer"} size={100} />
                     </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="stcast__controls">
-                <div className="stcast__center">
-                  <CircleControl glyph={<MicGlyph size={24} fill="#161518" />} label="Microphone" withChevron />
-                  <CircleControl glyph={<VideocamGlyph size={24} fill="#161518" />} label="Camera" withChevron />
-                  <CircleControl glyph={<ScreenShareGlyph size={24} fill="#161518" />} label="Share screen" withChevron />
-                  <button type="button" className="stcast__leave">
-                    <CallEndGlyph size={20} fill="#fff" />
-                    LEAVE STREAM
-                  </button>
-                </div>
-
-                <div className="stcast__right">
-                  <button type="button" className="stcast__iconbtn" aria-label={tabMuted ? "Unmute Cast audio" : "Mute Cast audio"}>
-                    {tabMuted ? <VolumeOffGlyph /> : <VolumeGlyph />}
-                  </button>
-                  <button type="button" className="stcast__iconbtn" aria-label="Chat">
-                    <ChatGlyph />
-                    {unreadMessages > 0 && <span className="stcast__badge">{unreadMessages}</span>}
-                  </button>
-                  <button type="button" className="stcast__iconbtn" aria-label="People">
-                    <PeopleGlyph />
-                    <span className="stcast__badge">{participants}</span>
-                  </button>
-                </div>
+                    <div className="stcast__namepill">{displayName || "Streamer"}</div>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        )}
 
-        {state === "error" && (
-          <div className="stcast__overlay" role="alertdialog" aria-label={errorTitle}>
-            <div className="stcast__errcard">
-              <div className="stcast__erricon" aria-hidden="true">
-                <RefreshGlyph size={40} fill="var(--stcast-ruby)" />
-              </div>
-              <div className="stcast__errtitle">{errorTitle}</div>
-              <div className="stcast__errmsg">{errorMessage}</div>
-              <div className="stcast__erractions">
-                <button type="button" className="stcast__errbtn" onClick={onRetry}>
-                  <RefreshGlyph size={18} fill="#fff" />
-                  {retryLabel}
+            <div className="stcast__controls">
+              <div className="stcast__center">
+                <CircleControl glyph={<MicGlyph size={24} fill="#161518" />} label="Microphone" withChevron />
+                <CircleControl glyph={<VideocamGlyph size={24} fill="#161518" />} label="Camera" withChevron />
+                <CircleControl glyph={<ScreenShareGlyph size={24} fill="#161518" />} label="Share screen" withChevron />
+                <button type="button" className="stcast__leave">
+                  <CallEndGlyph size={20} fill="#fff" />
+                  LEAVE STREAM
                 </button>
-                <button type="button" className="stcast__errbtn stcast__errbtn--ghost" onClick={onLeave}>
-                  {leaveLabel}
+              </div>
+
+              <div className="stcast__right">
+                <button type="button" className="stcast__iconbtn" aria-label={tabMuted ? "Unmute Cast audio" : "Mute Cast audio"}>
+                  {tabMuted ? <VolumeOffGlyph /> : <VolumeGlyph />}
+                </button>
+                <button type="button" className="stcast__iconbtn" aria-label="Chat">
+                  <ChatGlyph />
+                  {unreadMessages > 0 && <span className="stcast__badge">{unreadMessages}</span>}
+                </button>
+                <button type="button" className="stcast__iconbtn" aria-label="People">
+                  <PeopleGlyph />
+                  <span className="stcast__badge">{participants}</span>
                 </button>
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {toasts.length > 0 && (
-          <div className="stcast__stack">
-            {toasts.map((t) => (
-              <CastToast key={t.id} title={t.title} message={t.message} action={t.action} onDismiss={() => {}} />
-            ))}
+      {state === "error" && (
+        <div className="stcast__overlay" role="alertdialog" aria-label={errorTitle}>
+          <div className="stcast__errcard">
+            <div className="stcast__erricon" aria-hidden="true">
+              <RefreshGlyph size={40} fill="var(--stcast-ruby)" />
+            </div>
+            <div className="stcast__errtitle">{errorTitle}</div>
+            <div className="stcast__errmsg">{errorMessage}</div>
+            <div className="stcast__erractions">
+              <button type="button" className="stcast__errbtn" onClick={onRetry}>
+                <RefreshGlyph size={18} fill="#fff" />
+                {retryLabel}
+              </button>
+              <button type="button" className="stcast__errbtn stcast__errbtn--ghost" onClick={onLeave}>
+                {leaveLabel}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
-    </SitesChromeMaybe>
+        </div>
+      )}
+
+      {toasts.length > 0 && (
+        <div className="stcast__stack">
+          {toasts.map((t) => (
+            <CastToast key={t.id} title={t.title} message={t.message} action={t.action} onDismiss={() => {}} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

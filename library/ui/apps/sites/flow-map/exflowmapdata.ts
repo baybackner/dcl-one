@@ -8,8 +8,8 @@ import {
   route,
   sep,
   state,
-} from "../../flowmap/flowmapdata";
-import type { FlowSection } from "../../flowmap/flowmapdata";
+} from "../../../../web-core/flow-map";
+import type { FlowSection } from "../../../../web-core/flow-map";
 
 export const MACHINE_PATHS: Record<string, string> = {
   BootGate: "catalyrst/ui3/src/app/BootGate.tsx",

@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 
-import FlowMapPage, { Hourglass } from "../../flowmap/FlowMapPage";
-import type { LinkComponentProps } from "../../flowmap/FlowMapPage";
+import FlowMapPage, { Hourglass } from "./FlowMapPage";
+import type { LinkComponentProps } from "./FlowMapPage";
 import { ASCII_SOURCE, MACHINE_PATHS, SECTIONS, STATS } from "./exflowmapdata";
 
 type ExFlowMapPageProps = {
