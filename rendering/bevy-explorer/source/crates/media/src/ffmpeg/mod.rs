@@ -73,7 +73,10 @@ pub fn ffmpeg_worker(
         if disposed.strong_count() == 0 {
             return Ok(None);
         }
-        let local_folder = ipfas.cache_path().unwrap().join("video_downloads");
+        let local_folder = ipfas
+            .cache_path()
+            .ok_or_else(|| anyhow::anyhow!("no disk cache for video downloads"))?
+            .join("video_downloads");
         let local_path = local_folder.join(Path::new(urlencoding::encode(url).as_ref()));
 
         if std::fs::File::open(&local_path).is_err() {

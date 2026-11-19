@@ -96,17 +96,11 @@ fn main() {
         Ok(decentraland_app_config) => {
             // initialize v8 runtime from main thread
             if let Err(e) = init_runtime() {
-                // exits with the crash marker left in place
-                startup_error(&format!("can't start the scene runtime: {e}"));
-                std::process::exit(1);
+                fail_startup(&format!("can't start the scene runtime: {e}"));
             }
             let mut app = match decentraland_app.build(decentraland_app_config) {
                 Ok(app) => app,
-                Err(e) => {
-                    // exits with the crash marker left in place
-                    startup_error(&format!("can't build the app: {e}"));
-                    std::process::exit(1);
-                }
+                Err(e) => fail_startup(&format!("can't build the app: {e}")),
             };
             // the autopilot ends its run with a code, success or failure
             let exit = app.run();
@@ -156,11 +150,7 @@ fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
 
     let http_client = match ipfs::http_client() {
         Ok(http_client) => http_client,
-        Err(e) => {
-            // exits with the crash marker left in place
-            startup_error(&format!("can't create the http client: {e}"));
-            std::process::exit(1);
-        }
+        Err(e) => fail_startup(&format!("can't create the http client: {e}")),
     };
     Ok(DecentralandAppConfig::new(
         app_config,
@@ -238,6 +228,12 @@ fn session_log_file() -> Option<File> {
         .open(session_log)
         .inspect_err(|e| eprintln!("can't open the session log {session_log}: {e}"))
         .ok()
+}
+
+/// Reports `message` through [`startup_error`] and exits with code 1; the crash marker stays.
+fn fail_startup(message: &str) -> ! {
+    startup_error(message);
+    std::process::exit(1);
 }
 
 /// The reason a launch stops before the app runs. It is logged, and also appended to the session

@@ -43,6 +43,7 @@ use wallet::Wallet;
 /// Made by [`SocialPlugin::new`], which inserts the social runtime its systems take into an app;
 /// add the plugin to that same app.
 pub struct SocialPlugin {
+    /// Private so the plugin can only come from `new`, which inserts the runtime.
     _runtime: (),
 }
 

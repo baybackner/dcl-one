@@ -18,7 +18,7 @@ pub struct SocialRuntime(
 );
 
 impl SocialRuntime {
-    pub fn new() -> std::io::Result<Self> {
+    pub(crate) fn new() -> std::io::Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = Arc::new(
             Builder::new_multi_thread()

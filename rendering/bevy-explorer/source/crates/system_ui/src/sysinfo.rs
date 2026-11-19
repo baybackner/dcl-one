@@ -93,11 +93,6 @@ pub(crate) fn setup(
     asset_server: Res<AssetServer>,
     version: Res<Version>,
 ) {
-    let (Some(title_style), Some(body_style)) = (TITLE_TEXT_STYLE.get(), BODY_TEXT_STYLE.get())
-    else {
-        error!("system info is off: the text styles are not set");
-        return;
-    };
     commands.entity(root.0).try_with_children(|commands| {
         commands
             .spawn((
@@ -125,7 +120,14 @@ pub(crate) fn setup(
                     CrossHair,
                 ));
             });
+    });
 
+    let (Some(title_style), Some(body_style)) = (TITLE_TEXT_STYLE.get(), BODY_TEXT_STYLE.get())
+    else {
+        error!("system info is off: the text styles are not set");
+        return;
+    };
+    commands.entity(root.0).try_with_children(|commands| {
         commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
