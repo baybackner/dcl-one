@@ -77,6 +77,7 @@ impl Plugin for AvatarMovementPlugin {
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
         app.init_resource::<SceneDrivenAnimationFeedback>();
+        app.init_resource::<RedispatchRotationScene>();
 
         app.add_systems(Update, broadcast_movement_info.in_set(SceneSets::Init));
         app.world_mut()
@@ -634,27 +635,37 @@ pub fn apply_rotation(
     }
 }
 
+/// The scene whose [`SceneTickTiming::redispatch_rotation`] is set, if any: only the scene that
+/// drove the player when [`stage_redispatch_rotation`] last ran holds one.
+#[derive(Resource, Default)]
+struct RedispatchRotationScene(Option<Entity>);
+
 /// After each pass of the scene loop, sets the movement scene's
 /// [`SceneTickTiming::redispatch_rotation`]: the
 /// rotation [`apply_rotation`] will set from its late reply that landed in this frame, for its
 /// re-dispatch, which the next pass sends before that. Runs after the pass's `AvatarMovement`
-/// updates are applied. Every other scene's is cleared: the engine applies no movement from
-/// them, so a movement scene that no longer drives the player is not sent a rotation it staged
+/// updates are applied. The scene that staged the last rotation is tracked in
+/// [`RedispatchRotationScene`]; when another scene drives the player, or none does, that scene's
+/// rotation is cleared (a despawned scene has nothing to clear). The engine applies no movement
+/// from it, so a movement scene that no longer drives the player is not sent a rotation it staged
 /// while it did.
 fn stage_redispatch_rotation(
     player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
-    mut scenes: Query<(Entity, &RendererSceneContext, &mut SceneTickTiming)>,
+    mut scenes: Query<(&RendererSceneContext, &mut SceneTickTiming)>,
     movements: Query<&AvatarMovement>,
     movement_control: Res<EngineMovementControl>,
     frame: Res<FrameCount>,
+    mut staged: ResMut<RedispatchRotationScene>,
 ) {
     let active = player.single().ok().map(|active| active.scene());
-    for (scene, _, mut tick_timing) in &mut scenes {
-        if Some(scene) != active && tick_timing.redispatch_rotation.is_some() {
+    if let Some(previous) = staged.0.take_if(|&mut scene| Some(scene) != active) {
+        if let Ok((_, mut tick_timing)) = scenes.get_mut(previous) {
             tick_timing.redispatch_rotation = None;
         }
     }
-    let Some(Ok((_, context, mut tick_timing))) = active.map(|scene| scenes.get_mut(scene)) else {
+    let Some((scene, Ok((context, mut tick_timing)))) =
+        active.map(|scene| (scene, scenes.get_mut(scene)))
+    else {
         return;
     };
     let applied = tick_timing.late_reply_in(frame.0)
@@ -664,6 +675,7 @@ fn stage_redispatch_rotation(
         .and_then(|entity| movements.get(entity).ok())
         .filter(|_| applied)
         .map(AvatarMovement::rotation);
+    staged.0 = tick_timing.redispatch_rotation.map(|_| scene);
 }
 
 /// How far the player's slow move has pushed against a riser it has not stepped onto yet, up to
@@ -1626,7 +1638,8 @@ mod tests {
         app.insert_resource(EngineMovementControl {
             accept_movement_after: if imposed.is_some() { f64::MAX } else { -1.0 },
             ..default()
-        });
+        })
+        .init_resource::<RedispatchRotationScene>();
         let (scene, scene_player) = scene_with_player(&mut app);
         let player = app
             .world_mut()
@@ -1754,6 +1767,7 @@ mod tests {
             .get_mut::<SceneTickTiming>(movement_scene)
             .unwrap()
             .redispatch_rotation = Some(Quat::from_rotation_y(1.0));
+        app.insert_resource(RedispatchRotationScene(Some(movement_scene)));
         // then a parcel scene took over
         let (parcel_scene, parcel_player) = scene_with_player(&mut app);
         app.world_mut()
@@ -1763,6 +1777,23 @@ mod tests {
             .unwrap();
         let tick_timing = app.world().get::<SceneTickTiming>(movement_scene).unwrap();
         assert_eq!(tick_timing.redispatch_rotation, None);
+        assert_eq!(app.world().resource::<RedispatchRotationScene>().0, None);
+    }
+
+    #[test]
+    fn a_despawned_scene_that_staged_a_rotation_is_forgotten() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.insert_resource(EngineMovementControl::default())
+            .insert_resource(FrameCount(1));
+        let (movement_scene, _) = scene_with_player(&mut app);
+        app.insert_resource(RedispatchRotationScene(Some(movement_scene)));
+        app.world_mut().despawn(movement_scene);
+        app.world_mut()
+            .run_system_once(stage_redispatch_rotation)
+            .unwrap();
+        assert_eq!(app.world().resource::<RedispatchRotationScene>().0, None);
     }
 
     #[test]
