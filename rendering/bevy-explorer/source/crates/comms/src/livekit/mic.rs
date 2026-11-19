@@ -6,17 +6,14 @@ use std::sync::{
 };
 
 use bevy::{ecs::relationship::Relationship, prelude::*};
-use common::structs::{ClientWindowFocus, MicState, SystemAudio};
+use common::structs::{AppConfig, ClientWindowFocus, MicState, SystemAudio};
+use system_bridge::settings::microphone_setting::MicrophoneDevices;
 use tokio::{sync::oneshot, task::JoinHandle};
 use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
 use {
     bevy::render::view::RenderLayers,
-    common::{
-        structs::{AppConfig, AudioSettings},
-        util::AsH160,
-        util::VolumePanning,
-    },
+    common::{structs::AudioSettings, util::AsH160, util::VolumePanning},
     livestream_manager::AudioTransmitterVolume,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -200,8 +197,9 @@ pub(crate) struct MicrophonePublication {
     drain: MicrophoneDrain,
     task: JoinHandle<()>,
     /// The input chosen when the route started.
-    #[cfg(target_arch = "wasm32")]
     device: Option<String>,
+    /// The chosen input was not among the reported ones, so the capture fell back to another.
+    fell_back: bool,
 }
 
 impl MicrophonePublication {
@@ -217,6 +215,13 @@ impl MicrophonePublication {
                     let _ = start.send(());
                 }
             });
+    }
+
+    /// A different choice, or the chosen input returning after the route fell back, needs a new
+    /// route.
+    fn captures_choice(&self, choice: Option<&str>, devices: &MicrophoneDevices) -> bool {
+        self.device.as_deref() == choice
+            && !(self.fell_back && choice.is_some_and(|id| devices.contains(id)))
     }
 
     fn should_remove(&self, eligible: bool) -> bool {
@@ -692,7 +697,8 @@ fn reconcile_publications(
     livekit_runtime: LivekitRuntimeRes,
     #[cfg(not(target_arch = "wasm32"))] source: Res<LocalAudioSource>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
-    #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
+    config: Res<AppConfig>,
+    devices: Res<MicrophoneDevices>,
 ) {
     let enabled = microphone_routes_open(*focus, &mic, *permission.get(), *availability.get());
     let eligible = |room: Entity, participant: &LivekitParticipant| {
@@ -708,11 +714,7 @@ fn reconcile_publications(
     let mut revoking = false;
     for (entity, participant, room, publication) in &participants {
         if let Some(publication) = publication {
-            // A route captures from the input chosen when it started; another choice replaces it.
-            #[cfg(target_arch = "wasm32")]
-            let current = publication.device == config.audio.microphone;
-            #[cfg(not(target_arch = "wasm32"))]
-            let current = true;
+            let current = publication.captures_choice(config.audio.microphone.as_deref(), &devices);
             if publication.should_remove(current && eligible(room.get(), participant)) {
                 commands
                     .entity(entity)
@@ -762,8 +764,8 @@ fn reconcile_publications(
         let receiver = source.subscribe();
         #[cfg(not(target_arch = "wasm32"))]
         let (sample_rate, channels) = (format.sample_rate, format.channels);
-        #[cfg(target_arch = "wasm32")]
         let device = config.audio.microphone.clone();
+        let fell_back = device.as_deref().is_some_and(|id| !devices.contains(id));
         #[cfg(target_arch = "wasm32")]
         let task_device = device.clone();
 
@@ -859,8 +861,8 @@ fn reconcile_publications(
             cancel,
             drain: drain.clone(),
             task,
-            #[cfg(target_arch = "wasm32")]
             device,
+            fell_back,
         }
         .queue_insert(&mut commands, entity, start);
     }
@@ -1043,7 +1045,38 @@ mod routing_tests {
             cancel,
             drain: drain.clone(),
             task: runtime.spawn(std::future::pending()),
+            device: None,
+            fell_back: false,
         }
+    }
+
+    #[test]
+    fn a_route_is_replaced_for_another_choice_or_when_its_fallen_back_choice_returns() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let drain = MicrophoneDrain::default();
+        let devices = MicrophoneDevices::default();
+        let headset = system_bridge::settings::microphone_setting::MicrophoneDevice {
+            id: "headset".to_owned(),
+            label: "Headset".to_owned(),
+        };
+
+        let default = pending(&runtime, &drain);
+        assert!(default.captures_choice(None, &devices));
+        assert!(!default.captures_choice(Some("headset"), &devices));
+
+        let mut fallen_back = pending(&runtime, &drain);
+        fallen_back.device = Some("headset".to_owned());
+        fallen_back.fell_back = true;
+        assert!(fallen_back.captures_choice(Some("headset"), &devices));
+        devices.replace(vec![headset]);
+        assert!(!fallen_back.captures_choice(Some("headset"), &devices));
+
+        let mut on_headset = pending(&runtime, &drain);
+        on_headset.device = Some("headset".to_owned());
+        assert!(on_headset.captures_choice(Some("headset"), &devices));
+        assert!(!on_headset.captures_choice(None, &devices));
     }
 
     #[test]

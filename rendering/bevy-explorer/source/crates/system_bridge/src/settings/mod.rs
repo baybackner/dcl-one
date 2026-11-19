@@ -380,15 +380,16 @@ impl Settings {
             .apply
             .take()
             .unwrap();
-        let res = (apply)(config, value)?;
+        let res = (apply)(config, value);
         let setting = self
             .settings
             .iter_mut()
             .find(|s| s.info.name == name)
             .unwrap();
 
+        // restored before a failure returns, so the next change can still apply
         setting.apply = Some(apply);
-        setting.info.value = res;
+        setting.info.value = res?;
         Ok(())
     }
 

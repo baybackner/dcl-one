@@ -540,7 +540,9 @@ pub fn dispatch_page_events(
                 microphone.permission = permission;
             }
             LivekitEvent::MicrophoneDevices(devices) => {
-                microphone_devices.set_if_neq(MicrophoneDevices(devices));
+                if microphone_devices.replace(devices) {
+                    microphone_devices.set_changed();
+                }
             }
         }
     }

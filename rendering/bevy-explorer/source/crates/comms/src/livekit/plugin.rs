@@ -51,12 +51,13 @@ impl Plugin for LivekitPlugin {
         #[cfg(target_arch = "wasm32")]
         app.init_non_send_resource::<PlayerUpdateTasks>();
         app.init_state::<ConnectionAvailability>();
+        // the web page reports the inputs; the microphone routes read them
+        app.init_resource::<system_bridge::settings::microphone_setting::MicrophoneDevices>();
 
         #[cfg(target_arch = "wasm32")]
         {
             app.insert_resource(crate::livekit::web::take_event_receiver())
                 .init_resource::<crate::livekit::web::MicrophoneStatus>()
-                .init_resource::<system_bridge::settings::microphone_setting::MicrophoneDevices>()
                 .add_systems(PreUpdate, crate::livekit::web::dispatch_page_events);
         }
 

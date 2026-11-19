@@ -142,7 +142,8 @@ function isBinary(s: Setting): boolean {
 function isSlider(s: Setting): boolean {
   return !isBinary(s) && s.namedVariants.length === 0
 }
-// The engine's Microphone choices follow the devices plugged in.
+// The engine's Microphone choices follow the devices plugged in, so a re-read on open can bring new
+// choices under the same value to the page that stays mounted while closed.
 function sameVariants(a: Setting, b: Setting): boolean {
   return a.namedVariants.length === b.namedVariants.length && a.namedVariants.every((v, i) => v.name === b.namedVariants[i].name)
 }

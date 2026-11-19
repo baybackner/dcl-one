@@ -142,13 +142,15 @@ fn microphone_info(
     {
         let chosen = config.audio.microphone.as_ref().map(|id| {
             devices
-                .0
+                .read()
                 .iter()
                 .find(|device| &device.id == id)
-                .map_or("Chosen device (unplugged)", |device| device.label.as_str())
+                .map_or("Chosen device (unplugged)".to_owned(), |device| {
+                    device.label.clone()
+                })
         });
-        report["device"] = json!(chosen.unwrap_or("System Default"));
-        report["devices"] = json!(devices.0.len());
+        report["device"] = json!(chosen.as_deref().unwrap_or("System Default"));
+        report["devices"] = json!(devices.read().len());
     }
     input.reply_ok(report.to_string());
 }

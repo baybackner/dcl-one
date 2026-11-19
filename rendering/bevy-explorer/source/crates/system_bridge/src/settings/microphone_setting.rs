@@ -1,4 +1,4 @@
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
 use anyhow::anyhow;
 use bevy::prelude::*;
@@ -16,24 +16,41 @@ pub struct MicrophoneDevice {
     pub label: String,
 }
 
-/// The audio inputs the host offers, in its order.
-#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
-pub struct MicrophoneDevices(pub Vec<MicrophoneDevice>);
+/// The audio inputs the host offers, in its order. Clones share one list, which the setting's
+/// choices read; [`MicrophoneDevices::replace`] does not mark the resource changed.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct MicrophoneDevices(Arc<RwLock<Vec<MicrophoneDevice>>>);
 
-/// The device ids behind the setting's choices after the first, which is the system default.
-#[derive(Resource, Clone, Default)]
-struct Choices(Arc<RwLock<Vec<String>>>);
+impl MicrophoneDevices {
+    pub fn read(&self) -> RwLockReadGuard<'_, Vec<MicrophoneDevice>> {
+        self.0.read().unwrap_or_else(PoisonError::into_inner)
+    }
 
-fn choice(ids: &[String], config: &AppConfig) -> f32 {
+    pub fn contains(&self, id: &str) -> bool {
+        self.read().iter().any(|device| device.id == id)
+    }
+
+    /// Returns false when the list was already `devices`.
+    pub fn replace(&self, devices: Vec<MicrophoneDevice>) -> bool {
+        let mut current = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        if *current == devices {
+            return false;
+        }
+        *current = devices;
+        true
+    }
+}
+
+fn choice(devices: &[MicrophoneDevice], config: &AppConfig) -> f32 {
     config
         .audio
         .microphone
         .as_ref()
-        .and_then(|id| ids.iter().position(|known| known == id))
+        .and_then(|id| devices.iter().position(|device| &device.id == id))
         .map_or(0.0, |index| (index + 1) as f32)
 }
 
-fn info(devices: &[MicrophoneDevice], ids: &[String], config: &AppConfig) -> SettingInfo {
+fn info(devices: &[MicrophoneDevice], config: &AppConfig) -> SettingInfo {
     let variant = |name: &str| NamedVariant {
         name: name.to_owned(),
         description: DESCRIPTION.to_owned(),
@@ -47,7 +64,7 @@ fn info(devices: &[MicrophoneDevice], ids: &[String], config: &AppConfig) -> Set
         named_variants: std::iter::once(variant("System Default"))
             .chain(devices.iter().map(|device| variant(&device.label)))
             .collect(),
-        value: choice(ids, config),
+        value: choice(devices, config),
         default: 0.0,
         step_size: 1.0,
     }
@@ -57,35 +74,32 @@ fn info(devices: &[MicrophoneDevice], ids: &[String], config: &AppConfig) -> Set
 // Only the web host reports devices.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
-    let choices = Choices::default();
-    let apply_ids = choices.0.clone();
-    let load_ids = choices.0.clone();
+    let devices = app
+        .world_mut()
+        .get_resource_or_init::<MicrophoneDevices>()
+        .clone();
+    let apply_devices = devices.clone();
     settings.settings.push(Setting {
-        info: info(&[], &[], config),
+        info: info(&devices.read(), config),
         apply: Some(Box::new(
             move |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
-                let ids = apply_ids.read().unwrap_or_else(PoisonError::into_inner);
                 let index = value as usize;
                 config.audio.microphone = match index {
                     0 => None,
                     index => Some(
-                        ids.get(index - 1)
+                        apply_devices
+                            .read()
+                            .get(index - 1)
                             .ok_or(anyhow!("invalid variant index"))?
+                            .id
                             .clone(),
                     ),
                 };
                 Ok(index as f32)
             },
         )),
-        load: Box::new(move |config: &AppConfig| {
-            choice(
-                &load_ids.read().unwrap_or_else(PoisonError::into_inner),
-                config,
-            )
-        }),
+        load: Box::new(move |config: &AppConfig| choice(&devices.read(), config)),
     });
-    app.insert_resource(choices);
-    app.init_resource::<MicrophoneDevices>();
     app.add_systems(
         Update,
         sync_choices.run_if(resource_changed::<MicrophoneDevices>),
@@ -94,14 +108,11 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
 
 fn sync_choices(
     devices: Res<MicrophoneDevices>,
-    choices: Res<Choices>,
     config: Res<AppConfig>,
     mut settings: ResMut<Settings>,
 ) {
-    let mut ids = choices.0.write().unwrap_or_else(PoisonError::into_inner);
-    *ids = devices.0.iter().map(|device| device.id.clone()).collect();
     if let Some(setting) = settings.settings.iter_mut().find(|s| s.info.name == TITLE) {
-        setting.info = info(&devices.0, &ids, &config);
+        setting.info = info(&devices.read(), &config);
     }
 }
 
@@ -127,6 +138,13 @@ mod tests {
         app
     }
 
+    fn report(app: &mut App, ids: &[&str]) {
+        let mut devices = app.world_mut().resource_mut::<MicrophoneDevices>();
+        devices.replace(ids.iter().map(|id| device(id)).collect());
+        devices.set_changed();
+        app.update();
+    }
+
     fn set(app: &mut App, value: f32) -> Result<(), anyhow::Error> {
         app.world_mut()
             .resource_scope(|world, mut settings: Mut<Settings>| {
@@ -143,10 +161,8 @@ mod tests {
         let mut app = app();
         app.update();
         assert_eq!(shown(&app).named_variants.len(), 1);
-        assert!(set(&mut app, 1.0).is_err());
 
-        app.insert_resource(MicrophoneDevices(vec![device("a"), device("b")]));
-        app.update();
+        report(&mut app, &["a", "b"]);
         let names: Vec<_> = shown(&app)
             .named_variants
             .into_iter()
@@ -170,14 +186,30 @@ mod tests {
     }
 
     #[test]
+    fn a_choice_past_the_list_fails_and_the_setting_still_changes_after() {
+        let mut app = app();
+        report(&mut app, &["a"]);
+        assert!(set(&mut app, 2.0).is_err());
+        assert_eq!(app.world().resource::<AppConfig>().audio.microphone, None);
+
+        set(&mut app, 1.0).unwrap();
+        assert_eq!(
+            app.world()
+                .resource::<AppConfig>()
+                .audio
+                .microphone
+                .as_deref(),
+            Some("a")
+        );
+    }
+
+    #[test]
     fn an_unplugged_choice_shows_the_system_default_and_keeps_its_id() {
         let mut app = app();
-        app.insert_resource(MicrophoneDevices(vec![device("a"), device("b")]));
-        app.update();
+        report(&mut app, &["a", "b"]);
         set(&mut app, 2.0).unwrap();
 
-        app.insert_resource(MicrophoneDevices(vec![device("a")]));
-        app.update();
+        report(&mut app, &["a"]);
         assert_eq!(shown(&app).value, 0.0);
         assert_eq!(
             app.world()
@@ -188,8 +220,7 @@ mod tests {
             Some("b")
         );
 
-        app.insert_resource(MicrophoneDevices(vec![device("b"), device("a")]));
-        app.update();
+        report(&mut app, &["b", "a"]);
         assert_eq!(shown(&app).value, 1.0);
     }
 }

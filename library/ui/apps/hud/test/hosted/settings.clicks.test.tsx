@@ -130,13 +130,17 @@ describe('settings panel microphone', () => {
     <SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={settings} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />
   )
 
-  it('a lone choice is a select, and the devices reported later become choices', async () => {
-    resetSettingsTab()
-    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }
-    const { rerender } = render(panel(settings))
+  beforeEach(() => resetSettingsTab())
+
+  it('a lone choice is a select', () => {
+    render(panel({ ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }))
     expect(screen.getByRole('button', { name: 'Microphone' })).toBeEnabled()
     expect(screen.queryByRole('slider', { name: 'Microphone' })).toBeNull()
+  })
 
+  it('choices re-read under the same value can be picked', async () => {
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }
+    const { rerender } = render(panel(settings))
     const reported = { ...DEFAULT_ONLY, namedVariants: [...DEFAULT_ONLY.namedVariants, { name: 'USB Headset', description: '' }], maxValue: 2 }
     rerender(panel({ ...settings, list: [reported] }))
     await userEvent.click(screen.getByRole('button', { name: 'Microphone' }))
