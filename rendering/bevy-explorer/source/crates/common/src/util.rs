@@ -834,8 +834,8 @@ pub async fn resolve_public_addrs(
 }
 
 /// A colour ramp keyed by a normalized parameter in `[0, 1)` (e.g. time of day).
-/// Stops are sorted ascending; sampling wraps across the ends (last -> first). No stops sample
-/// as black.
+/// Stops are sorted ascending; sampling wraps across the ends (last -> first). Empty stops fail
+/// `dcl_assert!`; without it they sample as black.
 pub struct Gradient(pub &'static [(f32, Vec3)]);
 
 impl Gradient {
@@ -872,8 +872,8 @@ impl Gradient {
     }
 }
 
-/// A scalar ramp, sampled the same way as [`Gradient`] (wraps across the ends). No stops sample
-/// as zero.
+/// A scalar ramp, sampled the same way as [`Gradient`] (wraps across the ends). Empty stops fail
+/// `dcl_assert!`; without it they sample as zero.
 pub struct Curve(pub &'static [(f32, f32)]);
 
 impl Curve {
