@@ -510,7 +510,7 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
             temp_storage().await,
             std::sync::Arc::default(),
             dcl_http::Outbound::for_tests(),
-            None,
+            Some(super::support::registry_only_index().await),
             None,
             crate::Settings {
                 writes_enabled: true,

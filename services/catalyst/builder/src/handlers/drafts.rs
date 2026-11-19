@@ -22,7 +22,7 @@ pub async fn get_collection_drafts(
     Ok(Json(ApiData::ok(
         state
             .items
-            .collection_drafts(&access::wallet(&signer))
+            .collection_drafts(&access::managing(&state, &signer).await?)
             .await?,
     )))
 }
@@ -56,15 +56,16 @@ pub async fn put_collection(
         );
     }
     let uuid = Uuid::parse_str(&id).map_err(|_| ApiError::bad_request("Invalid request body"))?;
-    let standard = save
+    let provider = save
         .urn
         .as_deref()
         .and_then(save::third_party_urn)
-        .is_none();
+        .map(|(provider, _)| provider);
+    let standard = provider.is_none();
     if standard {
         save::standard_request(&save, signer.as_str())?;
     }
-    let edit = access::edit_collection(&state, &signer, uuid).await?;
+    let edit = access::edit_collection(&state, &signer, uuid, provider).await?;
     let deployment = standard
         .then(|| save::standard_deployment(&save, signer.as_str()))
         .transpose()?;
@@ -90,7 +91,7 @@ pub async fn put_item(
 ) -> Result<Json<ApiData<FullItemOut>>, ApiError> {
     let input = schema::parse(&body)?;
     state.items.require_documents_release().await?;
-    let target = item_save::prepare(&state, &signer, &path, &input).await?;
+    let target = item_save::prepare(&state, &path, &input).await?;
     let grant = access::save_item(&state, &signer, target.id, &target.intent).await?;
     Ok(Json(ApiData::ok(
         state.items.save_item(&grant, input, &target.intent).await?,

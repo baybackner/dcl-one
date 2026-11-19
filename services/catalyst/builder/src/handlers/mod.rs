@@ -10,6 +10,7 @@ pub mod publication;
 pub mod small_reads;
 pub mod storage;
 pub mod svg;
+pub mod third_parties;
 
 pub async fn ping() -> &'static str {
     "pong"

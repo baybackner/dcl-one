@@ -130,6 +130,7 @@ struct SeedThirdParty {
     managers: Vec<String>,
     #[serde(default)]
     programmatic: bool,
+    approved: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -944,12 +945,11 @@ fn a_gap_explains_nothing_on_a_capture_it_does_not_list() {
                 e["path"]
                     .as_str()
                     .unwrap()
-                    .ends_with("source/86-collection-save-rename.json")
+                    .ends_with("source/190-item-save-draft-owner.json")
             })
             .unwrap();
         let notes = [
             "status: fixture=200 candidate=401",
-            "data.salt missing",
             "data.name missing",
             "error extra",
             "ok value",
@@ -957,13 +957,13 @@ fn a_gap_explains_nothing_on_a_capture_it_does_not_list() {
         evidence["replay"] = serde_json::json!(notes);
         evidence["explained_by"] = notes
             .iter()
-            .map(|n| (n.to_string(), Value::from("open:third-party-registry")))
+            .map(|n| (n.to_string(), Value::from("open:item-curation-publicity")))
             .collect::<serde_json::Map<_, _>>()
             .into();
     });
     refused(
         &errors,
-        "source/86-collection-save-rename.json: open:third-party-registry does not list this capture",
+        "source/190-item-save-draft-owner.json: open:item-curation-publicity does not list this capture",
     );
 }
 
@@ -1835,9 +1835,29 @@ fn roles(seed: &Seed, roles: &[String]) -> Vec<String> {
 }
 
 /// A loopback Polygon collections subgraph that answers `seed.chain`'s
-/// committee as its `accounts` and its `rarities`, the way the capture's
-/// fake serves them.
-async fn committee_subgraph(seed: &Seed) -> String {
+/// committee as its `accounts` and its `rarities`, and a third-party
+/// registry subgraph beside it (`/graph/third-parties`) that answers the
+/// node's walk with `seed.registry`, each provider as the capture's fake
+/// serves it; returns both URLs.
+async fn committee_subgraph(seed: &Seed) -> (String, String) {
+    let mut providers: Vec<Value> = seed
+        .registry
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "root": null,
+                "managers": roles(seed, &p.managers),
+                "maxItems": "100",
+                "isApproved": p.approved.unwrap_or(true),
+                "isProgrammatic": p.programmatic,
+                "metadata": { "type": "third_party_v2", "thirdParty": {
+                    "name": p.name, "description": "", "contracts": []
+                } }
+            })
+        })
+        .collect();
+    providers.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     let accounts: Vec<Value> = roles(seed, &seed.chain.committee)
         .into_iter()
         .map(|address| serde_json::json!({ "id": address, "address": address }))
@@ -1850,21 +1870,44 @@ async fn committee_subgraph(seed: &Seed) -> String {
         .collect();
     let committee = serde_json::json!({ "data": { "accounts": accounts } });
     let listed = serde_json::json!({ "data": { "rarities": rarities } });
-    let app = Router::new().route(
-        "/graph/collections",
-        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
-            let query = body["query"].as_str().unwrap_or_default();
-            axum::Json(if query.contains("rarities") {
-                listed
-            } else {
-                committee
-            })
-        }),
-    );
+    let app = Router::new()
+        .route(
+            "/graph/collections",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+                let query = body["query"].as_str().unwrap_or_default();
+                axum::Json(if query.contains("rarities") {
+                    listed
+                } else {
+                    committee
+                })
+            }),
+        )
+        .route(
+            "/graph/third-parties",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let providers = providers.clone();
+                async move {
+                    let from = body["variables"]["idFrom"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let first = body["variables"]["first"].as_u64().unwrap_or(100) as usize;
+                    let page: Vec<Value> = providers
+                        .into_iter()
+                        .filter(|p| p["id"].as_str().unwrap_or_default() > from.as_str())
+                        .take(first)
+                        .collect();
+                    axum::Json(serde_json::json!({ "data": { "thirdParties": page } }))
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    format!("http://{addr}/graph/collections")
+    (
+        format!("http://{addr}/graph/collections"),
+        format!("http://{addr}/graph/third-parties"),
+    )
 }
 
 alloy_sol_types::sol! {
@@ -1947,46 +1990,41 @@ async fn oracle(seed: &Seed) -> String {
     format!("http://{addr}/rpc")
 }
 
-/// The node has no third-party registry yet: a provider's managers are the
-/// wallet that owns its collections, so a seeded provider must name exactly
-/// that wallet for both sides to decide alike.
-fn check_interim_providers(seed: &Seed) {
+/// The seed's providers: a registry provider names its managers (unless it
+/// is programmatic), a virtual third party its name and managers, and only a
+/// registry provider says whether it is approved.
+fn check_providers(seed: &Seed) {
     for registered in &seed.registry {
         assert!(
             registered.programmatic || !registered.managers.is_empty(),
             "seed.json registry provider {} has no manager",
             registered.id
         );
-        assert!(
-            !seed.third_parties.iter().any(|p| p.id == registered.id),
-            "seed.json provider {} is both in the registry and a virtual third party",
-            registered.id
-        );
     }
     for provider in &seed.third_parties {
         assert!(
-            !provider.name.is_empty(),
-            "seed.json provider {}",
+            !provider.name.is_empty()
+                && !provider.managers.is_empty()
+                && provider.approved.is_none(),
+            "seed.json virtual third party {}",
             provider.id
         );
-        for c in seed
-            .collections
-            .iter()
-            .filter(|c| c.third_party_id.as_deref() == Some(provider.id.as_str()))
-        {
-            assert_eq!(
-                provider.managers,
-                vec![c.owner.clone()],
-                "seed.json provider {} must be managed by the owner of {}",
-                provider.id,
-                c.id
-            );
-        }
     }
 }
 
 async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
-    check_interim_providers(seed);
+    check_providers(seed);
+    for provider in &seed.third_parties {
+        sqlx::query(
+            "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, $3)",
+        )
+        .bind(&provider.id)
+        .bind(roles(seed, &provider.managers))
+        .bind(format!("tp:1:{}:", provider.name))
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json virtual third party {}: {e}", provider.id));
+    }
     for c in &seed.collections {
         let urn = c
             .third_party_id
@@ -2157,10 +2195,12 @@ async fn replay_setup() -> Option<Replay> {
         wallets.insert(address.clone(), wallet);
     }
     seed(&scratch.pool, &seed_data).await;
+    let (collections_subgraph, registry_subgraph) = committee_subgraph(&seed_data).await;
     let index = catalyst::chain_index::ChainIndex::new(
         Outbound::for_tests(),
         catalyst::chain_index::IndexSettings {
-            matic_collections_subgraph_url: Some(committee_subgraph(&seed_data).await),
+            matic_collections_subgraph_url: Some(collections_subgraph),
+            third_party_registry_subgraph_url: Some(registry_subgraph),
             ..catalyst::chain_index::IndexSettings::for_tests()
         },
     );

@@ -25,7 +25,6 @@ use crate::access::{self, ItemChange, ItemSave, SaveIntent, SavePlan, UrnField};
 use crate::chain_state;
 use crate::content::JsJson;
 use crate::http::{ApiError, Subject};
-use crate::shared::signed_fetch::Signer;
 
 use super::ItemsComponent;
 use super::body::{FullItemOut, Reached};
@@ -86,10 +85,9 @@ fn not_matching(path: &str, body: Option<&str>) -> ApiError {
 /// disagree (400); a representation names a file the contents lack (400);
 /// more than 20 tags on a new item, or more on an item already over, and
 /// more than 10 emote outcomes (200 `ok:false`); a URN no item of the
-/// signer's third-party collections holds (404).
+/// provider's collections holds (404).
 pub async fn prepare(
     state: &SharedState,
-    signer: &Signer,
     path: &str,
     input: &ItemInput,
 ) -> Result<Target, ApiError> {
@@ -115,11 +113,10 @@ pub async fn prepare(
     let stored_id: Option<Uuid> = match (&by_urn, &input.id) {
         (Some(urn), _) => sqlx::query_scalar(
             "SELECT i.id FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
-             WHERE c.third_party_id = $1 AND c.eth_address = $2 AND i.urn_suffix = c.urn_suffix || ':' || $3 \
+             WHERE c.third_party_id = $1 AND i.urn_suffix = c.urn_suffix || ':' || $2 \
              ORDER BY i.created_at, i.id LIMIT 1",
         )
         .bind(&urn.third_party_id)
-        .bind(signer.as_str())
         .bind(&urn.item)
         .fetch_optional(pool)
         .await?,

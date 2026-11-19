@@ -33,15 +33,21 @@
 //! characters, matched literally; at most 20 assignees and 5 tags of at most
 //! 64 characters.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, QueryBuilder};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::access::{OnCommittee, Wallet};
+use crate::chain_index::ChainIndex;
 use crate::chain_state::{self, ReadView};
 use crate::http::ApiError;
 use crate::items::ItemsComponent;
+use crate::third_parties::{ThirdParties, provider};
 
 use super::{CollectionListingRowOut, CollectionRow, PUBLIC_LISTING, body_columns, project};
 
@@ -84,7 +90,8 @@ const STATUS: &str = "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
 const PUBLISHED_IDS: &str = "(SELECT m.collection_id AS id FROM builder.items m WHERE m.blockchain_item_id IS NOT NULL \
     UNION SELECT l.collection_id FROM builder.linked_collection_publications l WHERE l.status = 'submitted') pub \
     CROSS JOIN LATERAL (SELECT * FROM builder.collections c0 WHERE c0.id = pub.id";
-const ADDRESS_IDS: &str = "SELECT o.id FROM builder.collections o WHERE o.eth_address = $1 \
+const ADDRESS_IDS: &str = "SELECT o.id FROM builder.collections o WHERE o.eth_address = $1 AND o.third_party_id IS NULL \
+    UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id = ANY($2) \
     UNION SELECT b.id FROM shop.collections s JOIN builder.collections b ON b.contract_address = s.contract_address \
     WHERE s.network = 'matic' AND (s.creator = $1 OR EXISTS (SELECT 1 FROM unnest(s.managers || s.minters) r \
     WHERE lower(r) = $1))";
@@ -270,6 +277,7 @@ pub struct Listing {
     filters: Vec<Filter>,
     published_only: bool,
     address: Option<String>,
+    providers: Vec<String>,
     status: Option<&'static str>,
     sort: Sort,
     page: Page,
@@ -413,6 +421,7 @@ impl Listing {
             filters,
             published_only,
             address: None,
+            providers: Vec::new(),
             status: None,
             sort: q.non_empty("sort")?.map_or(Sort::Unordered, Sort::named),
             page: page(q, COMMITTEE_CAP)?,
@@ -460,6 +469,7 @@ impl Listing {
             filters,
             published_only: false,
             address: Some(wallet.address().to_string()),
+            providers: wallet.provider_ids(),
             status,
             sort: q
                 .non_empty("sort")?
@@ -590,9 +600,11 @@ pub struct PublishedAddresses {
     listing: Listing,
 }
 
-/// An address's own listing: the signer's collections, full rows.
+/// An address's own listing: the signer's collections and the collections
+/// of the providers it manages, full rows.
 pub struct OwnListing {
     listing: Listing,
+    programmatic: HashMap<String, bool>,
 }
 
 impl CommitteeListing {
@@ -633,6 +645,7 @@ impl OwnListing {
     pub fn new(wallet: &Wallet, q: &ListQuery) -> Result<Self, ApiError> {
         Ok(Self {
             listing: Listing::of(wallet, q)?,
+            programmatic: wallet.providers().iter().cloned().collect(),
         })
     }
 }
@@ -661,6 +674,7 @@ impl ItemsComponent {
             Some(address) => Some(
                 sqlx::query_scalar(ADDRESS_IDS)
                     .bind(address)
+                    .bind(&listing.providers)
                     .fetch_all(&mut *tx)
                     .await?,
             ),
@@ -747,14 +761,33 @@ impl ItemsComponent {
         Ok(body)
     }
 
-    /// `GET /v1/collections` for a committee member.
+    /// `GET /v1/collections` for a committee member: a third-party row of
+    /// a provider the registry has carries the provider's `is_programmatic`,
+    /// so a page that holds one reads the registry after its rows, with no
+    /// connection held.
     pub async fn committee_collections(
         &self,
         request: &CommitteeListing,
+        third_parties: &ThirdParties,
+        market: Option<&Arc<ChainIndex>>,
     ) -> Result<Value, ApiError> {
         let (rows, total, _) = self.list(&request.listing, true).await?;
-        let results: Vec<CollectionListingRowOut> =
-            rows.into_iter().map(|r| listing_row(r, None)).collect();
+        let registry = match rows.iter().any(|r| r.collection.third_party()) {
+            true => Some(third_parties.registry(market, Instant::now()).await?),
+            false => None,
+        };
+        let results: Vec<CollectionListingRowOut> = rows
+            .into_iter()
+            .map(|r| {
+                let programmatic = r
+                    .collection
+                    .provider()
+                    .zip(registry.as_deref())
+                    .and_then(|(id, registry)| provider(registry, id))
+                    .map(|p| p.is_programmatic);
+                listing_row(r, programmatic)
+            })
+            .collect();
         Self::envelope(&request.listing, results, total, None)
     }
 
@@ -789,7 +822,10 @@ impl ItemsComponent {
         let results: Vec<CollectionListingRowOut> = rows
             .into_iter()
             .map(|r| {
-                let programmatic = r.collection.third_party().then_some(false);
+                let programmatic = r
+                    .collection
+                    .provider()
+                    .map(|id| request.programmatic.get(id).copied().unwrap_or(false));
                 listing_row(r, programmatic)
             })
             .collect();

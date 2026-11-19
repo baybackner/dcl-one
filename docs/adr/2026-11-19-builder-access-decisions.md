@@ -24,7 +24,8 @@ source is down.
 - **One module decides.** `services/catalyst/builder/src/access.rs` decides
   every read and write of a collection or item. It reads only the verified
   signer, the resource ids the request acts on, the builder's rows, the
-  chain copy through a decision view, and the committee.
+  chain copy through a decision view, the committee and the third-party
+  registry.
 - **Grants are values.** A decision returns a value with private fields that
   only `access.rs` builds. The store functions that read or change a
   collection or item take that value, and the curation status writes take the
@@ -45,7 +46,9 @@ source is down.
   committee member reads published content as any signer does.
 - **No connection across an outbound read.** A decision reads the builder's
   rows and the chain copy, returns its database connection, and only then
-  waits on the committee.
+  waits on the committee. It reads the registry before it takes a
+  connection, and a write decides again inside its transaction from the
+  same registry read.
 - **One owner.** A standard collection's owner is its chain creator once the
   copy holds it, and its stored `eth_address` before. The owner is derived on
   each request, so `POST /v1/collections/{id}/owner/sync` stores nothing and
@@ -69,9 +72,38 @@ source is down.
   answers 503 until a read succeeds. `GET /v1/committee` answers from the
   same read. Decisions that only the committee can grant use a fresh read
   only.
-- **Third-party managers.** Until the builder reads the third-party
-  registry, a third-party collection's provider manager is the wallet that
-  created the collection.
+- **Third-party managers.** A third-party collection's provider is the
+  provider id of its URN. Its managers, in the order
+  `github.com/decentraland/builder-server` reads its sources:
+  - once the registry approves the provider, the managers the registry
+    lists;
+  - before approval, the managers the registry lists that the provider's
+    virtual third party also lists, or every manager the registry lists
+    when the provider has no virtual third party;
+  - with no registry record, the virtual third party's managers;
+  - nobody otherwise.
+
+  The wallet that created a third-party collection decides nothing; a
+  third-party collection has no owner. A provider's managers read, save,
+  delete and accept the terms of every collection and item of the provider,
+  and read the files those items name in a name whose writer holds the
+  bytes. The node's own publication of a third-party collection also
+  requires its stored creator.
+- **Third-party creates.** A save that creates a third-party collection
+  under a provider the registry or a virtual third party has is a
+  provider manager's. Under a provider neither has, any signer creates it,
+  and the save creates the provider's virtual third party with the signer
+  as its only manager, in the same transaction.
+- **The registry, read live.** The builder reads the whole third-party
+  registry (`thirdParties`, every provider, approved or not, with its
+  managers, merkle root, item allowance, approval, kind and metadata)
+  through the chain index's subgraph client, under a 10-second bound, from
+  `THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL`. A decision accepts only a read
+  that started after the decision began. One read runs at a time and every
+  decision waiting when it started shares it. A read that fails, an answer
+  that breaks the expected shape, or a node without the setting can't tell:
+  that answer lasts 30 seconds, and every decision, listing and view that
+  involves a third-party collection answers 503 until a read succeeds.
 - **Access checks never write.** A decision reads its sources and changes no
   row, also when it refuses.
 - **Admins.** `BUILDER_ADMIN_ADDRESSES` and the admin bearer open the
@@ -79,6 +111,17 @@ source is down.
 
 ## Consequences
 
+- A wallet the registry stops listing as a provider's manager is refused
+  on its next request once the registry subgraph has indexed the change. A
+  request that involves a third-party collection waits for a registry read
+  that starts after it arrives.
+- While the registry can't tell, every request that involves a third-party
+  collection answers 503 and writes nothing, an address's own listings
+  included; requests about standard collections only are unaffected.
+- A wallet that a virtual third party lists and that the registry doesn't
+  list for the same unapproved provider manages nothing of it, so a wallet
+  that claims a provider id before another wallet registers it on chain
+  keeps no access once the registry has the record.
 - After the builder's last successful read, a wallet removed from the
   committee:
   - can still be granted a decision only the committee can grant for up to
@@ -95,12 +138,12 @@ source is down.
   than an empty list. Published content stays readable as any signer reads
   it, a committee member included.
 - Every by-id read is a decision, so it answers 503 when the chain copy is
-  older than its decision bound, as writes do, with one exception: the
-  stored owner of a draft whose answer no chain fact can change beyond
-  what the owner already holds (a third-party draft, or a standard draft
-  whose contract the copy doesn't hold) reads it in full
-  from a copy that has a complete pass of any age, as the owner's own
-  listing already answers it.
+  older than its decision bound, as writes do, with one exception: a
+  reader whose answer no chain fact can change beyond what it already holds
+  (a manager of a third-party collection's provider, or the stored owner of
+  a standard draft whose contract the copy doesn't hold) reads it in full
+  from a copy that has a complete pass of any age, as its own listing
+  already answers it.
 - Between a creator transfer and the copy's next pass, the previous creator
   keeps the owner's access.
 - A new role or source is one change to `access.rs`, which the authorization
@@ -116,3 +159,10 @@ source is down.
   call.
 - **The committee as every wallet that ever curated.** The subgraph keeps
   past curators, so removed members would keep the role for good.
+- **A registry read kept for a time, or one read per provider.** A kept read
+  would let a removed manager keep access for its lifetime, and would break
+  the old builder web's wait for a new merkle root. Reads keyed by provider
+  would let a caller cycling provider ids send one subgraph query per id;
+  the whole registry is small enough to read at once.
+- **The virtual third party alone before approval.** It would leave the
+  provider to whichever wallet claimed its id first, until approval.

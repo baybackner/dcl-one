@@ -77,9 +77,18 @@ impl Default for Options {
 }
 
 async fn node_over(pool: PgPool, options: Options) -> Node {
+    sqlx::query(
+        "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Lifecycle:') \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(PROVIDER)
+    .bind(vec![address(OWNER_KEY)])
+    .execute(&pool)
+    .await
+    .unwrap();
     let market = match &options.committee {
         Some(committee) => Some(committee_index(committee).await),
-        None => None,
+        None => Some(super::support::registry_only_index().await),
     };
     let mut state = crate::State::new(
         pool.clone(),

@@ -103,6 +103,18 @@ CREATE INDEX collections_standard_name_idx ON builder.collections (lower(name)) 
 
 CREATE INDEX collections_third_party_urn_idx ON builder.collections (urn_suffix) WHERE third_party_id IS NOT NULL;
 
+CREATE TABLE builder.virtual_third_parties (
+    id text NOT NULL,
+    managers text[] NOT NULL,
+    raw_metadata text NOT NULL,
+    is_programmatic boolean NOT NULL DEFAULT false,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT virtual_third_parties_pkey PRIMARY KEY (id),
+    CONSTRAINT virtual_third_parties_id_len_check CHECK (char_length(id) <= 512),
+    CONSTRAINT virtual_third_parties_managers_lowercase_check CHECK (managers::text = lower(managers::text))
+);
+
 -- ── items ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE builder.items (

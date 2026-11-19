@@ -1454,6 +1454,57 @@ Invariants:
 Upgrade: step `0057_builder_collection_lock` adds `collections.lock`; the
 schema's object pass creates `builder.terms_acceptances` and its index.
 
+## Builder third parties workload
+
+The builder's third-party routes (`services/catalyst/builder/src/third_parties.rs`,
+`services/catalyst/builder/src/handlers/third_parties.rs`) and every
+decision about a third-party collection read the third-party registry over
+HTTP and `builder.virtual_third_parties` by SQL. The table holds the
+providers the registry doesn't have yet: tens of rows, one per provider a
+creator started before registering it, written rarely.
+
+Tables and what they hold:
+
+- `builder.virtual_third_parties`: a provider id (at most 512 characters),
+  its managers (lowercased addresses), `raw_metadata`
+  (`tp:1:<name>:<description>[:<network>-<address>;...]`) and
+  `is_programmatic`. A save that creates the first collection of a
+  provider neither the registry nor this table has inserts the row, with
+  the signer as its only manager; a save of a collection with a linked
+  contract lists that contract in the row; `PATCH /v1/thirdParties/{id}`
+  sets `is_programmatic`; `DELETE /v1/thirdParties/{id}` removes the row
+  once the registry has the provider; the delete of a provider's last
+  collection removes it. No foreign key: a row outlives its registry
+  record until one of those deletes.
+
+Statements:
+
+| Request | Statements | Index |
+| --- | --- | --- |
+| a decision about a collection or item | whether it is third-party; the collection row with its provider's row (`LEFT JOIN`) | `collections_pkey`, `items_pkey`, `virtual_third_parties_pkey` |
+| an address's own listings and drafts | the provider ids the wallet manages: the rows naming them or listing the wallet; then `third_party_id = ANY($ids)` | `collections_linked_contract_key` (leading `third_party_id`), `items_collection_created_idx` |
+| item URN in use | the provider's items holding the item part | `collections_linked_contract_key`, `items_collection_created_idx` |
+| a signed read of a private file | the providers of the third-party items naming the hash, at most 20 | `item_contents_hash_idx`, `uploaded_contents` primary key |
+| `GET /v1/thirdParties/{id}/slots` | the provider's submitted items | `collections_linked_contract_key`, `items_collection_created_idx` |
+| create, update, delete of a row | an advisory transaction lock on the provider id, the row, one write | `virtual_third_parties_pkey` |
+| collection delete | the provider's lock, then the row if no collection of the provider is left | `collections_linked_contract_key` |
+
+Invariants:
+
+- A write locks the provider id (`pg_advisory_xact_lock`) before it reads
+  the row, in the transaction that writes the collection, so two first
+  collections of one provider create one row and the second save decides
+  on it.
+- The registry read runs before any connection is taken and is never
+  retried inside a transaction; a write decides again inside its
+  transaction from that same read.
+- Measured at the reference size (51,745 collections, 34 third-party,
+  116,190 items, 7 rows): every statement above under 6 ms.
+
+Upgrade: the schema's object pass creates `builder.virtual_third_parties`
+and its constraints; no step. The import's `virtual_third_party` step
+copies upstream's rows (`tooling/migration/sources/builder-server/MAPPING.md`).
+
 ## Notification writer
 
 `shared::notifications` (`services/catalyst/shared/src/notifications.rs`) is the

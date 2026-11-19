@@ -249,10 +249,9 @@ impl ItemsComponent {
     }
 
     /// `GET /v1/{address}/items`: the wallet's own items that are not
-    /// third-party items, and the items of the third-party collections it
-    /// manages (until the node reads the registry, those it created);
-    /// `collectionId` narrows them to one collection, `null` to items with
-    /// none.
+    /// third-party items, and the items of the collections of the providers
+    /// it manages; `collectionId` narrows them to one collection, `null` to
+    /// items with none.
     pub async fn address_items(
         &self,
         wallet: &Wallet,
@@ -288,9 +287,9 @@ impl ItemsComponent {
         scope.push(
             " UNION ALL SELECT i.id, i.created_at, true FROM builder.collections c \
              JOIN builder.items i ON i.collection_id = c.id \
-             WHERE i.urn_suffix IS NOT NULL AND c.third_party_id IS NOT NULL AND c.eth_address = ",
+             WHERE i.urn_suffix IS NOT NULL AND c.third_party_id = ANY(",
         );
-        scope.push_bind(wallet.address().to_string());
+        scope.push_bind(wallet.provider_ids()).push(")");
         narrow(&mut scope);
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
         let results = bodies(&self.pool, &standard_first(ids), Reached::InList, true).await?;

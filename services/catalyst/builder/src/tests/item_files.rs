@@ -447,6 +447,14 @@ async fn fresh_pass(pool: &PgPool, minutes_ago: i64) {
 async fn files(committee: &FakeCommittee) -> Option<Files> {
     let pool = crate::db::scratch::isolated_pool(8).await?;
     fresh_pass(&pool, 0).await;
+    sqlx::query(
+        "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Files:')",
+    )
+    .bind(PROVIDER_ID)
+    .bind(vec![Provider.address()])
+    .execute(&pool)
+    .await
+    .unwrap();
     let store = temp_storage().await;
     let denylist = Arc::<crate::content::Denylist>::default();
     let state = Arc::new(
@@ -1258,6 +1266,7 @@ async fn a_signed_read_of_a_public_file_never_runs_the_signers_branches() {
             )))
             .bind(&hash)
             .bind(&signer)
+            .bind(20_i64)
             .fetch_one(&mut *conn)
             .await
             .unwrap();

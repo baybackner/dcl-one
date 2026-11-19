@@ -15,9 +15,16 @@
 //! - **On-chain manager**: a `managers` entry of the copy's row, so only of
 //!   a collection on chain.
 //! - **Committee member**: [`crate::committee`].
-//! - **Third-party manager** of a collection's provider: until the node reads
-//!   the third-party registry, the one wallet stored as the third-party
-//!   collection's `eth_address` (the wallet that created it).
+//! - **Third-party manager** of a collection's provider: a manager the
+//!   third-party registry lists for the provider once it approved it; before
+//!   approval, a manager the registry lists that the provider's virtual third
+//!   party also lists, or the registry's managers when there is no virtual
+//!   third party; with no registry record, the virtual third party's
+//!   managers ([`provider_managers`]). A decision that involves a
+//!   third-party collection reads the registry first, with no connection
+//!   held, and accepts only a read that started after it began
+//!   ([`crate::third_parties`]); the wallet stored as a third-party
+//!   collection's creator decides nothing.
 //! - **Item owner**: the item row's `eth_address`, which decides for an item
 //!   with no collection and for item reads.
 //!
@@ -33,7 +40,7 @@
 //!     save: &catalyst_builder::collections::save::CollectionSave,
 //!     id: uuid::Uuid,
 //! ) {
-//!     let edit = catalyst_builder::access::edit_collection(state, signer, id).await.unwrap();
+//!     let edit = catalyst_builder::access::edit_collection(state, signer, id, None).await.unwrap();
 //!     let _ = state.items.save_collection(&edit, save, None).await;
 //! }
 //! ```
@@ -63,16 +70,23 @@ use serde_json::json;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use tokio::time::Instant;
+
 use crate::SharedState;
+use crate::chain_index::third_parties::Provider;
 use crate::chain_state::{self, DecisionView};
 use crate::http::{ApiError, Subject};
 use crate::items::urn::ThirdPartyItemUrn;
 use crate::shared::signed_fetch::Signer;
+use crate::third_parties::{self, Registry, has_manager};
 
-/// A signer's own wallet: what the per-wallet listings filter by.
+/// A signer's own wallet: what the per-wallet listings filter by, with the
+/// providers it manages (each with whether it is programmatic) when the
+/// listing reads them.
 #[derive(Debug)]
 pub struct Wallet {
     address: String,
+    providers: Vec<(String, bool)>,
 }
 
 /// The signer is a current committee member.
@@ -86,6 +100,7 @@ pub struct OnCommittee {
 pub struct CollectionRead {
     id: Uuid,
     full: bool,
+    programmatic: bool,
 }
 
 /// May create or save the collection; `at` is when it was decided, which
@@ -95,6 +110,8 @@ pub struct CollectionEdit {
     id: Uuid,
     signer: String,
     at: DateTime<Utc>,
+    provider: Option<String>,
+    registry: Option<Registry>,
 }
 
 /// May lock the collection, at `at`.
@@ -111,6 +128,7 @@ pub struct CollectionManage {
     id: Uuid,
     signer: String,
     at: DateTime<Utc>,
+    registry: Option<Registry>,
 }
 
 /// May publish the collection's standard deployment or sync its owner;
@@ -121,6 +139,7 @@ pub struct CollectionSync {
     signer: String,
     committee: bool,
     third_party: bool,
+    registry: Option<Registry>,
 }
 
 /// May read the item; `full` also reads what only its owner's side sees.
@@ -137,6 +156,7 @@ pub struct ItemSave {
     signer: String,
     collection: Option<Uuid>,
     at: DateTime<Utc>,
+    registry: Option<Registry>,
 }
 
 /// May delete the item or upload its files.
@@ -145,6 +165,7 @@ pub struct ItemChange {
     id: Uuid,
     signer: String,
     at: DateTime<Utc>,
+    registry: Option<Registry>,
 }
 
 /// May run the node's publication of the collection.
@@ -185,6 +206,16 @@ impl MintedItem {
 }
 
 impl Wallet {
+    /// The providers it manages, each with whether it is programmatic.
+    pub fn providers(&self) -> &[(String, bool)] {
+        &self.providers
+    }
+
+    /// The ids of the providers it manages.
+    pub fn provider_ids(&self) -> Vec<String> {
+        self.providers.iter().map(|(id, _)| id.clone()).collect()
+    }
+
     pub fn address(&self) -> &str {
         &self.address
     }
@@ -202,6 +233,12 @@ impl CollectionRead {
     }
     pub fn full(&self) -> bool {
         self.full
+    }
+
+    /// Whether a third-party collection's provider is programmatic: the
+    /// registry's record, else its virtual third party.
+    pub fn programmatic(&self) -> bool {
+        self.programmatic
     }
 }
 
@@ -266,6 +303,7 @@ impl CollectionSync {
         CollectionRead {
             id: self.id,
             full: true,
+            programmatic: false,
         }
     }
 }
@@ -348,6 +386,8 @@ struct Collection {
     stored_owner: String,
     contract: Option<String>,
     third_party: bool,
+    provider_managers: Vec<String>,
+    programmatic: bool,
     pending: bool,
     lock: Option<NaiveDateTime>,
     published: bool,
@@ -370,7 +410,7 @@ impl Collection {
     }
 
     fn provider_manager(&self, signer: &str) -> bool {
-        self.third_party && self.stored_owner == signer
+        self.third_party && has_manager(&self.provider_managers, signer)
     }
 
     fn role(&self, signer: &str) -> bool {
@@ -387,24 +427,114 @@ impl Collection {
 /// How long a collection's lock holds.
 pub const LOCK_HOLDS: TimeDelta = TimeDelta::days(1);
 
-/// A collection row's owner, kind, contract, publication flag and lock.
-type StoredCollection = (String, bool, Option<String>, bool, Option<NaiveDateTime>);
+/// A collection row's owner, provider, contract, publication flag and
+/// lock, and its provider's virtual third party's managers.
+type StoredCollection = (
+    String,
+    Option<String>,
+    Option<String>,
+    bool,
+    Option<NaiveDateTime>,
+    Option<Vec<String>>,
+    Option<bool>,
+);
+
+/// The wallets that manage the provider `id`, as builder-server's
+/// `ThirdPartyService.isManager` orders its sources: the registry's managers
+/// once it approved the provider; before approval, its managers that the
+/// virtual third party also lists, or all of them when there is no virtual
+/// third party; with no registry record, the virtual third party's managers.
+/// Nobody without the registry.
+pub(crate) fn provider_managers(
+    registry: Option<&[Provider]>,
+    id: &str,
+    virtual_managers: Option<&[String]>,
+) -> Vec<String> {
+    let Some(registry) = registry else {
+        return Vec::new();
+    };
+    match (third_parties::provider(registry, id), virtual_managers) {
+        (Some(record), Some(listed)) if !record.is_approved => record
+            .managers
+            .iter()
+            .filter(|m| has_manager(listed, m))
+            .cloned()
+            .collect(),
+        (Some(record), _) => record.managers.clone(),
+        (None, Some(listed)) => listed.to_vec(),
+        (None, None) => Vec::new(),
+    }
+}
+
+/// The registry, read when a collection in `collections` or the collection
+/// of an item in `items` is third-party, by a read that started at or after
+/// `since`; `None` when none is. Holds no connection while it reads.
+async fn registry_for(
+    state: &SharedState,
+    since: Instant,
+    collections: &[Uuid],
+    items: &[Uuid],
+) -> Result<Option<Registry>, ApiError> {
+    let third_party: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = ANY($1) AND third_party_id IS NOT NULL) \
+         OR EXISTS (SELECT 1 FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
+           WHERE i.id = ANY($2) AND c.third_party_id IS NOT NULL)",
+    )
+    .bind(collections)
+    .bind(items)
+    .fetch_one(state.items.pool())
+    .await?;
+    if !third_party {
+        return Ok(None);
+    }
+    Ok(Some(registry(state, since).await?))
+}
+
+fn providers(registry: &Option<Registry>) -> Option<&[Provider]> {
+    registry.as_ref().map(|r| r.as_slice())
+}
+
+async fn registry(state: &SharedState, since: Instant) -> Result<Registry, ApiError> {
+    state
+        .third_parties
+        .registry(state.market.as_ref(), since)
+        .await
+}
 
 async fn collection(
     conn: &mut PgConnection,
     view: &DecisionView,
     id: Uuid,
+    registry: Option<&[Provider]>,
 ) -> Result<Option<Collection>, ApiError> {
     let row: Option<StoredCollection> = sqlx::query_as(
-        "SELECT eth_address, third_party_id IS NOT NULL, contract_address, publication_pending, lock \
-         FROM builder.collections WHERE id = $1",
+        "SELECT c.eth_address, c.third_party_id, c.contract_address, c.publication_pending, c.lock, v.managers, \
+           v.is_programmatic FROM builder.collections c LEFT JOIN builder.virtual_third_parties v ON v.id = c.third_party_id \
+         WHERE c.id = $1",
     )
     .bind(id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((stored_owner, third_party, contract, pending, lock)) = row else {
+    let Some((
+        stored_owner,
+        provider,
+        contract,
+        pending,
+        lock,
+        virtual_managers,
+        virtual_programmatic,
+    )) = row
+    else {
         return Ok(None);
     };
+    let third_party = provider.is_some();
+    let programmatic = provider
+        .as_deref()
+        .and_then(|id| registry.and_then(|r| third_parties::provider(r, id)))
+        .map_or(virtual_programmatic.unwrap_or(false), |p| p.is_programmatic);
+    let provider_managers = provider
+        .map(|id| provider_managers(registry, &id, virtual_managers.as_deref()))
+        .unwrap_or_default();
     let published = chain_state::published(conn, view, id).await?;
     let facts = match &contract {
         Some(contract) if published && !third_party => {
@@ -416,6 +546,8 @@ async fn collection(
         stored_owner,
         contract,
         third_party,
+        provider_managers,
+        programmatic,
         pending,
         lock,
         published,
@@ -455,8 +587,9 @@ async fn parent(
     conn: &mut PgConnection,
     view: &DecisionView,
     id: Uuid,
+    registry: Option<&[Provider]>,
 ) -> Result<Collection, ApiError> {
-    collection(conn, view, id)
+    collection(conn, view, id, registry)
         .await?
         .ok_or_else(|| ApiError::internal(format!("item of a missing collection {id}")))
 }
@@ -482,23 +615,98 @@ async fn on_committee(state: &SharedState, signer: &str) -> Result<bool, ApiErro
         .await
 }
 
-/// The signer's own wallet.
+/// The signer's own wallet, for a listing of the rows it owns itself.
 pub fn wallet(signer: &Signer) -> Wallet {
     Wallet {
         address: signer.as_str().to_string(),
+        providers: Vec::new(),
     }
 }
 
+/// The signer's own wallet with the providers it manages: the ones
+/// builder-server's `getThirdParties(manager)` lists that
+/// [`provider_managers`] admits it to. Reads the registry.
+pub async fn managing(state: &SharedState, signer: &Signer) -> Result<Wallet, ApiError> {
+    let registry = registry(state, Instant::now()).await?;
+    let mut conn = state.items.pool().acquire().await?;
+    let listed = third_parties::managed_by(&mut conn, &registry, signer.as_str()).await?;
+    let providers = listed
+        .into_iter()
+        .filter(|l| {
+            has_manager(
+                &provider_managers(Some(&registry), &l.id, l.virtual_managers.as_deref()),
+                signer.as_str(),
+            )
+        })
+        .map(|l| (l.id, l.programmatic))
+        .collect();
+    Ok(Wallet {
+        address: signer.as_str().to_string(),
+        providers,
+    })
+}
+
 /// `/v1/{address}/collections` and `/items`: the address must be the
-/// signer's; anyone else is refused with the requested address.
-pub fn own_address(signer: &Signer, address: &str) -> Result<Wallet, ApiError> {
+/// signer's; anyone else is refused with the requested address. The wallet
+/// carries the providers it manages ([`managing`]).
+pub async fn own_address(
+    state: &SharedState,
+    signer: &Signer,
+    address: &str,
+) -> Result<Wallet, ApiError> {
     let address = address.to_ascii_lowercase();
     if address != signer.as_str() {
         return Err(
             ApiError::unauthorized("Unauthorized").with_data(json!({ "eth_address": address }))
         );
     }
-    Ok(wallet(signer))
+    managing(state, signer).await
+}
+
+/// May read a provider's slots; carries the registry the decision read.
+#[derive(Debug)]
+pub struct ProviderManage {
+    id: String,
+    registry: Registry,
+}
+
+impl ProviderManage {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn registry(&self) -> &[Provider] {
+        &self.registry
+    }
+}
+
+/// `GET /v1/thirdParties/:id/slots`: a manager of the provider `id`
+/// ([`provider_managers`]); anyone else, an unknown provider included, is
+/// refused with builder-server's 401.
+pub async fn manage_provider(
+    state: &SharedState,
+    signer: &Signer,
+    id: &str,
+) -> Result<ProviderManage, ApiError> {
+    let registry = registry(state, Instant::now()).await?;
+    let listed: Option<Vec<String>> =
+        sqlx::query_scalar("SELECT managers FROM builder.virtual_third_parties WHERE id = $1")
+            .bind(id)
+            .fetch_optional(state.items.pool())
+            .await?;
+    if !has_manager(
+        &provider_managers(Some(&registry), id, listed.as_deref()),
+        signer.as_str(),
+    ) {
+        return Err(ApiError::unauthorized(
+            "Unauthorized access. Account is not manager of the collection",
+        )
+        .with_data(json!({ "eth_address": signer.as_str() })));
+    }
+    Ok(ProviderManage {
+        id: id.to_string(),
+        registry,
+    })
 }
 
 /// The signer must be a current committee member.
@@ -512,31 +720,54 @@ pub async fn committee(state: &SharedState, signer: &Signer) -> Result<OnCommitt
     })
 }
 
-/// While the copy has a complete pass but a stale one: whether `id` is the
-/// signer's own draft, which the copy can't change: its stored owner is the
-/// signer and it is third-party, or standard and its contract isn't on the
-/// copy. The owner's own listing answers the same rows from the same pass.
+/// A collection row's owner, provider and contract, with its provider's
+/// virtual third party's managers and programmatic flag.
+type StaleRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<bool>,
+);
+
+/// While the copy has a complete pass but a stale one: whether `id` is a
+/// collection the copy can't change that the signer reads in full (and, if
+/// so, whether its provider is programmatic): a third-party one whose
+/// provider it manages, or its own standard draft, whose contract isn't on
+/// the copy. The owner's own listing answers the same rows from the same
+/// pass.
 async fn own_draft_while_stale(
     conn: &mut PgConnection,
     signer: &Signer,
     id: Uuid,
-) -> Result<bool, ApiError> {
+    registry: Option<&[Provider]>,
+) -> Result<Option<bool>, ApiError> {
     let view = chain_state::for_read(conn).await?;
-    let row: Option<(String, bool, Option<String>)> = sqlx::query_as(
-        "SELECT eth_address, third_party_id IS NOT NULL, contract_address FROM builder.collections WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let Some((owner, third_party, contract)) = row else {
-        return Ok(false);
+    let row: Option<StaleRow> =
+        sqlx::query_as(
+            "SELECT c.eth_address, c.third_party_id, c.contract_address, v.managers, v.is_programmatic \
+             FROM builder.collections c LEFT JOIN builder.virtual_third_parties v ON v.id = c.third_party_id \
+             WHERE c.id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let Some((owner, provider, contract, listed, virtual_programmatic)) = row else {
+        return Ok(None);
     };
+    if let Some(provider) = provider {
+        let managers = provider_managers(registry, &provider, listed.as_deref());
+        let programmatic = registry
+            .and_then(|r| third_parties::provider(r, &provider))
+            .map_or(virtual_programmatic.unwrap_or(false), |p| p.is_programmatic);
+        return Ok(has_manager(&managers, signer.as_str()).then_some(programmatic));
+    }
     if owner != signer.as_str() {
-        return Ok(false);
+        return Ok(None);
     }
     Ok(match contract {
-        Some(contract) if !third_party => !chain_state::holds(conn, &view, &contract).await?,
-        _ => true,
+        Some(contract) => (!chain_state::holds(conn, &view, &contract).await?).then_some(false),
+        None => Some(false),
     })
 }
 
@@ -558,30 +789,47 @@ pub async fn read_collection(
     raw: &str,
 ) -> Result<CollectionRead, ApiError> {
     let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
     let mut conn = state.items.pool().acquire().await?;
     let view = match chain_state::for_decision(&mut conn).await {
         Ok(view) => view,
         Err(stale) => {
-            return match own_draft_while_stale(&mut conn, signer, id).await? {
-                true => Ok(CollectionRead { id, full: true }),
-                false => Err(stale),
+            return match own_draft_while_stale(&mut conn, signer, id, providers(&registry)).await? {
+                Some(programmatic) => Ok(CollectionRead {
+                    id,
+                    full: true,
+                    programmatic,
+                }),
+                None => Err(stale),
             };
         }
     };
-    let c = collection(&mut conn, &view, id)
+    let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
         .ok_or_else(|| not_found(id, COLLECTIONS))?;
     drop(conn);
     let s = signer.as_str();
     if c.role(s) {
-        return Ok(CollectionRead { id, full: true });
+        return Ok(CollectionRead {
+            id,
+            full: true,
+            programmatic: c.programmatic,
+        });
     }
     if c.published {
         let full = c.minter(s) || known_committee(state, s);
-        return Ok(CollectionRead { id, full });
+        return Ok(CollectionRead {
+            id,
+            full,
+            programmatic: c.programmatic,
+        });
     }
     if on_committee(state, s).await? {
-        return Ok(CollectionRead { id, full: true });
+        return Ok(CollectionRead {
+            id,
+            full: true,
+            programmatic: c.programmatic,
+        });
     }
     Err(ApiError::unauthorized("Unauthorized").with_data(json!({ "id": raw, "eth_address": s })))
 }
@@ -598,6 +846,10 @@ pub async fn collection_items(
     raw: &str,
     status: Option<&str>,
 ) -> Result<CollectionRead, ApiError> {
+    let registry = match Uuid::parse_str(raw) {
+        Ok(id) => registry_for(state, Instant::now(), &[id], &[]).await?,
+        Err(_) => None,
+    };
     let (mut conn, view) = decision(state).await?;
     let id = match Uuid::parse_str(raw) {
         Ok(id) => id,
@@ -621,7 +873,7 @@ pub async fn collection_items(
             .with_data(json!({ "idOrContractAddress": raw })));
         }
     };
-    let c = collection(&mut conn, &view, id)
+    let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
         .ok_or_else(|| not_found(id, COLLECTIONS))?;
     drop(conn);
@@ -631,14 +883,26 @@ pub async fn collection_items(
     }
     let s = signer.as_str();
     if c.role(s) {
-        return Ok(CollectionRead { id, full: true });
+        return Ok(CollectionRead {
+            id,
+            full: true,
+            programmatic: c.programmatic,
+        });
     }
     if c.published {
         let full = c.minter(s) || known_committee(state, s);
-        return Ok(CollectionRead { id, full });
+        return Ok(CollectionRead {
+            id,
+            full,
+            programmatic: c.programmatic,
+        });
     }
     if on_committee(state, s).await? {
-        return Ok(CollectionRead { id, full: true });
+        return Ok(CollectionRead {
+            id,
+            full: true,
+            programmatic: c.programmatic,
+        });
     }
     Err(ApiError::unauthorized("Unauthorized").with_data(json!({ "eth_address": s })))
 }
@@ -654,12 +918,13 @@ pub async fn read_item(
     raw: &str,
 ) -> Result<ItemRead, ApiError> {
     let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[], &[id]).await?;
     let (mut conn, view) = decision(state).await?;
     let i = item(&mut conn, id)
         .await?
         .ok_or_else(|| not_found(id, ITEMS))?;
     let parent = match i.collection {
-        Some(parent_id) => Some(parent(&mut conn, &view, parent_id).await?),
+        Some(parent_id) => Some(parent(&mut conn, &view, parent_id, providers(&registry)).await?),
         None => None,
     };
     drop(conn);
@@ -677,17 +942,28 @@ pub async fn read_item(
     Err(ApiError::unauthorized("Unauthorized").with_data(json!({ "id": raw, "eth_address": s })))
 }
 
-/// `PUT /v1/collections/:id`: anyone creates a collection under a new id;
-/// only the owner, or the provider's manager, saves an existing one.
+/// `PUT /v1/collections/:id`: anyone creates a standard collection under a
+/// new id, and a third-party one under `provider` when neither the registry
+/// nor a virtual third party has the provider, or when it manages the
+/// provider; only the owner, or the provider's manager, saves an existing
+/// one.
 pub async fn edit_collection(
     state: &SharedState,
     signer: &Signer,
     id: Uuid,
+    provider: Option<&str>,
 ) -> Result<CollectionEdit, ApiError> {
+    let since = Instant::now();
+    let registry = match provider {
+        Some(_) => Some(registry(state, since).await?),
+        None => registry_for(state, since, &[id], &[]).await?,
+    };
     let edit = CollectionEdit {
         id,
         signer: signer.as_str().to_string(),
         at: (state.now)(),
+        provider: provider.map(str::to_string),
+        registry,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_collection_edit(&mut conn, &view, &edit).await?;
@@ -695,13 +971,16 @@ pub async fn edit_collection(
 }
 
 /// The state of a collection a save was confirmed for: whether it is
-/// published, whether the node's own publication of it is in progress and
-/// whether its owner's lock holds.
+/// published, whether the node's own publication of it is in progress,
+/// whether its owner's lock holds, and, for a third-party collection a save
+/// creates, whether its provider is new to the node, so the save creates
+/// the provider's virtual third party with the signer as its manager.
 #[derive(Debug, Default)]
 pub struct EditState {
     pub published: bool,
     pub pending: bool,
     pub locked: bool,
+    pub new_provider: bool,
 }
 
 /// [`edit_collection`]'s decision again, inside the write's transaction,
@@ -711,18 +990,43 @@ pub(crate) async fn confirm_collection_edit(
     view: &DecisionView,
     edit: &CollectionEdit,
 ) -> Result<EditState, ApiError> {
-    let Some(c) = collection(conn, view, edit.id).await? else {
+    let s = edit.signer.as_str();
+    let refused = || {
+        ApiError::unauthorized("Unauthorized to upsert collection")
+            .with_data(json!({ "id": edit.id.to_string(), "eth_address": s }))
+    };
+    let Some(c) = collection(conn, view, edit.id, providers(&edit.registry)).await? else {
+        let Some(provider) = edit.provider.as_deref() else {
+            return Ok(EditState::default());
+        };
+        let registry = providers(&edit.registry).ok_or_else(refused)?;
+        let listed: Option<Vec<String>> =
+            sqlx::query_scalar("SELECT managers FROM builder.virtual_third_parties WHERE id = $1")
+                .bind(provider)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if third_parties::provider(registry, provider).is_none() && listed.is_none() {
+            return Ok(EditState {
+                new_provider: true,
+                ..EditState::default()
+            });
+        }
+        if !has_manager(
+            &provider_managers(Some(registry), provider, listed.as_deref()),
+            s,
+        ) {
+            return Err(refused());
+        }
         return Ok(EditState::default());
     };
-    let s = edit.signer.as_str();
     if !c.owner(s) && !c.provider_manager(s) {
-        return Err(ApiError::unauthorized("Unauthorized to upsert collection")
-            .with_data(json!({ "id": edit.id.to_string(), "eth_address": s })));
+        return Err(refused());
     }
     Ok(EditState {
         published: c.published,
         pending: c.pending,
         locked: c.locked(edit.at),
+        new_provider: false,
     })
 }
 
@@ -734,11 +1038,19 @@ pub async fn save_item(
     id: Uuid,
     intent: &SaveIntent,
 ) -> Result<ItemSave, ApiError> {
+    let registry = registry_for(
+        state,
+        Instant::now(),
+        &intent.collection.into_iter().collect::<Vec<_>>(),
+        &[id],
+    )
+    .await?;
     let save = ItemSave {
         id,
         signer: signer.as_str().to_string(),
         collection: intent.collection,
         at: (state.now)(),
+        registry,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_save(&mut conn, &view, &save, intent).await?;
@@ -820,23 +1132,20 @@ async fn third_party_urn(
     .await?)
 }
 
-/// Whether another item of the provider's collections that `manager`
-/// manages holds the item part `item`.
+/// Whether another item of any collection of `third_party_id` holds the
+/// item part `item` (builder-server's `isURNRepeated`).
 async fn urn_in_use(
     conn: &mut PgConnection,
     id: Uuid,
     third_party_id: &str,
-    manager: &str,
     item: &str,
 ) -> Result<bool, ApiError> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
-         WHERE i.id <> $1 AND c.third_party_id = $2 AND c.eth_address = $3 \
-           AND i.urn_suffix = c.urn_suffix || ':' || $4)",
+         WHERE i.id <> $1 AND c.third_party_id = $2 AND i.urn_suffix = c.urn_suffix || ':' || $3)",
     )
     .bind(id)
     .bind(third_party_id)
-    .bind(manager)
     .bind(item)
     .fetch_one(conn)
     .await?)
@@ -879,7 +1188,7 @@ pub(crate) async fn confirm_item_save(
     let target_id = (moving || joining).then_some(save.collection).flatten();
     let home = match home_id {
         Some(c) => Some(
-            collection(conn, view, c)
+            collection(conn, view, c, providers(&save.registry))
                 .await?
                 .ok_or_else(|| missing_collection(c))?,
         ),
@@ -887,7 +1196,7 @@ pub(crate) async fn confirm_item_save(
     };
     let target = match target_id {
         Some(c) => Some(
-            collection(conn, view, c)
+            collection(conn, view, c, providers(&save.registry))
                 .await?
                 .ok_or_else(|| missing_collection(c))?,
         ),
@@ -951,15 +1260,13 @@ pub(crate) async fn confirm_item_save(
                         json!({ "urn": item.urn }),
                     )));
                 }
-                if intent.id_given
-                    && urn_in_use(conn, id, &third_party_id, &c.stored_owner, &urn.item).await?
-                {
+                if intent.id_given && urn_in_use(conn, id, &third_party_id, &urn.item).await? {
                     return Err(in_use(UPSERT));
                 }
             }
             Some(_) => {}
             None => {
-                if urn_in_use(conn, id, &third_party_id, &c.stored_owner, &urn.item).await? {
+                if urn_in_use(conn, id, &third_party_id, &urn.item).await? {
                     return Err(in_use("inserted"));
                 }
             }
@@ -1050,6 +1357,7 @@ pub async fn change_item(
         id,
         signer: signer.as_str().to_string(),
         at: (state.now)(),
+        registry: registry_for(state, Instant::now(), &[], &[id]).await?,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_change(&mut conn, &view, &change).await?;
@@ -1083,7 +1391,7 @@ pub(crate) async fn confirm_item_change(
         }
         return Ok(ChangeState::default());
     };
-    let c = parent(conn, view, parent_id).await?;
+    let c = parent(conn, view, parent_id, providers(&change.registry)).await?;
     if !c.role(s) {
         return Err(unauthorized_user(s, ITEMS, id));
     }
@@ -1125,7 +1433,7 @@ pub(crate) async fn confirm_collection_lock(
     view: &DecisionView,
     lock: &CollectionLock,
 ) -> Result<(), ApiError> {
-    let c = collection(conn, view, lock.id)
+    let c = collection(conn, view, lock.id, None)
         .await?
         .ok_or_else(|| not_found(lock.id, COLLECTIONS))?;
     if !c.owner(&lock.signer) {
@@ -1141,10 +1449,12 @@ pub async fn manage_collection(
     signer: &Signer,
     raw: &str,
 ) -> Result<CollectionManage, ApiError> {
+    let id = parse(raw)?;
     let manage = CollectionManage {
-        id: parse(raw)?,
+        id,
         signer: signer.as_str().to_string(),
         at: (state.now)(),
+        registry: registry_for(state, Instant::now(), &[id], &[]).await?,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_collection_manage(&mut conn, &view, &manage).await?;
@@ -1168,7 +1478,7 @@ pub(crate) async fn confirm_collection_manage(
     view: &DecisionView,
     manage: &CollectionManage,
 ) -> Result<ManageState, ApiError> {
-    let c = collection(conn, view, manage.id)
+    let c = collection(conn, view, manage.id, providers(&manage.registry))
         .await?
         .ok_or_else(|| not_found(manage.id, COLLECTIONS))?;
     if !c.role(&manage.signer) {
@@ -1192,8 +1502,9 @@ pub async fn sync_collection(
     raw: &str,
 ) -> Result<CollectionSync, ApiError> {
     let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
     let (mut conn, view) = decision(state).await?;
-    let c = collection(&mut conn, &view, id)
+    let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
         .ok_or_else(|| not_found(id, COLLECTIONS))?;
     drop(conn);
@@ -1207,6 +1518,7 @@ pub async fn sync_collection(
         signer: s.to_string(),
         committee,
         third_party: c.third_party,
+        registry,
     })
 }
 
@@ -1217,7 +1529,7 @@ pub(crate) async fn confirm_collection_sync(
     view: &DecisionView,
     sync: &CollectionSync,
 ) -> Result<(), ApiError> {
-    let c = collection(conn, view, sync.id)
+    let c = collection(conn, view, sync.id, providers(&sync.registry))
         .await?
         .ok_or_else(|| not_found(sync.id, COLLECTIONS))?;
     if !sync.committee && !c.role(&sync.signer) {
@@ -1226,27 +1538,38 @@ pub(crate) async fn confirm_collection_sync(
     Ok(())
 }
 
-/// The node's own publication routes: the collection's stored owner, who is
-/// also the provider's manager of a third-party one.
+/// The node's own publication routes: the collection's stored owner and,
+/// for a third-party collection, a manager of its provider as well.
 pub async fn publisher(
     state: &SharedState,
     signer: &Signer,
     id: Uuid,
 ) -> Result<Publisher, ApiError> {
-    let owner: Option<String> =
-        sqlx::query_scalar("SELECT eth_address FROM builder.collections WHERE id = $1")
-            .bind(id)
-            .fetch_optional(state.items.pool())
-            .await?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let row: Option<(String, Option<String>, Option<Vec<String>>)> = sqlx::query_as(
+        "SELECT c.eth_address, c.third_party_id, v.managers FROM builder.collections c \
+         LEFT JOIN builder.virtual_third_parties v ON v.id = c.third_party_id WHERE c.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(state.items.pool())
+    .await?;
     let s = signer.as_str();
-    match owner {
-        None => Err(not_found(id, COLLECTIONS)),
-        Some(owner) if owner == s => Ok(Publisher {
-            id,
-            signer: s.to_string(),
-        }),
-        Some(_) => Err(unauthorized_user(s, COLLECTIONS, id)),
+    let Some((owner, provider, listed)) = row else {
+        return Err(not_found(id, COLLECTIONS));
+    };
+    let manages = provider.is_none_or(|provider| {
+        has_manager(
+            &provider_managers(providers(&registry), &provider, listed.as_deref()),
+            s,
+        )
+    });
+    if owner != s || !manages {
+        return Err(unauthorized_user(s, COLLECTIONS, id));
     }
+    Ok(Publisher {
+        id,
+        signer: s.to_string(),
+    })
 }
 
 /// Whether a published item names the hash `{hash}` in a name whose writer
@@ -1270,23 +1593,39 @@ const PUBLIC_FILE: &str = "EXISTS (SELECT 1 FROM (SELECT u.uploaded_by FROM buil
          AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
        LIMIT 1) named)";
 
+/// [`FILE_READ`]'s answer: public, the signer's own, and the providers
+/// with their virtual third parties' managers.
+type FileAnswer = (
+    bool,
+    bool,
+    sqlx::types::Json<Vec<(String, Option<Vec<String>>)>>,
+);
+
+/// The most providers a file read checks the signer against.
+const FILE_PROVIDERS: i64 = 20;
+
 /// [`PUBLIC_FILE`] for the hash `$1` and, for a signer `$2`, whether the
-/// signer holds an upload record for it itself or owns an item, or manages
-/// the third-party collection of an item, with an entry naming it whose
-/// writer holds one. Each branch starts from the hash's upload records; the
-/// signer's branches run only when the public answer is false.
-const FILE_READ: &str = "SELECT p.public, CASE WHEN p.public OR $2::text IS NULL THEN false ELSE ( \
+/// signer holds an upload record for it itself or owns an item with an
+/// entry naming it whose writer holds one, and, when neither, the providers
+/// (at most `$3`, each with its virtual third party's managers) of the
+/// third-party items with such an entry. Each branch starts from the hash's
+/// upload records; the signer's branches run only when the public answer
+/// is false.
+const FILE_READ: &str = "SELECT p.public, o.own, CASE WHEN p.public OR o.own OR $2::text IS NULL THEN '[]'::jsonb \
+       ELSE COALESCE((SELECT jsonb_agg(jsonb_build_array(t.id, v.managers)) FROM ( \
+         SELECT DISTINCT c.third_party_id AS id FROM builder.uploaded_contents u \
+           JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
+           JOIN builder.items i ON i.id = ic.item_id \
+           JOIN builder.collections c ON c.id = i.collection_id \
+           WHERE u.hash = $1 AND c.third_party_id IS NOT NULL ORDER BY 1 LIMIT $3) t \
+         LEFT JOIN builder.virtual_third_parties v ON v.id = t.id), '[]'::jsonb) END \
+     FROM (SELECT {public} AS public OFFSET 0) p \
+     CROSS JOIN LATERAL (SELECT CASE WHEN p.public OR $2::text IS NULL THEN false ELSE ( \
          EXISTS (SELECT 1 FROM builder.uploaded_contents WHERE hash = $1 AND uploaded_by = $2) \
          OR EXISTS (SELECT 1 FROM builder.uploaded_contents u \
            JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
            JOIN builder.items i ON i.id = ic.item_id \
-           WHERE u.hash = $1 AND i.eth_address = $2) \
-         OR EXISTS (SELECT 1 FROM builder.uploaded_contents u \
-           JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
-           JOIN builder.items i ON i.id = ic.item_id \
-           JOIN builder.collections c ON c.id = i.collection_id \
-           WHERE u.hash = $1 AND c.third_party_id IS NOT NULL AND c.eth_address = $2)) END \
-     FROM (SELECT {public} AS public OFFSET 0) p";
+           WHERE u.hash = $1 AND i.eth_address = $2)) END AS own) o";
 
 /// [`PUBLIC_FILE`] for the hash `hash` (a bound parameter or a column), with
 /// the published rule of [`chain_state::published_by_any_pass`].
@@ -1311,7 +1650,9 @@ pub(crate) fn file_read_sql() -> String {
 /// that an item it owns, or a third-party item whose collection it manages,
 /// names in such an entry. A name opens a file only for the wallet that
 /// wrote it holding the bytes; the committee and on-chain managers read what
-/// anyone reads.
+/// anyone reads. Whether the signer manages a provider is the registry's
+/// answer ([`provider_managers`]), read only for a signed request of a file
+/// no other branch opens that a third-party item names.
 /// `None` refuses: a hash that is not a canonical CID or that the node
 /// withholds (`content::Denylist`) is refused before any read, and a private
 /// file is refused as an absent one. Reads no committee and no fresh chain fact
@@ -1324,11 +1665,26 @@ pub async fn read_file(
     if !dcl_auth::is_canonical_cid(hash) || state.denylist.contains(hash) {
         return Ok(None);
     }
-    let (public, readable): (bool, bool) = sqlx::query_as(sqlx::AssertSqlSafe(file_read_sql()))
+    let since = Instant::now();
+    let (public, own, named): FileAnswer = sqlx::query_as(sqlx::AssertSqlSafe(file_read_sql()))
         .bind(hash)
         .bind(signer.map(Signer::as_str))
+        .bind(FILE_PROVIDERS)
         .fetch_one(state.items.pool())
         .await?;
+    let readable = own
+        || match (signer, named.0.is_empty()) {
+            (Some(signer), false) => {
+                let registry = registry(state, since).await?;
+                named.0.iter().any(|(provider, listed)| {
+                    has_manager(
+                        &provider_managers(Some(&registry), provider, listed.as_deref()),
+                        signer.as_str(),
+                    )
+                })
+            }
+            _ => false,
+        };
     Ok((public || readable).then(|| FileRead {
         hash: hash.to_string(),
         public: signer.is_none(),
@@ -1404,18 +1760,38 @@ pub(crate) mod granted {
     pub fn wallet(address: &str) -> Wallet {
         Wallet {
             address: address.to_string(),
+            providers: Vec::new(),
+        }
+    }
+
+    pub fn managing(address: &str, providers: &[&str]) -> Wallet {
+        Wallet {
+            address: address.to_string(),
+            providers: providers.iter().map(|p| (p.to_string(), false)).collect(),
         }
     }
 
     pub fn read(id: Uuid) -> CollectionRead {
-        CollectionRead { id, full: true }
+        CollectionRead {
+            id,
+            full: true,
+            programmatic: false,
+        }
     }
 
-    pub fn edit(signer: &str, id: Uuid) -> CollectionEdit {
+    /// An empty registry: a provider's managers are its virtual third
+    /// party's.
+    fn no_registry() -> Option<Registry> {
+        Some(Registry::default())
+    }
+
+    pub fn edit(signer: &str, id: Uuid, provider: Option<&str>) -> CollectionEdit {
         CollectionEdit {
             id,
             signer: signer.to_string(),
             at: Utc::now(),
+            provider: provider.map(str::to_string),
+            registry: no_registry(),
         }
     }
 
@@ -1429,6 +1805,7 @@ pub(crate) mod granted {
             signer: signer.to_string(),
             collection,
             at: Utc::now(),
+            registry: no_registry(),
         }
     }
 
@@ -1437,6 +1814,7 @@ pub(crate) mod granted {
             id,
             signer: signer.to_string(),
             at: Utc::now(),
+            registry: no_registry(),
         }
     }
 

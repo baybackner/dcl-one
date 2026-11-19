@@ -236,8 +236,9 @@ fn listing_out(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
 }
 
 impl ItemsComponent {
-    /// "My collections": the owner's unpublished collections and published
-    /// linked ones (`collections_owner_idx`).
+    /// "My collections": the owner's unpublished standard collections
+    /// (`collections_owner_idx`), and the unpublished and published linked
+    /// collections of the providers it manages.
     pub async fn collection_drafts(
         &self,
         wallet: &Wallet,
@@ -245,11 +246,13 @@ impl ItemsComponent {
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_read(&mut conn).await?;
         let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{} WHERE c.eth_address = $1 AND {} ORDER BY c.updated_at DESC",
+            "{} WHERE ((c.eth_address = $1 AND c.third_party_id IS NULL) OR c.third_party_id = ANY($2)) \
+             AND {} ORDER BY c.updated_at DESC",
             collection_listing(&view),
             draft_predicate(&view)
         )))
         .bind(wallet.address())
+        .bind(wallet.provider_ids())
         .fetch_all(&mut *conn)
         .await?;
         Ok(listing_out(&rows))

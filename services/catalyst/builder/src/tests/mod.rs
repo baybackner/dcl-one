@@ -16,6 +16,7 @@ mod linked_publication;
 mod publication_preparation;
 mod publication_transactions;
 mod small_reads;
+mod third_party_matrix;
 mod upstream_routes;
 mod wire_contract;
 mod write_gate;

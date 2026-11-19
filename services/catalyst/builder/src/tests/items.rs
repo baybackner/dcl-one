@@ -1,6 +1,8 @@
 //! Items beyond what the conformance captures show: the upload's bounds and
 //! hash checks, the blob collector's view of a deleted item's files, how a
-//! third-party URN in a path is matched, and listing filters as bound values.
+//! third-party URN in a path is matched and how an item part is unique
+//! across a provider, and listing filters as bound values. The provider's
+//! virtual third party lists the owner.
 
 use std::sync::Arc;
 
@@ -34,6 +36,14 @@ async fn app() -> Option<App> {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Items test:')",
+    )
+    .bind(PROVIDER)
+    .bind(vec![address(OWNER_KEY)])
+    .execute(&pool)
+    .await
+    .unwrap();
     Some(over(pool).await)
 }
 
@@ -44,7 +54,7 @@ async fn over(pool: PgPool) -> App {
             temp_storage().await,
             Arc::default(),
             dcl_http::Outbound::for_tests(),
-            None,
+            Some(super::support::registry_only_index().await),
             None,
             crate::Settings {
                 writes_enabled: true,
@@ -595,7 +605,7 @@ async fn linked_collection(app: &App, key: &str, name: &str) -> (Uuid, String) {
 }
 
 #[tokio::test]
-async fn another_wallets_collection_under_the_provider_neither_takes_nor_hides_an_item_urn() {
+async fn an_item_part_is_taken_across_the_providers_collections_and_only_its_managers_save() {
     let Some(app) = app().await else {
         return;
     };
@@ -616,7 +626,10 @@ async fn another_wallets_collection_under_the_provider_neither_takes_nor_hides_a
         ),
     )
     .await;
-    assert_eq!(got, 200, "{body}");
+    assert_eq!(
+        got, 401,
+        "creating a collection under the provider makes no manager of it: {body}"
+    );
 
     let (mine, my_urn) = linked_collection(&app, OWNER_KEY, "mine").await;
     let id = Uuid::new_v4();
@@ -633,12 +646,8 @@ async fn another_wallets_collection_under_the_provider_neither_takes_nor_hides_a
         ),
     )
     .await;
-    assert_eq!(
-        got, 200,
-        "another wallet's collection under the provider doesn't take the item part: {body}"
-    );
+    assert_eq!(got, 200, "{body}");
 
-    let (other, other_urn) = linked_collection(&app, OWNER_KEY, "other").await;
     let second = Uuid::new_v4();
     let (got, body) = put(
         &app,
@@ -647,15 +656,15 @@ async fn another_wallets_collection_under_the_provider_neither_takes_nor_hides_a
         &item(
             second,
             OWNER_KEY,
-            Some(other),
+            Some(theirs),
             &contents,
-            Some(&format!("{other_urn}:scarf")),
+            Some(&format!("{their_urn}:scarf")),
         ),
     )
     .await;
     assert_eq!(
         got, 409,
-        "the wallet's own collections under the provider share item parts: {body}"
+        "the provider's collections share item parts, whoever created them: {body}"
     );
 
     let path = format!("{my_urn}:scarf");
@@ -666,14 +675,35 @@ async fn another_wallets_collection_under_the_provider_neither_takes_nor_hides_a
     assert_eq!(
         (got, body["data"]["id"].as_str()),
         (200, Some(id.to_string().as_str())),
-        "a save by URN reaches the signer's own item, never another wallet's of the provider: {body}"
+        "a save by URN reaches the provider's item of that URN: {body}"
     );
-    let theirs_name: String = sqlx::query_scalar("SELECT name FROM builder.items WHERE id = $1")
-        .bind(squatted)
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    assert_eq!(theirs_name, "Items test");
+    let (got, body) = put(&app, STRANGER_KEY, &format!("/v1/items/{path}"), &by_urn).await;
+    assert_eq!(
+        got, 401,
+        "a wallet that manages no provider is refused: {body}"
+    );
+
+    let cap = Uuid::new_v4();
+    let cap_urn = format!("{their_urn}:cap");
+    let (got, body) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{cap}"),
+        &item(cap, OWNER_KEY, Some(theirs), &contents, Some(&cap_urn)),
+    )
+    .await;
+    assert_eq!(
+        got, 200,
+        "a manager saves into a collection another wallet created: {body}"
+    );
+    let mut by_urn = item(cap, OWNER_KEY, Some(theirs), &contents, Some(&cap_urn));
+    by_urn["item"].as_object_mut().unwrap().remove("id");
+    let (got, body) = put(&app, OWNER_KEY, &format!("/v1/items/{cap_urn}"), &by_urn).await;
+    assert_eq!(
+        (got, body["data"]["id"].as_str()),
+        (200, Some(cap.to_string().as_str())),
+        "a save by URN reaches an item of a collection another wallet created: {body}"
+    );
 }
 
 #[tokio::test]

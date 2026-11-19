@@ -44,7 +44,8 @@
         "source/132-collection-save-unsigned.json",
         "source/209-item-save-unsigned.json",
         "source/231-item-files-unsigned.json",
-        "source/282-collection-lock-unsigned.json"
+        "source/282-collection-lock-unsigned.json",
+        "source/304-third-parties-unsigned.json"
       ],
       "anchors": []
     },
@@ -123,11 +124,12 @@
       ]
     },
     "invalid-body-detail": {
-      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN and POST /v1/collections/:id/tos with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
+      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN, POST /v1/collections/:id/tos and PATCH /v1/thirdParties/:id with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
       "captures": [
         "source/16-collection-invalid-body.json",
         "source/206-item-save-invalid-name.json",
-        "source/287-collection-tos-invalid-email.json"
+        "source/287-collection-tos-invalid-email.json",
+        "source/327-third-party-update-invalid.json"
       ],
       "anchors": []
     },
@@ -265,6 +267,16 @@
       "text": "POST /v1/collections/:id/owner/sync: upstream writes the chain creator into the collection's and its items' stored eth_address when they differ; the node stores nothing, since it reads the owner from its chain copy on every request, and answers the same body. A later read of an item's stored eth_address shows the difference. The old builder web never calls the route.",
       "captures": [],
       "anchors": []
+    },
+    "third-party-claims": {
+      "text": "A provider the registry lists unapproved whose virtual third party lists other wallets: the node admits as its manager only a wallet both list, and refuses the others (401); upstream admits the virtual third party's managers alone until the registry approves the provider. The old builder web registers a provider from its virtual third party with the same managers, so both list them; a wallet that claimed an id before another wallet registered it on chain manages nothing of it on the node.",
+      "captures": [
+        "source/314-third-party-slots-claimed-before-registration.json",
+        "source/320-collection-save-claimed-before-registration.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=401"
+      ]
     }
   },
   "operations": [
@@ -347,13 +359,12 @@
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:item-list-bounds",
         "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "A provider manager the third-party registry lists."
+      "remaining_verification": "A registry manager listing its provider's items."
     },
     {
       "id": "api_http:GET:/v1/items/:id",
@@ -845,7 +856,6 @@
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:invalid-body-detail",
@@ -856,7 +866,7 @@
         "deliberate:managers-from-chain-only",
         "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "The lock, the registry, item curations and the catalyst's entities."
+      "remaining_verification": "The lock, a registry manager's saves, item curations and the catalyst's entities."
     },
     {
       "id": "api_http:DELETE:/v1/items/:id",
@@ -906,19 +916,18 @@
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "open:item-curation-publicity",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only"
       ],
-      "remaining_verification": "The registry and item curations."
+      "remaining_verification": "A registry manager's deletes and item curations."
     },
     {
       "id": "api_http:POST:/v1/items/:id/files",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "Uploads by the owner and an on-chain manager, including to a minted item and in a locked collection, refusals of a stranger, the committee, an unsigned request and an unknown item, and parts that don't match their hash or that the item doesn't name, were compared; the node refuses those parts.",
       "evidence": [
         {
@@ -1010,7 +1019,6 @@
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "deliberate:item-upload-named-files",
         "deliberate:item-upload-bounds",
         "deliberate:unauthenticated-message",
@@ -1019,7 +1027,7 @@
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only"
       ],
-      "remaining_verification": "The lock and the registry."
+      "remaining_verification": "The lock and a registry manager's uploads."
     },
     {
       "id": "api_http:POST:/v1/items/:id/videos",
@@ -1075,8 +1083,8 @@
     {
       "id": "api_http:GET:/v1/collections",
       "owner": "collections",
-      "status": "known_gap",
-      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches except the registry case. Also compared: a programmatic provider's collection on the committee's listing (upstream is_programmatic true, the node leaves it out: the open registry gap).",
+      "status": "reviewed",
+      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches, a registered provider's collection and a programmatic provider's collection on the committee's listing included.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/01-collections-public-search.json",
@@ -1281,47 +1289,28 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/143-collections-committee-registered-provider.json",
           "scope": "GET /collections signed by a committee member, searching collections of a provider the registry lists.",
-          "replay": [
-            "data.length value",
-            "data[].id value",
-            "data[].is_programmatic missing",
-            "data[].name value",
-            "data[].urn value"
-          ],
-          "explained_by": {
-            "data.length value": "open:third-party-registry",
-            "data[].id value": "open:third-party-registry",
-            "data[].is_programmatic missing": "open:third-party-registry",
-            "data[].name value": "open:third-party-registry",
-            "data[].urn value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/147-collections-committee-programmatic-provider.json",
           "scope": "GET /collections signed by a committee member, searching collections of a programmatic provider.",
-          "replay": [
-            "data[].is_programmatic missing"
-          ],
-          "explained_by": {
-            "data[].is_programmatic missing": "open:third-party-registry"
-          }
+          "replay": []
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "deliberate:collection-list-bounds",
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
         "deliberate:managers-from-chain-only",
         "deliberate:polygon-mainnet-collections"
       ],
-      "remaining_verification": "The third-party change reads the registry; then capture 143 replays clean. The review filters, relevance and curation_status read every collection as uncurated until the curation changes."
+      "remaining_verification": "The review filters, relevance and curation_status read every collection as uncurated until the curation changes."
     },
     {
       "id": "api_http:GET:/v1/:address/collections",
       "owner": "collections",
-      "status": "known_gap",
-      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names, except the registry case. Also compared: a programmatic provider's manager listing its third-party collections (is_programmatic, the open registry gap) and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap).",
+      "status": "reviewed",
+      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names. Also compared: a registry manager's and a programmatic provider's manager's listings of their providers' third-party collections, and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap).",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/62-address-collections-creator.json",
@@ -1507,50 +1496,12 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/142-address-collections-registered-manager.json",
           "scope": "GET /{address}/collections signed by that address, a manager the registry lists for a provider.",
-          "replay": [
-            "data.length value",
-            "data[].contract_address value",
-            "data[].eth_address value",
-            "data[].id value",
-            "data[].is_approved value",
-            "data[].is_mapping_complete value",
-            "data[].is_programmatic missing",
-            "data[].is_published value",
-            "data[].item_count value",
-            "data[].managers.length value",
-            "data[].minters.length value",
-            "data[].name value",
-            "data[].reviewed_at value",
-            "data[].salt value",
-            "data[].urn value"
-          ],
-          "explained_by": {
-            "data.length value": "open:third-party-registry",
-            "data[].contract_address value": "open:third-party-registry",
-            "data[].eth_address value": "open:third-party-registry",
-            "data[].id value": "open:third-party-registry",
-            "data[].is_approved value": "open:third-party-registry",
-            "data[].is_mapping_complete value": "open:third-party-registry",
-            "data[].is_programmatic missing": "open:third-party-registry",
-            "data[].is_published value": "open:third-party-registry",
-            "data[].item_count value": "open:third-party-registry",
-            "data[].managers.length value": "open:third-party-registry",
-            "data[].minters.length value": "open:third-party-registry",
-            "data[].name value": "open:third-party-registry",
-            "data[].reviewed_at value": "open:third-party-registry",
-            "data[].salt value": "open:third-party-registry",
-            "data[].urn value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/146-address-collections-programmatic-provider.json",
           "scope": "GET /{address}/collections signed by that address, a manager the registry lists for a programmatic provider.",
-          "replay": [
-            "data[].is_programmatic value"
-          ],
-          "explained_by": {
-            "data[].is_programmatic value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/149-address-collections-query-address-other.json",
@@ -1586,7 +1537,6 @@
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "deliberate:address-listing-transferred",
         "deliberate:collection-list-bounds",
         "deliberate:unauthenticated-message",
@@ -1598,13 +1548,13 @@
         "deliberate:signature-window",
         "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "The third-party change adds the registry's providers to the address's scope; then capture 142 replays clean. The status filter reads every collection as uncurated until the curation changes."
+      "remaining_verification": "The status filter reads every collection as uncurated until the curation changes."
     },
     {
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
-      "status": "known_gap",
-      "result": "The full body for the owner of a draft, of a published unapproved and of a published approved collection, for a committee member of a draft and of a published collection, for an on-chain manager and an on-chain minter, and for the provider's manager of a third-party collection; the public detail for a signer without a role on a published unapproved and approved collection; the refusals of a stranger on a draft and on a third-party collection, an unsigned request, each signature defect, a missing id and a malformed id were compared. Every one matches but the signature cases. Also compared: the chain creator and the stored owner of a transferred collection, a committee member on a third-party draft, an ADMIN_ADDRESSES wallet on a collection on chain, a wallet named as manager only in a draft's body, and a second registry manager of a provider. Also compared: the manager of a programmatic provider reading its collection (upstream is_programmatic true, the node false: the open registry gap), and an id query parameter naming another collection (upstream answers that one; the node the path's: a deliberate gap).",
+      "status": "reviewed",
+      "result": "The full body for the owner of a draft, of a published unapproved and of a published approved collection, for a committee member of a draft and of a published collection, for an on-chain manager and an on-chain minter, and for the provider's manager of a third-party collection; the public detail for a signer without a role on a published unapproved and approved collection; the refusals of a stranger on a draft and on a third-party collection, an unsigned request, each signature defect, a missing id and a malformed id were compared. Every one matches but the signature cases. Also compared: the chain creator and the stored owner of a transferred collection, a committee member on a third-party draft, an ADMIN_ADDRESSES wallet on a collection on chain, a wallet named as manager only in a draft's body, and a second registry manager of a provider. Also compared: the manager of a programmatic provider reading its collection, and an id query parameter naming another collection (upstream answers that one; the node the path's: a deliberate gap). Also compared: a collection of an unapproved provider read by a wallet both the registry and the virtual third party list, and by a registry manager the virtual third party doesn't list.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
@@ -1929,66 +1879,12 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/141-collection-registered-manager.json",
           "scope": "GET /collections/{id} signed by another manager the registry lists for the provider of a third-party collection.",
-          "replay": [
-            "status: fixture=200 candidate=401",
-            "data.contract_address missing",
-            "data.created_at missing",
-            "data.eth_address value",
-            "data.forum_id missing",
-            "data.forum_link missing",
-            "data.is_approved missing",
-            "data.is_mapping_complete missing",
-            "data.is_programmatic missing",
-            "data.is_published missing",
-            "data.item_count missing",
-            "data.linked_contract_address missing",
-            "data.linked_contract_network missing",
-            "data.lock missing",
-            "data.managers missing",
-            "data.minters missing",
-            "data.name missing",
-            "data.reviewed_at missing",
-            "data.salt missing",
-            "data.updated_at missing",
-            "data.urn missing",
-            "error extra",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=200 candidate=401": "open:third-party-registry",
-            "data.contract_address missing": "open:third-party-registry",
-            "data.created_at missing": "open:third-party-registry",
-            "data.eth_address value": "open:third-party-registry",
-            "data.forum_id missing": "open:third-party-registry",
-            "data.forum_link missing": "open:third-party-registry",
-            "data.is_approved missing": "open:third-party-registry",
-            "data.is_mapping_complete missing": "open:third-party-registry",
-            "data.is_programmatic missing": "open:third-party-registry",
-            "data.is_published missing": "open:third-party-registry",
-            "data.item_count missing": "open:third-party-registry",
-            "data.linked_contract_address missing": "open:third-party-registry",
-            "data.linked_contract_network missing": "open:third-party-registry",
-            "data.lock missing": "open:third-party-registry",
-            "data.managers missing": "open:third-party-registry",
-            "data.minters missing": "open:third-party-registry",
-            "data.name missing": "open:third-party-registry",
-            "data.reviewed_at missing": "open:third-party-registry",
-            "data.salt missing": "open:third-party-registry",
-            "data.updated_at missing": "open:third-party-registry",
-            "data.urn missing": "open:third-party-registry",
-            "error extra": "open:third-party-registry",
-            "ok value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/145-collection-programmatic-provider.json",
           "scope": "GET /collections/{id} signed by the manager of the programmatic provider of a third-party collection.",
-          "replay": [
-            "data.is_programmatic value"
-          ],
-          "explained_by": {
-            "data.is_programmatic value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/151-collection-query-id.json",
@@ -2024,10 +1920,19 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/300-collection-after-delete.json",
           "scope": "Signed GET by the owner of the draft it deleted.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/318-collection-unapproved-registry-only-manager.json",
+          "scope": "GET /collections/{id} signed by a manager the registry lists unapproved that the provider's virtual third party doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/319-collection-unapproved-both.json",
+          "scope": "GET /collections/{id} signed by a wallet the registry lists unapproved and the virtual third party lists too. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
         "deliberate:admin-addresses-not-admitted",
@@ -2039,7 +1944,7 @@
         "deliberate:unauthenticated-message",
         "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "The third-party change reads the registry; then capture 141 replays clean. Fields whose sources arrive later answer upstream's empty value: forum fields, a third-party collection's dates and published state from item curations."
+      "remaining_verification": "Fields whose sources arrive later answer upstream's empty value: forum fields, a third-party collection's dates and published state from item curations."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
@@ -2265,8 +2170,8 @@
     {
       "id": "api_http:PUT:/v1/collections/:id",
       "owner": "collections",
-      "status": "known_gap",
-      "result": "Creating a standard draft with initialize calldata naming its signer, renaming a draft, a name in use, body and path ids that differ, a body without data, a body claiming publication, a published collection, creating a third-party collection, a third-party URN in use, a changed URN suffix of an unpublished third-party collection, converting either kind, moving a collection to another provider, and the refusals of a stranger, a committee member, an on-chain manager, an unsigned request and an invalid body were compared. Also compared: unsigned with a valid body, a stranger saving another provider's collection, names in use only by a third-party collection or differing by case and spaces, approval claimed alone, a linked contract another collection of the provider links and a cleared linked contract (both refused as upstream refuses them), a manager kept in a draft's body, and a create under a provider the registry lists by a wallet that doesn't manage it and by one that does. Every difference is one a deliberate gap names, except the registry case. Also compared: a create under a programmatic registered provider, and a registry manager saving a collection another manager created (upstream 200, the node 401: the open registry gap).",
+      "status": "reviewed",
+      "result": "Creating a standard draft with initialize calldata naming its signer, renaming a draft, a name in use, body and path ids that differ, a body without data, a body claiming publication, a published collection, creating a third-party collection, a third-party URN in use, a changed URN suffix of an unpublished third-party collection, converting either kind, moving a collection to another provider, and the refusals of a stranger, a committee member, an on-chain manager, an unsigned request and an invalid body were compared. Also compared: unsigned with a valid body, a stranger saving another provider's collection, names in use only by a third-party collection or differing by case and spaces, approval claimed alone, a linked contract another collection of the provider links and a cleared linked contract (both refused as upstream refuses them), a manager kept in a draft's body, and a create under a provider the registry lists by a wallet that doesn't manage it and by one that does. Every difference is one a deliberate gap names. Also compared: a create under a programmatic registered provider, and a registry manager saving a collection another manager created. Third-party creates under an unapproved provider by a wallet the registry and the virtual third party both list, by the virtual third party's manager alone (the node refuses it: a deliberate gap) and by the registry's manager alone, the first collection of a provider nobody has, and a create by a wallet that provider's virtual third party doesn't list, were compared too.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/05-collection-create.json",
@@ -2636,54 +2541,7 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/139-collection-save-registered-provider-stranger.json",
           "scope": "PUT /collections/{id} signed by a wallet that manages no provider, creating a collection under a provider the registry lists.",
-          "replay": [
-            "status: fixture=401 candidate=200",
-            "data.contract_address extra",
-            "data.created_at extra",
-            "data.eth_address value",
-            "data.forum_id extra",
-            "data.forum_link extra",
-            "data.is_approved extra",
-            "data.is_mapping_complete extra",
-            "data.is_published extra",
-            "data.item_count extra",
-            "data.linked_contract_address extra",
-            "data.linked_contract_network extra",
-            "data.lock extra",
-            "data.managers extra",
-            "data.minters extra",
-            "data.name extra",
-            "data.reviewed_at extra",
-            "data.salt extra",
-            "data.updated_at extra",
-            "data.urn extra",
-            "error missing",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=401 candidate=200": "open:third-party-registry",
-            "data.contract_address extra": "open:third-party-registry",
-            "data.created_at extra": "open:third-party-registry",
-            "data.eth_address value": "open:third-party-registry",
-            "data.forum_id extra": "open:third-party-registry",
-            "data.forum_link extra": "open:third-party-registry",
-            "data.is_approved extra": "open:third-party-registry",
-            "data.is_mapping_complete extra": "open:third-party-registry",
-            "data.is_published extra": "open:third-party-registry",
-            "data.item_count extra": "open:third-party-registry",
-            "data.linked_contract_address extra": "open:third-party-registry",
-            "data.linked_contract_network extra": "open:third-party-registry",
-            "data.lock extra": "open:third-party-registry",
-            "data.managers extra": "open:third-party-registry",
-            "data.minters extra": "open:third-party-registry",
-            "data.name extra": "open:third-party-registry",
-            "data.reviewed_at extra": "open:third-party-registry",
-            "data.salt extra": "open:third-party-registry",
-            "data.updated_at extra": "open:third-party-registry",
-            "data.urn extra": "open:third-party-registry",
-            "error missing": "open:third-party-registry",
-            "ok value": "open:third-party-registry"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/140-collection-save-registered-provider-manager.json",
@@ -2698,6 +2556,16 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/148-collection-save-registered-other-manager.json",
           "scope": "PUT /collections/{id} signed by a manager the registry lists, saving a collection another manager of the provider created.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/317-collection-save-unapproved-both.json",
+          "scope": "PUT /collections/{id} signed by a wallet the registry lists unapproved and the virtual third party lists too, creating a collection under the provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/320-collection-save-claimed-before-registration.json",
+          "scope": "PUT /collections/{id} signed by the manager of a virtual third party of a provider the registry lists unapproved for another wallet. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": [
             "status: fixture=200 candidate=401",
             "data.contract_address missing",
@@ -2723,33 +2591,47 @@
             "ok value"
           ],
           "explained_by": {
-            "status: fixture=200 candidate=401": "open:third-party-registry",
-            "data.contract_address missing": "open:third-party-registry",
-            "data.created_at missing": "open:third-party-registry",
-            "data.eth_address value": "open:third-party-registry",
-            "data.forum_id missing": "open:third-party-registry",
-            "data.forum_link missing": "open:third-party-registry",
-            "data.is_approved missing": "open:third-party-registry",
-            "data.is_mapping_complete missing": "open:third-party-registry",
-            "data.is_published missing": "open:third-party-registry",
-            "data.item_count missing": "open:third-party-registry",
-            "data.linked_contract_address missing": "open:third-party-registry",
-            "data.linked_contract_network missing": "open:third-party-registry",
-            "data.lock missing": "open:third-party-registry",
-            "data.managers missing": "open:third-party-registry",
-            "data.minters missing": "open:third-party-registry",
-            "data.name missing": "open:third-party-registry",
-            "data.reviewed_at missing": "open:third-party-registry",
-            "data.salt missing": "open:third-party-registry",
-            "data.updated_at missing": "open:third-party-registry",
-            "data.urn missing": "open:third-party-registry",
-            "error extra": "open:third-party-registry",
-            "ok value": "open:third-party-registry"
+            "status: fixture=200 candidate=401": "deliberate:third-party-claims",
+            "data.contract_address missing": "deliberate:third-party-claims",
+            "data.created_at missing": "deliberate:third-party-claims",
+            "data.eth_address value": "deliberate:third-party-claims",
+            "data.forum_id missing": "deliberate:third-party-claims",
+            "data.forum_link missing": "deliberate:third-party-claims",
+            "data.is_approved missing": "deliberate:third-party-claims",
+            "data.is_mapping_complete missing": "deliberate:third-party-claims",
+            "data.is_published missing": "deliberate:third-party-claims",
+            "data.item_count missing": "deliberate:third-party-claims",
+            "data.linked_contract_address missing": "deliberate:third-party-claims",
+            "data.linked_contract_network missing": "deliberate:third-party-claims",
+            "data.lock missing": "deliberate:third-party-claims",
+            "data.managers missing": "deliberate:third-party-claims",
+            "data.minters missing": "deliberate:third-party-claims",
+            "data.name missing": "deliberate:third-party-claims",
+            "data.reviewed_at missing": "deliberate:third-party-claims",
+            "data.salt missing": "deliberate:third-party-claims",
+            "data.updated_at missing": "deliberate:third-party-claims",
+            "data.urn missing": "deliberate:third-party-claims",
+            "error extra": "deliberate:third-party-claims",
+            "ok value": "deliberate:third-party-claims"
           }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/321-collection-save-unapproved-registry-only.json",
+          "scope": "PUT /collections/{id} signed by the manager the registry lists unapproved for a provider whose virtual third party lists another wallet. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/322-collection-save-new-provider.json",
+          "scope": "PUT /collections/{id} signed by a wallet that manages no provider, creating the first collection of a provider nobody has. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/324-collection-save-under-another-virtual.json",
+          "scope": "PUT /collections/{id} signed by a wallet a provider's virtual third party doesn't list, under that provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:third-party-registry",
         "deliberate:initialize-data-creator",
         "deliberate:collection-save-input",
         "deliberate:invalid-body-detail",
@@ -2760,15 +2642,16 @@
         "deliberate:timestamped-signatures-only",
         "deliberate:unauthenticated-message",
         "deliberate:chain-copy-lag",
-        "deliberate:stored-name-trimmed"
+        "deliberate:stored-name-trimmed",
+        "deliberate:third-party-claims"
       ],
-      "remaining_verification": "The third-party change reads the registry: then a non-manager's create under a registered provider answers 401 and capture 139 replays clean. The lock's 423 waits for the lifecycle change."
+      "remaining_verification": "The lock's 423 waits for the lifecycle change."
     },
     {
       "id": "api_http:DELETE:/v1/collections/:id",
       "owner": "collections",
       "status": "reviewed",
-      "result": "Deletes of a draft by its owner with the body the old builder web sends, of a third-party collection never submitted by its provider manager, of a collection on chain and of a locked one by their owner, by a stranger and of an unknown id were compared and match, and so does a read of the deleted draft.",
+      "result": "Deletes of a draft by its owner with the body the old builder web sends, of a third-party collection never submitted by its provider manager, of a collection on chain and of a locked one by their owner, by a stranger and of an unknown id were compared and match, and so does a read of the deleted draft. So does the delete of a provider's only collection by its virtual third party's manager, which removes the virtual third party.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/294-collection-delete-stranger.json",
@@ -2798,6 +2681,11 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/299-collection-delete-unknown.json",
           "scope": "DELETE /collections/{id} of an id no collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/335-collection-delete-last-of-provider.json",
+          "scope": "DELETE /collections/{id} signed by the manager of a virtual third party, its provider's only collection. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
         }
       ],
@@ -3015,47 +2903,219 @@
     {
       "id": "api_http:GET:/v1/thirdParties",
       "owner": "third-parties",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The lists of a registry manager (approved providers, less an unapproved one whose virtual third party lists another wallet), of a wallet virtual third parties list (an unapproved provider both list, the virtual third parties not in its registry list, least recently written first), of a stranger, with a manager query parameter, and the refusal of an unsigned request were compared; every one matches but the unsigned refusal's message.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/301-third-parties-registry-manager.json",
+          "scope": "GET /thirdParties signed by a manager the registry lists for two approved providers and an unapproved one whose virtual third party lists another wallet. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/302-third-parties-virtual-manager.json",
+          "scope": "GET /thirdParties signed by a wallet that a virtual third party lists, for an unapproved provider of both, a provider with no record and an unapproved provider the registry lists another wallet for. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/303-third-parties-stranger.json",
+          "scope": "GET /thirdParties signed by a wallet that manages no provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/304-third-parties-unsigned.json",
+          "scope": "GET /thirdParties without a signature. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/305-third-parties-manager-query.json",
+          "scope": "GET /thirdParties signed by a wallet that manages no provider, naming a registry manager as manager. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:unauthenticated-message"
+      ],
+      "remaining_verification": "Providers with linked contracts in the registry's metadata."
     },
     {
       "id": "api_http:GET:/v1/thirdParties/:id/slots",
       "owner": "third-parties",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The slots of an approved provider for its second registry manager and a stranger, of a virtual third party for its manager, of unapproved providers for the manager of their virtual third party, for a registry manager the virtual third party doesn't list, and for a wallet both list, and after the virtual third party was removed, were compared; every one matches but the manager of the virtual third party of a provider the registry lists unapproved for another wallet, whom the node refuses.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/311-third-party-slots-registry-manager.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the second manager the registry lists for an approved provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/312-third-party-slots-stranger.json",
+          "scope": "GET /thirdParties/{id}/slots signed by a wallet with no role. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/313-third-party-slots-virtual-manager.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the manager of a virtual third party the registry doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/314-third-party-slots-claimed-before-registration.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the manager of a virtual third party of a provider the registry lists unapproved for another wallet. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data value",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:third-party-claims",
+            "data value": "deliberate:third-party-claims",
+            "error extra": "deliberate:third-party-claims",
+            "ok value": "deliberate:third-party-claims"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/315-third-party-slots-unapproved-registry-manager.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the manager the registry lists unapproved for a provider whose virtual third party lists another wallet. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/316-third-party-slots-unapproved-both.json",
+          "scope": "GET /thirdParties/{id}/slots signed by a wallet the registry lists unapproved and the virtual third party lists too. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/334-third-party-slots-after-delete.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the second manager the registry lists unapproved, once the virtual third party is gone. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:third-party-claims"
+      ],
+      "remaining_verification": "Slots counted against submitted items: the node counts the items it submitted until it keeps item curations."
     },
     {
       "id": "api_http:GET:/v1/thirdParties/:id",
       "owner": "third-parties",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
+      "status": "reviewed",
+      "result": "An approved and an unapproved registry record read by a stranger, a virtual third party read by its manager and by a stranger, an unknown provider, the virtual third party a collection save created, before and after it was made programmatic, and after its provider's last collection was deleted were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/306-third-party-registered-stranger.json",
+          "scope": "GET /thirdParties/{id} signed by a wallet with no role, an approved provider the registry lists. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/307-third-party-virtual-manager.json",
+          "scope": "GET /thirdParties/{id} signed by the manager of a virtual third party the registry doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/308-third-party-virtual-stranger.json",
+          "scope": "GET /thirdParties/{id} signed by a wallet with no role, a virtual third party the registry doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/309-third-party-unknown.json",
+          "scope": "GET /thirdParties/{id} signed by a registry manager, a provider neither the registry nor a virtual third party has. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/310-third-party-unapproved-stranger.json",
+          "scope": "GET /thirdParties/{id} signed by a wallet with no role, a provider the registry lists unapproved. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/323-third-party-created-virtual.json",
+          "scope": "GET /thirdParties/{id} signed by the wallet whose collection save created the virtual third party. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/329-third-party-updated.json",
+          "scope": "GET /thirdParties/{id} signed by the virtual third party's manager after the update. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/336-third-party-after-last-collection.json",
+          "scope": "GET /thirdParties/{id} signed by the former manager once the provider's last collection is gone. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        }
+      ],
       "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "remaining_verification": "A registry record with a merkle root and linked contracts."
     },
     {
       "id": "api_http:DELETE:/v1/thirdParties/:id",
       "owner": "third-parties",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
+      "status": "reviewed",
+      "result": "Removals by another wallet, by the manager before and after the registry lists the provider, and of a provider no virtual third party has were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/330-third-party-delete-other.json",
+          "scope": "DELETE /thirdParties/{id} signed by a wallet the virtual third party doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/331-third-party-delete-unregistered.json",
+          "scope": "DELETE /thirdParties/{id} signed by the virtual third party's manager before the registry lists the provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/332-third-party-delete-unknown.json",
+          "scope": "DELETE /thirdParties/{id} of a provider no virtual third party has. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/333-third-party-delete-registered.json",
+          "scope": "DELETE /thirdParties/{id} signed by the virtual third party's manager once the registry lists the provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        }
+      ],
       "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "remaining_verification": "A removal while the registry can't tell: the node answers 503 where upstream answers 200 with ok:false."
     },
     {
       "id": "api_http:PATCH:/v1/thirdParties/:id",
       "owner": "third-parties",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "Updates by the virtual third party's manager and by another wallet, with a kind that is not a boolean, and of a provider no virtual third party has were compared; every one matches but the schema refusal's data.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/325-third-party-update-other.json",
+          "scope": "PATCH /thirdParties/{id} signed by a wallet the virtual third party doesn't list. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/326-third-party-update-manager.json",
+          "scope": "PATCH /thirdParties/{id} signed by the virtual third party's manager, making it programmatic. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/327-third-party-update-invalid.json",
+          "scope": "PATCH /thirdParties/{id} signed by the virtual third party's manager with a kind that is not a boolean. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/328-third-party-update-unknown.json",
+          "scope": "PATCH /thirdParties/{id} of a provider no virtual third party has. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:invalid-body-detail"
+      ],
+      "remaining_verification": "An update of a virtual third party whose provider the registry already lists."
     },
     {
       "id": "api_http:GET:/v1/rarities",
@@ -3284,21 +3344,6 @@
     }
   ],
   "open_gaps": {
-    "third-party-registry": {
-      "text": "The node reads no third-party registry: it takes the wallet stored as a third-party collection's creator as its provider's only manager, lets any signer create a third-party collection under any provider id, and answers is_programmatic false on a third-party collection's reads and address-listing rows and leaves it out of the committee's listing. Upstream reads the registry's providers and managers: a non-manager's create under a listed provider answers 401, every manager the registry lists reads, lists and saves its provider's collections, and is_programmatic is the provider's, also on the committee's listing.",
-      "captures": [
-        "source/139-collection-save-registered-provider-stranger.json",
-        "source/141-collection-registered-manager.json",
-        "source/142-address-collections-registered-manager.json",
-        "source/143-collections-committee-registered-provider.json",
-        "source/145-collection-programmatic-provider.json",
-        "source/146-address-collections-programmatic-provider.json",
-        "source/147-collections-committee-programmatic-provider.json",
-        "source/148-collection-save-registered-other-manager.json"
-      ],
-      "closes": "The node reads the third-party registry's providers, their managers and whether each is programmatic, decides a third-party collection's managers and is_programmatic from it, and refuses a create under a listed provider by a wallet that doesn't manage it.",
-      "anchors": []
-    },
     "item-curation-publicity": {
       "text": "The node keeps no item curations: a third-party item's is_published is the node's record of its submission, its isMappingComplete is whether it has mappings, a third-party item's URN change and delete are refused once it is submitted, the synced and third-party status filters match nothing, and the file routes (GET and HEAD /v1/storage/contents/:hash, its exists probe) treat a third-party item as published only once the node holds its own linked submission of it, so the file of a third-party item curated elsewhere, such as an imported one, answers 404 to an unsigned request and to anyone but its readers. Upstream reads item curations: a by-id read of a third-party item answers is_published from its collection's latest item curation, so a never-submitted item of a collection with any curated item is public to any signer, while lists answer each item's own; isMappingComplete is the latest curation's flag; its file routes redirect every hash to its public bucket; the URN change and delete refusals follow the item's own curations; synced and status match items by their latest curation.",
       "captures": [],

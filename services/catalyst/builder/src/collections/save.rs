@@ -6,15 +6,22 @@
 //! sends ([`super::contract`]), never taken from the body; a body never sets
 //! the owner, managers, minters or published state. The write runs in one
 //! transaction that holds the collection row and an advisory lock on the
-//! name (standard) or URN (third party) it claims.
+//! name (standard) or URN (third party) it claims and, for a third-party
+//! collection, on its provider: a save that creates the first collection of
+//! a provider neither the registry nor a virtual third party has creates the
+//! provider's virtual third party with the signer as its manager, and a
+//! linked contract is listed on the provider's virtual third party, as
+//! builder-server keeps it.
 
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::access::{self, CollectionEdit};
+use crate::chain_index::third_parties::LinkedContract;
 use crate::chain_state;
 use crate::http::ApiError;
 use crate::items::ItemsComponent;
+use crate::third_parties::{parse_raw_metadata, raw_metadata};
 
 use super::{contract, project, row};
 
@@ -226,6 +233,59 @@ fn linked_contract_refusal(e: sqlx::Error) -> ApiError {
     }
 }
 
+fn same_contract(a: &LinkedContract, b: &LinkedContract) -> bool {
+    a.network == b.network && a.address.eq_ignore_ascii_case(&b.address)
+}
+
+/// builder-server's `syncVirtualThirdPartyContracts`: the provider's virtual
+/// third party, if any, lists `next` in place of `previous` and keeps the
+/// contracts its other collections link; nothing is written when it already
+/// reads that way.
+async fn list_contract(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    provider: &str,
+    previous: Option<&LinkedContract>,
+    next: &LinkedContract,
+) -> Result<(), ApiError> {
+    let raw: Option<String> = sqlx::query_scalar(
+        "SELECT raw_metadata FROM builder.virtual_third_parties WHERE id = $1 FOR UPDATE",
+    )
+    .bind(provider)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let (name, description, contracts) = parse_raw_metadata(&raw);
+    let mut kept: Vec<LinkedContract> = contracts
+        .iter()
+        .filter(|c| {
+            previous
+                .is_none_or(|previous| same_contract(previous, next) || !same_contract(c, previous))
+        })
+        .cloned()
+        .collect();
+    if !kept.iter().any(|c| same_contract(c, next)) {
+        kept.push(next.clone());
+    }
+    if kept.len() == contracts.len()
+        && kept
+            .iter()
+            .zip(&contracts)
+            .all(|(a, b)| same_contract(a, b))
+    {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE builder.virtual_third_parties SET raw_metadata = $2, updated_at = timezone('UTC', now()) WHERE id = $1",
+    )
+    .bind(provider)
+    .bind(raw_metadata(&name, &description, &kept))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 fn urn_in_use(id: Uuid, urn: &str, action: &str) -> ApiError {
     ApiError::conflict(format!(
         "The URN provided already belongs to a collection. The collection can't be {action}."
@@ -266,6 +326,20 @@ impl ItemsComponent {
             .bind(&save.name),
         };
         claim.execute(&mut *tx).await?;
+        if let Some((provider, _)) = provider {
+            sqlx::query(
+                "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
+            )
+            .bind(provider)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let previous_contract: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT linked_contract_address, linked_contract_network FROM builder.collections WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let state = access::confirm_collection_edit(&mut tx, &view, edit).await?;
         match (&stored, provider) {
             (Some((None, _)), Some(_)) => {
@@ -348,7 +422,6 @@ impl ItemsComponent {
                    linked_contract_address = EXCLUDED.linked_contract_address, \
                    linked_contract_network = EXCLUDED.linked_contract_network, updated_at = timezone('UTC', now()) \
                  WHERE NOT c.publication_pending AND c.third_party_id = EXCLUDED.third_party_id \
-                   AND c.eth_address = EXCLUDED.eth_address \
                  RETURNING id",
             )
             .bind(id)
@@ -388,6 +461,28 @@ impl ItemsComponent {
             return Err(ApiError::internal(format!(
                 "collection {id} changed under its row lock"
             )));
+        }
+        if let Some((provider, _)) = provider {
+            let next = save
+                .linked_contract_address
+                .clone()
+                .zip(save.linked_contract_network.clone())
+                .map(|(address, network)| LinkedContract { address, network });
+            if state.new_provider {
+                sqlx::query(
+                    "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, ARRAY[$2], $3)",
+                )
+                .bind(provider)
+                .bind(signer)
+                .bind(raw_metadata(&save.name, "", next.as_slice()))
+                .execute(&mut *tx)
+                .await?;
+            } else if let Some(next) = next {
+                let previous = previous_contract
+                    .and_then(|(address, network)| address.zip(network))
+                    .map(|(address, network)| LinkedContract { address, network });
+                list_contract(&mut tx, provider, previous.as_ref(), &next).await?;
+            }
         }
         let body = row(&mut tx, &view, edit).await?.ok_or_else(|| {
             ApiError::internal(format!("collection {id} vanished after its save"))

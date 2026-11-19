@@ -6,8 +6,8 @@ after = []
 notes = """
 Imports collection and item drafts (item curation state derived from the
 upstream columns and item_curations; a collection's published and approved
-state is not imported, the node derives it) and item contents. See
-MAPPING.md.
+state is not imported, the node derives it), item contents and the virtual
+third parties. See MAPPING.md.
 
 Prerequisite, out of scope for a DB import: every item content hash must be
 in the ONE blob store and recorded, with its size, in
@@ -15,7 +15,7 @@ dcl_migration.blob_inventory (source 'builder-server', object_key = hash);
 item_content stops on a missing hash.
 
 Not migrated: projects, asset_packs, assets, collection_curations,
-collection_events, slot_usage_cheques, virtual_third_parties, deployments,
+collection_events, slot_usage_cheques, deployments,
 pools, pool_groups, pool_likes (no target), the collections' managers,
 minters, reviewed_at, forum_link and forum_id columns (no target
 column). collection_publications and
@@ -91,4 +91,19 @@ columns = [
   { name = "hash", type = "text" },
   { name = "owner", type = "text" },
   { name = "position", type = "integer" },
+]
+
+[[step]]
+name = "virtual_third_party"
+targets = ["builder.virtual_third_parties"]
+extract = "virtual_third_party.extract.sql"
+load = "virtual_third_party.load.sql"
+key = ["id"]
+columns = [
+  { name = "id", type = "text" },
+  { name = "managers", type = "text[]" },
+  { name = "raw_metadata", type = "text" },
+  { name = "is_programmatic", type = "boolean" },
+  { name = "created_at", type = "timestamptz" },
+  { name = "updated_at", type = "timestamptz" },
 ]

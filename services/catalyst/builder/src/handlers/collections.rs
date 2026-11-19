@@ -97,7 +97,11 @@ async fn list_collections(
         Some(member) => {
             state
                 .items
-                .committee_collections(&CommitteeListing::new(&member, &q)?)
+                .committee_collections(
+                    &CommitteeListing::new(&member, &q)?,
+                    &state.third_parties,
+                    state.market.as_ref(),
+                )
                 .await?
         }
         None => {
@@ -128,7 +132,7 @@ pub async fn get_address_collections(
     Path(address): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<ApiData<Value>>, ApiError> {
-    let wallet = access::own_address(&signer, &address)?;
+    let wallet = access::own_address(&state, &signer, &address).await?;
     let listing = OwnListing::new(&wallet, &ListQuery::parse(raw.as_deref()))?;
     Ok(Json(ApiData::ok(
         state.items.address_collections(&listing).await?,
@@ -144,7 +148,7 @@ pub async fn get_address_items(
     Path(address): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
-    let wallet = access::own_address(&signer, &address)?;
+    let wallet = access::own_address(&state, &signer, &address).await?;
     Ok(Json(ApiData::ok(
         state
             .items

@@ -137,18 +137,18 @@ fails the replay test with its name. `collections` are the builder's rows,
 each with the contract address its draft computed, and a third-party one with
 its provider id, URN suffix and, optionally, its linked contract address and
 network. The capture stores a third-party row with an empty `eth_address`, as
-upstream stores one; the replay stores the owner the seed names, which the
-node reads as the provider's manager. `items` are the builder's item rows,
+upstream stores one; the replay stores the owner the seed names, which
+decides nothing on the node. `items` are the builder's item rows,
 with their `contents` (file to hash), `rarity` and, for a third-party item, the
 item part of its URN (`urn_suffix`; the replay stores the full URN the node
 keeps).
-`third_parties` are providers neither registry lists: the capture inserts
-them as upstream's virtual third parties; the node reads no registry and
-admits the wallet that owns a third-party collection as its provider's
-manager, so the replay requires each provider's managers to be exactly that
-wallet. `registry` names the providers the third-party registry lists, with
-their managers: the capture serves them from its fake third-party subgraph
-to upstream, and the node, which reads no registry, gets nothing. The
+`third_parties` are virtual third parties, each with its name and managers:
+both sides insert them as virtual third party rows (`tp:1:<name>:`).
+`registry` names the providers the third-party registry lists, each with its
+managers, whether it is programmatic and, with `approved: false`, an
+unapproved one (approved otherwise): the capture serves them from its fake
+third-party subgraph to upstream, and the replay from a loopback registry to
+the node. A provider can be in both. The
 `admin` wallet is upstream's `ADMIN_ADDRESSES`. `chain` names, once, what
 the Polygon collections subgraph holds: the committee's roles, its
 collections (contract, name, creator and owner roles, approval, manager and
@@ -164,8 +164,7 @@ collection's contract and that contract's item count from a loopback fake
 JSON-RPC, so a collection is published, a wallet is on the committee and a
 rarity has its prices on both sides exactly when `chain` says so. The node's
 clock, which sets and compares a collection's lock, is the capture's fixed
-clock. The fake
-third-party registry lists no provider.
+clock.
 
 ```sh
 cd services/catalyst
@@ -203,7 +202,8 @@ Then it:
    items), its `rarities` field with the `chain` rarities (`id`, `name`,
    `price` and `maxSupply`, ordered by id) and the third-party subgraph's `thirdParties` with
    the `seed.json` `registry` rows (by `id`, `managers_contains` or
-   `managers_contains_nocase`). It answers the catalyst's active-entities read with no entities
+   `managers_contains_nocase`; with no `__typename`, which The Graph answers
+   only when a query selects it). It answers the catalyst's active-entities read with no entities
    and the Polygon JSON-RPC's `eth_chainId`, `net_version`, `eth_getCode`
    (code only at a `chain` collection's contract) and the `eth_call` of the
    rarities-with-oracle contract's `getRarityByName` (a `chain` rarity's

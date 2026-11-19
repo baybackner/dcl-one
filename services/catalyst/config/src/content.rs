@@ -448,7 +448,7 @@ pub struct ValidatorConfig {
     // content validator (src/content/validator): the access policy of local
     // deploys (the old catalyrst-server names); its chain checks read
     // ETH_RPC_URL and RPC_ENDPOINT_POLYGON.
-    /// Third Party Registry subgraph on L2 (the approved providers the shop lists); public https.
+    /// Third Party Registry subgraph on L2: the approved providers the shop lists, and every provider the builder reads a third-party collection's managers from (unset: third-party builder requests answer 503); public https.
     #[arg(
         long,
         env = "THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL",

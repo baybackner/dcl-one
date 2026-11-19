@@ -22,6 +22,20 @@
       "managers": [
         "creator"
       ]
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:pending",
+      "name": "Pending virtual",
+      "managers": [
+        "creator"
+      ]
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:claimed",
+      "name": "Claimed virtual",
+      "managers": [
+        "creator"
+      ]
     }
   ],
   "collections": [
@@ -935,6 +949,23 @@
         "manager"
       ],
       "programmatic": true
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:pending",
+      "name": "Pending provider",
+      "managers": [
+        "manager"
+      ],
+      "approved": false
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:claimed",
+      "name": "Claimed provider",
+      "managers": [
+        "creator",
+        "minter"
+      ],
+      "approved": false
     }
   ]
 }

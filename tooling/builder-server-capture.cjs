@@ -290,6 +290,73 @@ const LIFECYCLE_CASES = [
   { name: '300-collection-after-delete', description: 'GET /collections/{id} signed by the owner of the draft it deleted', method: 'GET', path: `/v1/collections/${id('301')}`, signer: 'owner' }
 ]
 
+const PROVIDER = name => `urn:decentraland:matic:collections-thirdparty:${name}`
+const WALLETS = {
+  owner: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+  stranger: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+  manager: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0',
+  creator: '0x05bb381a642d932037707c4a626f93fb009696b2'
+}
+const linkedSave = (suffix, signer, name, urn) => ({
+  method: 'PUT',
+  path: `/v1/collections/${id(suffix)}`,
+  signer,
+  body: {
+    collection: {
+      id: id(suffix),
+      name,
+      eth_address: WALLETS[signer],
+      salt: null,
+      contract_address: null,
+      is_published: false,
+      is_approved: false,
+      minters: [],
+      managers: [],
+      urn
+    },
+    data: ''
+  }
+})
+
+const THIRD_PARTY_CASES = [
+  { name: '301-third-parties-registry-manager', description: 'GET /thirdParties signed by a manager the registry lists for two approved providers and an unapproved one whose virtual third party lists another wallet', method: 'GET', path: '/v1/thirdParties', signer: 'manager' },
+  { name: '302-third-parties-virtual-manager', description: 'GET /thirdParties signed by a wallet that a virtual third party lists, for an unapproved provider of both, a provider with no record and an unapproved provider the registry lists another wallet for', method: 'GET', path: '/v1/thirdParties', signer: 'creator' },
+  { name: '303-third-parties-stranger', description: 'GET /thirdParties signed by a wallet that manages no provider', method: 'GET', path: '/v1/thirdParties', signer: 'stranger' },
+  { name: '304-third-parties-unsigned', description: 'GET /thirdParties without a signature', method: 'GET', path: '/v1/thirdParties' },
+  { name: '305-third-parties-manager-query', description: 'GET /thirdParties signed by a wallet that manages no provider, naming a registry manager as manager', method: 'GET', path: '/v1/thirdParties', query: { manager: WALLETS.manager }, signer: 'stranger' },
+  { name: '306-third-party-registered-stranger', description: 'GET /thirdParties/{id} signed by a wallet with no role, an approved provider the registry lists', method: 'GET', path: `/v1/thirdParties/${PROVIDER('registered')}`, signer: 'stranger' },
+  { name: '307-third-party-virtual-manager', description: 'GET /thirdParties/{id} signed by the manager of a virtual third party the registry doesn\'t list', method: 'GET', path: `/v1/thirdParties/${PROVIDER('listing')}`, signer: 'creator' },
+  { name: '308-third-party-virtual-stranger', description: 'GET /thirdParties/{id} signed by a wallet with no role, a virtual third party the registry doesn\'t list', method: 'GET', path: `/v1/thirdParties/${PROVIDER('listing')}`, signer: 'stranger' },
+  { name: '309-third-party-unknown', description: 'GET /thirdParties/{id} signed by a registry manager, a provider neither the registry nor a virtual third party has', method: 'GET', path: `/v1/thirdParties/${PROVIDER('nobody')}`, signer: 'manager' },
+  { name: '310-third-party-unapproved-stranger', description: 'GET /thirdParties/{id} signed by a wallet with no role, a provider the registry lists unapproved', method: 'GET', path: `/v1/thirdParties/${PROVIDER('pending')}`, signer: 'stranger' },
+  { name: '311-third-party-slots-registry-manager', description: 'GET /thirdParties/{id}/slots signed by the second manager the registry lists for an approved provider', method: 'GET', path: `/v1/thirdParties/${PROVIDER('registered')}/slots`, signer: 'minter' },
+  { name: '312-third-party-slots-stranger', description: 'GET /thirdParties/{id}/slots signed by a wallet with no role', method: 'GET', path: `/v1/thirdParties/${PROVIDER('registered')}/slots`, signer: 'stranger' },
+  { name: '313-third-party-slots-virtual-manager', description: 'GET /thirdParties/{id}/slots signed by the manager of a virtual third party the registry doesn\'t list', method: 'GET', path: `/v1/thirdParties/${PROVIDER('listing')}/slots`, signer: 'creator' },
+  { name: '314-third-party-slots-claimed-before-registration', description: 'GET /thirdParties/{id}/slots signed by the manager of a virtual third party of a provider the registry lists unapproved for another wallet', method: 'GET', path: `/v1/thirdParties/${PROVIDER('pending')}/slots`, signer: 'creator' },
+  { name: '315-third-party-slots-unapproved-registry-manager', description: 'GET /thirdParties/{id}/slots signed by the manager the registry lists unapproved for a provider whose virtual third party lists another wallet', method: 'GET', path: `/v1/thirdParties/${PROVIDER('pending')}/slots`, signer: 'manager' },
+  { name: '316-third-party-slots-unapproved-both', description: 'GET /thirdParties/{id}/slots signed by a wallet the registry lists unapproved and the virtual third party lists too', method: 'GET', path: `/v1/thirdParties/${PROVIDER('claimed')}/slots`, signer: 'creator' },
+  { name: '317-collection-save-unapproved-both', description: 'PUT /collections/{id} signed by a wallet the registry lists unapproved and the virtual third party lists too, creating a collection under the provider', ...linkedSave('306', 'creator', 'Claimed hats', `${PROVIDER('claimed')}:hats`), volatile: ['data.created_at', 'data.updated_at'] },
+  { name: '318-collection-unapproved-registry-only-manager', description: 'GET /collections/{id} signed by a manager the registry lists unapproved that the provider\'s virtual third party doesn\'t list', method: 'GET', path: `/v1/collections/${id('306')}`, signer: 'minter' },
+  { name: '319-collection-unapproved-both', description: 'GET /collections/{id} signed by a wallet the registry lists unapproved and the virtual third party lists too', method: 'GET', path: `/v1/collections/${id('306')}`, signer: 'creator', volatile: ['data.created_at', 'data.updated_at'] },
+  { name: '320-collection-save-claimed-before-registration', description: 'PUT /collections/{id} signed by the manager of a virtual third party of a provider the registry lists unapproved for another wallet', ...linkedSave('307', 'creator', 'Pending squat', `${PROVIDER('pending')}:squat`), volatile: ['data.created_at', 'data.updated_at'] },
+  { name: '321-collection-save-unapproved-registry-only', description: 'PUT /collections/{id} signed by the manager the registry lists unapproved for a provider whose virtual third party lists another wallet', ...linkedSave('308', 'manager', 'Pending mine', `${PROVIDER('pending')}:mine`) },
+  { name: '322-collection-save-new-provider', description: 'PUT /collections/{id} signed by a wallet that manages no provider, creating the first collection of a provider nobody has', ...linkedSave('309', 'stranger', 'Fresh first', `${PROVIDER('fresh')}:first`), volatile: ['data.created_at', 'data.updated_at'] },
+  { name: '323-third-party-created-virtual', description: 'GET /thirdParties/{id} signed by the wallet whose collection save created the virtual third party', method: 'GET', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger' },
+  { name: '324-collection-save-under-another-virtual', description: 'PUT /collections/{id} signed by a wallet a provider\'s virtual third party doesn\'t list, under that provider', ...linkedSave('30a', 'owner', 'Fresh second', `${PROVIDER('fresh')}:second`) },
+  { name: '325-third-party-update-other', description: 'PATCH /thirdParties/{id} signed by a wallet the virtual third party doesn\'t list', method: 'PATCH', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'owner', body: { isProgrammatic: true } },
+  { name: '326-third-party-update-manager', description: 'PATCH /thirdParties/{id} signed by the virtual third party\'s manager, making it programmatic', method: 'PATCH', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger', body: { isProgrammatic: true } },
+  { name: '327-third-party-update-invalid', description: 'PATCH /thirdParties/{id} signed by the virtual third party\'s manager with a kind that is not a boolean', method: 'PATCH', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger', body: { isProgrammatic: 'yes' } },
+  { name: '328-third-party-update-unknown', description: 'PATCH /thirdParties/{id} of a provider no virtual third party has', method: 'PATCH', path: `/v1/thirdParties/${PROVIDER('nobody')}`, signer: 'stranger', body: { isProgrammatic: true } },
+  { name: '329-third-party-updated', description: 'GET /thirdParties/{id} signed by the virtual third party\'s manager after the update', method: 'GET', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger' },
+  { name: '330-third-party-delete-other', description: 'DELETE /thirdParties/{id} signed by a wallet the virtual third party doesn\'t list', method: 'DELETE', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'owner' },
+  { name: '331-third-party-delete-unregistered', description: 'DELETE /thirdParties/{id} signed by the virtual third party\'s manager before the registry lists the provider', method: 'DELETE', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger' },
+  { name: '332-third-party-delete-unknown', description: 'DELETE /thirdParties/{id} of a provider no virtual third party has', method: 'DELETE', path: `/v1/thirdParties/${PROVIDER('nobody')}`, signer: 'stranger' },
+  { name: '333-third-party-delete-registered', description: 'DELETE /thirdParties/{id} signed by the virtual third party\'s manager once the registry lists the provider', method: 'DELETE', path: `/v1/thirdParties/${PROVIDER('claimed')}`, signer: 'creator' },
+  { name: '334-third-party-slots-after-delete', description: 'GET /thirdParties/{id}/slots signed by the second manager the registry lists unapproved, once the virtual third party is gone', method: 'GET', path: `/v1/thirdParties/${PROVIDER('claimed')}/slots`, signer: 'minter' },
+  { name: '335-collection-delete-last-of-provider', description: 'DELETE /collections/{id} signed by the manager of a virtual third party, its provider\'s only collection', method: 'DELETE', path: `/v1/collections/${id('309')}`, signer: 'stranger' },
+  { name: '336-third-party-after-last-collection', description: 'GET /thirdParties/{id} signed by the former manager once the provider\'s last collection is gone', method: 'GET', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger' }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2190,7 +2257,8 @@ const CASES = [
   },
   ...ITEM_CASES,
   ...SMALL_READ_CASES,
-  ...LIFECYCLE_CASES
+  ...LIFECYCLE_CASES,
+  ...THIRD_PARTY_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2431,17 +2499,24 @@ function chainRows(seed, signers) {
     }
   })
   for (const collection of collections) collection.items = items.filter(item => item.collection.id === collection.id)
-  const registry = seed.registry.map(provider => ({
-    __typename: 'ThirdParty',
+  const registry = registryRows(seed.registry, role => signers[role].address)
+  return { accounts, collections, items, registry, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
+}
+
+/**
+ * The third-party subgraph's rows for the seeded `registry`: approved unless a provider says `approved: false`,
+ * with no `__typename`, which The Graph answers only when a query selects it.
+ */
+function registryRows(registry, address) {
+  return registry.map(provider => ({
     id: provider.id,
     root: null,
-    managers: addresses(provider.managers),
+    managers: provider.managers.map(address),
     maxItems: '100',
-    isApproved: true,
+    isApproved: provider.approved ?? true,
     isProgrammatic: !!provider.programmatic,
-    metadata: { __typename: 'Metadata', type: 'third_party_v2', thirdParty: { __typename: 'ThirdPartyMetadata', name: provider.name, description: '', contracts: [] } }
+    metadata: { type: 'third_party_v2', thirdParty: { name: provider.name, description: '', contracts: [] } }
   }))
-  return { accounts, collections, items, registry, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
 }
 
 /** The collections subgraph's `rarities` for `seed.chain.rarities`, with the fields upstream selects. */
@@ -2912,4 +2987,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

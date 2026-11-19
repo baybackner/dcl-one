@@ -164,6 +164,10 @@ impl CollectionRow {
         self.third_party_id.is_some()
     }
 
+    pub(crate) fn provider(&self) -> Option<&str> {
+        self.third_party_id.as_deref()
+    }
+
     pub(crate) fn contract_address(&self) -> Option<&str> {
         self.contract_address.as_deref()
     }
@@ -243,7 +247,7 @@ impl ItemsComponent {
         let row = row(&mut conn, &view, read)
             .await?
             .ok_or_else(|| ApiError::not_found("Not found"))?;
-        let programmatic = row.third_party().then_some(false);
+        let programmatic = row.third_party().then_some(read.programmatic());
         project(
             row.out(programmatic),
             (!read.full()).then_some(PUBLIC_DETAIL),

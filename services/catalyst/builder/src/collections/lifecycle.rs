@@ -85,7 +85,9 @@ pub async fn guard_address_change(
 /// `DELETE /v1/collections/:id`: a third-party collection stays once
 /// submitted and a standard one once published or deployed (409); either
 /// waits while its lock holds or the node publishes it (423). The items go
-/// with it, their contents and the upload records no other item names.
+/// with it, their contents and the upload records no other item names, and
+/// the provider's virtual third party once no collection of the provider is
+/// left.
 pub async fn delete(state: &State, manage: &CollectionManage) -> Result<(), ApiError> {
     let id = manage.id();
     let stored: Option<(bool, Option<String>)> = sqlx::query_as(
@@ -142,10 +144,27 @@ pub async fn delete(state: &State, manage: &CollectionManage) -> Result<(), ApiE
             .fetch_all(&mut *tx)
             .await?;
     hashes.extend(videos.into_iter().flatten());
-    sqlx::query("DELETE FROM builder.collections WHERE id = $1")
-        .bind(id)
+    let provider: Option<String> = sqlx::query_scalar(
+        "DELETE FROM builder.collections WHERE id = $1 RETURNING third_party_id",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if let Some(provider) = provider {
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
+        )
+        .bind(&provider)
         .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            "DELETE FROM builder.virtual_third_parties WHERE id = $1 \
+             AND NOT EXISTS (SELECT 1 FROM builder.collections WHERE third_party_id = $1)",
+        )
+        .bind(&provider)
+        .execute(&mut *tx)
+        .await?;
+    }
     forget_unnamed(&mut tx, &hashes).await?;
     tx.commit().await?;
     Ok(())

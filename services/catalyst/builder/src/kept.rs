@@ -6,7 +6,8 @@
 //! At most one read runs at a time, in a task of its own: it finishes and
 //! keeps its answer (a failure or a panic included) even when every caller
 //! that waited on it went away. [`Kept::get`] waits for it; [`Kept::known`]
-//! never does.
+//! never does; [`Kept::get_since`] accepts only a read that started at or
+//! after a given instant, whatever its lifetime.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,8 +23,10 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Cache<T> {
     good: Option<(Instant, T)>,
+    good_started: Option<Instant>,
     failed: Option<Instant>,
     reading: bool,
+    reading_started: Option<Instant>,
 }
 
 impl<T> Cache<T> {
@@ -57,6 +60,7 @@ impl<T> Shared<T> {
         match read {
             Some(value) => {
                 cache.good = Some((Instant::now(), value));
+                cache.good_started = cache.reading_started;
                 cache.failed = None;
             }
             None => {
@@ -92,8 +96,10 @@ impl<T: Clone + Send + 'static> Kept<T> {
             shared: Arc::new(Shared {
                 cache: Mutex::new(Cache {
                     good: None,
+                    good_started: None,
                     failed: None,
                     reading: false,
+                    reading_started: None,
                 }),
                 settled: Notify::new(),
                 ttl,
@@ -121,6 +127,7 @@ impl<T: Clone + Send + 'static> Kept<T> {
                 }
                 if !cache.reading {
                     cache.reading = true;
+                    cache.reading_started = Some(Instant::now());
                     self.spawn(read());
                 }
             }
@@ -139,6 +146,7 @@ impl<T: Clone + Send + 'static> Kept<T> {
         let mut cache = self.shared.cache();
         if cache.fresh(self.shared.ttl).is_none() && !cache.failing() && !cache.reading {
             cache.reading = true;
+            cache.reading_started = Some(Instant::now());
             self.spawn(read());
         }
         cache
@@ -146,6 +154,38 @@ impl<T: Clone + Send + 'static> Kept<T> {
             .as_ref()
             .filter(|(at, _)| at.elapsed() < self.shared.ttl || cache.reading)
             .map(|(_, value)| value.clone())
+    }
+
+    /// The value of a read that started at or after `since`, waiting for
+    /// one (and starting it when none runs); `None` when the source can't
+    /// tell. Concurrent callers share the read in flight when it started in
+    /// time.
+    pub async fn get_since<F>(&self, since: Instant, read: impl Fn() -> F) -> Option<T>
+    where
+        F: Future<Output = Option<T>> + Send + 'static,
+    {
+        loop {
+            let settled = self.shared.settled.notified();
+            tokio::pin!(settled);
+            settled.as_mut().enable();
+            {
+                let mut cache = self.shared.cache();
+                if cache.good_started.is_some_and(|started| started >= since)
+                    && let Some((_, value)) = &cache.good
+                {
+                    return Some(value.clone());
+                }
+                if cache.failing() {
+                    return None;
+                }
+                if !cache.reading {
+                    cache.reading = true;
+                    cache.reading_started = Some(Instant::now());
+                    self.spawn(read());
+                }
+            }
+            let _ = tokio::time::timeout(FETCH_TIMEOUT + Duration::from_secs(1), settled).await;
+        }
     }
 
     fn spawn(&self, read: impl Future<Output = Option<T>> + Send + 'static) {
@@ -167,7 +207,11 @@ impl<T: Clone + Send + 'static> Kept<T> {
         let settled = self.shared.settled.notified();
         tokio::pin!(settled);
         settled.as_mut().enable();
-        self.shared.cache().reading = true;
+        {
+            let mut cache = self.shared.cache();
+            cache.reading = true;
+            cache.reading_started = Some(Instant::now());
+        }
         self.spawn(read);
         settled.await;
     }
@@ -181,5 +225,87 @@ impl<T: Clone + Send + 'static> Kept<T> {
         if let Some(at) = cache.failed.as_mut() {
             *at = at.checked_sub(by).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    fn counting(
+        hits: &Arc<AtomicUsize>,
+        delay: Duration,
+        ok: bool,
+    ) -> impl Fn() -> std::pin::Pin<Box<dyn Future<Output = Option<usize>> + Send>> + Send + use<>
+    {
+        let hits = hits.clone();
+        move || {
+            let hits = hits.clone();
+            Box::pin(async move {
+                let n = hits.fetch_add(1, Ordering::SeqCst) + 1;
+                tokio::time::sleep(delay).await;
+                ok.then_some(n)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_started_before_the_question_never_answers_it() {
+        let kept = Kept::new(Duration::from_secs(3600));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let read = counting(&hits, Duration::ZERO, true);
+        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(1));
+        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(2));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn questions_asked_before_a_read_started_share_it() {
+        let kept = Arc::new(Kept::new(Duration::from_secs(3600)));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let since = Instant::now();
+        let mut waiting = Vec::new();
+        for _ in 0..20 {
+            let kept = kept.clone();
+            let read = counting(&hits, Duration::from_millis(50), true);
+            waiting.push(tokio::spawn(
+                async move { kept.get_since(since, read).await },
+            ));
+        }
+        for answer in waiting {
+            assert_eq!(answer.await.unwrap(), Some(1));
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_read_in_flight_when_asked_is_followed_by_one_that_started_after() {
+        let kept = Arc::new(Kept::new(Duration::from_secs(3600)));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let first = {
+            let kept = kept.clone();
+            let read = counting(&hits, Duration::from_millis(100), true);
+            tokio::spawn(async move { kept.get_since(Instant::now(), read).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let read = counting(&hits, Duration::from_millis(10), true);
+        assert_eq!(kept.get_since(Instant::now(), read).await, Some(2));
+        assert_eq!(first.await.unwrap(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_answers_cant_tell_and_is_kept_before_the_next_attempt() {
+        let kept = Kept::new(Duration::from_secs(3600));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let failing = counting(&hits, Duration::ZERO, false);
+        assert_eq!(kept.get_since(Instant::now(), &failing).await, None);
+        assert_eq!(kept.get_since(Instant::now(), &failing).await, None);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        kept.backdate(FAILURE_TTL);
+        let read = counting(&hits, Duration::ZERO, true);
+        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(2));
     }
 }

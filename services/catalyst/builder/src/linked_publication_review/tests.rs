@@ -324,7 +324,10 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
             .unwrap();
     assert!(!pending);
     let cards = store
-        .collection_drafts(&granted::wallet(OWNER))
+        .collection_drafts(&granted::managing(
+            OWNER,
+            &["urn:decentraland:matic:collections-thirdparty:provider"],
+        ))
         .await
         .unwrap();
     let card = cards

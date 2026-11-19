@@ -84,6 +84,7 @@ pub mod publication_chain;
 pub mod publication_store;
 pub mod rarities;
 pub mod terms;
+pub mod third_parties;
 pub mod writes;
 
 #[cfg(test)]
@@ -277,6 +278,8 @@ pub struct State {
     pub committee: committee::Committee,
     /// The rarities and their prices (`rarities`), kept a minute.
     pub rarities: rarities::Rarities,
+    /// The third-party registry (`third_parties`), read per decision.
+    pub third_parties: third_parties::ThirdParties,
     /// The node's clock, which a collection's lock is set and compared by.
     pub now: fn() -> chrono::DateTime<chrono::Utc>,
     /// What the Polygon RPC says of collection contracts, kept per contract.
@@ -306,6 +309,7 @@ impl State {
             denylist,
             committee: committee::Committee::default(),
             rarities: rarities::Rarities::default(),
+            third_parties: third_parties::ThirdParties::default(),
             now: chrono::Utc::now,
             deployments: collections::deployment::Deployments::default(),
         })
@@ -409,6 +413,17 @@ fn api_routes() -> Router<SharedState> {
         .route(
             "/v1/collections/{id}/items/status",
             patch(handlers::curation::patch_items_status_bulk),
+        )
+        .route("/v1/thirdParties", get(handlers::third_parties::list))
+        .route(
+            "/v1/thirdParties/{id}",
+            get(handlers::third_parties::get)
+                .delete(handlers::third_parties::delete)
+                .patch(handlers::third_parties::update),
+        )
+        .route(
+            "/v1/thirdParties/{id}/slots",
+            get(handlers::third_parties::slots),
         )
         .route_layer(axum::middleware::map_response(http::private_response))
         .route(

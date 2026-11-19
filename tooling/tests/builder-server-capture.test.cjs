@@ -412,6 +412,30 @@ test('the fake subgraph filters, orders and pages as The Graph does', () => {
   assert.deepEqual(unfaked, [])
 })
 
+test('the fake third-party subgraph answers each seeded provider with its approval, kind and managers', () => {
+  const { registryRows, selected } = require(script)
+  const rows = registryRows([
+    { id: 'urn:decentraland:matic:collections-thirdparty:b', name: 'B', managers: ['manager'] },
+    { id: 'urn:decentraland:matic:collections-thirdparty:a', name: 'A', managers: ['manager', 'minter'], approved: false, programmatic: true }
+  ], role => `0x${role}`)
+  assert.deepEqual(rows.map(row => [row.id.slice(-1), row.isApproved, row.isProgrammatic, row.managers]), [
+    ['b', true, false, ['0xmanager']],
+    ['a', false, true, ['0xmanager', '0xminter']]
+  ])
+  assert.deepEqual(rows[1].metadata, { type: 'third_party_v2', thirdParty: { name: 'A', description: '', contracts: [] } })
+  assert.ok(!('__typename' in rows[1]), 'The Graph answers __typename only when a query selects it, and upstream\'s don\'t')
+  const variable = name => ({ kind: 'Variable', name: { value: name } })
+  const field = (where, args = []) => ({
+    name: { value: 'thirdParties' },
+    arguments: [{ name: { value: 'where' }, value: { kind: 'ObjectValue', fields: Object.entries(where).map(([key, value]) => ({ name: { value: key }, value })) } }, ...args]
+  })
+  const unfaked = []
+  const first = { name: { value: 'first' }, value: { kind: 'IntValue', value: '1' } }
+  assert.deepEqual(selected(field({ id: variable('id') }, [first]), rows, { id: rows[1].id }, unfaked).map(row => row.id), [rows[1].id])
+  assert.deepEqual(selected(field({ managers_contains_nocase: variable('managers') }), rows, { managers: ['0xMINTER'] }, unfaked).map(row => row.id), [rows[1].id])
+  assert.deepEqual(unfaked, [])
+})
+
 test('a multipart case sends its parts as form data and records them', async () => {
   const { requestBody } = require(script)
   const parts = [{ name: 'bafkreiexample', filename: 'blob', type: 'application/octet-stream', text: 'conformance bytes' }]

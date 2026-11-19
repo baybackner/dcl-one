@@ -97,14 +97,15 @@ pub async fn save_collection(
 ) -> Result<serde_json::Value, crate::http::ApiError> {
     use crate::collections::save;
     let request = save::parse(&collection_body(collection, signer))?;
-    let deployment = match request.urn.as_deref().and_then(save::third_party_urn) {
+    let provider = request.urn.as_deref().and_then(save::third_party_urn);
+    let deployment = match provider {
         Some(_) => None,
         None => Some(save::standard_deployment(&request, signer)?),
     };
     let id = Uuid::parse_str(&request.id).unwrap();
     store
         .save_collection(
-            &crate::access::granted::edit(signer, id),
+            &crate::access::granted::edit(signer, id, provider.map(|(p, _)| p)),
             &request,
             deployment,
         )
@@ -498,16 +499,140 @@ impl FakeCommittee {
     }
 }
 
-/// A chain index whose Polygon collections subgraph is `fake`.
+/// A chain index whose Polygon collections subgraph is `fake` and whose
+/// third-party registry lists no provider, so a third-party collection's
+/// managers are its virtual third party's.
 pub async fn committee_index(fake: &FakeCommittee) -> Arc<crate::chain_index::ChainIndex> {
+    registry_index(fake, &FakeRegistry::up()).await
+}
+
+/// A loopback third-party registry subgraph that answers the providers it
+/// holds as The Graph does for the node's walk (`id_gt`, `first`, ordered by
+/// id); `down` answers a GraphQL error. Counts its reads.
+#[derive(Clone, Default)]
+pub struct FakeRegistry {
+    providers: Arc<std::sync::Mutex<Option<BTreeMap<String, serde_json::Value>>>>,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl FakeRegistry {
+    pub fn up() -> Self {
+        let fake = Self::default();
+        *fake.providers.lock().unwrap() = Some(BTreeMap::new());
+        fake
+    }
+
+    /// Lists provider `id` with `managers`, approved or not.
+    pub fn put(&self, id: &str, managers: &[&str], approved: bool, programmatic: bool) {
+        self.providers
+            .lock()
+            .unwrap()
+            .get_or_insert_default()
+            .insert(
+                id.to_string(),
+                serde_json::json!({
+                    "id": id,
+                    "root": format!("0x{}", "ab".repeat(32)),
+                    "managers": managers,
+                    "maxItems": "10",
+                    "isApproved": approved,
+                    "isProgrammatic": programmatic,
+                    "metadata": { "type": "third_party_v2", "thirdParty": {
+                        "name": "Registered", "description": "", "contracts": []
+                    } }
+                }),
+            );
+    }
+
+    /// Changes one field of provider `id`.
+    pub fn set(&self, id: &str, field: &str, value: serde_json::Value) {
+        if let Some(provider) = self
+            .providers
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|p| p.get_mut(id))
+        {
+            provider[field] = value;
+        }
+    }
+
+    /// Answers a GraphQL error (`true`) or the providers it holds.
+    pub fn fail(&self, down: bool) {
+        let mut providers = self.providers.lock().unwrap();
+        match (down, providers.is_some()) {
+            (true, true) => *providers = None,
+            (false, false) => *providers = Some(BTreeMap::new()),
+            _ => {}
+        }
+    }
+
+    pub fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn answer(
+        axum::extract::State(fake): axum::extract::State<Self>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::Json<serde_json::Value> {
+        fake.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let Some(providers) = fake.providers.lock().unwrap().clone() else {
+            return axum::Json(serde_json::json!({ "errors": [{ "message": "indexing error" }] }));
+        };
+        let from = body["variables"]["idFrom"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let first = body["variables"]["first"].as_u64().unwrap_or(100) as usize;
+        let page: Vec<_> = providers
+            .into_iter()
+            .filter(|(id, _)| *id > from)
+            .take(first)
+            .map(|(_, p)| p)
+            .collect();
+        axum::Json(serde_json::json!({ "data": { "thirdParties": page } }))
+    }
+}
+
+/// A chain index whose Polygon collections subgraph is `committee` and whose
+/// third-party registry is `registry`.
+pub async fn registry_index(
+    committee: &FakeCommittee,
+    registry: &FakeRegistry,
+) -> Arc<crate::chain_index::ChainIndex> {
     let app = axum::Router::new()
-        .route("/subgraph", axum::routing::post(FakeCommittee::answer))
-        .with_state(fake.clone());
+        .route(
+            "/subgraph",
+            axum::routing::post(FakeCommittee::answer).with_state(committee.clone()),
+        )
+        .route(
+            "/registry",
+            axum::routing::post(FakeRegistry::answer).with_state(registry.clone()),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let index = market_without_db(crate::chain_index::IndexSettings {
         matic_collections_subgraph_url: Some(format!("http://{addr}/subgraph")),
+        third_party_registry_subgraph_url: Some(format!("http://{addr}/registry")),
+        ..crate::chain_index::IndexSettings::for_tests()
+    });
+    index.allow_loopback_for_tests();
+    index
+}
+
+/// A chain index whose only source is a third-party registry that lists
+/// no provider: a third-party collection's managers are its virtual third
+/// party's.
+pub async fn registry_only_index() -> Arc<crate::chain_index::ChainIndex> {
+    let app = axum::Router::new()
+        .route("/registry", axum::routing::post(FakeRegistry::answer))
+        .with_state(FakeRegistry::up());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let index = market_without_db(crate::chain_index::IndexSettings {
+        third_party_registry_subgraph_url: Some(format!("http://{addr}/registry")),
         ..crate::chain_index::IndexSettings::for_tests()
     });
     index.allow_loopback_for_tests();

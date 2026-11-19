@@ -2,7 +2,9 @@
 //! under both mounts, called anonymously and as the owner, a signed
 //! stranger, an on-chain manager, a committee member and the chain creator
 //! of a transferred collection, against each resource state that changes the
-//! answer. Each cell asserts the status and the envelope's `error`, and a
+//! answer. The matrix's provider has a virtual third party that lists the
+//! owner and no registry record, so the owner is its manager; every caller
+//! kind and provider state of the third-party role is in `third_party_matrix`. Each cell asserts the status and the envelope's `error`, and a
 //! refused write leaves its rows as they were. The last tests are the "can't
 //! tell" column: a stale copy, a copy with no complete pass and a committee
 //! source that is down answer 503 and write nothing; the small public reads
@@ -575,6 +577,11 @@ enum Op {
     OwnerSync,
     Terms,
     Publish,
+    ThirdParties,
+    ThirdPartyRead,
+    ThirdPartySlots,
+    ThirdPartyDelete,
+    ThirdPartyUpdate,
 }
 
 const NOT_PUBLISHED: &str = "The collection is not published.";
@@ -694,6 +701,11 @@ impl Op {
             ("POST", "/v1/collections/{id}/owner/sync") => Op::OwnerSync,
             ("POST", "/v1/collections/{id}/tos") => Op::Terms,
             ("POST", "/v1/collections/{id}/publish") => Op::Publish,
+            ("GET", "/v1/thirdParties") => Op::ThirdParties,
+            ("GET", "/v1/thirdParties/{id}") => Op::ThirdPartyRead,
+            ("GET", "/v1/thirdParties/{id}/slots") => Op::ThirdPartySlots,
+            ("DELETE", "/v1/thirdParties/{id}") => Op::ThirdPartyDelete,
+            ("PATCH", "/v1/thirdParties/{id}") => Op::ThirdPartyUpdate,
             _ => return None,
         })
     }
@@ -797,6 +809,19 @@ impl Op {
                 | Op::LinkedVerify
                 | Op::ItemStatus
                 | Op::ItemsStatus
+                | Op::ThirdPartyDelete
+                | Op::ThirdPartyUpdate
+        )
+    }
+
+    fn third_party_record(self) -> bool {
+        matches!(
+            self,
+            Op::ThirdParties
+                | Op::ThirdPartyRead
+                | Op::ThirdPartySlots
+                | Op::ThirdPartyDelete
+                | Op::ThirdPartyUpdate
         )
     }
 
@@ -884,6 +909,23 @@ impl Op {
             Op::AddressCollections => ("GET", format!("/v1/{owner}/collections"), Payload::None),
             Op::AddressItems => ("GET", format!("/v1/{owner}/items"), Payload::None),
             Op::Committee => ("GET", "/v1/committee".into(), Payload::None),
+            Op::ThirdParties => ("GET", "/v1/thirdParties".into(), Payload::None),
+            Op::ThirdPartyRead => ("GET", format!("/v1/thirdParties/{PROVIDER}"), Payload::None),
+            Op::ThirdPartySlots => (
+                "GET",
+                format!("/v1/thirdParties/{PROVIDER}/slots"),
+                Payload::None,
+            ),
+            Op::ThirdPartyDelete => (
+                "DELETE",
+                format!("/v1/thirdParties/{PROVIDER}"),
+                Payload::None,
+            ),
+            Op::ThirdPartyUpdate => (
+                "PATCH",
+                format!("/v1/thirdParties/{PROVIDER}"),
+                Payload::Json(json!({ "isProgrammatic": false })),
+            ),
             Op::StorageGet => ("GET", format!("/v1/storage/contents/{cid}"), Payload::None),
             Op::StorageHead => ("HEAD", format!("/v1/storage/contents/{cid}"), Payload::None),
             Op::StorageExists => (
@@ -1004,6 +1046,25 @@ impl Op {
                 ),
                 _ if caller == Owner => admitted(),
                 _ => unauthorized_user(&caller.address(), "collections", &collection),
+            };
+        }
+        if self.third_party_record() {
+            let not_manager = "You are not the manager of this Third Party.";
+            return match self {
+                Op::ThirdParties => ok(),
+                Op::ThirdPartyRead if caller == Owner => ok(),
+                Op::ThirdPartyRead => refused(404, "The Third Party doesn't exists."),
+                Op::ThirdPartySlots if caller == Owner => ok(),
+                Op::ThirdPartySlots => refused(
+                    401,
+                    "Unauthorized access. Account is not manager of the collection",
+                ),
+                Op::ThirdPartyDelete if caller == Owner => refused(
+                    400,
+                    "The Third Party can only be deleted if it's already on the graph.",
+                ),
+                Op::ThirdPartyUpdate if caller == Owner => ok(),
+                _ => refused(401, not_manager),
             };
         }
         match self {
@@ -1189,6 +1250,14 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
         .nest("/builder-api", crate::router(state.clone()));
+    sqlx::query(
+        "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Matrix:')",
+    )
+    .bind(PROVIDER)
+    .bind(vec![Owner.address()])
+    .execute(&pool)
+    .await
+    .unwrap();
     sibling_collection(&pool).await;
     sqlx::query(
         "UPDATE builder.items SET data = '{\"tags\":[\"matrix\"]}'::json WHERE blockchain_item_id IS NOT NULL",
@@ -1200,8 +1269,9 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
 }
 
 /// A third-party collection under the matrix's provider that the sibling
-/// wallet created, with one item: it manages that collection and nothing
-/// else of the provider.
+/// wallet created, with one item: the provider's virtual third party lists
+/// the owner, so the sibling manages nothing of the provider, its own
+/// collection included.
 async fn sibling_collection(pool: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     let urn = format!("{PROVIDER}:sibling-{}", id.simple());
@@ -1905,10 +1975,9 @@ async fn a_sibling_collection_of_the_provider_grants_nothing_over_the_others() {
         .iter()
         .filter_map(|item| item["id"].as_str())
         .collect();
-    assert_eq!(listed.len(), 1, "only the sibling's own item: {body}");
     assert!(
-        !listed.contains(&f.item.unwrap().to_string().as_str()),
-        "the sibling lists an item of the owner's collection: {body}"
+        listed.is_empty(),
+        "the sibling manages no provider and lists none of its items: {body}"
     );
     for (method, path, payload) in [
         Op::ReadItem.request(ThirdParty, &f),

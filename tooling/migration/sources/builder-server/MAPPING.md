@@ -8,6 +8,7 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 | `collection` | `collections` | `builder.collections` |
 | `item` | `items` + newest `item_curations` + parent `collections` | `builder.items` |
 | `item_content` | `items.contents` (file -> hash) | `builder.uploaded_contents`, `builder.item_contents` |
+| `virtual_third_party` | `virtual_third_parties` | `builder.virtual_third_parties` |
 
 ## Derived columns
 
@@ -49,6 +50,17 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 - A collection or item the node wrote after upstream's last save (its
   `updated_at` is newer) is kept on re-runs.
 
+## Virtual third parties
+
+`virtual_third_party` copies each row of `virtual_third_parties`: the
+provider id, its managers (lowercased; the node's CHECK requires it),
+`raw_metadata` as upstream writes it (`tp:1:<name>:<description>[:<contracts>]`)
+and `"isProgrammatic"` as `is_programmatic`. A row whose id is longer than
+512 characters, the node's bound, is skipped. A row the node wrote after
+upstream's last save (its `updated_at` is newer) is kept on re-runs. Whether
+a virtual third party's managers manage the provider is decided on read,
+with the registry: see the builder's access rules.
+
 ## Blobs
 
 `builder.item_contents` keeps each file of an item's `contents` at its
@@ -72,8 +84,8 @@ object_key, hash, size)` with `source = 'builder-server'` and
 ## Not migrated
 
 - `projects`, `asset_packs`, `assets`, `collection_curations`,
-  `collection_events`, `slot_usage_cheques`, `virtual_third_parties`,
-  `deployments`, `pools`, `pool_groups`, `pool_likes`: no target. The node
+  `collection_events`, `slot_usage_cheques`, `deployments`, `pools`,
+  `pool_groups`, `pool_likes`: no target. The node
   keeps no scenes.
 - `collections.is_published`, `is_approved`: derived on the node, not stored.
 - `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`:

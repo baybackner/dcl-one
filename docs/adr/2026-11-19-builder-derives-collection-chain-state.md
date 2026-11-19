@@ -114,10 +114,11 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
   calldata can deploy it outside the node. So every save, of a standard or a
   third-party collection, new or existing, decides from a copy at most 30
   minutes old and answers 503 otherwise. A read of a draft is decided the
-  same way, except that the stored owner of a third-party draft, or of a
-  standard draft whose contract the copy doesn't hold, reads it from a copy
-  of any age: no chain fact can change what that answer reveals, and the
-  owner's own listing answers the same row from the same copy.
+  same way, except that a manager of a third-party collection's provider,
+  or the stored owner of a standard draft whose contract the copy doesn't
+  hold, reads it from a copy of any age: no chain fact can change what that
+  answer reveals, and the reader's own listing answers the same row from
+  the same copy.
 - **Nodes without the mirror.** Nodes under the `island` and `journey`
   postures, and the `offline` development profile, run no mirror, so the
   builder's draft routes answer 503 there. The builder logs which condition

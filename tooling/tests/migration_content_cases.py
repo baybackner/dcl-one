@@ -48,7 +48,7 @@ class ContentMigrationCases:
 
     def test_when_planning_the_builder_import_it_should_carry_no_scene_step(self):
         source = harness.migrate.load_source(harness.migrate.SOURCES / 'builder-server')
-        self.assertEqual([s.name for s in source.steps], ['collection', 'item', 'item_content'])
+        self.assertEqual([s.name for s in source.steps], ['collection', 'item', 'item_content', 'virtual_third_party'])
         self.assertFalse(any(t.startswith('builder.project') or t.startswith('builder.asset')
                              for s in source.steps for t in s.targets))
 
@@ -79,6 +79,41 @@ class ContentMigrationCases:
         self.content_load(db, 'builder-server', 'collection', [unlocked])
         self.assertEqual(self.sql(db, f"SELECT lock IS NULL FROM builder.collections WHERE id = '{COLLECTION}';\n").strip(),
                          't')
+
+    @staticmethod
+    def virtual_third_party_row(provider, managers, raw, programmatic, updated):
+        listed = ','.join(managers)
+        return (f"'{provider}', '{{{listed}}}', '{raw}', {programmatic}, "
+                f"'2026-01-01Z', '{updated}'")
+
+    def virtual_third_parties(self, db):
+        return self.sql(db, "SELECT id, managers, raw_metadata, is_programmatic FROM builder.virtual_third_parties "
+                            "ORDER BY id;\n").strip()
+
+    def test_when_importing_virtual_third_parties_it_should_keep_their_managers_metadata_and_kind(self):
+        db = self.content_db('content_builder_virtual_third_parties')
+        provider = 'urn:decentraland:matic:collections-thirdparty:virtual'
+        self.content_load(db, 'builder-server', 'virtual_third_party', [
+            self.virtual_third_party_row(provider, ['0x' + 'AB' * 20], 'tp:1:Virtual:a: b:amoy-0x1', 'true',
+                                         '2026-02-01Z'),
+            self.virtual_third_party_row('urn:decentraland:matic:collections-thirdparty:' + 'x' * 600, [OWNER],
+                                         'tp:1:Long:', 'false', '2026-02-01Z')])
+        self.assertEqual(self.virtual_third_parties(db),
+                         f"{provider}\t{{0x{'ab' * 20}}}\ttp:1:Virtual:a: b:amoy-0x1\tt")
+
+    def test_when_reimporting_a_virtual_third_party_it_should_keep_what_the_node_wrote_later(self):
+        db = self.content_db('content_builder_virtual_rerun')
+        provider = 'urn:decentraland:matic:collections-thirdparty:virtual'
+        self.content_load(db, 'builder-server', 'virtual_third_party', [
+            self.virtual_third_party_row(provider, [OWNER], 'tp:1:First:', 'false', '2026-02-01Z')])
+        self.content_load(db, 'builder-server', 'virtual_third_party', [
+            self.virtual_third_party_row(provider, [OWNER], 'tp:1:Second:', 'true', '2026-03-01Z')])
+        self.assertEqual(self.virtual_third_parties(db), f"{provider}\t{{{OWNER}}}\ttp:1:Second:\tt")
+        self.sql(db, "UPDATE builder.virtual_third_parties SET is_programmatic = false, "
+                     "updated_at = '2026-05-01';\n")
+        self.content_load(db, 'builder-server', 'virtual_third_party', [
+            self.virtual_third_party_row(provider, [OWNER], 'tp:1:Third:', 'true', '2026-04-01Z')])
+        self.assertEqual(self.virtual_third_parties(db), f"{provider}\t{{{OWNER}}}\ttp:1:Second:\tf")
 
     def test_when_importing_a_third_party_collection_it_should_keep_its_linked_contract(self):
         db = self.content_db('content_builder_linked')
