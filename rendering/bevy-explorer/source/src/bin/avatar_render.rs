@@ -198,19 +198,7 @@ fn main() -> AppExit {
     };
     let audio_settings = final_config.audio.clone();
 
-    let http_client = match ipfs::http_client() {
-        Ok(http_client) => http_client,
-        Err(e) => {
-            eprintln!("avatar_render: can't create the http client: {e}");
-            return AppExit::from_code(1);
-        }
-    };
-    let mut app = match offline_app(
-        final_config,
-        &realm,
-        content_server.unwrap_or(root),
-        http_client,
-    ) {
+    let mut app = match offline_app(final_config, &realm, content_server.unwrap_or(root)) {
         Ok(app) => app,
         Err(e) => {
             eprintln!("avatar_render: can't build the app: {e}");

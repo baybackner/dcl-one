@@ -148,15 +148,8 @@ fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
         warn!("failed to write the session id to the crash marker: {e}");
     }
 
-    let http_client = match ipfs::http_client() {
-        Ok(http_client) => http_client,
-        Err(e) => fail_startup(&format!("can't create the http client: {e}")),
-    };
     Ok(DecentralandAppConfig::new(
-        app_config,
-        arguments,
-        http_client,
-        crash_file,
+        app_config, arguments, crash_file,
     ))
 }
 

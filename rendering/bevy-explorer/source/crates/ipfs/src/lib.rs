@@ -614,7 +614,7 @@ impl Plugin for IpfsIoPlugin {
         } else {
             let cache_root = project_directories().map(|dirs| dirs.data_local_dir().join("cache"));
             if cache_root.is_none() {
-                error!("no data directory: the disk cache is off");
+                warn!("no data directory: the disk cache is off");
             }
             cache_root
         };

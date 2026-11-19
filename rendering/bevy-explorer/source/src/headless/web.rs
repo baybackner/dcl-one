@@ -125,9 +125,7 @@ pub fn headless_run(options: JsValue) -> Result<(), JsValue> {
     let mut wallet = Wallet::default();
     wallet.finalize_as_guest();
 
-    let http_client = ipfs::http_client()
-        .map_err(|e| JsValue::from_str(&format!("can't create the http client: {e}")))?;
-    super::assemble(&mut app, config, &launch, &realm, true, wallet, http_client)
+    super::assemble(&mut app, config, &launch, &realm, true, wallet)
         .map_err(|e| JsValue::from_str(&format!("can't build the app: {e}")))?;
     app.add_systems(PreUpdate, (report, forward_scene_logs));
 

@@ -66,7 +66,7 @@ impl Default for MessageLoopPlugin {
             bundled_framework_dir().unwrap_or_else(debug_chromium_embedded_framework_dir_path);
         #[cfg(target_os = "macos")]
         if framework_dir.to_str().is_none() {
-            error!(
+            warn!(
                 "the CEF framework path is not UTF-8: {}",
                 framework_dir.display()
             );

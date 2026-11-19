@@ -33,12 +33,8 @@ use crate::headless::scene_runtime_resources;
 
 /// The app, booted into `realm` (a catalyst root) with content resolved at `content_server`
 /// instead of the realm's advertised content server.
-pub fn offline_app(
-    config: AppConfig,
-    realm: &str,
-    content_server: String,
-    http_client: ipfs::HttpClient,
-) -> std::io::Result<App> {
+pub fn offline_app(config: AppConfig, realm: &str, content_server: String) -> std::io::Result<App> {
+    let http_client = ipfs::http_client().map_err(std::io::Error::other)?;
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins

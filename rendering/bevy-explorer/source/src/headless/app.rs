@@ -124,8 +124,8 @@ pub fn assemble(
     realm: &str,
     server_mode: bool,
     wallet: Wallet,
-    http_client: ipfs::HttpClient,
 ) -> std::io::Result<()> {
+    let http_client = ipfs::http_client().map_err(std::io::Error::other)?;
     // Skip the render-only scene plugins (scene UI, TextShape, scene materials, billboards,
     // lights, visibility, pointer results) and comms' microphone and video. Must precede the
     // plugins: the gates are read at plugin-build time.

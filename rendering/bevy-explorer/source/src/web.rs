@@ -615,8 +615,6 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
         },
     });
 
-    let http_client = ipfs::http_client()
-        .map_err(|e| JsValue::from_str(&format!("can't create the http client: {e}")))?;
     let wasm_loader_handle = WASM_ASSET_LOADER_HANDLE
         .get()
         .ok_or_else(|| JsValue::from_str("the asset loader handle is not set"))?
@@ -624,7 +622,6 @@ pub fn engine_run(options: JsValue) -> Result<(), JsValue> {
     let decentraland_app_config = DecentralandAppConfig::new(
         decentraland_serialized_app_config(),
         decentraland_app_arguments(&options),
-        http_client,
         Some(wasm_loader_handle),
         compute_threads as usize,
     );

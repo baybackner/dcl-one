@@ -408,13 +408,6 @@ fn main() -> AppExit {
         "orchestrated engine must run with a guest wallet"
     );
 
-    let http_client = match ipfs::http_client() {
-        Ok(http_client) => http_client,
-        Err(e) => {
-            eprintln!("[headless] can't create the http client: {e}");
-            return AppExit::from_code(1);
-        }
-    };
     if let Err(e) = webgpu_build::headless::assemble(
         &mut app,
         config,
@@ -422,7 +415,6 @@ fn main() -> AppExit {
         &args.realm,
         args.server_mode,
         wallet,
-        http_client,
     ) {
         eprintln!("[headless] can't build the app: {e}");
         return AppExit::from_code(1);

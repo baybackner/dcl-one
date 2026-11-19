@@ -166,8 +166,6 @@ pub struct DecentralandApp(App);
 pub struct DecentralandAppConfig {
     pub app_config: AppConfig,
     pub arguments: DecentralandArguments,
-    /// The client [`IpfsIoPlugin`] is built with.
-    pub(crate) http_client: ipfs::HttpClient,
     #[cfg(not(target_arch = "wasm32"))]
     pub crash_file: Option<PathBuf>,
     #[cfg(target_arch = "wasm32")]
@@ -182,7 +180,6 @@ impl DecentralandAppConfig {
     pub fn new(
         mut app_config: AppConfig,
         arguments: DecentralandArguments,
-        http_client: ipfs::HttpClient,
         #[cfg(not(target_arch = "wasm32"))] crash_file: Option<PathBuf>,
         #[cfg(target_arch = "wasm32")] wasm_loader_handle: Option<WasmLoaderHandle>,
         #[cfg(target_arch = "wasm32")] compute_threads: usize,
@@ -193,7 +190,6 @@ impl DecentralandAppConfig {
         Self {
             app_config,
             arguments,
-            http_client,
             #[cfg(not(target_arch = "wasm32"))]
             crash_file,
             #[cfg(target_arch = "wasm32")]
@@ -427,15 +423,19 @@ impl DecentralandApp {
         Self(app)
     }
 
-    /// An error when the LiveKit or social runtime can't start.
+    /// An error when the HTTP client can't be built or the LiveKit or social runtime can't start.
     pub fn build(self, decentraland_app_config: DecentralandAppConfig) -> std::io::Result<App> {
         let mut app = self.0;
+        let http_client = ipfs::http_client().map_err(std::io::Error::other)?;
 
         // DefaultPlugins
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_plugins(desktop_default_plugins(&decentraland_app_config));
+        app.add_plugins(desktop_default_plugins(
+            &decentraland_app_config,
+            http_client,
+        ));
         #[cfg(target_arch = "wasm32")]
-        app.add_plugins(wasm_default_plugins(&decentraland_app_config));
+        app.add_plugins(wasm_default_plugins(&decentraland_app_config, http_client));
 
         #[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
         if let Err(e) = media::init_ffmpeg() {
@@ -936,7 +936,10 @@ fn update_app_config_from_arguments(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn desktop_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> PluginGroupBuilder {
+fn desktop_default_plugins(
+    decentraland_app_config: &DecentralandAppConfig,
+    http_client: ipfs::HttpClient,
+) -> PluginGroupBuilder {
     // Compute runs both worlds' parallel systems and `par_iter` work, so it is sized from the core
     // count, not from what IO and async leave over (bevy assigns those first).
     let compute_threads = decentraland_app_config
@@ -1002,7 +1005,7 @@ fn desktop_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> P
         )
         .build()
         .add_before::<bevy::asset::AssetPlugin>(IpfsIoPlugin {
-            client: decentraland_app_config.http_client.clone(),
+            client: http_client,
             preview: decentraland_app_config.arguments.launch.preview,
             starting_realm: Some(map_realm_name(&decentraland_app_config.boot_server())),
             content_server_override: decentraland_app_config
@@ -1017,7 +1020,10 @@ fn desktop_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> P
 }
 
 #[cfg(target_arch = "wasm32")]
-fn wasm_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> PluginGroupBuilder {
+fn wasm_default_plugins(
+    decentraland_app_config: &DecentralandAppConfig,
+    http_client: ipfs::HttpClient,
+) -> PluginGroupBuilder {
     // The compute and async compute pools have real threads on the web (the page's compute and
     // async workers; the async pool's `spawn` runs futures there). The io pool and
     // `TaskPool::spawn` run their tasks on the engine worker's event loop, so one nominal thread
@@ -1068,7 +1074,7 @@ fn wasm_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> Plug
         // stream's hand-over ahead of it; this plugin would replace both with the console hook
         .disable::<bevy::app::PanicHandlerPlugin>()
         .add_before::<AssetPlugin>(IpfsIoPlugin {
-            client: decentraland_app_config.http_client.clone(),
+            client: http_client,
             preview: decentraland_app_config.arguments.launch.preview,
             starting_realm: Some(map_realm_name(&decentraland_app_config.boot_server())),
             content_server_override: decentraland_app_config

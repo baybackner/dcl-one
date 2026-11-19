@@ -53,9 +53,13 @@ impl Plugin for ImageProcessingPlugin {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let channels = CHANNELS
-                .get()
-                .and_then(|channels| channels.lock().ok()?.0.take());
+            let channels = CHANNELS.get().and_then(|channels| {
+                channels
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .0
+                    .take()
+            });
             match channels {
                 Some((req_sx, resp_rx)) => {
                     app.insert_resource(Channels { req_sx, resp_rx });

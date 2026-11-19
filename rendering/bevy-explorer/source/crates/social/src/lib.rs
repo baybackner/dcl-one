@@ -41,7 +41,8 @@ use tokio::sync::{
 use wallet::Wallet;
 
 /// Made by [`SocialPlugin::new`], which inserts the social runtime its systems take into an app;
-/// add the plugin to that same app.
+/// add the plugin to that same app. The runtime is not a field of the plugin because on the
+/// web it is a single-threaded runtime, which is not `Send`.
 pub struct SocialPlugin {
     /// Private so the plugin can only come from `new`, which inserts the runtime.
     _runtime: (),

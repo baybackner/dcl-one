@@ -96,7 +96,8 @@ pub mod chat_marker_things {
 }
 
 /// Made by [`CommsPlugin::new`], which inserts the LiveKit runtime its systems take into an app;
-/// add the plugin to that same app.
+/// add the plugin to that same app. The runtime is not a field of the plugin because on the
+/// web it is a single-threaded runtime, which is not `Send`.
 pub struct CommsPlugin {
     /// Private so the plugin can only come from `new`, which inserts the runtime.
     _runtime: (),
