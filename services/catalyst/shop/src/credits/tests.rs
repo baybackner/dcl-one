@@ -9872,3 +9872,31 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     );
     cleanup(&pool, &addr).await;
 }
+
+/// The admin flag takes the body the events-notifier posts to `/flag`, its addresses under `addressesLinked`.
+#[tokio::test]
+async fn the_admin_flag_accepts_the_events_notifier_body() {
+    let Some(pool) = pool().await else { return };
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            admin_token: Some("s3cret"),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let mut bearer = HeaderMap::new();
+    bearer.insert(header::AUTHORIZATION, "Bearer s3cret".parse().unwrap());
+    let addr = scratch_wallet().address;
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/flags",
+        bearer,
+        Some(json!({ "addressesLinked": [addr, scratch_wallet().address], "ip": "203.0.113.9", "source": "explorer_ip_multi_accounting" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(flag_count(&pool, &addr).await, 1);
+    cleanup(&pool, &addr).await;
+}

@@ -1512,7 +1512,8 @@ not carried over.
 notified on the `credits.wallet_flags` channel, `{action: "flag", addresses,
 source, ip}` (`shop/src/credits/wallet_flags.rs`), or posted through the
 admin, `POST /credits/admin/flags {addresses, source, ip}` (the shape the
-events-notifier posted to the credits server's `/flag`): one row per flagged
+events-notifier posted to the credits server's `/flag`, which names the
+addresses `addressesLinked`; both keys are accepted): one row per flagged
 wallet, keyed by address, with the source that raised it, the IP it reported
 and the wallets it was linked with (`linked_addresses`, the body's list). The
 node runs no detector: it keeps the flags it is told of.
