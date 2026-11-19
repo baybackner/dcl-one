@@ -19,7 +19,8 @@ pub struct CreateConfig {
     pub builder_foundation_url: String,
 
     /// Polygon JSON-RPC (https to a public host) that verifies publication
-    /// receipts; unset, publication begin/claim/verify answer 503.
+    /// receipts and reads the rarities' MANA prices; unset, publication
+    /// begin/claim/verify and the rarities routes answer 503.
     #[arg(long, env = "BUILDER_POLYGON_RPC_URL", hide_env_values = true)]
     pub builder_polygon_rpc_url: Option<String>,
 

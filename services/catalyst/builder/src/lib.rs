@@ -73,6 +73,7 @@ pub mod drafts;
 pub mod handlers;
 pub mod http;
 pub mod items;
+pub mod kept;
 pub mod linked_publication;
 pub mod linked_publication_review;
 pub mod linked_publication_store;
@@ -80,6 +81,7 @@ pub mod onchain;
 pub mod publication;
 pub mod publication_chain;
 pub mod publication_store;
+pub mod rarities;
 pub mod writes;
 
 #[cfg(test)]
@@ -120,7 +122,9 @@ pub struct RawSettings {
     /// `CREATE_WRITES_ENABLED` (false).
     pub writes_enabled: bool,
     /// `BUILDER_POLYGON_RPC_URL`: the Polygon JSON-RPC that verifies
-    /// publication receipts; unset refuses begin/claim/verify with 503.
+    /// publication receipts and reads the rarities' MANA prices
+    /// ([`rarities`]); unset refuses begin/claim/verify and the rarities
+    /// routes with 503.
     pub polygon_rpc_url: Option<String>,
     /// `BUILDER_ADMIN_ADDRESSES`: comma-separated admin wallets.
     pub admin_addresses: String,
@@ -228,6 +232,8 @@ pub struct State {
     pub denylist: Arc<crate::content::Denylist>,
     /// The current curation committee (`committee`), kept an hour.
     pub committee: committee::Committee,
+    /// The rarities and their prices (`rarities`), kept a minute.
+    pub rarities: rarities::Rarities,
 }
 
 pub type SharedState = Arc<State>;
@@ -252,6 +258,7 @@ impl State {
             eip1654,
             denylist,
             committee: committee::Committee::default(),
+            rarities: rarities::Rarities::default(),
         })
     }
 
@@ -347,6 +354,21 @@ fn api_routes() -> Router<SharedState> {
             get(handlers::collections::get_collections),
         )
         .route("/v1/committee", get(handlers::collections::get_committee))
+        .route("/v1/info", get(handlers::small_reads::get_info))
+        .route("/v1/rarities", get(handlers::small_reads::get_rarities))
+        .route(
+            "/v1/rarities/{name}",
+            get(handlers::small_reads::get_rarity),
+        )
+        .route(
+            "/v1/published-collections/{address}/items/{id}/utility",
+            get(handlers::small_reads::get_item_utility),
+        )
+        .route(
+            "/v1/items/{id}/{item}/contents",
+            get(handlers::small_reads::get_item_contents),
+        )
+        .route("/v1/addresses", get(handlers::small_reads::get_addresses))
         .route(
             "/v1/storage/contents/{hash}",
             get(handlers::storage::get_storage_content)

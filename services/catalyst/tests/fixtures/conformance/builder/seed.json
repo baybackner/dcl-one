@@ -892,6 +892,20 @@
         "total_supply": "0",
         "content_hash": "bafkreiitemsapprovedhatonchain"
       }
+    ],
+    "rarities": [
+      {
+        "name": "common",
+        "price": "10000000000000000000",
+        "max_supply": "100000",
+        "mana_price": "4000000000000000000"
+      },
+      {
+        "name": "epic",
+        "price": "60000000000000000000",
+        "max_supply": "1000",
+        "mana_price": "24000000000000000000"
+      }
     ]
   },
   "registry": [

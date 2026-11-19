@@ -409,12 +409,15 @@ pub async fn state_without_db(
 }
 
 /// A loopback Polygon collections subgraph that answers the committee
-/// accounts it holds (`None` answers a GraphQL error) and counts its reads.
+/// accounts it holds and, to a query of `rarities`, the rarities it holds
+/// (`None` answers a GraphQL error to either), and counts its reads of each.
 #[derive(Clone, Default)]
 pub struct FakeCommittee {
     members: Arc<std::sync::Mutex<Option<Vec<String>>>>,
     hits: Arc<std::sync::atomic::AtomicUsize>,
     delay: Arc<std::sync::Mutex<std::time::Duration>>,
+    rarities: Arc<std::sync::Mutex<Option<Vec<serde_json::Value>>>>,
+    rarity_hits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FakeCommittee {
@@ -441,10 +444,38 @@ impl FakeCommittee {
         self.hits.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// The `rarities` the subgraph answers, each `(name, usd price, max
+    /// supply)`; `None` answers a GraphQL error.
+    pub fn set_rarities(&self, rarities: Option<&[(&str, &str, &str)]>) {
+        *self.rarities.lock().unwrap() = rarities.map(|r| {
+            r.iter()
+                .map(|(name, price, max_supply)| {
+                    serde_json::json!({ "id": name, "name": name, "price": price, "maxSupply": max_supply })
+                })
+                .collect()
+        });
+    }
+
+    pub fn rarity_hits(&self) -> usize {
+        self.rarity_hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     async fn answer(
         axum::extract::State(fake): axum::extract::State<Self>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::Json<serde_json::Value> {
+        if body["query"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("rarities")
+        {
+            fake.rarity_hits
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return axum::Json(match fake.rarities.lock().unwrap().clone() {
+                Some(rarities) => serde_json::json!({ "data": { "rarities": rarities } }),
+                None => serde_json::json!({ "errors": [{ "message": "indexing error" }] }),
+            });
+        }
         fake.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let delay = *fake.delay.lock().unwrap();
         tokio::time::sleep(delay).await;
@@ -491,4 +522,97 @@ pub fn market_without_db(
         dcl_http::Outbound::for_tests(),
         settings,
     ))
+}
+
+alloy_sol_types::sol! {
+    struct OracleRarity { string name; uint256 maxSupply; uint256 price; }
+    function getRarityByName(string rarity) external view returns (OracleRarity);
+}
+
+/// The Polygon rarities-with-oracle contract.
+pub const RARITIES_WITH_ORACLE: &str = "0xa9158e22f89bb3f69c5600338895cb5fb81e5090";
+
+/// A loopback Polygon JSON-RPC that answers `eth_call`s of
+/// `getRarityByName` on [`RARITIES_WITH_ORACLE`] with the MANA price it
+/// holds for the name (an unknown name reverts, `None` answers HTTP 502),
+/// and records the names it was asked.
+#[derive(Clone, Default)]
+pub struct FakeOracle {
+    prices: Arc<std::sync::Mutex<Option<BTreeMap<String, String>>>>,
+    asked: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl FakeOracle {
+    pub fn with(prices: &[(&str, &str)]) -> Self {
+        let fake = Self::default();
+        fake.set(Some(prices));
+        fake
+    }
+
+    pub fn set(&self, prices: Option<&[(&str, &str)]>) {
+        *self.prices.lock().unwrap() = prices.map(|p| {
+            p.iter()
+                .map(|(name, price)| (name.to_string(), price.to_string()))
+                .collect()
+        });
+    }
+
+    pub fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    async fn answer(
+        axum::extract::State(fake): axum::extract::State<Self>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        use alloy_sol_types::SolCall;
+        use axum::response::IntoResponse;
+        let Some(prices) = fake.prices.lock().unwrap().clone() else {
+            return axum::http::StatusCode::BAD_GATEWAY.into_response();
+        };
+        let id = body["id"].clone();
+        let call = &body["params"][0];
+        let data = call["data"].as_str().unwrap_or_default();
+        let decoded = alloy_primitives::hex::decode(data)
+            .ok()
+            .and_then(|bytes| getRarityByNameCall::abi_decode(&bytes).ok());
+        let answer = match decoded {
+            Some(asked)
+                if body["method"] == "eth_call"
+                    && call["to"].as_str().map(str::to_ascii_lowercase).as_deref()
+                        == Some(RARITIES_WITH_ORACLE) =>
+            {
+                fake.asked.lock().unwrap().push(asked.rarity.clone());
+                match prices.get(&asked.rarity) {
+                    Some(price) => {
+                        serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": alloy_primitives::hex::encode_prefixed(
+                        getRarityByNameCall::abi_encode_returns(&OracleRarity {
+                            name: asked.rarity.clone(),
+                            maxSupply: alloy_primitives::U256::from(1u8),
+                            price: price.parse().unwrap(),
+                        }),
+                    ) })
+                    }
+                    None => {
+                        serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": 3, "message": "execution reverted" } })
+                    }
+                }
+            }
+            _ => {
+                serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "not faked" } })
+            }
+        };
+        axum::Json(answer).into_response()
+    }
+
+    /// The fake's URL, serving from now on.
+    pub async fn url(&self) -> String {
+        let app = axum::Router::new()
+            .route("/rpc", axum::routing::post(Self::answer))
+            .with_state(self.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}/rpc")
+    }
 }

@@ -44,9 +44,15 @@ The builder answers items as `github.com/decentraland/builder-server` at
   of a file and hash it re-sends, and of a hash the item already named
   under another file name; only a hash the item didn't name takes the
   saving signer. A name counts only while its writer holds an upload record
-  for its hash.
+  for its hash. An item's `video` is a name too: `builder.items.video_named_by`
+  keeps the wallet whose save wrote it (kept while the value is, else the
+  writer of the item's own entry for that hash, else the saving signer), so a
+  published smart wearable's kept video stays readable after a re-save
+  replaces its `video.mp4`, and a wallet that writes another wallet's hash
+  there opens nothing.
 - **Records follow names.** When a save or a delete leaves a hash no item
-  names, its upload records go in the same transaction. The blob collector
+  names, in its contents or as its video, its upload records go in the same
+  transaction. The blob collector
   counts upload records and never a name a save writes: neither a hash in
   an item's `contents` nor its `thumbnail` file name keeps a blob. The item
   hashes it does count (`local_content_hash`, `content_hash`,
@@ -81,6 +87,13 @@ The builder answers items as `github.com/decentraland/builder-server` at
   wallets read what an unsigned request reads.
   `access::read_file` (`services/catalyst/builder/src/access.rs`) decides;
   the table `tests/item_files.rs` holds it.
+- **A public list of names opens nothing more.** `GET
+  /v1/items/{address}/{id}/contents`, which answers a minted item's
+  `contents` to anyone, leaves out every entry an unsigned request couldn't
+  read at the file routes, and a smart wearable's kept video when it is such
+  a file; one predicate (`PUBLIC_FILE` in `access.rs`) decides both. So every
+  hash it names opens for the client that follows it, and
+  no answer names a file the rule above keeps private.
 - **A refusal reveals nothing.** A hash that isn't a canonical CID, a
   withheld hash, a private file and a hash with no file all answer the same
   404 with `Cache-Control: no-store`, and the probe answers 404 `{ok:true}`

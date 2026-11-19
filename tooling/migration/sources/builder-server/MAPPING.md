@@ -57,7 +57,11 @@ name an item holds to the item's owner and records that owner as an
 uploader of every hash the item names, whoever first sent the bytes;
 upstream served those files to anyone. A re-import that changes an entry's
 hash attributes it to the owner again; one that only moves the entry keeps
-its writer. What an imported name and record let a wallet read is the file
+its writer. An item's `video` is a name too: `item` writes
+`video_named_by`, the owner, and keeps the stored writer while the video is
+unchanged; `item_content` records the owner as an uploader of each staged
+item's video as well, and stops the batch when the video's hash is not in the
+blob inventory either. What an imported name and record let a wallet read is the file
 routes' decision, the same as for a save and an upload on the node. The blob copy (out of
 scope) must record each hash in `dcl_migration.blob_inventory (source,
 object_key, hash, size)` with `source = 'builder-server'` and

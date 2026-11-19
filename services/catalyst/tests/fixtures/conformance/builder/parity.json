@@ -88,7 +88,7 @@
       "anchors": []
     },
     "collection-list-bounds": {
-      "text": "GET /v1/collections and GET /v1/:address/collections: the node answers at most 1,000 rows (the committee's listing and the public search) or 5,000 rows (an address's own listing) per response, with or without page and limit, and a page's limit above that is answered with the cap as its limit. It refuses with 400 a q longer than 256 characters, more than 5 tag values, a tag longer than 64 characters, a repeated page, limit, q, sort, type or is_published, a type other than standard or third_party, and a negative page or limit, and matches q literally, % and _ included. Upstream answers every matching row, reads % and _ in q as wildcards, and answers those inputs otherwise.",
+      "text": "GET /v1/collections, GET /v1/addresses and GET /v1/:address/collections: the node answers at most 1,000 rows (the committee's listing, the public search and the addresses) or 5,000 rows (an address's own listing) per response, with or without page and limit, and a page's limit above that is answered with the cap as its limit. It refuses with 400 a q longer than 256 characters, more than 5 tag values, a tag longer than 64 characters, a repeated page, limit, q, sort, type or is_published, a type other than standard or third_party, and a negative page or limit, and matches q literally, % and _ included. Upstream answers every matching row, reads % and _ in q as wildcards, and answers those inputs otherwise.",
       "captures": [],
       "anchors": []
     },
@@ -222,17 +222,42 @@
       "anchors": [
         "status: fixture=200 candidate=404"
       ]
+    },
+    "rarities-read": {
+      "text": "GET /v1/rarities and GET /v1/rarities/:name: the node answers from one read of the Polygon collections subgraph's rarities and the rarities-with-oracle contract's price of each, kept one minute, and from no read of a name a request brings. When either source can't answer, or the subgraph lists no rarity, more than 100 or a malformed one, the node answers 503 {ok:false, data:{}, error:'The rarities are not available. Try again later.'} and asks again after 30 seconds. Upstream reads both on every request, answers an empty list when the subgraph fails and 404 'Could not fetch rarity from blockchain' when the oracle does.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-contents-public-files-only": {
+      "text": "GET /v1/items/:collectionAddress/:itemId/contents: the node answers only a standard collection's item, and leaves out every entry whose file an unsigned GET /v1/storage/contents/:hash would answer 404 (a name whose writer holds no upload record for its hash, a hash the node withholds), and a smart wearable's video.mp4 when its kept video is such a file (a video another wallet wrote without holding the bytes). Upstream answers every entry of the item's row, and the kept video.",
+      "captures": [],
+      "anchors": []
+    },
+    "addresses-published-only": {
+      "text": "GET /v1/addresses: the node lists only published standard collections, so without is_published=true it leaves out every draft's precomputed contract address, and is_published=false lists nothing. Upstream also lists the drafts unless is_published=true is sent, and only the drafts with is_published=false.",
+      "captures": [
+        "source/271-addresses-by-tag.json",
+        "source/272-addresses-by-tags.json",
+        "source/274-addresses-unfiltered.json"
+      ],
+      "anchors": []
     }
   },
   "operations": [
     {
       "id": "api_http:GET:/v1/info",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
+      "status": "reviewed",
+      "result": "The unsigned read was compared and matches: 200 {ok:true, data:{version:''}}, the body builder-server's deployment answers, which starts it without npm and so without a package version.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/258-info-unsigned.json",
+          "scope": "Unsigned GET.",
+          "replay": []
+        }
+      ],
       "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "remaining_verification": "None for the body; the CORS headers are not compared by the replay."
     },
     {
       "id": "api_http:GET:/v1/items",
@@ -436,11 +461,27 @@
     {
       "id": "api_http:GET:/v1/published-collections/:address/items/:id/utility",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
+      "status": "reviewed",
+      "result": "The unsigned read of a minted item's utility, of the same item by its contract in mixed case and of an id no item of the contract has were compared and match: 200 {utility}, and 404 {ok:false, data:{id:'<address>-<id>'}, error:\"The item doesn't exist.\"} for an address or id that isn't stored exactly.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/262-item-utility-minted.json",
+          "scope": "Unsigned GET, a minted item without utility.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/263-item-utility-mixed-case-address.json",
+          "scope": "Unsigned GET, the minted item by its contract in mixed case.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/264-item-utility-unminted.json",
+          "scope": "Unsigned GET, an id no item of the contract has.",
+          "replay": []
+        }
+      ],
       "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "remaining_verification": "A utility with a value is covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:GET:/v1/collections/:id/items",
@@ -1115,11 +1156,44 @@
     {
       "id": "api_http:GET:/v1/items/:collectionAddress/:itemId/contents",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The unsigned read of a minted item's contents, by its contract in lower and mixed case, of an id no item of the contract has, of a draft collection's precomputed contract, and of an address and an item id builder-server refuses were compared and match: 200 with the contents, 200 {ok:false, data:{}, error:\"The item doesn't exist.\"}, and 400 with the lowercased value.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/265-item-contents-minted.json",
+          "scope": "Unsigned GET, a minted item whose files its owner uploaded.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/266-item-contents-mixed-case-address.json",
+          "scope": "Unsigned GET, the minted item by its contract in mixed case.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/267-item-contents-unminted.json",
+          "scope": "Unsigned GET, an id no item of the contract has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/268-item-contents-draft-contract.json",
+          "scope": "Unsigned GET, the precomputed contract of a draft collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/269-item-contents-invalid-address.json",
+          "scope": "Unsigned GET, an address that is not one.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/270-item-contents-invalid-item-id.json",
+          "scope": "Unsigned GET, an item id that is not a number.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:item-contents-public-files-only"
+      ],
+      "remaining_verification": "A smart wearable's video and a name whose file is private are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:GET:/v1/collections",
@@ -2663,11 +2737,62 @@
     {
       "id": "api_http:GET:/v1/addresses",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The unsigned listings by one tag, by two tags in other case, of published collections by tag, with no filter and of a page of published collections were compared. The published listings match; the others differ only by the drafts' precomputed contracts upstream also lists.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/271-addresses-by-tag.json",
+          "scope": "Unsigned GET by one tag, as the marketplace asks.",
+          "replay": [
+            "data.length value",
+            "data[] value"
+          ],
+          "explained_by": {
+            "data.length value": "deliberate:addresses-published-only",
+            "data[] value": "deliberate:addresses-published-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/272-addresses-by-tags.json",
+          "scope": "Unsigned GET by two tags in other case.",
+          "replay": [
+            "data.length value",
+            "data[] value"
+          ],
+          "explained_by": {
+            "data.length value": "deliberate:addresses-published-only",
+            "data[] value": "deliberate:addresses-published-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/273-addresses-published-by-tag.json",
+          "scope": "Unsigned GET of published collections by tag.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/274-addresses-unfiltered.json",
+          "scope": "Unsigned GET with no filter.",
+          "replay": [
+            "data.length value",
+            "data[] value"
+          ],
+          "explained_by": {
+            "data.length value": "deliberate:addresses-published-only",
+            "data[] value": "deliberate:addresses-published-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/275-addresses-published-page.json",
+          "scope": "Unsigned GET of the first page of two published collections.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:addresses-published-only",
+        "deliberate:collection-list-bounds",
+        "deliberate:chain-copy-lag"
+      ],
+      "remaining_verification": "Review filters and sorts are shared with GET /v1/collections and compared there."
     },
     {
       "id": "api_http:GET:/v1/curations",
@@ -2861,20 +2986,41 @@
     {
       "id": "api_http:GET:/v1/rarities",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The unsigned read of two rarities was compared and matches: each rarity the Polygon collections subgraph lists with its USD price as price and prices.USD, and the rarities-with-oracle contract's MANA price as prices.MANA.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/259-rarities-unsigned.json",
+          "scope": "Unsigned GET; the fake subgraph lists seed.json's rarities and the fake Polygon RPC answers their oracle prices, on both sides.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:rarities-read"
+      ],
+      "remaining_verification": "The failure answers (subgraph or oracle down) are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:GET:/v1/rarities/:name",
       "owner": "small-reads",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The unsigned read of a listed rarity and of a name the subgraph doesn't list were compared and match: the rarity with its prices, and 404 {ok:false, data:{name}, error:'Rarity not found'}.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/260-rarity-by-name.json",
+          "scope": "Unsigned GET of a rarity the subgraph lists.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/261-rarity-unknown.json",
+          "scope": "Unsigned GET of a name the subgraph doesn't list.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:rarities-read"
+      ],
+      "remaining_verification": "The failure answers are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/post",

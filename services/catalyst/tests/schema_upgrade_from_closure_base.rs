@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 34] = [
+const PREPARED_PENDING_STEPS: [&str; 35] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -46,6 +46,7 @@ const PREPARED_PENDING_STEPS: [&str; 34] = [
     "0053_builder_collection_listings",
     "0054_builder_item_contents_order",
     "0055_builder_item_contents_named_by",
+    "0056_builder_item_video_named_by",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -2420,4 +2421,70 @@ async fn the_builder_named_by_step_attributes_each_name_to_the_writer_the_file_r
             .await
             .unwrap();
     assert_eq!(steps, [BUILDER_NAMED_BY_STEP]);
+}
+
+const BUILDER_VIDEO_NAMED_BY_STEP: &str = "0056_builder_item_video_named_by";
+
+#[tokio::test]
+async fn the_builder_video_named_by_step_attributes_each_kept_video_to_its_entrys_writer() {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    release_result(pool, &scenes_release()).await.unwrap();
+    release_result(pool, &item_documents_release())
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE builder.items DROP CONSTRAINT items_video_named_by_check; \
+         DROP INDEX builder.items_video_idx; \
+         ALTER TABLE builder.items DROP COLUMN video_named_by; \
+         DELETE FROM meta.schema_steps WHERE step = '0056_builder_item_video_named_by'; \
+         INSERT INTO builder.items (id, eth_address, name, type, video) VALUES \
+           ('33333333-3333-4333-8333-000000000101', '0x' || repeat('0', 39) || '1', 'Named', 'wearable', 'bafkvideo'), \
+           ('33333333-3333-4333-8333-000000000102', '0x' || repeat('0', 39) || '1', 'Unnamed', 'wearable', 'bafkkept'), \
+           ('33333333-3333-4333-8333-000000000103', '0x' || repeat('0', 39) || '1', 'None', 'wearable', NULL); \
+         INSERT INTO builder.item_contents (item_id, file, hash, position, named_by) VALUES \
+           ('33333333-3333-4333-8333-000000000101', 'a.mp4', 'bafkvideo', 0, '0x' || repeat('0', 39) || '2'), \
+           ('33333333-3333-4333-8333-000000000101', 'video.mp4', 'bafkvideo', 1, '0x' || repeat('0', 39) || '3'); \
+         INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES \
+           ('bafkvideo', 1, '0x' || repeat('0', 39) || '3'), ('bafkkept', 1, '0x' || repeat('0', 39) || '1');",
+    )
+    .execute(pool)
+    .await
+    .expect("items whose video has no writer, as the earlier steps left them");
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    let writers: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, right(video_named_by, 1) FROM builder.items \
+         WHERE id::text LIKE '33333333-3333-4333-8333-0000000001%' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        writers,
+        [("Named", Some("3")), ("None", None), ("Unnamed", None)]
+            .map(|(n, w)| (n.to_string(), w.map(str::to_string))),
+        "the writer of the item's own entry for the video, one holding the bytes first; no writer otherwise"
+    );
+    let index: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'builder' AND indexname = 'items_video_idx')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(index, "the object pass builds the video index");
+    let steps: Vec<String> =
+        sqlx::query_scalar("SELECT step FROM meta.schema_steps WHERE step = $1")
+            .bind(BUILDER_VIDEO_NAMED_BY_STEP)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(steps, [BUILDER_VIDEO_NAMED_BY_STEP]);
 }

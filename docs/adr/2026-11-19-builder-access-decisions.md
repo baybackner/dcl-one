@@ -29,7 +29,8 @@ source is down.
   only `access.rs` builds. The store functions that read or change a
   collection or item take that value, and the curation status writes take the
   admin proof, so a route that skips the decision doesn't compile. Only the
-  public search of published collections and the file reads by hash take
+  public search of published collections, the published collections'
+  contract addresses (`GET /v1/addresses`) and the file reads by hash take
   neither, by design. A write decides again inside its own transaction, after
   it locks its rows.
 - **Deny by default, fail closed.** A decision grants as soon as one role

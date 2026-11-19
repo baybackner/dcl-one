@@ -128,6 +128,11 @@ impl ListQuery {
         }
     }
 
+    /// The query without any `key` parameter.
+    pub(crate) fn without(&self, key: &str) -> Self {
+        Self(self.0.iter().filter(|(k, _)| k != key).cloned().collect())
+    }
+
     /// builder-server's public search: a non-empty `q` and `is_published`
     /// exactly `true`.
     pub fn is_public_search(&self) -> bool {
@@ -141,7 +146,7 @@ impl ListQuery {
 
 /// JavaScript's `parseInt(s, 10)`: leading whitespace, a sign, the leading
 /// digits; `None` when there are none. Saturates.
-fn js_int(s: &str) -> Option<i64> {
+pub(crate) fn js_int(s: &str) -> Option<i64> {
     let s = s.trim_start();
     let (negative, rest) = match s.as_bytes().first() {
         Some(b'-') => (true, &s[1..]),
@@ -579,6 +584,12 @@ pub struct PublicSearch {
     listing: Listing,
 }
 
+/// `GET /v1/addresses`: the contract addresses of published standard
+/// collections, by the public search's filters.
+pub struct PublishedAddresses {
+    listing: Listing,
+}
+
 /// An address's own listing: the signer's collections, full rows.
 pub struct OwnListing {
     listing: Listing,
@@ -601,6 +612,19 @@ impl PublicSearch {
         }
         let listing = Listing::everyone(q)?;
         Ok(listing.published_only.then_some(Self { listing }))
+    }
+}
+
+impl PublishedAddresses {
+    /// The listing `q` asks for: its `type` ignored, standard collections
+    /// only, published ones only.
+    pub fn new(q: &ListQuery) -> Result<Self, ApiError> {
+        let mut listing = Listing::everyone(&q.without("type"))?;
+        listing
+            .filters
+            .push(Filter::Fragment("c.third_party_id IS NULL"));
+        listing.published_only = true;
+        Ok(Self { listing })
     }
 }
 
@@ -743,6 +767,19 @@ impl ItemsComponent {
             .map(|r| project(listing_row(r, None), Some(PUBLIC_LISTING)))
             .collect::<Result<_, _>>()?;
         Self::envelope(&search.listing, results, total, None)
+    }
+
+    /// `GET /v1/addresses`: the listed collections' contract addresses.
+    pub async fn published_addresses(
+        &self,
+        request: &PublishedAddresses,
+    ) -> Result<Value, ApiError> {
+        let (rows, total, _) = self.list(&request.listing, true).await?;
+        let results: Vec<Option<String>> = rows
+            .into_iter()
+            .map(|r| r.collection.contract_address().map(str::to_string))
+            .collect();
+        Self::envelope(&request.listing, results, total, None)
     }
 
     /// `GET /v1/{address}/collections`: the full rows, and the status counts

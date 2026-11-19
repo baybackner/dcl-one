@@ -161,6 +161,10 @@ impl CollectionRow {
         self.third_party_id.is_some()
     }
 
+    pub(crate) fn contract_address(&self) -> Option<&str> {
+        self.contract_address.as_deref()
+    }
+
     pub(crate) fn out(self, is_programmatic: Option<bool>) -> CollectionOut {
         let urn = match (&self.third_party_id, self.urn_suffix) {
             (Some(_), Some(urn)) => urn,

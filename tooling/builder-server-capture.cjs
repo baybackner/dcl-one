@@ -21,7 +21,9 @@ const ROOT = path.resolve(__dirname, '..')
 const FIXTURES = path.join(ROOT, 'services/catalyst/tests/fixtures/conformance/builder')
 const GUARD = path.join(__dirname, 'builder-server-offline.cjs')
 const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
-const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'thirdParties'])
+const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'rarities', 'thirdParties'])
+const RARITIES_WITH_ORACLE = '0xa9158e22f89bb3f69c5600338895cb5fb81e5090'
+const GET_RARITY_BY_NAME = 'b5262333'
 const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain']
 const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'id_gt', 'creator', 'managers_contains', 'minters_contains', 'managers_contains_nocase', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
@@ -231,6 +233,31 @@ const ITEM_CASES = [
   { name: '255-storage-exists-draft-unsigned', description: 'GET /storage/contents/{hash}/exists unsigned, the model only an item with no collection names', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}/exists` },
   { name: '256-storage-exists-draft-owner', description: 'GET /storage/contents/{hash}/exists signed by the owner, the model of its item with no collection', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}/exists`, signer: 'owner' },
   { name: '257-storage-exists-unknown-unsigned', description: 'GET /storage/contents/{hash}/exists unsigned, a hash nobody uploaded', method: 'GET', path: `/v1/storage/contents/${ITEM_NEVER}/exists` }
+]
+
+const MINTED_CONTRACT = '0x5eed000000000000000000000000000000000302'
+const MINTED_CONTRACT_MIXED_CASE = '0x5EED000000000000000000000000000000000302'
+const DRAFT_CONTRACT = '0x5eed000000000000000000000000000000000301'
+
+const SMALL_READ_CASES = [
+  { name: '258-info-unsigned', description: 'GET /info unsigned', method: 'GET', path: '/v1/info' },
+  { name: '259-rarities-unsigned', description: 'GET /rarities unsigned, every rarity the subgraph lists with its oracle price', method: 'GET', path: '/v1/rarities' },
+  { name: '260-rarity-by-name', description: 'GET /rarities/{name} unsigned, a rarity the subgraph lists', method: 'GET', path: '/v1/rarities/epic' },
+  { name: '261-rarity-unknown', description: 'GET /rarities/{name} unsigned, a name the subgraph does not list', method: 'GET', path: '/v1/rarities/invalid' },
+  { name: '262-item-utility-minted', description: 'GET /published-collections/{address}/items/{id}/utility unsigned, a minted item', method: 'GET', path: `/v1/published-collections/${MINTED_CONTRACT}/items/0/utility` },
+  { name: '263-item-utility-mixed-case-address', description: 'GET /published-collections/{address}/items/{id}/utility unsigned, the minted item by its contract in mixed case', method: 'GET', path: `/v1/published-collections/${MINTED_CONTRACT_MIXED_CASE}/items/0/utility` },
+  { name: '264-item-utility-unminted', description: 'GET /published-collections/{address}/items/{id}/utility unsigned, an id no item of the contract has', method: 'GET', path: `/v1/published-collections/${MINTED_CONTRACT}/items/1/utility` },
+  { name: '265-item-contents-minted', description: 'GET /items/{address}/{id}/contents unsigned, a minted item', method: 'GET', path: `/v1/items/${MINTED_CONTRACT}/0/contents` },
+  { name: '266-item-contents-mixed-case-address', description: 'GET /items/{address}/{id}/contents unsigned, the minted item by its contract in mixed case', method: 'GET', path: `/v1/items/${MINTED_CONTRACT_MIXED_CASE}/0/contents` },
+  { name: '267-item-contents-unminted', description: 'GET /items/{address}/{id}/contents unsigned, an id no item of the contract has', method: 'GET', path: `/v1/items/${MINTED_CONTRACT}/1/contents` },
+  { name: '268-item-contents-draft-contract', description: 'GET /items/{address}/{id}/contents unsigned, the precomputed contract of a draft collection', method: 'GET', path: `/v1/items/${DRAFT_CONTRACT}/0/contents` },
+  { name: '269-item-contents-invalid-address', description: 'GET /items/{address}/{id}/contents unsigned, an address that is not one', method: 'GET', path: '/v1/items/0xa/0/contents' },
+  { name: '270-item-contents-invalid-item-id', description: 'GET /items/{address}/{id}/contents unsigned, an item id that is not a number', method: 'GET', path: `/v1/items/${MINTED_CONTRACT}/aItemId/contents` },
+  { name: '271-addresses-by-tag', description: 'GET /addresses unsigned, by one tag as the marketplace asks', method: 'GET', path: '/v1/addresses', query: { tag: 'conformance' } },
+  { name: '272-addresses-by-tags', description: 'GET /addresses unsigned, by two tags in other case', method: 'GET', path: '/v1/addresses', query: { tag: ['Hat', 'CONFORMANCE'] } },
+  { name: '273-addresses-published-by-tag', description: 'GET /addresses unsigned, published collections by tag', method: 'GET', path: '/v1/addresses', query: { tag: 'conformance', is_published: 'true' } },
+  { name: '274-addresses-unfiltered', description: 'GET /addresses unsigned, with no filter', method: 'GET', path: '/v1/addresses' },
+  { name: '275-addresses-published-page', description: 'GET /addresses unsigned, the first page of two published collections', method: 'GET', path: '/v1/addresses', query: { is_published: 'true', page: '1', limit: '2' } }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2131,7 +2158,8 @@ const CASES = [
       'data.updated_at'
     ]
   },
-  ...ITEM_CASES
+  ...ITEM_CASES,
+  ...SMALL_READ_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2382,7 +2410,35 @@ function chainRows(seed, signers) {
     isProgrammatic: !!provider.programmatic,
     metadata: { __typename: 'Metadata', type: 'third_party_v2', thirdParty: { __typename: 'ThirdPartyMetadata', name: provider.name, description: '', contracts: [] } }
   }))
-  return { accounts, collections, items, registry }
+  return { accounts, collections, items, registry, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
+}
+
+/** The collections subgraph's `rarities` for `seed.chain.rarities`, with the fields upstream selects. */
+function rarityRows(rarities) {
+  return rarities.map(r => ({ id: r.name, name: r.name, price: r.price, maxSupply: r.max_supply }))
+}
+
+/** One 32-byte ABI word of `value` (a hex string or a decimal string of a uint256). */
+function word(value) {
+  return BigInt(value).toString(16).padStart(64, '0')
+}
+
+/**
+ * The rarities-with-oracle contract's answer to an `eth_call` of `getRarityByName(string)`:
+ * the seeded rarity `(name, maxSupply, mana_price)` ABI-encoded, a revert for a name it doesn't
+ * hold, and undefined for any other call.
+ */
+function oracleAnswer(params, rarities) {
+  const [call] = params
+  const data = String(call?.data || '').replace(/^0x/, '')
+  if (String(call?.to || '').toLowerCase() !== RARITIES_WITH_ORACLE || !data.startsWith(GET_RARITY_BY_NAME) || data.length < 8 + 128) return undefined
+  const length = Number(BigInt(`0x${data.slice(8 + 64, 8 + 128)}`))
+  const name = Buffer.from(data.slice(8 + 128, 8 + 128 + length * 2), 'hex').toString('utf8')
+  const rarity = rarities.find(r => r.name === name)
+  if (!rarity) return { error: { code: 3, message: 'execution reverted' } }
+  const bytes = Buffer.from(name, 'utf8')
+  const padded = bytes.toString('hex').padEnd(Math.ceil(bytes.length / 32) * 64, '0')
+  return { result: `0x${word('0x20')}${word('0x60')}${word(rarity.max_supply)}${word(rarity.mana_price)}${word(bytes.length)}${padded}` }
 }
 
 /** The value of a GraphQL argument node, with its variables substituted. */
@@ -2481,6 +2537,11 @@ function startFakes(req, unfaked, chain) {
       if (request.method === 'POST' && request.url === '/rpc') {
         const { id, method, params = [] } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         const deployed = address => chain.collections.some(c => c.id === String(address).toLowerCase())
+        if (method === 'eth_call') {
+          const answer = oracleAnswer(params, chain.oracle)
+          if (!answer) unfaked.push(`rpc eth_call ${JSON.stringify(params[0])}`)
+          return send(200, { jsonrpc: '2.0', id, ...(answer || { result: '0x' }) })
+        }
         const results = { eth_chainId: '0x89', net_version: '137', eth_getCode: deployed(params[0]) ? '0x6080' : '0x' }
         if (!(method in results)) unfaked.push(`rpc ${method}`)
         return send(200, { jsonrpc: '2.0', id, result: results[method] ?? null })
@@ -2798,4 +2859,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, FAKED_GRAPH_FIELDS, oracleAnswer, rarityRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

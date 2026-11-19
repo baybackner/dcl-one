@@ -6,6 +6,7 @@ pub mod drafts;
 pub mod linked_publication;
 pub mod newsletter;
 pub mod publication;
+pub mod small_reads;
 pub mod storage;
 pub mod svg;
 

@@ -152,13 +152,16 @@ to upstream, and the node, which reads no registry, gets nothing. The
 `admin` wallet is upstream's `ADMIN_ADDRESSES`. `chain` names, once, what
 the Polygon collections subgraph holds: the committee's roles, its
 collections (contract, name, creator and owner roles, approval, manager and
-minter roles and unix timestamps) and their items. The capture serves
-`chain` from its fake subgraph to upstream; the replay writes the same
-collections and items into the node's copy of that subgraph
-(`shop.collections` and `shop.items`), records a fresh complete pass of both
-mirrors in `shop.mirror_state` and serves the committee to the node's reader
-from a loopback fake subgraph, so a collection is published, and a wallet is
-on the committee, on both sides exactly when `chain` says so. The fake
+minter roles and unix timestamps), their items, and the rarities (name, USD
+`price`, `max_supply`, and the `mana_price` the rarities-with-oracle
+contract answers). The capture serves `chain` from its fake subgraph and its
+fake Polygon JSON-RPC to upstream; the replay writes the same collections and
+items into the node's copy of that subgraph (`shop.collections` and
+`shop.items`), records a fresh complete pass of both mirrors in
+`shop.mirror_state`, and serves the committee and the rarities to the node's
+readers from a loopback fake subgraph and the oracle prices from a loopback
+fake JSON-RPC, so a collection is published, a wallet is on the committee and
+a rarity has its prices on both sides exactly when `chain` says so. The fake
 third-party registry lists no provider.
 
 ```sh
@@ -194,11 +197,14 @@ Then it:
    `minters_contains`, `collection` or `isCommitteeMember`; ids, creators and
    collections compare exactly, as The Graph does, and a `first` above 1,000
    or a `skip` above 5,000 answers The Graph's error; a collection carries its
-   items) and the third-party subgraph's `thirdParties` with
+   items), its `rarities` field with the `chain` rarities (`id`, `name`,
+   `price` and `maxSupply`, ordered by id) and the third-party subgraph's `thirdParties` with
    the `seed.json` `registry` rows (by `id`, `managers_contains` or
    `managers_contains_nocase`). It answers the catalyst's active-entities read with no entities
-   and the Polygon JSON-RPC's `eth_chainId`, `net_version` and `eth_getCode`
-   (code only at a `chain` collection's contract), and stores, copies and
+   and the Polygon JSON-RPC's `eth_chainId`, `net_version`, `eth_getCode`
+   (code only at a `chain` collection's contract) and the `eth_call` of the
+   rarities-with-oracle contract's `getRarityByName` (a `chain` rarity's
+   `max_supply` and `mana_price`; a revert for another name), and stores, copies and
    deletes the objects an upload sends to S3, and points the peer, RPC,
    forum, warehouse, S3, SNS and OpenSea settings at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.

@@ -5,7 +5,9 @@
 //! answer. Each cell asserts the status and the envelope's `error`, and a
 //! refused write leaves its rows as they were. The last tests are the "can't
 //! tell" column: a stale copy, a copy with no complete pass and a committee
-//! source that is down answer 503 and write nothing.
+//! source that is down answer 503 and write nothing; the small public reads
+//! answer alike in each, and only the rarities answer 503 while their
+//! source is down.
 
 use std::sync::Arc;
 
@@ -18,7 +20,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::support::{FakeCommittee, committee_index, temp_storage, wallet};
+use super::support::{FakeCommittee, FakeOracle, committee_index, temp_storage, wallet};
 use super::upstream_routes::{Route, UPSTREAM};
 use crate::shared::signed_fetch::test_support::signed_headers_by;
 
@@ -226,6 +228,7 @@ struct Fixture {
     item: Option<Uuid>,
     minted: Option<Uuid>,
     urn: Option<String>,
+    contract: Option<String>,
 }
 
 impl Fixture {
@@ -240,6 +243,15 @@ impl Fixture {
         match kind {
             Malformed => "not-a-uuid".into(),
             _ => self.item.unwrap_or_else(Uuid::new_v4).to_string(),
+        }
+    }
+
+    /// The contract and on-chain id the item is read by.
+    fn by_contract(&self, kind: Kind) -> (String, &'static str) {
+        match kind {
+            Malformed => ("not-an-address".into(), "0"),
+            Unminted => (self.contract.clone().unwrap(), "1"),
+            _ => (self.contract.clone().unwrap_or_else(contract), "0"),
         }
     }
 }
@@ -385,6 +397,7 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
                 item: Some(insert_item(pool, Some(id), false, third_party).await),
                 minted: None,
                 urn,
+                contract: None,
             }
         }
         Published | Approved | Unminted | Transferred => {
@@ -399,6 +412,7 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
                 item: Some(if kind == Unminted { unminted } else { minted }),
                 minted: Some(minted),
                 urn: None,
+                contract: Some(contract),
             }
         }
     }
@@ -538,7 +552,15 @@ enum Op {
     ItemStatus,
     ItemsStatus,
     Ping,
+    Info,
+    Rarities,
+    Rarity,
+    Utility,
+    ItemContents,
+    Addresses,
 }
+
+const RARITIES_UNAVAILABLE: &str = "The rarities are not available. Try again later.";
 
 const NO_FOUNDATION: &str =
     "Foundation review is off on this node: BUILDER_FOUNDATION_URL names no Foundation";
@@ -642,6 +664,12 @@ impl Op {
             ("PATCH", "/v1/collections/{id}/items/{item}/status") => Op::ItemStatus,
             ("PATCH", "/v1/collections/{id}/items/status") => Op::ItemsStatus,
             ("GET", "/ping") => Op::Ping,
+            ("GET", "/v1/info") => Op::Info,
+            ("GET", "/v1/rarities") => Op::Rarities,
+            ("GET", "/v1/rarities/{name}") => Op::Rarity,
+            ("GET", "/v1/published-collections/{address}/items/{id}/utility") => Op::Utility,
+            ("GET", "/v1/items/{id}/{item}/contents") => Op::ItemContents,
+            ("GET", "/v1/addresses") => Op::Addresses,
             _ => return None,
         })
     }
@@ -671,8 +699,30 @@ impl Op {
         )
     }
 
+    fn small_read(self) -> bool {
+        matches!(
+            self,
+            Op::Info | Op::Rarities | Op::Rarity | Op::Utility | Op::ItemContents | Op::Addresses
+        )
+    }
+
+    fn by_contract(self) -> bool {
+        matches!(self, Op::Utility | Op::ItemContents)
+    }
+
     fn kinds(self) -> &'static [Kind] {
-        if self.by_id() {
+        if self.by_contract() {
+            &[
+                Missing,
+                Malformed,
+                Draft,
+                Published,
+                Approved,
+                Unminted,
+                Transferred,
+                ThirdParty,
+            ]
+        } else if self.by_id() {
             &KINDS
         } else if self.publication() {
             &[Missing, Draft]
@@ -792,6 +842,26 @@ impl Op {
             Op::DraftItems => ("GET", "/v1/drafts/items".into(), Payload::None),
             Op::CurationQueue => ("GET", "/v1/collections/curation".into(), Payload::None),
             Op::Ping => ("GET", "/ping".into(), Payload::None),
+            Op::Info => ("GET", "/v1/info".into(), Payload::None),
+            Op::Rarities => ("GET", "/v1/rarities".into(), Payload::None),
+            Op::Rarity => ("GET", "/v1/rarities/common".into(), Payload::None),
+            Op::Addresses => ("GET", "/v1/addresses?tag=matrix".into(), Payload::None),
+            Op::Utility => {
+                let (contract, id) = f.by_contract(kind);
+                (
+                    "GET",
+                    format!("/v1/published-collections/{contract}/items/{id}/utility"),
+                    Payload::None,
+                )
+            }
+            Op::ItemContents => {
+                let (contract, id) = f.by_contract(kind);
+                (
+                    "GET",
+                    format!("/v1/items/{contract}/{id}/contents"),
+                    Payload::None,
+                )
+            }
             _ => {
                 let c = f.collection_id(kind);
                 let revision = Payload::Json(json!({ "revision": "r" }));
@@ -846,6 +916,16 @@ impl Op {
         if self == Op::Ping {
             return ok();
         }
+        if self.small_read() {
+            let minted = matches!(kind, Published | Approved | Transferred);
+            return match self {
+                Op::Utility if !minted => refused(404, "The item doesn't exist."),
+                Op::ItemContents if kind == Malformed => {
+                    refused(400, "Invalid address not-an-address")
+                }
+                _ => ok(),
+            };
+        }
         if !signed
             && !matches!(
                 self,
@@ -864,6 +944,10 @@ impl Op {
             return match kind {
                 _ if self == Op::LinkedVerify => refused(503, NO_FOUNDATION),
                 Missing => not_found(&collection, "collections"),
+                _ if caller == Owner && self == Op::PublicationTransaction => refused(
+                    404,
+                    "Prepare this collection before submitting its transaction",
+                ),
                 _ if caller == Owner => admitted(),
                 _ => unauthorized_user(&caller.address(), "collections", &collection),
             };
@@ -988,12 +1072,14 @@ async fn fresh_pass(pool: &PgPool, minutes_ago: i64) {
 }
 
 async fn matrix(committee: &FakeCommittee) -> Option<Matrix> {
-    matrix_with(committee, 8).await
+    matrix_with(committee, 8, true).await
 }
 
-async fn matrix_with(committee: &FakeCommittee, connections: u32) -> Option<Matrix> {
+async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> Option<Matrix> {
     let pool = crate::db::scratch::isolated_pool(connections).await?;
     fresh_pass(&pool, 0).await;
+    committee.set_rarities(Some(&[("common", "10000000000000000000", "100000")]));
+    let oracle = FakeOracle::with(&[("common", "4000000000000000000")]);
     let state = Arc::new(
         crate::State::new(
             pool.clone(),
@@ -1004,6 +1090,7 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32) -> Option<Matr
             None,
             crate::Settings {
                 writes_enabled: true,
+                polygon_rpc_url: if rpc { Some(oracle.url().await) } else { None },
                 ..crate::Settings::default()
             },
         )
@@ -1013,6 +1100,12 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32) -> Option<Matr
         .merge(crate::root_router(state.clone()))
         .nest("/builder-api", crate::router(state.clone()));
     sibling_collection(&pool).await;
+    sqlx::query(
+        "UPDATE builder.items SET data = '{\"tags\":[\"matrix\"]}'::json WHERE blockchain_item_id IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     Some(Matrix { pool, app, state })
 }
 
@@ -1493,7 +1586,7 @@ async fn a_committee_read_holds_no_database_connection() {
     for op in [Op::ReadCollection, Op::CollectionItems, Op::ReadItem] {
         let committee = FakeCommittee::with(&[&Committee.address()]);
         committee.slow(std::time::Duration::from_secs(3));
-        let Some(m) = matrix_with(&committee, 1).await else {
+        let Some(m) = matrix_with(&committee, 1, true).await else {
             return;
         };
         let f = fixture(&m.pool, Draft).await;
@@ -1738,4 +1831,104 @@ async fn a_sibling_collection_of_the_provider_grants_nothing_over_the_others() {
             "{method} {path} changed rows"
         );
     }
+}
+
+/// The small public reads read no signature, no committee and, but for
+/// `addresses`, no chain copy: they answer as in the matrix with the copy
+/// stale and with the committee source down; without a complete pass only
+/// `addresses` answers 503, and with the rarities source down only the
+/// rarities do.
+#[tokio::test]
+async fn the_small_reads_cannot_tell_only_without_their_own_source() {
+    let small_reads: Vec<Op> = ops().into_iter().filter(|op| op.small_read()).collect();
+    assert_eq!(small_reads.len(), 6);
+    for condition in ["stale", "no pass", "committee down", "rarities down"] {
+        let committee = if condition == "committee down" {
+            FakeCommittee::down()
+        } else {
+            FakeCommittee::with(&[&Committee.address()])
+        };
+        let Some(m) = matrix(&committee).await else {
+            return;
+        };
+        match condition {
+            "stale" => fresh_pass(&m.pool, 31).await,
+            "no pass" => {
+                sqlx::query("DELETE FROM shop.mirror_state")
+                    .execute(&m.pool)
+                    .await
+                    .unwrap();
+            }
+            "rarities down" => committee.set_rarities(None),
+            _ => {}
+        }
+        let mut failures = Vec::new();
+        for &op in &small_reads {
+            for &kind in op.kinds() {
+                for caller in CALLERS {
+                    let expect = |f: &Fixture| match (condition, op) {
+                        ("no pass", Op::Addresses) => Some(Expect(
+                            503,
+                            "Chain state is not available yet. Try again later.".to_string(),
+                        )),
+                        ("rarities down", Op::Rarities | Op::Rarity) => {
+                            refused(503, RARITIES_UNAVAILABLE)
+                        }
+                        _ => op.expect(kind, caller, f),
+                    };
+                    for mount in MOUNTS {
+                        if let Some(failure) = cell(
+                            &m,
+                            op,
+                            kind,
+                            caller,
+                            mount,
+                            condition != "committee down",
+                            expect,
+                        )
+                        .await
+                        {
+                            failures.push(format!("{condition}: {failure}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
+
+/// Without a Polygon verifier, the publication routes that need one answer
+/// 503 to the collection's owner, and every other caller gets the refusal
+/// the matrix gives it, ahead of the 503.
+#[tokio::test]
+async fn without_a_polygon_verifier_publication_answers_503_after_the_refusals() {
+    let committee = FakeCommittee::with(&[&Committee.address()]);
+    let Some(m) = matrix_with(&committee, 8, false).await else {
+        return;
+    };
+    let mut failures = Vec::new();
+    for op in [
+        Op::PublicationBegin,
+        Op::PublicationTransaction,
+        Op::PublicationClaim,
+    ] {
+        for kind in [Missing, Draft] {
+            for caller in CALLERS {
+                let expect = |f: &Fixture| match (kind, caller) {
+                    (Draft, Owner) => refused(
+                        503,
+                        "Collection publication is unavailable until the Polygon verifier is configured",
+                    ),
+                    _ => op.expect(kind, caller, f),
+                };
+                for mount in MOUNTS {
+                    if let Some(failure) = cell(&m, op, kind, caller, mount, true, expect).await {
+                        failures.push(failure);
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

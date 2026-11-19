@@ -451,3 +451,45 @@ test('a redirect into the fake bucket is recorded under upstream\'s own bucket U
   assert.equal(bucketNamed(`Moved Permanently. Redirecting to ${bucket}/contents/bafk1`, bucket), 'Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafk1')
   assert.equal(bucketNamed('unchanged', undefined), 'unchanged')
 })
+
+test('the fake subgraph lists the seeded rarities with the fields upstream selects', () => {
+  const { FAKED_GRAPH_FIELDS, rarityRows, selected } = require(script)
+  assert.ok(FAKED_GRAPH_FIELDS.has('rarities'))
+  const rows = rarityRows([
+    { name: 'epic', price: '20', max_supply: '1000', mana_price: '8' },
+    { name: 'common', price: '10', max_supply: '100000', mana_price: '4' }
+  ])
+  assert.deepEqual(rows, [
+    { id: 'epic', name: 'epic', price: '20', maxSupply: '1000' },
+    { id: 'common', name: 'common', price: '10', maxSupply: '100000' }
+  ])
+  const unfaked = []
+  assert.deepEqual(selected({ name: { value: 'rarities' }, arguments: [] }, rows, {}, unfaked).map(r => r.id), ['common', 'epic'], 'ordered by id')
+  assert.deepEqual(unfaked, [])
+})
+
+test('the fake oracle answers getRarityByName as the rarities-with-oracle contract encodes it', () => {
+  const { oracleAnswer } = require(script)
+  const rarities = [{ name: 'common', price: '10', max_supply: '100000', mana_price: '4000000000000000000' }]
+  const call = data => [{ to: '0xA9158E22F89Bb3F69c5600338895Cb5FB81e5090', data }, 'latest']
+  const common = '0xb5262333' +
+    '0000000000000000000000000000000000000000000000000000000000000020' +
+    '0000000000000000000000000000000000000000000000000000000000000006' +
+    '636f6d6d6f6e0000000000000000000000000000000000000000000000000000'
+  assert.deepEqual(oracleAnswer(call(common), rarities), {
+    result: '0x' +
+      '0000000000000000000000000000000000000000000000000000000000000020' +
+      '0000000000000000000000000000000000000000000000000000000000000060' +
+      '00000000000000000000000000000000000000000000000000000000000186a0' +
+      '0000000000000000000000000000000000000000000000003782dace9d900000' +
+      '0000000000000000000000000000000000000000000000000000000000000006' +
+      '636f6d6d6f6e0000000000000000000000000000000000000000000000000000'
+  })
+  const epic = '0xb5262333' +
+    '0000000000000000000000000000000000000000000000000000000000000020' +
+    '0000000000000000000000000000000000000000000000000000000000000004' +
+    '6570696300000000000000000000000000000000000000000000000000000000'
+  assert.deepEqual(oracleAnswer(call(epic), rarities), { error: { code: 3, message: 'execution reverted' } })
+  assert.equal(oracleAnswer([{ to: '0x0000000000000000000000000000000000000001', data: common }, 'latest'], rarities), undefined)
+  assert.equal(oracleAnswer(call('0xdeadbeef'), rarities), undefined)
+})

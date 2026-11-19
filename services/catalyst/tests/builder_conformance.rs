@@ -159,6 +159,16 @@ struct SeedChain {
     committee: Vec<String>,
     collections: Vec<ChainCollection>,
     items: Vec<ChainItem>,
+    rarities: Vec<ChainRarity>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct ChainRarity {
+    name: String,
+    price: String,
+    max_supply: String,
+    mana_price: String,
 }
 
 #[derive(Deserialize)]
@@ -1825,21 +1835,79 @@ fn roles(seed: &Seed, roles: &[String]) -> Vec<String> {
 }
 
 /// A loopback Polygon collections subgraph that answers `seed.chain`'s
-/// committee as its `accounts`, the way the capture's fake serves it.
+/// committee as its `accounts` and its `rarities`, the way the capture's
+/// fake serves them.
 async fn committee_subgraph(seed: &Seed) -> String {
     let accounts: Vec<Value> = roles(seed, &seed.chain.committee)
         .into_iter()
         .map(|address| serde_json::json!({ "id": address, "address": address }))
         .collect();
-    let answer = serde_json::json!({ "data": { "accounts": accounts } });
+    let rarities: Vec<Value> = seed
+        .chain
+        .rarities
+        .iter()
+        .map(|r| serde_json::json!({ "id": r.name, "name": r.name, "price": r.price, "maxSupply": r.max_supply }))
+        .collect();
+    let committee = serde_json::json!({ "data": { "accounts": accounts } });
+    let listed = serde_json::json!({ "data": { "rarities": rarities } });
     let app = Router::new().route(
         "/graph/collections",
-        axum::routing::post(move || async move { axum::Json(answer) }),
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            let query = body["query"].as_str().unwrap_or_default();
+            axum::Json(if query.contains("rarities") {
+                listed
+            } else {
+                committee
+            })
+        }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     format!("http://{addr}/graph/collections")
+}
+
+alloy_sol_types::sol! {
+    struct OracleRarity { string name; uint256 maxSupply; uint256 price; }
+    function getRarityByName(string rarity) external view returns (OracleRarity);
+}
+
+/// A loopback Polygon JSON-RPC that answers `getRarityByName` with
+/// `seed.chain`'s MANA prices, the way the capture's fake oracle does.
+async fn oracle(seed: &Seed) -> String {
+    use alloy_sol_types::SolCall;
+    let rarities = seed.chain.rarities.clone();
+    let app = Router::new().route(
+        "/rpc",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+            let rarities = rarities.clone();
+            async move {
+                let call = alloy_primitives::hex::decode(body["params"][0]["data"].as_str().unwrap_or_default())
+                    .ok()
+                    .and_then(|bytes| getRarityByNameCall::abi_decode(&bytes).ok());
+                let answer = call
+                    .and_then(|call| rarities.into_iter().find(|r| r.name == call.rarity))
+                    .map(|r| {
+                        serde_json::json!({ "result": alloy_primitives::hex::encode_prefixed(
+                            getRarityByNameCall::abi_encode_returns(&OracleRarity {
+                                name: r.name,
+                                maxSupply: r.max_supply.parse().unwrap(),
+                                price: r.mana_price.parse().unwrap(),
+                            }),
+                        ) })
+                    })
+                    .unwrap_or_else(|| serde_json::json!({ "error": { "code": 3, "message": "execution reverted" } }));
+                let mut answer = answer;
+                answer["jsonrpc"] = "2.0".into();
+                answer["id"] = body["id"].clone();
+                axum::Json(answer)
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/rpc")
 }
 
 /// The node has no third-party registry yet: a provider's managers are the
@@ -2075,6 +2143,7 @@ async fn replay_setup() -> Option<Replay> {
             None,
             Settings {
                 writes_enabled: true,
+                polygon_rpc_url: Some(oracle(&seed_data).await),
                 ..Settings::default()
             },
         )

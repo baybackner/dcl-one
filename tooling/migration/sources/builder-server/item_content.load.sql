@@ -1,7 +1,10 @@
 DO $missing$ DECLARE n bigint; BEGIN
-  SELECT count(DISTINCT s.hash) INTO n FROM stage s
+  SELECT count(DISTINCT h.hash) INTO n
+    FROM (SELECT s.hash FROM stage s
+          UNION SELECT i.video FROM builder.items i
+           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM stage)) h
    WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.blob_inventory b
-                      WHERE b.source = 'builder-server' AND b.object_key = s.hash);
+                      WHERE b.source = 'builder-server' AND b.object_key = h.hash);
   IF n > 0 THEN RAISE EXCEPTION
     'builder-server/item_content: % content hashes are not in dcl_migration.blob_inventory; copy the blobs first', n;
   ELSE NULL; END IF; END $missing$;
@@ -10,6 +13,13 @@ INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
 SELECT DISTINCT s.hash, b.size, lower(s.owner)
 FROM stage s
 JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
+ON CONFLICT (hash, uploaded_by) DO NOTHING;
+
+INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
+SELECT DISTINCT i.video, b.size, i.video_named_by
+FROM builder.items i
+JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = i.video
+WHERE i.video_named_by IS NOT NULL AND i.id IN (SELECT item_id FROM stage)
 ON CONFLICT (hash, uploaded_by) DO NOTHING;
 
 INSERT INTO builder.item_contents AS c (item_id, file, hash, position, named_by)

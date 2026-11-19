@@ -78,10 +78,12 @@ enum File {
     VictimCreator,
     CoWriterEdit,
     ImportedThirdParty,
+    KeptVideo,
+    VideoNamedByOther,
 }
 use File::*;
 
-const FILES: [File; 14] = [
+const FILES: [File; 16] = [
     Draft,
     OnChain,
     Minted,
@@ -96,13 +98,15 @@ const FILES: [File; 14] = [
     VictimCreator,
     CoWriterEdit,
     ImportedThirdParty,
+    KeptVideo,
+    VideoNamedByOther,
 ];
 
 impl File {
     fn public(self) -> bool {
         matches!(
             self,
-            OnChain | Minted | ManagerUploaded | ThirdPartySubmitted
+            OnChain | Minted | ManagerUploaded | ThirdPartySubmitted | KeptVideo
         )
     }
 
@@ -119,6 +123,7 @@ impl File {
                         | VictimCreator
                         | CoWriterEdit
                         | ImportedThirdParty
+                        | VideoNamedByOther
                 ),
                 Provider => self == ThirdParty,
                 Manager => self == ManagerRecordOnly,
@@ -207,6 +212,23 @@ async fn item(
     id
 }
 
+/// A minted item of `owner` that keeps `hash` as its video, the name written
+/// by `named_by`, and names nothing in its contents.
+async fn video_item(pool: &PgPool, owner: Caller, collection: Uuid, hash: &str, named_by: Caller) {
+    sqlx::query(
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, video, video_named_by) \
+         VALUES ($1, $2, $3, 'Files video', 'wearable', '0', $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(collection)
+    .bind(owner.address())
+    .bind(hash)
+    .bind(named_by.address())
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn record(pool: &PgPool, hash: &str, size: usize, uploader: Caller) {
     sqlx::query(
         "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, $2, $3)",
@@ -244,7 +266,7 @@ async fn file(pool: &PgPool, store: &Storage, state: File) -> (String, Vec<u8>) 
     }
     if matches!(
         state,
-        VictimManager | VictimCreator | CoWriterEdit | ImportedThirdParty
+        VictimManager | VictimCreator | CoWriterEdit | ImportedThirdParty | VideoNamedByOther
     ) {
         item(pool, Owner, None, false, false, &hash, Owner).await;
     }
@@ -315,6 +337,18 @@ async fn file(pool: &PgPool, store: &Storage, state: File) -> (String, Vec<u8>) 
         ImportedThirdParty => {
             let c = collection(pool, Provider, true, None).await;
             item(pool, Owner, Some(c), false, true, &hash, Provider).await;
+            true
+        }
+        KeptVideo => {
+            let c = collection(pool, Owner, false, Some(&contract())).await;
+            video_item(pool, Owner, c, &hash, Owner).await;
+            true
+        }
+        VideoNamedByOther => {
+            let contract = contract();
+            let c = collection(pool, Stranger, false, Some(&contract)).await;
+            copy_row(pool, &contract, Stranger, &[]).await;
+            video_item(pool, Stranger, c, &hash, Stranger).await;
             true
         }
     };

@@ -123,6 +123,13 @@ pub struct Publisher {
     signer: String,
 }
 
+/// Anyone may read the public facts of this item: a minted item of a
+/// standard collection.
+#[derive(Debug)]
+pub struct MintedItem {
+    id: Uuid,
+}
+
 /// May read the item file `hash`; `public` when the published rule alone
 /// opened it to an unsigned request.
 #[derive(Debug)]
@@ -137,6 +144,12 @@ impl FileRead {
     }
     pub fn public(&self) -> bool {
         self.public
+    }
+}
+
+impl MintedItem {
+    pub fn id(&self) -> Uuid {
+        self.id
     }
 }
 
@@ -1019,13 +1032,31 @@ pub async fn publisher(
     }
 }
 
-/// Whether a published item names the hash `$1` in an entry whose writer
-/// (`item_contents.named_by`) holds an upload record for it, and, for a
-/// signer `$2`, whether the signer holds one itself or owns an item, or
-/// manages the third-party collection of an item, with such an entry. Each
-/// branch starts from the hash's upload records, so it never visits a name
-/// written by a wallet without the bytes; the public one takes the uploaders
-/// in upload order, so a published file's first uploader answers first. The
+/// Whether a published item names the hash `{hash}` in a name whose writer
+/// holds an upload record for it: an entry of its contents
+/// (`item_contents.named_by`) or its video (`items.video_named_by`). It
+/// starts from the hash's upload records, in upload order, so it never
+/// visits a name written by a wallet without the bytes, and a published
+/// file's first uploader answers first.
+const PUBLIC_FILE: &str = "EXISTS (SELECT 1 FROM (SELECT u.uploaded_by FROM builder.uploaded_contents u \
+       WHERE u.hash = {hash} ORDER BY u.created_at, u.uploaded_by OFFSET 0) w \
+     CROSS JOIN LATERAL (SELECT 1 FROM builder.item_contents ic \
+       JOIN builder.items i ON i.id = ic.item_id \
+       JOIN builder.collections c ON c.id = i.collection_id \
+       {chain_join} \
+       WHERE ic.hash = {hash} AND ic.named_by = w.uploaded_by \
+         AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
+       UNION ALL SELECT 1 FROM builder.items i \
+       JOIN builder.collections c ON c.id = i.collection_id \
+       {chain_join} \
+       WHERE i.video = {hash} AND i.video_named_by = w.uploaded_by \
+         AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
+       LIMIT 1) named)";
+
+/// [`PUBLIC_FILE`] for the hash `$1` and, for a signer `$2`, whether the
+/// signer holds an upload record for it itself or owns an item, or manages
+/// the third-party collection of an item, with an entry naming it whose
+/// writer holds one. Each branch starts from the hash's upload records; the
 /// signer's branches run only when the public answer is false.
 const FILE_READ: &str = "SELECT p.public, CASE WHEN p.public OR $2::text IS NULL THEN false ELSE ( \
          EXISTS (SELECT 1 FROM builder.uploaded_contents WHERE hash = $1 AND uploaded_by = $2) \
@@ -1038,28 +1069,26 @@ const FILE_READ: &str = "SELECT p.public, CASE WHEN p.public OR $2::text IS NULL
            JOIN builder.items i ON i.id = ic.item_id \
            JOIN builder.collections c ON c.id = i.collection_id \
            WHERE u.hash = $1 AND c.third_party_id IS NOT NULL AND c.eth_address = $2)) END \
-     FROM (SELECT \
-       EXISTS (SELECT 1 FROM (SELECT u.uploaded_by FROM builder.uploaded_contents u \
-           WHERE u.hash = $1 ORDER BY u.created_at, u.uploaded_by OFFSET 0) w \
-         CROSS JOIN LATERAL (SELECT 1 FROM builder.item_contents ic \
-           JOIN builder.items i ON i.id = ic.item_id \
-           JOIN builder.collections c ON c.id = i.collection_id \
-           {chain_join} \
-           WHERE ic.hash = $1 AND ic.named_by = w.uploaded_by \
-             AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
-           LIMIT 1) named) AS public OFFSET 0) p";
+     FROM (SELECT {public} AS public OFFSET 0) p";
+
+/// [`PUBLIC_FILE`] for the hash `hash` (a bound parameter or a column), with
+/// the published rule of [`chain_state::published_by_any_pass`].
+fn public_file_sql(hash: &str) -> String {
+    let (chain_join, published) = chain_state::published_by_any_pass();
+    PUBLIC_FILE
+        .replace("{chain_join}", chain_join)
+        .replace("{published}", published)
+        .replace("{hash}", hash)
+}
 
 /// [`FILE_READ`] with the published rule of [`chain_state::published_by_any_pass`].
 pub(crate) fn file_read_sql() -> String {
-    let (chain_join, published) = chain_state::published_by_any_pass();
-    FILE_READ
-        .replace("{chain_join}", chain_join)
-        .replace("{published}", published)
+    FILE_READ.replace("{public}", &public_file_sql("$1"))
 }
 
 /// `GET /v1/storage/contents/:hash` and its `exists` probe: who may read an
 /// item file. Anyone, signed or not, while a published item names the hash
-/// in an entry whose writer holds an upload record for it (a standard item is
+/// in an entry, or as its video, whose writer holds an upload record for it (a standard item is
 /// published once its collection is; a third-party item once the node
 /// submitted it). A signer also reads a file it uploaded itself, and a file
 /// that an item it owns, or a third-party item whose collection it manages,
@@ -1087,6 +1116,66 @@ pub async fn read_file(
         hash: hash.to_string(),
         public: signer.is_none(),
     }))
+}
+
+/// `GET /v1/published-collections/:address/items/:id/utility` and `GET
+/// /v1/items/:address/:id/contents`, unsigned: the minted item whose
+/// standard collection's stored contract is exactly `contract` and whose
+/// on-chain id is exactly `chain_id`; `None` when no item is. Such an item's
+/// collection is published by the node's own record, so no chain fact is
+/// read. A `contract` that is not a lowercase address, or a `chain_id` that
+/// is not decimal digits, names no stored item and reads nothing.
+pub async fn minted_item(
+    state: &SharedState,
+    contract: &str,
+    chain_id: &str,
+) -> Result<Option<MintedItem>, ApiError> {
+    let stored_contract = contract.len() == 42
+        && contract.starts_with("0x")
+        && contract[2..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let stored_id = !chain_id.is_empty()
+        && chain_id.len() <= 78
+        && chain_id.bytes().all(|b| b.is_ascii_digit());
+    if !stored_contract || !stored_id {
+        return Ok(None);
+    }
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT i.id FROM builder.collections c JOIN builder.items i ON i.collection_id = c.id \
+         WHERE c.contract_address = $1 AND c.third_party_id IS NULL AND i.blockchain_item_id = $2 \
+         ORDER BY i.created_at, i.id LIMIT 1",
+    )
+    .bind(contract)
+    .bind(chain_id)
+    .fetch_optional(state.items.pool())
+    .await?;
+    Ok(id.map(|id| MintedItem { id }))
+}
+
+/// A minted item's contents entries `(file, hash)` that [`read_file`] opens
+/// to an unsigned request, in their order: one statement over the same
+/// published rule ([`PUBLIC_FILE`]), then the canonical-hash and withheld
+/// checks.
+pub async fn public_entries(
+    state: &SharedState,
+    item: &MintedItem,
+) -> Result<Vec<(String, String)>, ApiError> {
+    let rows: Vec<(String, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT e.file, e.hash, {} FROM builder.item_contents e \
+         WHERE e.item_id = $1 ORDER BY e.position, e.file",
+        public_file_sql("e.hash")
+    )))
+    .bind(item.id)
+    .fetch_all(state.items.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, hash, public)| {
+            *public && dcl_auth::is_canonical_cid(hash) && !state.denylist.contains(hash)
+        })
+        .map(|(file, hash, _)| (file, hash))
+        .collect())
 }
 
 /// Grants for store tests that exercise a store function by itself; the

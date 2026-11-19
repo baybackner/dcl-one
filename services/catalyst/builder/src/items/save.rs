@@ -10,8 +10,11 @@
 //! (`thumbnail`, `video`, `price`, `beneficiary`, `rarity`, `utility`,
 //! `mappings`); `collection_id` left out keeps the item where it is. An item
 //! may name any content hash; naming one grants nothing over its bytes
-//! ([`super::upload`] records who uploaded what). Content an item stops
-//! naming, by a save or a delete, loses its upload records once no item
+//! ([`super::upload`] records who uploaded what). The `video` is a name too:
+//! `video_named_by` keeps the wallet whose save wrote it (the writer kept
+//! while the value is, else the writer of the item's own entry for that hash,
+//! else the saving signer). Content an item stops naming, in its contents or
+//! as its video, by a save or a delete, loses its upload records once no item
 //! names it, so the blob collector can take the bytes.
 
 use sqlx::{Postgres, Transaction};
@@ -254,7 +257,8 @@ const NAMED_CONTENTS: &str = "INSERT INTO builder.item_contents (item_id, file, 
        $7) \
      FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t(f, h, n)";
 
-/// Drops the upload records of `hashes` that no item names any more.
+/// Drops the upload records of `hashes` that no item names any more, in its
+/// contents or as its video.
 pub(crate) async fn forget_unnamed(
     tx: &mut Transaction<'_, Postgres>,
     hashes: &[String],
@@ -264,7 +268,8 @@ pub(crate) async fn forget_unnamed(
     }
     sqlx::query(
         "DELETE FROM builder.uploaded_contents u WHERE u.hash = ANY($1) \
-         AND NOT EXISTS (SELECT 1 FROM builder.item_contents f WHERE f.hash = u.hash)",
+         AND NOT EXISTS (SELECT 1 FROM builder.item_contents f WHERE f.hash = u.hash) \
+         AND NOT EXISTS (SELECT 1 FROM builder.items v WHERE v.video = u.hash)",
     )
     .bind(hashes)
     .execute(&mut **tx)
@@ -358,15 +363,24 @@ impl ItemsComponent {
             .as_ref()
             .and_then(Option::as_ref)
             .map(crate::content::js_stringify);
-        sqlx::query(
-            "INSERT INTO builder.items AS i (id, collection_id, eth_address, name, description, thumbnail, video, type, \
-               rarity, price, beneficiary, data, metrics, utility, mappings, urn_suffix, local_content_hash) \
+        let (video_before, video_after): (Option<String>, Option<String>) = sqlx::query_as(
+            "WITH before AS (SELECT video FROM builder.items WHERE id = $1) \
+             INSERT INTO builder.items AS i (id, collection_id, eth_address, name, description, thumbnail, video, type, \
+               rarity, price, beneficiary, data, metrics, utility, mappings, urn_suffix, local_content_hash, video_named_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text::json, $13::text::json, $14, \
-               $15::text::jsonb, $16, $17) \
+               $15::text::jsonb, $16, $17, CASE WHEN $7::text IS NULL THEN NULL ELSE $26 END) \
              ON CONFLICT (id) DO UPDATE SET collection_id = EXCLUDED.collection_id, eth_address = EXCLUDED.eth_address, \
                name = EXCLUDED.name, description = EXCLUDED.description, \
                thumbnail = CASE WHEN $18 THEN EXCLUDED.thumbnail ELSE i.thumbnail END, \
                video = CASE WHEN $19 AND NOT $25 THEN EXCLUDED.video ELSE i.video END, \
+               video_named_by = CASE WHEN NOT $19 OR $25 OR EXCLUDED.video IS NOT DISTINCT FROM i.video \
+                 THEN i.video_named_by \
+                 WHEN EXCLUDED.video IS NULL THEN NULL \
+                 ELSE COALESCE((SELECT p.named_by FROM builder.item_contents p \
+                   WHERE p.item_id = i.id AND p.hash = EXCLUDED.video \
+                   ORDER BY EXISTS (SELECT 1 FROM builder.uploaded_contents u \
+                     WHERE u.hash = p.hash AND u.uploaded_by = p.named_by) DESC, p.named_by \
+                   LIMIT 1), $26) END, \
                type = EXCLUDED.type, \
                rarity = CASE WHEN $20 THEN EXCLUDED.rarity ELSE i.rarity END, \
                price = CASE WHEN $21 THEN EXCLUDED.price ELSE i.price END, \
@@ -376,7 +390,8 @@ impl ItemsComponent {
                mappings = CASE WHEN $24 THEN EXCLUDED.mappings ELSE i.mappings END, \
                urn_suffix = COALESCE(EXCLUDED.urn_suffix, i.urn_suffix), \
                local_content_hash = EXCLUDED.local_content_hash, \
-               updated_at = timezone('UTC', now())",
+               updated_at = timezone('UTC', now()) \
+             RETURNING (SELECT video FROM before), i.video",
         )
         .bind(id)
         .bind(intent.collection)
@@ -403,7 +418,8 @@ impl ItemsComponent {
         .bind(utility_named)
         .bind(mappings_named)
         .bind(keep_video)
-        .execute(&mut *tx)
+        .bind(save.signer())
+        .fetch_one(&mut *tx)
         .await?;
         let previous: Vec<(String, String, String)> = sqlx::query_as(
             "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING file, hash, named_by",
@@ -431,6 +447,7 @@ impl ItemsComponent {
         let dropped: Vec<String> = previous
             .into_iter()
             .map(|(_, h, _)| h)
+            .chain(video_before.filter(|v| video_after.as_ref() != Some(v)))
             .filter(|h| !hashes.contains(&h.as_str()))
             .collect();
         forget_unnamed(&mut tx, &dropped).await?;
@@ -469,16 +486,18 @@ impl ItemsComponent {
                     .with_data(serde_json::json!({ "id": id, "contract_address": state.contract })),
             );
         }
-        let hashes: Vec<String> = sqlx::query_scalar(
+        let mut hashes: Vec<String> = sqlx::query_scalar(
             "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING hash",
         )
         .bind(id)
         .fetch_all(&mut *tx)
         .await?;
-        sqlx::query("DELETE FROM builder.items WHERE id = $1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        let video: Option<String> =
+            sqlx::query_scalar("DELETE FROM builder.items WHERE id = $1 RETURNING video")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        hashes.extend(video);
         forget_unnamed(&mut tx, &hashes).await?;
         tx.commit().await?;
         Ok(())

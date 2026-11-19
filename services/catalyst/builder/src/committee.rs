@@ -7,33 +7,26 @@
 //! One good read is kept [`MEMBERS_TTL`], so a wallet removed from the
 //! committee keeps the role for up to that long. A read that fails, or a node
 //! with no Polygon collections subgraph, can't tell who is on the committee:
-//! that answer is kept [`FAILURE_TTL`] and is a 503, never an empty committee.
-//!
-//! At most one read runs at a time, in a task of its own: it finishes and
-//! keeps its answer (a failure or a panic included) even when every caller
-//! that waited on it went away. [`Committee::members`] waits for it;
-//! [`Committee::known_member`] never does.
+//! that answer is kept [`FAILURE_TTL`] and is a 503, never an empty committee
+//! ([`crate::kept`]: one read at a time, kept even when its callers went
+//! away). [`Committee::members`] waits for it; [`Committee::known_member`]
+//! never does.
 
-use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 
 use dcl_auth::is_eth_address;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::Notify;
-use tokio::time::Instant;
 
 use crate::chain_index::ChainIndex;
 use crate::chain_index::graph::{THE_GRAPH_PAGE_SIZE, graph_query};
 use crate::http::ApiError;
+use crate::kept::Kept;
+pub use crate::kept::{FAILURE_TTL, FETCH_TIMEOUT};
 
 /// How long a successful read answers (builder-server's hour).
 pub const MEMBERS_TTL: Duration = Duration::from_secs(60 * 60);
-/// How long a failed read answers "can't tell" before the next attempt.
-pub const FAILURE_TTL: Duration = Duration::from_secs(30);
-/// The whole read, every page and retry included.
-pub const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One member as `GET /v1/committee` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -44,97 +37,27 @@ pub struct Member {
 
 pub type Members = Arc<Vec<Member>>;
 
-#[derive(Default)]
-struct Cache {
-    good: Option<(Instant, Members)>,
-    failed: Option<Instant>,
-    reading: bool,
-}
-
-impl Cache {
-    fn fresh(&self) -> Option<&Members> {
-        self.good
-            .as_ref()
-            .filter(|(at, _)| at.elapsed() < MEMBERS_TTL)
-            .map(|(_, members)| members)
-    }
-
-    fn failing(&self) -> bool {
-        self.failed.is_some_and(|at| at.elapsed() < FAILURE_TTL)
-    }
-}
-
-#[derive(Default)]
-struct Shared {
-    cache: Mutex<Cache>,
-    settled: Notify,
-}
-
-impl Shared {
-    fn cache(&self) -> MutexGuard<'_, Cache> {
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn settle(&self, read: Option<Members>) {
-        let mut cache = self.cache();
-        match read {
-            Some(members) => {
-                cache.good = Some((Instant::now(), members));
-                cache.failed = None;
-            }
-            None => {
-                cache.failed = Some(Instant::now());
-                cache.good.take_if(|(at, _)| at.elapsed() >= MEMBERS_TTL);
-            }
-        }
-        cache.reading = false;
-        drop(cache);
-        self.settled.notify_waiters();
-    }
-}
-
-/// Settles its read as failed if the task ends without settling it.
-struct Unsettled(Option<Arc<Shared>>);
-
-impl Drop for Unsettled {
-    fn drop(&mut self) {
-        if let Some(shared) = self.0.take() {
-            shared.settle(None);
-        }
-    }
-}
-
 /// The committee read and its cache.
-#[derive(Default)]
 pub struct Committee {
-    shared: Arc<Shared>,
+    kept: Kept<Members>,
+}
+
+impl Default for Committee {
+    fn default() -> Self {
+        Self {
+            kept: Kept::new(MEMBERS_TTL),
+        }
+    }
 }
 
 impl Committee {
     /// The current members, waiting for a read when none is kept; 503 when
     /// the subgraph can't tell.
     pub async fn members(&self, market: Option<&Arc<ChainIndex>>) -> Result<Members, ApiError> {
-        loop {
-            let settled = self.shared.settled.notified();
-            tokio::pin!(settled);
-            settled.as_mut().enable();
-            {
-                let mut cache = self.shared.cache();
-                if let Some(members) = cache.fresh() {
-                    return Ok(members.clone());
-                }
-                if cache.failing() {
-                    return Err(unavailable());
-                }
-                if !cache.reading {
-                    cache.reading = true;
-                    self.spawn(fetch(market.cloned()));
-                }
-            }
-            let _ = tokio::time::timeout(FETCH_TIMEOUT + Duration::from_secs(1), settled).await;
-        }
+        self.kept
+            .get(|| fetch(market.cloned()))
+            .await
+            .ok_or_else(unavailable)
     }
 
     /// Whether `address` is a current member; 503 when the subgraph can't
@@ -148,57 +71,25 @@ impl Committee {
     }
 
     /// Whether a good read shows `address` on the committee, without
-    /// waiting: the read kept while it is fresh, and while the one refresh
-    /// that follows its expiry runs (a failed refresh drops an expired read);
-    /// false when no good read is at hand (none yet, or the source failing).
-    /// Starts the read that is due.
+    /// waiting ([`Kept::known`]); false when no good read is at hand (none
+    /// yet, or the source failing). Starts the read that is due.
     pub fn known_member(&self, market: Option<&Arc<ChainIndex>>, address: &str) -> bool {
-        let mut cache = self.shared.cache();
-        if cache.fresh().is_none() && !cache.failing() && !cache.reading {
-            cache.reading = true;
-            self.spawn(fetch(market.cloned()));
-        }
-        let usable = cache
-            .good
-            .as_ref()
-            .filter(|(at, _)| at.elapsed() < MEMBERS_TTL || cache.reading)
-            .map(|(_, members)| members);
-        usable.is_some_and(|members| contains(members, address))
-    }
-
-    fn spawn(&self, read: impl Future<Output = Option<Members>> + Send + 'static) {
-        let shared = self.shared.clone();
-        tokio::spawn(async move {
-            let mut unsettled = Unsettled(Some(shared));
-            let read = read.await;
-            if let Some(shared) = unsettled.0.take() {
-                shared.settle(read);
-            }
-        });
+        self.kept
+            .known(|| fetch(market.cloned()))
+            .is_some_and(|members| contains(&members, address))
     }
 
     #[cfg(test)]
     pub(crate) async fn refresh_with(
         &self,
-        read: impl Future<Output = Option<Members>> + Send + 'static,
+        read: impl std::future::Future<Output = Option<Members>> + Send + 'static,
     ) {
-        let settled = self.shared.settled.notified();
-        tokio::pin!(settled);
-        settled.as_mut().enable();
-        self.shared.cache().reading = true;
-        self.spawn(read);
-        settled.await;
+        self.kept.refresh_with(read).await;
     }
 
     #[cfg(test)]
     pub(crate) fn backdate(&self, by: Duration) {
-        let mut cache = self.shared.cache();
-        if let Some((at, _)) = cache.good.as_mut() {
-            *at = at.checked_sub(by).unwrap();
-        }
-        if let Some(at) = cache.failed.as_mut() {
-            *at = at.checked_sub(by).unwrap();
-        }
+        self.kept.backdate(by);
     }
 }
 

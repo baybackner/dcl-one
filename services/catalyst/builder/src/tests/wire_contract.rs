@@ -243,7 +243,7 @@ async fn an_unsigned_request_is_refused_before_its_id_or_body_is_read() {
 async fn a_path_no_builder_route_serves_is_left_to_the_router_it_is_merged_into() {
     let app = app(state_with_settings(crate::Settings::default()).await);
     let response = app
-        .oneshot(Request::get("/v1/rarities").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/v1/projects").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);

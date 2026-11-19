@@ -132,6 +132,7 @@ CREATE TABLE builder.items (
     catalyst_content_hash text,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    video_named_by text,
     CONSTRAINT items_pkey PRIMARY KEY (id),
     CONSTRAINT items_collection_id_fkey FOREIGN KEY (collection_id)
         REFERENCES builder.collections (id) ON DELETE CASCADE,
@@ -148,7 +149,9 @@ CREATE TABLE builder.items (
     CONSTRAINT items_approved_projection_check CHECK (is_approved = (curation_status = 'approved')),
     CONSTRAINT items_published_identity_check
         CHECK (NOT is_published OR (urn_suffix IS NOT NULL AND blockchain_item_id IS NOT NULL)),
-    CONSTRAINT items_total_supply_check CHECK (total_supply >= 0)
+    CONSTRAINT items_total_supply_check CHECK (total_supply >= 0),
+    CONSTRAINT items_video_named_by_check
+        CHECK (video_named_by IS NULL OR (video_named_by <> '' AND video_named_by = lower(video_named_by)))
 );
 
 -- The collection's items in creation order: GET /v1/collections/{id}/items
@@ -165,6 +168,8 @@ CREATE INDEX items_owner_updated_idx ON builder.items (eth_address, updated_at D
 CREATE INDEX items_minted_collection_idx ON builder.items (collection_id) WHERE blockchain_item_id IS NOT NULL;
 
 CREATE INDEX items_created_idx ON builder.items (created_at, id);
+
+CREATE INDEX items_video_idx ON builder.items (video, video_named_by) WHERE video IS NOT NULL;
 
 -- ── uploads ────────────────────────────────────────────────────────────────
 

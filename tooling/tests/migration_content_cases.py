@@ -122,6 +122,34 @@ class ContentMigrationCases:
             f"'{ITEM}', 'model.glb', 'bafkbmodel', '{OWNER}', 0"])
         self.assertEqual(self.sql(db, writers).strip(), f'model.glb {OWNER.lower()},thumbnail.png {other}')
 
+    def test_when_importing_an_items_video_it_should_attribute_it_to_the_items_owner_with_its_bytes(self):
+        db = self.content_db('content_builder_video')
+        collection, _ = self.builder_rows('Video', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [collection])
+
+        def item(video, updated):
+            return (f"'{ITEM}', '{COLLECTION}', '{OWNER.upper().replace('0X', '0x')}', 'Video', 'd', NULL, {video}, "
+                    f"'wearable', 'common', NULL, NULL, '{{}}', NULL, NULL, NULL, NULL, NULL, false, 'pending', 0, "
+                    f"NULL, NULL, '2026-01-01Z', '{updated}'")
+        self.content_load(db, 'builder-server', 'item', [item("'bafkvideo'", '2026-02-01Z')])
+        writer = f"SELECT video || ' ' || video_named_by FROM builder.items WHERE id = '{ITEM}';\n"
+        self.assertEqual(self.sql(db, writer).strip(), f'bafkvideo {OWNER}')
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
+                     "('builder-server', 'bafkvideo', 'bafkvideo', 7, 'video/mp4');\n")
+        self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0"])
+        self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || uploaded_by || ' ' || size, ',' ORDER BY hash) "
+                                      "FROM builder.uploaded_contents;\n").strip(),
+                         f'bafkamodel {OWNER} 5,bafkvideo {OWNER} 7')
+        other = '0x' + 'b' * 40
+        self.sql(db, f"UPDATE builder.items SET video_named_by = '{other}' WHERE id = '{ITEM}';\n")
+        self.content_load(db, 'builder-server', 'item', [item("'bafkvideo'", '2026-03-01Z')])
+        self.assertEqual(self.sql(db, writer).strip(), f'bafkvideo {other}', 'the same video keeps its writer')
+        self.content_load(db, 'builder-server', 'item', [item("'bafkother'", '2026-04-01Z')])
+        self.assertEqual(self.sql(db, writer).strip(), f'bafkother {OWNER}', 'another video is the owner\'s again')
+        with self.assertRaisesRegex(harness.migrate.MigrationError, 'not in dcl_migration.blob_inventory'):
+            self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0"])
+
     def test_when_the_item_documents_release_has_not_run_it_should_refuse_to_import_items(self):
         db = self.content_db('content_builder_before_release')
         collection, item = self.builder_rows('Early', '2026-02-01Z')

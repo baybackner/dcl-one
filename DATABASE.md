@@ -1207,7 +1207,8 @@ Invariants:
   save also takes an advisory lock on its URN's item part, so two saves never
   take the same item part in the provider's collections.
 - Upload records follow the names. When a save or a delete leaves a hash no
-  item names, its upload records go in the same transaction. The blob
+  item names, in its contents or as its video, its upload records go in the
+  same transaction. The blob
   collector keeps a blob while `builder.uploaded_contents.hash` names it; a
   name in `builder.item_contents.hash` keeps nothing, so once the last record
   goes the collector may take the bytes.
@@ -1266,18 +1267,23 @@ request before any byte is read.
 Each `builder.item_contents` row keeps `named_by`, the wallet whose save wrote
 that name (`items/save.rs`: a re-sent file and hash, or a hash the item
 already named under another file name, keeps its writer; a hash the item
-didn't name takes the saving signer; the import writes the item's owner). A
-name counts only while `builder.uploaded_contents` holds `(hash, named_by)`.
+didn't name takes the saving signer; the import writes the item's owner). An
+item's `video` is a name too, with its writer in `builder.items.video_named_by`
+(kept while the video is, else the writer of the item's own entry for that
+hash, else the saving signer; the import writes the owner). A name counts only
+while `builder.uploaded_contents` holds `(hash, named_by)`, or
+`(video, video_named_by)` for a video.
 
 It reads, never writes:
 
 - `builder.uploaded_contents` by `hash`: the wallets that sent the bytes, in
   upload order for the public answer, and `(hash, signer)` for a signed one.
-- `builder.item_contents` by `(hash, named_by)` for each of those wallets,
+- `builder.item_contents` by `(hash, named_by)` and `builder.items` by
+  `(video, video_named_by)` (`items_video_idx`) for each of those wallets,
   then `builder.items` and `builder.collections` by primary key: whether a
   name that counts sits in a published item (a third-party item's
-  `is_published`), or in an item the signer owns or whose third-party
-  collection it manages.
+  `is_published`), or, for an entry, in an item the signer owns or whose
+  third-party collection it manages.
 - The chain copy row of each standard collection (`shop.collections` by
   network and contract, any age) and the node's own publication records, for
   whether the collection is published.
@@ -1328,6 +1334,13 @@ Invariants:
   retired scene project) stays readable by its uploader alone and keeps its
   blob from the collector.
 
+Upgrade: step `0056_builder_item_video_named_by` adds `video_named_by`
+(nullable, a check that refuses an empty or uppercase writer) and fills each
+video from the writer of the item's own entry for that hash, one holding an
+upload record first; a video no entry of its item names keeps no writer, so it
+opens nothing until a save writes it again. `schema migrate` builds
+`items_video_idx` from `schemas/50_create.sql`.
+
 Upgrade: step `0055_builder_item_contents_named_by` adds `named_by` (`NOT
 NULL DEFAULT ''`, a check that refuses an empty or uppercase writer) and fills
 it in place. Each existing name goes to the first wallet that could have
@@ -1337,6 +1350,57 @@ collection's chain creator (else its stored owner), a chain manager, each
 only when it holds an upload record for the name's hash. The index
 `item_contents_hash_named_by_idx` is created by `schema migrate` from
 `schemas/50_create.sql`.
+
+## Builder small reads workload
+
+The builder answers four unsigned reads from its own rows and the chain copy
+(`services/catalyst/builder/src/handlers/small_reads.rs`). The marketplace
+web calls the item contents read for a smart wearable's video and the
+addresses read by tag, on each page view. Neither has a rate limit: an
+addresses read costs 40 to 100 ms of database time at the reference size,
+and a request that varies its query string misses any cache the five-minute
+`Cache-Control` lets in front of it. The rarities and `GET /v1/info` read no
+table.
+
+- `GET /v1/published-collections/{address}/items/{id}/utility` and `GET
+  /v1/items/{address}/{id}/contents`: one item, found by its standard
+  collection's stored contract (`collections_contract_address_key`) and its
+  on-chain id among that collection's minted items
+  (`items_minted_collection_idx`), then read by primary key. A contract that
+  isn't a lowercase address, or an id that isn't decimal digits, reads
+  nothing.
+- The contents read takes the item's entries in order (`item_contents_pkey`)
+  and runs the item files rule's public answer (`access::PUBLIC_FILE`, the
+  predicate `FILE_READ` uses) for each entry in the same statement, and
+  `FILE_READ` for a smart wearable's kept video, so it answers only files an
+  unsigned request may read.
+- `GET /v1/addresses`: the public search's listing over published standard
+  collections only. It resolves the published ids first
+  (`items_minted_collection_idx`), then probes each one's items for the tags
+  (`items_collection_created_idx`), and answers at most 1,000 contract
+  addresses, with their total only when paginated.
+
+Workload, at the reference size (50,015 collections, 112,955 items, 406,229
+content rows, 293,927 upload records, 52,000 chain rows of which 5,105 are
+published builder collections; `EXPLAIN (ANALYZE, BUFFERS)` of the
+statements the node sends):
+
+| Request | Measured |
+| --- | --- |
+| an item's utility, the contract with the most minted items (70) | under 0.5 ms (1.6 ms cold) |
+| an item's contents, the minted item with the most entries (173) | about 1 ms warm, 10 ms cold |
+| addresses, unfiltered (1,000 rows) | published ids 5 ms, the page 6 to 10 ms |
+| addresses by the most used tag (187 collections) | 40 to 60 ms |
+| addresses with `q`, five 64-character tags, paginated (the worst the bounds allow) | about 75 ms with its total |
+
+Invariants:
+
+- No statement reachable without a signature reads every collection or every
+  item: the tag probe stays within the published collections' items.
+- An answer names no draft: an item is found only by an on-chain id, which
+  only a published collection's items hold, and the addresses read lists only
+  published collections, never a draft's precomputed contract.
+- Every value from the path or the query reaches SQL as a bound parameter.
 
 ## Notification writer
 

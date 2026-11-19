@@ -9,7 +9,7 @@ INSERT INTO builder.items AS i
     (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
      price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,
      is_published, curation_status, is_approved, total_supply, local_content_hash, content_hash,
-     created_at, updated_at)
+     created_at, updated_at, video_named_by)
 SELECT s.id,
        c.id,
        lower(s.eth_address),
@@ -34,7 +34,8 @@ SELECT s.id,
        s.local_content_hash,
        s.content_hash,
        s.created_at AT TIME ZONE 'UTC',
-       s.updated_at AT TIME ZONE 'UTC'
+       s.updated_at AT TIME ZONE 'UTC',
+       CASE WHEN s.video IS NOT NULL THEN lower(s.eth_address) END
 FROM stage s
 LEFT JOIN builder.collections c ON c.id = s.collection_id
 ON CONFLICT (id) DO UPDATE SET
@@ -44,6 +45,8 @@ ON CONFLICT (id) DO UPDATE SET
     description = EXCLUDED.description,
     thumbnail = EXCLUDED.thumbnail,
     video = EXCLUDED.video,
+    video_named_by = CASE WHEN i.video IS NOT DISTINCT FROM EXCLUDED.video THEN i.video_named_by
+                          ELSE EXCLUDED.video_named_by END,
     type = EXCLUDED.type,
     rarity = EXCLUDED.rarity,
     price = EXCLUDED.price,

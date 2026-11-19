@@ -981,6 +981,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn an_items_kept_video_protects_its_blob_only_through_an_upload_record() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let item = uuid::Uuid::new_v4();
+        let video = format!("bafkreikeptvideo{}", item.simple());
+        let owner = "0x1111111111111111111111111111111111111111";
+        sqlx::query(
+            "INSERT INTO builder.items (id, eth_address, name, type, video, video_named_by) \
+             VALUES ($1, $2, 'Kept video', 'wearable', $3, $2)",
+        )
+        .bind(item)
+        .bind(owner)
+        .bind(&video)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let referenced = async || {
+            let mut conn = pool.acquire().await.unwrap();
+            referenced_rows_among_on(&mut conn, std::slice::from_ref(&video))
+                .await
+                .unwrap()
+                .contains(&video)
+        };
+        assert!(
+            !referenced().await,
+            "a kept video's name alone keeps the blob"
+        );
+        sqlx::query(
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 1, $2)",
+        )
+        .bind(&video)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            referenced().await,
+            "its writer's upload record keeps the blob"
+        );
+        sqlx::query("DELETE FROM builder.items WHERE id = $1")
+            .bind(item)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = $1")
+            .bind(&video)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
     /// Every hash/cid/entity/thumbnail/image column of the schema is either a
     /// reference source or a declared non-key, and every declared source
     /// statement runs against the real schema.

@@ -2,8 +2,9 @@
 //! ([`ItemsComponent`]: the ONE pool plus the ONE blob store for uploaded
 //! item files): the body ([`body`]), the save's schema ([`schema`]), the
 //! save, delete and upload ([`save`], [`upload`]), the listings
-//! ([`listing`]), third-party item URNs ([`urn`]) and the content hash a
-//! published item's body carries ([`hash`]). Also the collection projection
+//! ([`listing`]), third-party item URNs ([`urn`]), the content hash a
+//! published item's body carries ([`hash`]) and a minted item's public facts
+//! by contract ([`minted`]). Also the collection projection
 //! the drafts listing reads ([`CollectionMetaOut`]), the committee's
 //! curation status writes and the newsletter opt-in ([`NewsletterComponent`]).
 //! Every timestamp column is `timestamp without time zone` in UTC (the
@@ -12,6 +13,7 @@
 pub mod body;
 pub mod hash;
 pub mod listing;
+pub mod minted;
 pub mod save;
 pub mod schema;
 pub mod upload;
