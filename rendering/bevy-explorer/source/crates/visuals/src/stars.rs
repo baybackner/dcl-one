@@ -53,10 +53,7 @@ use bevy_atmosphere::{
     pipeline::AtmosphereImage,
     prelude::{AtmosphereCamera, AtmosphereModel},
 };
-use common::{
-    sky_preset::{evaluate_by_phase, STARS_V2},
-    structs::SceneGlobalLight,
-};
+use common::sky_preset::{evaluate_by_phase, STARS_V2};
 use scene_material::highlight::HighlightLabel;
 
 use crate::stylized_sky::StylizedSky;
@@ -169,8 +166,8 @@ mod settings {
 struct StarsNoise(Handle<Image>);
 
 /// The stars' brightness and the shooting-star rate at a day phase. A scene's star brightness
-/// scales the stars from the protocol's default. Nothing is `shown` while a scene hides the sun
-/// or shows a panorama.
+/// scales the stars from the protocol's default, and dims the shooting stars with them without
+/// ever raising their rate. Nothing is `shown` while a scene shows a panorama.
 fn star_levels(phase: f32, scene_brightness: Option<f32>, shown: bool) -> (f32, f32) {
     if !shown {
         return (0.0, 0.0);
@@ -181,13 +178,12 @@ fn star_levels(phase: f32, scene_brightness: Option<f32>, shown: bool) -> (f32, 
     });
     (
         STARS_V2.brightness * visibility * scene_scale,
-        STARS_V2.shooting_rate * visibility,
+        STARS_V2.shooting_rate * visibility * scene_scale.min(1.0),
     )
 }
 
 /// The stars come out with the sky's day phase.
 fn update_stars_settings(
-    light: Res<SceneGlobalLight>,
     environment: Res<crate::environment::SceneEnvironment>,
     atmosphere: Res<AtmosphereModel>,
     time: Res<Time>,
@@ -197,9 +193,12 @@ fn update_stars_settings(
     let Some(sky) = atmosphere.to_ref::<StylizedSky>() else {
         return;
     };
-    let shown = !light.sun_hidden && environment.texture.is_none();
-    (settings.brightness, settings.shooting_rate) =
-        star_levels(sky.phase, environment.star_brightness, shown);
+    // a scene that hides the sun hides its discs, not the stars
+    (settings.brightness, settings.shooting_rate) = star_levels(
+        sky.phase,
+        environment.star_brightness,
+        environment.texture.is_none(),
+    );
     settings.time = time.elapsed_secs();
     if noise.0 != sky.noise {
         noise.0 = sky.noise.clone();
@@ -534,7 +533,11 @@ mod tests {
         assert_eq!(star_levels(0.0, Some(4.62), true), preset);
         let (brightness, _) = star_levels(0.0, Some(2.31), true);
         assert!(close(brightness, preset.0 / 2.0), "{brightness}");
-        assert_eq!(star_levels(0.0, Some(0.0), true).0, 0.0);
+        // no brightness hides the shooting stars too, and more of it does not add any
+        assert_eq!(star_levels(0.0, Some(0.0), true), (0.0, 0.0));
+        let (brightness, shooting_rate) = star_levels(0.0, Some(9.24), true);
+        assert!(close(brightness, preset.0 * 2.0), "{brightness}");
+        assert_eq!(shooting_rate, preset.1);
     }
 
     #[test]
@@ -545,7 +548,7 @@ mod tests {
 
     /// Every variant of the star pipeline compiles, and each of the pass's three places (a plain
     /// view, a multisampled one and one with depth of field) lights stars on a clear night sky
-    /// and none once a scene hides the sun.
+    /// and none once a scene sets their brightness to nothing.
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn stars_pipelines_compile() {
@@ -597,8 +600,7 @@ mod tests {
         }
 
         let mut app = sky_test_app(64);
-        app.init_resource::<SceneGlobalLight>()
-            .init_resource::<crate::environment::SceneEnvironment>()
+        app.init_resource::<crate::environment::SceneEnvironment>()
             .init_resource::<Captured>();
         // the pass sits after the highlight pass, which this app does not draw
         app.sub_app_mut(RenderApp)
@@ -683,8 +685,8 @@ mod tests {
 
         let night = views.clone().map(|(_, target)| capture(&mut app, &target));
         app.world_mut()
-            .resource_mut::<SceneGlobalLight>()
-            .sun_hidden = true;
+            .resource_mut::<crate::environment::SceneEnvironment>()
+            .star_brightness = Some(0.0);
         for _ in 0..3 {
             app.update();
         }

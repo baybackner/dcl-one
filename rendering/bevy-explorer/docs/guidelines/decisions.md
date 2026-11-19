@@ -84,9 +84,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   alpha, its cloud cover: the disc and its halo do not hide a star behind them. The dim patches
   read the horizon noise with Unity's seam-safe derivatives, but the image has no mip chain
   here, so every sample is its top level. A scene's `PBSkybox` star brightness scales the
-  preset's stars from the protocol's default of 4.62 and leaves the shooting stars alone; a
-  scene that hides the sun or shows a panorama gets neither. Unity gives a scene-controlled sky
-  its Legacy look, which has no Stars v2.
+  preset's stars from the protocol's default of 4.62; below that default it thins the shooting
+  stars by the same factor, down to none at 0, and above it their rate stays the preset's. A
+  scene that shows a panorama gets neither. Unity gives a scene-controlled sky its Legacy look,
+  which has no Stars v2.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
   UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
   the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
