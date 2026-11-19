@@ -497,8 +497,22 @@ write, and only while the places webhook is configured; an unsent downgrade
 notice of the same row takes the newer message instead of a new row. A local
 world's or a derived place's creator rating is held to the operator's rating in
 `explore.place_moderation` when one is set, and a rating the row takes moves
-that override with it. A newly inserted derived place is also held to the
-ratings of the derived places its parcels overlap, which the pass then prunes.
+that override with it. A new deployment or a newly inserted derived place is
+also held to the ratings of the derived places its parcels overlap, which the
+pass then prunes, and to `explore.place_parcel_rating`.
+
+`explore.place_parcel_rating` keeps the rating last held on each parcel by the
+derived place covering it, so the rating outlives a row the pass prunes (an
+unpublished scene, or one moved to another base parcel). Workload: one row per
+rated parcel the catalogue derives (at most the deployed parcels); written in
+the derive page's transaction, one batched upsert for the rows whose rating the
+page settles and one insert of missing parcels for the others (an existing
+catalogue fills on its first pass), and one row per parcel for an operator's
+rating of a derived place; read by primary key for each settled row's parcels.
+Invariant: a parcel's row equals the rating of the derived place covering it,
+or of the last one; only the derive pass and the operator's place rating write
+it, and nothing deletes it. The table is a new object: the object pass of
+`catalyst schema migrate` creates it, so no step exists.
 
 Event notification delivery is owned by Social in
 `social.event_notification_intents`. Explore inserts an event transition snapshot

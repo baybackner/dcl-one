@@ -34,7 +34,10 @@
 //!
 //! A creator's rating (a scene deployment, a world's settings or publish)
 //! only raises the stored one ([`CreatorRating`]); its raise or refused
-//! lower is reported on the same channel ([`capture_creator_rating`]).
+//! lower is reported on the same channel ([`capture_creator_rating`]). An
+//! operator's rating of a derived place is also recorded on its parcels
+//! (`explore.place_parcel_rating`), which the derive pass holds the next
+//! place on them to.
 //!
 //! The pending rating has two spellings upstream: the route schema's `PR`
 //! (`Place/schemas.ts:343`) and the code enum's `RP`
@@ -289,6 +292,20 @@ const OVERLAY: &str = "INSERT INTO explore.place_moderation (place_id, disabled,
          set_by = EXCLUDED.set_by,
          updated_at = EXCLUDED.updated_at";
 
+/// An operator's rating `$2` of the derived place `$1`, recorded on each of
+/// its parcels (`explore.place_parcel_rating`, which the derive pass holds a
+/// new deployment or a new row to).
+const OPERATOR_PARCEL_RATINGS: &str = r#"
+    INSERT INTO explore.place_parcel_rating AS r (position, content_rating)
+    SELECT DISTINCT pos, $2 FROM explore.place p,
+         jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.raw->'positions') = 'array'
+                                        THEN p.raw->'positions' ELSE '[]'::jsonb END) AS pos
+    WHERE p.id = $1 AND p.raw->>'source' = 'content' AND p.world IS FALSE
+    ORDER BY pos
+    ON CONFLICT (position) DO UPDATE
+    SET content_rating = EXCLUDED.content_rating, updated_at = timezone('UTC', now())
+"#;
+
 /// The `raw` keys a disable decision writes, as `updateDisabled` did
 /// (`Place/model.ts:727-742`): `disabled_at` and `disabled_reason` set or
 /// cleared, `updated_at` moved.
@@ -373,6 +390,14 @@ pub async fn apply_with(
                 .bind(highlighted)
                 .bind(rating.as_deref())
                 .bind(&raw_patch)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let (Some(rating), Target::Place(_)) = (rating.as_deref(), &target) {
+            // A derived place's parcels hold the operator's rating past the row.
+            sqlx::query(OPERATOR_PARCEL_RATINGS)
+                .bind(&id)
+                .bind(rating)
                 .execute(&mut *tx)
                 .await?;
         }

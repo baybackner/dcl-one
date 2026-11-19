@@ -266,6 +266,24 @@ CREATE TABLE explore.place_moderation (
         CHECK (content_rating IS NULL OR content_rating IN ('RP', 'E', 'T', 'A', 'R'))
 );
 
+-- The content rating last held on each parcel by the derived place covering it
+-- (src/explore/places/derive.rs, `settle_ratings`): the derive pass writes the
+-- rating it settles for a new deployment or a new row over every parcel of
+-- that row, and fills a missing parcel from the row's stored rating; an
+-- operator's rating of a derived place (places::moderation) overwrites its
+-- parcels. A new deployment or a new row is held to the strictest rating of
+-- its parcels, so the rating outlives the row the pass prunes. Keyed by the
+-- parcel (`x,y`), one row per rated parcel the catalogue has derived; no FK
+-- to explore.place, whose rows come and go. The PK serves the pass's lookup
+-- and upsert by parcel.
+CREATE TABLE explore.place_parcel_rating (
+    position       text PRIMARY KEY,
+    content_rating text NOT NULL,
+    updated_at     timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT place_parcel_rating_known
+        CHECK (content_rating IN ('RP', 'E', 'T', 'A', 'R'))
+);
+
 -- An operator's ranking of a catalogue row (src/explore/places/ranking.rs: the
 -- admin routes' ranking and ranking-exclusion, the destinations ranking
 -- replace): `overlay` holds the raw keys decided (`ranking`: number or null,

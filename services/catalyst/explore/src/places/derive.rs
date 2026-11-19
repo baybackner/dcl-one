@@ -683,14 +683,25 @@ fn positions_of(p: &DerivedPlace) -> Vec<String> {
 const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.place \
      WHERE id = ANY($1) AND raw->>'source' = 'content' ORDER BY id FOR UPDATE";
 
-/// The ratings a new row is held to: its own operator rating, and the rating
-/// of every other derived place its parcels overlap (the rows it replaces,
-/// which `PRUNE` removes; that row's operator rating first), disabled ones
-/// included. `$1` the new ids, `$2` each one's positions.
+/// The ratings a new deployment or a new row is held to: its own operator
+/// rating, the rating recorded on each of its parcels (where none is, an
+/// operator's rating of a place based on that parcel), and the rating of
+/// every other derived place its parcels overlap (the rows it replaces, which
+/// `PRUNE` removes; that row's operator rating first), disabled ones
+/// included. `$1` the ids, `$2` each one's positions; `$3`, `$4`, `$5` one
+/// entry per parcel: the id, the position and the place id based there.
 const HELD_RATINGS: &str = r#"
     SELECT f.id, false AS predecessor, m.content_rating AS rating
     FROM unnest($1::text[]) AS f(id)
     JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
+    UNION ALL
+    SELECT c.id, true, COALESCE(r.content_rating, m.content_rating)
+    FROM unnest($3::text[], $4::text[], $5::text[]) AS c(id, position, parcel_id)
+    LEFT JOIN explore.place_parcel_rating r ON r.position = c.position
+    LEFT JOIN explore.place_moderation m
+      ON r.position IS NULL AND m.place_id = c.parcel_id AND m.place_id <> c.id
+     AND m.content_rating IS NOT NULL
+    WHERE r.position IS NOT NULL OR m.place_id IS NOT NULL
     UNION ALL
     SELECT f.id, true, COALESCE(m.content_rating, p.content_rating)
     FROM unnest($1::text[], $2::jsonb[]) AS f(id, positions)
@@ -698,6 +709,23 @@ const HELD_RATINGS: &str = r#"
       ON p.id <> f.id AND p.world IS FALSE AND p.raw->>'source' = 'content'
      AND p.raw->'positions' ?| ARRAY(SELECT jsonb_array_elements_text(f.positions))
     LEFT JOIN explore.place_moderation m ON m.place_id = p.id
+"#;
+
+/// The page's parcel ratings, locked after its places as an operator's
+/// rating locks them (`moderation::apply_with`).
+const LOCK_PARCEL_RATINGS: &str = "SELECT 1 FROM explore.place_parcel_rating \
+     WHERE position = ANY($1) ORDER BY position FOR UPDATE";
+
+/// Records `$2` on each parcel `$1`: `$3` true overwrites a recorded rating,
+/// false only fills a parcel with none.
+const RECORD_PARCEL_RATINGS: &str = r#"
+    INSERT INTO explore.place_parcel_rating AS r (position, content_rating)
+    SELECT DISTINCT ON (u.position) u.position, u.rating
+    FROM unnest($1::text[], $2::text[]) AS u(position, rating)
+    ORDER BY u.position
+    ON CONFLICT (position) DO UPDATE
+    SET content_rating = EXCLUDED.content_rating, updated_at = timezone('UTC', now())
+    WHERE $3 AND r.content_rating IS DISTINCT FROM EXCLUDED.content_rating
 "#;
 
 /// The page's operator rows, locked before its places as an operator's
@@ -755,6 +783,13 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
                 )
             })
             .collect();
+    let mut parcels: Vec<String> = rows.iter().flat_map(|p| positions_of(p)).collect();
+    parcels.sort();
+    parcels.dedup();
+    sqlx::query(LOCK_PARCEL_RATINGS)
+        .bind(&parcels)
+        .execute(&mut *tx)
+        .await?;
     let inserted: HashMap<String, bool> = sqlx::query(UPSERT)
         .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
         .bind(
@@ -888,10 +923,12 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
 
 /// The creator rating rule (`places::moderation::CreatorRating`) over a page:
 /// a new deployment of an existing row, or a new row, takes the scene's rating
-/// when it raises the one held, never a laxer one; a new row is held to its
-/// operator rating and to every place it replaces on its parcels. A pass over
-/// the same deployment leaves the stored rating, an operator's included. A
-/// scene that declares no rating keeps the held one, with no notice.
+/// when it raises the one held, never a laxer one. It is held to its stored
+/// or operator rating, to the rating recorded on each of its parcels, and to
+/// every place it replaces on them; the rating it takes is recorded on its
+/// parcels. A pass over the same deployment leaves the stored rating, an
+/// operator's included, and only fills its parcels' missing records. A scene
+/// that declares no rating keeps the held one, with no notice.
 async fn settle_ratings(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rows: &[&DerivedPlace],
@@ -899,18 +936,38 @@ async fn settle_ratings(
     inserted: &HashMap<String, bool>,
     notify: Option<&str>,
 ) -> Result<()> {
-    let fresh: Vec<&DerivedPlace> = rows
+    let settled: Vec<&DerivedPlace> = rows
         .iter()
         .copied()
-        .filter(|p| inserted.get(&p.id) == Some(&true))
+        .filter(|p| match inserted.get(&p.id) {
+            Some(true) => true,
+            Some(false) => before
+                .get(&p.id)
+                .is_some_and(|(_, at)| *at != p.deployed_at),
+            None => false,
+        })
         .collect();
     let mut held: HashMap<String, (Vec<String>, bool)> = HashMap::new();
-    if !fresh.is_empty() {
-        let ids: Vec<String> = fresh.iter().map(|p| p.id.clone()).collect();
-        let positions: Vec<Value> = fresh.iter().map(|p| Value::from(positions_of(p))).collect();
+    if !settled.is_empty() {
+        let ids: Vec<String> = settled.iter().map(|p| p.id.clone()).collect();
+        let positions: Vec<Value> = settled
+            .iter()
+            .map(|p| Value::from(positions_of(p)))
+            .collect();
+        let (mut cell_ids, mut cells, mut cell_places) = (Vec::new(), Vec::new(), Vec::new());
+        for p in &settled {
+            for position in positions_of(p) {
+                cell_ids.push(p.id.clone());
+                cell_places.push(super::parcel_place_id(&position));
+                cells.push(position);
+            }
+        }
         for r in sqlx::query(HELD_RATINGS)
             .bind(&ids)
             .bind(&positions)
+            .bind(&cell_ids)
+            .bind(&cells)
+            .bind(&cell_places)
             .fetch_all(&mut **tx)
             .await?
         {
@@ -924,21 +981,31 @@ async fn settle_ratings(
         }
     }
     let (mut ids, mut ratings) = (Vec::new(), Vec::new());
+    let (mut recorded, mut recorded_ratings) = (Vec::new(), Vec::new());
+    let (mut missing, mut missing_ratings) = (Vec::new(), Vec::new());
     for p in rows {
-        // The rating held, and whether a creator's change to it is reported.
         let fresh = inserted.get(&p.id) == Some(&true);
-        let (stored, report) = if fresh {
-            let (codes, predecessor) = held.remove(&p.id).unwrap_or_default();
-            let stored = moderation::strictest(codes.iter().map(String::as_str));
-            (stored.map(str::to_string), predecessor)
-        } else {
-            match before.get(&p.id) {
-                Some((stored, at)) if inserted.contains_key(&p.id) && *at != p.deployed_at => {
-                    (stored.clone(), true)
+        if !settled.iter().any(|s| s.id == p.id) {
+            if let Some((Some(rating), _)) =
+                before.get(&p.id).filter(|_| inserted.contains_key(&p.id))
+            {
+                for position in positions_of(p) {
+                    missing.push(position);
+                    missing_ratings.push(rating.clone());
                 }
-                _ => continue,
             }
+            continue;
+        }
+        // The rating held, and whether a creator's change to it is reported.
+        let (mut codes, predecessor) = held.remove(&p.id).unwrap_or_default();
+        let own = if fresh {
+            None
+        } else {
+            before.get(&p.id).and_then(|(rating, _)| rating.clone())
         };
+        codes.extend(own.clone());
+        let stored = moderation::strictest(codes.iter().map(String::as_str)).map(str::to_string);
+        let report = !fresh || predecessor;
         let declared = p.content_rating.as_deref();
         let rating = match declared {
             Some(d) if CreatorRating::of(stored.as_deref(), d).applies() => Some(d.to_string()),
@@ -953,7 +1020,12 @@ async fn settle_ratings(
             };
             moderation::capture_creator_rating(tx, base, row, stored, declared).await?;
         }
-        if let Some(rating) = rating.filter(|r| fresh || Some(r) != stored.as_ref()) {
+        let Some(rating) = rating else { continue };
+        for position in positions_of(p) {
+            recorded.push(position);
+            recorded_ratings.push(rating.clone());
+        }
+        if fresh || Some(&rating) != own.as_ref() {
             ids.push(p.id.clone());
             ratings.push(rating);
         }
@@ -963,6 +1035,19 @@ async fn settle_ratings(
             sqlx::query(sql)
                 .bind(&ids)
                 .bind(&ratings)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    for (positions, ratings, overwrite) in [
+        (recorded, recorded_ratings, true),
+        (missing, missing_ratings, false),
+    ] {
+        if !positions.is_empty() {
+            sqlx::query(RECORD_PARCEL_RATINGS)
+                .bind(&positions)
+                .bind(&ratings)
+                .bind(overwrite)
                 .execute(&mut **tx)
                 .await?;
         }
@@ -1328,6 +1413,7 @@ mod tests {
             .unwrap();
         assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
         assert_eq!(kinds(id_a.clone()).await, ["rating_downgrade_refused"]);
+        prune(id_b.clone()).await;
 
         upsert_page(&pool, deploy(&a, &[&a, &b], None, 3), site)
             .await
@@ -1368,8 +1454,16 @@ mod tests {
         assert_eq!(rating(id_c.clone()).await.as_deref(), Some("A"));
         assert_eq!(
             kinds(id_a).await,
-            ["rating_downgrade_refused", "rating_upgraded"],
-            "a new row with nothing it replaces reports nothing"
+            [
+                "rating_downgrade_refused",
+                "rating_upgraded",
+                "rating_upgraded"
+            ],
+            "a new row on rated parcels reports, an unsent downgrade takes the newer message"
+        );
+        assert!(
+            kinds(id_c.clone()).await.is_empty(),
+            "a new row on unrated parcels reports nothing"
         );
         // A scene that declares no rating keeps the stored one, with no notice.
         upsert_page(&pool, deploy(&c, &[&c], None, 8), site)
@@ -1377,6 +1471,176 @@ mod tests {
             .unwrap();
         assert_eq!(rating(id_c.clone()).await.as_deref(), Some("A"));
         assert!(kinds(id_c).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rating_outlives_the_row_on_its_parcels() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let x = u16::from_str_radix(&token[..4], 16).unwrap() as i32;
+        let y0 = u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000;
+        let parcel = |n: i32| format!("{x},{}", y0 + n);
+        let deploy = |base: &str, parcels: &[&String], rating: &str, minute: u32| {
+            let mut meta = wrapped();
+            meta["v"]["scene"]["base"] = json!(base);
+            meta["v"]["scene"]["parcels"] = json!(parcels);
+            meta["v"]["policy"] = json!({ "contentRating": rating });
+            let at = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, minute, 0);
+            vec![derive("0xauthor", &[], at, &meta, None, "/content", true).unwrap()]
+        };
+        let id = |position: &String| super::super::parcel_place_id(position);
+        let rating = |position: &String| {
+            let (pool, id) = (pool.clone(), id(position));
+            async move {
+                sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT content_rating FROM explore.place WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let kinds = |position: &String| {
+            let (pool, id) = (pool.clone(), id(position));
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT kind FROM explore.moderation_hooks \
+                     WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+                )
+                .bind(id)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        // What the pass does once a scene is unpublished or replaced.
+        let prune = |position: &String| {
+            let (pool, id) = (pool.clone(), id(position));
+            async move {
+                sqlx::query("DELETE FROM explore.place WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        let operator = |position: &String, code: &'static str| {
+            let (pool, id) = (pool.clone(), id(position));
+            async move {
+                moderation::apply(
+                    &pool,
+                    moderation::Target::Place(&id),
+                    &moderation::Decision::Rating(code.into()),
+                    "0xmoderator",
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            }
+        };
+        let site = Some("https://decentraland.org/places");
+
+        // An operator's rating holds after its row is pruned and the scene
+        // returns on another base parcel.
+        let (a, b) = (parcel(0), parcel(1));
+        upsert_page(&pool, deploy(&a, &[&a, &b], "T", 0), site)
+            .await
+            .unwrap();
+        operator(&a, "R").await;
+        prune(&a).await;
+        upsert_page(&pool, deploy(&b, &[&a, &b], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&b).await.as_deref(), Some("R"));
+        assert_eq!(kinds(&b).await, ["rating_downgrade_refused"]);
+
+        // An operator's lower rating of the current row wins over an older
+        // one under a former base.
+        operator(&b, "T").await;
+        prune(&b).await;
+        upsert_page(&pool, deploy(&b, &[&a, &b], "T", 2), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&b).await.as_deref(), Some("T"));
+
+        // A creator's raise holds with no operator rating, on the same base.
+        let c = parcel(3);
+        upsert_page(&pool, deploy(&c, &[&c], "T", 0), site)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&c, &[&c], "A", 1), site)
+            .await
+            .unwrap();
+        prune(&c).await;
+        upsert_page(&pool, deploy(&c, &[&c], "T", 2), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&c).await.as_deref(), Some("A"));
+
+        // A republish on only some of the parcels, with another base, holds.
+        let (d, e) = (parcel(5), parcel(6));
+        upsert_page(&pool, deploy(&d, &[&d, &e], "A", 0), site)
+            .await
+            .unwrap();
+        prune(&d).await;
+        upsert_page(&pool, deploy(&e, &[&e], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&e).await.as_deref(), Some("A"));
+
+        // Two moves: one parcel alone, then the other with a third as base.
+        let (f, g, h) = (parcel(8), parcel(9), parcel(10));
+        upsert_page(&pool, deploy(&f, &[&f, &g], "A", 0), site)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&g, &[&g], "T", 1), site)
+            .await
+            .unwrap();
+        prune(&f).await;
+        upsert_page(&pool, deploy(&h, &[&f, &h], "T", 2), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&g).await.as_deref(), Some("A"));
+        assert_eq!(rating(&h).await.as_deref(), Some("A"));
+
+        // A row redeployed over another rated place's parcels is held to it.
+        let (i, j) = (parcel(12), parcel(13));
+        upsert_page(&pool, deploy(&i, &[&i], "R", 0), site)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&j, &[&j], "T", 0), site)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&j, &[&i, &j], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&j).await.as_deref(), Some("R"));
+        assert_eq!(kinds(&j).await, ["rating_downgrade_refused"]);
+
+        // A pass over an unchanged deployment records a row from before the
+        // parcel ratings.
+        let k = parcel(15);
+        upsert_page(&pool, deploy(&k, &[&k], "A", 0), site)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = $1")
+            .bind(&k)
+            .execute(&pool)
+            .await
+            .unwrap();
+        upsert_page(&pool, deploy(&k, &[&k], "A", 0), site)
+            .await
+            .unwrap();
+        prune(&k).await;
+        upsert_page(&pool, deploy(&k, &[&k], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&k).await.as_deref(), Some("A"));
     }
 
     #[test]
