@@ -77,6 +77,7 @@ enum Kind {
     Published,
     Approved,
     Unminted,
+    Publishing,
     Locked,
     ThirdParty,
     ThirdPartySubmitted,
@@ -85,13 +86,14 @@ enum Kind {
 }
 use Kind::*;
 
-const KINDS: [Kind; 11] = [
+const KINDS: [Kind; 12] = [
     Missing,
     Malformed,
     Draft,
     Published,
     Approved,
     Unminted,
+    Publishing,
     Locked,
     ThirdParty,
     ThirdPartySubmitted,
@@ -378,8 +380,18 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
             item: Some(insert_item(pool, None, false, None).await),
             ..Fixture::default()
         },
-        Draft | Locked | ThirdParty | ThirdPartySubmitted => {
-            let urn = insert_collection(pool, id, kind.third_party(), None, kind == Locked).await;
+        Draft | Publishing | Locked | ThirdParty | ThirdPartySubmitted => {
+            let urn =
+                insert_collection(pool, id, kind.third_party(), None, kind == Publishing).await;
+            if kind == Locked {
+                sqlx::query(
+                    "UPDATE builder.collections SET lock = timezone('UTC', now()) WHERE id = $1",
+                )
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
             if kind == ThirdPartySubmitted {
                 sqlx::query(
                     "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
@@ -558,7 +570,14 @@ enum Op {
     Utility,
     ItemContents,
     Addresses,
+    Lock,
+    DeleteCollection,
+    OwnerSync,
+    Terms,
+    Publish,
 }
+
+const NOT_PUBLISHED: &str = "The collection is not published.";
 
 const RARITIES_UNAVAILABLE: &str = "The rarities are not available. Try again later.";
 
@@ -670,6 +689,11 @@ impl Op {
             ("GET", "/v1/published-collections/{address}/items/{id}/utility") => Op::Utility,
             ("GET", "/v1/items/{id}/{item}/contents") => Op::ItemContents,
             ("GET", "/v1/addresses") => Op::Addresses,
+            ("POST", "/v1/collections/{id}/lock") => Op::Lock,
+            ("DELETE", "/v1/collections/{id}") => Op::DeleteCollection,
+            ("POST", "/v1/collections/{id}/owner/sync") => Op::OwnerSync,
+            ("POST", "/v1/collections/{id}/tos") => Op::Terms,
+            ("POST", "/v1/collections/{id}/publish") => Op::Publish,
             _ => return None,
         })
     }
@@ -737,6 +761,11 @@ impl Op {
         matches!(
             self,
             Op::ReadCollection
+                | Op::Lock
+                | Op::DeleteCollection
+                | Op::OwnerSync
+                | Op::Terms
+                | Op::Publish
                 | Op::SaveCollection
                 | Op::CollectionItems
                 | Op::ReadItem
@@ -750,6 +779,10 @@ impl Op {
         matches!(
             self,
             Op::SaveCollection
+                | Op::Lock
+                | Op::DeleteCollection
+                | Op::Terms
+                | Op::Publish
                 | Op::SaveItem
                 | Op::DeleteItem
                 | Op::UploadFiles
@@ -798,6 +831,27 @@ impl Op {
             Op::CollectionItems => (
                 "GET",
                 format!("/v1/collections/{}/items", f.collection_id(kind)),
+                Payload::None,
+            ),
+            Op::Lock | Op::OwnerSync | Op::Terms | Op::Publish => {
+                let (route, payload) = match self {
+                    Op::Lock => ("lock", Payload::None),
+                    Op::OwnerSync => ("owner/sync", Payload::None),
+                    Op::Terms => (
+                        "tos",
+                        Payload::Json(json!({ "email": "jane.doe@example.com" })),
+                    ),
+                    _ => ("publish", Payload::None),
+                };
+                (
+                    "POST",
+                    format!("/v1/collections/{}/{route}", f.collection_id(kind)),
+                    payload,
+                )
+            }
+            Op::DeleteCollection => (
+                "DELETE",
+                format!("/v1/collections/{}", f.collection_id(kind)),
                 Payload::None,
             ),
             Op::ReadItem => (
@@ -997,9 +1051,45 @@ impl Op {
                 _ if !owner => refused(401, "Unauthorized to upsert collection"),
                 ThirdPartySubmitted => ok(),
                 _ if kind.published() => collection_published("updated"),
-                Locked => collection_locked("updated"),
+                Publishing | Locked => collection_locked("updated"),
                 _ => ok(),
             },
+            Op::Lock | Op::DeleteCollection | Op::OwnerSync | Op::Terms | Op::Publish
+                if matches!(kind, Missing | Malformed) =>
+            {
+                match kind {
+                    Missing => not_found(&collection, "collections"),
+                    _ => invalid_uuid(&collection),
+                }
+            }
+            Op::Lock if owner && !kind.third_party() => ok(),
+            Op::Lock => unauthorized_user(&caller.address(), "collections", &collection),
+            Op::DeleteCollection | Op::Terms if !owner && !manager => {
+                unauthorized_user(&caller.address(), "collections", &collection)
+            }
+            Op::OwnerSync | Op::Publish if !owner && !manager && !committee => {
+                unauthorized_user(&caller.address(), "collections", &collection)
+            }
+            Op::DeleteCollection => match kind {
+                ThirdPartySubmitted => refused(
+                    409,
+                    "The third party collection already has published items. It can't be deleted.",
+                ),
+                _ if kind.published() => collection_published("deleted"),
+                Publishing | Locked => collection_locked("deleted"),
+                _ => ok(),
+            },
+            Op::Terms => ok(),
+            Op::OwnerSync if kind.third_party() => {
+                refused(400, "Third party collections have no on-chain owner")
+            }
+            Op::OwnerSync => ok(),
+            Op::Publish if kind.third_party() => refused(
+                400,
+                "Third party collections are published through the linked publication",
+            ),
+            Op::Publish if kind.on_chain() => refused(409, "The item is not published."),
+            Op::Publish => refused(401, NOT_PUBLISHED),
             Op::CollectionItems => match kind {
                 Missing => not_found(&collection, "collections"),
                 Malformed => refused(
@@ -1027,7 +1117,7 @@ impl Op {
                 _ if !owner && !manager => {
                     refused(401, "You're not authorized to to change this collection.")
                 }
-                Locked => item_locked("inserted or updated"),
+                Publishing | Locked => item_locked("inserted or updated"),
                 _ => ok(),
             },
             Op::DeleteItem => match kind {
@@ -1037,7 +1127,7 @@ impl Op {
                 _ if !owner && !manager => unauthorized_user(&caller.address(), "items", &item),
                 ThirdPartySubmitted => third_party_item_published("deleted"),
                 _ if kind.published() => item_published("deleted"),
-                Locked => item_locked("deleted"),
+                Publishing | Locked => item_locked("deleted"),
                 _ => ok(),
             },
             Op::UploadFiles => match kind {
@@ -1448,6 +1538,11 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                             kind,
                             Missing | Malformed | Published | Approved | Transferred
                         ) && !kind.item_owner(caller)
+                    }
+                    Op::OwnerSync | Op::Publish => {
+                        !matches!(kind, Missing | Malformed)
+                            && !kind.owner(caller)
+                            && !kind.manager(caller)
                     }
                     Op::ListCollections | Op::ListItems | Op::Committee => true,
                     _ => false,

@@ -3,6 +3,7 @@
 pub mod collections;
 pub mod curation;
 pub mod drafts;
+pub mod lifecycle;
 pub mod linked_publication;
 pub mod newsletter;
 pub mod publication;

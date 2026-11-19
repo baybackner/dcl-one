@@ -272,7 +272,7 @@ impl Config {
         Ok(())
     }
 
-    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 80] {
+    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 82] {
         [
             ("SEGMENT_SIGNING_KEY", &mut self.social.segment_signing_key),
             ("ETH_RPC_URL", &mut self.content.eth_rpc_url),
@@ -383,6 +383,8 @@ impl Config {
                 "NEWSLETTER_SERVICE_API_KEY",
                 &mut self.create.newsletter_service_api_key,
             ),
+            ("WAREHOUSE_URL", &mut self.create.warehouse_url),
+            ("WAREHOUSE_TOKEN", &mut self.create.warehouse_token),
             (
                 "BUILDER_POLYGON_RPC_URL",
                 &mut self.create.builder_polygon_rpc_url,
@@ -770,16 +772,16 @@ mod tests {
     /// Secret slots that are not this node's own inbound operator secrets: credentials it
     /// sends elsewhere, keys and URLs whose shape another party sets.
     const OTHER_SECRETS: &[&str] = &[
-        // Inbound HMAC key, but Segment issues it: its length is Segment's.
         "SEGMENT_SIGNING_KEY",
         "ETH_RPC_URL",
+        "WAREHOUSE_URL",
+        "WAREHOUSE_TOKEN",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "SLACK_BOT_TOKEN",
         "ANALYTICS_API_TOKEN",
         "OPEN_AI_API_KEY",
         "SENDGRID_API_KEY",
-        // Signs and checks unsubscribe links: rotating a short key breaks links already sent.
         "SIGNING_KEY",
         "SLACK_WEBHOOK",
         "PLACES_MODERATION_WEBHOOK",

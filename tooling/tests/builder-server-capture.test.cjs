@@ -493,3 +493,18 @@ test('the fake oracle answers getRarityByName as the rarities-with-oracle contra
   assert.equal(oracleAnswer([{ to: '0x0000000000000000000000000000000000000001', data: common }, 'latest'], rarities), undefined)
   assert.equal(oracleAnswer(call('0xdeadbeef'), rarities), undefined)
 })
+
+test('the fake warehouse records an event sent with its token and refuses anything else', () => {
+  const { warehouseAnswer, WAREHOUSE_TOKEN } = require(script)
+  const received = []
+  const event = { context: 'builder', event: 'publish_collection_tos', body: { email: 'jane.doe@example.com' } }
+  const sent = Buffer.from(JSON.stringify(event))
+  assert.deepEqual(warehouseAnswer('POST', '/warehouse', { 'x-token': WAREHOUSE_TOKEN }, sent, received), { status: 200, body: {} })
+  assert.deepEqual(received, [event])
+  assert.equal(warehouseAnswer('POST', '/warehouse', { 'x-token': 'other' }, sent, received).status, 401)
+  assert.equal(warehouseAnswer('POST', '/warehouse', {}, sent, received).status, 401)
+  assert.equal(warehouseAnswer('POST', '/warehouse', { 'x-token': WAREHOUSE_TOKEN }, Buffer.from('not json'), received).status, 400)
+  assert.equal(warehouseAnswer('GET', '/warehouse', { 'x-token': WAREHOUSE_TOKEN }, Buffer.alloc(0), received), undefined)
+  assert.equal(warehouseAnswer('POST', '/elsewhere', { 'x-token': WAREHOUSE_TOKEN }, sent, received), undefined)
+  assert.equal(received.length, 1)
+})

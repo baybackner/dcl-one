@@ -974,7 +974,11 @@ The builder's own rows: a `builder.collections` row is a creator's draft.
 - A standard collection is published through
   `builder.collection_publications`, whose verified finish writes its
   contract address and collections-v2 urn, or it arrives with the contract
-  address computed before its deployment.
+  address computed before its deployment. A deployment the client sent
+  itself is recorded by `POST /v1/collections/{id}/publish`: once the copy,
+  or else the Polygon RPC, holds the contract at that address, each item
+  gets the on-chain id of its place in creation order, and the collection
+  reads as published from then on.
 - A linked (third-party) collection carries its provider urn from the draft
   on (`third_party_id` is the urn without its last segment) and is published
   through `builder.linked_collection_publications`.
@@ -1401,6 +1405,54 @@ Invariants:
   only a published collection's items hold, and the addresses read lists only
   published collections, never a draft's precomputed contract.
 - Every value from the path or the query reaches SQL as a bound parameter.
+
+## Builder collection lifecycle workload
+
+The builder's lifecycle routes (`services/catalyst/builder/src/collections/lifecycle.rs`,
+`services/catalyst/builder/src/terms.rs`) are rare writes by a collection's
+owner or managers: a lock and a terms acceptance per publication, a delete
+per abandoned draft, and the old builder web's publish call every five
+seconds until the chain holds the collection.
+
+Tables and what they hold:
+
+- `builder.collections.lock`: the owner's last lock, set by `POST
+  /v1/collections/{id}/lock` with the node's clock to the millisecond. It
+  holds for a day from that instant; while it holds, saves of the
+  collection, item saves and creations in it, item deletes and the
+  collection's delete answer 423. Uploads are never locked.
+- `builder.terms_acceptances`: one row per acceptance, with the body the
+  warehouse receives, the email address included. Only the terms route
+  inserts into it and only its forward reads and updates it; no other
+  statement reads it, no route answers it, and an operator reads it with SQL.
+  A delete of the collection keeps the rows (no foreign key). The schema has
+  no role that narrows who reads it beyond those statements.
+
+Statements:
+
+| Request | Statements | Index |
+| --- | --- | --- |
+| lock | the collection row `FOR UPDATE`, the decision, one update | `collections_pkey` |
+| delete | the collection row, then its items `FOR UPDATE ORDER BY id`; the decision; the items' contents, the items and the row deleted; the upload records no item names any more | `collections_pkey`, `items_collection_created_idx`, `item_contents_pkey`, `item_contents_hash_idx` |
+| publish | the collection's items in creation order, the copy's row and item ids for its contract; to assign ids, the rows locked as for a delete and one update per item | `items_collection_created_idx`, `shop.collections` and `shop.items` primary keys |
+| terms | one insert; one update when the forward succeeds | `terms_acceptances_pkey` |
+| terms forward pass | claims at most 50 due rows `FOR UPDATE SKIP LOCKED`, one update per delivered row | `terms_acceptances_due_idx` |
+
+Invariants:
+
+- One transaction per write, holding the collection row before its items
+  (the order of the item writes and the publications), with the decision
+  made again inside it.
+- A Polygon RPC read (`eth_getCode` and `itemsCount()` at the finalized
+  block, kept five seconds per contract, one read at a time) runs before the
+  transaction and never holds a connection.
+- A delete leaves no upload record that no item names, and touches no row
+  of another collection.
+- The forward is at least once: at most six attempts, the wait doubling from
+  a minute; a row the warehouse took is never claimed again.
+
+Upgrade: step `0057_builder_collection_lock` adds `collections.lock`; the
+schema's object pass creates `builder.terms_acceptances` and its index.
 
 ## Notification writer
 

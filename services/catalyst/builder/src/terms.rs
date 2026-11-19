@@ -1,0 +1,238 @@
+//! `POST /v1/collections/:id/tos`: a creator's acceptance of the publication
+//! terms, as builder-server takes it (its `saveTOSSchema`), kept on the node
+//! (`builder.terms_acceptances`) and forwarded to the warehouse
+//! (`WAREHOUSE_URL`, `x-token: WAREHOUSE_TOKEN`) as builder-server sends it:
+//! `{context, event, body}`. The acceptance is stored first; the forward is
+//! tried once right after, through the guarded client that follows no
+//! redirect, and then by [`forward_due`] (the leased `builder-terms-forward`
+//! job) at most [`MAX_ATTEMPTS`] times, doubling the wait from a minute. A
+//! delivery the warehouse answers with a non-2xx status is retried; one it
+//! received but whose answer was lost is sent again. No route answers the
+//! stored rows.
+
+use serde_json::{Map, Value, json};
+use uuid::Uuid;
+
+use crate::State;
+use crate::access::CollectionManage;
+use crate::handlers::newsletter::is_valid_email;
+use crate::http::ApiError;
+
+/// The most attempts an acceptance's forward gets.
+pub const MAX_ATTEMPTS: i32 = 6;
+/// The most due acceptances one pass forwards.
+pub const PASS_LIMIT: i64 = 50;
+/// The most hashes an acceptance names (builder-server's bound).
+pub const MAX_HASHES: usize = 40_000;
+
+const COLLECTION_EVENT: &str = "publish_collection_tos";
+const THIRD_PARTY_EVENT: &str = "publish_third_party_items_tos";
+
+/// An accepted body: the email, the event and the hashes it names.
+#[derive(Debug, PartialEq)]
+pub struct Acceptance {
+    pub email: String,
+    pub event: &'static str,
+    pub hashes: Option<Vec<String>>,
+}
+
+fn invalid_body() -> ApiError {
+    ApiError::bad_request("Invalid request body")
+}
+
+/// builder-server's `saveTOSSchema`: `email` required and an email,
+/// `collection_address` a string, `event` one of the two, `hashes` 1 to
+/// [`MAX_HASHES`] strings; other keys are dropped, as its validator drops
+/// them.
+pub fn parse(body: &Value) -> Result<Acceptance, ApiError> {
+    let fields: &Map<String, Value> = body.as_object().ok_or_else(invalid_body)?;
+    let email = fields
+        .get("email")
+        .and_then(Value::as_str)
+        .filter(|email| is_valid_email(email))
+        .ok_or_else(invalid_body)?;
+    if fields
+        .get("collection_address")
+        .is_some_and(|address| !address.is_string())
+    {
+        return Err(invalid_body());
+    }
+    let event = match fields.get("event") {
+        None => COLLECTION_EVENT,
+        Some(event) if event == COLLECTION_EVENT => COLLECTION_EVENT,
+        Some(event) if event == THIRD_PARTY_EVENT => THIRD_PARTY_EVENT,
+        Some(_) => return Err(invalid_body()),
+    };
+    let hashes = match fields.get("hashes") {
+        None => None,
+        Some(hashes) => {
+            let hashes = hashes
+                .as_array()
+                .filter(|h| !h.is_empty() && h.len() <= MAX_HASHES)
+                .ok_or_else(invalid_body)?;
+            Some(
+                hashes
+                    .iter()
+                    .map(|h| h.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(invalid_body)?,
+            )
+        }
+    };
+    Ok(Acceptance {
+        email: email.to_string(),
+        event,
+        hashes,
+    })
+}
+
+/// Stores `acceptance` for the collection `manage` names, then tries its
+/// forward once when a warehouse is configured.
+pub async fn accept(
+    state: &State,
+    manage: &CollectionManage,
+    acceptance: Acceptance,
+) -> Result<(), ApiError> {
+    let (contract, urn): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT contract_address, CASE WHEN third_party_id IS NOT NULL THEN urn_suffix END \
+         FROM builder.collections WHERE id = $1",
+    )
+    .bind(manage.id())
+    .fetch_optional(state.items.pool())
+    .await?
+    .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+    let body = match acceptance.event {
+        THIRD_PARTY_EVENT => json!({
+            "email": acceptance.email,
+            "urn": urn.unwrap_or_else(|| "Unknown urn".into()),
+            "hashes": acceptance.hashes,
+        }),
+        _ => json!({
+            "email": acceptance.email,
+            "eth_address": manage.signer(),
+            "collection_address": contract.unwrap_or_else(|| "Unknown address".into()),
+        }),
+    };
+    let id = Uuid::new_v4();
+    let configured = state.settings.warehouse.is_some();
+    sqlx::query(
+        "INSERT INTO builder.terms_acceptances (id, collection_id, signer, event, body, attempts, next_attempt_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, timezone('UTC', now()) + make_interval(mins => $6))",
+    )
+    .bind(id)
+    .bind(manage.id())
+    .bind(manage.signer())
+    .bind(acceptance.event)
+    .bind(&body)
+    .bind(i32::from(configured))
+    .execute(state.items.pool())
+    .await?;
+    if configured && send(state, acceptance.event, &body).await {
+        delivered(state, id).await?;
+    }
+    Ok(())
+}
+
+async fn delivered(state: &State, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE builder.terms_acceptances SET forwarded_at = timezone('UTC', now()) WHERE id = $1",
+    )
+    .bind(id)
+    .execute(state.items.pool())
+    .await?;
+    Ok(())
+}
+
+/// One delivery to the warehouse; whether it answered 2xx.
+async fn send(state: &State, event: &str, body: &Value) -> bool {
+    let Some(warehouse) = &state.settings.warehouse else {
+        return false;
+    };
+    let context = match &warehouse.context_prefix {
+        Some(prefix) => format!("{prefix}-builder"),
+        None => "builder".to_string(),
+    };
+    let sent = state
+        .foundation
+        .post(&warehouse.url)
+        .header("x-token", &warehouse.token)
+        .json(&json!({ "context": context, "event": event, "body": body }))
+        .send()
+        .await;
+    match sent {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            tracing::warn!(status = %response.status(), "warehouse refused a terms acceptance; it is retried");
+            false
+        }
+        Err(error) => {
+            tracing::warn!(
+                connect = error.is_connect(),
+                "warehouse forward of a terms acceptance failed; it is retried"
+            );
+            false
+        }
+    }
+}
+
+/// One pass of the forward: claims up to [`PASS_LIMIT`] due acceptances,
+/// counting the attempt and setting the next one before sending, and
+/// answers how many the warehouse took. Nothing without a warehouse.
+pub async fn forward_due(state: &State) -> anyhow::Result<u64> {
+    if state.settings.warehouse.is_none() {
+        return Ok(0);
+    }
+    let due: Vec<(Uuid, String, Value)> = sqlx::query_as(
+        "UPDATE builder.terms_acceptances t SET attempts = t.attempts + 1, \
+           next_attempt_at = timezone('UTC', now()) + make_interval(mins => power(2, t.attempts)::int) \
+         WHERE t.id IN (SELECT id FROM builder.terms_acceptances \
+           WHERE forwarded_at IS NULL AND attempts < $1 AND next_attempt_at <= timezone('UTC', now()) \
+           ORDER BY next_attempt_at LIMIT $2 FOR UPDATE SKIP LOCKED) \
+         RETURNING t.id, t.event, t.body",
+    )
+    .bind(MAX_ATTEMPTS)
+    .bind(PASS_LIMIT)
+    .fetch_all(state.items.pool())
+    .await?;
+    let mut forwarded = 0;
+    for (id, event, body) in due {
+        if send(state, &event, &body).await {
+            delivered(state, id).await?;
+            forwarded += 1;
+        }
+    }
+    Ok(forwarded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_body_follows_builder_servers_schema() {
+        let accepted = parse(&json!({ "email": "jane.doe@example.com", "other": 1 })).unwrap();
+        assert_eq!(
+            accepted,
+            Acceptance {
+                email: "jane.doe@example.com".into(),
+                event: COLLECTION_EVENT,
+                hashes: None
+            }
+        );
+        let third_party = parse(&json!({ "email": "jane.doe@example.com", "event": THIRD_PARTY_EVENT, "hashes": ["a"] }))
+            .unwrap();
+        assert_eq!(third_party.hashes, Some(vec!["a".to_string()]));
+        let too_many = vec!["h"; MAX_HASHES + 1];
+        for refused in [
+            json!([]),
+            json!({ "email": "jane.doe@example.com", "hashes": too_many }),
+            json!({ "email": "jane.doe@example.com", "event": null }),
+        ] {
+            assert!(parse(&refused).is_err(), "{refused}");
+        }
+        assert!(
+            parse(&json!({ "email": "jane.doe@example.com", "hashes": vec!["h"; MAX_HASHES] }))
+                .is_ok()
+        );
+    }
+}

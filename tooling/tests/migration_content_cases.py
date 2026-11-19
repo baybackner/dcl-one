@@ -30,9 +30,9 @@ class ContentMigrationCases:
         return db
 
     @staticmethod
-    def builder_rows(name, updated, contract='NULL'):
+    def builder_rows(name, updated, contract='NULL', lock='NULL'):
         collection = (f"'{COLLECTION}', '{name}', '{OWNER}', NULL, {contract}, NULL, NULL, "
-                      f"'2026-01-01Z', '{updated}', NULL, NULL")
+                      f"'2026-01-01Z', '{updated}', NULL, NULL, {lock}")
         item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', '{name}', 'd', NULL, NULL, 'wearable', 'Common', '', '', "
                 f"'{{}}', NULL, NULL, NULL, NULL, NULL, false, 'pending', 0, NULL, NULL, '2026-01-01Z', '{updated}'")
         return collection, item
@@ -69,12 +69,23 @@ class ContentMigrationCases:
                                       "AND table_name = 'collections' AND column_name IN ('is_published', 'is_approved');\n"
                                       ).strip(), '0')
 
+    def test_when_importing_a_locked_collection_it_should_keep_its_lock(self):
+        db = self.content_db('content_builder_lock')
+        collection, _ = self.builder_rows('Locked', '2026-02-01Z', lock="'2025-05-04 10:10:48.005'")
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        self.assertEqual(self.sql(db, f"SELECT lock FROM builder.collections WHERE id = '{COLLECTION}';\n").strip(),
+                         '2025-05-04 10:10:48.005')
+        unlocked, _ = self.builder_rows('Locked', '2026-03-01Z')
+        self.content_load(db, 'builder-server', 'collection', [unlocked])
+        self.assertEqual(self.sql(db, f"SELECT lock IS NULL FROM builder.collections WHERE id = '{COLLECTION}';\n").strip(),
+                         't')
+
     def test_when_importing_a_third_party_collection_it_should_keep_its_linked_contract(self):
         db = self.content_db('content_builder_linked')
         provider = 'urn:decentraland:matic:collections-thirdparty:tp'
         self.content_load(db, 'builder-server', 'collection', [
             f"'{COLLECTION}', 'Linked', '', NULL, NULL, '{provider}:hats', '{provider}', "
-            f"'2026-01-01Z', '2026-02-01Z', '0x{'AB' * 20}', 'mainnet'"])
+            f"'2026-01-01Z', '2026-02-01Z', '0x{'AB' * 20}', 'mainnet', NULL"])
         self.assertEqual(self.sql(db, f"SELECT linked_contract_address, linked_contract_network FROM builder.collections "
                                       f"WHERE id = '{COLLECTION}';\n").strip(), f"0x{'ab' * 20}\tmainnet")
 

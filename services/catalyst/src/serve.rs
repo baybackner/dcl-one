@@ -761,9 +761,6 @@ pub async fn serve(
         );
     }
 
-    // The creator plane (the old catalyrst-create bundle): the builder and the
-    // camera reel over the same pool, client, blob store and validator, both
-    // behind CREATE_WRITES_ENABLED (builder::writes).
     let builder = Arc::new(
         builder::State::new(
             pool.clone(),
@@ -781,6 +778,9 @@ pub async fn serve(
                 newsletter_publication_id: config.create.newsletter_publication_id.clone(),
                 newsletter_api_key: config.create.newsletter_service_api_key.clone(),
                 foundation_url: Some(config.create.builder_foundation_url.clone()),
+                warehouse_url: config.create.warehouse_url.clone(),
+                warehouse_token: config.create.warehouse_token.clone(),
+                warehouse_context_prefix: config.create.warehouse_context_prefix.clone(),
             })
             .context("BUILDER_* / NEWSLETTER_* configuration")?,
         )
@@ -814,6 +814,20 @@ pub async fn serve(
         .await
         .context("loading camera_reel.withheld_blobs")?;
     camera_reel.spawn_ranking_job(&jobs);
+    {
+        let builder = builder.clone();
+        jobs.spawn_periodic_leased(
+            "builder-terms-forward",
+            jobs::PeriodicCfg::every(Duration::from_secs(60)),
+            move |_ctx| {
+                let builder = builder.clone();
+                async move {
+                    builder::terms::forward_due(&builder).await?;
+                    Ok(())
+                }
+            },
+        );
+    }
     camera_reel::events::spawn_retention_job(&camera_reel, &jobs);
     tracing::info!(
         builder = %builder.sources_label(),

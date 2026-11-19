@@ -462,7 +462,7 @@ impl ItemsComponent {
     /// waits while the node publishes its collection (423) and stays once
     /// submitted (409); a standard item of a collection stays once the
     /// collection is published (409) and waits while the node publishes it
-    /// (423). The item's contents go with it, and the upload records of the
+    /// or its owner's lock holds (423). The item's contents go with it, and the upload records of the
     /// files no other item names.
     pub async fn delete_item(&self, change: &ItemChange) -> Result<(), ApiError> {
         let id = change.id();
@@ -485,6 +485,9 @@ impl ItemsComponent {
                 ApiError::published(Subject::Item, &id.to_string(), "deleted")
                     .with_data(serde_json::json!({ "id": id, "contract_address": state.contract })),
             );
+        }
+        if state.locked {
+            return Err(ApiError::locked(Subject::Item, &id.to_string(), "deleted"));
         }
         let mut hashes: Vec<String> = sqlx::query_scalar(
             "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING hash",

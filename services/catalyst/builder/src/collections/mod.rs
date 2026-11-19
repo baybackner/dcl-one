@@ -4,14 +4,16 @@
 //!
 //! The body is builder-server's `FullCollection`: the stored row, with a
 //! standard collection the chain copy holds merged as its `Bridge` merges the
-//! subgraph (name, creator, roles, approval and dates from the copy). Fields
-//! whose source the node doesn't hold yet answer what builder-server answers
-//! when that source is empty: `forum_link`, `forum_id` and `lock` are null and
-//! `curation_status` is null. A caller who may read only the public detail
+//! subgraph (name, creator, roles, approval and dates from the copy), and
+//! `lock` the owner's last lock. Fields whose source the node doesn't hold
+//! yet answer what builder-server answers when that source is empty:
+//! `forum_link` and `forum_id` are null and `curation_status` is null. A caller who may read only the public detail
 //! gets the keys [`PUBLIC_DETAIL`] names; the public listing, those
 //! [`PUBLIC_LISTING`] names. A key not named there is never answered to them.
 
 pub mod contract;
+pub mod deployment;
+pub mod lifecycle;
 pub mod listing;
 pub mod save;
 
@@ -113,7 +115,7 @@ pub(crate) fn body_columns(view: &ReadView) -> String {
     format!(
         "c.id, COALESCE(chain.name, c.name) AS name, \
          CASE WHEN c.third_party_id IS NOT NULL THEN '' ELSE COALESCE(chain.creator, c.eth_address) END AS eth_address, \
-         c.salt, c.contract_address, {} AS is_published, c.created_at, c.updated_at, \
+         c.salt, c.contract_address, {} AS is_published, c.created_at, c.updated_at, c.lock, \
          chain.created_at AS chain_created_at, chain.updated_at AS chain_updated_at, \
          chain.reviewed_at AS chain_reviewed_at, \
          ARRAY(SELECT lower(m) FROM unnest(chain.managers) m) AS managers, \
@@ -138,6 +140,7 @@ pub(crate) struct CollectionRow {
     is_published: bool,
     created_at: NaiveDateTime,
     updated_at: NaiveDateTime,
+    lock: Option<NaiveDateTime>,
     chain_created_at: Option<i64>,
     chain_updated_at: Option<i64>,
     chain_reviewed_at: Option<i64>,
@@ -193,7 +196,7 @@ impl CollectionRow {
             is_approved: self.is_approved,
             reviewed_at: self.chain_reviewed_at.map(unix),
             forum_link: None,
-            lock: None,
+            lock: self.lock.map(|lock| iso(&lock.and_utc())),
             forum_id: None,
             linked_contract_address: self.linked_contract_address,
             linked_contract_network: self.linked_contract_network,

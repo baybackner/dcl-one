@@ -1870,18 +1870,55 @@ async fn committee_subgraph(seed: &Seed) -> String {
 alloy_sol_types::sol! {
     struct OracleRarity { string name; uint256 maxSupply; uint256 price; }
     function getRarityByName(string rarity) external view returns (OracleRarity);
+    function itemsCount() external view returns (uint256);
 }
 
-/// A loopback Polygon JSON-RPC that answers `getRarityByName` with
-/// `seed.chain`'s MANA prices, the way the capture's fake oracle does.
+/// A loopback Polygon JSON-RPC that answers, the way the capture's fake
+/// does: `eth_chainId` Polygon's, `eth_getCode` code only at a `seed.chain`
+/// collection's contract, a collection contract's `itemsCount()` with its
+/// `seed.chain` items, and `getRarityByName` with `seed.chain`'s MANA prices.
 async fn oracle(seed: &Seed) -> String {
     use alloy_sol_types::SolCall;
     let rarities = seed.chain.rarities.clone();
+    let deployed: BTreeMap<String, u64> = seed
+        .chain
+        .collections
+        .iter()
+        .map(|c| {
+            let items = seed
+                .chain
+                .items
+                .iter()
+                .filter(|i| i.contract_address == c.contract_address)
+                .count();
+            (c.contract_address.to_ascii_lowercase(), items as u64)
+        })
+        .collect();
     let app = Router::new().route(
         "/rpc",
         axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
-            let rarities = rarities.clone();
+            let (rarities, deployed) = (rarities.clone(), deployed.clone());
             async move {
+                let reply = |result: Value| {
+                    axum::Json(serde_json::json!({ "jsonrpc": "2.0", "id": body["id"].clone(), "result": result }))
+                };
+                let at = |value: &Value| value.as_str().map(str::to_ascii_lowercase).and_then(|a| deployed.get(&a).copied());
+                match body["method"].as_str().unwrap_or_default() {
+                    "eth_chainId" => return reply("0x89".into()),
+                    "eth_getCode" => {
+                        return reply(if at(&body["params"][0]).is_some() { "0x6080" } else { "0x" }.into());
+                    }
+                    "eth_call"
+                        if body["params"][0]["data"].as_str()
+                            == Some(alloy_primitives::hex::encode_prefixed(itemsCountCall::SELECTOR).as_str()) =>
+                    {
+                        return reply(match at(&body["params"][0]["to"]) {
+                            Some(items) => format!("0x{items:064x}").into(),
+                            None => "0x".into(),
+                        });
+                    }
+                    _ => {}
+                }
                 let call = alloy_primitives::hex::decode(body["params"][0]["data"].as_str().unwrap_or_default())
                     .ok()
                     .and_then(|bytes| getRarityByNameCall::abi_decode(&bytes).ok());
@@ -2133,28 +2170,33 @@ async fn replay_setup() -> Option<Replay> {
         uuid::Uuid::new_v4()
     )));
     let storage = Arc::new(Storage::from_config(&dir.0).await.unwrap());
-    let state = Arc::new(
-        State::new(
-            scratch.pool.clone(),
-            storage.clone(),
-            storage.denylist().clone(),
-            Outbound::for_tests(),
-            Some(Arc::new(index)),
-            None,
-            Settings {
-                writes_enabled: true,
-                polygon_rpc_url: Some(oracle(&seed_data).await),
-                ..Settings::default()
-            },
-        )
-        .unwrap(),
-    );
+    let mut state = State::new(
+        scratch.pool.clone(),
+        storage.clone(),
+        storage.denylist().clone(),
+        Outbound::for_tests(),
+        Some(Arc::new(index)),
+        None,
+        Settings {
+            writes_enabled: true,
+            polygon_rpc_url: Some(oracle(&seed_data).await),
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    state.now = capture_clock;
+    let state = Arc::new(state);
     Some(Replay {
         scratch,
         app: mounted(state),
         wallets,
         _dir: dir,
     })
+}
+
+/// The capture's fixed clock, which the node's lock is set and compared by.
+fn capture_clock() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp_millis(1_767_225_600_000).unwrap()
 }
 
 async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec<String> {

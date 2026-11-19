@@ -43,7 +43,8 @@
         "source/77-address-collections-unsigned.json",
         "source/132-collection-save-unsigned.json",
         "source/209-item-save-unsigned.json",
-        "source/231-item-files-unsigned.json"
+        "source/231-item-files-unsigned.json",
+        "source/282-collection-lock-unsigned.json"
       ],
       "anchors": []
     },
@@ -68,7 +69,7 @@
       "anchors": []
     },
     "access-checks-never-write": {
-      "text": "DELETE /v1/items/:id and POST /v1/items/:id/files: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
+      "text": "DELETE /v1/items/:id, POST /v1/items/:id/files, POST /v1/collections/:id/lock, POST /v1/collections/:id/tos and DELETE /v1/collections/:id: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
       "captures": [],
       "anchors": []
     },
@@ -122,10 +123,11 @@
       ]
     },
     "invalid-body-detail": {
-      "text": "PUT /v1/collections/:id and PUT /v1/items/:idOrURN with a body the schema refuses: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
+      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN and POST /v1/collections/:id/tos with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
       "captures": [
         "source/16-collection-invalid-body.json",
-        "source/206-item-save-invalid-name.json"
+        "source/206-item-save-invalid-name.json",
+        "source/287-collection-tos-invalid-email.json"
       ],
       "anchors": []
     },
@@ -240,6 +242,28 @@
         "source/272-addresses-by-tags.json",
         "source/274-addresses-unfiltered.json"
       ],
+      "anchors": []
+    },
+    "lock-owner-only": {
+      "text": "POST /v1/collections/:id/lock signed by a wallet that may act on the collection but is not the owner of a standard collection (an on-chain manager, the provider manager of a third-party collection): upstream answers 200 with the date and stores no lock; the node answers 401 'Unauthorized user <signer> for collections <id>' and stores nothing. The old builder web locks only as the owner, right after it deploys.",
+      "captures": [
+        "source/283-collection-lock-published-manager.json",
+        "source/284-collection-lock-linked-manager.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=401"
+      ]
+    },
+    "publish-repeat-items-merged": {
+      "text": "POST /v1/collections/:id/publish of a standard collection whose items all hold their on-chain ids: upstream answers each item as its stored row, without the chain's values (is_published false, urn null, and its stored price, beneficiary, rarity, supply and content hash); the node answers the items merged with its chain copy, as on the call that assigned the ids. The old builder web reads only the items' on-chain ids from the answer.",
+      "captures": [
+        "source/277-collection-publish-again.json"
+      ],
+      "anchors": []
+    },
+    "owner-sync-stores-nothing": {
+      "text": "POST /v1/collections/:id/owner/sync: upstream writes the chain creator into the collection's and its items' stored eth_address when they differ; the node stores nothing, since it reads the owner from its chain copy on every request, and answers the same body. A later read of an item's stored eth_address shows the difference. The old builder web never calls the route.",
+      "captures": [],
       "anchors": []
     }
   },
@@ -627,7 +651,7 @@
       "id": "api_http:PUT:/v1/items/:idOrURN",
       "owner": "items",
       "status": "known_gap",
-      "result": "Saves of draft, unminted and minted items by the owner, an on-chain manager, a stranger and the committee; creations into a draft, a published collection and no collection; moves and removals around a published collection; a rarity change; third-party saves by URN and by id, creations, URN conflicts, a URN in another case and mappings; and each schema and path refusal were compared and match, except the schema refusal's detail, the unsigned message and the lock.",
+      "result": "Saves of draft, unminted and minted items by the owner, an on-chain manager, a stranger and the committee; creations into a draft, a published collection and no collection; moves and removals around a published collection; a rarity change; third-party saves by URN and by id, creations, URN conflicts, a URN in another case and mappings; and each schema and path refusal were compared and match, except the schema refusal's detail and the unsigned message.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/33-item-orphan-into-third-party.json",
@@ -802,134 +826,12 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/236-item-save-locked.json",
           "scope": "PUT /items/{id} signed by the owner on an item of a locked collection.",
-          "replay": [
-            "status: fixture=423 candidate=200",
-            "data.beneficiary extra",
-            "data.blockchain_item_id extra",
-            "data.catalyst_content_hash extra",
-            "data.collection_id extra",
-            "data.content_hash extra",
-            "data.contents extra",
-            "data.created_at extra",
-            "data.data extra",
-            "data.description extra",
-            "data.eth_address extra",
-            "data.in_catalyst extra",
-            "data.is_approved extra",
-            "data.is_published extra",
-            "data.local_content_hash extra",
-            "data.mappings extra",
-            "data.metrics extra",
-            "data.name extra",
-            "data.price extra",
-            "data.rarity extra",
-            "data.thumbnail extra",
-            "data.total_supply extra",
-            "data.type extra",
-            "data.updated_at extra",
-            "data.urn extra",
-            "data.utility extra",
-            "data.video extra",
-            "error missing",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=423 candidate=200": "open:lock",
-            "data.beneficiary extra": "open:lock",
-            "data.blockchain_item_id extra": "open:lock",
-            "data.catalyst_content_hash extra": "open:lock",
-            "data.collection_id extra": "open:lock",
-            "data.content_hash extra": "open:lock",
-            "data.contents extra": "open:lock",
-            "data.created_at extra": "open:lock",
-            "data.data extra": "open:lock",
-            "data.description extra": "open:lock",
-            "data.eth_address extra": "open:lock",
-            "data.in_catalyst extra": "open:lock",
-            "data.is_approved extra": "open:lock",
-            "data.is_published extra": "open:lock",
-            "data.local_content_hash extra": "open:lock",
-            "data.mappings extra": "open:lock",
-            "data.metrics extra": "open:lock",
-            "data.name extra": "open:lock",
-            "data.price extra": "open:lock",
-            "data.rarity extra": "open:lock",
-            "data.thumbnail extra": "open:lock",
-            "data.total_supply extra": "open:lock",
-            "data.type extra": "open:lock",
-            "data.updated_at extra": "open:lock",
-            "data.urn extra": "open:lock",
-            "data.utility extra": "open:lock",
-            "data.video extra": "open:lock",
-            "error missing": "open:lock",
-            "ok value": "open:lock"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/237-item-create-locked.json",
           "scope": "PUT /items/{id} signed by the owner, creating an item in a locked collection.",
-          "replay": [
-            "status: fixture=423 candidate=200",
-            "data.beneficiary extra",
-            "data.blockchain_item_id extra",
-            "data.catalyst_content_hash extra",
-            "data.collection_id extra",
-            "data.content_hash extra",
-            "data.contents extra",
-            "data.created_at extra",
-            "data.data extra",
-            "data.description extra",
-            "data.eth_address extra",
-            "data.in_catalyst extra",
-            "data.is_approved extra",
-            "data.is_published extra",
-            "data.local_content_hash extra",
-            "data.mappings extra",
-            "data.metrics extra",
-            "data.name extra",
-            "data.price extra",
-            "data.rarity extra",
-            "data.thumbnail extra",
-            "data.total_supply extra",
-            "data.type extra",
-            "data.updated_at extra",
-            "data.urn extra",
-            "data.utility extra",
-            "data.video extra",
-            "error missing",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=423 candidate=200": "open:lock",
-            "data.beneficiary extra": "open:lock",
-            "data.blockchain_item_id extra": "open:lock",
-            "data.catalyst_content_hash extra": "open:lock",
-            "data.collection_id extra": "open:lock",
-            "data.content_hash extra": "open:lock",
-            "data.contents extra": "open:lock",
-            "data.created_at extra": "open:lock",
-            "data.data extra": "open:lock",
-            "data.description extra": "open:lock",
-            "data.eth_address extra": "open:lock",
-            "data.in_catalyst extra": "open:lock",
-            "data.is_approved extra": "open:lock",
-            "data.is_published extra": "open:lock",
-            "data.local_content_hash extra": "open:lock",
-            "data.mappings extra": "open:lock",
-            "data.metrics extra": "open:lock",
-            "data.name extra": "open:lock",
-            "data.price extra": "open:lock",
-            "data.rarity extra": "open:lock",
-            "data.thumbnail extra": "open:lock",
-            "data.total_supply extra": "open:lock",
-            "data.type extra": "open:lock",
-            "data.updated_at extra": "open:lock",
-            "data.urn extra": "open:lock",
-            "data.utility extra": "open:lock",
-            "data.video extra": "open:lock",
-            "error missing": "open:lock",
-            "ok value": "open:lock"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/243-item-create-folder-and-empty-entries.json",
@@ -943,7 +845,6 @@
         }
       ],
       "gaps": [
-        "open:lock",
         "open:third-party-registry",
         "open:item-curation-publicity",
         "open:item-catalyst-state",
@@ -961,7 +862,7 @@
       "id": "api_http:DELETE:/v1/items/:id",
       "owner": "items",
       "status": "known_gap",
-      "result": "Deletes of a draft, minted, unminted, third-party and orphan item by their owner, an on-chain manager and a stranger, and of an unknown item, were compared and match, except in a locked collection.",
+      "result": "Deletes of a draft, minted, unminted, third-party and orphan item by their owner, an on-chain manager and a stranger, and of an unknown item,, and in a locked collection, were compared and match.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/219-item-delete-stranger.json",
@@ -1001,22 +902,10 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/238-item-delete-locked.json",
           "scope": "DELETE /items/{id} signed by the owner on an item of a locked collection.",
-          "replay": [
-            "status: fixture=423 candidate=200",
-            "data value",
-            "error missing",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=423 candidate=200": "open:lock",
-            "data value": "open:lock",
-            "error missing": "open:lock",
-            "ok value": "open:lock"
-          }
+          "replay": []
         }
       ],
       "gaps": [
-        "open:lock",
         "open:third-party-registry",
         "open:item-curation-publicity",
         "deliberate:owner-is-the-chain-creator",
@@ -1024,13 +913,13 @@
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only"
       ],
-      "remaining_verification": "The lock, the registry and item curations."
+      "remaining_verification": "The registry and item curations."
     },
     {
       "id": "api_http:POST:/v1/items/:id/files",
       "owner": "items",
       "status": "known_gap",
-      "result": "Uploads by the owner and an on-chain manager, including to a minted item and in a locked collection, refusals of a stranger, the committee, an unsigned request and an unknown item, and parts that don't match their hash or that the item doesn't name, were compared; the node refuses those parts and the item the lock let it delete.",
+      "result": "Uploads by the owner and an on-chain manager, including to a minted item and in a locked collection, refusals of a stranger, the committee, an unsigned request and an unknown item, and parts that don't match their hash or that the item doesn't name, were compared; the node refuses those parts.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/226-item-files-owner.json",
@@ -1107,18 +996,7 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/239-item-files-locked.json",
           "scope": "POST /items/{id}/files signed by the owner on an item of a locked collection.",
-          "replay": [
-            "status: fixture=200 candidate=404",
-            "data extra",
-            "error extra",
-            "ok value"
-          ],
-          "explained_by": {
-            "status: fixture=200 candidate=404": "open:lock",
-            "data extra": "open:lock",
-            "error extra": "open:lock",
-            "ok value": "open:lock"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/244-item-files-folder-and-empty-entries.json",
@@ -1132,7 +1010,6 @@
         }
       ],
       "gaps": [
-        "open:lock",
         "open:third-party-registry",
         "deliberate:item-upload-named-files",
         "deliberate:item-upload-bounds",
@@ -2142,6 +2019,11 @@
             "data.salt value": "deliberate:query-never-overrides",
             "data.urn value": "deliberate:query-never-overrides"
           }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/300-collection-after-delete.json",
+          "scope": "Signed GET by the owner of the draft it deleted.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -2157,62 +2039,219 @@
         "deliberate:unauthenticated-message",
         "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "The third-party change reads the registry; then capture 141 replays clean. Fields whose sources arrive later answer upstream's empty value: lock, forum fields, a third-party collection's dates and published state from item curations."
+      "remaining_verification": "The third-party change reads the registry; then capture 141 replays clean. Fields whose sources arrive later answer upstream's empty value: forum fields, a third-party collection's dates and published state from item curations."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
       "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [
-        "deliberate:chain-copy-lag"
-      ],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
-    },
-    {
-      "id": "api_http:POST:/v1/collections/:id/owner/sync",
-      "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
-    },
-    {
-      "id": "api_http:POST:/v1/collections/:id/tos",
-      "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
-    },
-    {
-      "id": "api_http:POST:/v1/collections/:id/lock",
-      "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's lock of a draft was captured; the node doesn't route it.",
+      "result": "The owner's publish of a collection on chain holding an item without an on-chain id (assigned in creation order), the same publish again, and the refusals of a stranger and of a draft the chain doesn't hold were compared and match, but the repeated publish's items, a deliberate gap. A third-party collection's publish differs: an open gap.",
       "evidence": [
         {
-          "path": "services/catalyst/tests/fixtures/conformance/builder/source/235-collection-lock-owner.json",
-          "scope": "POST /collections/{id}/lock signed by the owner of a draft collection.",
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/276-collection-publish-assigns-ids.json",
+          "scope": "POST /collections/{id}/publish signed by the owner once the chain holds the collection and the item that had no on-chain id.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/277-collection-publish-again.json",
+          "scope": "POST /collections/{id}/publish signed by the owner again, every item holding its on-chain id.",
           "replay": [
-            "status: fixture=200 candidate=404",
-            "header content-type: fixture=\"application/json; charset=utf-8\" candidate=<missing>",
-            "candidate body is not JSON: \"\""
+            "data.items[].beneficiary value",
+            "data.items[].content_hash value",
+            "data.items[].is_published value",
+            "data.items[].price value",
+            "data.items[].rarity value",
+            "data.items[].total_supply value",
+            "data.items[].urn value"
           ],
           "explained_by": {
-            "status: fixture=200 candidate=404": "open:lock",
-            "header content-type: fixture=\"application/json; charset=utf-8\" candidate=<missing>": "open:lock",
-            "candidate body is not JSON: \"\"": "open:lock"
+            "data.items[].beneficiary value": "deliberate:publish-repeat-items-merged",
+            "data.items[].content_hash value": "deliberate:publish-repeat-items-merged",
+            "data.items[].is_published value": "deliberate:publish-repeat-items-merged",
+            "data.items[].price value": "deliberate:publish-repeat-items-merged",
+            "data.items[].rarity value": "deliberate:publish-repeat-items-merged",
+            "data.items[].total_supply value": "deliberate:publish-repeat-items-merged",
+            "data.items[].urn value": "deliberate:publish-repeat-items-merged"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/278-collection-publish-stranger.json",
+          "scope": "POST /collections/{id}/publish signed by a wallet with no role on the collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/279-collection-publish-draft-owner.json",
+          "scope": "POST /collections/{id}/publish signed by the owner of a collection the chain doesn't hold.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/280-collection-publish-linked.json",
+          "scope": "POST /collections/{id}/publish signed by the provider manager of a third-party collection, without item ids.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data.id extra",
+            "error value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "open:third-party-publish",
+            "data.id extra": "open:third-party-publish",
+            "error value": "open:third-party-publish"
           }
         }
       ],
       "gaps": [
-        "open:lock"
+        "open:third-party-publish",
+        "deliberate:publish-repeat-items-merged",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "The lock itself."
+      "remaining_verification": "Third-party publish with its slot cheque. The curation row, forum post and Slack notice upstream's first publication starts belong to the curation changes; this route makes none."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/owner/sync",
+      "owner": "collections",
+      "status": "reviewed",
+      "result": "The sync by the owner of a collection on chain, by the chain creator of a transferred collection, on a third-party collection and by a stranger were compared and match. The node stores nothing, a deliberate gap.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/290-collection-owner-sync-owner.json",
+          "scope": "POST /collections/{id}/owner/sync signed by the owner of a collection on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/291-collection-owner-sync-transferred-creator.json",
+          "scope": "POST /collections/{id}/owner/sync signed by the chain creator of a collection transferred on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/292-collection-owner-sync-linked.json",
+          "scope": "POST /collections/{id}/owner/sync signed by the provider manager of a third-party collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/293-collection-owner-sync-stranger.json",
+          "scope": "POST /collections/{id}/owner/sync signed by a wallet with no role on the draft.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:owner-sync-stores-nothing",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag"
+      ],
+      "remaining_verification": "A sync by a committee member, which the matrix tests hold."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/tos",
+      "owner": "collections",
+      "status": "reviewed",
+      "result": "Acceptances by the owner of a draft and by the provider manager of a third-party collection with its items' hashes, an email the schema refuses and a stranger were compared and match, but the schema refusal's detail. The node also keeps each acceptance, which no route answers.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/286-collection-tos-owner.json",
+          "scope": "POST /collections/{id}/tos signed by the owner with the body the old builder web sends before it deploys.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/287-collection-tos-invalid-email.json",
+          "scope": "POST /collections/{id}/tos signed by the owner with an email that is not one.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/288-collection-tos-stranger.json",
+          "scope": "POST /collections/{id}/tos signed by a wallet with no role on the draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/289-collection-tos-linked.json",
+          "scope": "POST /collections/{id}/tos signed by the provider manager of a third-party collection, with its items' hashes.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:invalid-body-detail",
+        "deliberate:access-checks-never-write",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "What the warehouse receives is not part of a capture; the node's forward is held to upstream's body by its own tests."
+    },
+    {
+      "id": "api_http:POST:/v1/collections/:id/lock",
+      "owner": "collections",
+      "status": "reviewed",
+      "result": "The owner's lock of a draft, and the refusals of a stranger, an unsigned request and an unknown id, were compared and match; its effect (423 on item saves, creations and deletes, never uploads) replays on captures 236 to 239 and on the collection's delete (296). An on-chain manager's and a provider manager's lock are refused by the node, a deliberate gap.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/235-collection-lock-owner.json",
+          "scope": "POST /collections/{id}/lock signed by the owner of a draft collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/281-collection-lock-stranger.json",
+          "scope": "POST /collections/{id}/lock signed by a wallet with no role on the draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/282-collection-lock-unsigned.json",
+          "scope": "POST /collections/{id}/lock without a signature.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/283-collection-lock-published-manager.json",
+          "scope": "POST /collections/{id}/lock signed by an on-chain manager of a collection on chain.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data value",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:lock-owner-only",
+            "data value": "deliberate:lock-owner-only",
+            "error extra": "deliberate:lock-owner-only",
+            "ok value": "deliberate:lock-owner-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/284-collection-lock-linked-manager.json",
+          "scope": "POST /collections/{id}/lock signed by the provider manager of a third-party collection.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data value",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:lock-owner-only",
+            "data value": "deliberate:lock-owner-only",
+            "error extra": "deliberate:lock-owner-only",
+            "ok value": "deliberate:lock-owner-only"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/285-collection-lock-unknown.json",
+          "scope": "POST /collections/{id}/lock of an id no collection has.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:lock-owner-only",
+        "deliberate:unauthenticated-message",
+        "deliberate:access-checks-never-write",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag"
+      ],
+      "remaining_verification": "A lock by the chain creator of a transferred collection, which the node admits as its owner."
     },
     {
       "id": "api_http:GET:/v1/collections/:id/approvalData",
@@ -2728,11 +2767,46 @@
     {
       "id": "api_http:DELETE:/v1/collections/:id",
       "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "Deletes of a draft by its owner with the body the old builder web sends, of a third-party collection never submitted by its provider manager, of a collection on chain and of a locked one by their owner, by a stranger and of an unknown id were compared and match, and so does a read of the deleted draft.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/294-collection-delete-stranger.json",
+          "scope": "DELETE /collections/{id} signed by a wallet with no role on the draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/295-collection-delete-published.json",
+          "scope": "DELETE /collections/{id} signed by the owner of a collection on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/296-collection-delete-locked.json",
+          "scope": "DELETE /collections/{id} signed by the owner of a collection locked under a day ago.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/297-collection-delete-linked.json",
+          "scope": "DELETE /collections/{id} signed by the provider manager of a third-party collection never submitted.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/298-collection-delete-draft-owner.json",
+          "scope": "DELETE /collections/{id} signed by the owner of a draft, with an empty JSON body.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/299-collection-delete-unknown.json",
+          "scope": "DELETE /collections/{id} of an id no collection has.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:access-checks-never-write",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag"
+      ],
+      "remaining_verification": "A delete of a submitted third-party collection, which the node's own tests hold."
     },
     {
       "id": "api_http:GET:/v1/addresses",
@@ -3231,23 +3305,21 @@
       "closes": "The node keeps item curations and answers each item's published state, mapping flag and curation filters from them, a by-id read from the item's own curation, and the file routes take a third-party item with an item curation as published.",
       "anchors": []
     },
-    "lock": {
-      "text": "The node keeps no lock: POST /v1/collections/:id/lock answers 404 and nothing locks a collection, so an item save, creation or delete in a collection its owner locked under a day ago is carried out (capture 239's upload then finds the item deleted at 238, 404); the node answers 423 to those only while its own publication of the collection runs. Upstream answers the lock with its date, and 423 to item saves, creations and deletes in a collection locked under a day ago; it never refuses an upload for a lock.",
-      "captures": [
-        "source/235-collection-lock-owner.json",
-        "source/236-item-save-locked.json",
-        "source/237-item-create-locked.json",
-        "source/238-item-delete-locked.json",
-        "source/239-item-files-locked.json"
-      ],
-      "closes": "The node keeps a collection's lock from POST /v1/collections/:id/lock and answers 423 to item saves, creations and deletes in it while it is under a day old.",
-      "anchors": []
-    },
     "item-catalyst-state": {
       "text": "The node doesn't ask the catalyst about items: every body answers in_catalyst false and catalyst_content_hash null, a third-party item is approved and published only by the node's own records, and a third-party save checks a new URN against the node's items only. Upstream asks the catalyst for the item's entity: in_catalyst is whether it holds one, a third-party item held there is approved and published with its entity's merkle proof hash as catalyst_content_hash, and a third-party save refuses a URN the catalyst holds with 409.",
       "captures": [],
       "closes": "The node reads its content server's active entities by the item's URN for in_catalyst, a third-party item's approval, publication and catalyst_content_hash, and the third-party URN check.",
       "anchors": []
+    },
+    "third-party-publish": {
+      "text": "POST /v1/collections/:id/publish of a third-party collection: upstream publishes the items the body names against the provider's slots, and without itemIds answers 200 {ok:false, error:'Could not get itemIds from request'}; the node answers 400 and publishes a third-party collection through its linked publication.",
+      "captures": [
+        "source/280-collection-publish-linked.json"
+      ],
+      "closes": "The node publishes a third-party collection's items from POST /v1/collections/:id/publish with their slot cheque, as upstream does.",
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
     }
   }
 }

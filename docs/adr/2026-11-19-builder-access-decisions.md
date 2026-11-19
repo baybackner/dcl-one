@@ -47,7 +47,14 @@ source is down.
   rows and the chain copy, returns its database connection, and only then
   waits on the committee.
 - **One owner.** A standard collection's owner is its chain creator once the
-  copy holds it, and its stored `eth_address` before.
+  copy holds it, and its stored `eth_address` before. The owner is derived on
+  each request, so `POST /v1/collections/{id}/owner/sync` stores nothing and
+  answers the collection's body.
+- **The lifecycle routes.** Only the owner of a standard collection sets its
+  lock. The owner, an on-chain manager or the provider's manager deletes a
+  collection and accepts its terms of service. Those, or a current committee
+  member, publish a standard collection and sync its owner; the committee's
+  admission stands when the publish decides again inside its transaction.
 - **Managers come from the chain.** Only a collection on chain has managers,
   read from the copy. A request body never sets them.
 - **Current committee, read once an hour.** The builder reads the current

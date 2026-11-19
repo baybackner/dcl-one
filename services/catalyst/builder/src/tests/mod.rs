@@ -11,6 +11,7 @@ mod curation_auth_fuzz;
 mod draft_persistence;
 mod item_files;
 mod items;
+mod lifecycle;
 mod linked_publication;
 mod publication_preparation;
 mod publication_transactions;

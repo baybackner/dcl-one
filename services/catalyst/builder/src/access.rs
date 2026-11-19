@@ -58,6 +58,7 @@
 //! }
 //! ```
 
+use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use serde_json::json;
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -87,11 +88,39 @@ pub struct CollectionRead {
     full: bool,
 }
 
-/// May create or save the collection.
+/// May create or save the collection; `at` is when it was decided, which
+/// the collection's lock is compared with.
 #[derive(Debug)]
 pub struct CollectionEdit {
     id: Uuid,
     signer: String,
+    at: DateTime<Utc>,
+}
+
+/// May lock the collection, at `at`.
+#[derive(Debug)]
+pub struct CollectionLock {
+    id: Uuid,
+    signer: String,
+    at: DateTime<Utc>,
+}
+
+/// May delete the collection or accept its terms of service.
+#[derive(Debug)]
+pub struct CollectionManage {
+    id: Uuid,
+    signer: String,
+    at: DateTime<Utc>,
+}
+
+/// May publish the collection's standard deployment or sync its owner;
+/// `committee` when the current committee admitted the signer.
+#[derive(Debug)]
+pub struct CollectionSync {
+    id: Uuid,
+    signer: String,
+    committee: bool,
+    third_party: bool,
 }
 
 /// May read the item; `full` also reads what only its owner's side sees.
@@ -107,6 +136,7 @@ pub struct ItemSave {
     id: Uuid,
     signer: String,
     collection: Option<Uuid>,
+    at: DateTime<Utc>,
 }
 
 /// May delete the item or upload its files.
@@ -114,6 +144,7 @@ pub struct ItemSave {
 pub struct ItemChange {
     id: Uuid,
     signer: String,
+    at: DateTime<Utc>,
 }
 
 /// May run the node's publication of the collection.
@@ -178,6 +209,7 @@ mod sealed {
     pub trait Sealed {}
     impl Sealed for super::CollectionRead {}
     impl Sealed for super::CollectionEdit {}
+    impl Sealed for super::CollectionSync {}
 }
 
 /// A grant over one collection, for the reads that answer its row; only
@@ -195,6 +227,46 @@ impl CollectionGrant for CollectionRead {
 impl CollectionGrant for CollectionEdit {
     fn collection(&self) -> Uuid {
         self.id
+    }
+}
+
+impl CollectionGrant for CollectionSync {
+    fn collection(&self) -> Uuid {
+        self.id
+    }
+}
+
+impl CollectionLock {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    pub fn at(&self) -> DateTime<Utc> {
+        self.at
+    }
+}
+
+impl CollectionManage {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    pub fn signer(&self) -> &str {
+        &self.signer
+    }
+}
+
+impl CollectionSync {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    pub fn third_party(&self) -> bool {
+        self.third_party
+    }
+    /// The full read this grant opens: the body and every item.
+    pub fn full_read(&self) -> CollectionRead {
+        CollectionRead {
+            id: self.id,
+            full: true,
+        }
     }
 }
 
@@ -277,6 +349,7 @@ struct Collection {
     contract: Option<String>,
     third_party: bool,
     pending: bool,
+    lock: Option<NaiveDateTime>,
     published: bool,
     creator: Option<String>,
     managers: Vec<String>,
@@ -303,21 +376,33 @@ impl Collection {
     fn role(&self, signer: &str) -> bool {
         self.owner(signer) || self.manager(signer) || self.provider_manager(signer)
     }
+
+    /// The owner's lock holds at `at`: set less than a day before it.
+    fn locked(&self, at: DateTime<Utc>) -> bool {
+        self.lock
+            .is_some_and(|lock| lock.and_utc() + LOCK_HOLDS > at)
+    }
 }
+
+/// How long a collection's lock holds.
+pub const LOCK_HOLDS: TimeDelta = TimeDelta::days(1);
+
+/// A collection row's owner, kind, contract, publication flag and lock.
+type StoredCollection = (String, bool, Option<String>, bool, Option<NaiveDateTime>);
 
 async fn collection(
     conn: &mut PgConnection,
     view: &DecisionView,
     id: Uuid,
 ) -> Result<Option<Collection>, ApiError> {
-    let row: Option<(String, bool, Option<String>, bool)> = sqlx::query_as(
-        "SELECT eth_address, third_party_id IS NOT NULL, contract_address, publication_pending \
+    let row: Option<StoredCollection> = sqlx::query_as(
+        "SELECT eth_address, third_party_id IS NOT NULL, contract_address, publication_pending, lock \
          FROM builder.collections WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((stored_owner, third_party, contract, pending)) = row else {
+    let Some((stored_owner, third_party, contract, pending, lock)) = row else {
         return Ok(None);
     };
     let published = chain_state::published(conn, view, id).await?;
@@ -332,6 +417,7 @@ async fn collection(
         contract,
         third_party,
         pending,
+        lock,
         published,
         creator: facts.as_ref().map(|f| f.creator.clone()),
         minters: facts
@@ -601,6 +687,7 @@ pub async fn edit_collection(
     let edit = CollectionEdit {
         id,
         signer: signer.as_str().to_string(),
+        at: (state.now)(),
     };
     let (mut conn, view) = decision(state).await?;
     confirm_collection_edit(&mut conn, &view, &edit).await?;
@@ -608,11 +695,13 @@ pub async fn edit_collection(
 }
 
 /// The state of a collection a save was confirmed for: whether it is
-/// published and whether the node's own publication of it is in progress.
+/// published, whether the node's own publication of it is in progress and
+/// whether its owner's lock holds.
 #[derive(Debug, Default)]
 pub struct EditState {
     pub published: bool,
     pub pending: bool,
+    pub locked: bool,
 }
 
 /// [`edit_collection`]'s decision again, inside the write's transaction,
@@ -633,6 +722,7 @@ pub(crate) async fn confirm_collection_edit(
     Ok(EditState {
         published: c.published,
         pending: c.pending,
+        locked: c.locked(edit.at),
     })
 }
 
@@ -648,6 +738,7 @@ pub async fn save_item(
         id,
         signer: signer.as_str().to_string(),
         collection: intent.collection,
+        at: (state.now)(),
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_save(&mut conn, &view, &save, intent).await?;
@@ -915,7 +1006,7 @@ pub(crate) async fn confirm_item_save(
                 return Err(published("updated with a new rarity"));
             }
             keep_video = stored.smart;
-        } else if c.pending {
+        } else if c.pending || c.locked(save.at) {
             return Err(ApiError::locked(Subject::Item, "", UPSERT)
                 .with_data(with_id(intent.path_id.as_deref(), json!({}))));
         }
@@ -928,7 +1019,7 @@ pub(crate) async fn confirm_item_save(
             if moving {
                 return Err(published("inserted"));
             }
-        } else if c.pending {
+        } else if c.pending || c.locked(save.at) {
             return Err(ApiError::locked(Subject::Item, "", UPSERT)
                 .with_data(with_id(intent.path_id.as_deref(), json!({}))));
         }
@@ -958,6 +1049,7 @@ pub async fn change_item(
     let change = ItemChange {
         id,
         signer: signer.as_str().to_string(),
+        at: (state.now)(),
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_change(&mut conn, &view, &change).await?;
@@ -971,6 +1063,7 @@ pub struct ChangeState {
     pub third_party: bool,
     pub published: bool,
     pub pending: bool,
+    pub locked: bool,
     pub submitted: bool,
     pub contract: Option<String>,
     pub urn: Option<String>,
@@ -1003,10 +1096,134 @@ pub(crate) async fn confirm_item_change(
         third_party: c.third_party,
         published: c.published,
         pending: c.pending,
+        locked: c.locked(change.at),
         submitted: i.published,
         contract: c.contract.clone(),
         urn,
     })
+}
+
+/// `POST /v1/collections/:id/lock`: only the owner of a standard collection.
+pub async fn lock_collection(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<CollectionLock, ApiError> {
+    let lock = CollectionLock {
+        id: parse(raw)?,
+        signer: signer.as_str().to_string(),
+        at: (state.now)(),
+    };
+    let (mut conn, view) = decision(state).await?;
+    confirm_collection_lock(&mut conn, &view, &lock).await?;
+    Ok(lock)
+}
+
+/// [`lock_collection`]'s decision again, inside the write's transaction.
+pub(crate) async fn confirm_collection_lock(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    lock: &CollectionLock,
+) -> Result<(), ApiError> {
+    let c = collection(conn, view, lock.id)
+        .await?
+        .ok_or_else(|| not_found(lock.id, COLLECTIONS))?;
+    if !c.owner(&lock.signer) {
+        return Err(unauthorized_user(&lock.signer, COLLECTIONS, lock.id));
+    }
+    Ok(())
+}
+
+/// `DELETE /v1/collections/:id` and `POST /v1/collections/:id/tos`: the
+/// collection's owner, its on-chain manager or its provider's manager.
+pub async fn manage_collection(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<CollectionManage, ApiError> {
+    let manage = CollectionManage {
+        id: parse(raw)?,
+        signer: signer.as_str().to_string(),
+        at: (state.now)(),
+    };
+    let (mut conn, view) = decision(state).await?;
+    confirm_collection_manage(&mut conn, &view, &manage).await?;
+    Ok(manage)
+}
+
+/// The state of the collection a manage grant was confirmed for, which a
+/// delete's own rules read.
+#[derive(Debug, Default)]
+pub struct ManageState {
+    pub third_party: bool,
+    pub published: bool,
+    pub pending: bool,
+    pub locked: bool,
+    pub contract: Option<String>,
+}
+
+/// [`manage_collection`]'s decision again, inside the write's transaction.
+pub(crate) async fn confirm_collection_manage(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    manage: &CollectionManage,
+) -> Result<ManageState, ApiError> {
+    let c = collection(conn, view, manage.id)
+        .await?
+        .ok_or_else(|| not_found(manage.id, COLLECTIONS))?;
+    if !c.role(&manage.signer) {
+        return Err(unauthorized_user(&manage.signer, COLLECTIONS, manage.id));
+    }
+    Ok(ManageState {
+        third_party: c.third_party,
+        published: c.published,
+        pending: c.pending,
+        locked: c.locked(manage.at),
+        contract: c.contract,
+    })
+}
+
+/// `POST /v1/collections/:id/publish` and `/owner/sync`: the collection's
+/// owner, its on-chain manager, its provider's manager or a current
+/// committee member.
+pub async fn sync_collection(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<CollectionSync, ApiError> {
+    let id = parse(raw)?;
+    let (mut conn, view) = decision(state).await?;
+    let c = collection(&mut conn, &view, id)
+        .await?
+        .ok_or_else(|| not_found(id, COLLECTIONS))?;
+    drop(conn);
+    let s = signer.as_str();
+    let committee = !c.role(s);
+    if committee && !on_committee(state, s).await? {
+        return Err(unauthorized_user(s, COLLECTIONS, id));
+    }
+    Ok(CollectionSync {
+        id,
+        signer: s.to_string(),
+        committee,
+        third_party: c.third_party,
+    })
+}
+
+/// [`sync_collection`]'s decision again, inside the write's transaction: a
+/// role the rows decide is decided again; the committee's admission stands.
+pub(crate) async fn confirm_collection_sync(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    sync: &CollectionSync,
+) -> Result<(), ApiError> {
+    let c = collection(conn, view, sync.id)
+        .await?
+        .ok_or_else(|| not_found(sync.id, COLLECTIONS))?;
+    if !sync.committee && !c.role(&sync.signer) {
+        return Err(unauthorized_user(&sync.signer, COLLECTIONS, sync.id));
+    }
+    Ok(())
 }
 
 /// The node's own publication routes: the collection's stored owner, who is
@@ -1198,6 +1415,7 @@ pub(crate) mod granted {
         CollectionEdit {
             id,
             signer: signer.to_string(),
+            at: Utc::now(),
         }
     }
 
@@ -1210,6 +1428,7 @@ pub(crate) mod granted {
             id,
             signer: signer.to_string(),
             collection,
+            at: Utc::now(),
         }
     }
 
@@ -1217,6 +1436,7 @@ pub(crate) mod granted {
         ItemChange {
             id,
             signer: signer.to_string(),
+            at: Utc::now(),
         }
     }
 

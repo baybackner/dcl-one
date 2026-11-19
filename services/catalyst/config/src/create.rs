@@ -42,6 +42,20 @@ pub struct CreateConfig {
     #[arg(long, env = "NEWSLETTER_SERVICE_API_KEY", hide_env_values = true)]
     pub newsletter_service_api_key: Option<String>,
 
+    /// The warehouse a terms-of-service acceptance is forwarded to; the
+    /// forward is configured only when the token is set too. Without it the
+    /// acceptance is stored and kept for a later forward.
+    #[arg(long, env = "WAREHOUSE_URL", hide_env_values = true)]
+    pub warehouse_url: Option<String>,
+
+    /// Sent as the warehouse's `x-token` header.
+    #[arg(long, env = "WAREHOUSE_TOKEN", hide_env_values = true)]
+    pub warehouse_token: Option<String>,
+
+    /// Prefixes the forward's `builder` context as `<prefix>-builder`.
+    #[arg(long, env = "WAREHOUSE_CONTEXT_PREFIX")]
+    pub warehouse_context_prefix: Option<String>,
+
     /// Bearer of the moderator routes; unset refuses them.
     #[arg(
         long,
@@ -108,6 +122,11 @@ mod tests {
             c.create.newsletter_service_url.is_none()
                 && c.create.newsletter_publication_id.is_none()
                 && c.create.newsletter_service_api_key.is_none()
+        );
+        assert!(
+            c.create.warehouse_url.is_none()
+                && c.create.warehouse_token.is_none()
+                && c.create.warehouse_context_prefix.is_none()
         );
         assert!(
             c.create.catalyrst_camera_reel_admin_token.is_none()

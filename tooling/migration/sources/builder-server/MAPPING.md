@@ -16,8 +16,10 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   of the contract for a published standard collection; NULL otherwise.
 - `collections.contract_address`: the CREATE2 address upstream computed for
   every standard collection's draft, lowercased; NULL for a linked
-  collection. `publication_pending` starts false: the upstream `lock` is a
-  short-lived publish lock.
+  collection. `publication_pending` starts false: it marks the node's own
+  publication in progress.
+- `collections.lock`: the owner's last lock as upstream stores it; it holds
+  for a day from that instant.
 - `collections.linked_contract_address` (lowercased) and
   `linked_contract_network`: a third-party collection's linked contract, as
   upstream stores it.
@@ -74,8 +76,10 @@ object_key, hash, size)` with `source = 'builder-server'` and
   `deployments`, `pools`, `pool_groups`, `pool_likes`: no target. The node
   keeps no scenes.
 - `collections.is_published`, `is_approved`: derived on the node, not stored.
-- `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`,
-  `lock`: no target column.
+- `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`:
+  no target column.
+- Terms of service: upstream forwards each acceptance to its warehouse and
+  stores none, so there is nothing to import into `builder.terms_acceptances`.
 - Left to the node: `collection_publications`, `linked_collection_publications`,
   `items.in_catalyst`, `items.catalyst_content_hash`,
   `newsletter_subscriptions` (upstream forwards opt-ins and stores none).

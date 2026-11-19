@@ -540,6 +540,10 @@ pub const RARITIES_WITH_ORACLE: &str = "0xa9158e22f89bb3f69c5600338895cb5fb81e50
 pub struct FakeOracle {
     prices: Arc<std::sync::Mutex<Option<BTreeMap<String, String>>>>,
     asked: Arc<std::sync::Mutex<Vec<String>>>,
+    deployed: Arc<std::sync::Mutex<BTreeMap<String, u64>>>,
+    code_reads: Arc<std::sync::atomic::AtomicUsize>,
+    down: Arc<std::sync::atomic::AtomicBool>,
+    other_chain: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl FakeOracle {
@@ -561,17 +565,89 @@ impl FakeOracle {
         self.asked.lock().unwrap().clone()
     }
 
+    /// A collection contract at `contract` holding `items` items: its code
+    /// answers `eth_getCode` and its `itemsCount()` answers `items`.
+    pub fn deploy(&self, contract: &str, items: u64) {
+        self.deployed
+            .lock()
+            .unwrap()
+            .insert(contract.to_ascii_lowercase(), items);
+    }
+
+    /// Every request answers HTTP 502 while `down`.
+    pub fn set_down(&self, down: bool) {
+        self.down.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Answers another network's chain id (Ethereum's) while `other`.
+    pub fn set_other_chain(&self, other: bool) {
+        self.other_chain
+            .store(other, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many `eth_getCode` reads the fake answered.
+    pub fn code_reads(&self) -> usize {
+        self.code_reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     async fn answer(
         axum::extract::State(fake): axum::extract::State<Self>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
         use alloy_sol_types::SolCall;
         use axum::response::IntoResponse;
+        if fake.down.load(std::sync::atomic::Ordering::SeqCst) {
+            return axum::http::StatusCode::BAD_GATEWAY.into_response();
+        }
+        let id = body["id"].clone();
+        let call = &body["params"][0];
+        let target = call["to"].as_str().map(str::to_ascii_lowercase);
+        let deployed = |address: Option<String>| {
+            address.and_then(|a| fake.deployed.lock().unwrap().get(&a).copied())
+        };
+        match body["method"].as_str().unwrap_or_default() {
+            "eth_chainId" => {
+                let chain = if fake.other_chain.load(std::sync::atomic::Ordering::SeqCst) {
+                    "0x1"
+                } else {
+                    "0x89"
+                };
+                return axum::Json(
+                    serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": chain }),
+                )
+                .into_response();
+            }
+            "eth_getCode" => {
+                fake.code_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let code = match deployed(body["params"][0].as_str().map(str::to_ascii_lowercase)) {
+                    Some(_) => "0x6080",
+                    None => "0x",
+                };
+                return axum::Json(
+                    serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": code }),
+                )
+                .into_response();
+            }
+            "eth_call"
+                if call["data"].as_str().is_some_and(|d| {
+                    d.eq_ignore_ascii_case(&alloy_primitives::hex::encode_prefixed(
+                        crate::publication_chain::itemsCountCall::SELECTOR,
+                    ))
+                }) =>
+            {
+                let answer = match deployed(target) {
+                    Some(items) => serde_json::json!({ "jsonrpc": "2.0", "id": id,
+                        "result": format!("0x{items:064x}") }),
+                    None => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": "0x" }),
+                };
+                return axum::Json(answer).into_response();
+            }
+            _ => {}
+        }
         let Some(prices) = fake.prices.lock().unwrap().clone() else {
             return axum::http::StatusCode::BAD_GATEWAY.into_response();
         };
-        let id = body["id"].clone();
-        let call = &body["params"][0];
         let data = call["data"].as_str().unwrap_or_default();
         let decoded = alloy_primitives::hex::decode(data)
             .ok()

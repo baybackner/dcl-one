@@ -21,7 +21,8 @@
 //! collection's body and listings merge ([`collections`]). The one
 //! client it does not share is the Foundation review's
 //! (`linked_publication_review::foundation_client`: guarded as the shared
-//! one, but no redirects; the reason is in that module). Every write goes behind
+//! one, but no redirects; the reason is in that module), which the
+//! terms-of-service forward to the warehouse ([`terms`]) takes too. Every write goes behind
 //! `CREATE_WRITES_ENABLED` ([`writes`], default false, 503 with
 //! `Retry-After`, built the way `social::writes` gates the social writes).
 //!
@@ -82,6 +83,7 @@ pub mod publication;
 pub mod publication_chain;
 pub mod publication_store;
 pub mod rarities;
+pub mod terms;
 pub mod writes;
 
 #[cfg(test)]
@@ -116,6 +118,25 @@ pub struct NewsletterForward {
     pub api_key: String,
 }
 
+/// The warehouse a terms-of-service acceptance is forwarded to
+/// (`WAREHOUSE_URL`, `WAREHOUSE_TOKEN` and the optional
+/// `WAREHOUSE_CONTEXT_PREFIX`), configured only when the URL and the token
+/// are set.
+#[derive(Clone)]
+pub struct WarehouseForward {
+    pub url: String,
+    pub token: String,
+    pub context_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for WarehouseForward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WarehouseForward")
+            .field("context_prefix", &self.context_prefix)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The environment as `Config` hands it over (the old env names).
 #[derive(Clone, Debug, Default)]
 pub struct RawSettings {
@@ -136,6 +157,9 @@ pub struct RawSettings {
     /// `BUILDER_FOUNDATION_URL`: the Foundation builder API a linked
     /// publication is verified against; unset answers 503 there.
     pub foundation_url: Option<String>,
+    pub warehouse_url: Option<String>,
+    pub warehouse_token: Option<String>,
+    pub warehouse_context_prefix: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -146,6 +170,7 @@ pub struct Settings {
     pub admin_token: Option<String>,
     pub newsletter: Option<NewsletterForward>,
     pub foundation_url: Option<String>,
+    pub warehouse: Option<WarehouseForward>,
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -204,6 +229,22 @@ impl Settings {
         {
             bail!("BUILDER_FOUNDATION_URL must be a public http(s) URL");
         }
+        let warehouse = match (
+            non_empty(&raw.warehouse_url),
+            non_empty(&raw.warehouse_token),
+        ) {
+            (Some(url), Some(token)) => {
+                if !dcl_http::is_safe_http_url(&url) {
+                    bail!("WAREHOUSE_URL must be a public http(s) URL");
+                }
+                Some(WarehouseForward {
+                    url,
+                    token,
+                    context_prefix: non_empty(&raw.warehouse_context_prefix),
+                })
+            }
+            _ => None,
+        };
         Ok(Self {
             writes_enabled: raw.writes_enabled,
             polygon_rpc_url,
@@ -211,6 +252,7 @@ impl Settings {
             admin_token: non_empty(&raw.admin_token),
             newsletter,
             foundation_url,
+            warehouse,
         })
     }
 }
@@ -223,7 +265,8 @@ pub struct State {
     pub market: Option<Arc<ChainIndex>>,
     pub settings: Settings,
     pub http: Outbound,
-    /// The guarded, no-redirect client of the Foundation review reads.
+    /// The guarded, no-redirect client: the Foundation review reads and the
+    /// warehouse forward, whose requests carry a credential.
     pub foundation: Outbound,
     pub eip1654: Option<Arc<dyn Eip1654Validator>>,
     /// The content state's denylist (the same `Arc`): a hash the camera reel
@@ -234,6 +277,10 @@ pub struct State {
     pub committee: committee::Committee,
     /// The rarities and their prices (`rarities`), kept a minute.
     pub rarities: rarities::Rarities,
+    /// The node's clock, which a collection's lock is set and compared by.
+    pub now: fn() -> chrono::DateTime<chrono::Utc>,
+    /// What the Polygon RPC says of collection contracts, kept per contract.
+    pub deployments: collections::deployment::Deployments,
 }
 
 pub type SharedState = Arc<State>;
@@ -259,17 +306,20 @@ impl State {
             denylist,
             committee: committee::Committee::default(),
             rarities: rarities::Rarities::default(),
+            now: chrono::Utc::now,
+            deployments: collections::deployment::Deployments::default(),
         })
     }
 
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "polygon_rpc={} collections_reader={} admins={} newsletter={}",
+            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={}",
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),
             self.settings.newsletter.is_some(),
+            self.settings.warehouse.is_some(),
         )
     }
 }
@@ -326,7 +376,19 @@ fn api_routes() -> Router<SharedState> {
         )
         .route(
             "/v1/collections/{id}",
-            get(handlers::collections::get_collection).put(handlers::drafts::put_collection),
+            get(handlers::collections::get_collection)
+                .put(handlers::drafts::put_collection)
+                .delete(handlers::lifecycle::delete),
+        )
+        .route("/v1/collections/{id}/lock", post(handlers::lifecycle::lock))
+        .route(
+            "/v1/collections/{id}/owner/sync",
+            post(handlers::lifecycle::owner_sync),
+        )
+        .route("/v1/collections/{id}/tos", post(handlers::lifecycle::terms))
+        .route(
+            "/v1/collections/{id}/publish",
+            post(handlers::lifecycle::publish),
         )
         .route(
             "/v1/collections/curation",
@@ -444,6 +506,80 @@ mod router_tests {
                 ..RawSettings::default()
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_warehouse_needs_its_url_and_token_and_a_public_url() {
+        let warehouse = |url: &str, token: Option<&str>, prefix: Option<&str>| {
+            Settings::parse(RawSettings {
+                warehouse_url: Some(url.into()),
+                warehouse_token: token.map(str::to_string),
+                warehouse_context_prefix: prefix.map(str::to_string),
+                ..RawSettings::default()
+            })
+        };
+        let forward = warehouse(
+            "https://warehouse.example/events",
+            Some("sk-example123"),
+            Some(" prd "),
+        )
+        .unwrap()
+        .warehouse
+        .unwrap();
+        assert_eq!(
+            (
+                forward.url.as_str(),
+                forward.token.as_str(),
+                forward.context_prefix.as_deref()
+            ),
+            (
+                "https://warehouse.example/events",
+                "sk-example123",
+                Some("prd")
+            )
+        );
+        assert!(
+            warehouse("https://warehouse.example/events", None, None)
+                .unwrap()
+                .warehouse
+                .is_none()
+        );
+        assert!(
+            warehouse("https://warehouse.example/events", Some(" "), None)
+                .unwrap()
+                .warehouse
+                .is_none()
+        );
+        assert!(
+            warehouse(
+                "https://warehouse.example/events",
+                Some("sk-example123"),
+                Some("")
+            )
+            .unwrap()
+            .warehouse
+            .unwrap()
+            .context_prefix
+            .is_none()
+        );
+        let settings = warehouse(
+            "https://warehouse.example/events?key=sk-example456",
+            Some("sk-example123"),
+            None,
+        )
+        .unwrap();
+        let printed = format!("{settings:?}");
+        assert!(
+            !printed.contains("sk-example123") && !printed.contains("sk-example456"),
+            "{printed}"
+        );
+        let err = warehouse("http://127.0.0.1/events", Some("sk-example123"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("WAREHOUSE_URL") && !err.contains("sk-example123"),
+            "{err}"
         );
     }
 }

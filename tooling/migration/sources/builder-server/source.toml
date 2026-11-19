@@ -17,7 +17,7 @@ item_content stops on a missing hash.
 Not migrated: projects, asset_packs, assets, collection_curations,
 collection_events, slot_usage_cheques, virtual_third_parties, deployments,
 pools, pool_groups, pool_likes (no target), the collections' managers,
-minters, reviewed_at, forum_link, forum_id and lock columns (no target
+minters, reviewed_at, forum_link and forum_id columns (no target
 column). collection_publications and
 linked_collection_publications stay the node's.
 
@@ -43,6 +43,7 @@ columns = [
   { name = "updated_at", type = "timestamptz" },
   { name = "linked_contract_address", type = "text" },
   { name = "linked_contract_network", type = "text" },
+  { name = "lock", type = "timestamp" },
 ]
 
 [[step]]

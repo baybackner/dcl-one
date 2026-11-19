@@ -55,8 +55,14 @@ pub fn initialize_for(data: &str, creator: &str) -> Option<Vec<u8>> {
 /// `initialize` calldata naming `creator`, with no items.
 #[cfg(test)]
 pub(crate) fn initialize_calldata(creator: &str) -> String {
+    initialize_calldata_named(creator, "Test")
+}
+
+/// [`initialize_calldata`] for a collection called `name`.
+#[cfg(test)]
+pub(crate) fn initialize_calldata_named(creator: &str, name: &str) -> String {
     let call = initializeCall {
-        name: "Test".into(),
+        name: name.into(),
         symbol: "DCL-TST".into(),
         baseURI: String::new(),
         creator: creator.parse().unwrap(),

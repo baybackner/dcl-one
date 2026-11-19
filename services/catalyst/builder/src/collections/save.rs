@@ -158,6 +158,13 @@ pub struct Deployment {
     contract_address: String,
 }
 
+impl Deployment {
+    /// The address the save gives the collection.
+    pub fn contract_address(&self) -> &str {
+        &self.contract_address
+    }
+}
+
 /// The checks a standard save makes before it asks who the signer is:
 /// `data` present and no claim of publication.
 pub fn standard_request(save: &CollectionSave, signer: &str) -> Result<(), ApiError> {
@@ -326,7 +333,7 @@ impl ItemsComponent {
                 return Err(urn_in_use(id, urn, action));
             }
         }
-        if state.pending {
+        if state.pending || state.locked {
             return Err(ApiError::locked(
                 crate::http::Subject::Collection,
                 &id.to_string(),

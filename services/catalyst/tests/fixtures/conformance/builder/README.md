@@ -159,9 +159,12 @@ fake Polygon JSON-RPC to upstream; the replay writes the same collections and
 items into the node's copy of that subgraph (`shop.collections` and
 `shop.items`), records a fresh complete pass of both mirrors in
 `shop.mirror_state`, and serves the committee and the rarities to the node's
-readers from a loopback fake subgraph and the oracle prices from a loopback
-fake JSON-RPC, so a collection is published, a wallet is on the committee and
-a rarity has its prices on both sides exactly when `chain` says so. The fake
+readers from a loopback fake subgraph and the oracle prices, Polygon's chain id, code at each `chain`
+collection's contract and that contract's item count from a loopback fake
+JSON-RPC, so a collection is published, a wallet is on the committee and a
+rarity has its prices on both sides exactly when `chain` says so. The node's
+clock, which sets and compares a collection's lock, is the capture's fixed
+clock. The fake
 third-party registry lists no provider.
 
 ```sh
@@ -204,8 +207,9 @@ Then it:
    and the Polygon JSON-RPC's `eth_chainId`, `net_version`, `eth_getCode`
    (code only at a `chain` collection's contract) and the `eth_call` of the
    rarities-with-oracle contract's `getRarityByName` (a `chain` rarity's
-   `max_supply` and `mana_price`; a revert for another name), and stores, copies and
-   deletes the objects an upload sends to S3, and points the peer, RPC,
+   `max_supply` and `mana_price`; a revert for another name), records the
+   events upstream forwards to the warehouse (a `POST` with its token), and
+   stores, copies and deletes the objects an upload sends to S3, and points the peer, RPC,
    forum, warehouse, S3, SNS and OpenSea settings at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
@@ -215,7 +219,7 @@ Then it:
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
    apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC, the
-   active-entities read and the S3 object writes. A case
+   active-entities read, the warehouse and the S3 object writes. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
    process and on every thread of the migration process. It

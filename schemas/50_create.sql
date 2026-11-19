@@ -63,6 +63,7 @@ CREATE TABLE builder.collections (
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     linked_contract_address text,
     linked_contract_network text,
+    lock timestamp without time zone,
     CONSTRAINT collections_pkey PRIMARY KEY (id),
     CONSTRAINT collections_contract_address_key UNIQUE (contract_address),
     CONSTRAINT collections_eth_address_lowercase_check CHECK (eth_address = lower(eth_address)),
@@ -345,6 +346,38 @@ CREATE INDEX images_ranking_pending_idx ON camera_reel.images (id) WHERE NOT ran
 -- ══ Domain-agent sections: append inside the matching block only ═══════════
 
 -- ==== section: builder ====
+
+-- A creator's acceptance of the publication terms (POST
+-- /v1/collections/{id}/tos), kept on the node and forwarded to the
+-- warehouse: `body` is the forward's body, the email address included.
+-- Written by that route and its forward only; no other statement reads it
+-- and no route answers it. The forward is at least once: an inline attempt
+-- after the insert, then the leased `builder-terms-forward` pass over the
+-- due rows (`next_attempt_at`), at most six attempts with doubling backoff;
+-- `forwarded_at` marks a delivered row. No foreign key: a deleted
+-- collection keeps the acceptances made for it.
+CREATE TABLE builder.terms_acceptances (
+    id uuid NOT NULL,
+    collection_id uuid NOT NULL,
+    signer text NOT NULL,
+    event text NOT NULL,
+    body jsonb NOT NULL,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    forwarded_at timestamp without time zone,
+    CONSTRAINT terms_acceptances_pkey PRIMARY KEY (id),
+    CONSTRAINT terms_acceptances_signer_lowercase_check CHECK (signer = lower(signer)),
+    CONSTRAINT terms_acceptances_event_check
+        CHECK (event IN ('publish_collection_tos', 'publish_third_party_items_tos')),
+    CONSTRAINT terms_acceptances_body_object_check CHECK (jsonb_typeof(body) = 'object'),
+    CONSTRAINT terms_acceptances_attempts_check CHECK (attempts BETWEEN 0 AND 6)
+);
+
+-- The forward pass's due set: undelivered rows with attempts left, oldest
+-- due first.
+CREATE INDEX terms_acceptances_due_idx ON builder.terms_acceptances (next_attempt_at)
+    WHERE forwarded_at IS NULL AND attempts < 6;
 -- ==== end section: builder ====
 
 -- ==== section: camera_reel ====

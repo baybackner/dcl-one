@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::SharedState;
 use crate::access;
 use crate::auth::Signed;
-use crate::collections::save;
+use crate::collections::{lifecycle, save};
 use crate::drafts::CollectionListingOut;
 use crate::http::{ApiData, ApiError};
 use crate::items::body::FullItemOut;
@@ -38,8 +38,10 @@ pub async fn get_item_drafts(
 
 /// `PUT /v1/collections/:id` (`upsertCollection`): the body's schema, the
 /// ids, a standard collection's `data`, then who may save it
-/// (`access::edit_collection`), then the `initialize` calldata and the
-/// save's own rules (`collections::save`).
+/// (`access::edit_collection`), then the `initialize` calldata, the check
+/// that a new address leaves no deployed contract behind
+/// (`collections::lifecycle::guard_address_change`) and the save's own
+/// rules (`collections::save`).
 pub async fn put_collection(
     State(state): State<SharedState>,
     Signed(signer): Signed,
@@ -66,6 +68,9 @@ pub async fn put_collection(
     let deployment = standard
         .then(|| save::standard_deployment(&save, signer.as_str()))
         .transpose()?;
+    if let Some(deployment) = &deployment {
+        lifecycle::guard_address_change(&state, &edit, deployment.contract_address()).await?;
+    }
     Ok(Json(ApiData::ok(
         state
             .items

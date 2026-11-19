@@ -891,6 +891,17 @@
         "beneficiary": "owner",
         "total_supply": "0",
         "content_hash": "bafkreiitemsapprovedhatonchain"
+      },
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000302",
+        "blockchain_id": "1",
+        "name": "Unminted cap",
+        "category": "hat",
+        "rarity": "common",
+        "price": "0",
+        "beneficiary": "owner",
+        "total_supply": "0",
+        "content_hash": "bafkreiitemsunmintedcaponchain"
       }
     ],
     "rarities": [

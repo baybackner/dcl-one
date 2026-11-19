@@ -260,6 +260,36 @@ const SMALL_READ_CASES = [
   { name: '275-addresses-published-page', description: 'GET /addresses unsigned, the first page of two published collections', method: 'GET', path: '/v1/addresses', query: { is_published: 'true', page: '1', limit: '2' } }
 ]
 
+const TERMS_EMAIL = 'jane.doe@example.com'
+
+const LIFECYCLE_CASES = [
+  { name: '276-collection-publish-assigns-ids', description: 'POST /collections/{id}/publish signed by the owner once the chain holds the collection and the item it lacked an on-chain id for, assigning it', method: 'POST', path: `/v1/collections/${id('302')}/publish`, signer: 'owner', volatile: ['data.items.updated_at'] },
+  { name: '277-collection-publish-again', description: 'POST /collections/{id}/publish signed by the owner again, every item holding its on-chain id', method: 'POST', path: `/v1/collections/${id('302')}/publish`, signer: 'owner', volatile: ['data.items.updated_at'] },
+  { name: '278-collection-publish-stranger', description: 'POST /collections/{id}/publish signed by a wallet with no role on the collection', method: 'POST', path: `/v1/collections/${id('302')}/publish`, signer: 'stranger' },
+  { name: '279-collection-publish-draft-owner', description: 'POST /collections/{id}/publish signed by the owner of a collection the chain doesn\'t hold', method: 'POST', path: `/v1/collections/${id('301')}/publish`, signer: 'owner' },
+  { name: '280-collection-publish-linked', description: 'POST /collections/{id}/publish signed by the provider manager of a third-party collection, without item ids', method: 'POST', path: `/v1/collections/${id('304')}/publish`, signer: 'owner' },
+  { name: '281-collection-lock-stranger', description: 'POST /collections/{id}/lock signed by a wallet with no role on the draft', method: 'POST', path: `/v1/collections/${id('301')}/lock`, signer: 'stranger' },
+  { name: '282-collection-lock-unsigned', description: 'POST /collections/{id}/lock without a signature', method: 'POST', path: `/v1/collections/${id('301')}/lock` },
+  { name: '283-collection-lock-published-manager', description: 'POST /collections/{id}/lock signed by an on-chain manager of a collection on chain', method: 'POST', path: `/v1/collections/${id('302')}/lock`, signer: 'manager' },
+  { name: '284-collection-lock-linked-manager', description: 'POST /collections/{id}/lock signed by the provider manager of a third-party collection', method: 'POST', path: `/v1/collections/${id('304')}/lock`, signer: 'owner' },
+  { name: '285-collection-lock-unknown', description: 'POST /collections/{id}/lock of an id no collection has', method: 'POST', path: `/v1/collections/${id('3ff')}/lock`, signer: 'owner' },
+  { name: '286-collection-tos-owner', description: 'POST /collections/{id}/tos signed by the owner, as the old builder web sends it before deploying', method: 'POST', path: `/v1/collections/${id('301')}/tos`, signer: 'owner', body: { collection_address: '0x5eed000000000000000000000000000000000301', email: TERMS_EMAIL, event: 'publish_collection_tos' } },
+  { name: '287-collection-tos-invalid-email', description: 'POST /collections/{id}/tos signed by the owner with an email that is not one', method: 'POST', path: `/v1/collections/${id('301')}/tos`, signer: 'owner', body: { email: 'not an email' } },
+  { name: '288-collection-tos-stranger', description: 'POST /collections/{id}/tos signed by a wallet with no role on the draft', method: 'POST', path: `/v1/collections/${id('301')}/tos`, signer: 'stranger', body: { email: TERMS_EMAIL } },
+  { name: '289-collection-tos-linked', description: 'POST /collections/{id}/tos signed by the provider manager of a third-party collection, with its items\' hashes', method: 'POST', path: `/v1/collections/${id('304')}/tos`, signer: 'owner', body: { email: TERMS_EMAIL, event: 'publish_third_party_items_tos', hashes: [ITEM_MODEL] } },
+  { name: '290-collection-owner-sync-owner', description: 'POST /collections/{id}/owner/sync signed by the owner of a collection on chain', method: 'POST', path: `/v1/collections/${id('302')}/owner/sync`, signer: 'owner' },
+  { name: '291-collection-owner-sync-transferred-creator', description: 'POST /collections/{id}/owner/sync signed by the chain creator of a collection transferred on chain', method: 'POST', path: `/v1/collections/${id('106')}/owner/sync`, signer: 'stranger' },
+  { name: '292-collection-owner-sync-linked', description: 'POST /collections/{id}/owner/sync signed by the provider manager of a third-party collection', method: 'POST', path: `/v1/collections/${id('304')}/owner/sync`, signer: 'owner' },
+  { name: '293-collection-owner-sync-stranger', description: 'POST /collections/{id}/owner/sync signed by a wallet with no role on the draft', method: 'POST', path: `/v1/collections/${id('301')}/owner/sync`, signer: 'stranger' },
+  { name: '294-collection-delete-stranger', description: 'DELETE /collections/{id} signed by a wallet with no role on the draft', method: 'DELETE', path: `/v1/collections/${id('301')}`, signer: 'stranger' },
+  { name: '295-collection-delete-published', description: 'DELETE /collections/{id} signed by the owner of a collection on chain', method: 'DELETE', path: `/v1/collections/${id('302')}`, signer: 'owner' },
+  { name: '296-collection-delete-locked', description: 'DELETE /collections/{id} signed by the owner of a collection locked under a day ago', method: 'DELETE', path: `/v1/collections/${id('305')}`, signer: 'owner' },
+  { name: '297-collection-delete-linked', description: 'DELETE /collections/{id} signed by the provider manager of a third-party collection never submitted', method: 'DELETE', path: `/v1/collections/${id('304')}`, signer: 'owner' },
+  { name: '298-collection-delete-draft-owner', description: 'DELETE /collections/{id} signed by the owner of a draft, with the empty body the old builder web sends', method: 'DELETE', path: `/v1/collections/${id('301')}`, signer: 'owner', body: {} },
+  { name: '299-collection-delete-unknown', description: 'DELETE /collections/{id} of an id no collection has', method: 'DELETE', path: `/v1/collections/${id('3ff')}`, signer: 'owner' },
+  { name: '300-collection-after-delete', description: 'GET /collections/{id} signed by the owner of the draft it deleted', method: 'GET', path: `/v1/collections/${id('301')}`, signer: 'owner' }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2159,7 +2189,8 @@ const CASES = [
     ]
   },
   ...ITEM_CASES,
-  ...SMALL_READ_CASES
+  ...SMALL_READ_CASES,
+  ...LIFECYCLE_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2513,9 +2544,29 @@ function s3Answer(method, url, headers, bytes, objects) {
   return undefined
 }
 
+/** The token upstream sends the fake warehouse as `x-token`. */
+const WAREHOUSE_TOKEN = 'example-warehouse-token'
+
+/**
+ * The fake warehouse's answer to one request: a `POST /warehouse` with the configured `x-token` and a
+ * JSON body is recorded in `received` and answered 200; a wrong or missing token 401, a body that isn't
+ * JSON 400; undefined for anything else.
+ */
+function warehouseAnswer(method, url, headers, bytes, received) {
+  if (method !== 'POST' || url !== '/warehouse') return undefined
+  if (headers['x-token'] !== WAREHOUSE_TOKEN) return { status: 401, body: { error: 'Unauthorized' } }
+  try {
+    received.push(JSON.parse(bytes.toString('utf8')))
+  } catch {
+    return { status: 400, body: { error: 'Invalid body' } }
+  }
+  return { status: 200, body: {} }
+}
+
 function startFakes(req, unfaked, chain) {
   const { parse } = req('graphql')
   const s3Objects = new Map()
+  const warehoused = []
   const server = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -2525,6 +2576,8 @@ function startFakes(req, unfaked, chain) {
         response.end(JSON.stringify(body))
       }
       if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
+      const warehouse = warehouseAnswer(request.method, request.url, request.headers, Buffer.concat(chunks), warehoused)
+      if (warehouse) return send(warehouse.status, warehouse.body)
       if (request.url.startsWith('/s3/conformance/')) {
         const answer = s3Answer(request.method, request.url, request.headers, Buffer.concat(chunks), s3Objects)
         if (!answer) {
@@ -2586,7 +2639,7 @@ function upstreamEnvironment(fakeBase, url, admins) {
     AWS_SNS_ARN: 'arn:aws:sns:us-east-1:000000000000:conformance',
     WEARABLE_VALIDATOR_CALLBACK_SECRET: 'example-callback-secret',
     WAREHOUSE_URL: `${fakeBase}/warehouse`,
-    WAREHOUSE_TOKEN: 'example-warehouse-token',
+    WAREHOUSE_TOKEN,
     AWS_STORAGE_URL: `${fakeBase}/s3`,
     AWS_SNS_ENDPOINT: `${fakeBase}/sns`,
     AWS_BUCKET_NAME: 'conformance',
@@ -2859,4 +2912,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, FAKED_GRAPH_FIELDS, oracleAnswer, rarityRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
