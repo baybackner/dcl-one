@@ -162,6 +162,9 @@ export function main() {
     engineAssist.slopeLimit = assist.includes('slopeLimit');
     engineAssist.snap = assist.includes('snap');
     engineAssist.step = assist.includes('step');
+  }).catch((error) => {
+    // engineAssist stays all false: the model does the slope limit, snap and step itself
+    console.log(`explorer configuration unavailable: ${error}`);
   })
 
   // Pre-load every movement clip up front so playback never hitches on first use.
