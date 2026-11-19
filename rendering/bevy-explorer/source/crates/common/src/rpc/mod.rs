@@ -54,16 +54,16 @@ pub trait IpcEndpoint: Send {
 
 pub(crate) fn ipc_register<T: IpcEndpoint + 'static>(
     endpoint: T,
-) -> (u64, tokio::sync::mpsc::UnboundedSender<u64>) {
+) -> Result<(u64, tokio::sync::mpsc::UnboundedSender<u64>), &'static str> {
     SCENE_IPC_CONTEXT.with(|cell| {
         let mut ctx = cell.borrow_mut();
-        let ctx = ctx.as_mut().unwrap();
+        let ctx = ctx.as_mut().ok_or("no ipc context")?;
 
         ctx.next_id += 1;
         let id = ctx.next_id;
 
         ctx.registry.insert(id, Box::new(endpoint));
-        (id, ctx.close_sender.clone())
+        Ok((id, ctx.close_sender.clone()))
     })
 }
 

@@ -396,29 +396,33 @@ fn apply_player_move(
             camera_rotation,
             origin,
         } => {
-            if let Some(d) = duration {
-                let d = d.max(f32::EPSILON);
-                let from = player_transform.translation;
-                debug!("player interpolation start: {from} -> {world_target} over {d}s");
-                movement_control
-                    .suppress_avatar_physics
-                    .insert("player_move");
-                commands.entity(player_entity).try_insert(ActivePlayerMove {
-                    target: world_target,
-                    elapsed: 0.0,
-                    response: response.unwrap(),
-                    kind: PlayerMoveKind::Interpolate { from, duration: d },
-                });
-            } else {
-                player_transform.translation = world_target;
-                movement_control.deliberate_penetration = true;
-                debug!("player teleported to {world_target}");
-                // Instant reposition → announce as a Pulse teleport so peers snap rather than lerp.
-                teleport_events.write(PlayerTeleported {
-                    position: world_target,
-                });
-                if let Some(r) = response {
-                    r.send(true);
+            // an interpolated move reports through its response; a move without one is instant
+            match (duration, response) {
+                (Some(d), Some(response)) => {
+                    let d = d.max(f32::EPSILON);
+                    let from = player_transform.translation;
+                    debug!("player interpolation start: {from} -> {world_target} over {d}s");
+                    movement_control
+                        .suppress_avatar_physics
+                        .insert("player_move");
+                    commands.entity(player_entity).try_insert(ActivePlayerMove {
+                        target: world_target,
+                        elapsed: 0.0,
+                        response,
+                        kind: PlayerMoveKind::Interpolate { from, duration: d },
+                    });
+                }
+                (_, response) => {
+                    player_transform.translation = world_target;
+                    movement_control.deliberate_penetration = true;
+                    debug!("player teleported to {world_target}");
+                    // Instant reposition → announce as a Pulse teleport so peers snap rather than lerp.
+                    teleport_events.write(PlayerTeleported {
+                        position: world_target,
+                    });
+                    if let Some(r) = response {
+                        r.send(true);
+                    }
                 }
             }
 
@@ -887,7 +891,7 @@ fn resolve_portable_urn(urn: &str, realm_url: &str) -> Result<(String, String), 
     Ok((hash, pid))
 }
 
-type SpawnResponseChannel = Option<RpcResultSender<Result<SpawnResponse, String>>>;
+type SpawnResponseChannel = RpcResultSender<Result<SpawnResponse, String>>;
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn spawn_portable(
@@ -897,7 +901,7 @@ fn spawn_portable(
     mut pending_lookups: Local<
         Vec<(
             Task<Result<(String, PortableSource), String>>,
-            SpawnResponseChannel,
+            Option<SpawnResponseChannel>,
         )>,
     >,
     mut pending_responses: Local<HashMap<String, SpawnResponseChannel>>,
@@ -970,7 +974,7 @@ fn spawn_portable(
                         PortableSource::new(hacked_urn, Some(parent_hash), None, false),
                     );
                 }
-                pending_responses.insert(hash, Some(response.clone()));
+                pending_responses.insert(hash, response.clone());
             }
             PortableLocation::Ens(ens) => {
                 let ens = ens.clone();
@@ -1000,13 +1004,14 @@ fn spawn_portable(
                     if current_portables.get(&hash).is_none() {
                         new_portables.insert(hash.clone(), source);
                     }
-                    pending_responses.insert(hash, response.take());
+                    if let Some(response) = response.take() {
+                        pending_responses.insert(hash, response);
+                    }
                 }
                 Err(e) => {
-                    response
-                        .take()
-                        .unwrap()
-                        .send(Err(format!("failed to lookup ens: {e}")));
+                    if let Some(response) = response {
+                        response.send(Err(format!("failed to lookup ens: {e}")));
+                    }
                 }
             }
             false
@@ -1017,7 +1022,7 @@ fn spawn_portable(
 
     pending_responses.retain(|hash, sender| {
         let mut fail = |msg: String| -> bool {
-            sender.take().unwrap().send(Err(msg));
+            sender.send(Err(msg));
             failed_portables.insert(hash.clone());
             false
         };
@@ -1038,17 +1043,14 @@ fn spawn_portable(
 
         if let Some(context) = maybe_context {
             if let Some(source) = current_portables.get(hash) {
-                sender.take().unwrap().send(Ok(SpawnResponse {
+                sender.send(Ok(SpawnResponse {
                     pid: source.pid.clone(),
                     parent_cid: source.parent_scene.clone().unwrap_or_default(),
                     name: context.title.clone(),
                     ens: source.ens.clone(),
                 }));
             } else {
-                sender
-                    .take()
-                    .unwrap()
-                    .send(Err("killed before load completed".to_owned()));
+                sender.send(Err("killed before load completed".to_owned()));
             }
             return false;
         }
@@ -1621,8 +1623,10 @@ fn event_player_moved_scene(
         .iter()
         .filter(|(_, f)| !(server_mode() && f.is_none()))
         .flat_map(|(p, f)| {
-            if let Some(scene) = f.and_then(|f| scene_of_context.get(&f.context)) {
-                return Some((f.unwrap().address, *scene));
+            if let Some((f, scene)) =
+                f.and_then(|f| scene_of_context.get(&f.context).map(|scene| (f, scene)))
+            {
+                return Some((f.address, *scene));
             }
             containing_scene.get_parcel(p).map(|parcel| {
                 (
@@ -1876,7 +1880,9 @@ fn show_nft_dialog(
                             "buttons",
                             vec![
                                 DuiButton::new("View on OpenSea.io", link.is_some(), move || {
-                                    let _ = open_url(link.as_ref().unwrap());
+                                    if let Some(link) = link.as_ref() {
+                                        let _ = open_url(link);
+                                    }
                                 }),
                                 DuiButton::close_happy("Close"),
                             ],

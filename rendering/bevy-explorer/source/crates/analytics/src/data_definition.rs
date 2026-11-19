@@ -102,7 +102,7 @@ pub enum SegmentEvent {
 
 impl SegmentEvent {
     /// The engine's own events by their Segment name and properties, without the common fields;
-    /// `None` for a page event, which arrives named.
+    /// `None` for a page event, which arrives named, or when the properties fail to serialize.
     pub fn name_and_properties(&self) -> Option<(String, serde_json::Value)> {
         let (name, properties) = match self {
             SegmentEvent::PerformanceMetrics(event) => {
@@ -137,7 +137,7 @@ impl SegmentEvent {
             SegmentEvent::TakePhoto(event) => ("take_photo", serde_json::to_value(event)),
             SegmentEvent::Page { .. } => return None,
         };
-        Some((name.to_string(), properties.unwrap()))
+        Some((name.to_string(), properties.ok()?))
     }
 }
 

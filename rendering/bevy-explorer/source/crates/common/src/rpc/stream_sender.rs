@@ -33,14 +33,17 @@ pub enum LocalChannel<T> {
 }
 
 impl<T> LocalChannel<T> {
-    fn serialize_with<F: FnOnce(tokio::sync::mpsc::Sender<T>) -> u64>(&mut self, f: F) -> u64 {
+    fn serialize_with<F: FnOnce(tokio::sync::mpsc::Sender<T>) -> Result<u64, &'static str>>(
+        &mut self,
+        f: F,
+    ) -> Result<u64, &'static str> {
         let id = match std::mem::replace(self, LocalChannel::Serialized(u64::MAX)) {
-            LocalChannel::Channel(sender) => (f)(sender),
+            LocalChannel::Channel(sender) => (f)(sender)?,
             LocalChannel::Serialized(id) => id,
         };
 
         *self = LocalChannel::Serialized(id);
-        id
+        Ok(id)
     }
 }
 
@@ -183,21 +186,25 @@ impl<T: 'static + Serialize + DeserializeOwned + Send> Serialize for RpcStreamSe
             panic!();
         };
 
-        let id = channel.lock().unwrap().serialize_with(|sender| {
-            let endpoint = IpcStreamCallback {
-                sender,
-                _cancel_on_drop: cancel.clone().drop_guard(),
-            };
-            let (id, close_sender) = ipc_register(endpoint);
+        let id = channel
+            .lock()
+            .unwrap()
+            .serialize_with(|sender| {
+                let endpoint = IpcStreamCallback {
+                    sender,
+                    _cancel_on_drop: cancel.clone().drop_guard(),
+                };
+                let (id, close_sender) = ipc_register(endpoint)?;
 
-            let cancel = cancel.clone();
-            tokio::spawn(async move {
-                cancel.cancelled().await;
-                let _ = close_sender.send(id);
-            });
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    cancel.cancelled().await;
+                    let _ = close_sender.send(id);
+                });
 
-            id
-        });
+                Ok(id)
+            })
+            .map_err(serde::ser::Error::custom)?;
 
         serializer.serialize_u64(id)
     }

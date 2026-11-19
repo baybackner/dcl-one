@@ -3,7 +3,7 @@ use bevy::{
     log::{
         debug, info,
         tracing_subscriber::{self, EnvFilter},
-        warn,
+        warn, warn_once,
     },
     platform::collections::HashMap,
 };
@@ -84,7 +84,10 @@ async fn scene_ipc_out(
                     warn!("scene_ipc_out exit on scene_rx closed");
                     return;
                 };
-                write_msg(&mut stream, &SceneToEngine::SceneResponse(scene_id, response)).await;
+                if let Err(e) = write_msg(&mut stream, &SceneToEngine::SceneResponse(scene_id, response)).await {
+                    warn!("scene_ipc_out exit on write failure: {e}");
+                    return;
+                }
             }
             close_rx = close_rx.recv() => {
                 let Some(close_id) = close_rx else {
@@ -94,12 +97,18 @@ async fn scene_ipc_out(
 
                 let was_open = SCENE_IPC_CONTEXT.with(|ctx| {
                     let mut ctx = ctx.borrow_mut();
-                    let ctx = ctx.as_mut().unwrap();
+                    let Some(ctx) = ctx.as_mut() else {
+                        warn_once!("ignoring ipc close for channel {close_id}: ipc context is not set");
+                        return false;
+                    };
                     ctx.registry.remove(&close_id).is_some()
                 });
 
                 if was_open {
-                    write_msg(&mut stream, &SceneToEngine::IpcMessage(close_id, IpcMessage::Closed)).await;
+                    if let Err(e) = write_msg(&mut stream, &SceneToEngine::IpcMessage(close_id, IpcMessage::Closed)).await {
+                        warn!("scene_ipc_out exit on write failure: {e}");
+                        return;
+                    }
                 }
             },
             system_api_rx = system_api_rx.recv() => {
@@ -107,7 +116,10 @@ async fn scene_ipc_out(
                     warn!("scene_ipc_out exit on system_api_rx closed");
                     return;
                 };
-                write_msg(&mut stream, &SceneToEngine::SystemApi(system_api)).await;
+                if let Err(e) = write_msg(&mut stream, &SceneToEngine::SystemApi(system_api)).await {
+                    warn!("scene_ipc_out exit on write failure: {e}");
+                    return;
+                }
             }
         }
     }
@@ -183,7 +195,10 @@ async fn scene_ipc_in(
             EngineToScene::IpcMessage(id, ipc_message) => {
                 SCENE_IPC_CONTEXT.with(|ctx| {
                     let mut ctx = ctx.borrow_mut();
-                    let ctx = ctx.as_mut().unwrap();
+                    let Some(ctx) = ctx.as_mut() else {
+                        warn_once!("ignoring ipc message for channel {id}: ipc context is not set");
+                        return;
+                    };
 
                     debug!(
                         "ipc response {} -> {}",

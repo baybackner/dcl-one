@@ -1622,7 +1622,9 @@ impl IpfsIo {
                     for entity in active_entities.0 {
                         // return active entity struct
                         res.push(EntityDefinition {
-                            id: entity.id.unwrap(),
+                            id: entity
+                                .id
+                                .ok_or_else(|| anyhow!("active entity without id"))?,
                             pointers: entity.pointers,
                             metadata: entity.metadata,
                             content: ContentMap::from_content(

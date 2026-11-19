@@ -1126,11 +1126,11 @@ impl NodeProcessing<'_, '_> {
                     .or_default();
                 *index += 1u32;
 
-                let h_collider = if data.is_skinned {
-                    data.maybe_collider.clone().unwrap()
-                } else {
-                    h_mesh.clone()
-                };
+                // a skinned mesh collides with its unskinned copy
+                let h_collider = data
+                    .maybe_collider
+                    .clone()
+                    .unwrap_or_else(|| h_mesh.clone());
 
                 commands
                     .entity(spawned_ent)
@@ -1151,11 +1151,11 @@ impl NodeProcessing<'_, '_> {
                     .or_default();
                 *index += 1u32;
 
-                let h_collider = if data.is_skinned {
-                    data.maybe_collider.clone().unwrap()
-                } else {
-                    h_mesh.clone()
-                };
+                // a skinned mesh collides with its unskinned copy
+                let h_collider = data
+                    .maybe_collider
+                    .clone()
+                    .unwrap_or_else(|| h_mesh.clone());
 
                 commands
                     .entity(spawned_ent)
@@ -1936,6 +1936,11 @@ fn expose_gltfs(
                         break GltfLinkState::Failed("requested node name not found in gtlf");
                     }
                     Some(t) => {
+                        let Some(gltf) = maybe_gltf else {
+                            break GltfLinkState::Failed(
+                                "GltfNode is not a child of an entity with a GltfContainer or GltfNode",
+                            );
+                        };
                         if already_linked.get(t).is_ok() {
                             break GltfLinkState::Failed("duplicate node name requested");
                         }
@@ -1963,7 +1968,7 @@ fn expose_gltfs(
 
                         break GltfLinkState::Ready {
                             gltf_entity: t,
-                            src: &maybe_gltf.unwrap().0.src,
+                            src: &gltf.0.src,
                             gltf_node_parent,
                             scene_parent: scene_parent
                                 .map(|(_, scene_entity, scene_entity_id)| {
@@ -2122,8 +2127,9 @@ fn expose_gltfs(
                     //     },
                     // )
                 }
-                if let Some(material) = maybe_material {
-                    debug!("link material ({} / {:?})", src, maybe_mat_name);
+                // the gltf spawn inserts a node's material together with its name
+                if let (Some(material), Some(mat_name)) = (maybe_material, maybe_mat_name) {
+                    debug!("link material ({} / {:?})", src, mat_name);
                     // hide
                     commands
                         .entity(gltf_entity)
@@ -2141,7 +2147,7 @@ fn expose_gltfs(
                     commands.entity(ent).try_insert(BaseMaterial {
                         material: base.base.clone(),
                         gltf: src.to_owned(),
-                        name: maybe_mat_name.unwrap().0.clone(),
+                        name: mat_name.0.clone(),
                     });
 
                     // write to scene
@@ -2153,9 +2159,9 @@ fn expose_gltfs(
                             material: Some(dcl_material_from_standard_material(
                                 &base.base, &images,
                             )),
-                            gltf: maybe_mat_name.map(|name| pb_material::GltfMaterial {
+                            gltf: Some(pb_material::GltfMaterial {
                                 gltf_src: src.to_owned(),
-                                name: name.0.clone(),
+                                name: mat_name.0.clone(),
                             }),
                         },
                     );

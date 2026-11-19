@@ -1579,9 +1579,7 @@ pub struct DialogPermit {
 
 impl DialogPermit {
     pub fn take(&mut self) -> Self {
-        Self {
-            _p: Some(self._p.take().unwrap()),
-        }
+        Self { _p: self._p.take() }
     }
 }
 

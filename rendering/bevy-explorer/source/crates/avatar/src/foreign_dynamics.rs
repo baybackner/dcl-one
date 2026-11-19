@@ -349,10 +349,11 @@ fn update_foreign_user_target_position(
                     if let Some(mut pending) = maybe_pending {
                         if pending.pending.is_some() {
                             if pending.fire_on_next_movement {
-                                let anim = pending.pending.take().unwrap();
-                                commands
-                                    .entity(ev.player)
-                                    .try_insert(SceneDrivenAnim { active: anim });
+                                if let Some(anim) = pending.pending.take() {
+                                    commands
+                                        .entity(ev.player)
+                                        .try_insert(SceneDrivenAnim { active: anim });
+                                }
                             } else {
                                 pending.fire_on_next_movement = true;
                             }
@@ -600,10 +601,11 @@ fn update_foreign_user_actual_position(
             if pending.pending.is_some()
                 && time.elapsed_secs_f64() >= pending.received_at + target.update_freq as f64
             {
-                let anim = pending.pending.take().unwrap();
-                commands
-                    .entity(foreign_ent)
-                    .try_insert(SceneDrivenAnim { active: anim });
+                if let Some(anim) = pending.pending.take() {
+                    commands
+                        .entity(foreign_ent)
+                        .try_insert(SceneDrivenAnim { active: anim });
+                }
             }
         }
     }
