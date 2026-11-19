@@ -57,7 +57,6 @@ impl Plugin for UserInputPlugin {
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn manage_player_visibility(
     camera: Query<(&GlobalTransform, Has<PhotoMode>), With<PrimaryCamera>>,
     mut player: Query<
