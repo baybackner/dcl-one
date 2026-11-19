@@ -1,7 +1,6 @@
 import { AssetLoad, AvatarAnimationState, AvatarMovement, AvatarMovementInfo, engine, MovementAnimation, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
-import { getExplorerConfiguration } from '~system/EnvironmentApi';
-import { grounded, initGroundRaycast, recordGroundForNextTick, updateGroundAdjust } from './ground';
+import { grounded, initGroundRaycast, recordGroundForNextTick } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
 import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
@@ -144,18 +143,7 @@ const PRELOAD_CLIPS: string[] = [
 export * from '@dcl/sdk'
 
 // setup
-var positionAdjust = Vector3.Zero();
 export function main() {
-  getExplorerConfiguration({}).then((config) => {
-    positionAdjust = {
-      "bevy-explorer": Vector3.Zero(),
-      "": Vector3.create(0, -0.08, 0), // probably explorer alpha...
-    }[config.clientUri] ?? (console.log(`unknown client ${config.clientUri}`), Vector3.Zero());
-    updateGroundAdjust(positionAdjust.y);
-  }).catch((error) => {
-    console.log(`explorer configuration unavailable: ${error}`);
-  })
-
   // Pre-load every movement clip up front so playback never hitches on first use.
   AssetLoad.create(engine.addEntity(), { assets: PRELOAD_CLIPS });
 
@@ -213,7 +201,6 @@ function initFrame() {
   Vector3.copyFrom(playerPosition, prevPlayerPosition);
   const playerTransform = Transform.get(engine.PlayerEntity)
   Vector3.copyFrom(playerTransform.position, playerPosition);
-  Vector3.addToRef(playerPosition, positionAdjust, playerPosition);
   playerRotation = playerTransform.rotation;
 
   const movementInfo = AvatarMovementInfo.getOrNull(engine.PlayerEntity);

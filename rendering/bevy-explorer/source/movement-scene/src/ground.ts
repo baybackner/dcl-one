@@ -21,10 +21,6 @@ var groundRayCaster: Entity;
 var groundHitTick = 0;
 var groundRayHitTick = 0;
 
-export function updateGroundAdjust(h: number) {
-    Transform.getMutable(groundCaster).position.y += h;
-}
-
 export function initGroundRaycast() {
     engine.addSystem(recordGroundState, 100000 - 2);
 
