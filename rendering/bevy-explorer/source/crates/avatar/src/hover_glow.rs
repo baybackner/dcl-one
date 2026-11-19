@@ -4,22 +4,22 @@
 use bevy::prelude::*;
 use scene_material::{highlight::Highlight, SceneMaterial};
 
-pub const AVATAR_GLOW_COLOR: Color = Color::srgb(0.0, 1.0, 0.52395105);
+const AVATAR_GLOW_COLOR: Color = Color::srgb(0.0, 1.0, 0.52395105);
 /// the glow's opacity once it has faded in
-pub const AVATAR_GLOW_OPACITY: f32 = 0.8;
+const AVATAR_GLOW_OPACITY: f32 = 0.8;
 /// A share of the view's height, as `Highlight::width`: 3.5 pixels at 1080p.
-pub const AVATAR_GLOW_WIDTH: f32 = 3.5 / 1080.0;
-pub const AVATAR_GLOW_FADE_SECONDS: f32 = 0.1;
+const AVATAR_GLOW_WIDTH: f32 = 3.5 / 1080.0;
+const AVATAR_GLOW_FADE_SECONDS: f32 = 0.1;
 
 /// On the player container: `target` 1.0 while hovered, 0.0 after; `alpha` moves toward it at a
 /// constant rate, a full fade taking `AVATAR_GLOW_FADE_SECONDS`. Removed when both are 0.
 #[derive(Component, Debug, PartialEq, Clone, Copy)]
-pub struct HoverGlow {
-    pub target: f32,
-    pub alpha: f32,
+pub(crate) struct HoverGlow {
+    target: f32,
+    alpha: f32,
 }
 
-pub fn step_glow(glow: HoverGlow, dt: f32) -> HoverGlow {
+fn step_glow(glow: HoverGlow, dt: f32) -> HoverGlow {
     let step = dt / AVATAR_GLOW_FADE_SECONDS;
     let alpha = if glow.alpha < glow.target {
         (glow.alpha + step).min(glow.target)
@@ -31,7 +31,7 @@ pub fn step_glow(glow: HoverGlow, dt: f32) -> HoverGlow {
 
 /// The highlight of a glow faded to `alpha`. The highlight pass blends its colour as
 /// premultiplied, so the colour is scaled by the opacity it carries.
-pub fn glow_highlight(alpha: f32) -> Highlight {
+fn glow_highlight(alpha: f32) -> Highlight {
     let opacity = AVATAR_GLOW_OPACITY * alpha;
     let color = AVATAR_GLOW_COLOR.to_linear();
     Highlight {
@@ -47,11 +47,11 @@ pub fn glow_highlight(alpha: f32) -> Highlight {
 
 /// On a mesh of a wearable that opts out of outlines (`outlineCompatible: false`): it never glows.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct NoHoverGlow;
+pub(crate) struct NoHoverGlow;
 
 /// Marks whether `mesh` takes part in its avatar's glow. The avatar build calls it for every mesh
 /// it dresses, both ways, so a mesh entity kept across a rebuild follows the wearable it now shows.
-pub fn set_hover_glows(mesh: &mut EntityCommands, glows: bool) {
+pub(crate) fn set_hover_glows(mesh: &mut EntityCommands, glows: bool) {
     if glows {
         mesh.try_remove::<NoHoverGlow>();
     } else {
@@ -60,7 +60,7 @@ pub fn set_hover_glows(mesh: &mut EntityCommands, glows: bool) {
 }
 
 /// fades `container`'s glow toward `target`, from nothing when a glow starts
-pub fn set_glow_target(
+pub(crate) fn set_glow_target(
     commands: &mut Commands,
     glows: &mut Query<&mut HoverGlow>,
     container: Entity,
@@ -88,7 +88,7 @@ fn can_glow(alpha_mode: AlphaMode) -> bool {
 /// steps each glow and writes its `Highlight` on the container's glowing meshes, walking them
 /// every frame so a rebuilt avatar's new meshes pick it up; a finished glow takes its
 /// `Highlight`s and itself away
-pub fn apply_hover_glow(
+pub(crate) fn apply_hover_glow(
     mut commands: Commands,
     time: Res<Time>,
     mut glows: Query<(Entity, &mut HoverGlow)>,

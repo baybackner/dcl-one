@@ -40,7 +40,7 @@ impl Plugin for AvatarColliderPlugin {
                     send_message_to_scene.run_if(in_state(AvatarHighlighted(true))),
                 )
                     .chain(),
-                apply_hover_glow.after(update_avatar_collider_actions),
+                apply_hover_glow.in_set(SceneSets::PostLoop),
                 handle_avatar_modifier_requests,
             ),
         );

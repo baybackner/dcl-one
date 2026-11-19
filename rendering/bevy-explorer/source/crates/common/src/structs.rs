@@ -1110,6 +1110,11 @@ pub const MIN_CASCADE: f32 = 0.1;
 #[derive(Component)]
 pub struct StageLight;
 
+/// A light that never casts shadows (a photo booth's key light): the shadow settings leave it
+/// alone.
+#[derive(Component)]
+pub struct ShadowlessLight;
+
 /// The camera that shows the lobby stage, drawn with no post-processing: the bloom setting
 /// leaves it alone.
 #[derive(Component)]

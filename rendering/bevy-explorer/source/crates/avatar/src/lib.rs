@@ -61,7 +61,7 @@ pub mod foreign_dynamics;
 #[cfg(feature = "explorer")]
 pub mod ghost;
 pub mod head_ik;
-pub mod hover_glow;
+mod hover_glow;
 #[cfg(feature = "explorer")]
 mod ik_debug;
 #[cfg(feature = "explorer")]

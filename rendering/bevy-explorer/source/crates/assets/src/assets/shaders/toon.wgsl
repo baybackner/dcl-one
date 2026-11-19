@@ -12,8 +12,7 @@
 // No point or spot light reaches the avatar (decisions.md).
 //
 // The constants are scene_material::toon's, carried as defs by its toon_shader_defs: a float is
-// its bit pattern, read with bitcast<f32>. scene_material::toon also holds the CPU twin of the
-// functions below, expression for expression.
+// its bit pattern, read with bitcast<f32>.
 // Avatars still CAST shadows (that is the shadow pass's job, not this shading).
 
 #import bevy_pbr::{

@@ -136,8 +136,7 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32
 return out;
 }
 
-// the avatar outline (scene_material::toon, which holds the constants and the CPU twin of the
-// width): a darker, more saturated tone of the surface, base being its base colour, that thins
+// the avatar outline (its constants are scene_material::toon's): a darker, more saturated tone of the surface, base being its base colour, that thins
 // with the mesh's distance from the camera and, in a perspective view, stops at the cutoff
 // distance. Distances are to the mesh's origin, so a whole mesh gains or loses its outline at
 // once. An orthographic view has no cutoff: its camera stands back however large it draws the
