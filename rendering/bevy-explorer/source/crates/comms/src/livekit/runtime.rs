@@ -112,9 +112,6 @@ impl Plugin for LivekitRuntimePlugin {
 /// it, it will never poll the tasks on wasm, native does not have this issue
 /// as it is multithreaded
 #[cfg(target_arch = "wasm32")]
-fn yield_to_runtime(livekit_runtime: LivekitRuntimeRes) {
-    let Some(livekit_runtime) = livekit_runtime else {
-        return;
-    };
+fn yield_to_runtime(livekit_runtime: NonSend<LivekitRuntime>) {
     livekit_runtime.block_on(yield_now());
 }

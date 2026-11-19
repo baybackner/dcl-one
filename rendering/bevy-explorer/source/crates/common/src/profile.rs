@@ -178,8 +178,6 @@ impl Default for SerializedProfile {
             extra: HashMap::new(),
         };
 
-        //                     {\"slot\": 1, \"urn\": \"urn:decentraland:matic:collections-v2:0x9087f96750c4e7607454c67c4f0bcf357ae62a46:2\" }
-
         Self {
             user_id: Default::default(),
             name: "Bevy_User".to_string(),

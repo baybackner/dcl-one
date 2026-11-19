@@ -100,9 +100,6 @@ impl Plugin for SocialRuntimePlugin {
 /// Tokio uses cooperative scheduling, so unless we explicitly yield time for
 /// it, it will never poll the tasks on wasm.
 #[cfg(target_arch = "wasm32")]
-fn yield_to_runtime(social_runtime: SocialRuntimeRes) {
-    let Some(social_runtime) = social_runtime else {
-        return;
-    };
+fn yield_to_runtime(social_runtime: NonSend<SocialRuntime>) {
     social_runtime.block_on(yield_now());
 }

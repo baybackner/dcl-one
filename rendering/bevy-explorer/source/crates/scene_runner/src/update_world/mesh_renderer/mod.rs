@@ -113,7 +113,7 @@ impl Plugin for MeshDefinitionPlugin {
 
         let generate_tangents = |mut mesh: Mesh| {
             if let Err(e) = mesh.generate_tangents() {
-                warn!("primitive mesh has no tangents: {e}");
+                error!("primitive mesh has no tangents: {e}");
             }
             mesh
         };

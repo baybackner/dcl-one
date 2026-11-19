@@ -678,9 +678,13 @@ fn set_sysinfo(
 ) {
     if let Some(Ok(command)) = input.take() {
         let on = command.on.unwrap_or(true);
+        let Ok(container) = q.single() else {
+            input.reply_failed("system info is off");
+            return;
+        };
 
         commands
-            .entity(q.single().unwrap())
+            .entity(container)
             .modify_component(move |style: &mut Node| {
                 style.display = if on { Display::Flex } else { Display::None };
             });

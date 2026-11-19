@@ -90,17 +90,8 @@ fn main() {
     #[cfg(not(feature = "console"))]
     log_panics::init();
 
-    let http_client = match ipfs::http_client() {
-        Ok(http_client) => http_client,
-        Err(e) => {
-            // exits with the crash marker left in place
-            startup_error(&format!("can't create the http client: {e}"));
-            std::process::exit(1);
-        }
-    };
-
     // args first, so --help and a bad flag answer without spawning the scene runtime
-    let exit_code = match decentraland_app_config(http_client) {
+    let exit_code = match decentraland_app_config() {
         Ok(decentraland_app_config) => {
             // initialize v8 runtime from main thread
             if let Err(e) = init_runtime() {
@@ -134,10 +125,16 @@ fn main() {
     }
 }
 
-fn decentraland_app_config(
-    http_client: ipfs::HttpClient,
-) -> Result<DecentralandAppConfig, UserError> {
+fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
     let mut arguments = decentraland_app_arguments()?;
+    let http_client = match ipfs::http_client() {
+        Ok(http_client) => http_client,
+        Err(e) => {
+            // exits with the crash marker left in place
+            startup_error(&format!("can't create the http client: {e}"));
+            std::process::exit(1);
+        }
+    };
     open_benchmark_log(
         arguments.log_file.as_deref(),
         &BENCHMARK_LOG,

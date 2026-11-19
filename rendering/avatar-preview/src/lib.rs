@@ -77,7 +77,12 @@ pub fn run(canvas: &str, base_domain: Option<&str>, flags: &str) {
     let http_client = match ipfs::http_client() {
         Ok(http_client) => http_client,
         Err(e) => {
-            error!("can't create the http client: {e}");
+            // straight to the console: no tracing subscriber exists before the app
+            let message = format!("can't create the http client: {e}");
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::error_1(&message.into());
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!("{message}");
             return;
         }
     };

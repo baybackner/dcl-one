@@ -239,7 +239,7 @@ fn setup(
         HOVER_TEXT_STYLE.set(hover).is_err(),
     ];
     if already_set.contains(&true) {
-        warn!("text styles are already set");
+        error!("text styles are already set");
     }
 }
 
