@@ -10,7 +10,8 @@
 import { useSyncExternalStore } from "react";
 
 import { hostOr, hostShopFlags } from "./flags";
-import { REMOTE_FLAG, remoteFlagVariant, useRemoteFlagState } from "./remote-flags";
+import { REMOTE_FLAG, useRemoteFlagsAnswer } from "./remote-flags";
+import { remoteFlagOn, remoteFlagVariantIn } from "@shop/discovery/lib/rolloutFlags";
 
 export type ShopCapabilities = {
   /** Buying and listing resales (MANA only). */
@@ -108,7 +109,8 @@ export function myStoreAccessWith(
  */
 export function useMyStoreAccess(address: string | null, resolving: boolean): MyStoreAccess {
   const caps = useShopCapabilities();
-  const remote = useRemoteFlagState(REMOTE_FLAG.myStore);
+  const answer = useRemoteFlagsAnswer();
+  const remote = answer ? remoteFlagOn(answer, REMOTE_FLAG.myStore) : null;
   const declared = typeof hostShopFlags().myStore === "boolean";
-  return myStoreAccessWith(hostOr("myStore", remote), declared ? null : remoteFlagVariant(REMOTE_FLAG.myStore), caps, address, resolving);
+  return myStoreAccessWith(hostOr("myStore", remote), declared ? null : remoteFlagVariantIn(answer, REMOTE_FLAG.myStore), caps, address, resolving);
 }

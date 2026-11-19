@@ -4,7 +4,7 @@
 // lib/remoteFlags, discovery/reads), the host's network and readers (land/chain, land/evm, checkout/chain, wallet),
 // the NAME registration or its host reads (names/names, names/offer, names/reads), ui3's catalyst or auth modules,
 // shared web auth, the page itself, a component, the purchase's encoding or the wallet's MANA. It follows imports
-// through ui3 and web-core so indirect dependencies count too.
+// through ui3, web-core and library/ui so indirect dependencies count too.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 const SRC = join(__dirname, "..", "..");
 const WEB_CORE = resolve(SRC, "../../../library/web-core");
 const WEB_CORE_ALIAS = "@web-core/";
+const ONE_UI = resolve(SRC, "../../../library/ui");
+const ONE_UI_ALIAS = "@dcl/one-ui/";
 // The read modules still in ui3. Those already moved (the client, the catalogue, the item, credits, the flags file,
 // the LAND and NAME contracts, the NAME reads) are held by library/shop/boundary.test.ts, which compiles them without
 // a host at all.
@@ -110,11 +112,13 @@ function withoutComments(source: string): string {
   return out;
 }
 
-/** Where a relative or web-core specifier lands, from src/ and without its extension. */
+/** Where a relative or shared-library specifier lands, from src/ and without its extension. */
 function target(file: string, specifier: string): string | null {
   let resolved: string;
   if (specifier.startsWith(WEB_CORE_ALIAS)) {
     resolved = resolve(WEB_CORE, specifier.slice(WEB_CORE_ALIAS.length));
+  } else if (specifier.startsWith(ONE_UI_ALIAS)) {
+    resolved = resolve(ONE_UI, specifier.slice(ONE_UI_ALIAS.length));
   } else if (specifier.startsWith(".")) {
     resolved = resolve(dirname(join(SRC, file)), specifier);
   } else {
@@ -125,7 +129,7 @@ function target(file: string, specifier: string): string | null {
 }
 
 const FORBIDDEN =
-  /^(shop\/api\/(host|index)|shop\/discovery\/(flags|reads|lib\/remoteFlags)|shop\/discovery\/components\/.*|shop\/checkout\/(purchase|chain)\/.*|shop\/land\/(chain|evm)|shop\/names\/(names|offer|reads)|shop\/market\/lib\/mana|shop\/wallet\/.*|data\/(auth|catalyst)(\/.*)?|(?:\.\.\/){3}library\/web-core\/(auth(\/.*)?|shop-chain-env))$/;
+  /^(shop\/api\/(host|index)|shop\/discovery\/(flags|reads|lib\/remoteFlags)|shop\/discovery\/components\/.*|shop\/checkout\/(purchase|chain)\/.*|shop\/land\/(chain|evm)|shop\/names\/(names|offer|reads)|shop\/market\/lib\/mana|shop\/wallet\/.*|data\/(auth|catalyst)(\/.*)?|(?:\.\.\/){3}library\/web-core\/(auth(\/.*)?|shop-chain-env)|(?:\.\.\/){3}library\/ui\/apps\/shop\/(flags|remote-flags|capabilities|session|wallet-account))$/;
 
 function hostImports(file: string, source: string): string[] {
   const { named, opaque } = specifiers(source);
@@ -247,6 +251,28 @@ describe("the host seam of the Shop's read modules", () => {
       };
       expect(reach("shop/checkout/lib/api.ts", (path) => tree[path]).filter((path) => FORBIDDEN.test(path))).toEqual([
         "../../../library/web-core/auth/signerCore",
+      ]);
+    });
+  });
+
+  describe("when a read module names the shared Shop browser host", () => {
+    it.each([
+      'import { shopFlags } from "@dcl/one-ui/apps/shop/flags";',
+      'import type { ShopWalletHost } from "@dcl/one-ui/apps/shop/session";',
+      'const flags = await import("@dcl/one-ui/apps/shop/remote-flags");',
+      'export { useWalletAccount } from "@dcl/one-ui/apps/shop/wallet-account";',
+      'import { useShopCapabilities } from "../../../../../../library/ui/apps/shop/capabilities.ts";',
+    ])("should forbid %s", (source) => {
+      expect(hostImports("shop/checkout/lib/api.ts", source)).toHaveLength(1);
+    });
+
+    it("should find the shared Shop host through a local helper", () => {
+      const tree: Record<string, string> = {
+        "shop/checkout/lib/api.ts": 'import "./helper";',
+        "shop/checkout/lib/helper.ts": 'export { primeRemoteFlags } from "@dcl/one-ui/apps/shop/remote-flags";',
+      };
+      expect(reach("shop/checkout/lib/api.ts", (path) => tree[path]).filter((path) => FORBIDDEN.test(path))).toEqual([
+        "../../../library/ui/apps/shop/remote-flags",
       ]);
     });
   });

@@ -13,8 +13,7 @@ import { itemIdFromTokenId } from "@ui/shop/detail/lib/token-id";
 import { routeSegment } from "@ui/shop/discovery/lib/routes";
 import { dealsRequestedIn, itemsFilterDefaults, itemsGrid, itemsQuery } from "@ui/shop/discovery/lib/itemsGrid";
 import { readUrlFilters } from "@ui/shop/discovery/hooks";
-import { shopFlags } from "@ui/shop/discovery/flags";
-import { primeRemoteFlags } from "@ui/shop/discovery/lib/remoteFlags";
+import { REMOTE_FLAG, remoteFlagOn } from "@shop/discovery/lib/rolloutFlags";
 import type { ShopPageId } from "@ui/shop/routes";
 
 import { catalystUrl, processEnv, publicPageUrl, type BaseEnv } from "../catalyst/bases";
@@ -22,19 +21,20 @@ import { dappsFlagsAnswer, type DappsFlags, type DappsFlagsAnswer, type DappsFla
 import { serverShopApiMode } from "./mode";
 import { defaultShopSeo, type PrimedQuery, type ShopPageData, type ShopSeo } from "./pages";
 
-/** The creator-sales switch the reads map with: the page's, primed (primeRemoteFlags) before any read. */
-const creatorSales = (): boolean => shopFlags().creatorSales;
-
 /** How long one server read may hold the document before the page falls back to its own fetch. */
 export const SHOP_SSR_READ_MS = 1_500;
 
 let shared: { key: string; client: ShopClient } | null = null;
 
-/** The server's unsigned client for CATALYST_URL, rebuilt when the base or the mode changes. */
-export function serverShopClient(env: BaseEnv = processEnv(), fetchImpl?: typeof fetch): ShopClient {
+function shopTarget(env: BaseEnv) {
   const base = catalystUrl(undefined, env);
   const mode = serverShopApiMode(env);
-  const key = `${base}|${mode}`;
+  return { base, mode, key: JSON.stringify([base, mode]) };
+}
+
+/** The server's unsigned client for CATALYST_URL, rebuilt when the base or the mode changes. */
+export function serverShopClient(env: BaseEnv = processEnv(), fetchImpl?: typeof fetch): ShopClient {
+  const { base, mode, key } = shopTarget(env);
   if (fetchImpl) return createShopClient(hostApiOptions({ base, mode, signer: null, fetchImpl }));
   if (!shared || shared.key !== key) shared = { key, client: createShopClient(hostApiOptions({ base, mode, signer: null })) };
   return shared.client;
@@ -67,11 +67,16 @@ export const SHOP_SSR_SHARE_MS = 10_000;
 const SHARED_MAX = 256;
 const sharedReads = new Map<string, { at: number; read: Promise<{ value: unknown; at: number }> }>();
 
-type ReadCtx = { request: Request; now: () => number; share: boolean };
+type ReadCtx = { request: Request; now: () => number; shareTarget: string | null; creatorSales: boolean };
+
+function readOptions(ctx: ReadCtx, client: ShopClient, signal: AbortSignal) {
+  return { client, creatorSales: () => ctx.creatorSales, signal };
+}
 
 /** A public read, shared across documents for SHOP_SSR_SHARE_MS on the server's own client. */
-function publicRead<T>(ctx: ReadCtx, key: string, read: (signal: AbortSignal) => Promise<T>): Promise<{ value: T; at: number }> {
-  if (!ctx.share) return read(deadline(ctx.request)).then((value) => ({ value, at: ctx.now() }));
+function publicRead<T>(ctx: ReadCtx, queryKey: string, read: (signal: AbortSignal) => Promise<T>): Promise<{ value: T; at: number }> {
+  if (ctx.shareTarget === null) return read(deadline(ctx.request)).then((value) => ({ value, at: ctx.now() }));
+  const key = JSON.stringify([ctx.shareTarget, ctx.creatorSales, queryKey]);
   const at = ctx.now();
   const hit = sharedReads.get(key);
   if (hit && at - hit.at < SHOP_SSR_SHARE_MS) return hit.read as Promise<{ value: T; at: number }>;
@@ -97,8 +102,8 @@ const ADDRESS = /^0x[0-9a-f]{40}$/;
 
 type Collected = { queries: PrimedQuery[]; seo: ShopSeo; status: number };
 
-async function itemPage(input: Required<Pick<ShopLoadInput, "request" | "params" | "client">> & { now: () => number; env: BaseEnv; token: boolean }): Promise<Collected> {
-  const { request, params, client, now, env, token } = input;
+async function itemPage(ctx: ReadCtx, params: ShopLoadInput["params"], client: ShopClient, env: BaseEnv, token: boolean): Promise<Collected> {
+  const { request, now } = ctx;
   const contract = (routeSegment(params.contractAddress) ?? "").toLowerCase();
   const tokenId = token ? (routeSegment(params.tokenId) ?? null) : null;
   const itemId = token ? itemIdFromTokenId(tokenId) : (routeSegment(params.itemId) ?? null);
@@ -106,8 +111,7 @@ async function itemPage(input: Required<Pick<ShopLoadInput, "request" | "params"
   const seo = defaultShopSeo(token ? "tokenDetail" : "itemDetail", publicPageUrl(request, path, env));
   if (!ADDRESS.test(contract) || (token ? !tokenId : !itemId)) return { queries: [], seo, status: 404 };
 
-  const signal = deadline(request);
-  const opts = { client, creatorSales, signal };
+  const opts = readOptions(ctx, client, deadline(request));
   const [listing, meta, desc, collection, owned] = await Promise.all([
     // The creator's primary sale only: the page's first render reads it while the Marketplace (resales, for a web3
     // session with the rollout on) is still pending, so a resale is never server-rendered as the item's price.
@@ -145,11 +149,12 @@ async function itemPage(input: Required<Pick<ShopLoadInput, "request" | "params"
   };
 }
 
-async function collectionPage(request: Request, params: ShopLoadInput["params"], client: ShopClient, now: () => number, env: BaseEnv): Promise<Collected> {
+async function collectionPage(ctx: ReadCtx, params: ShopLoadInput["params"], client: ShopClient, env: BaseEnv): Promise<Collected> {
+  const { request, now } = ctx;
   const contract = routeSegment(params.contractAddress);
   const seo = defaultShopSeo("collection", publicPageUrl(request, `/shop/collection/${contract ?? ""}`, env));
   if (!contract) return { queries: [], seo, status: 404 };
-  const found = await settle(fetchCollection(contract, { client, creatorSales, signal: deadline(request) }));
+  const found = await settle(fetchCollection(contract, readOptions(ctx, client, deadline(request))));
   if (!found.ok) return { queries: [], seo, status: 200 };
   const queries: PrimedQuery[] = [[["collection-meta", contract], found.value, now()]];
   if (!found.value) return { queries, seo: { ...seo, noindex: true }, status: 404 };
@@ -162,13 +167,12 @@ async function collectionPage(request: Request, params: ShopLoadInput["params"],
 
 async function overviewPage(ctx: ReadCtx, client: ShopClient, env: BaseEnv): Promise<Collected> {
   const seo = defaultShopSeo("overview", publicPageUrl(ctx.request, "/shop/overview", env));
-  const flags = shopFlags();
   // The server reads for no one, and the Marketplace is a web3 session's (market/access.tsx): primary sales only.
   const [listings, trending, deals] = await Promise.all([
-    settle(publicRead(ctx, "overview-listings", (signal) => fetchShopItems({ first: 12, sortBy: "newest", listingType: "primary" }, { client, creatorSales, signal }))),
-    settle(publicRead(ctx, "overview-trending|primary", (signal) => fetchTrendingItems({ first: 12, listingType: "primary" }, { client, creatorSales, signal }))),
-    flags.creatorSales
-      ? settle(publicRead(ctx, "overview-deals", (signal) => fetchShopItems({ first: 12, discounted: true, sortBy: "discount", listingType: "primary" }, { client, creatorSales, signal })))
+    settle(publicRead(ctx, "overview-listings", (signal) => fetchShopItems({ first: 12, sortBy: "newest", listingType: "primary" }, readOptions(ctx, client, signal)))),
+    settle(publicRead(ctx, "overview-trending|primary", (signal) => fetchTrendingItems({ first: 12, listingType: "primary" }, readOptions(ctx, client, signal)))),
+    ctx.creatorSales
+      ? settle(publicRead(ctx, "overview-deals", (signal) => fetchShopItems({ first: 12, discounted: true, sortBy: "discount", listingType: "primary" }, readOptions(ctx, client, signal))))
       : Promise.resolve(null),
   ]);
   const queries: PrimedQuery[] = [];
@@ -183,10 +187,10 @@ async function itemsPage(ctx: ReadCtx, client: ShopClient, env: BaseEnv): Promis
   const url = new URL(ctx.request.url);
   const seo = defaultShopSeo("items", publicPageUrl(ctx.request, url.pathname, env));
   const { q } = itemsQuery(url.searchParams);
-  const filters = readUrlFilters(url.searchParams, itemsFilterDefaults(q, dealsRequestedIn(url.searchParams)));
-  const grid = itemsGrid(filters, q);
+  const filters = readUrlFilters(url.searchParams, itemsFilterDefaults(q, dealsRequestedIn(url.searchParams, ctx.creatorSales)));
+  const grid = itemsGrid(filters, q, ctx.creatorSales);
   if (!grid.key) return { queries: [], seo, status: 200 };
-  const page = await settle(publicRead(ctx, JSON.stringify(grid.key), (signal) => grid.fetchPage(0, { client, creatorSales, signal })));
+  const page = await settle(publicRead(ctx, JSON.stringify(grid.key), (signal) => grid.fetchPage(0, readOptions(ctx, client, signal))));
   return { queries: page.ok ? [[grid.key, page.value.value, page.value.at]] : [], seo, status: 200 };
 }
 
@@ -194,8 +198,7 @@ async function itemsPage(ctx: ReadCtx, client: ShopClient, env: BaseEnv): Promis
 export async function loadShopPage(page: ShopPageId, input: ShopLoadInput): Promise<ShopPageLoad> {
   const env = input.env ?? processEnv();
   const client = input.client ?? serverShopClient(env);
-  // The page's flags decide what it reads (the Best Deals rail): primed here before any read, and sent with the page
-  // so the browser primes the same answer before it hydrates. Their variants (My Store's address list) go with them.
+  // The same answer drives this request's public reads, render and hydration.
   const answer: DappsFlagsAnswer = input.flags
     ? { flags: input.flags, variants: input.flagVariants ?? {} }
     : input.client
@@ -203,20 +206,24 @@ export async function loadShopPage(page: ShopPageId, input: ShopLoadInput): Prom
       : await dappsFlagsAnswer();
   const featureFlags = answer.flags;
   const featureFlagVariants = Object.keys(answer.variants).length > 0 ? answer.variants : undefined;
-  primeRemoteFlags(featureFlags, answer.variants);
   const now = input.now ?? Date.now;
   const { request, params } = input;
   const pathname = new URL(request.url).pathname;
   // Only the server's own client shares reads: an injected one (a test's node) always asks.
-  const ctx: ReadCtx = { request, now, share: !input.client };
+  const ctx: ReadCtx = {
+    request,
+    now,
+    shareTarget: input.client ? null : shopTarget(env).key,
+    creatorSales: remoteFlagOn(answer, REMOTE_FLAG.creatorSales),
+  };
   let collected: Collected;
   switch (page) {
     case "itemDetail":
     case "tokenDetail":
-      collected = await itemPage({ request, params, client, now, env, token: page === "tokenDetail" });
+      collected = await itemPage(ctx, params, client, env, page === "tokenDetail");
       break;
     case "collection":
-      collected = await collectionPage(request, params, client, now, env);
+      collected = await collectionPage(ctx, params, client, env);
       break;
     case "overview":
       collected = await overviewPage(ctx, client, env);

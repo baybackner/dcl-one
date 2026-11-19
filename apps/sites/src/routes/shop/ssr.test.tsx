@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ComponentType } from "react";
 import { renderToString } from "react-dom/server";
-import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, it } from "vitest";
 
 import { createShopClient, hostApiOptions } from "@ui/shop/api";
@@ -12,7 +12,10 @@ import { SHOP_PAGES } from "@ui/shop/routes";
 import { defaultShopSeo, type ShopPageData } from "@/data/lib/shop/pages";
 import { loadShopPage } from "@/data/lib/shop/pages.server";
 
-import SitesShopFrame from "./host";
+import { useMyStoreAccess } from "@dcl/one-ui/apps/shop/capabilities";
+import { REMOTE_FLAG, remoteFlagVariant, useRemoteFlag } from "@dcl/one-ui/apps/shop/remote-flags";
+
+import ShopLayout from "../routes/shop";
 
 const ROUTES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../routes");
 
@@ -44,11 +47,7 @@ function render(pattern: string, url: string, Component: ComponentType<{ loaderD
       {
         id: "shop",
         path: "/shop",
-        element: (
-          <SitesShopFrame>
-            <Outlet />
-          </SitesShopFrame>
-        ),
+        element: <ShopLayout />,
         children: [{ id: "page", path: pattern.slice("/shop/".length), Component: Component as ComponentType, loader: () => loaderData }],
       },
     ],
@@ -113,5 +112,33 @@ describe("server-read answers reach the first paint", () => {
 
     const unprimed = render(pattern, url, mod.default, { ...data, queries: [] });
     expect(unprimed).not.toContain("Pirate Hat");
+  });
+});
+
+describe("Shop rollout data during server rendering", () => {
+  function FlagProbe() {
+    const deals = useRemoteFlag(REMOTE_FLAG.creatorSales);
+    const store = useMyStoreAccess(SAMPLE.address ?? null, false);
+    return <p>{`deals=${deals}; store=${store}`}</p>;
+  }
+
+  it("renders each request's switches and variants without seeding the browser store", () => {
+    const url = "/shop/overview";
+    const common: ShopPageData = { page: "overview", seo: defaultShopSeo("overview"), queries: [] };
+    const allowed: ShopPageData = {
+      ...common,
+      featureFlags: { [`dapps-${REMOTE_FLAG.creatorSales}`]: true, [`dapps-${REMOTE_FLAG.myStore}`]: true },
+      featureFlagVariants: { [`dapps-${REMOTE_FLAG.myStore}`]: SAMPLE.address! },
+    };
+    const denied: ShopPageData = {
+      ...common,
+      featureFlags: { [`dapps-${REMOTE_FLAG.creatorSales}`]: false, [`dapps-${REMOTE_FLAG.myStore}`]: true },
+      featureFlagVariants: { [`dapps-${REMOTE_FLAG.myStore}`]: "0x2222222222222222222222222222222222222222" },
+    };
+
+    expect(render(url, url, FlagProbe, allowed)).toContain("deals=true; store=on");
+    expect(render(url, url, FlagProbe, denied)).toContain("deals=false; store=off");
+    expect(render(url, url, FlagProbe, allowed)).toContain("deals=true; store=on");
+    expect(remoteFlagVariant(REMOTE_FLAG.myStore)).toBeNull();
   });
 });

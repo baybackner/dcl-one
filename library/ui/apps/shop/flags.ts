@@ -9,8 +9,8 @@
 // The browser host's switches: what the page declares (`window.__SHOP_FLAGS__`) over the file as this page holds it
 // (lib/remoteFlags.ts). How the two combine is lib/rolloutFlags.ts.
 
-import { remoteFlag } from "./remote-flags";
-import { declaredOr, resolveShopFlags, type HostShopFlags, type ShopFlags } from "@shop/discovery/lib/rolloutFlags";
+import { remoteFlag, useRemoteFlagsAnswer } from "./remote-flags";
+import { declaredOr, remoteFlagOn, resolveShopFlags, type HostShopFlags, type ShopFlags } from "@shop/discovery/lib/rolloutFlags";
 
 export type { HostShopFlags, ShopFlags };
 
@@ -32,6 +32,11 @@ export function hostOr(key: keyof HostShopFlags, remote: boolean | null): boolea
 
 export function shopFlags(): ShopFlags {
   return resolveShopFlags(hostShopFlags(), remoteFlag);
+}
+
+export function useShopFlags(): ShopFlags {
+  const answer = useRemoteFlagsAnswer();
+  return resolveShopFlags(hostShopFlags(), (flag) => remoteFlagOn(answer, flag));
 }
 
 export function isIapMode(): boolean {
