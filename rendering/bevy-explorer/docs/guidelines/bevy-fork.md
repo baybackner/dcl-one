@@ -90,6 +90,16 @@ across workers:
   `alpha_mode` receives the base as input.
 - Pipeline cache: `PipelineCompilationMode::async_with_handler` with a
   `PipelineCompilationHandler` that is notified as pipelines compile.
+- **Skinning, where skins use storage buffers**: the joint matrix buffer holds one world matrix
+  per joint entity, shared by every skin that names the joint and written once a frame when
+  the joint moves; slot 0 is the identity. A second buffer, `SkinUniforms::skin_joints_buffer`
+  (mesh bind group binding 8), holds each skin's inverse bindposes with the joint's slot in
+  the bottom row's first component, and is uploaded only when a skin is added.
+  `skinning::skin_model` multiplies the two, so a shader that skins through it needs no
+  change; one that reads `joint_matrices` itself must do the same. An avatar's body and
+  wearables name the same joint entities, so their joints cost one matrix each a frame
+  however many meshes the avatar has. Stock bevy writes a finished matrix per skin and joint
+  each frame, and still does where skins use uniform buffers.
 - **Throwaway**: `RenderMeshInstances` and `RenderMaterialInstances` mirrored into render-entity
   components with component-first lookups (`MeshInstanceLookup`, `MaterialInstanceLookup`,
   `validate_instance_mirror` feature); upstream #22966 removes the need.
