@@ -35,6 +35,7 @@ export type NavBarLinkComponent = ComponentType<NavBarLinkProps>
 export type NavBarLink = {
   label: string
   href: string
+  target?: '_blank'
   /** Marks the link as the current page. */
   active?: boolean
 }
@@ -215,8 +216,10 @@ type LinkRenderer = (props: NavBarLinkProps) => ReactNode
 
 const linkRenderer =
   (LinkComponent: NavBarLinkComponent | undefined): LinkRenderer =>
-  (props) =>
-    LinkComponent && isInternalHref(props.href) ? <LinkComponent {...props} /> : <a {...props} />
+  (props) => {
+    const Link = LinkComponent && isInternalHref(props.href) ? LinkComponent : 'a'
+    return <Link {...props} rel={props.target === '_blank' ? 'noopener noreferrer' : props.rel} />
+  }
 
 /** Closes an open popup on Escape (returning focus to its trigger), on an outside press and when focus leaves it. */
 function usePopupDismissal(
@@ -346,6 +349,7 @@ function SectionDropdown({
           <li key={index}>
             {renderLink({
               href: item.href,
+              target: item.target,
               className: styles.dropdownLink,
               'aria-current': item.active ? 'page' : undefined,
               onClick: onClose,
@@ -378,6 +382,7 @@ function DrawerSection({
         <li key={index}>
           {renderLink({
             href: item.href,
+            target: item.target,
             className: styles.drawerItemLink,
             'aria-current': item.active ? 'page' : undefined,
             onClick: onNavigate,
@@ -968,6 +973,7 @@ export function NavBar({
                 <li key={index} className={styles.section}>
                   {renderLink({
                     href: section.href,
+                    target: section.target,
                     className: styles.tab,
                     'aria-current': section.active ? 'page' : undefined,
                     children: section.label
@@ -1098,6 +1104,7 @@ export function NavBar({
                   ) : (
                     renderLink({
                       href: section.href,
+                      target: section.target,
                       className: styles.drawerLink,
                       'aria-current': section.active ? 'page' : undefined,
                       onClick: closeDrawer,
