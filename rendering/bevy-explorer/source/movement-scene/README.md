@@ -41,3 +41,12 @@ skipping its own version of it. An engine that does not send the key gets the sc
 so the scene keeps working on engine builds that predate it. The key is an entry in the
 configuration's string map, not a protocol field: a new part is a new name, added to the engine,
 the scene and this list in the same change.
+
+The key also tells how the engine's jump heights read. With the key, the engine's `jumpHeight`
+and `runJumpHeight` are the apex of a tapped jump; holding the jump input reaches about twice as high.
+Without it, or when the configuration fails, the engine predates this model and its own heights
+(1.9m and 2.95m by default) are the apex of a held jump: the scene multiplies them by
+`JUMP_HOLD_SCALE` (0.95m and 1.475m tapped), so a held jump keeps their height. It recognizes the
+engine's own settings by their shape (every speed and jump height, a `hardLandingCooldown` of 0,
+no double-jump or glide value) and takes a parcel scene's `AvatarLocomotionSettings` as set. No
+ground jump starts until the configuration resolves or fails; walking does not wait.
