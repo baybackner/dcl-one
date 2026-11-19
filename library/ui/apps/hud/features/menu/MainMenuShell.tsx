@@ -27,11 +27,8 @@ const SELECTED_ART: Record<string, [string, number]> = {
   shop: [onShop, 36], map: [onMap, 46], settings: [onSettings, 46], gallery: [onGallery, 36]
 }
 
-// How many menu shells are currently mounted. Each full-screen page renders its own shell, so
-// SWITCHING pages unmounts one and mounts another. A shell that mounts while another is already open
-// is a page switch (skip the entrance fade so the shared chrome doesn't flash "close → reopen"); a
-// shell that mounts with none open is a fresh open (animate). The previous shell's unmount cleanup
-// runs AFTER the new shell renders, so reading this at render time correctly sees the outgoing shell.
+// Menu shells currently mounted. A shell that renders while another is mounted is a page switch and
+// plays no entrance; one that renders with none mounted is a fresh open.
 let openShells = 0
 // A shell that mounts within this many ms of the last one closing is a page switch, not a fresh open.
 const SWITCH_GAP_MS = 200
