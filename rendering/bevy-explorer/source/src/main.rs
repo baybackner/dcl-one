@@ -221,8 +221,8 @@ fn check_csv_folder(path: Option<&std::path::Path>, autopilot: bool) -> Result<(
     Err(UserError(BENCHMARK_OUTPUT_ERROR))
 }
 
-/// The session log, opened for appending as `startup_error` does, so neither writes over the
-/// other's lines; none when it can't be opened, and the failure goes to stderr.
+/// The session log, opened for appending; none when it can't be opened, and the failure goes to
+/// stderr.
 fn session_log_file() -> Option<File> {
     let session_log = SESSION_LOG.get()?;
     File::options()

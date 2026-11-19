@@ -588,7 +588,7 @@ impl ManifestNumber {
 }
 
 pub struct IpfsIoPlugin {
-    /// From [`http_client`].
+    /// The client for every asset request.
     pub client: HttpClient,
     pub preview: bool,
     pub assets_root: Option<String>,

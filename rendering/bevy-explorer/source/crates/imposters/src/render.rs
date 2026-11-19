@@ -109,7 +109,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     }
 
     let imposter_mesh = ImposterMesh::default();
-    // the cube's corners are `min` and `max`
+    // the box from `min` to `max`
     let aabb = Aabb::from_min_max(imposter_mesh.min, imposter_mesh.max);
     let cube: Mesh = imposter_mesh.build();
 

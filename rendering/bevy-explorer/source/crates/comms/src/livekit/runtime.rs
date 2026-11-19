@@ -82,7 +82,7 @@ impl LivekitRuntime {
 
 /// How systems take the runtime. On the web it is a single-threaded tokio runtime, so it is a
 /// non-send resource: that keeps every system using it on the engine thread, where its tasks run.
-/// None when the runtime could not start.
+/// None when the runtime resource is absent.
 #[cfg(not(target_arch = "wasm32"))]
 pub type LivekitRuntimeRes<'w> = Option<Res<'w, LivekitRuntime>>;
 #[cfg(target_arch = "wasm32")]

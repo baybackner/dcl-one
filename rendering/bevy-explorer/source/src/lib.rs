@@ -166,7 +166,7 @@ pub struct DecentralandApp(App);
 pub struct DecentralandAppConfig {
     pub app_config: AppConfig,
     pub arguments: DecentralandArguments,
-    /// From [`ipfs::http_client`].
+    /// The client [`IpfsIoPlugin`] is built with.
     pub(crate) http_client: ipfs::HttpClient,
     #[cfg(not(target_arch = "wasm32"))]
     pub crash_file: Option<PathBuf>,
