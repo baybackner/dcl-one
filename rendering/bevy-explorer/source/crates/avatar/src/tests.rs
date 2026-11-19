@@ -334,20 +334,22 @@ fn a_body_that_exhausted_its_fallback_reports_failure_to_the_renderer_host() {
 
 #[test]
 fn a_build_waits_for_the_face_textures_and_masks() {
-    use bevy::asset::LoadState;
+    use bevy::asset::{uuid::Uuid, LoadState};
+    let image = |id: u128| {
+        Handle::<Image>::Weak(AssetId::Uuid {
+            uuid: Uuid::from_u128(id),
+        })
+    };
     let face = |texture: u128, mask: Option<u128>| Wearable {
         category: WearableCategory::MOUTH,
         hides: HashSet::default(),
         model: None,
-        texture: Some(Handle::weak_from_u128(texture)),
-        mask: mask.map(Handle::weak_from_u128),
+        texture: Some(image(texture)),
+        mask: mask.map(image),
     };
     let loading = |ids: &'static [u128]| {
         move |handle: &Handle<Image>| {
-            if ids
-                .iter()
-                .any(|id| handle.id() == Handle::<Image>::weak_from_u128(*id).id())
-            {
+            if ids.iter().any(|id| handle.id() == image(*id).id()) {
                 Some(LoadState::Loading)
             } else {
                 Some(LoadState::Loaded)
