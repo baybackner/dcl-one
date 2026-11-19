@@ -74,6 +74,14 @@ pub fn run(canvas: &str, base_domain: Option<&str>, flags: &str) {
         lambdas_url: format!("{catalyst}/lambdas"),
     };
 
+    let http_client = match ipfs::http_client() {
+        Ok(http_client) => http_client,
+        Err(e) => {
+            error!("can't create the http client: {e}");
+            return;
+        }
+    };
+
     let mut app = App::new();
     // the Explorer's preview mode, set before its plugins build: the scene material then leaves
     // out imposter baking, which the preview never does and which needs fragment-writable
@@ -113,6 +121,7 @@ pub fn run(canvas: &str, base_domain: Option<&str>, flags: &str) {
                     .with_uri_resolver(std::sync::Arc::new(ipfs::ipfs_path::resolve_content_uri)),
             )
             .add_before::<AssetPlugin>(IpfsIoPlugin {
+                client: http_client,
                 preview: false,
                 assets_root: None,
                 starting_realm: None,

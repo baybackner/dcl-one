@@ -11,7 +11,10 @@ use std::{
 
 use bevy::{
     app::AppExit,
-    log::{tracing_subscriber::Layer, LogPlugin},
+    log::{
+        tracing_subscriber::{Layer, Registry},
+        LogPlugin,
+    },
     prelude::*,
 };
 use clap::Parser;
@@ -60,18 +63,17 @@ fn main() {
         filter: "wgpu=error,naga=error,bevy_animation=error,matrix=error,symphonia=warn"
             .to_string(),
         custom_layer: move |_| {
-            // appending, as `startup_error` does, so neither writes over the other's lines
-            let (non_blocking, guard) = tracing_appender::non_blocking(
-                File::options()
-                    .append(true)
-                    .open(SESSION_LOG.get().unwrap())
-                    .unwrap(),
+            let session_log_layer = session_log_file().map(|file| {
+                let (non_blocking, guard) = tracing_appender::non_blocking(file);
+                Box::leak(guard.into());
+                bevy::log::tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false)
+            });
+            let layer = <_ as Layer<Registry>>::and_then(
+                session_log_layer,
+                PerfLogLayer::new(&BENCHMARK_LOG),
             );
-            Box::leak(guard.into());
-            let layer = bevy::log::tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                .and_then(PerfLogLayer::new(&BENCHMARK_LOG));
             #[cfg(feature = "performance-profiler")]
             let layer =
                 layer.and_then(webgpu_build::perf::profiled_scopes::profiled_scopes_layer());
@@ -88,11 +90,24 @@ fn main() {
     #[cfg(not(feature = "console"))]
     log_panics::init();
 
+    let http_client = match ipfs::http_client() {
+        Ok(http_client) => http_client,
+        Err(e) => {
+            // exits with the crash marker left in place
+            startup_error(&format!("can't create the http client: {e}"));
+            std::process::exit(1);
+        }
+    };
+
     // args first, so --help and a bad flag answer without spawning the scene runtime
-    let exit_code = match decentraland_app_config() {
+    let exit_code = match decentraland_app_config(http_client) {
         Ok(decentraland_app_config) => {
             // initialize v8 runtime from main thread
-            init_runtime().unwrap();
+            if let Err(e) = init_runtime() {
+                // exits with the crash marker left in place
+                startup_error(&format!("can't start the scene runtime: {e}"));
+                std::process::exit(1);
+            }
             // the autopilot ends its run with a code, success or failure
             let exit = decentraland_app.build(decentraland_app_config).run();
             // the app is gone, so its av threads are leaving: let them, rather than have
@@ -119,7 +134,9 @@ fn main() {
     }
 }
 
-fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
+fn decentraland_app_config(
+    http_client: ipfs::HttpClient,
+) -> Result<DecentralandAppConfig, UserError> {
     let mut arguments = decentraland_app_arguments()?;
     open_benchmark_log(
         arguments.log_file.as_deref(),
@@ -140,7 +157,10 @@ fn decentraland_app_config() -> Result<DecentralandAppConfig, UserError> {
     }
 
     Ok(DecentralandAppConfig::new(
-        app_config, arguments, crash_file,
+        app_config,
+        arguments,
+        http_client,
+        crash_file,
     ))
 }
 
@@ -201,6 +221,17 @@ fn check_csv_folder(path: Option<&std::path::Path>, autopilot: bool) -> Result<(
         folder.display()
     ));
     Err(UserError(BENCHMARK_OUTPUT_ERROR))
+}
+
+/// The session log, opened for appending as `startup_error` does, so neither writes over the
+/// other's lines; none when it can't be opened, and the failure goes to stderr.
+fn session_log_file() -> Option<File> {
+    let session_log = SESSION_LOG.get()?;
+    File::options()
+        .append(true)
+        .open(session_log)
+        .inspect_err(|e| eprintln!("can't open the session log {session_log}: {e}"))
+        .ok()
 }
 
 /// The reason a launch stops before the app runs. It is logged, and also appended to the session

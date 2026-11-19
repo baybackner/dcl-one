@@ -29,6 +29,7 @@ fn io_with_cache(label: &str) -> (Arc<IpfsIo>, PathBuf) {
     IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
     let dir = temp_dir(label);
     let mut io = Arc::new(IpfsIo::new(
+        crate::http_client().unwrap(),
         false,
         Box::new(bevy::asset::io::file::FileAssetReader::new("assets")),
         None,

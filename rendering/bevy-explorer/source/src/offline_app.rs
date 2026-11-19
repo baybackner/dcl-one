@@ -33,7 +33,12 @@ use crate::headless::scene_runtime_resources;
 
 /// The app, booted into `realm` (a catalyst root) with content resolved at `content_server`
 /// instead of the realm's advertised content server.
-pub fn offline_app(config: AppConfig, realm: &str, content_server: String) -> App {
+pub fn offline_app(
+    config: AppConfig,
+    realm: &str,
+    content_server: String,
+    http_client: ipfs::HttpClient,
+) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -71,6 +76,7 @@ pub fn offline_app(config: AppConfig, realm: &str, content_server: String) -> Ap
             })
             .build()
             .add_before::<bevy::asset::AssetPlugin>(IpfsIoPlugin {
+                client: http_client,
                 preview: false,
                 starting_realm: Some(map_realm_name(realm)),
                 content_server_override: Some(content_server),

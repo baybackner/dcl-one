@@ -148,6 +148,9 @@ fn close_paused_room(
     rooms: Query<&LivekitRoom, With<RoomSuspended>>,
     runtime: LivekitRuntimeRes,
 ) {
+    let Some(runtime) = runtime else {
+        return;
+    };
     if let Ok(room) = rooms.get(trigger.target()) {
         if !room.closed {
             let room = room.room.clone();

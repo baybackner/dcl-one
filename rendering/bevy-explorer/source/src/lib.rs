@@ -166,6 +166,8 @@ pub struct DecentralandApp(App);
 pub struct DecentralandAppConfig {
     pub app_config: AppConfig,
     pub arguments: DecentralandArguments,
+    /// From [`ipfs::http_client`].
+    pub http_client: ipfs::HttpClient,
     #[cfg(not(target_arch = "wasm32"))]
     pub crash_file: Option<PathBuf>,
     #[cfg(target_arch = "wasm32")]
@@ -180,6 +182,7 @@ impl DecentralandAppConfig {
     pub fn new(
         mut app_config: AppConfig,
         arguments: DecentralandArguments,
+        http_client: ipfs::HttpClient,
         #[cfg(not(target_arch = "wasm32"))] crash_file: Option<PathBuf>,
         #[cfg(target_arch = "wasm32")] wasm_loader_handle: Option<WasmLoaderHandle>,
         #[cfg(target_arch = "wasm32")] compute_threads: usize,
@@ -190,6 +193,7 @@ impl DecentralandAppConfig {
         Self {
             app_config,
             arguments,
+            http_client,
             #[cfg(not(target_arch = "wasm32"))]
             crash_file,
             #[cfg(target_arch = "wasm32")]
@@ -433,7 +437,9 @@ impl DecentralandApp {
         app.add_plugins(wasm_default_plugins(&decentraland_app_config));
 
         #[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
-        media::init_ffmpeg();
+        if let Err(e) = media::init_ffmpeg() {
+            error!("ffmpeg failed to initialize, video may not play: {e}");
+        }
 
         // we use kira for audio source asset management, regardless of native / wasm
         app.add_plugins(bevy_kira_audio::AudioPlugin);
@@ -993,6 +999,7 @@ fn desktop_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> P
         )
         .build()
         .add_before::<bevy::asset::AssetPlugin>(IpfsIoPlugin {
+            client: decentraland_app_config.http_client.clone(),
             preview: decentraland_app_config.arguments.launch.preview,
             starting_realm: Some(map_realm_name(&decentraland_app_config.boot_server())),
             content_server_override: decentraland_app_config
@@ -1058,6 +1065,7 @@ fn wasm_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> Plug
         // stream's hand-over ahead of it; this plugin would replace both with the console hook
         .disable::<bevy::app::PanicHandlerPlugin>()
         .add_before::<AssetPlugin>(IpfsIoPlugin {
+            client: decentraland_app_config.http_client.clone(),
             preview: decentraland_app_config.arguments.launch.preview,
             starting_realm: Some(map_realm_name(&decentraland_app_config.boot_server())),
             content_server_override: decentraland_app_config

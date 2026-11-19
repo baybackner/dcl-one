@@ -159,6 +159,7 @@ mod delay_tests {
 
     fn app(preview: bool) -> App {
         let ipfs = IpfsIo::new(
+            crate::http_client().unwrap(),
             preview,
             Box::new(MemoryAssetReader { root: default() }),
             None,
@@ -193,6 +194,7 @@ mod request_tests {
     #[test]
     fn first_content_request_state_includes_completed_downloads_and_batches() {
         let ipfs = Arc::new(IpfsIo::new(
+            crate::http_client().unwrap(),
             false,
             Box::new(MemoryAssetReader { root: default() }),
             None,

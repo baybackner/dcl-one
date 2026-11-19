@@ -113,6 +113,9 @@ fn participant_connected(
     mut player_update_tasks: PlayerUpdateTasksMut,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let ParticipantConnected {
         participant,
         room: room_entity,
@@ -185,6 +188,9 @@ fn participant_disconnected(
     mut player_update_tasks: PlayerUpdateTasksMut,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let ParticipantDisconnected {
         participant,
         room: room_entity,
@@ -324,6 +330,9 @@ fn participant_payload(
     time: Res<Time>,
     private_rooms: Query<(), With<PrivateChatRoom>>,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let ParticipantPayload {
         room: room_entity,
         identity,
@@ -407,6 +416,9 @@ fn retire_unannounced_participants(
     livekit_runtime: LivekitRuntimeRes,
     time: Res<Time>,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let now = time.elapsed_secs_f64();
     for (room, mut unannounced) in rooms {
         if unannounced.values().all(|deadline| *deadline > now) {

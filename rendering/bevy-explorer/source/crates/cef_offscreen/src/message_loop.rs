@@ -65,8 +65,8 @@ impl Default for MessageLoopPlugin {
             #[cfg(target_os = "macos")]
             framework_dir_path: bundled_framework_dir()
                 .unwrap_or_else(debug_chromium_embedded_framework_dir_path)
-                .to_str()
-                .unwrap()
+                .to_string_lossy()
+                .as_ref()
                 .into(),
             browser_subprocess_path: render_process_path()
                 .map(|p| p.to_str().unwrap_or_default().into())

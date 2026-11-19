@@ -90,6 +90,7 @@ impl PluginGroup for TestPlugins {
             .add(TransformPlugin)
             .add(DiagnosticsPlugin)
             .add(IpfsIoPlugin {
+                client: ipfs::http_client().unwrap(),
                 preview: false,
                 assets_root: test_path.to_str().map(ToOwned::to_owned),
                 starting_realm: Default::default(),

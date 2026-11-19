@@ -54,6 +54,7 @@ impl Server {
 fn ipfs() -> Arc<IpfsIo> {
     IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
     Arc::new(IpfsIo::new(
+        crate::http_client().unwrap(),
         false,
         Box::new(FileAssetReader::new("assets")),
         None,

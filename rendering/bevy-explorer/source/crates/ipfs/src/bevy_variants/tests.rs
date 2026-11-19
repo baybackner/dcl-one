@@ -223,6 +223,7 @@ fn io_with_cache(label: &str) -> (Arc<IpfsIo>, PathBuf) {
     ));
     std::fs::create_dir(&dir).unwrap();
     let mut io = Arc::new(IpfsIo::new(
+        crate::http_client().unwrap(),
         false,
         Box::new(bevy::asset::io::file::FileAssetReader::new("assets")),
         None,

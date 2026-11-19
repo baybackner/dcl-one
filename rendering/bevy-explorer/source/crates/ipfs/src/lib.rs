@@ -588,6 +588,8 @@ impl ManifestNumber {
 }
 
 pub struct IpfsIoPlugin {
+    /// From [`http_client`].
+    pub client: HttpClient,
     pub preview: bool,
     pub assets_root: Option<String>,
     pub starting_realm: Option<String>,
@@ -610,12 +612,7 @@ impl Plugin for IpfsIoPlugin {
             // use app folder for unit tests
             Some(default_reader.root_path().join("cache"))
         } else {
-            Some(
-                project_directories()
-                    .unwrap()
-                    .data_local_dir()
-                    .join("cache"),
-            )
+            project_directories().map(|dirs| dirs.data_local_dir().join("cache"))
         };
         #[cfg(target_arch = "wasm32")]
         let cache_root = None;
@@ -628,6 +625,7 @@ impl Plugin for IpfsIoPlugin {
         #[cfg(feature = "ipfs_debug")]
         let (debug_overlay_sender, debug_overlay_receiver) = tokio::sync::mpsc::unbounded_channel();
         let ipfs_io = IpfsIo::new(
+            self.client.clone(),
             self.preview,
             Box::new(default_reader),
             cache_root,
@@ -1130,8 +1128,20 @@ pub struct IpfsIo {
     debug_overlay_sender: tokio::sync::mpsc::UnboundedSender<IpfsDebug>,
 }
 
+pub type HttpClient = reqwest::Client;
+
+/// The asset server's HTTP client: native TLS and a 5 s connect timeout.
+pub fn http_client() -> reqwest::Result<HttpClient> {
+    platform::http_client_builder()
+        .connect_timeout(Duration::from_secs(5))
+        .use_native_tls()
+        .user_agent("DCLExplorer/0.1")
+        .build()
+}
+
 impl IpfsIo {
     pub fn new(
+        client: HttpClient,
         is_preview: bool,
         default_io: Box<dyn ErasedAssetReader>,
         default_fs_path: Option<PathBuf>,
@@ -1161,12 +1171,7 @@ impl IpfsIo {
             static_files: static_paths,
             #[cfg(not(target_arch = "wasm32"))]
             allowed_file_roots: Default::default(),
-            client: platform::http_client_builder()
-                .connect_timeout(Duration::from_secs(5))
-                .use_native_tls()
-                .user_agent("DCLExplorer/0.1")
-                .build()
-                .unwrap(),
+            client,
             in_flight: Default::default(),
             failed_remotes: Default::default(),
             bevy_variants: Default::default(),
@@ -2555,6 +2560,7 @@ mod tests {
             }
         });
         let ipfs = Arc::new(super::IpfsIo::new(
+            super::http_client().unwrap(),
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,
@@ -2597,6 +2603,7 @@ mod tests {
             stream.write_all(b"x").unwrap();
         });
         let ipfs = Arc::new(super::IpfsIo::new(
+            super::http_client().unwrap(),
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,
@@ -2666,6 +2673,7 @@ mod tests {
             }
         });
         let ipfs = Arc::new(super::IpfsIo::new(
+            super::http_client().unwrap(),
             false,
             Box::new(super::FileAssetReader::new("assets")),
             None,

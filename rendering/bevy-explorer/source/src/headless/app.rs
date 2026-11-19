@@ -124,6 +124,7 @@ pub fn assemble(
     realm: &str,
     server_mode: bool,
     wallet: Wallet,
+    http_client: ipfs::HttpClient,
 ) {
     // Skip the render-only scene plugins (scene UI, TextShape, scene materials, billboards,
     // lights, visibility, pointer results) and comms' microphone and video. Must precede the
@@ -140,6 +141,7 @@ pub fn assemble(
         .add_plugins(TransformPlugin)
         .add_plugins(DiagnosticsPlugin)
         .add_plugins(IpfsIoPlugin {
+            client: http_client,
             preview: launch.preview,
             assets_root: None,
             starting_realm: Some(map_realm_name(realm)),
@@ -350,12 +352,16 @@ fn setup(
     cam_resource.0 = camera_id;
 
     // wallet is already finalized in main(); build the profile from its address
-    println!("[headless] guest address: {:#x}", wallet.address().unwrap());
+    let Some(address) = wallet.address() else {
+        error!("[headless] the wallet has no address; no guest profile");
+        return;
+    };
+    println!("[headless] guest address: {address:#x}");
     current_profile.profile = Some(UserProfile {
         version: 0,
         content: SerializedProfile {
-            eth_address: format!("{:#x}", wallet.address().unwrap()),
-            user_id: Some(format!("{:#x}", wallet.address().unwrap())),
+            eth_address: format!("{address:#x}"),
+            user_id: Some(format!("{address:#x}")),
             ..Default::default()
         },
         base_url: Default::default(),

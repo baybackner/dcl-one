@@ -29,14 +29,13 @@ pub struct LivekitRuntime(
 );
 
 impl LivekitRuntime {
-    pub fn new() -> Self {
+    pub fn new() -> std::io::Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = Arc::new(
             Builder::new_multi_thread()
                 .worker_threads(1)
                 .enable_all()
-                .build()
-                .unwrap(),
+                .build()?,
         );
         #[cfg_attr(
             target_arch = "wasm32",
@@ -47,17 +46,10 @@ impl LivekitRuntime {
             Builder::new_current_thread()
                 .worker_threads(1)
                 .enable_all()
-                .build_local(LocalOptions::default())
-                .unwrap(),
+                .build_local(LocalOptions::default())?,
         );
 
-        Self(runtime)
-    }
-}
-
-impl Default for LivekitRuntime {
-    fn default() -> Self {
-        Self::new()
+        Ok(Self(runtime))
     }
 }
 
@@ -90,19 +82,27 @@ impl LivekitRuntime {
 
 /// How systems take the runtime. On the web it is a single-threaded tokio runtime, so it is a
 /// non-send resource: that keeps every system using it on the engine thread, where its tasks run.
+/// None when the runtime could not start.
 #[cfg(not(target_arch = "wasm32"))]
-pub type LivekitRuntimeRes<'w> = Res<'w, LivekitRuntime>;
+pub type LivekitRuntimeRes<'w> = Option<Res<'w, LivekitRuntime>>;
 #[cfg(target_arch = "wasm32")]
-pub type LivekitRuntimeRes<'w> = NonSend<'w, LivekitRuntime>;
+pub type LivekitRuntimeRes<'w> = Option<NonSend<'w, LivekitRuntime>>;
 
 pub struct LivekitRuntimePlugin;
 
 impl Plugin for LivekitRuntimePlugin {
     fn build(&self, app: &mut App) {
+        let runtime = match LivekitRuntime::new() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                error!("LiveKit is off: can't start its runtime: {e}");
+                return;
+            }
+        };
         #[cfg(not(target_arch = "wasm32"))]
-        app.init_resource::<LivekitRuntime>();
+        app.insert_resource(runtime);
         #[cfg(target_arch = "wasm32")]
-        app.init_non_send_resource::<LivekitRuntime>();
+        app.insert_non_send_resource(runtime);
         #[cfg(target_arch = "wasm32")]
         app.add_systems(First, yield_to_runtime);
     }
@@ -113,5 +113,8 @@ impl Plugin for LivekitRuntimePlugin {
 /// as it is multithreaded
 #[cfg(target_arch = "wasm32")]
 fn yield_to_runtime(livekit_runtime: LivekitRuntimeRes) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     livekit_runtime.block_on(yield_now());
 }

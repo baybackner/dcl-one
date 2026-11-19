@@ -386,6 +386,7 @@ fn empty_definition_is_kept_without_deferring_and_despawned_out_of_range() {
         .init_asset_loader::<EntityDefinitionLoader>()
         .insert_resource(IpfsResource {
             inner: std::sync::Arc::new(IpfsIo::new(
+                ipfs::http_client().unwrap(),
                 false,
                 Box::new(MemoryAssetReader {
                     root: Dir::default(),

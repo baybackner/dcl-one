@@ -49,6 +49,7 @@ pub(crate) fn test_app() -> (App, Entity) {
         .insert_resource(scene_updates(Some(SIXTY_FPS)))
         .insert_resource(IpfsResource {
             inner: Arc::new(IpfsIo::new(
+                ipfs::http_client().unwrap(),
                 false,
                 Box::new(MemoryAssetReader {
                     root: Dir::default(),

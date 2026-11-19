@@ -22,6 +22,7 @@ fn app_with_render_avatar() -> App {
         .init_resource::<AppConfig>()
         .insert_resource(IpfsResource {
             inner: Arc::new(IpfsIo::new(
+                ipfs::http_client().unwrap(),
                 false,
                 Box::new(MemoryAssetReader {
                     root: Dir::default(),

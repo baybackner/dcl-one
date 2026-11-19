@@ -93,6 +93,11 @@ pub(crate) fn setup(
     asset_server: Res<AssetServer>,
     version: Res<Version>,
 ) {
+    let (Some(title_style), Some(body_style)) = (TITLE_TEXT_STYLE.get(), BODY_TEXT_STYLE.get())
+    else {
+        error!("system info is off: the text styles are not set");
+        return;
+    };
     commands.entity(root.0).try_with_children(|commands| {
         commands
             .spawn((
@@ -129,7 +134,7 @@ pub(crate) fn setup(
                 ..Default::default()
             },
             Text::new(format!("Version: {}", version.0)),
-            BODY_TEXT_STYLE.get().unwrap().clone(),
+            body_style.clone(),
         ));
     });
 
@@ -155,10 +160,7 @@ pub(crate) fn setup(
                 SysInfoContainer,
             ))
             .try_with_children(|commands| {
-                commands.spawn((
-                    Text::new("System Info"),
-                    TITLE_TEXT_STYLE.get().unwrap().clone(),
-                ));
+                commands.spawn((Text::new("System Info"), title_style.clone()));
 
                 commands
                     .spawn((
@@ -180,7 +182,7 @@ pub(crate) fn setup(
                                         },
                                         Text::new(label),
                                         TextLayout::new_with_justify(JustifyText::Right),
-                                        BODY_TEXT_STYLE.get().unwrap().clone(),
+                                        body_style.clone(),
                                     ));
                                     commands.spawn((
                                         Node {
@@ -188,7 +190,7 @@ pub(crate) fn setup(
                                             ..Default::default()
                                         },
                                         Text::default(),
-                                        BODY_TEXT_STYLE.get().unwrap().clone(),
+                                        body_style.clone(),
                                     ));
                                 });
                         };
@@ -358,9 +360,13 @@ fn setup_minimap(
     preview: Res<PreviewMode>,
     system_scene: Option<Res<StartupScenes>>,
 ) {
-    let components = commands
-        .spawn_template(&dui, "minimap", Default::default())
-        .unwrap();
+    let components = match commands.spawn_template(&dui, "minimap", Default::default()) {
+        Ok(components) => components,
+        Err(e) => {
+            error!("minimap is off: {e}");
+            return;
+        }
+    };
 
     commands
         .entity(components.root)
@@ -415,12 +421,11 @@ fn setup_minimap(
                         system_scene: Option<Res<StartupScenes>>,
                         mut toaster: Toaster,
                     | {
-                        if system_scene.as_ref().is_some_and(|ss| ss.scenes.first().is_some_and(|scene| scene.hot_reload.is_some())) {
-                            let ss = system_scene.unwrap();
-                            let ss = ss.scenes.first().unwrap();
+                        let ui_scene = system_scene.as_ref().and_then(|ss| ss.scenes.first());
+                        if let Some((ss, hot_reload)) = ui_scene.and_then(|scene| Some((scene, scene.hot_reload.as_ref()?))) {
                             if let Some(hash) = ss.hash.clone() {
                                 test_data.inspect_hash = Some(hash.clone());
-                                let _ = ss.hot_reload.as_ref().unwrap().send(PreviewCommand::ReloadScene { hash });
+                                let _ = hot_reload.send(PreviewCommand::ReloadScene { hash });
                                 toaster.add_toast("inspector", "Please open chrome and navigate to \"chrome://inspect\" to attach a debugger to the UI scene");
                             }
                             return;
@@ -440,9 +445,13 @@ fn setup_minimap(
                     })
                 )
                 .with_prop("inspect-enabled", cfg!(feature = "inspect")),
-            )
-            .unwrap();
-        commands.entity(tracker.root).try_insert(Tracker(true));
+            );
+        match tracker {
+            Ok(tracker) => {
+                commands.entity(tracker.root).try_insert(Tracker(true));
+            }
+            Err(e) => error!("scene tracker is off: {e}"),
+        }
     }
 }
 

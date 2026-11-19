@@ -503,6 +503,9 @@ fn init_social_client(
     mut consumer_requested: ResMut<SocialConsumerRequested>,
     mut system_api_events: EventReader<SystemApi>,
 ) {
+    let Some(social_runtime) = social_runtime else {
+        return;
+    };
     for event in system_api_events.read() {
         if is_social_consumer_request(event) {
             consumer_requested.0 = true;

@@ -78,6 +78,7 @@ fn min_test_app() -> App {
             ..Default::default()
         },
         IpfsIoPlugin {
+            client: ipfs::http_client().unwrap(),
             preview: false,
             starting_realm: None,
             content_server_override: None,

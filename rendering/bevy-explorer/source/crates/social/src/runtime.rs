@@ -18,14 +18,13 @@ pub struct SocialRuntime(
 );
 
 impl SocialRuntime {
-    pub fn new() -> Self {
+    pub fn new() -> std::io::Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = Arc::new(
             Builder::new_multi_thread()
                 .worker_threads(1)
                 .enable_all()
-                .build()
-                .unwrap(),
+                .build()?,
         );
         #[cfg_attr(
             target_arch = "wasm32",
@@ -36,17 +35,10 @@ impl SocialRuntime {
             Builder::new_current_thread()
                 .worker_threads(1)
                 .enable_all()
-                .build_local(LocalOptions::default())
-                .unwrap(),
+                .build_local(LocalOptions::default())?,
         );
 
-        Self(runtime)
-    }
-}
-
-impl Default for SocialRuntime {
-    fn default() -> Self {
-        Self::new()
+        Ok(Self(runtime))
     }
 }
 
@@ -79,19 +71,27 @@ impl SocialRuntime {
 
 /// How systems take the runtime. On the web it is a single-threaded tokio runtime, so it is a
 /// non-send resource: that keeps every system using it on the engine thread, where its tasks run.
+/// None when the runtime could not start.
 #[cfg(not(target_arch = "wasm32"))]
-pub type SocialRuntimeRes<'w> = Res<'w, SocialRuntime>;
+pub type SocialRuntimeRes<'w> = Option<Res<'w, SocialRuntime>>;
 #[cfg(target_arch = "wasm32")]
-pub type SocialRuntimeRes<'w> = NonSend<'w, SocialRuntime>;
+pub type SocialRuntimeRes<'w> = Option<NonSend<'w, SocialRuntime>>;
 
 pub struct SocialRuntimePlugin;
 
 impl Plugin for SocialRuntimePlugin {
     fn build(&self, app: &mut App) {
+        let runtime = match SocialRuntime::new() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                error!("social is off: can't start its runtime: {e}");
+                return;
+            }
+        };
         #[cfg(not(target_arch = "wasm32"))]
-        app.init_resource::<SocialRuntime>();
+        app.insert_resource(runtime);
         #[cfg(target_arch = "wasm32")]
-        app.init_non_send_resource::<SocialRuntime>();
+        app.insert_non_send_resource(runtime);
         #[cfg(target_arch = "wasm32")]
         app.add_systems(First, yield_to_runtime);
     }
@@ -101,5 +101,8 @@ impl Plugin for SocialRuntimePlugin {
 /// it, it will never poll the tasks on wasm.
 #[cfg(target_arch = "wasm32")]
 fn yield_to_runtime(social_runtime: SocialRuntimeRes) {
+    let Some(social_runtime) = social_runtime else {
+        return;
+    };
     social_runtime.block_on(yield_now());
 }

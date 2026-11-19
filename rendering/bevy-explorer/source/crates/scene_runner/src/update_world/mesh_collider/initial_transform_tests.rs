@@ -96,6 +96,7 @@ fn first_input_uses_propagated_transforms_for_new_and_replaced_shapes() {
         .init_resource::<InputIntersections>()
         .insert_resource(IpfsResource {
             inner: Arc::new(IpfsIo::new(
+                ipfs::http_client().unwrap(),
                 false,
                 Box::new(MemoryAssetReader {
                     root: Dir::default(),

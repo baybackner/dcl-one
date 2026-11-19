@@ -116,6 +116,9 @@ fn track_published(
     mut player_update_tasks: PlayerUpdateTasksMut,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let TrackPublished { participant, track } = trigger.event();
 
     let Some((participant_entity, _, hosted_by, has_active_speaker)) = participants
@@ -239,6 +242,9 @@ fn track_unpublished(
     mut player_update_tasks: PlayerUpdateTasksMut,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let TrackUnpublished { participant, track } = trigger.event();
 
     let Some((participant_entity, _, hosted_by)) = participants
@@ -366,6 +372,9 @@ fn subscribe_to_audio_track(
     data_only_rooms: Query<(), With<crate::private_chat::PrivateChatRoom>>,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let entity = trigger.target();
     let SubscribeToAudioTrack {
         #[cfg(not(target_arch = "wasm32"))]
@@ -421,6 +430,9 @@ fn subscribe_to_track(
     data_only_rooms: Query<(), With<crate::private_chat::PrivateChatRoom>>,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let entity = trigger.target();
 
     if entity == Entity::PLACEHOLDER {
@@ -459,6 +471,9 @@ fn unsubscribe_to_track(
     tracks: Query<&LivekitTrack>,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let entity = trigger.target();
 
     if entity == Entity::PLACEHOLDER {
@@ -489,6 +504,9 @@ fn subscribed_audio_track_with_open_sender(
     >,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     for (entity, track, mut sender) in tracks.iter_mut() {
         let runtime = livekit_runtime.clone();
         let publication = track.track.clone();
@@ -621,6 +639,9 @@ fn video_track_is_now_subscribed(
     tracks: Query<(&LivekitTrack, Has<Video>), With<Subscribed>>,
     livekit_runtime: LivekitRuntimeRes,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let entity = trigger.target();
     let Ok((track, is_video)) = tracks.get(entity) else {
         debug_panic!("Subscribed track did not have LivekitTrack.");

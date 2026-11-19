@@ -33,7 +33,8 @@ fn test_livekit() {
         true,
         Uri::try_from("https://worlds-content-server.decentraland.org/world/mannakia.dcl.eth")
             .unwrap(),
-    );
+    )
+    .unwrap();
 
     let rt = Arc::new(
         tokio::runtime::Builder::new_current_thread()

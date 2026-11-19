@@ -26,9 +26,10 @@ use crate::{
 /// The kira sound playing a stream's audio.
 pub type AudioHandle = <StreamingSoundData<AudioDecoderError> as kira::sound::SoundData>::Handle;
 
-pub fn init_ffmpeg() {
-    ffmpeg_next::init().unwrap();
+pub fn init_ffmpeg() -> Result<(), ffmpeg_next::Error> {
+    ffmpeg_next::init()?;
     ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
+    Ok(())
 }
 
 /// Polled by ffmpeg while it opens and reads. True once every command sender is gone, so a

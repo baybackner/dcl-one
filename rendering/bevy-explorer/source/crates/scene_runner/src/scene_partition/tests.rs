@@ -44,6 +44,7 @@ fn spawn_rendering_camera(world: &mut World, position: Vec3, forward: Vec3) {
 fn insert_ipfs(world: &mut World, slots: usize) {
     world.insert_resource(IpfsResource {
         inner: Arc::new(IpfsIo::new(
+            ipfs::http_client().unwrap(),
             false,
             Box::new(MemoryAssetReader {
                 root: Dir::default(),

@@ -686,6 +686,9 @@ fn reconcile_publications(
     #[cfg(not(target_arch = "wasm32"))] source: Res<LocalAudioSource>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
 ) {
+    let Some(livekit_runtime) = livekit_runtime else {
+        return;
+    };
     let enabled = microphone_routes_open(*focus, &mic, *permission.get(), *availability.get());
     let eligible = |room: Entity, participant: &LivekitParticipant| {
         rooms.get(room).is_ok_and(|room| {
