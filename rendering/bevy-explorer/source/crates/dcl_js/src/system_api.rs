@@ -267,10 +267,10 @@ pub async fn op_get_bindings(
 ) -> Result<JsBindingsData, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetBindings(sx));
+        .send(SystemApi::GetBindings(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e)).map(|bd| {
         let mut bindings: Vec<_> = bd.bindings.into_iter().collect();
@@ -289,10 +289,10 @@ pub async fn op_set_bindings(
         bindings: bindings.bindings.into_iter().collect(),
     };
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::SetBindings(bindings, sx));
+        .send(SystemApi::SetBindings(bindings, sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -325,10 +325,10 @@ pub async fn op_console_command(
 ) -> Result<String, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::ConsoleCommand(format!("/{cmd}"), args, sx));
+        .send(SystemApi::ConsoleCommand(format!("/{cmd}"), args, sx))?;
 
     rx.await
         .map_err(|e| anyhow::anyhow!(e))?
@@ -340,10 +340,10 @@ pub async fn op_live_scene_info(
 ) -> Result<Vec<LiveSceneInfo>, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::LiveSceneInfo(sx));
+        .send(SystemApi::LiveSceneInfo(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -351,10 +351,10 @@ pub async fn op_live_scene_info(
 pub async fn op_get_home_scene(state: Rc<RefCell<impl State>>) -> Result<HomeScene, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetHomeScene(sx));
+        .send(SystemApi::GetHomeScene(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -364,10 +364,10 @@ pub async fn op_get_service_urls(
 ) -> Result<Vec<(String, String)>, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetServiceUrls(sx));
+        .send(SystemApi::GetServiceUrls(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -375,10 +375,10 @@ pub async fn op_get_service_urls(
 pub async fn op_get_welcome(state: Rc<RefCell<impl State>>) -> Result<WelcomeState, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetWelcome(sx));
+        .send(SystemApi::GetWelcome(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -386,10 +386,10 @@ pub async fn op_get_welcome(state: Rc<RefCell<impl State>>) -> Result<WelcomeSta
 pub async fn op_accept_terms(state: Rc<RefCell<impl State>>) -> Result<(), anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::AcceptTerms(sx));
+        .send(SystemApi::AcceptTerms(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -399,10 +399,10 @@ pub async fn op_get_satellite_view(
 ) -> Result<Option<SatelliteView>, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetSatelliteView(sx));
+        .send(SystemApi::GetSatelliteView(sx))?;
 
     rx.await.map_err(|e| anyhow::anyhow!(e))
 }
@@ -962,10 +962,10 @@ pub async fn op_set_mic_enabled(state: Rc<RefCell<impl State>>, enabled: bool) {
 pub async fn op_get_mic_state(state: Rc<RefCell<impl State>>) -> Result<MicState, anyhow::Error> {
     let (sx, rx) = RpcResultSender::channel();
 
-    let _ = state
+    state
         .borrow_mut()
         .borrow_mut::<SuperUserScene>()
-        .send(SystemApi::GetMicState(sx));
+        .send(SystemApi::GetMicState(sx))?;
 
     Ok(rx.await?)
 }

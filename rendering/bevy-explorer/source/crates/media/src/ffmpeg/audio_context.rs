@@ -338,14 +338,12 @@ impl FfmpegContext for AudioContext {
                 self.buffer.len()
             );
         }
-        let Some(frame) = self.buffer.pop_front() else {
-            return;
-        };
-        if !self.dead {
-            if let Err(e) = self.sink.blocking_send(frame) {
-                error!("failed to send audio frame: {e}");
-                self.dead = true;
-            }
+        if let Some(frame) = self.buffer.pop_front()
+            && !self.dead
+            && let Err(e) = self.sink.blocking_send(frame)
+        {
+            error!("failed to send audio frame: {e}");
+            self.dead = true;
         }
         self.current_frame += 1;
     }
