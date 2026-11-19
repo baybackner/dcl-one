@@ -1,4 +1,5 @@
 use super::*;
+use crate::access::granted;
 use crate::tests::support::{OWNER_KEY, cleanup, scratch_component, signed_map};
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use serde_json::json;
@@ -237,7 +238,7 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     };
     assert_eq!(
         verifier
-            .verify(&store, OWNER, id, &signed)
+            .verify(&store, &granted::publisher(OWNER, id), &signed)
             .await
             .unwrap()
             .status,
@@ -250,7 +251,10 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     ]);
     *mock.redirect.lock().unwrap() = true;
     assert!(
-        verifier.verify(&store, OWNER, id, &signed).await.is_err(),
+        verifier
+            .verify(&store, &granted::publisher(OWNER, id), &signed)
+            .await
+            .is_err(),
         "a redirecting Foundation is never followed"
     );
     *mock.redirect.lock().unwrap() = false;
@@ -260,10 +264,15 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         .lock()
         .unwrap()
         .insert(format!("{path}/items"), mismatch);
-    assert!(verifier.verify(&store, OWNER, id, &signed).await.is_err());
+    assert!(
+        verifier
+            .verify(&store, &granted::publisher(OWNER, id), &signed)
+            .await
+            .is_err()
+    );
     assert_eq!(
         store
-            .linked_publication_state(OWNER, id)
+            .linked_publication_state(&granted::publisher(OWNER, id))
             .await
             .unwrap()
             .unwrap()
@@ -274,9 +283,10 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         .lock()
         .unwrap()
         .insert(format!("{path}/items"), items);
+    let (one, two) = (granted::publisher(OWNER, id), granted::publisher(OWNER, id));
     let (first, second) = tokio::join!(
-        verifier.verify(&store, OWNER, id, &signed),
-        verifier.verify(&store, OWNER, id, &signed)
+        verifier.verify(&store, &one, &signed),
+        verifier.verify(&store, &two, &signed)
     );
     let result = first.unwrap();
     assert_eq!(second.unwrap().status, "submitted");
@@ -296,7 +306,11 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         saved,
         (true, format!("{URN}:{item}"), "pending".into(), false)
     );
-    let saved = store.collection_by_id(&id).await.unwrap().unwrap();
+    let saved = store
+        .collection_by_id(&granted::read(id))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (saved.is_published, saved.is_approved),
         (true, false),
@@ -309,7 +323,10 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
             .await
             .unwrap();
     assert!(!pending);
-    let cards = store.collection_drafts(OWNER).await.unwrap();
+    let cards = store
+        .collection_drafts(&granted::wallet(OWNER))
+        .await
+        .unwrap();
     let card = cards
         .iter()
         .find(|c| c.collection.id == id.to_string())
@@ -318,7 +335,9 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     assert_eq!(card.item_count, 1);
     assert!(
         store
-            .collection_drafts("0x2222222222222222222222222222222222222222")
+            .collection_drafts(&granted::wallet(
+                "0x2222222222222222222222222222222222222222"
+            ))
             .await
             .unwrap()
             .is_empty()
@@ -334,7 +353,7 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     let reopened = ItemsComponent::new(store.pool().clone(), store.blobs.clone());
     assert_eq!(
         verifier
-            .verify(&reopened, OWNER, id, &signed)
+            .verify(&reopened, &granted::publisher(OWNER, id), &signed)
             .await
             .unwrap()
             .status,

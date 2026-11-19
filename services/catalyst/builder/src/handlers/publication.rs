@@ -4,6 +4,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::SharedState;
+use crate::access;
 use crate::http::{ApiData, ApiError};
 use crate::publication_chain::PublicationChain;
 use crate::publication_store::PublicationState;
@@ -33,11 +34,12 @@ pub async fn begin(
     Path(id): Path<Uuid>,
     Json(body): Json<BeginPublication>,
 ) -> Result<Json<ApiData<PublicationState>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     rpc_url(&state)?;
     Ok(Json(ApiData::ok(
         state
             .items
-            .begin_publication(owner.as_str(), id, &body.revision)
+            .begin_publication(&publisher, &body.revision)
             .await?,
     )))
 }
@@ -47,8 +49,9 @@ pub async fn status(
     Signed(owner): Signed,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiData<Option<PublicationState>>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
-        state.items.publication_state(owner.as_str(), id).await?,
+        state.items.publication_state(&publisher).await?,
     )))
 }
 
@@ -58,13 +61,14 @@ pub async fn transaction(
     Path(id): Path<Uuid>,
     Json(body): Json<PublicationTransaction>,
 ) -> Result<Json<ApiData<PublicationState>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     let chain = PublicationChain {
         http: &state.http,
         url: rpc_url(&state)?,
     };
     Ok(Json(ApiData::ok(
         chain
-            .verify(&state.items, owner.as_str(), id, &body.tx_hash)
+            .verify(&state.items, &publisher, &body.tx_hash)
             .await?,
     )))
 }
@@ -74,7 +78,8 @@ pub async fn cancel(
     Signed(owner): Signed,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
-    state.items.cancel_publication(owner.as_str(), id).await?;
+    let publisher = access::publisher(&state, &owner, id).await?;
+    state.items.cancel_publication(&publisher).await?;
     Ok(Json(ApiData::ok(true)))
 }
 
@@ -84,10 +89,11 @@ pub async fn claim(
     Path(id): Path<Uuid>,
     Json(body): Json<BeginPublication>,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     rpc_url(&state)?;
     state
         .items
-        .claim_publication(owner.as_str(), id, &body.revision)
+        .claim_publication(&publisher, &body.revision)
         .await?;
     Ok(Json(ApiData::ok(true)))
 }

@@ -14,7 +14,13 @@
     "timestamped-signatures-only": "Every signed operation: upstream also accepts a request whose auth chain signs only its method and its path below /v1 (lowercased), whatever x-identity-timestamp or x-identity-metadata header the request carries or omits, valid until the delegated key expires. The node accepts only the timestamped payload over its own method and path, at most five minutes old and one minute ahead, and refuses such a request with upstream's 401 {ok:false, data:{message}, error:'Unauthenticated'}.",
     "signature-window": "Every signed operation: upstream accepts a timestamp up to 30 minutes old or ahead; the node accepts at most five minutes old and one minute ahead, and refuses the rest with the same 401.",
     "unauthenticated-message": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message.",
-    "chain-copy-lag": "Every operation that reads a collection's published or approved state: upstream asks the Polygon collections subgraph on each request; the node reads its copy of that subgraph, which the shop's collections mirror refreshes every three times MARKETPLACE_MIRROR_INTERVAL_SECS (15 minutes at the default 300). A collection deployed outside the node's own publication flow reads as unpublished, and an approval or a role change as not yet made, until the next pass, so a client that polls after a deployment (the old builder web retries its publish every 5 seconds) waits up to that bound plus the subgraph's lag. When the copy has no complete pass the node answers 503, and when its last pass, or the row or absence a decision reads, is more than 30 minutes old it answers 503 to every request that grants access or writes."
+    "chain-copy-lag": "Every operation that reads a collection's published or approved state: upstream asks the Polygon collections subgraph on each request; the node reads its copy of that subgraph, which the shop's collections mirror refreshes every three times MARKETPLACE_MIRROR_INTERVAL_SECS (15 minutes at the default 300). A collection deployed outside the node's own publication flow reads as unpublished, and an approval or a role change as not yet made, until the next pass, so a client that polls after a deployment (the old builder web retries its publish every 5 seconds) waits up to that bound plus the subgraph's lag. When the copy has no complete pass the node answers 503, and when its last pass, or the row or absence a decision reads, is more than 30 minutes old it answers 503 to every request that grants access or writes.",
+    "owner-is-the-chain-creator": "Every operation that decides by a standard collection's owner: once the node's copy of the Polygon collections subgraph holds the collection, its owner is the chain creator for every check; before, the stored eth_address. Upstream compares the stored eth_address in some checks and the chain creator in others until an owner sync rewrites the row, so between a creator transfer and that sync a client of upstream sees the previous creator keep, and the new creator lack, part of the owner's access; the node gives all of it to the chain creator at once.",
+    "managers-from-chain-only": "Every operation that admits an on-chain manager: the node reads managers only from its copy of the Polygon collections subgraph, so only a collection on chain has managers. Upstream also admits the managers a PUT /v1/collections/:id body stored for a collection that is not on chain.",
+    "access-checks-never-write": "DELETE /v1/items/:id and POST /v1/items/:id/files: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
+    "access-before-kind-conflict": "PUT /v1/collections/:id on an existing collection: the node answers 401 Unauthorized to upsert collection before it compares the body's URN with the stored collection, so only a signer who may save the collection gets the 409s for converting it or changing its third party. Upstream answers those 409s first.",
+    "committee-cache": "GET /v1/committee: the node answers from the same read of the Polygon collections subgraph its committee decisions use, kept one hour, so a member added or removed shows up to an hour later. Upstream reads the subgraph on every GET /v1/committee and keeps its own read an hour for decisions.",
+    "committee-unavailable": "Every operation a committee member may perform: when the Polygon collections subgraph can't answer, the node answers 503 to GET /v1/committee and to every decision only the committee could grant, and asks again after 30 seconds. Once its read is more than an hour old and a refresh has failed, a committee member reads published content as any signer does until a read succeeds. Upstream answers GET /v1/committee with an empty list and treats nobody as a member."
   },
   "operations": [
     {
@@ -49,11 +55,55 @@
     {
       "id": "api_http:GET:/v1/items/:id",
       "owner": "items",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "A stranger's, the owner's and a committee member's reads of a minted item of a collection on chain were compared. Each caller is admitted as upstream admits it and receives the same keys upstream sends it (the owner and the committee local_content_hash too, the stranger not); values merged from the chain differ.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/36-item-published-stranger.json",
+          "scope": "Signed GET by a wallet with no role on a minted item of a collection on chain: upstream's public item.",
+          "replay": [
+            "data.beneficiary value",
+            "data.content_hash value",
+            "data.is_published value",
+            "data.price value",
+            "data.rarity value",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/37-item-published-owner.json",
+          "scope": "Signed GET by the owner of the minted item: upstream's full item.",
+          "replay": [
+            "data.beneficiary value",
+            "data.content_hash value",
+            "data.is_published value",
+            "data.price value",
+            "data.rarity value",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/38-item-published-committee.json",
+          "scope": "Signed GET by a committee member with no other role: upstream's full item.",
+          "replay": [
+            "data.beneficiary value",
+            "data.content_hash value",
+            "data.is_published value",
+            "data.price value",
+            "data.rarity value",
+            "data.urn value"
+          ]
+        }
+      ],
+      "gaps": [
+        "Published items: upstream merges the collections subgraph's item into the body (urn, price, beneficiary, rarity and content_hash from the chain, is_published true); the node answers its own row's values.",
+        "Third party: upstream answers any signer the public item of a third-party collection that has an item curation; the node answers 401 until it keeps item curations.",
+        "Upstream's ADMIN_ADDRESSES wallets read any published item in full; the node gives BUILDER_ADMIN_ADDRESSES no role.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:committee-unavailable",
+        "deliberate:chain-copy-lag"
+      ],
+      "remaining_verification": "Capture reads of a draft item by its owner, a stranger and a committee member, and an on-chain manager's read of a minted item."
     },
     {
       "id": "api_http:GET:/v1/published-collections/:address/items/:id/utility",
@@ -67,22 +117,101 @@
     {
       "id": "api_http:GET:/v1/collections/:id/items",
       "owner": "items",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "The unsigned refusal, a stranger's refusal of a draft, a committee member's list of a draft, and a stranger's and an on-chain manager's lists of a collection on chain holding one minted item were compared. Each caller is admitted or refused as upstream decides and receives the same item keys upstream sends it; values merged from the chain differ, and the node answers description and video differently.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/28-collection-items-unsigned.json",
+          "scope": "GET without an auth chain.",
+          "replay": [
+            "data.message value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/29-collection-items-stranger.json",
+          "scope": "Signed GET by a wallet with no role on a draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/30-collection-items-committee.json",
+          "scope": "Signed GET by a committee member with no other role on a draft with no items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/31-collection-items-published-stranger.json",
+          "scope": "Signed GET by a wallet with no role on a collection on chain holding one minted item; the capture's fake catalyst holds no entities.",
+          "replay": [
+            "data[].beneficiary value",
+            "data[].content_hash value",
+            "data[].description value",
+            "data[].is_published value",
+            "data[].price value",
+            "data[].rarity value",
+            "data[].urn value",
+            "data[].video missing"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/32-collection-items-published-manager.json",
+          "scope": "Signed GET by an on-chain manager of a collection on chain holding one minted item.",
+          "replay": [
+            "data[].beneficiary value",
+            "data[].content_hash value",
+            "data[].description value",
+            "data[].is_published value",
+            "data[].price value",
+            "data[].rarity value",
+            "data[].urn value",
+            "data[].video missing"
+          ]
+        }
+      ],
+      "gaps": [
+        "Published items: upstream merges the collections subgraph's item into the body (urn, price, beneficiary, rarity and content_hash from the chain, is_published true); the node answers its own row's values.",
+        "Item lists: the node answers an empty description as \"\" where upstream answers null, and omits video when it is null.",
+        "Upstream admits its ADMIN_ADDRESSES wallets to every collection's full list, drafts included; the node gives BUILDER_ADMIN_ADDRESSES no role here.",
+        "Minters: upstream lists every item, drafts included, to a minter of a collection on chain; the node lists a minter the minted items only.",
+        "Third party: upstream lists any signer the items of a third-party collection that have an item curation; the node lists such a signer none until it keeps item curations.",
+        "The node validates status before it looks the collection up; upstream answers 404 for a missing collection first.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:committee-unavailable",
+        "deliberate:chain-copy-lag",
+        "deliberate:unauthenticated-message"
+      ],
+      "remaining_verification": "Capture lists with items (drafts and minted), a contract address in place of the id, pagination and the status, mappingStatus, synced and name filters."
     },
     {
       "id": "api_http:PUT:/v1/items/:idOrURN",
       "owner": "items",
       "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
+      "result": "Three moves of an existing item that upstream refuses were compared and match: into a third-party collection from no collection, out of a third-party collection, and from one third-party collection to another, each 401 Item can't change between collections. Saves are not compared yet.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/33-item-orphan-into-third-party.json",
+          "scope": "Signed PUT by the owner moving its item with no collection into a third-party collection whose provider it manages.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/34-item-out-of-third-party.json",
+          "scope": "Signed PUT by the owner taking its item out of a third-party collection whose provider it manages.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/35-item-between-third-party.json",
+          "scope": "Signed PUT by the owner moving its item between two third-party collections of a provider it manages.",
+          "replay": []
+        }
+      ],
       "gaps": [
+        "Published: upstream lets the owner and an on-chain manager save an existing item's metadata and contents in a published collection (a rarity change, a move or a new item stays 409); the node answers 409 to every save there.",
+        "Locked: upstream answers 423 while the collection's lock is under a day old; the node has no lock yet and answers 423 while its own publication of the collection is in progress.",
+        "Path: upstream also takes a third-party item URN in place of the id and saves third-party items by URN; the node takes a UUID only, and its third-party item saves carry no URN.",
+        "Third party: upstream's provider managers come from the third-party registry; the node's are the wallet that created the collection.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:managers-from-chain-only",
         "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "remaining_verification": "Capture saves of a draft item by its owner, a stranger and a committee member, a save in a published collection by the owner and an on-chain manager, a locked collection, and a third-party item by URN."
     },
     {
       "id": "api_http:DELETE:/v1/items/:id",
@@ -91,7 +220,12 @@
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
       "gaps": [
-        "deliberate:chain-copy-lag"
+        "Body: upstream answers data true; the node answers {id}.",
+        "Locked: the node answers 423 while its own publication of the collection is in progress; upstream while the collection's lock is under a day old.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag",
+        "deliberate:access-checks-never-write",
+        "deliberate:managers-from-chain-only"
       ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
@@ -102,7 +236,13 @@
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
       "gaps": [
-        "deliberate:chain-copy-lag"
+        "Published: upstream accepts uploads from the owner, an on-chain manager or the provider's manager whatever the collection's state; the node answers 409 once the collection is published and 423 while its own publication is in progress.",
+        "Body: upstream answers no data; the node answers the stored file map.",
+        "Bounds: the node accepts at most 100 files and 20 MB together; upstream bounds each file at 25 MiB and not their count.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag",
+        "deliberate:access-checks-never-write",
+        "deliberate:managers-from-chain-only"
       ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
@@ -154,7 +294,7 @@
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's reads of a draft, a published unapproved and a published approved collection, the unsigned refusal, a stranger's refusal and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. The refusals answer upstream's status and envelope; the owner's reads answer upstream's is_published and is_approved and differ in other fields, and a request signed over method and path alone is refused where upstream serves it.",
+      "result": "The owner's reads of a draft, a published unapproved and a published approved collection, a committee member's read of a draft, a stranger's and an on-chain manager's reads of a published collection, the unsigned refusal, a stranger's refusal of a draft and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. Every caller is admitted or refused as upstream decides, with upstream's status and envelope; the reads answer upstream's is_published and is_approved and differ in other fields, and a request signed over method and path alone is refused where upstream serves it.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
@@ -340,16 +480,76 @@
             "error extra",
             "ok value"
           ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/22-collection-committee.json",
+          "scope": "Signed GET by a committee member with no other role on a draft; the node reads the same committee from its fake subgraph.",
+          "replay": [
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/23-collection-published-stranger.json",
+          "scope": "Signed GET by a wallet with no role on a collection on chain: upstream answers its public detail, which drops salt, lock and the forum fields.",
+          "replay": [
+            "data.created_at value",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.third_party_id extra",
+            "data.updated_at value",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/24-collection-published-manager.json",
+          "scope": "Signed GET by an on-chain manager of a collection on chain: upstream answers the full collection.",
+          "replay": [
+            "data.created_at value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.updated_at value",
+            "data.urn value"
+          ]
         }
       ],
       "gaps": [
-        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers urn as null for a draft and for a collection it did not publish itself. For a published collection upstream answers created_at and updated_at from the subgraph; the node answers the draft row's.",
+        "Reads: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers urn as null for a draft and for a collection it did not publish itself. For a published collection upstream answers created_at and updated_at from the subgraph; the node answers the draft row's. Upstream answers a signer without a role on a published collection a public detail without salt, lock and the forum fields; the node answers every admitted caller the same body, which carries none of them.",
+        "Upstream's ADMIN_ADDRESSES wallets read the full detail of a published collection; the node gives BUILDER_ADMIN_ADDRESSES no role here.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:unauthenticated-message"
       ],
-      "remaining_verification": "Capture reads by the committee, an on-chain manager and minter, a third-party manager and any signer of a published collection, and a missing id."
+      "remaining_verification": "Capture reads by a minter, a third-party manager, a missing id and a malformed id."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
@@ -402,7 +602,7 @@
       "id": "api_http:PUT:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's creation of a standard draft, the same creation signed over method and path alone, a body upstream's schema refuses, and an unsigned request with such a body were compared. The node creates the draft with a different body, refuses the untimestamped request, refuses the invalid body with upstream's status and error, and refuses the unsigned one before reading its body, as upstream does.",
+      "result": "The owner's creation of a standard draft, the same creation signed over method and path alone, a body upstream's schema refuses, an unsigned request with such a body, and saves of an existing draft by a stranger and by a committee member and of a collection on chain by its on-chain manager were compared. The node creates the draft with a different body, refuses the untimestamped request, refuses the invalid body with upstream's status and error, refuses the unsigned one before reading its body, as upstream does, and refuses the three signers without the owner's role exactly as upstream does.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/05-collection-create.json",
@@ -467,16 +667,36 @@
           "replay": [
             "data.message value"
           ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/25-collection-save-stranger.json",
+          "scope": "Signed PUT by a wallet with no role on an existing draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/26-collection-save-committee.json",
+          "scope": "Signed PUT by a committee member with no other role on an existing draft.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/27-collection-save-published-manager.json",
+          "scope": "Signed PUT by an on-chain manager of a collection on chain.",
+          "replay": []
         }
       ],
       "gaps": [
         "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id.",
         "Invalid body: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema errors, the node's is {}.",
+        "Locked: upstream answers 423 while a collection's lock is under a day old; the node has no lock yet and answers 423 while its own publication of the collection is in progress.",
+        "Third party: upstream saves a third-party collection after its items are submitted and lets its URN suffix change while no item is curated; the node answers 409 to both. Upstream's provider managers come from the third-party registry; the node's are the wallet that created the collection.",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:managers-from-chain-only",
+        "deliberate:access-before-kind-conflict",
         "deliberate:timestamped-signatures-only",
         "deliberate:unauthenticated-message",
         "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use, a stranger's write and mismatched body and URL ids."
+      "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use and mismatched body and URL ids."
     },
     {
       "id": "api_http:DELETE:/v1/collections/:id",
@@ -625,23 +845,20 @@
     {
       "id": "api_http:GET:/v1/committee",
       "owner": "committee",
-      "status": "known_gap",
-      "result": "The unsigned committee read was compared; the node has no route for it.",
+      "status": "reviewed",
+      "result": "The unsigned read of a committee with one member was compared and matches: 200 {ok:true, data:[{id, address}]}, the subgraph's accounts with isCommitteeMember omitted.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/06-committee-unsigned.json",
-          "scope": "Unsigned GET; the fake subgraph lists no committee member.",
-          "replay": [
-            "status: fixture=200 candidate=404",
-            "header content-type: fixture=\"application/json; charset=utf-8\" candidate=<missing>",
-            "candidate body is not JSON: \"\""
-          ]
+          "scope": "Unsigned GET; the fake Polygon collections subgraph and the node's reader both list seed.json's committee.",
+          "replay": []
         }
       ],
       "gaps": [
-        "Not routed: upstream answers 200 {ok:true, data:[]} for an empty committee; the node answers 404 with an empty body."
+        "deliberate:committee-cache",
+        "deliberate:committee-unavailable"
       ],
-      "remaining_verification": "Compare a committee with members and an unavailable subgraph."
+      "remaining_verification": "Compare a committee longer than one subgraph page."
     },
     {
       "id": "api_http:GET:/v1/thirdParties",

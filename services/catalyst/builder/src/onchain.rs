@@ -1,6 +1,7 @@
 //! The builder's on-chain reads: an address's published collections and
 //! items (`GET /v1/{address}/collections`, `/v1/{address}/items`) and the
-//! curation console's committee and under-review listings. The old crate
+//! curation console's under-review listing (its committee is
+//! [`crate::committee`]'s). The old crate
 //! read the marketplace squid over a side pool; v2 runs no squid, so these
 //! are the L1/L2 collections subgraph readers (`marketplace::graph`, the
 //! ONE guarded client with its retry ladder and body cap), shaped exactly as
@@ -14,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::access::Wallet;
 use crate::chain_index::ChainIndex;
 use crate::chain_index::graph::{THE_GRAPH_PAGE_SIZE, any_collections_reader, graph_query};
 
@@ -194,8 +196,6 @@ pub struct OrphanItemOut {
 
 const MAX_ROWS: usize = 1000;
 const MAX_REVIEW_ROWS: usize = 1000;
-/// Curation pages walked for the committee before the answer is cut off.
-const MAX_CURATION_PAGES: usize = 10;
 /// Collections per `collection_in` chunk of the latest-curation lookup.
 const CURATION_CHUNK: usize = 100;
 pub const MARKETPLACE_DOWN: &str = "marketplace data unavailable";
@@ -372,10 +372,6 @@ const ITEMS_QUERY: &str = "query builderItems($address: String!, $first: Int!) {
   }\
 }";
 
-const CURATORS_QUERY: &str = "query curators($idFrom: ID!, $first: Int!) {\
-  curations(first: $first, where: { id_gt: $idFrom }, orderBy: id, orderDirection: asc) { id curator { id } }\
-}";
-
 const UNDER_REVIEW_QUERY: &str = "query underReview($first: Int!) {\
   collections(first: $first, where: { isCompleted: true, isApproved: false }, orderBy: createdAt, orderDirection: desc) {\
     id name creator itemsCount isCompleted isApproved createdAt reviewedAt\
@@ -399,9 +395,9 @@ fn list<'a>(data: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
 /// newest first, at most [`MAX_ROWS`].
 pub async fn collections_for_address(
     market: &ChainIndex,
-    address: &str,
+    wallet: &Wallet,
 ) -> Result<Vec<BuilderCollectionOut>, ApiError> {
-    let addr = address.to_ascii_lowercase();
+    let addr = wallet.address();
     let mut seen = HashSet::new();
     let mut rows: Vec<DbCollection> = Vec::new();
     for reader in &READERS {
@@ -439,13 +435,13 @@ pub async fn collections_for_address(
 /// collection-less items, which never exist on-chain, so it answers empty.
 pub async fn items_for_address(
     market: &ChainIndex,
-    address: &str,
+    wallet: &Wallet,
     only_orphans: bool,
 ) -> Result<Vec<OrphanItemOut>, ApiError> {
     if only_orphans {
         return Ok(Vec::new());
     }
-    let addr = address.to_ascii_lowercase();
+    let addr = wallet.address();
     let mut rows: Vec<DbItem> = Vec::new();
     for reader in &READERS {
         let Some(url) = (reader.url_of)(market) else {
@@ -470,73 +466,13 @@ pub async fn items_for_address(
     Ok(rows.into_iter().map(item_out).collect())
 }
 
-/// Every wallet that ever curated, as the squid's `DISTINCT curator_id`
-/// listed them: the curations walked in id order, at most
-/// [`MAX_CURATION_PAGES`] pages per network.
-pub async fn committee_members(market: &ChainIndex) -> Result<Vec<CommitteeMemberOut>, ApiError> {
-    let mut addresses: Vec<String> = Vec::new();
-    for reader in &READERS {
-        let Some(url) = (reader.url_of)(market) else {
-            continue;
-        };
-        let mut id_from = String::new();
-        for _ in 0..MAX_CURATION_PAGES {
-            let data = graph_query(
-                market,
-                url,
-                CURATORS_QUERY,
-                json!({ "idFrom": id_from, "first": THE_GRAPH_PAGE_SIZE }),
-            )
-            .await
-            .map_err(upstream)?;
-            let page: Vec<&Value> = list(&data, "curations").collect();
-            for c in &page {
-                if let Some(addr) = c
-                    .get("curator")
-                    .and_then(|c| c.get("id"))
-                    .and_then(Value::as_str)
-                {
-                    addresses.push(addr.to_string());
-                }
-            }
-            if page.len() < THE_GRAPH_PAGE_SIZE as usize {
-                break;
-            }
-            match page
-                .last()
-                .and_then(|c| c.get("id"))
-                .and_then(Value::as_str)
-            {
-                Some(id) => id_from = id.to_string(),
-                None => break,
-            }
+impl From<&crate::committee::Member> for CommitteeMemberOut {
+    fn from(member: &crate::committee::Member) -> Self {
+        Self {
+            address: member.address.clone(),
+            name: short_address(&member.address),
         }
     }
-    Ok(shape_committee(addresses))
-}
-
-fn shape_committee(addresses: Vec<String>) -> Vec<CommitteeMemberOut> {
-    let mut distinct: Vec<String> = addresses
-        .into_iter()
-        .filter_map(|addr| {
-            let a = addr
-                .split('-')
-                .next()
-                .unwrap_or(&addr)
-                .trim()
-                .to_ascii_lowercase();
-            (!a.is_empty() && a.starts_with("0x")).then_some(a)
-        })
-        .collect();
-    distinct.sort();
-    distinct.dedup();
-    distinct
-        .into_iter()
-        .map(|address| CommitteeMemberOut {
-            name: short_address(&address),
-            address,
-        })
-        .collect()
 }
 
 /// The completed, unapproved collections with their latest curation.
@@ -956,21 +892,11 @@ mod tests {
             "name": "0xabcd\u{2026}ef01",
         });
         assert_eq!(serde_json::to_value(&member).unwrap(), old);
-        let shaped = shape_committee(vec![
-            "0xB-1".into(),
-            "0xa".into(),
-            "0xb-2".into(),
-            "junk".into(),
-            " ".into(),
-        ]);
-        assert_eq!(
-            shaped
-                .iter()
-                .map(|m| m.address.as_str())
-                .collect::<Vec<_>>(),
-            vec!["0xa", "0xb"],
-            "distinct, lowercased, sorted"
-        );
+        let from_reader = CommitteeMemberOut::from(&crate::committee::Member {
+            id: "0xabcdef0123456789abcdef0123456789abcdef01".into(),
+            address: "0xabcdef0123456789abcdef0123456789abcdef01".into(),
+        });
+        assert_eq!(serde_json::to_value(&from_reader).unwrap(), old);
     }
 
     #[test]
@@ -1042,12 +968,16 @@ mod tests {
         assert!(!configured(Some(&market)));
         assert!(!configured(None));
         assert!(
-            collections_for_address(&market, "0x797066a17f83425c1b4c7a8cca52d19095520a52")
-                .await
-                .unwrap()
-                .is_empty()
+            collections_for_address(
+                &market,
+                &crate::access::wallet(&crate::shared::signed_fetch::test_support::signer(
+                    "0x797066a17f83425c1b4c7a8cca52d19095520a52"
+                ))
+            )
+            .await
+            .unwrap()
+            .is_empty()
         );
-        assert!(committee_members(&market).await.unwrap().is_empty());
         assert!(collections_under_review(&market).await.unwrap().is_empty());
     }
 }

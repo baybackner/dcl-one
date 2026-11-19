@@ -1,8 +1,19 @@
 {
   "wallets": {
     "owner": "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e",
-    "stranger": "0xcd6884d4258edc833f31ac773e24affe6a7d3154"
+    "stranger": "0xcd6884d4258edc833f31ac773e24affe6a7d3154",
+    "committee": "0x01eba3f0e992f53debaf51ed3738dc2f23e09aee",
+    "manager": "0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0"
   },
+  "third_parties": [
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:conformance",
+      "name": "Conformance provider",
+      "managers": [
+        "owner"
+      ]
+    }
+  ],
   "collections": [
     {
       "id": "c011ec71-0000-4000-8000-000000000001",
@@ -30,9 +41,108 @@
       "contract_address": "0x5eed000000000000000000000000000000000007",
       "created_at": "2025-12-02T00:00:00.000Z",
       "updated_at": "2025-12-02T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000008",
+      "name": "Conformance linked A",
+      "owner": "owner",
+      "salt": "0x8e4b2a7d3c6f5e9a1b0c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:conformance",
+      "urn_suffix": "linked-a",
+      "created_at": "2025-12-04T00:00:00.000Z",
+      "updated_at": "2025-12-04T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000009",
+      "name": "Conformance linked B",
+      "owner": "owner",
+      "salt": "0x9f5c3b8e4d7a6f0b2c1d3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:conformance",
+      "urn_suffix": "linked-b",
+      "created_at": "2025-12-04T00:00:00.000Z",
+      "updated_at": "2025-12-04T00:00:00.000Z"
+    }
+  ],
+  "items": [
+    {
+      "id": "c011ec71-0000-4000-8000-0000000000a1",
+      "name": "Conformance orphan",
+      "owner": "owner",
+      "collection_id": null,
+      "created_at": "2025-12-05T00:00:00.000Z",
+      "updated_at": "2025-12-05T00:00:00.000Z",
+      "blockchain_item_id": null,
+      "thumbnail": "thumbnail.png",
+      "data": {
+        "category": "hat",
+        "tags": [],
+        "replaces": [],
+        "hides": [],
+        "representations": []
+      },
+      "metrics": {}
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000000a2",
+      "name": "Conformance linked hat",
+      "owner": "owner",
+      "collection_id": "c011ec71-0000-4000-8000-000000000008",
+      "created_at": "2025-12-05T00:00:00.000Z",
+      "updated_at": "2025-12-05T00:00:00.000Z",
+      "blockchain_item_id": null,
+      "thumbnail": "thumbnail.png",
+      "data": {
+        "category": "hat",
+        "tags": [],
+        "replaces": [],
+        "hides": [],
+        "representations": []
+      },
+      "metrics": {}
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000000a3",
+      "name": "Conformance linked cap",
+      "owner": "owner",
+      "collection_id": "c011ec71-0000-4000-8000-000000000009",
+      "created_at": "2025-12-05T00:00:00.000Z",
+      "updated_at": "2025-12-05T00:00:00.000Z",
+      "blockchain_item_id": null,
+      "thumbnail": "thumbnail.png",
+      "data": {
+        "category": "hat",
+        "tags": [],
+        "replaces": [],
+        "hides": [],
+        "representations": []
+      },
+      "metrics": {}
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000000b1",
+      "name": "Chain hat",
+      "owner": "owner",
+      "collection_id": "c011ec71-0000-4000-8000-000000000006",
+      "blockchain_item_id": "0",
+      "created_at": "2025-12-05T00:00:00.000Z",
+      "updated_at": "2025-12-05T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "data": {
+        "category": "hat",
+        "tags": [],
+        "replaces": [],
+        "hides": [],
+        "representations": []
+      },
+      "metrics": {}
     }
   ],
   "chain": {
+    "committee": [
+      "committee"
+    ],
     "collections": [
       {
         "contract_address": "0x5eed000000000000000000000000000000000006",
@@ -40,7 +150,9 @@
         "creator": "owner",
         "owner": "owner",
         "is_approved": false,
-        "managers": [],
+        "managers": [
+          "manager"
+        ],
         "minters": [],
         "created_at": 1764720000,
         "updated_at": 1764720000,

@@ -54,27 +54,28 @@ fn parse_uuid(raw: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(raw.trim()).map_err(|_| ApiError::not_found("Not found"))
 }
 
-/// The curation queue: the committee (memoised five minutes) and the
-/// collections under review, both from the collections subgraphs; empty
-/// lists without a reader, as the old node answered without its side pool.
+/// The curation queue: the current committee (`committee`, kept an hour;
+/// 503 while it can't tell) and the collections under review from the
+/// collections subgraphs; empty lists without a reader, as the old node
+/// answered without its side pool.
 pub async fn get_curation_collections(
     State(state): State<SharedState>,
     _: Admin,
 ) -> Result<Json<ApiData<CurationCollectionsOut>>, ApiError> {
     let (committee, collections) = match state
         .market
-        .as_deref()
+        .as_ref()
         .filter(|m| onchain::configured(Some(m)))
     {
         Some(market) => {
-            let committee = state.committee_memo.get_or_fetch((), || async {
-                onchain::committee_members(market)
-                    .await
-                    .map(std::sync::Arc::new)
-            });
-            let (committee, collections) =
-                tokio::try_join!(committee, onchain::collections_under_review(market))?;
-            (committee.as_ref().clone(), collections)
+            let (committee, collections) = tokio::try_join!(
+                state.committee.members(Some(market)),
+                onchain::collections_under_review(market)
+            )?;
+            (
+                committee.iter().map(CommitteeMemberOut::from).collect(),
+                collections,
+            )
         }
         None => (Vec::new(), Vec::new()),
     };
@@ -92,7 +93,7 @@ pub struct ItemStatusBody {
 
 pub async fn patch_item_status(
     State(state): State<SharedState>,
-    _: Admin,
+    admin: Admin,
     Path((id, item)): Path<(String, String)>,
     Json(body): Json<ItemStatusBody>,
 ) -> Result<Json<ApiData<ItemStatusPatchOut>>, ApiError> {
@@ -103,7 +104,7 @@ pub async fn patch_item_status(
 
     let updated = state
         .items
-        .set_item_curation_status(&collection_id, &item_id, &body.status)
+        .set_item_curation_status(&admin, &collection_id, &item_id, &body.status)
         .await?;
 
     if updated == 0 {
@@ -127,7 +128,7 @@ pub struct BulkItemStatusBody {
 
 pub async fn patch_items_status_bulk(
     State(state): State<SharedState>,
-    _: Admin,
+    admin: Admin,
     Path(id): Path<String>,
     Json(body): Json<BulkItemStatusBody>,
 ) -> Result<Json<ApiData<BulkItemStatusPatchOut>>, ApiError> {
@@ -148,7 +149,7 @@ pub async fn patch_items_status_bulk(
 
     let updated = state
         .items
-        .set_items_curation_status(&collection_id, &item_ids, &body.status)
+        .set_items_curation_status(&admin, &collection_id, &item_ids, &body.status)
         .await?;
 
     Ok(Json(ApiData::ok(BulkItemStatusPatchOut {

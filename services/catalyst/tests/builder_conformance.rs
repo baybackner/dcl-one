@@ -87,13 +87,39 @@ struct Defect {
 #[serde(deny_unknown_fields)]
 struct Seed {
     wallets: BTreeMap<String, String>,
+    third_parties: Vec<SeedThirdParty>,
     collections: Vec<SeedCollection>,
+    items: Vec<SeedItem>,
     chain: SeedChain,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SeedThirdParty {
+    id: String,
+    name: String,
+    managers: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedItem {
+    id: uuid::Uuid,
+    name: String,
+    owner: String,
+    collection_id: Option<uuid::Uuid>,
+    blockchain_item_id: Option<String>,
+    thumbnail: String,
+    data: Value,
+    metrics: Value,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SeedChain {
+    committee: Vec<String>,
     collections: Vec<ChainCollection>,
     items: Vec<ChainItem>,
 }
@@ -135,6 +161,8 @@ struct SeedCollection {
     owner: String,
     salt: String,
     contract_address: Option<String>,
+    third_party_id: Option<String>,
+    urn_suffix: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -1260,23 +1288,101 @@ async fn fresh_signature(
     headers
 }
 
+fn roles(seed: &Seed, roles: &[String]) -> Vec<String> {
+    roles
+        .iter()
+        .map(|role| seed.wallets[role].clone())
+        .collect()
+}
+
+/// A loopback Polygon collections subgraph that answers `seed.chain`'s
+/// committee as its `accounts`, the way the capture's fake serves it.
+async fn committee_subgraph(seed: &Seed) -> String {
+    let accounts: Vec<Value> = roles(seed, &seed.chain.committee)
+        .into_iter()
+        .map(|address| serde_json::json!({ "id": address, "address": address }))
+        .collect();
+    let answer = serde_json::json!({ "data": { "accounts": accounts } });
+    let app = Router::new().route(
+        "/graph/collections",
+        axum::routing::post(move || async move { axum::Json(answer) }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/graph/collections")
+}
+
+/// The node has no third-party registry yet: a provider's managers are the
+/// wallet that owns its collections, so a seeded provider must name exactly
+/// that wallet for both sides to decide alike.
+fn check_interim_providers(seed: &Seed) {
+    for provider in &seed.third_parties {
+        assert!(
+            !provider.name.is_empty(),
+            "seed.json provider {}",
+            provider.id
+        );
+        for c in seed
+            .collections
+            .iter()
+            .filter(|c| c.third_party_id.as_deref() == Some(provider.id.as_str()))
+        {
+            assert_eq!(
+                provider.managers,
+                vec![c.owner.clone()],
+                "seed.json provider {} must be managed by the owner of {}",
+                provider.id,
+                c.id
+            );
+        }
+    }
+}
+
 async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
+    check_interim_providers(seed);
     for c in &seed.collections {
+        let urn = c
+            .third_party_id
+            .as_ref()
+            .zip(c.urn_suffix.as_ref())
+            .map(|(provider, suffix)| format!("{provider}:{suffix}"));
         sqlx::query(
             "INSERT INTO builder.collections \
-         (id, name, eth_address, salt, contract_address, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(c.id)
         .bind(&c.name)
         .bind(&seed.wallets[&c.owner])
         .bind(&c.salt)
         .bind(&c.contract_address)
+        .bind(&c.third_party_id)
+        .bind(urn)
         .bind(c.created_at.naive_utc())
         .bind(c.updated_at.naive_utc())
         .execute(pool)
         .await
         .unwrap_or_else(|e| panic!("seed.json collection {}: {e}", c.id));
+    }
+    for i in &seed.items {
+        sqlx::query(
+            "INSERT INTO builder.items (id, name, eth_address, collection_id, blockchain_item_id, type, thumbnail, data, metrics, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, 'wearable', $6, $7, $8, $9, $10)",
+        )
+        .bind(i.id)
+        .bind(&i.name)
+        .bind(&seed.wallets[&i.owner])
+        .bind(i.collection_id)
+        .bind(&i.blockchain_item_id)
+        .bind(&i.thumbnail)
+        .bind(&i.data)
+        .bind(&i.metrics)
+        .bind(i.created_at.naive_utc())
+        .bind(i.updated_at.naive_utc())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json item {}: {e}", i.id));
     }
     for c in &seed.chain.collections {
         sqlx::query(
@@ -1290,8 +1396,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .bind(&seed.wallets[&c.creator])
         .bind(&seed.wallets[&c.owner])
         .bind(c.is_approved)
-        .bind(&c.managers)
-        .bind(&c.minters)
+        .bind(roles(seed, &c.managers))
+        .bind(roles(seed, &c.minters))
         .bind(c.created_at)
         .bind(c.updated_at)
         .bind(c.reviewed_at)
@@ -1377,6 +1483,14 @@ async fn replay_setup() -> Option<Replay> {
         wallets.insert(address.clone(), wallet);
     }
     seed(&scratch.pool, &seed_data).await;
+    let index = catalyst::chain_index::ChainIndex::new(
+        Outbound::for_tests(),
+        catalyst::chain_index::IndexSettings {
+            matic_collections_subgraph_url: Some(committee_subgraph(&seed_data).await),
+            ..catalyst::chain_index::IndexSettings::for_tests()
+        },
+    );
+    index.allow_loopback_for_tests();
     let dir = TempDir(std::env::temp_dir().join(format!(
         "catalyst-builder-conformance-{}",
         uuid::Uuid::new_v4()
@@ -1388,7 +1502,7 @@ async fn replay_setup() -> Option<Replay> {
             storage.clone(),
             storage.denylist().clone(),
             Outbound::for_tests(),
-            None,
+            Some(Arc::new(index)),
             None,
             Settings {
                 writes_enabled: true,

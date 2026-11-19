@@ -4,6 +4,7 @@
 
 pub(crate) mod support;
 
+mod access_matrix;
 mod chain_state;
 mod curation_auth;
 mod curation_auth_fuzz;

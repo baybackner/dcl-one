@@ -182,13 +182,6 @@ async fn a_request_the_router_refuses_answers_the_envelope_without_the_parsers_w
         ),
         (
             "GET",
-            "/v1/items/not-a-uuid".to_string(),
-            "",
-            StatusCode::BAD_REQUEST,
-            "Bad Request",
-        ),
-        (
-            "GET",
             format!("/v1/collections/{ID}/items?page=two"),
             "",
             StatusCode::BAD_REQUEST,
@@ -253,7 +246,7 @@ async fn an_unsigned_request_is_refused_before_its_id_or_body_is_read() {
 async fn a_path_no_builder_route_serves_is_left_to_the_router_it_is_merged_into() {
     let app = app(state_with_settings(crate::Settings::default()).await);
     let response = app
-        .oneshot(Request::get("/v1/committee").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/v1/rarities").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -275,8 +268,8 @@ async fn the_collection_listing_answers_privately_only_when_signed() {
         let (status, cache, _) = send_signed(&app, "GET", &path, "").await;
         assert_eq!(
             (status, cache.as_deref()),
-            (StatusCode::UNAUTHORIZED, Some("private, no-store")),
-            "{mount} signed listing"
+            (StatusCode::SERVICE_UNAVAILABLE, Some("private, no-store")),
+            "{mount} signed listing, with no committee source to decide it"
         );
     }
 }

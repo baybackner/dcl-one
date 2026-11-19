@@ -1,3 +1,4 @@
+use crate::access::granted;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -17,22 +18,34 @@ async fn publication_uses_owned_persisted_files_and_stable_item_order() {
     let collection: CollectionDraft =
         serde_json::from_value(json!({"id": id, "name": "Publication"})).unwrap();
     store
-        .save_collection_draft(OWNER, &collection)
+        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
         .await
         .unwrap();
-    assert!(store.prepare_publication(OWNER, id).await.is_err());
+    assert!(
+        store
+            .prepare_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     let mut item: ItemDraft = serde_json::from_value(json!({
         "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
         "data": {"category": "hat", "representations": [{"mainFile": "model.glb", "contents": ["model.glb"],
         "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"]}]},
         "price": "0", "rarity": "rare", "thumbnail": "thumbnail.png"
     })).unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
-    assert!(store.prepare_publication(OWNER, id).await.is_err());
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .prepare_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     let files = store
         .save_item_files(
-            OWNER,
-            item.id,
+            &granted::change(OWNER, item.id),
             vec![
                 ("model.glb".into(), unique("model")),
                 ("thumbnail.png".into(), unique("image")),
@@ -42,25 +55,46 @@ async fn publication_uses_owned_persisted_files_and_stable_item_order() {
         .unwrap();
     let hashes: Vec<String> = files.values().cloned().collect();
     item.contents = files.clone();
-    store.save_item_draft(OWNER, &item).await.unwrap();
-    let first = store.prepare_publication(OWNER, id).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
+    let first = store
+        .prepare_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     assert_eq!(first.items.len(), 1);
     assert_eq!(first.items[0].metadata, "1:w:Hat::hat:BaseMale");
-    assert!(store.prepare_publication(OTHER, id).await.is_err());
+    assert!(
+        store
+            .prepare_publication(&granted::publisher(OTHER, id))
+            .await
+            .is_err()
+    );
     assert_eq!(
         first.revision,
-        store.prepare_publication(OWNER, id).await.unwrap().revision
+        store
+            .prepare_publication(&granted::publisher(OWNER, id))
+            .await
+            .unwrap()
+            .revision
     );
     let second_id = Uuid::new_v4();
     let first_id = item.id;
     item.id = second_id;
-    store.save_item_draft(OWNER, &item).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
     sqlx::query("UPDATE builder.items SET created_at='2026-01-01T00:00:00' WHERE collection_id=$1")
         .bind(id)
         .execute(store.pool())
         .await
         .unwrap();
-    let prepared = store.prepare_publication(OWNER, id).await.unwrap();
+    let prepared = store
+        .prepare_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     let mut expected = [first_id.to_string(), second_id.to_string()];
     expected.sort();
     assert_eq!(
@@ -81,10 +115,15 @@ async fn publication_uses_owned_persisted_files_and_stable_item_order() {
         refused.is_err(),
         "a draft still names the upload, so the FK refuses the delete: the old missing_content case cannot arise"
     );
-    assert!(store.prepare_publication(OWNER, id).await.is_ok());
+    assert!(
+        store
+            .prepare_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_ok()
+    );
     assert!(
         !store
-            .collection_by_id(&id)
+            .collection_by_id(&granted::read(id))
             .await
             .unwrap()
             .unwrap()
@@ -104,8 +143,9 @@ async fn published_draft(store: &crate::items::ItemsComponent, linked: bool) -> 
     if linked {
         draft["urn"] = json!(urn);
     }
+    let draft: crate::drafts::CollectionDraft = serde_json::from_value(draft).unwrap();
     store
-        .save_collection_draft(OWNER, &serde_json::from_value(draft).unwrap())
+        .save_collection_draft(&granted::edit(OWNER, draft.id), &draft)
         .await
         .unwrap();
     let item: ItemDraft = serde_json::from_value(json!({
@@ -113,7 +153,10 @@ async fn published_draft(store: &crate::items::ItemsComponent, linked: bool) -> 
         "data": {"category": "hat"}, "price": "0", "rarity": "rare"
     }))
     .unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
     (id, item.id)
 }
 
@@ -164,21 +207,26 @@ async fn a_published_collection_cannot_begin_another_publication() {
             if linked {
                 already_published(
                     store
-                        .prepare_linked_publication(OWNER, id)
+                        .prepare_linked_publication(&granted::publisher(OWNER, id))
                         .await
                         .unwrap_err(),
                 );
                 already_published(
                     store
-                        .begin_linked_publication(OWNER, id, "any revision")
+                        .begin_linked_publication(&granted::publisher(OWNER, id), "any revision")
                         .await
                         .unwrap_err(),
                 );
             } else {
-                already_published(store.prepare_publication(OWNER, id).await.unwrap_err());
                 already_published(
                     store
-                        .begin_publication(OWNER, id, "any revision")
+                        .prepare_publication(&granted::publisher(OWNER, id))
+                        .await
+                        .unwrap_err(),
+                );
+                already_published(
+                    store
+                        .begin_publication(&granted::publisher(OWNER, id), "any revision")
                         .await
                         .unwrap_err(),
                 );
@@ -212,7 +260,7 @@ async fn a_published_collection_cannot_begin_another_publication() {
     .unwrap();
     assert_eq!(
         store
-            .begin_publication(OWNER, id, "another revision")
+            .begin_publication(&granted::publisher(OWNER, id), "another revision")
             .await
             .unwrap_err()
             .status(),
@@ -246,7 +294,7 @@ async fn a_published_collection_cannot_begin_another_publication() {
     .unwrap();
     assert_eq!(
         store
-            .begin_linked_publication(OWNER, id, "another revision")
+            .begin_linked_publication(&granted::publisher(OWNER, id), "another revision")
             .await
             .unwrap_err()
             .status(),

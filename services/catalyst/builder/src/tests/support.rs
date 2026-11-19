@@ -48,7 +48,8 @@ pub async fn scratch_pool(max_connections: u32) -> Option<sqlx::PgPool> {
 
 /// Puts collection `id` on chain the way the shop's copy shows it: a
 /// contract address on the builder row and its Polygon row in
-/// `shop.collections`. Returns the contract for [`off_chain`].
+/// `shop.collections`, created by the row's owner. Returns the contract for
+/// [`off_chain`].
 pub async fn on_chain(pool: &sqlx::PgPool, id: Uuid, approved: bool) -> String {
     let contract = format!("0x{}", Uuid::new_v4().simple().to_string()[..20].repeat(2));
     sqlx::query("UPDATE builder.collections SET contract_address = $2 WHERE id = $1")
@@ -60,10 +61,12 @@ pub async fn on_chain(pool: &sqlx::PgPool, id: Uuid, approved: bool) -> String {
     sqlx::query(
         "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
            is_completed, is_approved, is_editable, created_at, updated_at, reviewed_at, mirrored_at) \
-         VALUES ('matic', $1, 137, 'On chain', $1, $1, 'urn:c', true, $2, true, 1, 1, 1, timezone('UTC', now()))",
+         SELECT 'matic', $1, 137, 'On chain', eth_address, eth_address, 'urn:c', true, $2, true, 1, 1, 1, timezone('UTC', now()) \
+         FROM builder.collections WHERE id = $3",
     )
     .bind(&contract)
     .bind(approved)
+    .bind(id)
     .execute(pool)
     .await
     .unwrap();
@@ -207,6 +210,81 @@ pub async fn state_without_db(
     market: Option<Arc<crate::chain_index::ChainIndex>>,
 ) -> crate::SharedState {
     state_over(lazy_pool(), market).await
+}
+
+/// A loopback Polygon collections subgraph that answers the committee
+/// accounts it holds (`None` answers a GraphQL error) and counts its reads.
+#[derive(Clone, Default)]
+pub struct FakeCommittee {
+    members: Arc<std::sync::Mutex<Option<Vec<String>>>>,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+    delay: Arc<std::sync::Mutex<std::time::Duration>>,
+}
+
+impl FakeCommittee {
+    pub fn with(members: &[&str]) -> Self {
+        let fake = Self::default();
+        fake.set(Some(members));
+        fake
+    }
+
+    pub fn down() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&self, members: Option<&[&str]>) {
+        *self.members.lock().unwrap() = members.map(|m| m.iter().map(|a| a.to_string()).collect());
+    }
+
+    /// Answers each read after `delay`.
+    pub fn slow(&self, delay: std::time::Duration) {
+        *self.delay.lock().unwrap() = delay;
+    }
+
+    pub fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn answer(
+        axum::extract::State(fake): axum::extract::State<Self>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::Json<serde_json::Value> {
+        fake.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let delay = *fake.delay.lock().unwrap();
+        tokio::time::sleep(delay).await;
+        let Some(mut members) = fake.members.lock().unwrap().clone() else {
+            return axum::Json(serde_json::json!({ "errors": [{ "message": "indexing error" }] }));
+        };
+        members.sort_by_key(|a| a.to_ascii_lowercase());
+        let from = body["variables"]["idFrom"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let first = body["variables"]["first"].as_u64().unwrap_or(1000) as usize;
+        let accounts: Vec<_> = members
+            .iter()
+            .filter(|a| a.to_ascii_lowercase() > from)
+            .take(first)
+            .map(|a| serde_json::json!({ "id": a.to_ascii_lowercase(), "address": a }))
+            .collect();
+        axum::Json(serde_json::json!({ "data": { "accounts": accounts } }))
+    }
+}
+
+/// A chain index whose Polygon collections subgraph is `fake`.
+pub async fn committee_index(fake: &FakeCommittee) -> Arc<crate::chain_index::ChainIndex> {
+    let app = axum::Router::new()
+        .route("/subgraph", axum::routing::post(FakeCommittee::answer))
+        .with_state(fake.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let index = market_without_db(crate::chain_index::IndexSettings {
+        matic_collections_subgraph_url: Some(format!("http://{addr}/subgraph")),
+        ..crate::chain_index::IndexSettings::for_tests()
+    });
+    index.allow_loopback_for_tests();
+    index
 }
 
 /// A chain index with `settings` (no subgraph configured by default).

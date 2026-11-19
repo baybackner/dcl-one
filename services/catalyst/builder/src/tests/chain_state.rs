@@ -521,11 +521,11 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
     );
     let app = crate::router(state);
     let reads = [
-        format!("/v1/collections/{collection}"),
         "/v1/drafts/collections".to_string(),
         "/v1/drafts/items".to_string(),
     ];
     let decision_reads = [
+        format!("/v1/collections/{collection}"),
         format!("/v1/collections/{collection}/publication"),
         format!("/v1/collections/{collection}/linked-publication"),
     ];
@@ -593,17 +593,9 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
         assert_eq!(
             status,
             StatusCode::SERVICE_UNAVAILABLE,
-            "{path}: a preparation guards against a published collection, so a stale copy refuses it: {body}"
+            "{path}: a by-id read is an access decision and a preparation guards against a published collection, so a stale copy refuses them: {body}"
         );
     }
-    let (_, body) = send(
-        &app,
-        "GET",
-        &format!("/v1/collections/{collection}"),
-        Value::Null,
-    )
-    .await;
-    assert_eq!(body["data"]["is_published"], false, "{body}");
     for (method, path, body) in &writes {
         let (status, answer) = send(&app, method, path, body.clone()).await;
         assert_eq!(
@@ -615,6 +607,14 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
     unchanged().await;
 
     fresh_pass(&mut conn).await;
+    let (_, body) = send(
+        &app,
+        "GET",
+        &format!("/v1/collections/{collection}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(body["data"]["is_published"], false, "{body}");
     for (method, path, body) in &writes {
         let (status, answer) = send(&app, method, path, body.clone()).await;
         assert_eq!(status, StatusCode::OK, "{method} {path}: {answer}");

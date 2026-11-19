@@ -22,9 +22,42 @@ const FIXTURES = path.join(ROOT, 'services/catalyst/tests/fixtures/conformance/b
 const GUARD = path.join(__dirname, 'builder-server-offline.cjs')
 const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
 const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'thirdParties'])
-const SEED_KEYS = ['wallets', 'collections', 'chain']
-const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'creator', 'managers_contains', 'minters_contains', 'collection'])
+const SEED_KEYS = ['wallets', 'third_parties', 'collections', 'items', 'chain']
+const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'creator', 'managers_contains', 'minters_contains', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
+const MOVED_ITEM_FILE = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy'
+
+/** A client-shaped wearable `item` body for `id`, in `collectionId` (null: no collection). */
+function movedItem(id, collectionId) {
+  return {
+    item: {
+      id,
+      name: 'Conformance moved',
+      description: '',
+      eth_address: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
+      collection_id: collectionId,
+      type: 'wearable',
+      rarity: 'common',
+      price: '0',
+      thumbnail: 'thumbnail.png',
+      contents: { 'model.glb': MOVED_ITEM_FILE, 'thumbnail.png': MOVED_ITEM_FILE },
+      metrics: { meshes: 1, bodies: 1, materials: 1, textures: 1, triangles: 1, entities: 1 },
+      data: {
+        category: 'hat',
+        tags: [],
+        replaces: [],
+        hides: [],
+        representations: [{
+          bodyShapes: ['urn:decentraland:off-chain:base-avatars:BaseMale'],
+          mainFile: 'model.glb',
+          contents: ['model.glb'],
+          overrideReplaces: [],
+          overrideHides: []
+        }]
+      }
+    }
+  }
+}
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -240,6 +273,169 @@ const CASES = [
     method: 'GET',
     path: '/v1/collections/c011ec71-0000-4000-8000-000000000007',
     signer: 'owner'
+  },
+  {
+    name: '22-collection-committee',
+    description: 'GET /collections/{id} signed by a committee member who holds no other role on the draft',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'committee'
+  },
+  {
+    name: '23-collection-published-stranger',
+    description: 'GET /collections/{id} signed by a wallet that holds no role on a collection on chain',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'stranger'
+  },
+  {
+    name: '24-collection-published-manager',
+    description: 'GET /collections/{id} signed by an on-chain manager of the collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'manager'
+  },
+  {
+    name: '25-collection-save-stranger',
+    description: 'PUT /collections/{id} signed by a wallet that holds no role on the draft',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'stranger',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000001',
+        name: 'Conformance draft',
+        eth_address: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: '0x00'
+    }
+  },
+  {
+    name: '26-collection-save-committee',
+    description: 'PUT /collections/{id} signed by a committee member who holds no other role on the draft',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001',
+    signer: 'committee',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000001',
+        name: 'Conformance draft',
+        eth_address: '0x01eba3f0e992f53debaf51ed3738dc2f23e09aee',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: '0x00'
+    }
+  },
+  {
+    name: '27-collection-save-published-manager',
+    description: 'PUT /collections/{id} signed by an on-chain manager of a collection on chain',
+    method: 'PUT',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'manager',
+    body: {
+      collection: {
+        id: 'c011ec71-0000-4000-8000-000000000006',
+        name: 'Chain unapproved',
+        eth_address: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0',
+        salt: null,
+        contract_address: null,
+        is_published: false,
+        is_approved: false,
+        minters: [],
+        managers: []
+      },
+      data: '0x00'
+    }
+  },
+  {
+    name: '28-collection-items-unsigned',
+    description: 'GET /collections/{id}/items without a signature',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001/items'
+  },
+  {
+    name: '29-collection-items-stranger',
+    description: 'GET /collections/{id}/items signed by a wallet that holds no role on the draft',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001/items',
+    signer: 'stranger'
+  },
+  {
+    name: '30-collection-items-committee',
+    description: 'GET /collections/{id}/items signed by a committee member who holds no other role on the draft',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000001/items',
+    signer: 'committee'
+  },
+  {
+    name: '31-collection-items-published-stranger',
+    description: 'GET /collections/{id}/items signed by a wallet that holds no role on a collection on chain',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006/items',
+    signer: 'stranger'
+  },
+  {
+    name: '32-collection-items-published-manager',
+    description: 'GET /collections/{id}/items signed by an on-chain manager of the collection',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006/items',
+    signer: 'manager'
+  },
+  {
+    name: '33-item-orphan-into-third-party',
+    description: 'PUT /items/{id} signed by the owner moving its item with no collection into a third-party collection it manages',
+    method: 'PUT',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000a1',
+    signer: 'owner',
+    body: movedItem('c011ec71-0000-4000-8000-0000000000a1', 'c011ec71-0000-4000-8000-000000000008')
+  },
+  {
+    name: '34-item-out-of-third-party',
+    description: 'PUT /items/{id} signed by the owner taking its item out of a third-party collection it manages',
+    method: 'PUT',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000a2',
+    signer: 'owner',
+    body: movedItem('c011ec71-0000-4000-8000-0000000000a2', null)
+  },
+  {
+    name: '35-item-between-third-party',
+    description: 'PUT /items/{id} signed by the owner moving its item from one third-party collection it manages to another',
+    method: 'PUT',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000a3',
+    signer: 'owner',
+    body: movedItem('c011ec71-0000-4000-8000-0000000000a3', 'c011ec71-0000-4000-8000-000000000008')
+  },
+  {
+    name: '36-item-published-stranger',
+    description: 'GET /items/{id} signed by a wallet that holds no role on a minted item of a collection on chain',
+    method: 'GET',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000b1',
+    signer: 'stranger'
+  },
+  {
+    name: '37-item-published-owner',
+    description: 'GET /items/{id} signed by the owner of a minted item of a collection on chain',
+    method: 'GET',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000b1',
+    signer: 'owner'
+  },
+  {
+    name: '38-item-published-committee',
+    description: 'GET /items/{id} signed by a committee member who holds no other role on a minted item of a collection on chain',
+    method: 'GET',
+    path: '/v1/items/c011ec71-0000-4000-8000-0000000000b1',
+    signer: 'committee'
   }
 ]
 
@@ -400,6 +596,8 @@ async function signedHeaders(req, wallet, item) {
 
 /** The collections subgraph's rows for `seed.chain`, in the shape upstream's fragments select. */
 function chainRows(seed, signers) {
+  const addresses = roles => roles.map(role => signers[role].address)
+  const accounts = addresses(seed.chain.committee).map(address => ({ id: address, address, isCommitteeMember: true }))
   const collections = seed.chain.collections.map(c => ({
     __typename: 'Collection',
     id: c.contract_address,
@@ -408,8 +606,8 @@ function chainRows(seed, signers) {
     name: c.name,
     isApproved: c.is_approved,
     isCompleted: true,
-    minters: c.minters,
-    managers: c.managers,
+    minters: addresses(c.minters),
+    managers: addresses(c.managers),
     reviewedAt: String(c.reviewed_at),
     updatedAt: String(c.updated_at),
     createdAt: String(c.created_at)
@@ -450,7 +648,8 @@ function chainRows(seed, signers) {
       }
     }
   })
-  return { collections, items }
+  for (const collection of collections) collection.items = items.filter(item => item.collection.id === collection.id)
+  return { accounts, collections, items }
 }
 
 /** The value of a GraphQL argument node, with its variables substituted. */
@@ -475,6 +674,7 @@ function selected(field, rows, variables, unfaked) {
     }
     if (key === 'id') return row.id === lower(value)
     if (key === 'id_in') return value.map(lower).includes(row.id)
+    if (key === 'isCommitteeMember') return row.isCommitteeMember === value
     if (key === 'creator') return row.creator === lower(value)
     if (key === 'managers_contains') return value.map(lower).some(v => (row.managers || []).includes(v))
     if (key === 'minters_contains') return value.map(lower).some(v => (row.minters || []).includes(v))
@@ -492,6 +692,7 @@ function startFakes(req, unfaked, chain) {
         response.writeHead(status, { 'content-type': 'application/json' })
         response.end(JSON.stringify(body))
       }
+      if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
       if (request.method !== 'POST' || !request.url.startsWith('/graph/')) {
         unfaked.push(`${request.method} ${request.url}`)
         return send(404, { error: 'not faked' })
@@ -559,10 +760,22 @@ function migrate(upstream, environment) {
 }
 
 async function seedDatabase(client, seed, signers) {
+  for (const provider of seed.third_parties) {
+    await client.query(
+      'INSERT INTO virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, $3)',
+      [provider.id, provider.managers.map(role => signers[role].address), `tp:1:${provider.name}:`]
+    )
+  }
   for (const collection of seed.collections) {
     await client.query(
-      'INSERT INTO collections (id, name, eth_address, salt, contract_address, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [collection.id, collection.name, signers[collection.owner].address, collection.salt, collection.contract_address, collection.created_at, collection.updated_at]
+      'INSERT INTO collections (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [collection.id, collection.name, signers[collection.owner].address, collection.salt, collection.contract_address, collection.third_party_id ?? null, collection.urn_suffix ?? null, collection.created_at, collection.updated_at]
+    )
+  }
+  for (const item of seed.items) {
+    await client.query(
+      'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+      [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, '{}', item.created_at, item.updated_at]
     )
   }
 }

@@ -16,6 +16,8 @@ use serde_json::{Map, Value};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use crate::access::{CollectionGrant, CollectionRead};
+use crate::auth::Admin;
 use crate::chain_state::{self, ReadView};
 use crate::storage::Storage;
 
@@ -150,32 +152,24 @@ impl ItemsComponent {
         Self { pool, blobs }
     }
 
-    pub fn pool(&self) -> &PgPool {
+    pub(crate) fn pool(&self) -> &PgPool {
         &self.pool
-    }
-
-    pub async fn collection_owner(&self, collection_id: &Uuid) -> Result<Option<String>, ApiError> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT eth_address FROM builder.collections WHERE id = $1")
-                .bind(collection_id)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|(addr,)| addr))
     }
 
     /// The collection with its derived published and approved state; 503
     /// while the chain copy can't tell.
     pub async fn collection_by_id(
         &self,
-        collection_id: &Uuid,
+        read: &CollectionRead,
     ) -> Result<Option<CollectionMetaRow>, ApiError> {
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_read(&mut conn).await?;
-        collection_meta(&mut conn, &view, collection_id).await
+        collection_meta(&mut conn, &view, read).await
     }
 
     pub async fn set_item_curation_status(
         &self,
+        _admin: &Admin,
         collection_id: &Uuid,
         item_id: &Uuid,
         status: &str,
@@ -197,6 +191,7 @@ impl ItemsComponent {
 
     pub async fn set_items_curation_status(
         &self,
+        _admin: &Admin,
         collection_id: &Uuid,
         item_ids: &[Uuid],
         status: &str,
@@ -217,10 +212,11 @@ impl ItemsComponent {
     }
 
     /// The collection's items in creation order (`items_collection_created_idx`),
-    /// with the window total the paginated envelope reports.
+    /// with the window total the paginated envelope reports: every item for a
+    /// full read, else the minted ones.
     pub async fn items_for_collection(
         &self,
-        collection_id: &Uuid,
+        read: &CollectionRead,
         q: &ItemQuery,
     ) -> Result<(Vec<ItemRow>, i64), ApiError> {
         let (limit, offset): (Option<i64>, Option<i64>) = match (q.page, q.limit) {
@@ -246,14 +242,16 @@ impl ItemsComponent {
             FROM builder.items i
             WHERE i.collection_id = $1
               AND ($2::text IS NULL OR i.name ILIKE '%' || $2 || '%')
+              AND ($5 OR i.blockchain_item_id IS NOT NULL)
             ORDER BY i.created_at ASC, i.id ASC
             LIMIT $3 OFFSET COALESCE($4, 0)
             "#,
         )
-        .bind(collection_id)
+        .bind(read.id())
         .bind(q.name.as_deref())
         .bind(limit)
         .bind(offset)
+        .bind(read.full())
         .fetch_all(&self.pool)
         .await?;
 
@@ -343,8 +341,9 @@ pub(crate) fn collection_meta_columns(view: &ReadView) -> String {
 pub(crate) async fn collection_meta(
     conn: &mut PgConnection,
     view: &ReadView,
-    collection_id: &Uuid,
+    grant: &impl CollectionGrant,
 ) -> Result<Option<CollectionMetaRow>, ApiError> {
+    let collection_id = grant.collection();
     Ok(
         sqlx::query_as::<_, CollectionMetaRow>(sqlx::AssertSqlSafe(format!(
             "SELECT {} FROM {} WHERE c.id = $1",

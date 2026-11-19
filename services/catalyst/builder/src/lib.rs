@@ -24,16 +24,16 @@
 //! `CREATE_WRITES_ENABLED` ([`writes`], default false, 503 with
 //! `Retry-After`, built the way `social::writes` gates the social writes).
 //!
-//! Authorization contracts, kept exactly: owner = `collections.eth_address`
-//! / `items.eth_address` equals the signer on every draft, upload and
-//! publication write (the rows are lowercase by CHECK, the signer is
-//! lowercased by the verifier); a non-owner's collection read and the
-//! curation routes need the admin bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`,
-//! constant-time, fails closed) or a `BUILDER_ADMIN_ADDRESSES` signer; the
-//! on-chain address reads stay anonymous (the old crate's recorded
-//! divergence); chain writes are prepared here and signed and submitted by
-//! the client, the receipt verified over the Polygon RPC; the linked cheque
-//! is verified only; v2 never holds a signing key.
+//! Authorization: [`access`] decides every read and write of a collection or
+//! item (owner, on-chain manager, current committee member, third-party
+//! manager, as builder-server defines them; 503 when a source it needs can't
+//! tell), and the store functions take the grant it returns. The committee is
+//! [`committee`]'s read of the Polygon collections subgraph, kept an hour.
+//! The curation routes need the admin bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`,
+//! constant-time, fails closed) or a `BUILDER_ADMIN_ADDRESSES` signer; chain
+//! writes are prepared here and signed and submitted by the client, the
+//! receipt verified over the Polygon RPC; the linked cheque is verified only;
+//! v2 never holds a signing key.
 //!
 //! Deviations from the old crate, all deliberate: the signed-fetch window is
 //! the shared verifier's 5 minutes (the old required path allowed 30); the
@@ -66,8 +66,10 @@ pub(crate) use catalyst_db as db;
 pub(crate) use catalyst_shared as shared;
 pub(crate) use catalyst_storage as storage;
 
+pub mod access;
 pub mod auth;
 pub mod chain_state;
+pub mod committee;
 pub mod drafts;
 pub mod handlers;
 pub mod http;
@@ -100,10 +102,8 @@ use dcl_auth::eip1654::Eip1654Validator;
 use dcl_http::Outbound;
 
 use items::{ItemsComponent, NewsletterComponent};
-use onchain::CommitteeMemberOut;
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_BUILDER_ADMIN_TOKEN";
-const COMMITTEE_MEMO_TTL: Duration = Duration::from_secs(300);
 const EXISTS_TTL: Duration = Duration::from_secs(300);
 const EXISTS_CACHE_MAX: usize = 8192;
 /// One 20 MiB upload with its framing.
@@ -243,7 +243,8 @@ pub struct State {
     /// withheld (rejected or deleted photo) is a 404 on the storage routes
     /// here too, not only on the content server's routes.
     pub denylist: Arc<crate::content::Denylist>,
-    pub(crate) committee_memo: TtlMap<(), Arc<Vec<CommitteeMemberOut>>>,
+    /// The current curation committee (`committee`), kept an hour.
+    pub committee: committee::Committee,
     pub(crate) exists_memo: TtlMap<String, bool>,
 }
 
@@ -268,7 +269,7 @@ impl State {
             foundation: linked_publication_review::foundation_client(),
             eip1654,
             denylist,
-            committee_memo: TtlMap::new(COMMITTEE_MEMO_TTL),
+            committee: committee::Committee::default(),
             exists_memo: TtlMap::bounded(EXISTS_TTL, EXISTS_CACHE_MAX),
         })
     }
@@ -365,6 +366,7 @@ fn api_routes() -> Router<SharedState> {
             "/v1/collections",
             get(handlers::collections::get_collections),
         )
+        .route("/v1/committee", get(handlers::collections::get_committee))
         .route(
             "/v1/storage/contents/{hash}",
             get(handlers::storage::get_storage_content)

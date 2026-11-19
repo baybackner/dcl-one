@@ -107,15 +107,23 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
 
 `seed.json` accepts only the fields both seeders apply; any other field
 fails the replay test with its name. `collections` are the builder's rows,
-each with the contract address its draft computed. `chain` names, once, what
-the Polygon collections subgraph holds: its collections (contract, name,
-creator and owner roles, approval, managers, minters and unix timestamps) and
-their items. The capture serves `chain` from its fake subgraph to upstream;
-the replay writes the same facts into the node's copy of that subgraph
-(`shop.collections` and `shop.items`) and records a fresh complete pass of
-both mirrors in `shop.mirror_state`, so a collection is published on both
-sides exactly when `chain` holds its contract. The capture answers an empty
-committee and lists no third parties.
+each with the contract address its draft computed, and a third-party one with
+its provider id and URN suffix. `items` are the builder's item rows.
+`third_parties` are providers neither registry lists: the capture inserts
+them as upstream's virtual third parties; the node reads no registry yet and
+admits the wallet that owns a third-party collection as its provider's
+manager, so the replay requires each provider's managers to be exactly that
+wallet. `chain` names, once, what
+the Polygon collections subgraph holds: the committee's roles, its
+collections (contract, name, creator and owner roles, approval, manager and
+minter roles and unix timestamps) and their items. The capture serves
+`chain` from its fake subgraph to upstream; the replay writes the same
+collections and items into the node's copy of that subgraph
+(`shop.collections` and `shop.items`), records a fresh complete pass of both
+mirrors in `shop.mirror_state` and serves the committee to the node's reader
+from a loopback fake subgraph, so a collection is published, and a wallet is
+on the committee, on both sides exactly when `chain` says so. The fake
+third-party registry lists no provider.
 
 ```sh
 cd services/catalyst
@@ -144,12 +152,14 @@ Then it:
    can create databases and owns nothing else.
 2. Runs upstream's migrations and inserts the rows of `seed.json`.
 3. Starts a loopback fake for the collections and third-party subgraphs,
-   which answers the collections subgraph's `collections` and `items` fields
-   with the `seed.json` `chain` rows their `where` argument selects (by `id`,
-   `id_in`, `creator`, `managers_contains`, `minters_contains` or
-   `collection`), its `accounts` field and the third-party subgraph's fields
-   with an empty list, and points the peer, RPC, forum, warehouse, S3, SNS and
-   OpenSea settings at it. Slack is off and the feature flags are set off
+   which answers the collections subgraph's `accounts`, `collections` and
+   `items` fields with the `seed.json` `chain` rows their `where` argument
+   selects (by `id`, `id_in`, `creator`, `managers_contains`,
+   `minters_contains`, `collection` or `isCommitteeMember`; a collection
+   carries its items) and the third-party subgraph's fields with an empty
+   list. It answers the catalyst's active-entities read with no entities,
+   and points the peer, RPC, forum, warehouse, S3, SNS and OpenSea settings
+   at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
    with `--require`, into the migration process: proxy variables are
@@ -157,7 +167,8 @@ Then it:
    address is refused, as is a `dns.lookup` of any other hostname. The
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
-   apply, or if it called a fake route other than the subgraphs. A case
+   apply, or if it called a fake route other than the subgraphs and the
+   active-entities read. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
    process and on every thread of the migration process. It

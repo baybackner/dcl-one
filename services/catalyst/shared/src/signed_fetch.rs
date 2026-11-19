@@ -558,6 +558,11 @@ pub mod test_support {
         KEY.parse().unwrap()
     }
 
+    /// A verified signer for `address`, lowercased as the verifier answers it.
+    pub fn signer(address: &str) -> Signer {
+        Signer(address.to_lowercase())
+    }
+
     pub fn address() -> String {
         format!("{:#x}", wallet().address())
     }

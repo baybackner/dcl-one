@@ -4,6 +4,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::SharedState;
+use crate::access;
 use crate::http::{ApiData, ApiError};
 use crate::linked_publication::LinkedPublicationCheque;
 use crate::linked_publication_review::{FoundationLinkedReview, FoundationReviewSignatures};
@@ -21,11 +22,9 @@ pub async fn prepare(
     Signed(owner): Signed,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiData<LinkedPublicationPreparation>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
-        state
-            .items
-            .prepare_linked_publication(owner.as_str(), id)
-            .await?,
+        state.items.prepare_linked_publication(&publisher).await?,
     )))
 }
 
@@ -34,11 +33,9 @@ pub async fn status(
     Signed(owner): Signed,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiData<Option<LinkedPublicationState>>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
-        state
-            .items
-            .linked_publication_state(owner.as_str(), id)
-            .await?,
+        state.items.linked_publication_state(&publisher).await?,
     )))
 }
 
@@ -48,10 +45,11 @@ pub async fn begin(
     Path(id): Path<Uuid>,
     Json(body): Json<Revision>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
         state
             .items
-            .begin_linked_publication(owner.as_str(), id, &body.revision)
+            .begin_linked_publication(&publisher, &body.revision)
             .await?,
     )))
 }
@@ -62,10 +60,11 @@ pub async fn claim(
     Path(id): Path<Uuid>,
     Json(body): Json<Revision>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
         state
             .items
-            .claim_linked_publication(owner.as_str(), id, &body.revision)
+            .claim_linked_publication(&publisher, &body.revision)
             .await?,
     )))
 }
@@ -76,10 +75,11 @@ pub async fn authorize(
     Path(id): Path<Uuid>,
     Json(body): Json<LinkedPublicationCheque>,
 ) -> Result<Json<ApiData<LinkedPublicationState>>, ApiError> {
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
         state
             .items
-            .authorize_linked_publication(owner.as_str(), id, &body)
+            .authorize_linked_publication(&publisher, &body)
             .await?,
     )))
 }
@@ -89,10 +89,8 @@ pub async fn cancel(
     Signed(owner): Signed,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiData<bool>>, ApiError> {
-    state
-        .items
-        .cancel_linked_publication(owner.as_str(), id)
-        .await?;
+    let publisher = access::publisher(&state, &owner, id).await?;
+    state.items.cancel_linked_publication(&publisher).await?;
     Ok(Json(ApiData::ok(true)))
 }
 
@@ -110,9 +108,8 @@ pub async fn verify(
             "Foundation review is off on this node: BUILDER_FOUNDATION_URL names no Foundation",
         ));
     };
+    let publisher = access::publisher(&state, &owner, id).await?;
     Ok(Json(ApiData::ok(
-        verifier
-            .verify(&state.items, owner.as_str(), id, &body)
-            .await?,
+        verifier.verify(&state.items, &publisher, &body).await?,
     )))
 }

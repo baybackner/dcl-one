@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::access::Publisher;
+
 use super::chain_state;
 use super::http::ApiError;
 use super::items::ItemsComponent;
@@ -40,9 +42,9 @@ fn decode(value: Value) -> Result<PublicationState, ApiError> {
 impl ItemsComponent {
     pub async fn publication_state(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
     ) -> Result<Option<PublicationState>, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let value: Option<Value> = sqlx::query_scalar(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -53,10 +55,10 @@ impl ItemsComponent {
 
     pub async fn begin_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         revision: &str,
     ) -> Result<PublicationState, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         let view = chain_state::for_decision(&mut tx).await?;
         let owned: Option<Uuid> = sqlx::query_scalar(LOCK_OWNED)
@@ -121,10 +123,10 @@ impl ItemsComponent {
 
     pub async fn claim_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         revision: &str,
     ) -> Result<(), ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         sqlx::query(LOCK_OWNED)
             .bind(id)
@@ -152,7 +154,8 @@ impl ItemsComponent {
         Ok(())
     }
 
-    pub async fn cancel_publication(&self, signer: &str, id: Uuid) -> Result<(), ApiError> {
+    pub async fn cancel_publication(&self, publisher: &Publisher) -> Result<(), ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         let owned: Option<Uuid> = sqlx::query_scalar(LOCK_OWNED)
             .bind(id)
@@ -191,11 +194,11 @@ impl ItemsComponent {
 
     pub(super) async fn record_publication_tx(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         hash: &str,
         revision: &str,
     ) -> Result<(), ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         sqlx::query(LOCK_OWNED)
             .bind(id)
@@ -222,11 +225,11 @@ impl ItemsComponent {
     /// unfreezes the draft. Idempotent once terminal.
     pub(super) async fn finish_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         hash: &str,
         contract: Option<&str>,
     ) -> Result<PublicationState, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         sqlx::query(LOCK_OWNED)
             .bind(id)

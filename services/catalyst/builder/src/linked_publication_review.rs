@@ -22,6 +22,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::access::Publisher;
+
 use crate::shared::signed_fetch::{
     AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER,
 };
@@ -117,12 +119,12 @@ impl FoundationLinkedReview {
     pub async fn verify(
         &self,
         store: &ItemsComponent,
-        owner: &str,
-        id: Uuid,
+        publisher: &Publisher,
         signatures: &FoundationReviewSignatures,
     ) -> Result<LinkedPublicationState, ApiError> {
+        let (owner, id) = (publisher.signer(), publisher.id());
         let state = store
-            .linked_publication_state(owner, id)
+            .linked_publication_state(publisher)
             .await?
             .ok_or_else(|| ApiError::not_found("Linked publication not found"))?;
         if state.status == "submitted" {
@@ -156,7 +158,7 @@ impl FoundationLinkedReview {
             return Ok(state);
         };
         store
-            .finish_linked_publication(owner, id, &state.preparation.revision, review)
+            .finish_linked_publication(publisher, &state.preparation.revision, review)
             .await
     }
 }
@@ -342,13 +344,13 @@ impl ItemsComponent {
     /// published ([`crate::chain_state`]). Idempotent once submitted.
     async fn finish_linked_publication(
         &self,
-        owner: &str,
-        id: Uuid,
+        publisher: &Publisher,
         revision: &str,
         review: VerifiedReview,
     ) -> Result<LinkedPublicationState, ApiError> {
+        let (owner, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
-        lock_collection(&mut tx, owner, id).await?;
+        lock_collection(&mut tx, publisher).await?;
         let value: Value = sqlx::query_scalar(STATE_QUERY)
             .bind(id)
             .bind(owner)

@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::access::Publisher;
+
 use dcl_auth::hash_bytes_v1;
 
 use super::chain_state;
@@ -56,7 +58,8 @@ fn prepare(snapshot: &Value, signer: &str) -> Result<LinkedPublicationPreparatio
     collection["urn"] = collection["urn_suffix"].clone();
     let draft: CollectionDraft = serde_json::from_value(collection.clone())
         .map_err(|_| ApiError::bad_request("Invalid collection draft"))?;
-    draft.validate(draft.id, signer)?;
+    draft.validate(draft.id)?;
+    crate::drafts::owned_by(draft.eth_address.as_deref(), signer)?;
     let urn = draft
         .urn
         .ok_or_else(|| ApiError::bad_request("Choose a linked collection"))?;
@@ -74,7 +77,8 @@ fn prepare(snapshot: &Value, signer: &str) -> Result<LinkedPublicationPreparatio
     for row in rows {
         let item: ItemDraft = serde_json::from_value(row.clone())
             .map_err(|_| ApiError::bad_request("Invalid collection item"))?;
-        item.validate(item.id, signer)?;
+        item.validate(item.id)?;
+        crate::drafts::owned_by(item.eth_address.as_deref(), signer)?;
         if item.collection_id != Some(draft.id)
             || row["missing_content"] == true
             || item.contents.is_empty()
@@ -109,9 +113,9 @@ fn prepare(snapshot: &Value, signer: &str) -> Result<LinkedPublicationPreparatio
 impl ItemsComponent {
     pub async fn linked_publication_state(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
     ) -> Result<Option<LinkedPublicationState>, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -123,10 +127,10 @@ impl ItemsComponent {
 
     pub async fn prepare_linked_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
     ) -> Result<LinkedPublicationPreparation, ApiError> {
-        if let Some(state) = self.linked_publication_state(signer, id).await? {
+        let (signer, id) = (publisher.signer(), publisher.id());
+        if let Some(state) = self.linked_publication_state(publisher).await? {
             return Ok(state.preparation);
         }
         let mut conn = self.pool.acquire().await?;
@@ -145,13 +149,13 @@ impl ItemsComponent {
 
     pub async fn begin_linked_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         revision: &str,
     ) -> Result<LinkedPublicationState, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
         let view = chain_state::for_decision(&mut tx).await?;
-        lock_collection(&mut tx, signer, id).await?;
+        lock_collection(&mut tx, publisher).await?;
         if let Some(prior) = sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -214,12 +218,12 @@ impl ItemsComponent {
 
     pub async fn claim_linked_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         revision: &str,
     ) -> Result<LinkedPublicationState, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
-        lock_collection(&mut tx, signer, id).await?;
+        lock_collection(&mut tx, publisher).await?;
         let prior = sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -241,12 +245,12 @@ impl ItemsComponent {
 
     pub async fn authorize_linked_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
         cheque: &LinkedPublicationCheque,
     ) -> Result<LinkedPublicationState, ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
-        lock_collection(&mut tx, signer, id).await?;
+        lock_collection(&mut tx, publisher).await?;
         let prior = sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -285,9 +289,10 @@ impl ItemsComponent {
         Ok(state)
     }
 
-    pub async fn cancel_linked_publication(&self, signer: &str, id: Uuid) -> Result<(), ApiError> {
+    pub async fn cancel_linked_publication(&self, publisher: &Publisher) -> Result<(), ApiError> {
+        let (signer, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
-        lock_collection(&mut tx, signer, id).await?;
+        lock_collection(&mut tx, publisher).await?;
         let prior = sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
             .bind(signer)
@@ -318,9 +323,9 @@ impl ItemsComponent {
 
 pub(super) async fn lock_collection(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    signer: &str,
-    id: Uuid,
+    publisher: &Publisher,
 ) -> Result<(), ApiError> {
+    let (signer, id) = (publisher.signer(), publisher.id());
     let owner: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM builder.collections WHERE id=$1 AND eth_address=$2 FOR UPDATE",
     )

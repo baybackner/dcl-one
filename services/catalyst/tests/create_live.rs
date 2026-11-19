@@ -286,7 +286,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     let owner = Wallet::random();
     let stranger = Wallet::random();
 
-    // ── a collection and the publication vector's item, over signed fetch ───
     let collection = Uuid::new_v4();
     let item = Uuid::new_v4();
     let c_path = format!("{BUILDER}/v1/collections/{collection}");
@@ -363,7 +362,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     assert_eq!(saved.status, 200, "{}", saved.body);
     assert_eq!(saved.body["data"]["name"], "Hat");
 
-    // Files first (the FK rule: a draft may only name a hash this node accepted).
     let glb = format!("glTF-live-{}", Uuid::new_v4()).into_bytes();
     let thumb = png(64, 64, 7);
     let (body, ct) = multipart(&[
@@ -439,12 +437,17 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     assert_eq!(read.body["data"]["description"], "A blue hat");
     assert_eq!(
         node.signed(&stranger, "get", &i_path, None).await.status,
-        404,
-        "another wallet has no such draft"
+        401,
+        "another wallet is refused the draft item"
     );
 
     let listing = node
-        .signed(&owner, "get", &format!("{BUILDER}/v1/collections"), None)
+        .signed(
+            &owner,
+            "get",
+            &format!("{BUILDER}/v1/drafts/collections"),
+            None,
+        )
         .await;
     assert_eq!(listing.status, 200, "{}", listing.body);
     let mine = listing.body["data"]
@@ -467,7 +470,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     assert_eq!(items.body["data"][0]["is_approved"], false);
     assert_eq!(items.body["data"][0]["contents"]["model.glb"], glb_hash);
 
-    // ── curation: the operator bearer, then the admin-address wallet ────────
     let status_path = format!("{c_path}/items/{item}/status");
     let refused = node
         .signed_json(
@@ -542,9 +544,10 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     );
     assert_eq!(bulk.body["data"]["updated"], 1);
     let by_admin = node.signed(&curator, "get", &c_path, None).await;
-    assert_eq!(
-        by_admin.status, 200,
-        "an admin address reads any collection"
+    assert!(
+        matches!(by_admin.status, 401 | 503),
+        "an admin address has no role on another wallet's draft (401, or 503 while the committee can't tell): {}",
+        by_admin.body
     );
     let curation = node
         .bearer(
@@ -561,7 +564,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
         "empty lists without a collections subgraph"
     );
 
-    // ── the prepared publication is the old vector ──────────────────────────
     let prepared = node
         .signed(&owner, "get", &format!("{c_path}/publication"), None)
         .await;
@@ -626,7 +628,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
         .await;
     assert_eq!(status.status, 200, "{}", status.body);
 
-    // ── camera reel ─────────────────────────────────────────────────────────
     let place = Uuid::new_v4().to_string();
     let shot = png(1280, 720, 3);
     let (body, ct) = multipart(&[
@@ -826,7 +827,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
         keyset.body
     );
 
-    // The moderator: a second photo rejected disappears from every read.
     let second = png(640, 360, 5);
     let (body, ct) = multipart(&[
         Part {
@@ -930,7 +930,6 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
         Some(1)
     );
 
-    // Delete: the row goes, the hash stops being served (the blob stays in the shared store).
     let del_path = format!("{REEL}/api/images/{image_id}");
     assert_eq!(
         node.signed(&stranger, "delete", &del_path, None)

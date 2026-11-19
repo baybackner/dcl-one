@@ -1,3 +1,4 @@
+use crate::access::granted;
 use alloy::signers::{SignerSync, local::PrivateKeySigner};
 use alloy_primitives::{B256, U256, address};
 use alloy_sol_types::{SolStruct, eip712_domain, sol};
@@ -56,22 +57,34 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     }))
     .unwrap();
     store
-        .save_collection_draft(OWNER, &collection)
+        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
         .await
         .unwrap();
-    assert!(store.prepare_linked_publication(OWNER, id).await.is_err());
+    assert!(
+        store
+            .prepare_linked_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     let mut item: ItemDraft = serde_json::from_value(json!({
         "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
         "thumbnail": "thumbnail.png", "data": {"category": "hat", "representations": [{
             "mainFile": "hat.glb", "contents": ["hat.glb"], "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"]
         }]}, "metrics": {"triangles": 100}
     })).unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
-    assert!(store.prepare_linked_publication(OWNER, id).await.is_err());
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .prepare_linked_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     item.contents = store
         .save_item_files(
-            OWNER,
-            item.id,
+            &granted::change(OWNER, item.id),
             vec![
                 ("hat.glb".into(), unique("model")),
                 ("thumbnail.png".into(), unique("thumbnail")),
@@ -80,72 +93,120 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
         .await
         .unwrap();
     let hashes: Vec<String> = item.contents.values().cloned().collect();
-    store.save_item_draft(OWNER, &item).await.unwrap();
-    let stale = store.prepare_linked_publication(OWNER, id).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
+    let stale = store
+        .prepare_linked_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     collection.name = "Updated hats".into();
     store
-        .save_collection_draft(OWNER, &collection)
+        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
         .await
         .unwrap();
     assert!(
         store
-            .begin_linked_publication(OWNER, id, &stale.revision)
+            .begin_linked_publication(&granted::publisher(OWNER, id), &stale.revision)
             .await
             .is_err()
     );
-    assert!(store.prepare_linked_publication(OTHER, id).await.is_err());
-    assert!(store.prepare_publication(OWNER, id).await.is_err());
-    let prepared = store.prepare_linked_publication(OWNER, id).await.unwrap();
+    assert!(
+        store
+            .prepare_linked_publication(&granted::publisher(OTHER, id))
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .prepare_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
+    let prepared = store
+        .prepare_linked_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     assert_eq!(prepared.item_ids, vec![item.id.to_string()]);
+    let (one, two) = (granted::publisher(OWNER, id), granted::publisher(OWNER, id));
     let (a, b) = tokio::join!(
-        store.begin_linked_publication(OWNER, id, &prepared.revision),
-        store.begin_linked_publication(OWNER, id, &prepared.revision)
+        store.begin_linked_publication(&one, &prepared.revision),
+        store.begin_linked_publication(&two, &prepared.revision)
     );
     let first = a.unwrap();
     assert_eq!(first.salt, b.unwrap().salt);
     assert_eq!(first.status, "prepared");
     assert!(
         store
-            .save_collection_draft(OWNER, &collection)
+            .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
             .await
             .is_err()
     );
-    assert!(store.save_item_draft(OWNER, &item).await.is_err());
     assert!(
         store
-            .save_item_files(OWNER, item.id, vec![("hat.glb".into(), unique("changed"))])
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
             .await
             .is_err()
     );
-    store.cancel_publication(OWNER, id).await.unwrap();
     assert!(
-        store.save_item_draft(OWNER, &item).await.is_err(),
+        store
+            .save_item_files(
+                &granted::change(OWNER, item.id),
+                vec![("hat.glb".into(), unique("changed"))]
+            )
+            .await
+            .is_err()
+    );
+    store
+        .cancel_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+            .await
+            .is_err(),
         "standard cancellation must not unlock linked publication"
     );
-    assert!(store.cancel_linked_publication(OTHER, id).await.is_err());
-    store.cancel_linked_publication(OWNER, id).await.unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
-    let prepared = store.prepare_linked_publication(OWNER, id).await.unwrap();
+    assert!(
+        store
+            .cancel_linked_publication(&granted::publisher(OTHER, id))
+            .await
+            .is_err()
+    );
+    store
+        .cancel_linked_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
+    let prepared = store
+        .prepare_linked_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     let second = store
-        .begin_linked_publication(OWNER, id, &prepared.revision)
+        .begin_linked_publication(&granted::publisher(OWNER, id), &prepared.revision)
         .await
         .unwrap();
     assert_ne!(first.salt, second.salt);
     let cheque = authorization(&second.salt);
     assert!(
         store
-            .authorize_linked_publication(OWNER, id, &cheque)
+            .authorize_linked_publication(&granted::publisher(OWNER, id), &cheque)
             .await
             .is_err()
     );
     let claimed = store
-        .claim_linked_publication(OWNER, id, &prepared.revision)
+        .claim_linked_publication(&granted::publisher(OWNER, id), &prepared.revision)
         .await
         .unwrap();
     assert_eq!(claimed.status, "signing");
     assert_eq!(
         store
-            .claim_linked_publication(OWNER, id, &prepared.revision)
+            .claim_linked_publication(&granted::publisher(OWNER, id), &prepared.revision)
             .await
             .unwrap()
             .salt,
@@ -153,22 +214,27 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     );
     assert!(
         store
-            .claim_linked_publication(OTHER, id, &prepared.revision)
+            .claim_linked_publication(&granted::publisher(OTHER, id), &prepared.revision)
             .await
             .is_err()
     );
     assert!(
         store
-            .claim_linked_publication(OWNER, id, "other revision")
+            .claim_linked_publication(&granted::publisher(OWNER, id), "other revision")
             .await
             .is_err()
     );
-    assert!(store.cancel_linked_publication(OWNER, id).await.is_err());
+    assert!(
+        store
+            .cancel_linked_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     let mut invalid = cheque.clone();
     invalid.qty = 2;
     assert!(
         store
-            .authorize_linked_publication(OWNER, id, &invalid)
+            .authorize_linked_publication(&granted::publisher(OWNER, id), &invalid)
             .await
             .is_err()
     );
@@ -176,7 +242,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     invalid.salt = first.salt;
     assert!(
         store
-            .authorize_linked_publication(OWNER, id, &invalid)
+            .authorize_linked_publication(&granted::publisher(OWNER, id), &invalid)
             .await
             .is_err()
     );
@@ -184,13 +250,13 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     invalid.signature = format!("0x{}", "00".repeat(65));
     assert!(
         store
-            .authorize_linked_publication(OWNER, id, &invalid)
+            .authorize_linked_publication(&granted::publisher(OWNER, id), &invalid)
             .await
             .is_err()
     );
     assert_eq!(
         store
-            .linked_publication_state(OWNER, id)
+            .linked_publication_state(&granted::publisher(OWNER, id))
             .await
             .unwrap()
             .unwrap()
@@ -199,18 +265,18 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     );
     assert!(
         store
-            .authorize_linked_publication(OTHER, id, &cheque)
+            .authorize_linked_publication(&granted::publisher(OTHER, id), &cheque)
             .await
             .is_err()
     );
     let authorized = store
-        .authorize_linked_publication(OWNER, id, &cheque)
+        .authorize_linked_publication(&granted::publisher(OWNER, id), &cheque)
         .await
         .unwrap();
     assert_eq!(authorized.status, "authorized");
     let reopened = ItemsComponent::new(store.pool().clone(), store.blobs.clone());
     let persisted = reopened
-        .linked_publication_state(OWNER, id)
+        .linked_publication_state(&granted::publisher(OWNER, id))
         .await
         .unwrap()
         .unwrap();
@@ -219,21 +285,31 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     assert_eq!(persisted.salt, second.salt);
     assert!(
         reopened
-            .linked_publication_state(OTHER, id)
+            .linked_publication_state(&granted::publisher(OTHER, id))
             .await
             .unwrap()
             .is_none()
     );
     assert_eq!(
         reopened
-            .authorize_linked_publication(OWNER, id, &cheque)
+            .authorize_linked_publication(&granted::publisher(OWNER, id), &cheque)
             .await
             .unwrap()
             .status,
         "authorized"
     );
-    assert!(reopened.cancel_linked_publication(OWNER, id).await.is_err());
-    assert!(reopened.save_item_draft(OWNER, &item).await.is_err());
+    assert!(
+        reopened
+            .cancel_linked_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
+    assert!(
+        reopened
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+            .await
+            .is_err()
+    );
     let snapshot: Value = sqlx::query_scalar(
         "SELECT snapshot FROM builder.linked_collection_publications WHERE collection_id=$1",
     )
@@ -244,7 +320,7 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     assert_eq!(snapshot["items"][0]["contents"], json!(item.contents));
     assert_eq!(snapshot["collection"]["name"], "Updated hats");
     let published = store
-        .collection_by_id(&id)
+        .collection_by_id(&granted::read(id))
         .await
         .unwrap()
         .unwrap()

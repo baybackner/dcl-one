@@ -12,7 +12,8 @@
 use alloy_primitives::{Address, B256, U256, keccak256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
+
+use crate::access::Publisher;
 
 use dcl_auth::hash_bytes_v1;
 
@@ -57,10 +58,10 @@ pub struct PublicationPreparation {
 impl ItemsComponent {
     pub async fn prepare_publication(
         &self,
-        signer: &str,
-        id: Uuid,
+        publisher: &Publisher,
     ) -> Result<PublicationPreparation, ApiError> {
-        if let Some(state) = self.publication_state(signer, id).await?
+        let (signer, id) = (publisher.signer(), publisher.id());
+        if let Some(state) = self.publication_state(publisher).await?
             && state.status != "reverted"
         {
             return Ok(state.preparation);
@@ -153,7 +154,8 @@ fn text<'a>(value: &'a Value, field: &str) -> Result<&'a str, ApiError> {
 fn prepare_item(row: &Value, signer: &str) -> Result<PublicationItem, ApiError> {
     let item: ItemDraft = serde_json::from_value(row.clone())
         .map_err(|_| ApiError::bad_request("Invalid collection item"))?;
-    item.validate(item.id, signer)?;
+    item.validate(item.id)?;
+    crate::drafts::owned_by(item.eth_address.as_deref(), signer)?;
     let invalid = |reason: &str| ApiError::bad_request(format!("{}: {reason}", item.name));
     if row["missing_content"] == true {
         return Err(invalid("upload missing content before publishing"));

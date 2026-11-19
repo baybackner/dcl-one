@@ -21,14 +21,14 @@ use crate::shared::test_http::call;
 use crate::{Settings, State};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Route {
+pub(super) enum Route {
     Routed,
     Todo,
     Removed,
 }
 use Route::{Removed, Routed, Todo};
 
-const UPSTREAM: &[(&str, &str, Route)] = &[
+pub(super) const UPSTREAM: &[(&str, &str, Route)] = &[
     ("GET", "/info", Todo),
     ("GET", "/assetPacks", Removed),
     ("GET", "/assetPacks/:id", Removed),
@@ -84,7 +84,7 @@ const UPSTREAM: &[(&str, &str, Route)] = &[
     ("GET", "/collections/:id/events", Todo),
     ("POST", "/collections/:id/comments", Todo),
     ("POST", "/collections/:id/validation-result", Todo),
-    ("GET", "/committee", Todo),
+    ("GET", "/committee", Routed),
     ("GET", "/thirdParties", Todo),
     ("GET", "/thirdParties/:id/slots", Todo),
     ("GET", "/thirdParties/:id", Todo),

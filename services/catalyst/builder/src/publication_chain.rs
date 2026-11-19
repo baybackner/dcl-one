@@ -10,7 +10,8 @@
 use alloy_primitives::{Address, B256, U256, hex, keccak256};
 use alloy_sol_types::{SolCall, sol};
 use serde_json::{Value, json};
-use uuid::Uuid;
+
+use crate::access::Publisher;
 
 use dcl_http::Outbound;
 use dcl_http::jsonrpc::{Rpc, RpcError};
@@ -83,12 +84,12 @@ impl PublicationChain<'_> {
     pub async fn verify(
         &self,
         store: &ItemsComponent,
-        owner: &str,
-        id: Uuid,
+        publisher: &Publisher,
         hash: &str,
     ) -> Result<PublicationState, ApiError> {
+        let owner = publisher.signer();
         let hash = format!("{:#x}", parse::<B256>(hash)?);
-        let state = store.publication_state(owner, id).await?.ok_or_else(|| {
+        let state = store.publication_state(publisher).await?.ok_or_else(|| {
             ApiError::not_found("Prepare this collection before submitting its transaction")
         })?;
         if state.tx_hash.as_deref().is_some_and(|saved| saved != hash) {
@@ -113,11 +114,11 @@ impl PublicationChain<'_> {
         }
         verify_transaction(&transaction, &state.preparation, &hash)?;
         store
-            .record_publication_tx(owner, id, &hash, &state.preparation.revision)
+            .record_publication_tx(publisher, &hash, &state.preparation.revision)
             .await?;
         let receipt = self.rpc("eth_getTransactionReceipt", json!([hash])).await?;
         if receipt.is_null() {
-            return pending(store, owner, id).await;
+            return pending(store, publisher).await;
         }
         if !same(&receipt["transactionHash"], &hash)
             || !same(&receipt["from"], owner)
@@ -132,7 +133,7 @@ impl PublicationChain<'_> {
             .rpc("eth_getBlockByNumber", json!(["finalized", false]))
             .await?;
         if finalized.is_null() || quantity(&finalized["number"])? < block {
-            return pending(store, owner, id).await;
+            return pending(store, publisher).await;
         }
         let canonical = self
             .rpc(
@@ -154,7 +155,7 @@ impl PublicationChain<'_> {
         }
         match quantity(&receipt["status"])? {
             status if status == U256::ZERO => {
-                store.finish_publication(owner, id, &hash, None).await
+                store.finish_publication(publisher, &hash, None).await
             }
             status if status == U256::from(1) => {
                 let contract = deployed_collection(&receipt, &state.preparation.salt)?;
@@ -174,7 +175,7 @@ impl PublicationChain<'_> {
                     ));
                 }
                 store
-                    .finish_publication(owner, id, &hash, Some(&contract))
+                    .finish_publication(publisher, &hash, Some(&contract))
                     .await
             }
             _ => Err(invalid("Publication receipt has an invalid status")),
@@ -184,11 +185,10 @@ impl PublicationChain<'_> {
 
 async fn pending(
     store: &ItemsComponent,
-    owner: &str,
-    id: Uuid,
+    publisher: &Publisher,
 ) -> Result<PublicationState, ApiError> {
     store
-        .publication_state(owner, id)
+        .publication_state(publisher)
         .await?
         .ok_or_else(|| ApiError::not_found("Publication not found"))
 }

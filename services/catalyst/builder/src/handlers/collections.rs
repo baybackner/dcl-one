@@ -1,19 +1,17 @@
-use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use uuid::Uuid;
+use serde_json::{Value, json};
 
 use crate::SharedState;
+use crate::access;
 use crate::auth::{Signed, signed_path, try_extract_signer};
+use crate::committee::Member;
 use crate::http::{ApiData, ApiError};
 use crate::items::{CollectionMetaOut, FullItemOut, ItemQuery};
-use crate::onchain;
-use crate::shared::signed_fetch::{AUTH_CHAIN_HEADER_PREFIX, Signer};
+use crate::shared::signed_fetch::AUTH_CHAIN_HEADER_PREFIX;
 
 use super::onchain::ItemsParams;
 
@@ -43,30 +41,18 @@ fn should_paginate(page: Option<i64>, limit: Option<i64>) -> bool {
     matches!((page, limit), (Some(p), Some(l)) if p != 0 && l != 0 && l < DEFAULT_LIMIT)
 }
 
-/// The owner or an admin address reads a collection by id.
+/// `GET /v1/collections/:id`, for whoever `access::read_collection` admits.
 pub async fn get_collection(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
 ) -> Result<Json<ApiData<CollectionMetaOut>>, ApiError> {
-    let collection_id = Uuid::parse_str(id.trim()).map_err(|_| ApiError::not_found("Not found"))?;
-
+    let read = access::read_collection(&state, &signer, &id).await?;
     let meta = state
         .items
-        .collection_by_id(&collection_id)
+        .collection_by_id(&read)
         .await?
         .ok_or_else(|| ApiError::not_found("Not found"))?;
-
-    let is_admin = state
-        .settings
-        .admin_addresses
-        .iter()
-        .any(|a| a == signer.as_str());
-    if signer.as_str() != meta.eth_address.to_ascii_lowercase() && !is_admin {
-        return Err(ApiError::unauthorized("Unauthorized")
-            .with_data(json!({ "id": id, "eth_address": signer.as_str() })));
-    }
-
     Ok(Json(ApiData::ok(CollectionMetaOut::from(&meta))))
 }
 
@@ -81,37 +67,24 @@ pub struct CollectionItemsParams {
     pub limit: Option<i64>,
 }
 
-/// The explorer's primary route: the collection's items as `FullItem`s, for
-/// the owner or an admin address; paginated only when `page` and `limit`
-/// are both truthy and `limit` is below the upstream default.
+/// The explorer's primary route: the collection's items as `FullItem`s,
+/// every item for a role holder or the committee and the published ones for
+/// any other signer of a published collection (`access::collection_items`);
+/// paginated only when `page` and `limit` are both truthy and `limit` is
+/// below the upstream default.
 pub async fn get_collection_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
     Query(params): Query<CollectionItemsParams>,
-) -> Result<Json<ApiData<CollectionItemsOut>>, ApiError> {
+) -> Result<Json<ApiData<Value>>, ApiError> {
     if let Some(status) = &params.status
         && !CURATION_STATUSES.contains(&status.as_str())
     {
         return Err(ApiError::bad_request("Invalid Status provided"));
     }
 
-    let collection_id = Uuid::parse_str(id.trim()).map_err(|_| ApiError::not_found("Not found"))?;
-
-    let owner = state
-        .items
-        .collection_owner(&collection_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Not found"))?;
-
-    let is_admin = state
-        .settings
-        .admin_addresses
-        .iter()
-        .any(|a| a == signer.as_str());
-    if signer.as_str() != owner && !is_admin {
-        return Err(unauthorized_for(signer.as_str()));
-    }
+    let read = access::collection_items(&state, &signer, &id).await?;
 
     let paginate = should_paginate(params.page, params.limit);
 
@@ -124,7 +97,7 @@ pub async fn get_collection_items(
         limit: params.limit,
     };
 
-    let (items, total) = state.items.items_for_collection(&collection_id, &q).await?;
+    let (items, total) = state.items.items_for_collection(&read, &q).await?;
     let results: Vec<FullItemOut> = items.iter().map(|i| i.to_out()).collect();
 
     let data = if paginate {
@@ -145,7 +118,18 @@ pub async fn get_collection_items(
     } else {
         CollectionItemsOut::Plain(results)
     };
-
+    let mut data = serde_json::to_value(data).map_err(|e| ApiError::internal(e.to_string()))?;
+    if !read.full() {
+        let items = match data.get_mut("results") {
+            Some(results) => results,
+            None => &mut data,
+        };
+        for item in items.as_array_mut().into_iter().flatten() {
+            if let Some(fields) = item.as_object_mut() {
+                fields.remove("local_content_hash");
+            }
+        }
+    }
     Ok(Json(ApiData::ok(data)))
 }
 
@@ -154,57 +138,6 @@ pub async fn get_collection_items(
 /// address, the signer's, `""` anonymously).
 fn unauthorized_for(eth_address: &str) -> ApiError {
     ApiError::unauthorized("Unauthorized").with_data(json!({ "eth_address": eth_address }))
-}
-
-/// The curation committee (builder-server's `isCommitteeMember`):
-/// `BUILDER_ADMIN_ADDRESSES` and the curators the collections subgraphs
-/// list, memoised five minutes as `/v1/collections/curation` reads them;
-/// without a reader only the configured addresses, and a failed lookup
-/// refuses (a listing is never widened by an outage).
-pub(super) async fn is_committee(state: &SharedState, address: &str) -> bool {
-    if state
-        .settings
-        .admin_addresses
-        .iter()
-        .any(|a| a.eq_ignore_ascii_case(address))
-    {
-        return true;
-    }
-    let Some(market) = state
-        .market
-        .as_deref()
-        .filter(|m| onchain::configured(Some(m)))
-    else {
-        return false;
-    };
-    match state
-        .committee_memo
-        .get_or_fetch((), || async {
-            onchain::committee_members(market).await.map(Arc::new)
-        })
-        .await
-    {
-        Ok(members) => members
-            .iter()
-            .any(|m| m.address.eq_ignore_ascii_case(address)),
-        Err(error) => {
-            tracing::warn!(error = %error, "committee lookup failed; the listing is refused");
-            false
-        }
-    }
-}
-
-/// Admits a request signed by `address` itself or by the committee; an
-/// unsigned or unverifiable chain is upstream's 401 `Unauthenticated`.
-async fn own_or_committee(
-    state: &SharedState,
-    signer: &Signer,
-    address: &str,
-) -> Result<(), ApiError> {
-    if signer.as_str().eq_ignore_ascii_case(address) || is_committee(state, signer.as_str()).await {
-        return Ok(());
-    }
-    Err(unauthorized_for(address))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -260,11 +193,16 @@ async fn list_collections(
     )
     .await
     {
-        Some(signer) if is_committee(state, signer.as_str()).await => Ok(Json(ApiData::ok(
-            state.items.collection_drafts_of_everyone().await?,
-        ))
-        .into_response()),
-        Some(signer) => Err(unauthorized_for(signer.as_str())),
+        Some(signer) => {
+            let committee = access::committee(state, &signer).await?;
+            Ok(Json(ApiData::ok(
+                state
+                    .items
+                    .collection_drafts_of_everyone(&committee)
+                    .await?,
+            ))
+            .into_response())
+        }
         None => Err(unauthorized_for("")),
     }
 }
@@ -275,26 +213,25 @@ pub async fn get_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
 ) -> Result<Response, ApiError> {
-    if !is_committee(&state, signer.as_str()).await {
-        return Err(unauthorized_for(signer.as_str()));
-    }
-    Ok(Json(ApiData::ok(state.items.item_drafts_of_everyone().await?)).into_response())
+    let committee = access::committee(&state, &signer).await?;
+    Ok(Json(ApiData::ok(
+        state.items.item_drafts_of_everyone(&committee).await?,
+    ))
+    .into_response())
 }
 
 /// `GET /v1/{address}/collections` (`getAddressCollections`): the wallet
-/// itself or the committee, signed; anyone else is refused with the path's
-/// address. The set is the on-chain reader's (`onchain::get_address_collections`).
+/// itself, signed; anyone else is refused with the path's address. The set
+/// is the on-chain reader's (`onchain::get_address_collections`).
 pub async fn get_address_collections(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(address): Path<String>,
 ) -> Result<Response, ApiError> {
-    own_or_committee(&state, &signer, &address).await?;
-    Ok(
-        super::onchain::get_address_collections(State(state), Path(address))
-            .await?
-            .into_response(),
-    )
+    let wallet = access::own_address(&signer, &address)?;
+    Ok(super::onchain::get_address_collections(&state, &wallet)
+        .await?
+        .into_response())
 }
 
 /// `GET /v1/{address}/items` (`getAddressItems`): the same rule over the
@@ -305,17 +242,27 @@ pub async fn get_address_items(
     Path(address): Path<String>,
     Query(params): Query<ItemsParams>,
 ) -> Result<Response, ApiError> {
-    own_or_committee(&state, &signer, &address).await?;
-    Ok(
-        super::onchain::get_address_items(State(state), Path(address), Query(params))
-            .await?
-            .into_response(),
-    )
+    let wallet = access::own_address(&signer, &address)?;
+    Ok(super::onchain::get_address_items(&state, &wallet, params)
+        .await?
+        .into_response())
+}
+
+/// `GET /v1/committee`: the current committee members, unauthenticated;
+/// 503 while the subgraph can't tell.
+pub async fn get_committee(
+    State(state): State<SharedState>,
+) -> Result<Json<ApiData<Vec<Member>>>, ApiError> {
+    let members = state.committee.members(state.market.as_ref()).await?;
+    Ok(Json(ApiData::ok(members.as_ref().clone())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access::granted;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
     use axum::Router;
     use axum::body::Body;
@@ -324,7 +271,9 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::shared::signed_fetch::test_support::signed_headers_by;
-    use crate::tests::support::{OWNER_KEY, cleanup, temp_storage, wallet};
+    use crate::tests::support::{
+        FakeCommittee, OWNER_KEY, cleanup, committee_index, temp_storage, wallet,
+    };
 
     const STRANGER_KEY: &str = "0x2222222222222222222222222222222222222222222222222222222222222222";
     const COMMITTEE_KEY: &str =
@@ -336,19 +285,16 @@ mod tests {
 
     async fn state(committee: &str) -> Option<SharedState> {
         let pool = crate::tests::support::scratch_pool(4).await?;
-        let settings = crate::Settings {
-            admin_addresses: vec![committee.to_string()],
-            ..Default::default()
-        };
+        let market = committee_index(&FakeCommittee::with(&[committee])).await;
         Some(Arc::new(
             crate::State::new(
                 pool,
                 temp_storage().await,
                 Arc::default(),
                 dcl_http::Outbound::for_tests(),
+                Some(market),
                 None,
-                None,
-                settings,
+                crate::Settings::default(),
             )
             .unwrap(),
         ))
@@ -403,8 +349,8 @@ mod tests {
     /// The four listings, builder-server's rule: a wallet that owns nothing
     /// and is not on the committee gets the upstream 401 envelope naming the
     /// wallet the request was about, the owner its own set, the committee
-    /// every set, the anonymous published search its matches; v2 answered
-    /// `{ok:true,data:[]}` to the stranger and served the address routes unsigned.
+    /// every wallet's drafts but no other wallet's address listing, the
+    /// anonymous published search its matches.
     #[tokio::test]
     async fn listings_are_visible_to_the_owner_and_the_committee_only() {
         let (owner, stranger, committee) = (
@@ -419,25 +365,20 @@ mod tests {
         let app = crate::router(state.clone());
         let tag = Uuid::new_v4().simple().to_string();
         let (draft, published) = (Uuid::new_v4(), Uuid::new_v4());
+        let first: crate::drafts::CollectionDraft =
+            serde_json::from_value(json!({ "id": draft, "name": format!("draft {tag}") })).unwrap();
         let saved = state
             .items
-            .save_collection_draft(
-                &owner,
-                &serde_json::from_value(json!({ "id": draft, "name": format!("draft {tag}") }))
-                    .unwrap(),
-            )
+            .save_collection_draft(&granted::edit(&owner, draft), &first)
             .await
             .unwrap();
         assert_eq!(saved.eth_address, owner);
+        let second: crate::drafts::CollectionDraft =
+            serde_json::from_value(json!({ "id": published, "name": format!("SheFi {tag}%_") }))
+                .unwrap();
         state
             .items
-            .save_collection_draft(
-                &owner,
-                &serde_json::from_value(
-                    json!({ "id": published, "name": format!("SheFi {tag}%_") }),
-                )
-                .unwrap(),
-            )
+            .save_collection_draft(&granted::edit(&owner, published), &second)
             .await
             .unwrap();
         sqlx::query(
@@ -451,7 +392,7 @@ mod tests {
         .await
         .unwrap();
         let item = Uuid::new_v4();
-        let item_draft = serde_json::from_value(json!({
+        let item_draft: crate::drafts::ItemDraft = serde_json::from_value(json!({
             "id": item, "name": "My wearable", "collection_id": draft,
             "type": "wearable", "data": { "category": "upper_body" }, "rarity": "common", "price": "0",
             "metrics": { "triangles": 42, "meshes": 1 }
@@ -459,7 +400,10 @@ mod tests {
         .unwrap();
         state
             .items
-            .save_item_draft(&owner, &item_draft)
+            .save_item_draft(
+                &granted::save(&owner, item_draft.id, item_draft.collection_id),
+                &item_draft,
+            )
             .await
             .unwrap();
 
@@ -491,7 +435,6 @@ mod tests {
             );
         }
 
-        // /v1/items: the committee, or the upstream refusal with the signer
         let (status, body) = get(&app, "/v1/items", Some(STRANGER_KEY)).await;
         assert_eq!(
             (status, body),
@@ -517,7 +460,6 @@ mod tests {
         );
         assert_eq!(body["ok"], false);
 
-        // /v1/collections: the committee, the anonymous published search, else the refusal
         let (status, body) = get(&app, "/v1/collections", None).await;
         assert_eq!((status, body), (StatusCode::UNAUTHORIZED, refusal_of("")));
         let (status, body) = get(&app, "/v1/collections", Some(STRANGER_KEY)).await;
@@ -565,26 +507,21 @@ mod tests {
             "q without is_published=true is no search"
         );
 
-        // /v1/{address}/collections and /items: signed by the wallet or the committee
         for route in ["collections", "items"] {
             let path = format!("/v1/{owner}/{route}");
             let (status, body) = get(&app, &path, None).await;
             assert_ne!(status, StatusCode::OK, "unsigned {route}: {body}");
             assert_eq!(body["ok"], false);
-            let (status, body) = get(&app, &path, Some(STRANGER_KEY)).await;
-            assert_eq!(
-                (status, body),
-                (StatusCode::UNAUTHORIZED, refusal_of(&owner)),
-                "{route}: the refusal names the path's wallet"
-            );
-            for key in [OWNER_KEY, COMMITTEE_KEY] {
+            for key in [STRANGER_KEY, COMMITTEE_KEY] {
                 let (status, body) = get(&app, &path, Some(key)).await;
                 assert_eq!(
-                    status,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "{route}: admitted, then the reader's 503 without a subgraph: {body}"
+                    (status, body),
+                    (StatusCode::UNAUTHORIZED, refusal_of(&owner)),
+                    "{route}: the refusal names the path's wallet; the committee is no exception"
                 );
             }
+            let (status, body) = get(&app, &path, Some(OWNER_KEY)).await;
+            assert_eq!(status, StatusCode::OK, "{route}: {body}");
             let (status, _) = get(
                 &app,
                 &format!("/v1/{}/{route}", owner.to_uppercase().replace("0X", "0x")),
@@ -593,7 +530,7 @@ mod tests {
             .await;
             assert_eq!(
                 status,
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::OK,
                 "{route}: the path's case does not matter"
             );
         }

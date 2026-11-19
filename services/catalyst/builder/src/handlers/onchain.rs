@@ -1,8 +1,8 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 
 use crate::SharedState;
+use crate::access::Wallet;
 use crate::http::{ApiData, ApiError};
 use crate::onchain::{self, BuilderCollectionOut, MARKETPLACE_DOWN, OrphanItemOut};
 
@@ -10,11 +10,6 @@ use crate::onchain::{self, BuilderCollectionOut, MARKETPLACE_DOWN, OrphanItemOut
 pub struct ItemsParams {
     #[serde(rename = "onlyOrphans")]
     pub only_orphans: Option<bool>,
-}
-
-fn valid_address(addr: &str) -> bool {
-    let a = addr.strip_prefix("0x").unwrap_or(addr);
-    a.len() == 40 && a.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn reader(state: &SharedState) -> Result<&crate::chain_index::ChainIndex, ApiError> {
@@ -26,42 +21,39 @@ fn reader(state: &SharedState) -> Result<&crate::chain_index::ChainIndex, ApiErr
 }
 
 /// The readers behind `collections::get_address_collections` and
-/// `get_address_items`, which admit the wallet itself or the committee
-/// first (builder-server's rule; the old route answered anonymously).
+/// `get_address_items`, for the wallet `access::own_address` admitted.
 pub async fn get_address_collections(
-    State(state): State<SharedState>,
-    Path(address): Path<String>,
+    state: &SharedState,
+    wallet: &Wallet,
 ) -> Result<Json<ApiData<Vec<BuilderCollectionOut>>>, ApiError> {
-    if !valid_address(&address) {
-        return Err(ApiError::bad_request("Invalid address"));
-    }
-    let market = reader(&state)?;
-    let data = onchain::collections_for_address(market, &address).await?;
+    let market = reader(state)?;
+    let data = onchain::collections_for_address(market, wallet).await?;
     Ok(Json(ApiData::ok(data)))
 }
 
 pub async fn get_address_items(
-    State(state): State<SharedState>,
-    Path(address): Path<String>,
-    Query(params): Query<ItemsParams>,
+    state: &SharedState,
+    wallet: &Wallet,
+    params: ItemsParams,
 ) -> Result<Json<ApiData<Vec<OrphanItemOut>>>, ApiError> {
-    if !valid_address(&address) {
-        return Err(ApiError::bad_request("Invalid address"));
-    }
     let only_orphans = params.only_orphans.unwrap_or(false);
-    let market = reader(&state)?;
-    let data = onchain::items_for_address(market, &address, only_orphans).await?;
+    let market = reader(state)?;
+    let data = onchain::items_for_address(market, wallet, only_orphans).await?;
     Ok(Json(ApiData::ok(data)))
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::extract::{Path, Query, State};
-
     use super::*;
+    use crate::access::wallet;
+    use crate::shared::signed_fetch::test_support::signer;
     use crate::tests::support::state_without_db;
 
     const ADDR: &str = "0x797066a17f83425c1b4c7a8cca52d19095520a52";
+
+    fn own() -> Wallet {
+        wallet(&signer(ADDR))
+    }
 
     #[tokio::test]
     async fn collections_return_503_when_no_collections_reader_is_configured() {
@@ -72,7 +64,7 @@ mod tests {
             )),
         ] {
             let state = state_without_db(market).await;
-            let err = get_address_collections(State(state), Path(ADDR.to_string()))
+            let err = get_address_collections(&state, &own())
                 .await
                 .expect_err("must be an error, not an empty 200");
             assert_eq!(err.status(), 503);
@@ -82,13 +74,9 @@ mod tests {
     #[tokio::test]
     async fn items_return_503_when_no_collections_reader_is_configured() {
         let state = state_without_db(None).await;
-        let err = get_address_items(
-            State(state),
-            Path(ADDR.to_string()),
-            Query(ItemsParams::default()),
-        )
-        .await
-        .expect_err("must be an error, not an empty 200");
+        let err = get_address_items(&state, &own(), ItemsParams::default())
+            .await
+            .expect_err("must be an error, not an empty 200");
         assert_eq!(err.status(), 503);
     }
 
@@ -100,24 +88,13 @@ mod tests {
         };
         let market = crate::tests::support::market_without_db(settings);
         let state = state_without_db(Some(market)).await;
-        let err = get_address_collections(State(state.clone()), Path(ADDR.to_string()))
+        let err = get_address_collections(&state, &own())
             .await
             .expect_err("an unreachable subgraph must error, never yield an empty list");
         assert!(err.status() >= 500, "{err}");
-        let err = get_address_items(
-            State(state),
-            Path(ADDR.to_string()),
-            Query(ItemsParams::default()),
-        )
-        .await
-        .unwrap_err();
+        let err = get_address_items(&state, &own(), ItemsParams::default())
+            .await
+            .unwrap_err();
         assert!(err.status() >= 500, "{err}");
-    }
-
-    #[tokio::test]
-    async fn invalid_address_is_still_a_400() {
-        let state = state_without_db(None).await;
-        let res = get_address_collections(State(state), Path("nope".into())).await;
-        assert_eq!(res.expect_err("invalid address must 400").status(), 400);
     }
 }

@@ -1,3 +1,4 @@
+use crate::access::granted;
 use alloy_primitives::keccak256;
 use axum::{Json, Router, extract::State, routing::post};
 use serde_json::{Value, json};
@@ -52,17 +53,19 @@ async fn draft(store: &ItemsComponent) -> (CollectionDraft, ItemDraft) {
     let collection: CollectionDraft =
         serde_json::from_value(json!({"id":id, "name":"Transaction collection"})).unwrap();
     store
-        .save_collection_draft(OWNER, &collection)
+        .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
         .await
         .unwrap();
     let mut item: ItemDraft = serde_json::from_value(json!({"id":Uuid::new_v4(), "name":"Hat", "type":"wearable", "collection_id":id,
         "price":"1000000000000000001", "rarity":"rare", "thumbnail":"thumbnail.png",
         "data":{"category":"hat", "representations":[{"mainFile":"model.glb", "contents":["model.glb"], "bodyShapes":["urn:decentraland:off-chain:base-avatars:BaseMale"]}]}})).unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
     item.contents = store
         .save_item_files(
-            OWNER,
-            item.id,
+            &granted::change(OWNER, item.id),
             vec![
                 ("model.glb".into(), unique("model")),
                 ("thumbnail.png".into(), unique("image")),
@@ -70,7 +73,10 @@ async fn draft(store: &ItemsComponent) -> (CollectionDraft, ItemDraft) {
         )
         .await
         .unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
     (collection, item)
 }
 
@@ -88,27 +94,30 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     };
     let (collection, mut item) = draft(&store).await;
     let id = collection.id;
-    let prepared = store.prepare_publication(OWNER, id).await.unwrap();
+    let prepared = store
+        .prepare_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     assert!(
         store
-            .begin_publication(OTHER, id, &prepared.revision)
+            .begin_publication(&granted::publisher(OTHER, id), &prepared.revision)
             .await
             .is_err()
     );
     assert!(
         store
-            .begin_publication(OWNER, id, "outdated")
+            .begin_publication(&granted::publisher(OWNER, id), "outdated")
             .await
             .is_err()
     );
     let active = store
-        .begin_publication(OWNER, id, &prepared.revision)
+        .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
         .await
         .unwrap();
     assert_eq!(active.status, "prepared");
     assert_eq!(
         store
-            .begin_publication(OWNER, id, &prepared.revision)
+            .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
             .await
             .unwrap()
             .preparation
@@ -117,16 +126,20 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     );
     assert!(
         store
-            .save_collection_draft(OWNER, &collection)
+            .save_collection_draft(&granted::edit(OWNER, collection.id), &collection)
             .await
             .is_err()
     );
-    assert!(store.save_item_draft(OWNER, &item).await.is_err());
+    assert!(
+        store
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+            .await
+            .is_err()
+    );
     assert!(
         store
             .save_item_files(
-                OWNER,
-                item.id,
+                &granted::change(OWNER, item.id),
                 vec![("model.glb".into(), unique("changed"))]
             )
             .await
@@ -134,14 +147,23 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     );
     item.collection_id = None;
     assert!(
-        store.save_item_draft(OWNER, &item).await.is_err(),
+        store
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+            .await
+            .is_err(),
         "detaching cannot bypass a publication lock"
     );
     item.collection_id = Some(id);
-    assert!(store.cancel_publication(OTHER, id).await.is_err());
+    assert!(
+        store
+            .cancel_publication(&granted::publisher(OTHER, id))
+            .await
+            .is_err()
+    );
+    let (one, two) = (granted::publisher(OWNER, id), granted::publisher(OWNER, id));
     let (first_claim, second_claim) = tokio::join!(
-        store.claim_publication(OWNER, id, &prepared.revision),
-        store.claim_publication(OWNER, id, &prepared.revision),
+        store.claim_publication(&one, &prepared.revision),
+        store.claim_publication(&two, &prepared.revision),
     );
     assert_ne!(
         first_claim.is_ok(),
@@ -150,25 +172,34 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     );
     assert_eq!(
         store
-            .publication_state(OWNER, id)
+            .publication_state(&granted::publisher(OWNER, id))
             .await
             .unwrap()
             .unwrap()
             .status,
         "signing"
     );
-    store.cancel_publication(OWNER, id).await.unwrap();
-    store.save_item_draft(OWNER, &item).await.unwrap();
+    store
+        .cancel_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
+    store
+        .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+        .await
+        .unwrap();
     assert!(
         store
-            .begin_publication(OWNER, id, &prepared.revision)
+            .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
             .await
             .is_err(),
         "an edit invalidates the original review"
     );
-    let prepared = store.prepare_publication(OWNER, id).await.unwrap();
+    let prepared = store
+        .prepare_publication(&granted::publisher(OWNER, id))
+        .await
+        .unwrap();
     store
-        .begin_publication(OWNER, id, &prepared.revision)
+        .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
         .await
         .unwrap();
     let transaction = json!({"hash":HASH, "from":OWNER, "to":COLLECTION_MANAGER, "value":"0x0", "input":publication_calldata(&prepared).unwrap(), "blockNumber":"0x10", "blockHash":BLOCK});
@@ -198,12 +229,15 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     ] {
         state.lock().unwrap()["tx"][field] = value;
         assert!(
-            chain.verify(&store, OWNER, id, HASH).await.is_err(),
+            chain
+                .verify(&store, &granted::publisher(OWNER, id), HASH)
+                .await
+                .is_err(),
             "accepted wrong transaction {field}"
         );
         assert!(
             store
-                .publication_state(OWNER, id)
+                .publication_state(&granted::publisher(OWNER, id))
                 .await
                 .unwrap()
                 .unwrap()
@@ -212,16 +246,34 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         );
         state.lock().unwrap()["tx"] = transaction.clone();
     }
-    assert!(chain.verify(&store, OTHER, id, HASH).await.is_err());
+    assert!(
+        chain
+            .verify(&store, &granted::publisher(OTHER, id), HASH)
+            .await
+            .is_err()
+    );
     assert_eq!(
-        chain.verify(&store, OWNER, id, HASH).await.unwrap().status,
+        chain
+            .verify(&store, &granted::publisher(OWNER, id), HASH)
+            .await
+            .unwrap()
+            .status,
         "submitted"
     );
-    assert!(store.cancel_publication(OWNER, id).await.is_err());
+    assert!(
+        store
+            .cancel_publication(&granted::publisher(OWNER, id))
+            .await
+            .is_err()
+    );
     state.lock().unwrap()["receipt"] = receipt.clone();
     state.lock().unwrap()["finalized"] = json!("0xf");
     assert_eq!(
-        chain.verify(&store, OWNER, id, HASH).await.unwrap().status,
+        chain
+            .verify(&store, &granted::publisher(OWNER, id), HASH)
+            .await
+            .unwrap()
+            .status,
         "submitted"
     );
     state.lock().unwrap()["finalized"] = json!("0x10");
@@ -236,12 +288,15 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         let previous = state.lock().unwrap().pointer(path).unwrap().clone();
         *state.lock().unwrap().pointer_mut(path).unwrap() = value;
         assert!(
-            chain.verify(&store, OWNER, id, HASH).await.is_err(),
+            chain
+                .verify(&store, &granted::publisher(OWNER, id), HASH)
+                .await
+                .is_err(),
             "accepted invalid receipt {path}"
         );
         assert!(
             !store
-                .collection_by_id(&id)
+                .collection_by_id(&granted::read(id))
                 .await
                 .unwrap()
                 .unwrap()
@@ -249,26 +304,41 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         );
         *state.lock().unwrap().pointer_mut(path).unwrap() = previous;
     }
-    let published = chain.verify(&store, OWNER, id, HASH).await.unwrap();
+    let published = chain
+        .verify(&store, &granted::publisher(OWNER, id), HASH)
+        .await
+        .unwrap();
     assert_eq!(published.status, "published");
     assert_eq!(published.contract_address.as_deref(), Some(CONTRACT));
     assert_eq!(
-        chain.verify(&store, OWNER, id, HASH).await.unwrap().status,
+        chain
+            .verify(&store, &granted::publisher(OWNER, id), HASH)
+            .await
+            .unwrap()
+            .status,
         "published"
     );
-    let saved = store.item_draft(OWNER, item.id).await.unwrap();
+    let saved = store.item_draft(&granted::item(item.id)).await.unwrap();
     assert_eq!(saved["is_published"], true);
     assert_eq!(saved["blockchain_item_id"], "0");
     assert_eq!(
-        saved["urn_suffix"],
+        saved["urn"],
         format!("urn:decentraland:matic:collections-v2:{CONTRACT}:0")
     );
     assert_eq!(saved["beneficiary"], OWNER);
-    assert!(store.save_item_draft(OWNER, &item).await.is_err());
+    assert!(
+        store
+            .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+            .await
+            .is_err()
+    );
     let (second, second_item) = draft(&store).await;
-    let preparation = store.prepare_publication(OWNER, second.id).await.unwrap();
+    let preparation = store
+        .prepare_publication(&granted::publisher(OWNER, second.id))
+        .await
+        .unwrap();
     store
-        .begin_publication(OWNER, second.id, &preparation.revision)
+        .begin_publication(&granted::publisher(OWNER, second.id), &preparation.revision)
         .await
         .unwrap();
     let failed_hash = format!("0x{}", "66".repeat(32));
@@ -281,17 +351,26 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
     }
     assert_eq!(
         chain
-            .verify(&store, OWNER, second.id, &failed_hash)
+            .verify(&store, &granted::publisher(OWNER, second.id), &failed_hash)
             .await
             .unwrap()
             .status,
         "reverted"
     );
-    store.save_item_draft(OWNER, &second_item).await.unwrap();
-    let preparation = store.prepare_publication(OWNER, second.id).await.unwrap();
+    store
+        .save_item_draft(
+            &granted::save(OWNER, second_item.id, second_item.collection_id),
+            &second_item,
+        )
+        .await
+        .unwrap();
+    let preparation = store
+        .prepare_publication(&granted::publisher(OWNER, second.id))
+        .await
+        .unwrap();
     assert_eq!(
         store
-            .begin_publication(OWNER, second.id, &preparation.revision)
+            .begin_publication(&granted::publisher(OWNER, second.id), &preparation.revision)
             .await
             .unwrap()
             .status,
@@ -308,25 +387,29 @@ async fn concurrent_edit_and_publication_cannot_both_accept_the_old_revision() {
     };
     let (collection, mut item) = draft(&store).await;
     let prepared = store
-        .prepare_publication(OWNER, collection.id)
+        .prepare_publication(&granted::publisher(OWNER, collection.id))
         .await
         .unwrap();
     item.name = "Changed while paying".into();
+    let (publisher, save) = (
+        granted::publisher(OWNER, collection.id),
+        granted::save(OWNER, item.id, item.collection_id),
+    );
     let (begin, edit) = tokio::join!(
-        store.begin_publication(OWNER, collection.id, &prepared.revision),
-        store.save_item_draft(OWNER, &item)
+        store.begin_publication(&publisher, &prepared.revision),
+        store.save_item_draft(&save, &item)
     );
     assert_ne!(
         begin.is_ok(),
         edit.is_ok(),
         "exactly one operation may accept the reviewed revision"
     );
-    let saved = store.item_draft(OWNER, item.id).await.unwrap();
+    let saved = store.item_draft(&granted::item(item.id)).await.unwrap();
     if begin.is_ok() {
         assert_eq!(saved["name"], "Hat");
         assert_eq!(
             store
-                .prepare_publication(OWNER, collection.id)
+                .prepare_publication(&granted::publisher(OWNER, collection.id))
                 .await
                 .unwrap()
                 .revision,
@@ -336,7 +419,7 @@ async fn concurrent_edit_and_publication_cannot_both_accept_the_old_revision() {
         assert_eq!(saved["name"], "Changed while paying");
         assert!(
             store
-                .publication_state(OWNER, collection.id)
+                .publication_state(&granted::publisher(OWNER, collection.id))
                 .await
                 .unwrap()
                 .is_none()
@@ -358,7 +441,7 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
         created.push(collection.id);
         hashes.extend(item.contents.values().cloned());
         let item_id = item.id;
-        let original = store.item_draft(OWNER, item_id).await.unwrap();
+        let original = store.item_draft(&granted::item(item_id)).await.unwrap();
         let writer_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
@@ -388,12 +471,14 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
         let attempt = tokio::spawn(async move {
             if detach {
                 item.collection_id = None;
-                writer.save_item_draft(OWNER, &item).await.map(|_| ())
+                writer
+                    .save_item_draft(&granted::save(OWNER, item.id, item.collection_id), &item)
+                    .await
+                    .map(|_| ())
             } else {
                 writer
                     .save_item_files(
-                        OWNER,
-                        item_id,
+                        &granted::change(OWNER, item_id),
                         vec![("model.glb".into(), unique("replacement"))],
                     )
                     .await
@@ -413,7 +498,10 @@ async fn waiting_detach_and_upload_recheck_the_committed_publication_lock() {
             attempt.await.unwrap().is_err(),
             "waiting writer bypassed the committed publication lock: detach={detach}"
         );
-        assert_eq!(store.item_draft(OWNER, item_id).await.unwrap(), original);
+        assert_eq!(
+            store.item_draft(&granted::item(item_id)).await.unwrap(),
+            original
+        );
         writer_pool.close().await;
     }
     cleanup(&store, &created, &hashes).await;

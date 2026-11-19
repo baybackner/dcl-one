@@ -3,8 +3,8 @@ import { deleteWearableDraft, listItemDrafts, loadWearableDraft, saveWearableDra
 
 const id = "fd84234c-55d4-40a8-afbc-ea5a6fe00761";
 it("surfaces a refused deletion and never treats an invalid id as a path", async () => {
-  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: false, data: {}, error: "Collection is publishing" }, { status: 403 }));
-  await expect(deleteWearableDraft(id, { fetch })).rejects.toThrow("Collection is publishing");
+  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ ok: false, data: { id }, error: "The collection for the item is locked. The item can't be deleted." }, { status: 423 }));
+  await expect(deleteWearableDraft(id, { fetch })).rejects.toThrow("The collection for the item is locked. The item can't be deleted.");
   expect(fetch.mock.calls[0][1]).toMatchObject({ method: "DELETE", cache: "no-store" });
   await expect(deleteWearableDraft("../collections", { fetch })).rejects.toThrow("Invalid wearable draft id");
   expect(fetch).toHaveBeenCalledTimes(1);
@@ -110,10 +110,10 @@ describe("wearable persistence", () => {
   });
 
   it("rejects fake models and does not create an item after a permission error", async () => {
-    const fetch = vi.fn().mockResolvedValue(Response.json({ message: "Not authorized" }, { status: 403 }));
+    const fetch = vi.fn().mockResolvedValue(Response.json({ ok: false, data: { id }, error: "Unauthorized" }, { status: 401 }));
     await expect(saveWearableDraft({ ...draft, model: new File(["not a model"], "fake.glb") }, { fetch })).rejects.toThrow("GLB");
     expect(fetch).not.toHaveBeenCalled();
-    await expect(saveWearableDraft(draft, { fetch })).rejects.toThrow("Not authorized");
+    await expect(saveWearableDraft(draft, { fetch })).rejects.toThrow("Unauthorized");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
