@@ -290,6 +290,7 @@ impl SegmentMetricsEvents {
                 queued.queued_at,
                 queued.message_id.clone(),
             ) else {
+                error!("dropping segment event: properties failed to serialize");
                 self.events.pop_front();
                 continue;
             };

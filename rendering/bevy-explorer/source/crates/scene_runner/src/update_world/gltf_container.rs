@@ -1935,9 +1935,7 @@ fn expose_gltfs(
                     }
                     Some(t) => {
                         let Some(gltf) = maybe_gltf else {
-                            break GltfLinkState::Failed(
-                                "GltfNode is not a child of an entity with a GltfContainer or GltfNode",
-                            );
+                            break GltfLinkState::Failed("gltf container removed during link");
                         };
                         if already_linked.get(t).is_ok() {
                             break GltfLinkState::Failed("duplicate node name requested");

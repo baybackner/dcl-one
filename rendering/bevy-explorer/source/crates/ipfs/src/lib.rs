@@ -1620,11 +1620,13 @@ impl IpfsIo {
                         serde_json::from_slice(&fetched.body).map_err(|e| anyhow!(e))?;
                     let mut res = Vec::default();
                     for entity in active_entities.0 {
+                        let Some(id) = entity.id else {
+                            warn!("active entity without id, skipping");
+                            continue;
+                        };
                         // return active entity struct
                         res.push(EntityDefinition {
-                            id: entity
-                                .id
-                                .ok_or_else(|| anyhow!("active entity without id"))?,
+                            id,
                             pointers: entity.pointers,
                             metadata: entity.metadata,
                             content: ContentMap::from_content(

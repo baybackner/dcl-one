@@ -177,7 +177,7 @@ fn load_frame(
         };
 
         let Some(frame_scene) = gltf.default_scene.clone() else {
-            warn_once!("nft frame {:?} has no default scene", frame.frame_type);
+            error_once!("nft frame {:?} has no default scene", frame.frame_type);
             commands.entity(ent).remove::<FrameLoading>();
             continue;
         };
