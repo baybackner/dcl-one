@@ -745,8 +745,6 @@ export function registerAvatarPreview(ctx: Ctx): void {
       pollEmotes(dt)
     }
   })
-  // Whether the camera eased this frame: the Shop's nametag follows the view (below).
-  let eased = false
   ctx.push((dt) => {
     if (framingT >= 1 || cameraEntity == null || stage !== 'backpack') return
     framingT = Math.min(1, framingT + dt / FOCUS_SECONDS)
@@ -756,22 +754,25 @@ export function registerAvatarPreview(ctx: Ctx): void {
       centerY: framingFrom.centerY + (framingTo.centerY - framingFrom.centerY) * e
     }
     applyFraming(framing)
-    eased = true
   })
 
   // The Shop's nametag stands where the engine puts its avatar's own: over the head and what it wears, following the
   // head. While the Shop's stage is up the engine's anchor is read now and then and told to the page as a point in
   // the avatar's window (./previewNametagFeed).
+  const aspect = (): number => (rect != null && rect.height > 0 ? rect.width / rect.height : 1)
   const nametag = createNametagFeed<Entity, SceneOffset>({
     read: (avatar) => BevyApi.avatarNametagAnchor?.(avatar) ?? Promise.resolve(null),
-    project: (anchor) =>
-      windowPoint(anchor, framing, zoom, zoomShift, CAMERA_PITCH, rect != null && rect.height > 0 ? rect.width / rect.height : 1, PREVIEW_FEET_Y),
+    project: (anchor) => windowPoint(anchor, framing, zoom, zoomShift, CAMERA_PITCH, aspect(), PREVIEW_FEET_Y),
     send: (anchor) => ctx.send({ kind: 'previewNametag', anchor })
   })
+  // The view the tag was last placed by. Once it moves (the camera easing to another page's framing, a zoom, the
+  // window resized) the tag follows it from the last anchor read, without waiting for the next read.
+  let placedBy: number[] = []
   ctx.push((dt) => {
     nametag.tick(dt, shopStage != null && stage === 'backpack' && BevyApi.avatarNametagAnchor != null ? avatarEntity : null)
-    if (eased) {
-      eased = false
+    const view = [framing.range, framing.centerY, zoom, zoomShift, aspect()]
+    if (view.some((v, i) => v !== placedBy[i])) {
+      placedBy = view
       nametag.reproject()
     }
   })
@@ -780,14 +781,19 @@ export function registerAvatarPreview(ctx: Ctx): void {
   // the floor the image has, so the Backpack's podium steps aside. The avatar is framed as the page draws it.
   ctx.on('previewStage', (msg) => {
     const page = msg.framing === 'names' ? SHOP_NAMES_FRAMING : SHOP_FRAMING
-    // Another page of the Shop, its stage staying up: the camera eases to that page's framing, the nametag with it.
-    if (shopStage != null && msg.rect != null && page !== framingTo) {
+    // The stage staying up (resized, or another page): its place moves, and the camera eases to the page's framing,
+    // from wherever it is, only when that framing changes. A resize midway leaves the ease running, and the nametag
+    // keeps its anchor and follows the view.
+    if (shopStage != null && msg.rect != null) {
       shopStage = msg.rect
-      framingFrom = framing
-      framingTo = page
-      framingT = 0
+      if (page !== framingTo) {
+        framingFrom = framing
+        framingTo = page
+        framingT = 0
+      }
       return
     }
+    // The stage coming up or going: the page's framing at once, and the nametag unknown until read.
     shopStage = msg.rect
     showPodium(shopStage == null)
     framing = framingFrom = framingTo = shopStage != null ? page : FRAMING.body
