@@ -1696,6 +1696,160 @@ mod tests {
         assert_eq!(frame_reach(Vec3::ZERO, 1.0 / 60.0), step_reach() as f32);
     }
 
+    /// Runs `frames` frames of the scene moving the player at `velocity`; its position after.
+    fn run_for(app: &mut App, player: Entity, velocity: Vec3, frames: usize) -> Vec3 {
+        set_velocity(app, player, velocity);
+        for _ in 0..frames {
+            app.update();
+        }
+        app.world().get::<Transform>(player).unwrap().translation
+    }
+
+    #[test]
+    fn a_wall_of_the_scene_on_the_diagonal_parcel_stops_the_avatar_at_the_corner() {
+        // 0.5 m from parcel 0,0's corner with parcels 1,0, 0,1 and 1,1, and a block held only by
+        // the scene of parcel 1,1, 0.5 m into it from both of its edges
+        let start = Vec3::new(15.5, 0.0, -15.5);
+        let (mut app, player) = movement_app(&[], start);
+        let block = (Vec3::new(20.25, 1.0, -20.25), Vec3::new(3.75, 1.0, 3.75));
+        add_wall_scene(&mut app, "corner", IVec2::new(1, 1), block.0, block.1);
+        // across the corner into the block: it stops at the block's corner or slides along a face
+        let end = run_for(&mut app, player, Vec3::new(3.0, 0.0, -3.0), 50);
+        let clear = PLAYER_COLLIDER_RADIUS - 0.01;
+        assert!(
+            end.x < 16.5 - clear || end.z > -16.5 + clear,
+            "went into the block to {end}"
+        );
+    }
+
+    #[test]
+    fn walls_of_the_scenes_across_the_origins_edges_stop_the_avatar() {
+        // parcel 0,0's west edge (x 0) borders parcel -1,0; its north edge (z 0), parcel 0,-1:
+        // parcel y grows to -z. Each wall 0.5 m beyond the edge.
+        let cases = [
+            (
+                Vec3::new(0.5, 0.0, -8.0),
+                Vec3::new(-5.0, 0.0, 0.0),
+                IVec2::new(-1, 0),
+                (Vec3::new(-1.0, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0)),
+            ),
+            (
+                Vec3::new(8.0, 0.0, -0.5),
+                Vec3::new(0.0, 0.0, 5.0),
+                IVec2::new(0, -1),
+                (Vec3::new(8.0, 1.0, 1.0), Vec3::new(8.0, 1.0, 0.5)),
+            ),
+        ];
+        for (start, velocity, parcel, wall) in cases {
+            let (mut app, player) = movement_app(&[], start);
+            add_wall_scene(&mut app, "beyond", parcel, wall.0, wall.1);
+            let end = run_for(&mut app, player, velocity, 50);
+            // against the wall's face, 0.5 m past the edge
+            let along = velocity.normalize();
+            let reached = end.dot(along);
+            let face = 0.5 - PLAYER_COLLIDER_RADIUS;
+            assert!((reached - face).abs() < 0.01, "{parcel}: stopped at {end}");
+        }
+    }
+
+    #[test]
+    fn a_run_at_30_fps_stops_at_the_wall_of_the_next_parcels_scene_from_any_point_a_frame_away() {
+        // a run at 10 m/s moves 0.33 m in a 30 fps frame; the wall 0.05 m into parcel 1,0, the
+        // avatar's front from 0.35 to 0.05 m short of it
+        let frame = std::time::Duration::from_secs_f64(1.0 / 30.0);
+        let wall = (Vec3::new(16.55, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        let face = 16.05 - PLAYER_COLLIDER_RADIUS;
+        for k in 0..11 {
+            let start = Vec3::new(15.4 + k as f32 * 0.03, 0.0, -8.0);
+            let (mut app, player) = movement_app_at(&[], start, frame);
+            add_wall_scene(&mut app, "next", IVec2::new(1, 0), wall.0, wall.1);
+            app.update();
+            let end = run_for(&mut app, player, Vec3::new(10.0, 0.0, 0.0), 30);
+            assert!(
+                (end.x - face).abs() < 0.01,
+                "from {start}: stopped at {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_walk_and_a_jog_step_onto_a_riser_of_the_next_parcels_scene() {
+        // a 0.2 m riser held by the scene of parcel 1,0, its face on the parcels' edge (x 16)
+        let riser = (Vec3::new(20.0, 0.1, -8.0), Vec3::new(4.0, 0.1, 8.0));
+        let frame = std::time::Duration::from_secs_f64(1.0 / 30.0);
+        for (speed, frames) in [(1.5, 60), (8.0, 15)] {
+            let (mut app, player) = movement_app_at(&[], Vec3::new(15.0, 0.0, -8.0), frame);
+            add_wall_scene(&mut app, "riser", IVec2::new(1, 0), riser.0, riser.1);
+            app.update();
+            let end = run_for(&mut app, player, Vec3::new(speed, 0.0, 0.0), frames);
+            assert!(
+                end.x > 16.5 && (end.y - 0.2).abs() < 0.01,
+                "{speed} m/s: {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_walk_and_a_jog_off_a_low_step_follow_it_down_onto_the_next_parcels_scene() {
+        // a platform 0.2 m high ending on parcel 0,0's east edge (x 16), and beyond it, held by
+        // the scene of parcel 1,0, one 0.1 m high: a 0.1 m step down onto the next scene's ground
+        let upper = (
+            Vec3::new(12.0, 0.1, -8.0),
+            Vec3::new(4.0, 0.1, 8.0),
+            Quat::IDENTITY,
+        );
+        let lower = (Vec3::new(24.0, 0.05, -8.0), Vec3::new(8.0, 0.05, 8.0));
+        let frame = std::time::Duration::from_secs_f64(1.0 / 30.0);
+        for (speed, frames) in [(1.5, 60), (8.0, 15)] {
+            let start = Vec3::new(14.0, 0.2, -8.0);
+            let (mut app, player) = movement_app_at(&[upper], start, frame);
+            add_wall_scene(&mut app, "lower", IVec2::new(1, 0), lower.0, lower.1);
+            app.update();
+            let end = run_for(&mut app, player, Vec3::new(speed, 0.0, 0.0), frames);
+            assert!(
+                end.x > 16.5 && (end.y - 0.1).abs() < 0.01,
+                "{speed} m/s: {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_move_of_more_than_a_parcel_in_a_frame_is_cast_against_the_scenes_a_parcel_around() {
+        // 40 m in a 20 ms frame from the middle of parcel 0,0: a wall of the next parcel's scene
+        // stops it, one two parcels away is not cast against
+        let start = Vec3::new(8.0, 0.0, -8.0);
+        let velocity = Vec3::new(2000.0, 0.0, 0.0);
+        let (mut app, player) = movement_app(&[], start);
+        let near = (Vec3::new(20.5, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        add_wall_scene(&mut app, "near", IVec2::new(1, 0), near.0, near.1);
+        app.update();
+        let end = run_for(&mut app, player, velocity, 1);
+        let face = 20.0 - PLAYER_COLLIDER_RADIUS;
+        assert!((end.x - face).abs() < 0.01, "stopped at {end}");
+
+        let (mut app, player) = movement_app(&[], start);
+        let far = (Vec3::new(36.5, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        add_wall_scene(&mut app, "far", IVec2::new(2, 0), far.0, far.1);
+        app.update();
+        let end = run_for(&mut app, player, velocity, 1);
+        assert!(end.x > 40.0, "stopped at {end}");
+    }
+
+    #[test]
+    fn a_scene_velocity_that_is_not_finite_ends_the_frame() {
+        // the scenes cast against stay those a parcel around the avatar, however far the velocity
+        // would carry it
+        for velocity in [
+            Vec3::NAN,
+            Vec3::new(f32::INFINITY, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, f32::NEG_INFINITY),
+        ] {
+            let (mut app, player) = movement_app(&[], Vec3::new(8.0, 0.0, -8.0));
+            app.update();
+            run_for(&mut app, player, velocity, 3);
+        }
+    }
+
     /// A ramp rising along +x at `degrees`, its surface from x 1 at y 0.
     fn ramp(degrees: f32) -> (Vec3, Vec3, Quat) {
         let a = degrees.to_radians();
@@ -1742,45 +1896,106 @@ mod tests {
         assert!((end.y - on_ramp).abs() < 0.05, "left the ramp at {end}");
     }
 
-    /// The highest the avatar's feet hover over the ground in a walk at `speed` m/s down a 45
-    /// degree ramp from `x` onto the floor at its foot, in 60 Hz frames.
-    fn hover_down_to_the_foot_of_a_ramp(x: f32, speed: f32) -> f32 {
+    /// A walk at `speed` m/s down a ramp of `degrees` from `x` onto the floor at its foot (x 1),
+    /// in frames of `fps`, until 1.5 m past the foot: each frame's x and the feet's height over
+    /// the ground after it. With `fall`, the scene's fall: while the avatar is off the ground, its
+    /// vertical speed gains 10 m/s downward a second; on the ground it is 0.
+    fn down_a_ramp(degrees: f32, fps: f64, x: f32, speed: f32, fall: bool) -> Vec<(f32, f32)> {
+        let slope = degrees.to_radians();
         // standing on the ramp: its surface under the centre, plus the lower sphere's lift there
-        let lift = PLAYER_COLLIDER_RADIUS * (std::f32::consts::SQRT_2 - 1.0);
-        let start = Vec3::new(x, x - 1.0 + lift, 0.0);
-        let frame = std::time::Duration::from_secs_f64(1.0 / 60.0);
-        let (mut app, player) = movement_app_at(&[ramp(45.0)], start, frame);
+        let lift = PLAYER_COLLIDER_RADIUS * (1.0 / slope.cos() - 1.0);
+        let start = Vec3::new(x, (x - 1.0) * slope.tan() + lift, 0.0);
+        let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+        let (mut app, player) = movement_app_at(&[ramp(degrees)], start, frame);
         app.update();
-        set_velocity(&mut app, player, Vec3::new(-speed, 0.0, 0.0));
-        let mut hover = 0.0_f32;
-        while app.world().get::<Transform>(player).unwrap().translation.x > 0.0 {
-            app.update();
+        let mut vertical = 0.0_f32;
+        let mut trace = Vec::new();
+        while app.world().get::<Transform>(player).unwrap().translation.x > -1.5 {
+            assert!(trace.len() < 10_000, "held on the ramp from {x}");
             let height = app
                 .world()
                 .get::<AvatarDynamicState>(player)
                 .unwrap()
                 .ground_height;
-            hover = hover.max(height);
+            vertical = if fall && height > PLAYER_GROUND_THRESHOLD {
+                vertical - 10.0 / fps as f32
+            } else {
+                0.0
+            };
+            set_velocity(&mut app, player, Vec3::new(-speed, vertical, 0.0));
+            app.update();
+            let x = app.world().get::<Transform>(player).unwrap().translation.x;
+            let height = app
+                .world()
+                .get::<AvatarDynamicState>(player)
+                .unwrap()
+                .ground_height;
+            trace.push((x, height));
         }
-        hover
+        trace
     }
+
+    /// Start points of [`down_a_ramp`] spread over one frame at `speed` m/s, so that the last
+    /// frame on the ramp ends anywhere before its foot.
+    fn a_frame_of_starts(fps: f64, speed: f32) -> impl Iterator<Item = f32> {
+        const STARTS: usize = 16;
+        (0..STARTS).map(move |k| 2.0 + speed / fps as f32 * k as f32 / STARTS as f32)
+    }
+
+    /// The scene's walk, jog and run (1.5, 8 and 10 m/s) down a ramp, 1.29 times faster downhill.
+    const DOWNHILL_SPEEDS: [f32; 3] = [1.93, 10.29, 12.86];
 
     #[test]
     fn walking_down_a_slope_onto_flat_ground_keeps_to_the_ground_at_the_foot() {
-        // a jog and a run down a 45 degree ramp (the scene's 8 and 10 m/s, 1.29 times faster
-        // downhill) take more than GROUND_SNAP_DROP of descent in a frame; from start points one
-        // frame apart, so that the last frame on the ramp ends anywhere before its foot
+        // down 45 degrees and 46, just under the steepest walkable slope; a jog and a run take
+        // more than GROUND_SNAP_DROP of descent in a frame
         let mut hovered = Vec::new();
-        for speed in [10.29, 12.86] {
-            for k in 0..22 {
-                let x = 4.0 + k as f32 * 0.01;
-                let hover = hover_down_to_the_foot_of_a_ramp(x, speed);
-                if hover > PLAYER_GROUND_THRESHOLD {
-                    hovered.push((speed, x, hover));
+        for fps in [30.0, 60.0, 144.0] {
+            for degrees in [45.0, 46.0] {
+                for speed in DOWNHILL_SPEEDS {
+                    for x in a_frame_of_starts(fps, speed) {
+                        let trace = down_a_ramp(degrees, fps, x, speed, false);
+                        let hover = trace.iter().fold(0.0_f32, |hover, &(_, h)| hover.max(h));
+                        if hover > PLAYER_GROUND_THRESHOLD {
+                            hovered.push((fps, degrees, speed, x, hover));
+                        }
+                    }
                 }
             }
         }
-        assert!(hovered.is_empty(), "(m/s, from x, hovered m): {hovered:?}");
+        assert!(
+            hovered.is_empty(),
+            "(fps, degrees, m/s, from x, hovered m): {hovered:?}"
+        );
+    }
+
+    #[test]
+    fn falling_off_the_foot_of_a_slope_lands_just_past_it() {
+        // with the scene falling whenever the avatar is off the ground, the first frame on the
+        // ground past the foot is within 0.33 m of it, give or take the frame and a 20 ms reply
+        let mut far = Vec::new();
+        for fps in [30.0, 60.0, 144.0] {
+            let frame = 1.0 / fps as f32;
+            for degrees in [45.0, 46.0] {
+                for speed in DOWNHILL_SPEEDS {
+                    let within = 0.33 + (speed * (0.02 + frame)).max(0.1);
+                    for x in a_frame_of_starts(fps, speed) {
+                        let trace = down_a_ramp(degrees, fps, x, speed, true);
+                        let landed = trace
+                            .iter()
+                            .find(|&&(x, height)| x < 1.0 && height <= PLAYER_GROUND_THRESHOLD)
+                            .map(|&(x, _)| 1.0 - x);
+                        if !landed.is_some_and(|past| past <= within) {
+                            far.push((fps, degrees, speed, x, landed));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            far.is_empty(),
+            "(fps, degrees, m/s, from x, landed m past the foot): {far:?}"
+        );
     }
 
     #[test]
@@ -1870,33 +2085,63 @@ mod tests {
         assert_eq!(app.world().get::<RiserPush>(player).unwrap().0, 0.0);
     }
 
-    /// The time a walk at 1.5 m/s from 0.15 m short of a 0.2 m riser takes to step onto it, at
-    /// `fps` frames a second.
-    fn time_to_step_up(fps: f64) -> f64 {
+    /// The time a move at `speed` m/s from 0.15 m short of a 0.2 m riser takes to step onto it, at
+    /// `fps` frames a second, and the furthest it pushed against the riser before.
+    fn time_to_step_up(fps: f64, speed: f32) -> (f64, f64) {
         let frame = std::time::Duration::from_secs_f64(1.0 / fps);
         let (mut app, player) = movement_app_at(&[riser(0.2)], Vec3::new(0.55, 0.0, 0.0), frame);
         app.update();
-        set_velocity(&mut app, player, Vec3::new(1.5, 0.0, 0.0));
+        set_velocity(&mut app, player, Vec3::new(speed, 0.0, 0.0));
         let mut time = 0.0;
+        let mut pushed = 0.0_f64;
         while app.world().get::<Transform>(player).unwrap().translation.y < 0.1 {
-            assert!(time < 2.0, "never stepped up at {fps} fps");
+            assert!(time < 2.0, "never stepped up at {speed} m/s, {fps} fps");
             app.update();
             time += frame.as_secs_f64();
+            pushed = pushed.max(app.world().get::<RiserPush>(player).unwrap().0);
         }
-        time
+        (time, pushed)
     }
 
     #[test]
     fn a_walk_pushes_against_a_riser_for_the_same_time_at_any_frame_rate() {
         // 0.1 s to reach the riser, then the push
-        let at_60 = time_to_step_up(60.0);
-        let at_15 = time_to_step_up(15.0);
-        assert!(at_60 > 0.18, "no push at 60 fps: {at_60} s");
-        assert!(at_15 > 0.18, "no push at 15 fps: {at_15} s");
-        assert!(
-            (at_60 - at_15).abs() <= 1.0 / 15.0 + 1e-6,
-            "{at_60} s at 60 fps, {at_15} s at 15"
-        );
+        let (at_60, _) = time_to_step_up(60.0, 1.5);
+        for fps in [15.0, 30.0, 60.0, 144.0] {
+            let (time, _) = time_to_step_up(fps, 1.5);
+            assert!(time > 0.18, "no push at {fps} fps: {time} s");
+            assert!(
+                (time - at_60).abs() <= 1.0 / fps.min(60.0) + 1e-6,
+                "{time} s at {fps} fps, {at_60} s at 60"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_move_slower_than_the_push_speed_pushes_against_a_riser_at_any_frame_rate() {
+        // the push speed is about 5.5 m/s: a walk and a move just under it push for STEP_PUSH
+        // once at the riser; a move just over it, a jog and a run step onto it in the frame they
+        // reach it
+        let push_speed = step_push_speed() as f32;
+        for fps in [30.0, 60.0, 144.0] {
+            for speed in [1.5, push_speed * 0.9] {
+                let (time, _) = time_to_step_up(fps, speed);
+                let pushed = (0.15 + STEP_PUSH) / f64::from(speed);
+                assert!(
+                    time > pushed - 1e-3,
+                    "{speed} m/s at {fps} fps: stepped up after {time} s"
+                );
+            }
+            for speed in [push_speed * 1.1, 8.0, 10.0] {
+                let (time, pushed) = time_to_step_up(fps, speed);
+                assert_eq!(pushed, 0.0, "{speed} m/s at {fps} fps pushed");
+                let reached = 0.15 / f64::from(speed);
+                assert!(
+                    time < reached + 1.0 / fps + 1e-6,
+                    "{speed} m/s at {fps} fps: stepped up after {time} s"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1934,16 +2179,32 @@ mod tests {
 
     #[test]
     fn a_running_jump_into_a_riser_does_not_step_onto_it_as_it_takes_off() {
-        // 0.05 m short of a 0.4 m riser, on the ground
-        let (mut app, player) = movement_app(&[riser(0.4)], Vec3::new(0.65, 0.0, 0.0));
-        app.update();
-        // a run at 10 m/s takes off for a 1 m jump
-        set_velocity(&mut app, player, Vec3::new(10.0, 8.94, 0.0));
-        app.update();
-        let end = app.world().get::<Transform>(player).unwrap().translation;
-        // the take-off step rises at 8.94 m/s for its 20 ms, against the riser's face
-        assert!((end.y - 8.94 * 0.02).abs() < 0.01, "rose to {end}");
-        assert!(end.x < 0.71, "went onto the riser to {end}");
+        // on the ground, 0.05 m short of a 0.4 m riser's face, or 0.02 m short of a 0.2 m riser's
+        // edge (the lower sphere meets it above its top); the avatar stops at the riser at x 0.7
+        // and 0.72 respectively
+        for fps in [30.0, 50.0, 144.0] {
+            let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+            let dt = 1.0 / fps as f32;
+            for (height, start, at_riser) in [(0.4, 0.65, 0.71), (0.2, 0.7, 0.74)] {
+                // a run at 10 m/s takes off for a 1 m jump, or a hop that is still within the
+                // ground's reach after the take-off at 144 fps
+                for rise in [8.94, 3.0] {
+                    let case = format!("{height} m riser, rising at {rise} m/s, {fps} fps");
+                    let (mut app, player) =
+                        movement_app_at(&[riser(height)], Vec3::new(start, 0.0, 0.0), frame);
+                    app.update();
+                    let off = run_for(&mut app, player, Vec3::new(10.0, rise, 0.0), 1);
+                    // the take-off step rises at its speed for the frame, against the riser
+                    assert!((off.y - rise * dt).abs() < 0.01, "{case}: rose to {off}");
+                    assert!(off.x < at_riser, "{case}: went onto the riser to {off}");
+                    // the next frame of the flight still rises, slowed by the fall
+                    let next = run_for(&mut app, player, Vec3::new(10.0, rise - 10.0 * dt, 0.0), 1);
+                    assert!(next.y > off.y, "{case}: from {off} to {next}");
+                    let steps = app.world().get::<GroundAssist>(player).unwrap().steps;
+                    assert_eq!(steps, 0, "{case}: stepped up");
+                }
+            }
+        }
     }
 
     #[test]
@@ -2251,6 +2512,86 @@ mod tests {
             yaws[4..].iter().all(|yaw| (yaw - 30.0).abs() < 1e-3),
             "settled at {yaws:?}"
         );
+    }
+
+    /// A movement scene turning the player as in [`late_replies`], with the reply to its `k`th
+    /// tick landing `schedule[k % schedule.len()]` frames after the tick's dispatch (0: in the
+    /// frame of the dispatch). The scene is dispatched in each frame it is not in flight in: a
+    /// dispatch in the frame a late reply lands is the re-dispatch. The first `turning` ticks have
+    /// input. Returns, for each tick, the yaw it is sent and the yaw it replies; and the player's
+    /// yaw after each frame.
+    fn scheduled_replies(
+        schedule: &[u32],
+        turning: usize,
+        frames: u32,
+    ) -> (Vec<(f32, f32)>, Vec<f32>) {
+        let (mut app, player) = rotation_app(0.0);
+        let scene = add_scene(&mut app, "movement", Some(1));
+        // the scene has been driving the player
+        app.world_mut()
+            .entity_mut(scene.1)
+            .insert(AvatarMovement::default());
+
+        // (dispatch frame, landing frame, orientation) of the tick in flight
+        let mut in_flight: Option<(u32, u32, f32)> = None;
+        let mut ticks = Vec::new();
+        let mut applied = Vec::new();
+        for frame in 0..frames {
+            app.insert_resource(FrameCount(frame));
+            if let Some((sent, _, orientation)) =
+                in_flight.take_if(|&mut (_, lands, _)| lands == frame)
+            {
+                land_reply(&mut app, scene, sent, frame, Some(orientation));
+            }
+            app.world_mut().run_schedule(Update);
+            if in_flight.is_none() {
+                let world = app.world();
+                let rotation = world.get::<Transform>(player).unwrap().rotation;
+                let tick_timing = world.get::<SceneTickTiming>(scene.0).unwrap();
+                let sent = yaw(tick_timing.player_rotation_to_send(frame, rotation));
+                let orientation = if ticks.len() < turning {
+                    sent + (90.0 - sent).clamp(-10.0, 10.0)
+                } else {
+                    sent
+                };
+                let lands = frame + schedule[ticks.len() % schedule.len()];
+                ticks.push((sent, orientation));
+                if lands == frame {
+                    land_reply(&mut app, scene, frame, frame, Some(orientation));
+                } else {
+                    in_flight = Some((frame, lands, orientation));
+                }
+            }
+            app.world_mut().run_schedule(PostUpdate);
+            applied.push(yaw(app.world().get::<Transform>(player).unwrap().rotation));
+        }
+        (ticks, applied)
+    }
+
+    #[test]
+    fn a_redispatch_turns_on_from_a_reply_two_frames_late_or_between_in_frame_ones() {
+        // every reply two frames late; in the frame of its dispatch and a frame late in turn; a
+        // frame and two frames late in turn
+        for schedule in [&[2][..], &[0, 1], &[1, 2]] {
+            let (ticks, applied) = scheduled_replies(schedule, 3, 16);
+            // every tick is sent the yaw the one before it replied
+            assert!(
+                ticks
+                    .windows(2)
+                    .all(|pair| (pair[1].0 - pair[0].1).abs() < 1e-3),
+                "{schedule:?}: (sent, replied) {ticks:?}"
+            );
+            assert!(
+                applied.windows(2).all(|pair| pair[1] >= pair[0] - 1e-3),
+                "{schedule:?}: turned back: {applied:?}"
+            );
+            // three ticks with input turn 30 degrees
+            let last = applied.last().unwrap();
+            assert!(
+                (last - 30.0).abs() < 1e-3,
+                "{schedule:?}: settled at {applied:?}"
+            );
+        }
     }
 
     #[test]

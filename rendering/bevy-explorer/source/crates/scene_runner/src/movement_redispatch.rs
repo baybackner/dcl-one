@@ -219,6 +219,17 @@ mod tests {
         assert!(replied(6, 7).late_reply_in(7));
         // it is no reason to call frame 8's dispatch one
         assert!(!replied(6, 7).late_reply_in(8));
+        // a reply two frames late makes its frame's dispatch one too: that dispatch alone is sent
+        // the staged rotation
+        assert!(replied(5, 7).late_reply_in(7));
+        let staged = bevy::math::Quat::from_rotation_y(1.0);
+        let player = bevy::math::Quat::from_rotation_y(2.0);
+        let two_late = SceneTickTiming {
+            redispatch_rotation: Some(staged),
+            ..replied(5, 7)
+        };
+        assert_eq!(two_late.player_rotation_to_send(7, player), staged);
+        assert_eq!(two_late.player_rotation_to_send(8, player), player);
         // a reply in its own frame is not late
         assert!(!replied(7, 7).late_reply_in(7));
         assert!(!SceneTickTiming::default().late_reply_in(7));
