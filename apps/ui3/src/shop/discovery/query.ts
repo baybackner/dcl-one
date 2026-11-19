@@ -63,6 +63,16 @@ export function primeShopQuery(key: readonly unknown[], data: unknown, at: numbe
   notify();
 }
 
+/** Starts the read under `key` before a page asks for it, unless it holds a fresh answer or is already being read. */
+export function prefetchShopQuery<T>(key: readonly unknown[], fetcher: (signal: AbortSignal) => Promise<T>): void {
+  const id = keyOf(key);
+  const cached = cache.get(id);
+  if ((cached && Date.now() - cached.at < DEFAULT_STALE_MS) || inflight.has(id)) return;
+  // Held until it lands, so a page that mounts meanwhile joins it rather than asking again.
+  const flight = join(id, fetcher);
+  flight.promise.then((data) => cache.set(id, { data, at: Date.now() }), () => {}).finally(flight.leave);
+}
+
 export function peekShopQuery<T>(key: readonly unknown[], staleMs: number = DEFAULT_STALE_MS): T | undefined {
   const entry = cache.get(keyOf(key));
   return entry && Date.now() - entry.at < staleMs ? (entry.data as T) : undefined;
