@@ -157,15 +157,18 @@ fn run_on_worker_timer(mut app: App) -> AppExit {
     // fires late (they do, by a millisecond or several) is repaid by a shorter wait and the
     // rate holds; as the scene loop's `next_frame_end` does for its native sleep.
     let mut due = Instant::now();
-    *tick.borrow_mut() = Some(Closure::new(move || {
+    let first: Closure<dyn FnMut()> = Closure::new(move || {
         app.update();
         if app.should_exit().is_none() {
             let now = Instant::now();
             due = (due + interval).max(now);
-            reschedule(next.borrow().as_ref().unwrap(), due - now);
+            if let Some(next) = next.borrow().as_ref() {
+                reschedule(next, due - now);
+            }
         }
-    }));
-    schedule(tick.borrow().as_ref().unwrap(), Duration::ZERO);
+    });
+    schedule(&first, Duration::ZERO);
+    *tick.borrow_mut() = Some(first);
     AppExit::Success
 }
 

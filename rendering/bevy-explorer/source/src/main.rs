@@ -313,7 +313,9 @@ fn data_local_dir() -> PathBuf {
 
 fn create_logs_folder() {
     let log_dir = data_local_dir();
-    std::fs::create_dir_all(log_dir).unwrap();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("failed to create log folder {log_dir:?}: {e}");
+    }
 }
 
 fn create_log_files() {
@@ -322,7 +324,9 @@ fn create_log_files() {
         .write_all(format!("{}\n\n", SESSION_LOG.get().unwrap()).as_bytes())
         .expect("failed to create log file");
 
-    File::create(crash_marker()).unwrap();
+    if let Err(e) = File::create(crash_marker()) {
+        eprintln!("failed to create crash marker: {e}");
+    }
     println!("log file: {}", SESSION_LOG.get().unwrap());
 }
 
@@ -330,13 +334,7 @@ fn create_log_files() {
 /// and saves it to [`SESSION_LOG`]
 fn decentraland_log_file() {
     let log_dir = data_local_dir();
-    let session_time: chrono::DateTime<chrono::Utc> = chrono::DateTime::from_timestamp_millis(
-        web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64,
-    )
-    .unwrap();
+    let session_time = chrono::Utc::now();
     let session_log = log_dir.join(format!("{}.log", session_time.format("%Y%m%d-%H%M%S")));
     SESSION_LOG
         .set(session_log.to_string_lossy().into_owned())
