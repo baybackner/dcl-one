@@ -1,10 +1,12 @@
 /* oxlint-disable no-useless-escape */
 
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import extract from '@dcl/zip-extract';
 import log from 'electron-log/main';
 import { fetch } from '/shared/fetch';
+import SCENE_TEMPLATES from './scene-templates.json';
 
 // Function to parse GitHub URL for root or subfolder
 function parseGitHubUrl(githubUrl: string) {
@@ -72,6 +74,29 @@ async function fetchZipball(apiUrl: string): Promise<ArrayBuffer> {
   }
 }
 
+const BUNDLED: Record<string, { commit: string; sha256: string } | undefined> = SCENE_TEMPLATES;
+
+// The app ships the templates that scene-templates.json pins (scripts/fetch-templates.js), so a
+// scene made from one needs no network. Any other repo, or a bundled zip that is absent or does
+// not match its pin, is downloaded.
+async function readBundledZip(githubUrl: string): Promise<Uint8Array | undefined> {
+  const pin = BUNDLED[githubUrl];
+  if (!pin) return undefined;
+  try {
+    const zip = await fs.readFile(
+      path.join(process.resourcesPath, 'scene-templates', `${pin.commit}.zip`),
+    );
+    if (createHash('sha256').update(zip).digest('hex') === pin.sha256) {
+      log.info(`[download-github-folder] ${githubUrl} comes from the app at ${pin.commit}`);
+      return zip;
+    }
+    log.warn(`[download-github-folder] the bundled ${githubUrl} does not match its sha256`);
+  } catch (error) {
+    log.warn(`[download-github-folder] ${githubUrl} is not bundled: ${(error as Error).message}`);
+  }
+  return undefined;
+}
+
 export async function downloadGithubRepo(githubUrl: string, destination: string) {
   const { owner, repo, branch, path: subfolderPath } = parseGitHubUrl(githubUrl);
   const apiUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${branch}`;
@@ -79,8 +104,9 @@ export async function downloadGithubRepo(githubUrl: string, destination: string)
   try {
     // Download and extract the zip file
     const tempZipPath = path.join(destination, `${repo}.zip`);
-    const zipContent = await fetchZipball(apiUrl);
-    await fs.writeFile(tempZipPath, new Uint8Array(zipContent));
+    const zipContent =
+      (await readBundledZip(githubUrl)) ?? new Uint8Array(await fetchZipball(apiUrl));
+    await fs.writeFile(tempZipPath, zipContent);
     await extract(tempZipPath, {
       dir: destination,
       onSkip: (entry, reason) =>

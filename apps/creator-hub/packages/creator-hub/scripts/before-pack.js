@@ -5,10 +5,12 @@
 import copyNpmForAsar from './copy-npm-for-asar.js';
 import downloadNode from './download-node.js';
 import fetchDevtools from './fetch-devtools.js';
+import fetchTemplates from './fetch-templates.js';
 import provisionOxcBindings from './provision-oxc-bindings.js';
 
 export default async function beforePack(context) {
   fetchDevtools();
+  await fetchTemplates();
   await copyNpmForAsar(context);
   await downloadNode(context);
   await provisionOxcBindings(context);

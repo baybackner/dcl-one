@@ -1,0 +1,34 @@
+{
+  "https://github.com/decentraland/sdk-empty-scene-template": {
+    "commit": "3655941fb2df45a8afd04d287a8780585a208415",
+    "sha256": "785f72be3d201fa63987f4d87f00cbc269c5c3961a86127fda85e4d4d3a7dad8"
+  },
+  "https://github.com/decentraland-scenes/Video-Streaming-Template": {
+    "commit": "74a95f0aca361c7955a77d4acaafb1f4d899b8f3",
+    "sha256": "40921a611a86818cc2b37b00e63345cd1130b52b517d2b002a2fc1f45c0c429b"
+  },
+  "https://github.com/decentraland-scenes/art-gallery-template": {
+    "commit": "40712a603e4c5c8f30a746b1d1d59405ee648ccf",
+    "sha256": "c006e1ff475a568880ae4ffd3a7d00296e9a60853dd4b84841bf17f5f258a966"
+  },
+  "https://github.com/decentraland-scenes/cozy-house-template": {
+    "commit": "b10a5e18e08fa629c16133b83a3e1cc6df13266a",
+    "sha256": "7e5a84cee7c724776a5de40029f193f71570a027c58a9c5d2133c2cf25c7b011"
+  },
+  "https://github.com/decentraland-scenes/Spooky-House-Template": {
+    "commit": "0f10389d2aa7262cd667c3d0c4888d9681ffa88a",
+    "sha256": "6eda5e4ef6d3bf797548b2f73b4114e502d4875c6803a4de247730c651606175"
+  },
+  "https://github.com/decentraland-scenes/Party-Pad-Template": {
+    "commit": "1b9cc1a445bb518f47cce87b7dd30d184417b0c3",
+    "sha256": "94ec6149991174b8c9e132092f9529cfb9aa960d413251481c995d710da6a8b1"
+  },
+  "https://github.com/decentraland-scenes/stream-studio-template": {
+    "commit": "e3fcdf888d957a947b2c40cce84a9062bddc9b63",
+    "sha256": "05da34c6b7a7c4410f181909bcc4dd6644dd821abfe4a512036d613c38ec2686"
+  },
+  "https://github.com/decentraland-scenes/teamhub-library": {
+    "commit": "db8296020646765bcb2d6d070387141d41f2c18c",
+    "sha256": "e2f7ecd71ecc0fe3863d66ce74165a0c4328fab407a3459f3722a8904dbb0ff5"
+  }
+}

@@ -30,6 +30,7 @@ yarn-error.log*
 **/public/bevy-agent
 packages/creator-hub/node-bin
 packages/creator-hub/devtools-frontend
+packages/creator-hub/scene-templates
 **/gen
 **/tsconfig.tsbuildinfo
 **/tsconfig.check.tsbuildinfo

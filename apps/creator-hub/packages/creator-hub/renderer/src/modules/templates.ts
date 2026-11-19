@@ -38,9 +38,10 @@ export type Template = {
 /**
  * The scene templates offered on the Templates page and the Home row.
  *
- * The template code lives in the linked GitHub repos; only the catalog (names, blurbs,
- * tags, artwork) is bundled here. To add a template: drop its artwork in `assets/templates/`
- * and append an entry.
+ * The template code lives in the linked GitHub repos. The app ships the repos that
+ * main/src/modules/scene-templates.json pins, so a scene made from one needs no network; the
+ * other repos download when a scene is created. To add a template: drop its artwork in
+ * `assets/templates/`, append an entry, and pin its repo there if it is small.
  */
 export const TEMPLATES: Template[] = [
   {

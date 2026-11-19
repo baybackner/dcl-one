@@ -68,6 +68,12 @@ const config = {
       to: 'node-bin',
       filter: ['**/*'],
     },
+    // Scene templates, fetched by the beforePack hook: a scene made from one needs no network.
+    {
+      from: 'scene-templates',
+      to: 'scene-templates',
+      filter: ['**/*'],
+    },
   ],
   // The AppImage with this runtime needs no libfuse2, which Ubuntu does not install, and its
   // launcher starts the app without the Chromium sandbox where the system forbids it.

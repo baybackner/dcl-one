@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({ warn: vi.fn(), fetch: vi.fn(), extract: vi.fn(
 vi.mock('electron-log/main', () => ({ default: { info: vi.fn(), warn: mocks.warn } }));
 vi.mock('/shared/fetch', () => ({ fetch: mocks.fetch }));
 vi.mock('@dcl/zip-extract', () => ({ default: mocks.extract }));
+vi.mock('../src/modules/scene-templates.json', () => ({
+  default: {
+    'https://github.com/owner/template': {
+      commit: 'abc',
+      sha256: '9d7921a10bc70fa0023abc5b48c2f9ebc379eba081c92566e3ca111b2020bef8', // "bundled zip"
+    },
+  },
+}));
 
 import { downloadGithubRepo } from '../src/modules/download-github-folder';
 
@@ -102,6 +110,62 @@ describe('downloadGithubRepo', () => {
     });
   });
 
+  describe('when the app ships the template', () => {
+    let resources: string;
+    let extracted: string | undefined;
+
+    beforeEach(async () => {
+      resources = await fs.mkdtemp(path.join(os.tmpdir(), 'scene-templates-'));
+      await fs.mkdir(path.join(resources, 'scene-templates'));
+      Object.assign(process, { resourcesPath: resources });
+      mocks.extract.mockImplementation(async (zip: string, options: any) => {
+        extracted = await fs.readFile(zip, 'utf8');
+        await fs.mkdir(path.join(options.dir, 'template-abc'));
+        await fs.writeFile(path.join(options.dir, 'template-abc', 'scene.json'), '{}');
+      });
+    });
+
+    afterEach(async () => {
+      Reflect.deleteProperty(process, 'resourcesPath');
+      await fs.rm(resources, { recursive: true, force: true });
+    });
+
+    it('should extract the bundled zip with no network', async () => {
+      await fs.writeFile(path.join(resources, 'scene-templates', 'abc.zip'), 'bundled zip');
+
+      await downloadGithubRepo('https://github.com/owner/template', destination);
+
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(extracted).toBe('bundled zip');
+      expect(await fs.readdir(destination)).toEqual(['scene.json']);
+    });
+
+    it('should download the template when the bundled zip does not match its sha256', async () => {
+      await fs.writeFile(path.join(resources, 'scene-templates', 'abc.zip'), 'altered zip');
+
+      await downloadGithubRepo('https://github.com/owner/template', destination);
+
+      expect(mocks.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/owner/template/zipball/main',
+        undefined,
+        30_000,
+      );
+      expect(extracted).toBe('');
+    });
+
+    it('should still download a repository that the app does not ship', async () => {
+      await fs.writeFile(path.join(resources, 'scene-templates', 'abc.zip'), 'bundled zip');
+
+      await downloadGithubRepo('https://github.com/owner/repo', destination);
+
+      expect(mocks.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/owner/repo/zipball/main',
+        undefined,
+        30_000,
+      );
+    });
+  });
+
   describe('when GitHub says the repository does not exist', () => {
     beforeEach(() => {
       mocks.fetch.mockResolvedValue({ ok: false, status: 404, body: null });
@@ -113,5 +177,19 @@ describe('downloadGithubRepo', () => {
       ).rejects.toThrow('404');
       expect(mocks.fetch).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('scene-templates.json', () => {
+  it('should pin every bundled template to a commit and the sha256 of its zip', async () => {
+    const { default: pins } = await vi.importActual<{
+      default: Record<string, { commit: string; sha256: string }>;
+    }>('../src/modules/scene-templates.json');
+    expect(pins).toHaveProperty(['https://github.com/decentraland/sdk-empty-scene-template']);
+    for (const [repo, pin] of Object.entries(pins)) {
+      expect(repo).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+$/);
+      expect(pin.commit, repo).toMatch(/^[0-9a-f]{40}$/);
+      expect(pin.sha256, repo).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 });
