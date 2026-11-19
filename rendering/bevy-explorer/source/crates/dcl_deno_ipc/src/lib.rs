@@ -341,12 +341,9 @@ pub async fn renderer_ipc_in(mut stream: RecvHalf) {
                     let Err(e) = sender.try_send((id, scene_response)) else {
                         return true;
                     };
-                    // HEADLESS-ONLY: EXIT_ON_SIDECAR_LOSS marks the orchestrated headless
-                    // server, where every scene shares one engine. There, ending this loop
-                    // trips the process exit above — killing the whole engine and every
-                    // co-tenant scene. So shed the response instead: a scene that outruns the
-                    // bevy-side drain only stalls itself. Desktop and tests (flag unset) stop
-                    // this loop.
+                    // With EXIT_ON_SIDECAR_LOSS set, drop this response and keep reading, so
+                    // one undeliverable response does not end the loop. With it unset, stop
+                    // the loop.
                     if EXIT_ON_SIDECAR_LOSS.load(Ordering::SeqCst) {
                         warn!("dropping scene response: renderer channel unavailable ({e})");
                         true
