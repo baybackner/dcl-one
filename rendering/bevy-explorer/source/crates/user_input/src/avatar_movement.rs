@@ -1713,12 +1713,14 @@ mod tests {
         let (mut app, player) = movement_app(&[], start);
         let block = (Vec3::new(20.25, 1.0, -20.25), Vec3::new(3.75, 1.0, 3.75));
         add_wall_scene(&mut app, "corner", IVec2::new(1, 1), block.0, block.1);
-        // across the corner into the block: it stops at the block's corner or slides along a face
+        // across the corner into the block: it stops against the block's corner or slides along a
+        // face, the capsule's radius from the block's nearest point either way
         let end = run_for(&mut app, player, Vec3::new(3.0, 0.0, -3.0), 50);
-        let clear = PLAYER_COLLIDER_RADIUS - 0.01;
+        let nearest = Vec2::new(end.x.clamp(16.5, 24.0), end.z.clamp(-24.0, -16.5));
+        let gap = Vec2::new(end.x, end.z).distance(nearest);
         assert!(
-            end.x < 16.5 - clear || end.z > -16.5 + clear,
-            "went into the block to {end}"
+            (gap - PLAYER_COLLIDER_RADIUS).abs() < 0.01,
+            "{gap} m from the block at {end}"
         );
     }
 
@@ -2103,6 +2105,14 @@ mod tests {
         (time, pushed)
     }
 
+    /// How far the move of [`time_to_step_up`] goes before it touches the riser: the 0.15 m to its
+    /// face, and more, as the riser is lower than the centre of the capsule's bottom sphere, which
+    /// touches the riser's top edge first (about 0.167 m).
+    fn distance_to_riser() -> f64 {
+        let radius = f64::from(PLAYER_COLLIDER_RADIUS);
+        0.15 + radius - (radius * radius - (radius - 0.2).powi(2)).sqrt()
+    }
+
     #[test]
     fn a_walk_pushes_against_a_riser_for_the_same_time_at_any_frame_rate() {
         // 0.1 s to reach the riser, then the push
@@ -2126,7 +2136,7 @@ mod tests {
         for fps in [30.0, 60.0, 144.0] {
             for speed in [1.5, push_speed * 0.9] {
                 let (time, _) = time_to_step_up(fps, speed);
-                let pushed = (0.15 + STEP_PUSH) / f64::from(speed);
+                let pushed = (distance_to_riser() + STEP_PUSH) / f64::from(speed);
                 assert!(
                     time > pushed - 1e-3,
                     "{speed} m/s at {fps} fps: stepped up after {time} s"
@@ -2135,7 +2145,7 @@ mod tests {
             for speed in [push_speed * 1.1, 8.0, 10.0] {
                 let (time, pushed) = time_to_step_up(fps, speed);
                 assert_eq!(pushed, 0.0, "{speed} m/s at {fps} fps pushed");
-                let reached = 0.15 / f64::from(speed);
+                let reached = distance_to_riser() / f64::from(speed);
                 assert!(
                     time < reached + 1.0 / fps + 1e-6,
                     "{speed} m/s at {fps} fps: stepped up after {time} s"
