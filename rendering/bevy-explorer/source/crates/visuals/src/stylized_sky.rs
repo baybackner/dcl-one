@@ -214,12 +214,17 @@ pub fn cloud_uv(
 }
 
 /// The clouds' lit and shadowed colours at `phase`. A scene's colour is the lit one, and its
-/// shadow keeps the preset's contrast.
+/// shadow is the same hue, darker by as much as the preset's shadow is darker than its lit
+/// colour (Rec. 709 luminance) and never brighter.
 pub fn cloud_colors(phase: f32, scene: Option<Vec3>) -> (Vec3, Vec3) {
     let lit = sample_ramp(&CLOUD_LIT_RAMP, phase);
     let shadow = sample_ramp(&CLOUD_SHADOW_RAMP, phase);
     match scene {
-        Some(color) => (color, color * shadow / lit.max(Vec3::splat(1e-4))),
+        Some(color) => {
+            let luminance = |colour: Vec3| colour.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+            let contrast = (luminance(shadow) / luminance(lit).max(1e-4)).min(1.0);
+            (color, color * contrast)
+        }
         None => (lit, shadow),
     }
 }
@@ -672,13 +677,26 @@ mod tests {
         (sky.cloud_lit, sky.cloud_shadow) = cloud_colors(noon, Some(authored));
         let uniform = StylizedSkyUniform::from(&sky);
         assert_eq!(uniform.cloud_lit, authored);
-        for channel in 0..3 {
-            let expected = authored[channel] * shadow[channel] / lit[channel].max(1e-4);
-            assert!(
-                (uniform.cloud_shadow[channel] - expected).abs() < 1e-6,
-                "channel {channel}: {} for {expected}",
-                uniform.cloud_shadow[channel]
-            );
+        // the authored hue, darkened by how much darker the preset's shadow is than its lit
+        let luminance = |colour: Vec3| colour.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let expected = authored * (luminance(shadow) / luminance(lit).max(1e-4)).min(1.0);
+        assert!(
+            (uniform.cloud_shadow - expected).abs().max_element() < 1e-6,
+            "{} for {expected}",
+            uniform.cloud_shadow
+        );
+
+        // the shadow is never brighter than the lit colour, in any channel, at any anchor. At
+        // sunrise the preset's own shadow is far bluer than its lit colour
+        for phase in [0.0, 0.25, 0.5, 0.75] {
+            for authored in [Vec3::ONE, authored] {
+                let (lit, shadow) = cloud_colors(phase, Some(authored));
+                assert_eq!(lit, authored);
+                assert!(
+                    shadow.cmple(lit).all(),
+                    "phase {phase}: shadow {shadow} over lit {lit}"
+                );
+            }
         }
     }
 
