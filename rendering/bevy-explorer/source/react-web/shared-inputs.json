@@ -9114,7 +9114,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.module.css",
-      "sha256": "228d230d44a31f95e3478456084395be2291c7168b79fd1fef8dabda32bf4664"
+      "sha256": "93c1d216ab7cba990e40ab9da745dfee4d4aa7025b64effaa28fa681eb60b53a"
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.tsx",
