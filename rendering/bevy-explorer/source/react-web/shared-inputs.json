@@ -7078,7 +7078,7 @@
     },
     {
       "path": "library/ui/apps/hud/App.tsx",
-      "sha256": "bf0b506bcc719347237e5a3c7c84b5964bdc426440c65cd148ffbcb9503b4421"
+      "sha256": "2183b40421bdf14d490bd3327693c153d3bb9f68302ec670f241158751aae32a"
     },
     {
       "path": "library/ui/apps/hud/assets/backpack/add-gradient.webp",
@@ -14268,6 +14268,21 @@
     {
       "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
       "kind": "test:runtime"
     },
     {
