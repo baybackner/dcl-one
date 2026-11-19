@@ -75,7 +75,8 @@ Each pass of the loop runs four chained sets (`SceneLoopSets`):
    `add_crdt_lww_component` or `add_crdt_go_component` in `update_world`; the registration adds
    the system. Only transforms and text shapes have hand-written loop systems.
    After them, once their components are in, `stage_redispatch_rotation` (`user_input`) stages
-   the movement scene's rotation for its re-dispatch (see below).
+   the rotation for the movement scene's re-dispatch on the scene that moves the player and
+   clears it on every other scene (see below).
 
 The loop runs at least once per frame, then repeats while time remains and there are eligible
 scenes or replies outstanding. Priority: the scenes the player is in (the one they stand in,
@@ -111,9 +112,11 @@ too is applied in the next frame. The movement scene tells a reply the engine ha
 yet from a takeover by the requested velocity it receives. The re-dispatch is sent the player's
 rotation as the late reply sets it, staged after each loop pass (`stage_redispatch_rotation`,
 `SceneTickTiming::redispatch_rotation`): the engine applies the reply's orientation only in
-`PostUpdate`, and the scene turns from the rotation it is sent, so from the player's current
-rotation every other frame would continue a different chain of replies. A reply whose orientation
-the engine will not apply (a `movePlayerTo` facing holds) leaves the player's rotation.
+`PostUpdate` (`apply_rotation`, first in `PlayerUpdate`), and the scene turns from the rotation
+it is sent, so from the player's current rotation every other frame would continue a different
+chain of replies. A reply whose orientation the engine will not apply (a `movePlayerTo` facing
+holds), or the reply of a movement scene that no longer moves the player (a parcel scene's
+`AvatarMovement` took over), leaves the player's current rotation.
 
 Everything downstream of the loop reads bevy components. A system that needs scene data never
 reads the CRDT store directly; it queries the component the `UpdateWorld` system wrote.
