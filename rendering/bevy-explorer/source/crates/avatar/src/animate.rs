@@ -47,7 +47,7 @@ use crate::{process_avatar, upload_cpu_mesh, AvatarDefinition};
 #[derive(Component)]
 pub struct AvatarAnimPlayer(pub Entity);
 
-// engine-emote urns used every frame by the velocity selector; built once
+// engine-emote urns, each built once on first use
 pub(crate) static URN_IDLE: std::sync::LazyLock<EmoteUrn> =
     std::sync::LazyLock::new(|| EmoteUrn::builtin("idle_male"));
 static URN_JUMP: std::sync::LazyLock<EmoteUrn> =
