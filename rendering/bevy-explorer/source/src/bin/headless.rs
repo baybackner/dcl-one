@@ -6,6 +6,7 @@
 //! uses. `--server-mode` makes `isServer()` return true to scene JS, so a scene's
 //! authoritative-server branch runs. Intended to replace hammurabi-headless.
 
+use parking_lot::Mutex;
 use std::{str::FromStr, sync::OnceLock, time::Duration};
 use webgpu_build::headless::{scene_stats_sample, EmittedSceneStats};
 
@@ -253,7 +254,7 @@ enum ControlCommand {
 }
 
 #[derive(Resource)]
-struct ControlChannel(parking_lot::Mutex<std::sync::mpsc::Receiver<ControlCommand>>);
+struct ControlChannel(Mutex<std::sync::mpsc::Receiver<ControlCommand>>);
 
 /// What the orchestrator asked for: the scenes to host and each one's room credential.
 /// `drain_control_commands` only writes this; `reconcile_scene_rooms` brings the world to
@@ -461,33 +462,31 @@ fn main() -> AppExit {
     }
 
     if args.orchestrated {
-        app.insert_resource(ControlChannel(
-            parking_lot::Mutex::new(spawn_stdin_reader()),
-        ))
-        .init_resource::<OrchestratedScenes>()
-        // structural gate: the engine must never sign gatekeeper handshakes in
-        // orchestrated mode — adapters are always minted by the trusted parent
-        .insert_resource(comms::DisableSceneRoomGatekeeper(true))
-        .add_systems(
-            Update,
-            (
-                (drain_control_commands, reconcile_scene_rooms).chain(),
-                reap_scene_contexts,
-                demux_scene_logs,
-                request_delegation_renewals,
-                reap_terminal_scene_rooms,
-                report_disconnected_scene_rooms,
-                project_server_scene_rooms,
-            ),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                emit_scene_status,
-                emit_scene_stats,
-                emit_failed_scene_status,
-            ),
-        );
+        app.insert_resource(ControlChannel(Mutex::new(spawn_stdin_reader())))
+            .init_resource::<OrchestratedScenes>()
+            // structural gate: the engine must never sign gatekeeper handshakes in
+            // orchestrated mode — adapters are always minted by the trusted parent
+            .insert_resource(comms::DisableSceneRoomGatekeeper(true))
+            .add_systems(
+                Update,
+                (
+                    (drain_control_commands, reconcile_scene_rooms).chain(),
+                    reap_scene_contexts,
+                    demux_scene_logs,
+                    request_delegation_renewals,
+                    reap_terminal_scene_rooms,
+                    report_disconnected_scene_rooms,
+                    project_server_scene_rooms,
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    emit_scene_status,
+                    emit_scene_stats,
+                    emit_failed_scene_status,
+                ),
+            );
         ctl_emit(&serde_json::json!({"type": "starting", "realm": args.realm}));
     } else if args.server_mode {
         // before the scene loads: the lifecycle spawns the SceneHash, loading starts next frame

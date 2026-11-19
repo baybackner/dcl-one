@@ -63,18 +63,13 @@ fn is_cacheable_path(path: &AssetPath<'_>) -> bool {
 /// Whether a transcode of the image loaded from `path` is waiting for its cache write, which is
 /// how `check_assets` tells a freshly transcoded KTX2 from an image already compressed.
 pub(crate) fn has_waiting_transcode(path: &AssetPath<'_>) -> bool {
-    KTX2_RESULTS
-        .lock()
-        .is_ok_and(|results| results.contains_key(&path.to_string()))
+    KTX2_RESULTS.lock().contains_key(&path.to_string())
 }
 
 /// Whether the image loaded at the labelled `path` is an embedded KTX2 that was transcoded, and
 /// so whether its glTF needs the pass that writes it back as dds; the note is taken.
 pub(crate) fn take_embedded_transcode(path: &AssetPath<'_>) -> bool {
-    path.label().is_some()
-        && EMBEDDED_TRANSCODES
-            .lock()
-            .is_ok_and(|mut noted| noted.remove(&path.to_string()))
+    path.label().is_some() && EMBEDDED_TRANSCODES.lock().remove(&path.to_string())
 }
 
 /// Sets [`transcode_ktx2_image`] as the process's `bevy_image` KTX2 transcoder. A second call
