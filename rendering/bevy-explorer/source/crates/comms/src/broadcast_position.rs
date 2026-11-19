@@ -13,7 +13,6 @@ use wallet::Wallet;
 use crate::{
     anim_announce::{Announcement, ClipAnnouncer},
     broadcast, broadcast_to,
-    global_crdt::GlobalCrdtState,
     movement_animation::{ClipMotion, JumpCount, WireAnimation},
     pulse::movement_pacing::{Change, MovementPacer},
     BroadcastTarget,
@@ -82,16 +81,11 @@ fn broadcast_position(
     mut last_index: Local<u32>,
     mut last_anim: Local<LastAnim>,
     time: Res<Time>,
-    contexts: Query<&GlobalCrdtState>,
     wallet: Res<Wallet>,
 ) {
     // An authoritative server has no avatar to announce — hammurabi's reportPosition is
     // a no-op. Suppress so clients never see a ghost server player.
     if common::structs::server_mode() {
-        return;
-    }
-    // client-only system (see above): the single shared context
-    if contexts.single().is_err() {
         return;
     }
     let Ok((player, dynamics, scene_anim, head_sync, point_at, speeds)) = player.single() else {

@@ -13,7 +13,6 @@ pub mod global_crdt;
 pub mod livekit;
 pub mod moderation;
 mod movement_animation;
-pub mod movement_compressed;
 pub mod nearby_mutes;
 pub mod preview;
 #[cfg(feature = "livekit")]
