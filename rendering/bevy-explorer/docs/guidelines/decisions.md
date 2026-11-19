@@ -554,6 +554,35 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   successful, failed and cancelled gifts and plays a sound with the sent and received popups; this
   port leaves both out for now. The shell's "Preparing Gift for" tile shows the
   marketplace index's item category (wearable or emote), so its corner glyph is the generic one.
+- **Media reopens on the web.** The web backend keeps unity-explorer's counts and delays: a
+  failed URL source is reopened up to 5 times, 2, 4, 8, 16 and 32 s after each failure, the count
+  restarts when the scene changes the source, and a source that gave up stays failed until the
+  source changes. It differs in five ways:
+  - *States between reopens.* unity-explorer reports `VsError` after every failed attempt; here a
+    scheduled reopen reports `VsLoading`, so `VsError` means the source gave up or is failed and
+    paused.
+  - *Failures during playback.* unity-explorer reopens only a source that failed to open; here an
+    element error at any time starts the schedule, and a live stream that ends (its feed dropped)
+    counts as a failure rather than a normal end, so a stream whose feed drops reconnects without a
+    scene reload. A reopened source that is not live resumes where it failed, or where the scene
+    seeked meanwhile.
+  - *Count restart.* unity-explorer clears the count as soon as a reopen opens; here it restarts
+    only after 5 s of playback since the last failure, so a source that keeps failing at the same
+    point gives up.
+  - *Pause.* unity-explorer reopens a failed source whether or not it plays; here a failed source is
+    reopened only while the scene plays it, so a paused screen requests nothing. A failure while
+    paused, or before the scene first plays the source, counts and reports `VsError`. The next play
+    reports `VsLoading` and reopens once the current delay has passed since the failure, so toggling
+    playback never reopens faster than the schedule, and a pause keeps the count. A pause during a
+    loading reopen lets it load, as a paused first open does. A live stream resumes at its live
+    edge, not at a saved position.
+  - *The screen.* unity-explorer renders black whenever a player is in `VsError` or `VsNone`; here
+    the image turns black when the source gives up or a non-looping source ends, and keeps the
+    last frame while a reopen is pending, so a short drop shows no black flash; the failed source
+    is detached meanwhile. A non-looping source that ends reports `VsNone`, as in unity-explorer.
+
+  Native (FFmpeg) has no reopen: its first error ends playback. A non-looping source that ends
+  there reports `VsPaused` and keeps its last frame, where the web reports `VsNone` and clears it.
 - **The map's markers are HUD elements, not a rendered scene.** unity-explorer draws its map and
   markers with a camera into a texture; here the atlas and every marker are elements of the HUD
   page, placed from the map camera's position and zoom. The seven zoom levels, the marker sizes at
