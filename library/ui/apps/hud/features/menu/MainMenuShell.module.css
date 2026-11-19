@@ -12,8 +12,7 @@
   transform: scale(var(--ui-scale));
   transform-origin: top left;
   z-index: var(--z-modal);
-  /* the dark frame: above every persistent layer a page stacks in the overlay; hover tooltips and
-     dropdowns sit higher */
+  /* the dark frame's layer in the overlay */
   --menu-veil-z: 10;
   display: flex;
   flex-direction: column;
@@ -34,9 +33,8 @@
     opacity: 1;
   }
 }
-/* A fresh open over the world fades through black, as unity-explorer does: the view fades in under
-   an opaque veil for the first half of --dur-pop, so the world darkens to black, then the veil fades
-   out over the second half and reveals the page, an engine-drawn body included. */
+/* A fresh open fades through black: the overlay fades in under an opaque veil for the first half of
+   --dur-pop, then the veil fades out over the second half. */
 .animateThroughDark {
   animation: menuIn calc(var(--dur-pop) / 2) linear;
 }

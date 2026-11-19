@@ -33,9 +33,7 @@ const SELECTED_ART: Record<string, [string, number]> = {
 // shell that mounts with none open is a fresh open (animate). The previous shell's unmount cleanup
 // runs AFTER the new shell renders, so reading this at render time correctly sees the outgoing shell.
 let openShells = 0
-// A shell that mounts this soon after the last one closed is a page switch too: a lazily loaded page
-// (Create) mounts its shell only once its code arrives, after the outgoing shell is gone. Best effort:
-// slower code still opens as fresh, and a close and reopen this quick opens with no entrance.
+// A shell that mounts within this many ms of the last one closing is a page switch, not a fresh open.
 const SWITCH_GAP_MS = 200
 let lastShellClosedAt = Number.NEGATIVE_INFINITY
 

@@ -9782,11 +9782,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
-      "sha256": "6be27261ced1a75491bcdcde77f72b34122bea13e33f851f05b630923d69cb9d"
+      "sha256": "f1acaa8ee792bf27c9b9dab45e3f4779c6c975b2d915027b97c687f107d2bfdf"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
-      "sha256": "17befc361b19dee82b067bb31d6bb112e97aba4ad286ef0218dbb7feda0fcae1"
+      "sha256": "7180726b46f5af4048c62857f5316ba701c6a312e8b6344fa3aead240d5a2b47"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MenuBackdrop.module.css",
