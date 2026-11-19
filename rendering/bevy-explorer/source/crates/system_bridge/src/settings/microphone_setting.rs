@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_choice_not_yet_reported_shows_as_chosen_and_unplugged() {
+    fn a_saved_choice_not_yet_reported_shows_as_chosen_by_its_saved_name() {
         let mut config = AppConfig::default();
         config.audio.microphone = Some("headset".to_owned());
         let mut app = App::new();

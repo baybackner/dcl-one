@@ -34,8 +34,7 @@ fn register_group(app: &mut App, settings: &[SettingInfo], category: &str, title
     let rows: Vec<_> = settings
         .iter()
         .enumerate()
-        // its choices change at runtime; the voice chat section picks it
-        .filter(|(_, s)| s.category == category && s.name != super::microphone_setting::TITLE)
+        .filter(|(_, s)| s.category == category)
         .map(|(i, s)| {
             (
                 s,
@@ -68,7 +67,14 @@ fn register_group(app: &mut App, settings: &[SettingInfo], category: &str, title
             label: &s.name,
             field,
             command,
-            kind: if options.is_empty() {
+            // a select is fixed here, so choices that change at runtime are set by index
+            kind: if s.name == super::microphone_setting::TITLE {
+                DebugInputKind::Number {
+                    min: 0.0,
+                    max: 64.0,
+                    step: 1.0,
+                }
+            } else if options.is_empty() {
                 DebugInputKind::Number {
                     min: panel_number(s.min_value, s.step_size),
                     max: panel_number(s.max_value, s.step_size),
