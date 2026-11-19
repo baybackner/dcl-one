@@ -478,7 +478,6 @@ fn active_speakers_changed(
     }
 }
 
-#[expect(clippy::type_complexity)]
 fn is_now_speaking(
     trigger: Trigger<OnInsert, ActiveSpeaker>,
     mut commands: Commands,
@@ -536,7 +535,6 @@ fn is_now_speaking(
     }
 }
 
-#[expect(clippy::type_complexity)]
 fn is_no_longer_speaking(
     trigger: Trigger<OnReplace, ActiveSpeaker>,
     mut commands: Commands,
