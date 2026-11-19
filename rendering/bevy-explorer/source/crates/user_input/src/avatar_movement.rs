@@ -705,6 +705,8 @@ pub(crate) fn apply_movement(
         && dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
 
     if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
+        // the move has stopped, so its push against a riser ends: the next riser takes its own
+        *step_push = 0.0;
         dynamic_state.velocity = Vec3::ZERO;
         dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
         end_jump_on_landing(&mut dynamic_state);
@@ -1567,6 +1569,22 @@ mod tests {
                 "{height} m at {speed} m/s: {end}"
             );
         }
+    }
+
+    #[test]
+    fn standing_still_ends_the_push_against_a_riser() {
+        let (mut app, player) = movement_app(&[riser(0.2)], Vec3::new(0.695, 0.0, 0.0));
+        app.update();
+        // a slow move held at the riser
+        set_velocity(&mut app, player, Vec3::new(0.5, 0.0, 0.0));
+        for _ in 0..5 {
+            app.update();
+        }
+        let pushed = app.world().get::<RiserPush>(player).unwrap().0;
+        assert!(pushed > 0.0, "not held at the riser");
+        set_velocity(&mut app, player, Vec3::ZERO);
+        app.update();
+        assert_eq!(app.world().get::<RiserPush>(player).unwrap().0, 0.0);
     }
 
     #[test]
