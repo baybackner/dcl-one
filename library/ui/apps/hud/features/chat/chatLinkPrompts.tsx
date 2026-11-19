@@ -7,7 +7,7 @@ import { showConfirm, showToast } from '../../design'
 import styles from './chatLinkPrompts.module.css'
 
 /** Asks before opening `url`, naming its host first, then opens the parsed URL that was shown. The native
- *  HUD has no tabs, so the engine opens it there, and only `https:`. */
+ *  HUD has no tabs, so the engine opens it there, and only `https:`; the web opens `http:` and `https:`. */
 export async function confirmOpenLink(url: string, openExternal: (url: string) => Promise<boolean>): Promise<void> {
   let parsed: URL
   try {
@@ -17,8 +17,8 @@ export async function confirmOpenLink(url: string, openExternal: (url: string) =
     return
   }
   const native = isNativeHud()
-  if (native && parsed.protocol !== 'https:') {
-    showToast('Only https links can be opened', { tone: 'error' })
+  if (parsed.protocol !== 'https:' && (native || parsed.protocol !== 'http:')) {
+    showToast(native ? 'Only https links can be opened' : 'Only http and https links can be opened', { tone: 'error' })
     return
   }
   const ok = await showConfirm({ title: 'Open this link?', body: <LinkTarget url={parsed} />, confirmLabel: 'Continue' })

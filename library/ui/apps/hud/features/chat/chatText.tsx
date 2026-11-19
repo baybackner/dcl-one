@@ -39,22 +39,27 @@ export function MessageText({
               </a>
             )
           }
-          // A button, not an anchor: the browser's own ways to open a link (context menu, drag) would skip onUrl.
+          // An anchor keeps a long URL flowing inline; every browser way to open it (click, middle-click,
+          // context menu, drag) is taken over, so it opens only through onUrl.
           return (
-            <button
+            <a
               key={i}
-              type="button"
-              role="link"
               className={styles.url}
-              onClick={() => onUrl(t.value)}
-              onAuxClick={(e) => {
-                if (e.button !== 1) return
+              href={t.value}
+              draggable={false}
+              onClick={(e) => {
                 e.preventDefault()
                 onUrl(t.value)
               }}
+              onAuxClick={(e) => {
+                e.preventDefault()
+                if (e.button === 1) onUrl(t.value)
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+              onDragStart={(e) => e.preventDefault()}
             >
               {t.value}
-            </button>
+            </a>
           )
         }
         if (t.type === 'world') {

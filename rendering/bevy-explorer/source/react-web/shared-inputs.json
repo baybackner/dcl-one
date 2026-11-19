@@ -9114,7 +9114,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.module.css",
-      "sha256": "7dd39fd9c1a609432216e73a1401f8d4c96540e216c7311807ad9ed204449b6f"
+      "sha256": "228d230d44a31f95e3478456084395be2291c7168b79fd1fef8dabda32bf4664"
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.tsx",
@@ -9182,11 +9182,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatLinkPrompts.tsx",
-      "sha256": "b9ce3ef80514269ad406b843f066fe6bd7f67afb9dcb464ab27ba89e7d166e72"
+      "sha256": "951e84d6b3f194ca8cb8fa472faa1b0deff12514de6e5dd745fa4c0baf2c2f48"
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatText.tsx",
-      "sha256": "825f4c6263b5e3aab58b131f30635e8628b132e90bbf5ea17b2b981eae84fc9c"
+      "sha256": "0f696b316e3497ea5b0a984537f516199800aab2168b08748dd82d3ce5270241"
     },
     {
       "path": "library/ui/apps/hud/features/chat/dmStateCopy.ts",
@@ -10466,7 +10466,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.rich.test.tsx",
-      "sha256": "81f422ed0cfc5658639e7754348d24bc4405a5944ba0fdb5d82d4d9a91f12a9e"
+      "sha256": "750bee0dd25c363a8971cabe9665e6b9d58f4da6952d54a0d74bb2b99122605c"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.test.tsx",
@@ -10474,7 +10474,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatLinkPrompts.test.tsx",
-      "sha256": "5e26e58bc79a9920e5f82bef2aca81ef3a9507f7b050397ee2083439a7465dc5"
+      "sha256": "7ecb6192fdf8597e53f29d15acb9d5d40c607ef2d0603c570f6f2c8cb1015138"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatTranslation.test.tsx",

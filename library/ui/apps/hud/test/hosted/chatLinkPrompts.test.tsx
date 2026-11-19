@@ -140,4 +140,17 @@ describe('link confirmation', () => {
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
     expect(openExternal).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['an unparsable URL', 'https://exa\u202Emple.com', "This link can't be opened"],
+    ['a scheme other than http and https', 'javascript:alert(1)//https://x', 'Only http and https links can be opened']
+  ])('refuses %s without a prompt', async (_, url, toast) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const openExternal = vi.fn(async () => true)
+    await start(() => confirmOpenLink(url, openExternal))
+    expect(await screen.findByText(toast)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+    expect(openExternal).not.toHaveBeenCalled()
+  })
 })
