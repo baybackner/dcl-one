@@ -16,5 +16,6 @@ own textures, and the pictures are re-encoded (JPEG) or resized. They are otherw
 | `halloween_backdrop.jpg`, `game_world_backdrop.jpg`, `ground.jpg` | the lobby's backgrounds and ground (`DCL/Lobby/Textures`) |
 | `blob_shadow.png` | the radial glow (`Textures/Common/RadialGlow.png`), baked to one grey channel |
 | `sky/horizon_noise.png` | the stylized skybox's horizon noise (`DCL/StylizedSkybox/Textures/Noise4.png`), halved to 1024 a side, the size Unity imports it at, and stored as its one grey channel |
+| `sky/clouds_overhead.png`, `sky/clouds_low.png`, `sky/clouds_cumulus.png` | the stylized skybox's cloud strips (`DCL/StylizedSkybox/Textures/Clouds/SkyboxCloudsOverhead_V2.png`, `SkyboxCloudsLow_V2.png`, `SkyboxCloudsCumulus_V2.png`), unchanged |
 
 This file sits outside `src/assets` because every file there is embedded in the engine.

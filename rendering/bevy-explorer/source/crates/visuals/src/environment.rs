@@ -509,6 +509,7 @@ mod tests {
         use crate::{
             sky_envmap::{SkyAmbient, SkyEnvmapSettings},
             sky_preset::{ambient_trilight, fog_falloff_density, time_to_phase},
+            stylized_sky::cloud_colors,
         };
         use common::structs::{AppConfig, FogSetting};
         let mut app = light_app();
@@ -553,6 +554,15 @@ mod tests {
         assert_eq!(atmosphere.phase, time_to_phase(0.5));
         assert_eq!(atmosphere.tick, 3);
         assert_eq!(atmosphere.time, 3.0);
+        // the scene's cloud opacity, and the preset's colours and speeds where it sets none:
+        // three seconds of the overhead strip's 0.0008 turns a second
+        assert_eq!(atmosphere.cloud_opacity, 0.0);
+        assert_eq!(
+            (atmosphere.cloud_lit, atmosphere.cloud_shadow),
+            cloud_colors(time_to_phase(0.5), None)
+        );
+        assert!((atmosphere.cloud_scroll.x - 0.0024).abs() < 1e-6);
+        let scrolled = atmosphere.cloud_scroll;
         let ambient = world.resource::<AmbientLight>();
         assert!(ambient.color.to_linear().alpha * ambient.brightness < -1.5);
         // the Off setting is no fog, whatever the scene asks for
@@ -562,6 +572,29 @@ mod tests {
             app.world().get::<DistanceFog>(camera).unwrap().falloff,
             FogFalloff::Exponential { density: 0.0 }
         ));
+        // a scene's cloud colour is the lit colour, and its speed turns every strip: half a
+        // turn back in this one second, from wherever each was
+        *app.world_mut().resource_mut::<SceneEnvironment>() = SceneEnvironment {
+            cloud_color: Some(Vec3::new(0.0, 2.0, 0.0)),
+            cloud_speed: Some(-std::f32::consts::PI),
+            ..default()
+        };
+        let before = sky(&app).cloud_scroll;
+        app.update();
+        let atmosphere = sky(&app);
+        assert_eq!(atmosphere.cloud_lit, Vec3::new(0.0, 2.0, 0.0));
+        assert_eq!(
+            atmosphere.cloud_shadow,
+            cloud_colors(time_to_phase(0.5), Some(atmosphere.cloud_lit)).1
+        );
+        assert_eq!(atmosphere.cloud_opacity, 1.0);
+        assert!(before.cmpgt(scrolled).all());
+        assert!(
+            (atmosphere.cloud_scroll - (before + 0.5))
+                .abs()
+                .max_element()
+                < 1e-6
+        );
         *app.world_mut().resource_mut::<SceneEnvironment>() = SceneEnvironment::default();
         app.world_mut()
             .resource_mut::<SceneGlobalLight>()

@@ -29,7 +29,10 @@ use bevy_atmosphere::{
     prelude::{AtmosphereCamera, AtmosphereModel, AtmospherePlugin, AtmosphereSettings},
     system_param::AtmosphereMut,
 };
-use stylized_sky::{load_horizon_noise, sky_lut_image, StylizedSky};
+use stylized_sky::{
+    cloud_colors, cloud_scroll_rates, load_cloud_strips, load_horizon_noise, sky_lut_image,
+    stack_cloud_strips, CloudStrips, StylizedSky,
+};
 
 use bevy_console::ConsoleCommand;
 use common::{
@@ -89,6 +92,10 @@ impl Plugin for VisualsPlugin {
                     .before(scene_runner::update_world::lights::update_directional_light),
             )
             .add_systems(Update, update_dof)
+            .add_systems(
+                Update,
+                stack_cloud_strips.run_if(resource_exists::<CloudStrips>),
+            )
             .add_systems(Startup, setup.in_set(SetupSets::Main));
 
         app.insert_resource(AtmosphereSettings {
@@ -178,6 +185,7 @@ fn setup(
 
         atmosphere.lut = images.add(sky_lut_image());
         atmosphere.noise = load_horizon_noise(&asset_server);
+        commands.insert_resource(load_cloud_strips(&asset_server));
     }
 }
 
@@ -248,7 +256,8 @@ fn apply_global_light(
     let rotation = Quat::from_rotation_arc(Vec3::NEG_Z, next_light.dir_direction);
 
     // the sky follows the clock: the lookup's phase, the scrolls and the next dither step. a
-    // scene's own sky colours blend over the lookup
+    // scene's own sky colours blend over the lookup, and its cloud colour, opacity and speed
+    // replace the preset's
     let clock_fraction = day_fraction(time_of_day.elapsed_secs() / 3600.0);
     atmosphere.phase = time_to_phase(clock_fraction);
     atmosphere.time += time.delta_secs();
@@ -259,7 +268,15 @@ fn apply_global_light(
     atmosphere.scene_nadir = band(environment.nadir);
     atmosphere.scene_rim = band(environment.rim);
     let procedural_clouds = environment.texture.is_none();
-    atmosphere.scene_cloud_color = band(environment.cloud_color.filter(|_| procedural_clouds));
+    (atmosphere.cloud_lit, atmosphere.cloud_shadow) = cloud_colors(
+        atmosphere.phase,
+        environment.cloud_color.filter(|_| procedural_clouds),
+    );
+    atmosphere.cloud_opacity = environment.cloud_opacity.unwrap_or(1.0);
+    // whole turns are dropped, so the scroll stays exact however long it runs
+    atmosphere.cloud_scroll = (atmosphere.cloud_scroll
+        + cloud_scroll_rates(environment.cloud_speed) * time.delta_secs())
+    .fract_gl();
     atmosphere.scene_sun_visible = if next_light.sun_hidden { 0.0 } else { 1.0 };
 
     // the fog and the Trilight ambient follow the clock, not the scene light, so they are kept

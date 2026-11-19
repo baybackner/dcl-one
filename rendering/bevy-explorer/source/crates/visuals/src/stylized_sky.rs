@@ -1,7 +1,8 @@
 //! The sky: Unity's stylized skybox (the StylizedV1 preset), drawn into the atmosphere cube by
 //! `shaders/stylized_sky.wgsl`. The sky colour is a lookup by day phase and elevation, baked
 //! from the preset's four gradients (`sky_preset::bake_sky_lut`); a scene's own sky colours
-//! blend over it.
+//! blend over it. Three cloud strips wrap the dome over that, and the cube's alpha is how much
+//! they hide.
 //!
 //! The authored colours go to the shader as they are, and the skybox material writes the cube
 //! to the view unscaled, so the cube is in the units of Unity's sky output.
@@ -22,12 +23,26 @@ use bevy::{
         RenderApp,
     },
 };
-use bevy_atmosphere::{model::AtmosphereModelMetadata, pipeline::AtmosphereImageBindGroupLayout};
+use bevy_atmosphere::{
+    model::AtmosphereModelMetadata, pipeline::AtmosphereImageBindGroupLayout,
+    system_param::AtmosphereMut,
+};
 
-use crate::sky_preset::{bake_sky_lut, HORIZON_NOISE, SKY_LUT_ROWS, SKY_LUT_WIDTH};
+use crate::sky_preset::{
+    bake_sky_lut, evaluate_by_phase, sample_ramp, CLOUD_FADES, CLOUD_LAYERS, CLOUD_LIT_RAMP,
+    CLOUD_PARAMS, CLOUD_SHADOW_RAMP, HORIZON_NOISE, SKY_LUT_ROWS, SKY_LUT_WIDTH,
+};
 
 const SHADER_PATH: &str = "embedded://shaders/stylized_sky.wgsl";
 const HORIZON_NOISE_PATH: &str = "embedded://sky/horizon_noise.png";
+/// One strip a cloud layer, in the order of `CLOUD_LAYERS`.
+const CLOUD_STRIP_PATHS: [&str; 3] = [
+    "embedded://sky/clouds_overhead.png",
+    "embedded://sky/clouds_low.png",
+    "embedded://sky/clouds_cumulus.png",
+];
+/// Turns a second a strip of speed 1 scrolls.
+const CLOUD_SCROLL_TURNS: f32 = 0.0004;
 
 /// The stylized sky model. `apply_global_light` writes it every frame.
 #[derive(Reflect, Debug, Clone)]
@@ -49,22 +64,23 @@ pub struct StylizedSky {
     pub halo: Vec2,
     pub cloud_lit: Vec3,
     pub cloud_shadow: Vec3,
+    /// Scales every strip's opacity.
     pub cloud_opacity: f32,
-    /// How far the cloud strips have scrolled, in turns.
-    pub cloud_scroll: f32,
+    /// How far each cloud strip has scrolled, in turns.
+    pub cloud_scroll: Vec3,
+    /// How much the body behind a cloud lights it through.
     pub backlight_weight: f32,
     /// Scene-authored linear sky colours; alpha flags whether each band is overridden.
     pub scene_zenith: Vec4,
     pub scene_horizon: Vec4,
     pub scene_nadir: Vec4,
     pub scene_rim: Vec4,
-    pub scene_cloud_color: Vec4,
     pub scene_sun_visible: f32,
     /// The sky lookup (`sky_lut_image`).
     pub lut: Handle<Image>,
     /// The horizon noise (`load_horizon_noise`).
     pub noise: Handle<Image>,
-    /// The cloud strips, one layer each.
+    /// The cloud strips, one layer each (`stack_cloud_strips`). No cloud is drawn without it.
     pub clouds: Handle<Image>,
 }
 
@@ -83,13 +99,12 @@ impl Default for StylizedSky {
             cloud_lit: Vec3::ONE,
             cloud_shadow: Vec3::ONE,
             cloud_opacity: 1.0,
-            cloud_scroll: 0.0,
+            cloud_scroll: Vec3::ZERO,
             backlight_weight: 0.0,
             scene_zenith: Vec4::ZERO,
             scene_horizon: Vec4::ZERO,
             scene_nadir: Vec4::ZERO,
             scene_rim: Vec4::ZERO,
-            scene_cloud_color: Vec4::ZERO,
             scene_sun_visible: 1.0,
             lut: Handle::default(),
             noise: Handle::default(),
@@ -117,17 +132,23 @@ mod uniform {
         pub disc_size: f32,
         pub halo: Vec2,
         pub cloud_opacity: f32,
-        pub cloud_scroll: f32,
-        pub cloud_lit: Vec3,
         pub backlight_weight: f32,
-        pub cloud_shadow: Vec3,
+        pub cloud_lit: Vec3,
         pub scene_sun_visible: f32,
+        pub cloud_shadow: Vec3,
         pub horizon_noise: Vec4,
         pub scene_zenith: Vec4,
         pub scene_horizon: Vec4,
         pub scene_nadir: Vec4,
         pub scene_rim: Vec4,
-        pub scene_cloud_color: Vec4,
+        /// Ramp knee, highlight strength, highlight threshold, highlight falloff.
+        pub cloud_params: Vec4,
+        /// Zenith fade start and end, occlusion start and end.
+        pub cloud_fades: Vec4,
+        /// Per strip: stretch and offset down the dome, repeats and offset around it.
+        pub cloud_layers: [Vec4; 3],
+        /// Per strip: strength, opacity, flow at the phase, scroll in turns.
+        pub cloud_looks: [Vec4; 3],
     }
 }
 use uniform::StylizedSkyUniform;
@@ -145,18 +166,70 @@ impl From<&StylizedSky> for StylizedSkyUniform {
             disc_size: sky.disc_size,
             halo: sky.halo,
             cloud_opacity: sky.cloud_opacity,
-            cloud_scroll: sky.cloud_scroll,
-            cloud_lit: sky.cloud_lit,
             backlight_weight: sky.backlight_weight,
-            cloud_shadow: sky.cloud_shadow,
+            cloud_lit: sky.cloud_lit,
             scene_sun_visible: sky.scene_sun_visible,
+            cloud_shadow: sky.cloud_shadow,
             horizon_noise: HORIZON_NOISE,
             scene_zenith: sky.scene_zenith,
             scene_horizon: sky.scene_horizon,
             scene_nadir: sky.scene_nadir,
             scene_rim: sky.scene_rim,
-            scene_cloud_color: sky.scene_cloud_color,
+            cloud_params: CLOUD_PARAMS,
+            cloud_fades: CLOUD_FADES,
+            cloud_layers: CLOUD_LAYERS.map(|layer| {
+                Vec4::new(
+                    layer.stretch_v,
+                    layer.offset_v,
+                    layer.tiling_u,
+                    layer.offset_u,
+                )
+            }),
+            cloud_looks: std::array::from_fn(|index| {
+                let layer = &CLOUD_LAYERS[index];
+                Vec4::new(
+                    layer.strength,
+                    layer.opacity,
+                    evaluate_by_phase(layer.flow_by_phase, sky.phase),
+                    sky.cloud_scroll[index],
+                )
+            }),
         }
+    }
+}
+
+/// Where a cloud strip is read for a direction: Unity's `CloudsV2_Uv`, with U in repeats of
+/// the strip and V up the image. `v_dome` runs from 0 at the zenith to 1 at the dome's rim,
+/// 113.6 degrees below it. The shader does the same; this copy is what the tests check.
+#[cfg(test)]
+pub fn cloud_uv(
+    layer: &crate::sky_preset::CloudLayer,
+    azimuth_turns: f32,
+    v_dome: f32,
+    scroll_turns: f32,
+) -> Vec2 {
+    let v_tex = (v_dome + layer.offset_v - 0.5) / layer.stretch_v.max(1e-3) + 0.5;
+    let u = azimuth_turns * layer.tiling_u + layer.offset_u - scroll_turns;
+    Vec2::new(u, (1.0 - v_tex).clamp(0.0, 1.0))
+}
+
+/// The clouds' lit and shadowed colours at `phase`. A scene's colour is the lit one, and its
+/// shadow keeps the preset's contrast.
+pub fn cloud_colors(phase: f32, scene: Option<Vec3>) -> (Vec3, Vec3) {
+    let lit = sample_ramp(&CLOUD_LIT_RAMP, phase);
+    let shadow = sample_ramp(&CLOUD_SHADOW_RAMP, phase);
+    match scene {
+        Some(color) => (color, color * shadow / lit.max(Vec3::splat(1e-4))),
+        None => (lit, shadow),
+    }
+}
+
+/// Turns a second each strip scrolls: the preset's speeds, or a scene's radians a second for
+/// all three.
+pub fn cloud_scroll_rates(scene_speed: Option<f32>) -> Vec3 {
+    match scene_speed {
+        Some(speed) => Vec3::splat(speed / std::f32::consts::TAU),
+        None => Vec3::from_array(CLOUD_LAYERS.map(|layer| layer.speed * CLOUD_SCROLL_TURNS)),
     }
 }
 
@@ -168,20 +241,25 @@ impl bevy_atmosphere::model::Atmospheric for StylizedSky {
         images: &RenderAssets<GpuImage>,
         fallback_image: &FallbackImage,
     ) -> BindGroup {
-        let mut uniform = encase::UniformBuffer::new(Vec::new());
-        uniform.write(&StylizedSkyUniform::from(self)).unwrap();
-        let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("stylized_sky_uniform"),
-            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
-            contents: uniform.as_ref(),
-        });
         let lut = images.get(&self.lut).unwrap_or(&fallback_image.d2);
         let noise = images.get(&self.noise).unwrap_or(&fallback_image.d2);
         // an unset handle is the default image, which is no array
         let clouds = images
             .get(&self.clouds)
-            .filter(|image| image.size.depth_or_array_layers > 1)
-            .unwrap_or(&fallback_image.d2_array);
+            .filter(|image| image.size.depth_or_array_layers > 1);
+        let mut values = StylizedSkyUniform::from(self);
+        if clouds.is_none() {
+            // the stand-in is opaque white, which would be cloud all over
+            values.cloud_opacity = 0.0;
+        }
+        let clouds = clouds.unwrap_or(&fallback_image.d2_array);
+        let mut uniform = encase::UniformBuffer::new(Vec::new());
+        uniform.write(&values).unwrap();
+        let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("stylized_sky_uniform"),
+            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
+            contents: uniform.as_ref(),
+        });
         render_device.create_bind_group(
             "stylized_sky_bind_group",
             layout,
@@ -310,6 +388,61 @@ pub fn load_horizon_noise(asset_server: &AssetServer) -> Handle<Image> {
     })
 }
 
+/// The cloud strips while they load, in the order of `CLOUD_LAYERS`.
+#[derive(Resource)]
+pub struct CloudStrips([Handle<Image>; 3]);
+
+/// The strips as Unity ships them: data, not colour, each wide image one turn of the sky. They
+/// stay off the GPU; `stack_cloud_strips` makes the texture the shader reads.
+pub fn load_cloud_strips(asset_server: &AssetServer) -> CloudStrips {
+    CloudStrips(CLOUD_STRIP_PATHS.map(|path| {
+        asset_server.load_with_settings(path, |settings: &mut ImageLoaderSettings| {
+            settings.is_srgb = false;
+            settings.asset_usage = RenderAssetUsages::MAIN_WORLD;
+        })
+    }))
+}
+
+/// Once the three strips have loaded, gives the sky one texture with a layer for each:
+/// repeating around the sky, held at the top and bottom rows, which are clear.
+pub fn stack_cloud_strips(
+    mut commands: Commands,
+    strips: Res<CloudStrips>,
+    mut images: ResMut<Assets<Image>>,
+    mut sky: AtmosphereMut<StylizedSky>,
+) {
+    let Some(layers) = strips
+        .0
+        .iter()
+        .map(|strip| images.get(strip))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    let mut stacked = Image::new(
+        Extent3d {
+            width: layers[0].width(),
+            height: layers[0].height(),
+            depth_or_array_layers: layers.len() as u32,
+        },
+        TextureDimension::D2,
+        layers
+            .iter()
+            .flat_map(|layer| layer.data.iter().flatten().copied())
+            .collect(),
+        layers[0].texture_descriptor.format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    stacked.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        label: Some("cloud_strips".to_owned()),
+        address_mode_u: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    sky.clouds = images.add(stacked);
+    // the last handles to the three sources
+    commands.remove_resource::<CloudStrips>();
+}
+
 /// What the GPU tests of the sky share: an app that draws the model into a small cube, and the
 /// cube read back.
 #[cfg(test)]
@@ -319,10 +452,7 @@ pub(crate) mod test_support {
         gpu_readback::{Readback, ReadbackComplete},
         render_resource::TextureUsages,
     };
-    use bevy_atmosphere::{
-        model::AddAtmosphereModel, pipeline::AtmosphereImage, prelude::*,
-        system_param::AtmosphereMut,
-    };
+    use bevy_atmosphere::{model::AddAtmosphereModel, pipeline::AtmosphereImage, prelude::*};
     use pipeline_test::{compile_pipelines, headless_app_without_embedded_assets};
 
     #[derive(Resource, Default)]
@@ -347,8 +477,8 @@ pub(crate) mod test_support {
         app
     }
 
-    /// Finishes the app as the client does, gives the model its textures and returns the sky
-    /// cube, readable.
+    /// Finishes the app as the client does, gives the model its lookup and noise and returns
+    /// the sky cube, readable. The sky stays clear of cloud until `start_clouds`.
     pub(crate) fn start_sky(app: &mut App) -> Handle<Image> {
         app.add_plugins(assets::EmbedAssetsPlugin);
         app.finish();
@@ -368,8 +498,17 @@ pub(crate) mod test_support {
         cube
     }
 
+    /// Loads the cloud strips, as the client does at startup.
+    pub(crate) fn start_clouds(app: &mut App) {
+        let strips = load_cloud_strips(app.world().resource::<AssetServer>());
+        app.insert_resource(strips).add_systems(
+            Update,
+            stack_cloud_strips.run_if(resource_exists::<CloudStrips>),
+        );
+    }
+
     /// Changes the model and updates until the whole cube is drawn from it: the pipeline
-    /// compiled, the noise loaded, then every dither step.
+    /// compiled, the noise and any cloud strips loaded, then every dither step.
     pub(crate) fn draw_sky(app: &mut App, change: impl FnOnce(&mut StylizedSky)) {
         let mut model = app.world_mut().resource_mut::<AtmosphereModel>();
         let sky = model.to_mut::<StylizedSky>().unwrap();
@@ -377,11 +516,13 @@ pub(crate) mod test_support {
         let noise = sky.noise.clone();
         compile_pipelines(app);
         let start = std::time::Instant::now();
-        while !app.world().resource::<AssetServer>().is_loaded(&noise) {
+        while !app.world().resource::<AssetServer>().is_loaded(&noise)
+            || app.world().contains_resource::<CloudStrips>()
+        {
             app.update();
             assert!(
                 start.elapsed().as_secs() < 30,
-                "the horizon noise never loaded"
+                "the sky's textures never loaded"
             );
         }
         for _ in 0..80 {
@@ -457,10 +598,13 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::{
-        test_support::{draw_sky, read_cube, sky_test_app, start_sky, texel},
+        test_support::{draw_sky, read_cube, sky_test_app, start_clouds, start_sky, texel},
         *,
     };
-    use crate::sky_preset::{day_fraction, time_to_phase};
+    use crate::sky_preset::{
+        day_fraction, sample_ramp, time_to_phase, CLOUD_LAYERS, CLOUD_LIT_RAMP, CLOUD_SHADOW_RAMP,
+    };
+    use std::f32::consts::TAU;
 
     const SIZE: usize = 128;
     // cube faces, and the texel whose ray runs along the face's axis
@@ -486,12 +630,97 @@ mod tests {
         assert!((blue - bake_sky_lut()[2 * 256 + 255][2]).abs() < 1e-3);
     }
 
+    #[test]
+    fn cloud_uv_wraps_at_the_seam() {
+        for layer in &CLOUD_LAYERS {
+            for scroll in [0.0, 0.37] {
+                let east = cloud_uv(layer, 0.5 - 1e-4, 0.6, scroll).x.rem_euclid(1.0);
+                let west = cloud_uv(layer, -0.5 + 1e-4, 0.6, scroll).x.rem_euclid(1.0);
+                // around the strip: 0.9999 and 0.0001 are neighbours
+                let apart = (east - west).abs();
+                assert!(
+                    apart.min(1.0 - apart) < 1e-3,
+                    "{layer:?} scrolled {scroll}: {east} and {west}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cloud_uv_hangs_each_strip_on_its_band() {
+        // the low strip: its top row 0.53 down the dome, its bottom row 0.81 down
+        let low = &CLOUD_LAYERS[1];
+        assert!((cloud_uv(low, 0.0, 0.53, 0.0).y - 1.0).abs() < 1e-4);
+        assert!((cloud_uv(low, 0.0, 0.67, 0.0).y - 0.5).abs() < 1e-4);
+        assert!(cloud_uv(low, 0.0, 0.81, 0.0).y.abs() < 1e-4);
+        // and held past both
+        assert_eq!(cloud_uv(low, 0.0, 0.2, 0.0).y, 1.0);
+        assert_eq!(cloud_uv(low, 0.0, 0.95, 0.0).y, 0.0);
+        // a quarter turn of scroll is a quarter of the strip, against its offset
+        assert!((cloud_uv(low, 0.25, 0.6, 0.25).x - low.offset_u).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scene_cloud_colour_keeps_the_ramp_contrast() {
+        let noon = time_to_phase(day_fraction(12.0));
+        let lit = sample_ramp(&CLOUD_LIT_RAMP, noon);
+        let shadow = sample_ramp(&CLOUD_SHADOW_RAMP, noon);
+        assert_eq!(cloud_colors(noon, None), (lit, shadow));
+
+        let authored = Vec3::new(0.2, 3.0, 0.5);
+        let mut sky = StylizedSky::default();
+        (sky.cloud_lit, sky.cloud_shadow) = cloud_colors(noon, Some(authored));
+        let uniform = StylizedSkyUniform::from(&sky);
+        assert_eq!(uniform.cloud_lit, authored);
+        for channel in 0..3 {
+            let expected = authored[channel] * shadow[channel] / lit[channel].max(1e-4);
+            assert!(
+                (uniform.cloud_shadow[channel] - expected).abs() < 1e-6,
+                "channel {channel}: {} for {expected}",
+                uniform.cloud_shadow[channel]
+            );
+        }
+    }
+
+    #[test]
+    fn a_scene_speed_drives_every_strip() {
+        // the preset's speeds, each strip its own
+        let preset = cloud_scroll_rates(None);
+        for (layer, rate) in CLOUD_LAYERS.iter().zip(preset.to_array()) {
+            assert_eq!(rate, layer.speed * 0.0004);
+        }
+        // a scene's radians per second, as turns, and backwards when negative
+        assert_eq!(cloud_scroll_rates(Some(TAU)), Vec3::ONE);
+        assert_eq!(cloud_scroll_rates(Some(-TAU / 2.0)), Vec3::splat(-0.5));
+        assert_eq!(cloud_scroll_rates(Some(0.0)), Vec3::ZERO);
+    }
+
+    #[test]
+    fn the_uniform_carries_the_cloud_layers() {
+        let mut sky = StylizedSky {
+            phase: 0.0,
+            cloud_scroll: Vec3::new(0.1, 0.2, 0.3),
+            ..default()
+        };
+        let night = StylizedSkyUniform::from(&sky);
+        assert_eq!(night.cloud_params, Vec4::new(0.15, 2.0, 0.6, 3.0));
+        assert_eq!(night.cloud_fades, Vec4::new(0.97, 1.0, 0.35, 0.9));
+        // stretch, offset down the dome, repeats, offset around it
+        assert_eq!(night.cloud_layers[1], Vec4::new(0.28, -0.17, 1.0, 0.5));
+        // strength, opacity, flow at the phase, scroll: the cumulus only flows by day
+        assert_eq!(night.cloud_looks[0], Vec4::new(1.2, 1.0, 1.0, 0.1));
+        assert_eq!(night.cloud_looks[2], Vec4::new(1.2, 1.0, 0.0, 0.3));
+        sky.phase = 0.5;
+        assert_eq!(StylizedSkyUniform::from(&sky).cloud_looks[2].z, 1.0);
+    }
+
     /// Renders the model into its cube at noon and at midnight and reads all six faces back.
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn sky_cube_is_finite() {
         let mut app = sky_test_app(SIZE as u32);
         let cube = start_sky(&mut app);
+        start_clouds(&mut app);
         for hours in [12.0, 0.0] {
             draw_sky(&mut app, |sky| {
                 sky.phase = time_to_phase(day_fraction(hours));
@@ -566,8 +795,41 @@ mod tests {
             high - low > 0.02,
             "the horizon is one colour: {low}..{high}"
         );
-        // alpha is the cloud cover
-        assert_eq!(zenith[3], 0.0);
+        // alpha is the cloud cover, and until the strips load there is none
+        assert!(texels.iter().all(|texel| texel[3] == 0.0));
+
+        // with the strips, cloud covers part of the sky 10 degrees up and never the zenith.
+        // each side face's row there, 7 to 10 degrees up
+        start_clouds(&mut app);
+        draw_sky(&mut app, |_| ());
+        let clouded = read_cube(&mut app, &cube, SIZE, "noon clouds");
+        let ten_up = ((1.0 - 10f32.to_radians().tan()) * CENTRE as f32) as usize;
+        let cover = |cube: &[[f32; 4]]| {
+            [0, 1, 4, 5]
+                .into_iter()
+                .flat_map(|face| (0..SIZE).map(move |x| (face, x)))
+                .map(|(face, x)| texel(cube, SIZE, face, x, ten_up)[3])
+                .fold((f32::MAX, f32::MIN), |(low, high), alpha| {
+                    (low.min(alpha), high.max(alpha))
+                })
+        };
+        let (clear, covered) = cover(&clouded);
+        assert!(covered > 0.0, "no cloud 10 degrees up");
+        // the strips, not their one-colour stand-in, which covers everything
+        assert_eq!(clear, 0.0, "cloud all around 10 degrees up");
+        assert_eq!(texel(&clouded, SIZE, UP, CENTRE, CENTRE), zenith);
+        // the cloud is drawn over the sky
+        let changed = texels
+            .iter()
+            .zip(&clouded)
+            .filter(|(sky, clouded)| distance(**sky, **clouded) > 0.05)
+            .count();
+        assert!(changed > 0, "the strips change no texel");
+        // a scene's opacity of 0 takes them away
+        draw_sky(&mut app, |sky| sky.cloud_opacity = 0.0);
+        let cleared = read_cube(&mut app, &cube, SIZE, "noon, clouds at 0");
+        assert!(cleared.iter().all(|texel| texel[3] == 0.0));
+        draw_sky(&mut app, |sky| sky.cloud_opacity = 1.0);
 
         // the rows run night, sunrise, day, sunset, night: sunrise is the second
         draw_sky(&mut app, |sky| sky.phase = 0.25);

@@ -56,6 +56,17 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   above it unless a scene authors a nadir. One difference from Unity: the horizon noise is
   sampled at its full resolution, because the cube is drawn by a compute shader, which has no
   screen derivatives to choose a mip from.
+- **A scene's cloud values drive the three cloud strips.** The sky's clouds are Unity's three
+  strips (`CloudsV2.hlsl`), each with its own speed in the preset. A scene's `PBSkybox` cloud
+  speed, in radians per second around the sky, replaces all three: one speed turns every strip
+  together, backwards when negative, and the strips carry on from where they were. Its cloud
+  opacity scales every strip, and its cloud colour is the lit colour, with the shadowed colour
+  scaled by the preset's shadow to lit ratio at that phase so the strips keep their contrast.
+  Unity's environment profile at `0a8bafca9e62ced7f34ac182158b11edd0c842a4` writes the three
+  values to the old cloud cubemap's material, which the strips do not read. The strips are
+  sampled at their full resolution, for the reason the horizon noise is; a strip texel is
+  about the size of a cube texel, so there is little to filter. The growth flow the preset switches off
+  is not ported.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
   UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
   the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
