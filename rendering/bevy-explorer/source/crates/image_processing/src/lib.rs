@@ -6,7 +6,6 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 mod processor;
 
-#[cfg(target_arch = "wasm32")]
 use parking_lot::Mutex;
 #[cfg(target_arch = "wasm32")]
 use std::sync::{Arc, OnceLock};

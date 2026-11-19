@@ -280,6 +280,7 @@ impl PriorityGate {
         })
     }
 
+    /// The gate's locked state.
     fn state(&self) -> MutexGuard<'_, GateState> {
         self.state.lock()
     }
