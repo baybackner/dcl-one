@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { useEventsCopy } from "@dcl/one-ui/apps/sites/events/locale";
 import { EventsLocaleProvider, useEventsFooterCopy } from "@/features/events/locale";
-import LdSubmitHangoutView from "@ui/landings/pages/LdSubmitHangoutView";
+import { SubmitHangoutView as LdSubmitHangoutView } from "@dcl/one-ui/apps/sites/events/SubmitHangoutView";
 
 import { fetchEventCategories, type EventCategory } from "@/data/lib/catalyst/places/events";
 import { invalidateEventsAfterWrite } from "@/data/lib/catalyst/places/events-page";
