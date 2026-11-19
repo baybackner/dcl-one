@@ -70,6 +70,13 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   sampled at their full resolution, for the reason the horizon noise is; a strip texel is
   about the size of a cube texel, so there is little to filter. The growth flow the preset switches off
   is not ported.
+- **A scene's sun direction draws the sun's whole disc.** Unity switches a sky that a scene
+  controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look, which computes no celestial
+  path. Here a scene-controlled sky stays on StylizedV1. A scene that fixes the sun's direction
+  gets the sun's disc, the sun's colour and the halo at that direction at every hour: no moon
+  crescent, where Unity's Legacy look draws a sun-coloured crescent there at midnight, and no
+  Legacy sun opacity curve. The disc still dips out through the two windows in which the light
+  swings between the sun's arc and the moon's.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
   UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
   the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
