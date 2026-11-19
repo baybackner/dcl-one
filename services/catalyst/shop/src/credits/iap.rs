@@ -538,6 +538,8 @@ impl Credits {
                      SET status = 'refunded', \
                          revoked_credits = CASE WHEN $4::bigint IS NULL THEN credits \
                                                 ELSE trim_scale(round(credits * $4::bigint / 100000, 2)) END, \
+                         refunded_cents = CASE WHEN $4::bigint IS NULL THEN amount_cents \
+                                               ELSE round(amount_cents * $4::bigint / 100000.0)::bigint END, \
                          refund_ref = $2, refund_reason = $3, \
                          refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
                      WHERE transaction_id = $1 RETURNING revoked_credits::text",
@@ -621,13 +623,17 @@ impl Credits {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         let row = sqlx::query(
-            "SELECT status, address, credited_by, revoked_credits::text AS revoked \
+            "SELECT status, address, credited_by, revoked_credits::text AS revoked, \
+                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some(row) = row.filter(|r| r.get::<String, _>("status") == "refunded") else {
+        // An upstream purchase's marker (the import) is never cleared.
+        let Some(row) = row.filter(|r| {
+            r.get::<String, _>("status") == "refunded" && !r.get::<bool, _>("upstream")
+        }) else {
             return Ok(ReinstateOutcome::NotRefunded);
         };
         let (Some(address), Some(_)) = (
@@ -644,7 +650,7 @@ impl Credits {
         let credits: String = row.get("revoked");
         sqlx::query(
             "UPDATE credits.iap_transactions \
-             SET status = 'paid', revoked_credits = 0, refund_ref = NULL, refund_reason = NULL, \
+             SET status = 'paid', revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
                  refunded_at = NULL, updated_at = timezone('UTC', now()) \
              WHERE transaction_id = $1",
         )

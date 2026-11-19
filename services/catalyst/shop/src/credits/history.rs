@@ -169,7 +169,7 @@ impl Credits {
                  UNION ALL \
                  SELECT 'apple', NULL, NULL, NULL, transaction_id, product_id, \
                         floor(credits)::bigint, amount_cents, \
-                        CASE WHEN status = 'refunded' THEN amount_cents ELSE 0 END, status, created_at \
+                        refunded_cents, status, created_at \
                  FROM credits.iap_transactions WHERE address = $1 AND credited_by IS NOT NULL \
              ) o ORDER BY created_at DESC, id DESC NULLS LAST, transaction_id DESC LIMIT $2 OFFSET $3",
         )

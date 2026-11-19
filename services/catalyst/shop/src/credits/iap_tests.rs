@@ -1087,6 +1087,12 @@ async fn a_partial_refund_charges_back_its_share() {
     let (_, out) = notify(&app, c.notification("REFUND", Some(c.sign(&refunded)))).await;
     assert_eq!(out["action"], "refunded", "{out}");
     assert_eq!(available(&pool, &w.address).await, "75");
+    let orders = test_state(pool.clone(), StateCfg::default())
+        .credits
+        .credit_orders_history(&w.address, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(orders.orders[0].status, "partially_reversed");
 }
 
 #[tokio::test]
@@ -1273,4 +1279,86 @@ async fn credit_orders_page_through_card_and_app_store_rows_once_each() {
     }
     assert_eq!(seen.len(), 7);
     drop(app);
+}
+
+#[tokio::test]
+async fn a_held_purchase_refunded_is_never_credited() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 500,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["held"], true, "{out}");
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+    assert!(!held_ids(&app).await.contains(&id));
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap",
+        bearer(),
+        Some(json!({ "userAddress": w.address, "appleTransactionId": id, "appleProductId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+#[tokio::test]
+async fn an_imported_purchase_is_neither_credited_nor_charged_back_again() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let (usd, mana) = (tx_id(), tx_id());
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, amount_cents, status) \
+         VALUES ($1, $2, $3, 100, 1000, 'imported')",
+    )
+    .bind(&usd)
+    .bind(PRODUCT)
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions (transaction_id, product_id, status, refund_ref, refund_reason, refunded_at) \
+         VALUES ($1, $2, 'refunded', 'credits-server', 'credited upstream', timezone('UTC', now()))",
+    )
+    .bind(&mana)
+    .bind(PRODUCT)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let signed = c.transaction(&usd, PRODUCT, Some(&w.address));
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["alreadyExisted"], true, "{out}");
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    assert_eq!(row(&pool, &usd).await.unwrap().0, "imported");
+
+    // A reversed refund of an upstream purchase keeps its marker.
+    let signed = c.transaction(&mana, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(row(&pool, &mana).await.unwrap().0, "refunded");
+    assert_eq!(available(&pool, &w.address).await, "0");
 }

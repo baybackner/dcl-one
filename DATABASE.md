@@ -1565,12 +1565,13 @@ wallet) is upserted as `held` with its reason, unless an operator asked; a
 later delivery or an operator credit re-checks a held row and turns it `paid`.
 A reversal takes the same transaction lock, flips the row to `refunded`,
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
-records what was removed in `revoked_credits` and, when the balance net of
+records what was removed in `revoked_credits` and the refunded USD in
+`refunded_cents` and, when the balance net of
 live pledges cannot cover it, queues the wallet's newest unexpired signed
 credits covering the uncovered part in `credits.revocations`, in one
 transaction. `REFUND_REVERSED` grants `revoked_credits` back (a `refund`
 ledger row) and returns the row to `paid`, or deletes a `refunded` row never
-credited so the purchase can be credited. Readers are the wallet's credit
+credited (not an imported upstream marker) so the purchase can be credited. Readers are the wallet's credit
 orders (`address, created_at DESC`, rows this node credited), the caps
 (`address` and `created_at` partial indexes; rows credited here or
 `imported`) and the operator's held list (`GET /credits/credits/iap/held`,

@@ -249,8 +249,8 @@ CREATE TABLE credits.payment_reversals (
 -- cutover, with its wallet, value and time, so it counts toward the caps.
 -- `refunded` is either a refunded credit (`credited_by` set) or a refund of
 -- a transaction never credited, which keeps a later delivery from being
--- credited. `revoked_credits` is what the refund charged back, bounded by
--- the grant.
+-- credited. `revoked_credits` is what the refund actually charged back
+-- (what a reversed refund grants again), bounded by the grant.
 CREATE TABLE credits.iap_transactions (
     transaction_id text NOT NULL,
     original_transaction_id text,
@@ -266,6 +266,8 @@ CREATE TABLE credits.iap_transactions (
     -- A held purchase whose account token names no wallet keeps the token.
     app_account_token text,
     revoked_credits numeric NOT NULL DEFAULT 0,
+    -- The USD value Apple refunded (all of it, or its revocationPercentage share).
+    refunded_cents bigint NOT NULL DEFAULT 0,
     refund_ref text,
     refund_reason text,
     refunded_at timestamp without time zone,
@@ -285,7 +287,9 @@ CREATE TABLE credits.iap_transactions (
     CONSTRAINT iap_transactions_credited_by_check CHECK (credited_by IN ('notification', 'device', 'operator')),
     CONSTRAINT iap_transactions_amount_check CHECK (credits IS NULL OR (credits > 0 AND amount_cents > 0)),
     CONSTRAINT iap_transactions_revoked_check
-        CHECK (revoked_credits >= 0 AND (credits IS NULL OR revoked_credits <= credits))
+        CHECK (revoked_credits >= 0 AND (credits IS NULL OR revoked_credits <= credits)),
+    CONSTRAINT iap_transactions_refunded_check
+        CHECK (refunded_cents >= 0 AND refunded_cents <= COALESCE(amount_cents, 0))
 );
 
 -- A wallet's App Store purchases (the credit-order history, newest first,
