@@ -504,6 +504,45 @@ fn unique_address() -> String {
     format!("{:#x}", PrivateKeySigner::random().address())
 }
 
+/// Each client address gets 30 relay requests per minute; the next one is answered 429 with
+/// `Retry-After` before the body is parsed or validated, while another address is still served.
+#[tokio::test]
+async fn relay_requests_are_limited_per_client_address() {
+    let app = router(state(lazy_pool(), Settings::for_tests()));
+    let post_as = |ip: &'static str| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/transactions")
+                .header("content-type", "application/json")
+                .header("x-real-ip", ip)
+                .body(Body::from("{}"))
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }
+    };
+    for _ in 0..super::RELAY_REQUESTS_PER_WINDOW {
+        assert_eq!(
+            post_as("203.0.113.7").await.status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let limited = post_as("203.0.113.7").await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.headers()["retry-after"], "2");
+    let bytes = axum::body::to_bytes(limited.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"], "api_limit_reached", "{body}");
+    assert_eq!(body["not_sent"], true, "{body}");
+    assert_eq!(
+        post_as("203.0.113.8").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
 #[tokio::test]
 async fn the_free_call_budget_never_holds_back_a_sale() {
     use axum::response::IntoResponse;

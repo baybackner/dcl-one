@@ -72,6 +72,7 @@ use chrono::NaiveDateTime;
 use sqlx::PgPool;
 
 use crate::http::Outbound;
+use crate::shared::limits::RateLimiter;
 use crate::shared::writes::DataWrites;
 
 use admin::RuntimeConfig;
@@ -372,7 +373,14 @@ pub struct State {
     /// The NAMEs chain signer (Ethereum), when the key and `ETH_RPC_URL` are set.
     pub eth_signer: Option<Arc<DirectSigner>>,
     pub runtime: Arc<RuntimeConfig>,
+    /// `POST /v1/transactions` per client address ([`RELAY_REQUESTS_PER_WINDOW`] per
+    /// [`RELAY_RATE_WINDOW`]), checked before any validation.
+    pub relay_limiter: RateLimiter,
 }
+
+/// The relay requests one client address may make per [`RELAY_RATE_WINDOW`].
+pub const RELAY_REQUESTS_PER_WINDOW: u32 = 30;
+pub const RELAY_RATE_WINDOW: Duration = Duration::from_secs(60);
 
 pub type SharedState = Arc<State>;
 
@@ -521,6 +529,8 @@ impl State {
             contracts,
             eth_signer,
             runtime,
+            relay_limiter: RateLimiter::new(RELAY_REQUESTS_PER_WINDOW, RELAY_RATE_WINDOW)
+                .with_max_buckets(200_000),
         })
     }
 }

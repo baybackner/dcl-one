@@ -15,6 +15,7 @@ pub mod code {
     pub const INVALID_CONTRACT_ADDRESS: &str = "invalid_contract_address";
     pub const SALE_PRICE_TOO_LOW: &str = "sale_price_too_low";
     pub const QUOTA_REACHED: &str = "quota_reached";
+    pub const API_LIMIT_REACHED: &str = "api_limit_reached";
     /// The relayer's daily budget for free (non-sale) calls is spent.
     pub const RELAY_BUDGET_SPENT: &str = "relay_budget_spent";
     pub const HIGH_CONGESTION: &str = "high_congestion";
@@ -34,6 +35,9 @@ pub enum ApiError {
     InvalidTransaction(String),
     #[error("{0}")]
     QuotaReached(String),
+    /// One client address sent more relay requests than its window allows.
+    #[error("{0}")]
+    RateLimited(String),
     #[error("{0}")]
     RelayBudgetSpent(String),
     #[error("{0}")]
@@ -77,6 +81,7 @@ impl ApiError {
             ApiError::InvalidTransaction(_) => (400, Some(code::INVALID_TRANSACTION)),
             ApiError::RelayReverted(_) => (400, Some(code::INVALID_TRANSACTION)),
             ApiError::QuotaReached(_) => (429, Some(code::QUOTA_REACHED)),
+            ApiError::RateLimited(_) => (429, Some(code::API_LIMIT_REACHED)),
             ApiError::RelayBudgetSpent(_) => (429, Some(code::RELAY_BUDGET_SPENT)),
             ApiError::HighCongestion(_) => (503, Some(code::HIGH_CONGESTION)),
             ApiError::RelayerUnavailable(_) => (503, Some(code::UNKNOWN)),

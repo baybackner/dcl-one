@@ -23,11 +23,41 @@ pub async fn send_transaction(
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    if let Some(refused) = refuse_over_client_limit(&state, &headers).await {
+        return refused;
+    }
     match relay(&state, &headers, body).await {
         Ok(response) => response,
         Err(Failure::NotSent(err)) => not_sent(err).await,
         Err(Failure::MaybeSent(err)) => err.into_response(),
     }
+}
+
+/// Seconds until a client over its limit earns its next request.
+const RETRY_AFTER_SECS: u64 =
+    crate::evm::RELAY_RATE_WINDOW.as_secs() / crate::evm::RELAY_REQUESTS_PER_WINDOW as u64;
+
+/// 429 with `Retry-After` once the caller's address ([`crate::shared::client_ip::client_ip`],
+/// pinned by the server) spent its window, before the body is parsed or validated. Requests
+/// without an address share one bucket.
+async fn refuse_over_client_limit(state: &SharedState, headers: &HeaderMap) -> Option<Response> {
+    let ip = crate::shared::client_ip::client_ip(headers);
+    let key = if ip.is_empty() {
+        "unspecified".to_string()
+    } else {
+        crate::shared::client_ip::source_key(&ip)
+    };
+    if state.relay_limiter.check(&key) == crate::shared::limits::RateLimitDecision::Allow {
+        return None;
+    }
+    let mut response = not_sent(ApiError::RateLimited(format!(
+        "Too many requests. Retry in {RETRY_AFTER_SECS} seconds."
+    )))
+    .await;
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, RETRY_AFTER_SECS.into());
+    Some(response)
 }
 
 enum Failure {
