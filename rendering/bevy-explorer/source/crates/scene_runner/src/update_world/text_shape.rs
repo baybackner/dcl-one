@@ -613,7 +613,7 @@ struct AtlasPage {
     resized: bool,
 }
 
-/// The atlas can't fit the glyph: at the page's maximum size and no room.
+/// The page can't take the glyph: it is at its maximum size with no room, or its image is gone.
 struct AtlasFull;
 
 /// The glyph isn't in the atlas yet; ask again next frame.
