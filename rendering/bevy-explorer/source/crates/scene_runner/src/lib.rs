@@ -1683,8 +1683,10 @@ fn receive_scene_updates(
                             context.last_update_frame = frame.0;
                             // with at most one tick in flight, this reply's tick is the last sent
                             context.reply_sent = context.last_sent;
-                            // a context requires its timing, so this always holds
-                            if let Ok(mut tick_timing) = tick_timings.get_mut(root) {
+                            // a context requires its timing (`#[require(SceneTickTiming)]`)
+                            let tick_timing = tick_timings.get_mut(root);
+                            dcl_assert!(tick_timing.is_ok());
+                            if let Ok(mut tick_timing) = tick_timing {
                                 tick_timing.reply =
                                     tick_timing.sent.map(|sent| renderer_context::ReplyTiming {
                                         sent,
