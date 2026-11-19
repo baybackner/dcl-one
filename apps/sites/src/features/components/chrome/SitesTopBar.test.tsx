@@ -77,7 +77,7 @@ describe("Sites native chrome integration", () => {
     expect(screen.getAllByRole("banner")).toHaveLength(1);
     expect(
       screen.getByRole("link", { name: "Shop" }).getAttribute("href"),
-    ).toBe("/shop");
+    ).toBe("/shop/overview");
     expect(
       screen.getByRole("link", { name: "Shop" }).getAttribute("aria-current"),
     ).toBe("page");
