@@ -846,11 +846,9 @@ pub(crate) fn apply_movement(
             && movement_control.suppress_clipping.is_empty()
         {
             // step offset: a riser up to MAX_STEP_HEIGHT is stepped onto, keeping the move. A move
-            // slower than step_reach() a frame first pushes against it for STEP_PUSH.
+            // slower than step_push_speed() first pushes against it for STEP_PUSH.
             let speed = horizontal.length();
-            if speed * time_res.delta_secs_f64() < step_reach()
-                && speed * time + *step_push < STEP_PUSH
-            {
+            if speed < step_push_speed() && speed * time + *step_push < STEP_PUSH {
                 *step_push += speed * time;
                 held_at_riser = true;
             } else if let Some((stepped, used)) =
@@ -1034,9 +1032,17 @@ const SETTLE_HEIGHT: f32 = 1e-3;
 fn step_reach() -> f64 {
     f64::from(PLAYER_COLLIDER_RADIUS) * (1.0 - f64::from(MAX_GROUND_INCLINE.sin())) + 0.01
 }
-/// How far a move slower than [`step_reach`] a frame pushes against a riser before it steps onto
-/// it: the default walk (1.5 m/s) pauses about 0.1 s at each riser, so climbing reads as stepping.
+/// How far a move slower than [`step_push_speed`] pushes against a riser before it steps onto it:
+/// the default walk (1.5 m/s) pauses about 0.1 s at each riser, so climbing reads as stepping.
 const STEP_PUSH: f64 = 0.15;
+/// The frame the speed below which a move pushes against a riser is set for.
+const STEP_PUSH_FRAME: f64 = 1.0 / 60.0;
+/// Horizontal speed below which a move pushes against a riser for [`STEP_PUSH`] before it steps
+/// onto it: [`step_reach`] in a 60 Hz frame (about 5.5 m/s), so a walk pushes and a jog or a run
+/// steps at once, at any frame rate.
+fn step_push_speed() -> f64 {
+    step_reach() / STEP_PUSH_FRAME
+}
 
 /// Step offset from a riser too steep to stand on: up by at most [`MAX_STEP_HEIGHT`] (less under a
 /// ceiling), on along the horizontal move for the rest of the step's `time` and at least
@@ -1482,11 +1488,18 @@ mod tests {
     /// half extents, rotation) in steps of 20 ms after the first, which has no elapsed time, and
     /// its player, standing still at `start`.
     fn movement_app(boxes: &[(Vec3, Vec3, Quat)], start: Vec3) -> (App, Entity) {
+        movement_app_at(boxes, start, std::time::Duration::from_millis(20))
+    }
+
+    /// [`movement_app`] in steps of `frame`.
+    fn movement_app_at(
+        boxes: &[(Vec3, Vec3, Quat)],
+        start: Vec3,
+        frame: std::time::Duration,
+    ) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(TimePlugin)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(20),
-            ))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(frame))
             .init_resource::<AvatarMovementInfo>()
             .init_resource::<LastMovementStep>()
             .init_resource::<CentralCollisions>()
@@ -1655,6 +1668,35 @@ mod tests {
         set_velocity(&mut app, player, Vec3::ZERO);
         app.update();
         assert_eq!(app.world().get::<RiserPush>(player).unwrap().0, 0.0);
+    }
+
+    /// The time a walk at 1.5 m/s from 0.15 m short of a 0.2 m riser takes to step onto it, at
+    /// `fps` frames a second.
+    fn time_to_step_up(fps: f64) -> f64 {
+        let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+        let (mut app, player) = movement_app_at(&[riser(0.2)], Vec3::new(0.55, 0.0, 0.0), frame);
+        app.update();
+        set_velocity(&mut app, player, Vec3::new(1.5, 0.0, 0.0));
+        let mut time = 0.0;
+        while app.world().get::<Transform>(player).unwrap().translation.y < 0.1 {
+            assert!(time < 2.0, "never stepped up at {fps} fps");
+            app.update();
+            time += frame.as_secs_f64();
+        }
+        time
+    }
+
+    #[test]
+    fn a_walk_pushes_against_a_riser_for_the_same_time_at_any_frame_rate() {
+        // 0.1 s to reach the riser, then the push
+        let at_60 = time_to_step_up(60.0);
+        let at_15 = time_to_step_up(15.0);
+        assert!(at_60 > 0.18, "no push at 60 fps: {at_60} s");
+        assert!(at_15 > 0.18, "no push at 15 fps: {at_15} s");
+        assert!(
+            (at_60 - at_15).abs() <= 1.0 / 15.0 + 1e-6,
+            "{at_60} s at 60 fps, {at_15} s at 15"
+        );
     }
 
     #[test]
