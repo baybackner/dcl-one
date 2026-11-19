@@ -272,7 +272,8 @@ impl bevy_atmosphere::model::RegisterAtmosphereModel for StylizedSky {
 }
 
 /// The sky lookup as the shader samples it: `SKY_LUT_WIDTH` by `SKY_LUT_ROWS`, blending
-/// between elevations and between neighbouring phases, and holding its edges.
+/// between elevations and between neighbouring phases, and holding its edges. Half floats, as
+/// Unity's, which every device filters.
 pub fn sky_lut_image() -> Image {
     let mut image = Image::new(
         Extent3d {
@@ -284,9 +285,9 @@ pub fn sky_lut_image() -> Image {
         bake_sky_lut()
             .into_iter()
             .flatten()
-            .flat_map(f32::to_le_bytes)
+            .flat_map(|channel| half::f16::from_f32(channel).to_le_bytes())
             .collect(),
-        TextureFormat::Rgba32Float,
+        TextureFormat::Rgba16Float,
         RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
@@ -478,11 +479,11 @@ mod tests {
         let image = sky_lut_image();
         assert_eq!((image.width(), image.height()), (256, 5));
         let data = image.data.as_ref().unwrap();
-        assert_eq!(data.len(), 256 * 5 * 16);
-        // the last texel of the day row, the zenith at noon
-        let at = (2 * 256 + 255) * 16;
-        let red = f32::from_le_bytes(data[at..at + 4].try_into().unwrap());
-        assert_eq!(red, bake_sky_lut()[2 * 256 + 255][0]);
+        assert_eq!(data.len(), 256 * 5 * 8);
+        // the last texel of the day row, the zenith at noon, to a half float's precision
+        let at = (2 * 256 + 255) * 8;
+        let blue = half::f16::from_le_bytes([data[at + 4], data[at + 5]]).to_f32();
+        assert!((blue - bake_sky_lut()[2 * 256 + 255][2]).abs() < 1e-3);
     }
 
     /// Renders the model into its cube at noon and at midnight and reads all six faces back.
