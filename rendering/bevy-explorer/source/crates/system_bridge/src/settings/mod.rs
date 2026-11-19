@@ -54,6 +54,7 @@ use volume_settings::{
     AvatarVolumeSetting, MasterVolumeSetting, SceneVolumeSetting, SystemVolumeSetting,
     VoiceChatVolumeSetting, VoiceVolumeSetting,
 };
+use vsync_setting::VsyncSetting;
 
 pub mod aa_settings;
 pub mod ambient_brightness_setting;
@@ -88,6 +89,7 @@ pub mod spring_bones_setting;
 pub mod ssao_setting;
 pub mod video_threads;
 pub mod volume_settings;
+pub mod vsync_setting;
 pub mod window_settings;
 
 /// Inserts both prepasses while the avatar outline (edge detection) is on or the camera has SSAO
@@ -212,6 +214,7 @@ impl Plugin for SettingBridgePlugin {
             add_int_setting::<UnloadDistanceSetting>(app, &mut settings, &mut schedule, &config);
         }
 
+        add_enum_setting::<VsyncSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<FpsTargetSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<render_scale_setting::RenderScaleSetting>(
             app,
@@ -301,6 +304,11 @@ pub trait AppSetting: Eq + Send + Sync + 'static {
     fn category() -> SettingCategory;
     fn load(config: &AppConfig) -> Self;
     fn save(&self, config: &mut AppConfig);
+    /// True while another setting overrides this one (reported as `disabled`, which the panel
+    /// shows greyed out with its value kept).
+    fn is_disabled(_config: &AppConfig) -> bool {
+        false
+    }
     fn apply(
         &self,
         param: SystemParamItem<Self::Param>,
@@ -351,6 +359,7 @@ pub struct Setting {
     >,
     /// The displayed value for the current config, for settings changed outside `set_value`.
     load: Box<dyn Fn(&AppConfig) -> f32 + Send + Sync + 'static>,
+    is_disabled: fn(&AppConfig) -> bool,
 }
 
 #[derive(Resource)]
@@ -393,6 +402,7 @@ impl Settings {
     pub fn refresh(&mut self, config: &AppConfig) {
         for setting in self.settings.iter_mut() {
             setting.info.value = (setting.load)(config);
+            setting.info.disabled = (setting.is_disabled)(config);
         }
     }
 
@@ -409,6 +419,7 @@ impl Settings {
                 value: value.value() as f32 * S::scale(),
                 default: S::load(&AppConfig::default()).value() as f32 * S::scale(),
                 step_size: S::scale().abs(),
+                disabled: S::is_disabled(config),
             },
             apply: Some(Box::new(
                 |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
@@ -418,6 +429,7 @@ impl Settings {
                 },
             )),
             load: Box::new(|config: &AppConfig| S::load(config).value() as f32 * S::scale()),
+            is_disabled: S::is_disabled,
         });
     }
 
@@ -451,6 +463,7 @@ impl Settings {
                 value: displayed::<S>(config),
                 default: default_index as f32,
                 step_size: 1.0,
+                disabled: S::is_disabled(config),
             },
             apply: Some(Box::new(
                 |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
@@ -462,6 +475,7 @@ impl Settings {
                 },
             )),
             load: Box::new(|config: &AppConfig| displayed::<S>(config)),
+            is_disabled: S::is_disabled,
         });
     }
 }
@@ -577,6 +591,46 @@ fn is_fullscreen_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vsync_disables_the_target_frame_rate() {
+        let mut config = AppConfig::default();
+        let mut settings = Settings {
+            settings: Vec::default(),
+        };
+        settings.add_enum_setting::<VsyncSetting>(&config);
+        settings.add_enum_setting::<FpsTargetSetting>(&config);
+        let fps_target = |settings: &Settings| {
+            settings
+                .get()
+                .into_iter()
+                .find(|s| s.name == FpsTargetSetting::title())
+                .unwrap()
+        };
+        assert!(!fps_target(&settings).disabled);
+
+        settings
+            .set_value(&mut config, &VsyncSetting::title(), 1.0)
+            .unwrap();
+        assert!(config.graphics.vsync);
+        settings.refresh(&config);
+        let info = fps_target(&settings);
+        assert!(info.disabled);
+        // the value stays, so turning vsync off restores the cap
+        assert_eq!(
+            info.value,
+            FpsTargetSetting::variants()
+                .iter()
+                .position(|v| *v == FpsTargetSetting::load(&config))
+                .unwrap() as f32
+        );
+
+        settings
+            .set_value(&mut config, &VsyncSetting::title(), 0.0)
+            .unwrap();
+        settings.refresh(&config);
+        assert!(!fps_target(&settings).disabled);
+    }
 
     #[test]
     fn prepasses_follow_the_avatar_outline() {

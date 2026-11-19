@@ -852,13 +852,22 @@ fn update_text_focus(priorities: Res<InputPriorities>, mut prev: Local<bool>, _j
     }
 }
 
+/// The Target Frame Rate setting's "Uncapped" value.
+const UNCAPPED_FPS: usize = 999;
+
 pub fn update_winit_fps(
     config: Res<AppConfig>,
     session: Res<SessionGraphics>,
     mut winit: ResMut<WinitSettings>,
     mut last_target: Local<Option<usize>>,
 ) {
-    let fps_target = session.fps_target(&config);
+    // with vsync the render worker's animation frames pace the app; the wait only stops a frame
+    // starting sooner
+    let fps_target = if config.graphics.vsync {
+        UNCAPPED_FPS
+    } else {
+        session.fps_target(&config)
+    };
     let target = if VIEWPORT_ACTIVE.load(Ordering::Relaxed) {
         fps_target.max(1)
     } else {

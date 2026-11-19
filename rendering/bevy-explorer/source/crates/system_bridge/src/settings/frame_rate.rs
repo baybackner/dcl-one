@@ -47,6 +47,10 @@ impl AppSetting for FpsTargetSetting {
         Self(config.graphics.fps_target)
     }
 
+    fn is_disabled(config: &AppConfig) -> bool {
+        config.graphics.vsync
+    }
+
     fn category() -> super::SettingCategory {
         super::SettingCategory::Performance
     }

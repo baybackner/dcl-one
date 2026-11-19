@@ -19,6 +19,7 @@ const base = (over: Partial<Setting>): Setting => ({
   value: 0,
   default: 0,
   stepSize: 1,
+  disabled: false,
   ...over
 })
 
@@ -118,6 +119,21 @@ describe('settings panel unset controls', () => {
     expect(screen.queryByRole('switch', { name: 'dm_privacy' })).toBeNull()
     const select = screen.getByRole('button', { name: 'dm_privacy' })
     expect(select).toBeDisabled()
+    await userEvent.click(select)
+    expect(vi.mocked(settings.set)).not.toHaveBeenCalled()
+  })
+})
+
+// A disabled setting is overridden by another (Target Frame Rate under VSync): its value stays
+// visible, the control does not change it.
+describe('settings panel disabled controls', () => {
+  it('a disabled select keeps its value and does not set', async () => {
+    const FPS = base({ name: 'Target Frame Rate', category: 'graphics', namedVariants: [{ name: '30 fps', description: '' }, { name: '60 fps', description: '' }], value: 1, default: 1, maxValue: 2, disabled: true })
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [FPS], set: vi.fn() }
+    render(<SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={settings} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />)
+    const select = screen.getByRole('button', { name: 'Target Frame Rate' })
+    expect(select).toBeDisabled()
+    expect(select.textContent).toContain('60 fps')
     await userEvent.click(select)
     expect(vi.mocked(settings.set)).not.toHaveBeenCalled()
   })

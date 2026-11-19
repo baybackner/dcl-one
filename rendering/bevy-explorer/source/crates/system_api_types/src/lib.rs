@@ -989,4 +989,6 @@ pub struct SettingInfo {
     pub step_size: f32,
     pub value: f32,
     pub default: f32,
+    /// Overridden by another setting: shown with its value, not editable.
+    pub disabled: bool,
 }
