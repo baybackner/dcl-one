@@ -33,7 +33,10 @@ impl Plugin for MicDebugPlugin {
                     ("Local microphone track active", "transmitting"),
                     ("Active remote speakers (up to 32)", "speakers"),
                     ("Available input devices", "devices"),
+                    #[cfg(not(target_arch = "wasm32"))]
                     ("Current input device", "device"),
+                    #[cfg(target_arch = "wasm32")]
+                    ("Chosen input device", "device"),
                     #[cfg(target_arch = "wasm32")]
                     ("Input device choices", "choices"),
                     #[cfg(not(target_arch = "wasm32"))]

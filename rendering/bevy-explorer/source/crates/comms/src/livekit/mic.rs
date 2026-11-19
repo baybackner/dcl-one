@@ -222,7 +222,6 @@ impl MicrophonePublication {
     /// Records the input chosen as the route starts.
     fn choose(&mut self, device: Option<String>, devices: &MicrophoneDevices) {
         if let Some(id) = &device {
-            devices.remember(id);
             self.fell_back = devices.missing(id);
             self.absences = devices.absences(id);
         }
@@ -1076,7 +1075,7 @@ mod routing_tests {
             .unwrap();
         let drain = MicrophoneDrain::default();
         let devices = MicrophoneDevices::default();
-        let headset = system_bridge::settings::microphone_setting::MicrophoneDevice {
+        let headset = system_bridge::settings::microphone_setting::MicrophoneInput {
             id: "headset".to_owned(),
             label: "Headset".to_owned(),
         };
@@ -1088,6 +1087,8 @@ mod routing_tests {
         let headset_id = || Some("headset".to_owned());
 
         // built on a saved choice before the page reported any input, which then lists it
+        // the setting lists the saved choice before any report
+        devices.remember("headset");
         let mut early = pending(&runtime, &drain);
         early.choose(headset_id(), &devices);
         assert!(early.captures_choice(Some("headset"), &devices));
@@ -1096,6 +1097,7 @@ mod routing_tests {
 
         // built on a saved choice before the page reported any input, which then lacks it
         let fresh = MicrophoneDevices::default();
+        fresh.remember("headset");
         let mut early_missing = pending(&runtime, &drain);
         early_missing.choose(headset_id(), &fresh);
         fresh.replace(Vec::new());

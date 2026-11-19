@@ -34,7 +34,7 @@ use bevy::{platform::collections::HashMap, prelude::*};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use media::MediaId;
 use once_cell::sync::OnceCell;
-use system_bridge::settings::microphone_setting::{MicrophoneDevice, MicrophoneDevices};
+use system_bridge::settings::microphone_setting::{MicrophoneDevices, MicrophoneInput};
 use tokio::sync::{mpsc, oneshot};
 
 pub use crate::livekit::web::{
@@ -353,7 +353,7 @@ pub enum LivekitEvent {
         permission: String,
     },
     /// The browser's audio inputs changed.
-    MicrophoneDevices(Vec<MicrophoneDevice>),
+    MicrophoneDevices(Vec<MicrophoneInput>),
 }
 
 /// The page's answer to a request.

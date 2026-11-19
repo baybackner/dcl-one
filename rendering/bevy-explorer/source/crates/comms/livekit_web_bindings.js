@@ -17,9 +17,15 @@ const roomPlayback = new WeakMap();
  * @param {function} on_change called with the permission state now and whenever it changes
  */
 export function setupMicrophonePermission(on_change) {
+    if (!(navigator.permissions && navigator.permissions.query)) {
+        warn("the microphone permission cannot be queried");
+        return;
+    }
     navigator.permissions.query({ name: "microphone" }).then((permissionState) => {
         microphonePermission = permissionState.state;
         on_change(microphonePermission);
+        // the watch may have skipped an empty list before the state was known
+        reportMicrophoneDevices();
 
         permissionState.onchange = () => {
             microphonePermission = permissionState.state;
@@ -27,7 +33,7 @@ export function setupMicrophonePermission(on_change) {
             // a grant reveals the devices' ids and labels
             reportMicrophoneDevices();
         };
-    });
+    }).catch((err) => warn("querying the microphone permission failed", err));
 }
 
 /**
@@ -77,7 +83,11 @@ export function watchMicrophoneDevices(on_change) {
             .enumerateDevices()
             .then((devices) => {
                 const audio = devices.filter((device) => device.kind === "audioinput");
-                if (audio.some((device) => !device.deviceId)) {
+                // hidden ids, or a list that may be empty only for want of permission
+                if (
+                    audio.some((device) => !device.deviceId) ||
+                    (audio.length === 0 && microphonePermission !== "granted")
+                ) {
                     return;
                 }
                 const inputs = audio.filter(
@@ -86,9 +96,10 @@ export function watchMicrophoneDevices(on_change) {
                         device.deviceId !== "communications"
                 );
                 on_change(
-                    inputs.map((device, index) => ({
+                    inputs.map((device) => ({
                         id: device.deviceId,
-                        label: device.label || `Microphone ${index + 1}`,
+                        // from the id, so another input plugged in leaves this name alone
+                        label: device.label || `Microphone ${device.deviceId.slice(0, 6)}`,
                     }))
                 );
             })

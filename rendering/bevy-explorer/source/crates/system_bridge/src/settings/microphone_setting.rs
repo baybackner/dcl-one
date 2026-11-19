@@ -14,7 +14,7 @@ const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem De
 
 /// An audio input the host offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MicrophoneDevice {
+pub struct MicrophoneInput {
     pub id: String,
     pub label: String,
 }
@@ -22,7 +22,7 @@ pub struct MicrophoneDevice {
 /// An input reported during this session, kept after it is unplugged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownMicrophone {
-    pub device: MicrophoneDevice,
+    pub device: MicrophoneInput,
     pub present: bool,
     /// How many reports found it gone: after one listing it, or as the first report.
     absences: u32,
@@ -73,13 +73,13 @@ impl MicrophoneDevices {
             .map_or(0, |known| known.absences)
     }
 
-    /// Lists a chosen input the host has not reported yet, so the first report that lacks it
+    /// Lists a saved choice the host has not reported yet, so the first report that lacks it
     /// counts as an absence.
     pub fn remember(&self, id: &str) {
         let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         if !known.iter().any(|entry| entry.device.id == id) {
             known.push(KnownMicrophone {
-                device: MicrophoneDevice {
+                device: MicrophoneInput {
                     id: id.to_owned(),
                     label: "Saved microphone".to_owned(),
                 },
@@ -90,7 +90,7 @@ impl MicrophoneDevices {
     }
 
     /// Takes the host's current inputs; returns false when nothing changed.
-    pub fn replace(&self, reported: Vec<MicrophoneDevice>) -> bool {
+    pub fn replace(&self, reported: Vec<MicrophoneInput>) -> bool {
         let first = !self.reported.swap(true, Ordering::SeqCst);
         let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         let before = known.clone();
@@ -218,8 +218,8 @@ fn sync_choices(
 mod tests {
     use super::*;
 
-    fn device(id: &str) -> MicrophoneDevice {
-        MicrophoneDevice {
+    fn device(id: &str) -> MicrophoneInput {
+        MicrophoneInput {
             id: id.to_owned(),
             label: format!("{id} label"),
         }
