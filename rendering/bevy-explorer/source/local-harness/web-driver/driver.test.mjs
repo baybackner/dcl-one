@@ -526,3 +526,25 @@ describe('console and screenshot', { skip: noChrome }, () => {
     assert.deepEqual([...shot.subarray(0, 2)], [0xff, 0xd8]);
   });
 });
+
+// The width and height a baseline or progressive JPEG's frame header gives.
+function jpegSize(jpeg) {
+  for (let at = 2; at + 9 < jpeg.length; ) {
+    const marker = jpeg.readUInt16BE(at);
+    if (marker === 0xffc0 || marker === 0xffc2) return [jpeg.readUInt16BE(at + 7), jpeg.readUInt16BE(at + 5)];
+    at += 2 + jpeg.readUInt16BE(at + 2);
+  }
+  throw new Error('no JPEG frame header');
+}
+
+describe('resizeView', { skip: noChrome }, () => {
+  const page = openPage({ isolated: true, mode: 'hud' });
+
+  test('lays the page out at the size given, and null returns it to the window', async () => {
+    const windowSize = jpegSize(await page.driver.screenshot());
+    await page.driver.resizeView([640, 480]);
+    assert.deepEqual(jpegSize(await page.driver.screenshot()), [640, 480]);
+    await page.driver.resizeView(null);
+    assert.deepEqual(jpegSize(await page.driver.screenshot()), windowSize);
+  });
+});

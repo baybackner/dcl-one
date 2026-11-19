@@ -905,6 +905,13 @@ export class Explorer {
     return Buffer.from(await this.run('/screenshot'), 'base64')
   }
 
+  /** Lay the HUD out at `[width, height]` CSS px, or at the window's size again with `null`;
+   *  web only. */
+  async resizeView(size: [number, number] | null): Promise<void> {
+    if (!this.console.resizeView) throw new Error(`the ${this.console.kind} transport cannot resize the view`)
+    await this.console.resizeView(size)
+  }
+
   // --- input --------------------------------------------------------------------------------
 
   /** A key by its `KeyboardEvent.code`; `state` holds or releases it. */

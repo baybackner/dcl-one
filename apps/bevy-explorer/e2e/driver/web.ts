@@ -23,6 +23,7 @@ interface WebDriver {
   frameTargets(): unknown[]
   consoleMessages(): { at: number; target: string; kind: string; text: string }[]
   screenshot(): Promise<Buffer>
+  resizeView(size: [number, number] | null): Promise<void>
   close(): Promise<void> | void
   readonly product?: string
 }
@@ -134,6 +135,10 @@ export class WebConsole implements Console {
       console: this.#driver.consoleMessages().map(consoleLine),
       screenshot: await this.#driver.screenshot().catch(() => undefined)
     }
+  }
+
+  async resizeView(size: [number, number] | null): Promise<void> {
+    await this.#driver.resizeView(size)
   }
 
   async close(): Promise<void> {

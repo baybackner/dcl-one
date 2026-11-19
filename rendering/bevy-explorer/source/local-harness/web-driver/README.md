@@ -57,7 +57,9 @@ iframes.
 exceptions, the browser's own log entries (a request that failed, a worker that would not
 register) and a target that crashed, oldest first, the last 300, each cut at 2000 characters once
 the credentials of the lines run were replaced. `screenshot()` is the page as a
-JPEG. Both are for a boot that does not become ready: what `ready()`'s timeout cannot say. An
+JPEG. Both are for a boot that does not become ready: what `ready()`'s timeout cannot say.
+`resizeView([width, height])` lays the page out at that size in CSS px inside the same window,
+as a resized window would, and `resizeView(null)` returns it to the window's size. An
 error `launch` throws carries the same messages as its `console`. A first navigation the browser
 aborts (`net::ERR_ABORTED`, seen on a browser's first start on a machine) is made once more.
 

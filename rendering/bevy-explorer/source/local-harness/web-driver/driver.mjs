@@ -503,6 +503,17 @@ class Driver {
     return Buffer.from(data, 'base64');
   }
 
+  /** Lay the page out at `width` x `height` CSS px, inside the same window; `null` returns it to
+   *  the window's size. The page gets a `resize` as for a resized window. */
+  async resizeView(size) {
+    if (size === null) {
+      await this.#send('Emulation.clearDeviceMetricsOverride', {}, this.#page);
+      return;
+    }
+    const [width, height] = size;
+    await this.#send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 0, mobile: false }, this.#page);
+  }
+
   // --- the app frame: ready and console commands ---
 
   #forget(key) {
