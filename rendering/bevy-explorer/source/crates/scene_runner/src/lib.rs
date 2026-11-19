@@ -1379,8 +1379,10 @@ fn send_scene_updates(
 
     // generate updates for camera and player
     let mut player_transform = player.single().copied().unwrap_or_default();
-    player_transform.rotation =
-        tick_timing.player_rotation_to_send(engine_info.frame.0, player_transform.rotation);
+    if let Some(staged) = tick_timing.staged_rotation(engine_info.frame.0) {
+        updates.movement_ticks.record_staged_rotation(staged);
+        player_transform.rotation = staged;
+    }
     for (mut affine, id, is_player) in [
         (
             player_transform.compute_affine(),
@@ -1806,6 +1808,7 @@ fn movement_redispatch_due(
             first_poll && late,
             updates.previous_loop_end,
         ));
+    updates.movement_ticks.late_replies += u64::from(late);
     if !late
         || context.last_sent >= now
         || !context.blocked.is_empty()
@@ -1816,7 +1819,9 @@ fn movement_redispatch_due(
     let left = updates
         .loop_end_time
         .saturating_duration_since(Instant::now());
-    updates.movement_ticks.redispatch_fits(left, first_poll)
+    let due = updates.movement_ticks.redispatch_fits(left, first_poll);
+    updates.movement_ticks.redispatches += u64::from(due);
+    due
 }
 
 // entities deleted this loop

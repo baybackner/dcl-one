@@ -197,9 +197,13 @@ impl SceneTickTiming {
     /// The player's rotation a dispatch in `frame` sends the scene, given the player's current
     /// `rotation`: the movement scene's re-dispatch is sent its `redispatch_rotation`.
     pub fn player_rotation_to_send(&self, frame: u32, rotation: Quat) -> Quat {
+        self.staged_rotation(frame).unwrap_or(rotation)
+    }
+
+    /// The `redispatch_rotation` a dispatch in `frame` sends in place of the player's rotation.
+    pub fn staged_rotation(&self, frame: u32) -> Option<Quat> {
         self.redispatch_rotation
             .filter(|_| self.late_reply_in(frame))
-            .unwrap_or(rotation)
     }
 }
 

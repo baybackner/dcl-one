@@ -20,10 +20,19 @@ use web_time::Instant;
 /// Ticks the percentile is taken over.
 const TICK_SAMPLES: usize = 32;
 
-/// The movement scene's recent tick times, dispatch to reply.
+/// The movement scene's recent tick times, dispatch to reply, and counts of its re-dispatches
+/// since startup for the debug panel.
 #[derive(Debug, Default)]
 pub(crate) struct MovementTickTimes {
     samples: VecDeque<Duration>,
+    /// Replies that landed in a later frame than their dispatch.
+    pub(crate) late_replies: u64,
+    /// Re-dispatches queued on a late reply.
+    pub(crate) redispatches: u64,
+    /// Re-dispatches sent the rotation staged from the late reply instead of the player's.
+    pub(crate) staged_rotations: u64,
+    /// The yaw (degrees) of the last staged rotation sent.
+    pub(crate) last_staged_yaw: Option<f32>,
 }
 
 impl MovementTickTimes {
@@ -34,8 +43,19 @@ impl MovementTickTimes {
         self.samples.push_back(tick);
     }
 
+    /// Ticks recorded for the percentile, up to [`TICK_SAMPLES`].
+    pub(crate) fn samples(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// A re-dispatch was sent the staged `rotation`.
+    pub(crate) fn record_staged_rotation(&mut self, rotation: bevy::math::Quat) {
+        self.staged_rotations += 1;
+        self.last_staged_yaw = Some(rotation.to_euler(bevy::math::EulerRot::YXZ).0.to_degrees());
+    }
+
     /// The 90th percentile (nearest rank) of the recorded ticks; None before the first.
-    fn p90(&self) -> Option<Duration> {
+    pub(crate) fn p90(&self) -> Option<Duration> {
         if self.samples.is_empty() {
             return None;
         }

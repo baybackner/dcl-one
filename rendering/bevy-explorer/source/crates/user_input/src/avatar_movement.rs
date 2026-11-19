@@ -74,6 +74,7 @@ impl Plugin for AvatarMovementPlugin {
         app.init_resource::<LastMovementStep>();
         app.register_required_components::<PrimaryUser, LocomotionSpeeds>();
         app.register_required_components::<PrimaryUser, RiserPush>();
+        app.register_required_components::<PrimaryUser, GroundAssist>();
         app.register_required_components::<RendererSceneContext, MovementPeriod>();
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
@@ -739,7 +740,19 @@ fn stage_redispatch_rotation(
 /// How far the player's slow move has pushed against a riser it has not stepped onto yet, up to
 /// [`STEP_PUSH`]. Kept from frame to frame by [`apply_movement`].
 #[derive(Component, Default)]
-pub(crate) struct RiserPush(f64);
+pub(crate) struct RiserPush(pub(crate) f64);
+
+/// The player's step offsets and ground snaps since startup, each with the height of the last
+/// one, for the debug panel. Kept by [`apply_movement`].
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub(crate) struct GroundAssist {
+    pub(crate) steps: u64,
+    /// How far the last step offset rose (m).
+    pub(crate) last_step_rise: Option<f32>,
+    pub(crate) snaps: u64,
+    /// How far the last ground snap dropped (m).
+    pub(crate) last_snap_drop: Option<f32>,
+}
 
 pub(crate) fn apply_movement(
     mut player: Query<
@@ -748,6 +761,7 @@ pub(crate) fn apply_movement(
             &mut AvatarDynamicState,
             &ActivePlayerComponent<AvatarMovement>,
             &mut RiserPush,
+            &mut GroundAssist,
         ),
         With<PrimaryUser>,
     >,
@@ -759,7 +773,8 @@ pub(crate) fn apply_movement(
     movement_control: Res<EngineMovementControl>,
     central: Res<CentralCollisions>,
 ) {
-    let Ok((mut transform, mut dynamic_state, movement, mut riser_push)) = player.single_mut()
+    let Ok((mut transform, mut dynamic_state, movement, mut riser_push, mut assist)) =
+        player.single_mut()
     else {
         return;
     };
@@ -857,6 +872,8 @@ pub(crate) fn apply_movement(
             } else if let Some((stepped, used)) =
                 step_up(&mut scenes, disabled, position, horizontal, time)
             {
+                assist.steps += 1;
+                assist.last_step_rise = Some((stepped.y - position.y) as f32);
                 position = stepped;
                 time -= used;
                 *step_push = 0.0;
@@ -887,7 +904,12 @@ pub(crate) fn apply_movement(
         && !movement_control.deliberate_penetration
         && movement_control.suppress_clipping.is_empty()
     {
-        position = snap_to_ground(&mut scenes, disabled, start, position, followed);
+        let snapped = snap_to_ground(&mut scenes, disabled, start, position, followed);
+        if position.y - snapped.y > SNAP_REPORTED {
+            assist.snaps += 1;
+            assist.last_snap_drop = Some((position.y - snapped.y) as f32);
+        }
+        position = snapped;
     }
 
     debug!(
@@ -1028,6 +1050,10 @@ fn snap_to_ground(
 
 /// Height over the ground below which an avatar standing still is not settled onto it.
 const SETTLE_HEIGHT: f32 = 1e-3;
+
+/// A ground snap shorter than this is the sweep's rounding on flat ground, not a drop:
+/// [`GroundAssist`] does not count it.
+const SNAP_REPORTED: f64 = 1e-4;
 
 /// Forward distance a step offset covers at least: from touching a riser's face to resting on its
 /// corner within [`MAX_GROUND_INCLINE`], plus a margin. The step takes the avatar that far at once.
@@ -1506,6 +1532,7 @@ mod tests {
             .init_resource::<LastMovementStep>()
             .init_resource::<CentralCollisions>()
             .register_required_components::<PrimaryUser, RiserPush>()
+            .register_required_components::<PrimaryUser, GroundAssist>()
             .insert_resource(EngineMovementControl {
                 accept_movement_after: -1.0,
                 ..default()
@@ -1699,6 +1726,39 @@ mod tests {
             (at_60 - at_15).abs() <= 1.0 / 15.0 + 1e-6,
             "{at_60} s at 60 fps, {at_15} s at 15"
         );
+    }
+
+    #[test]
+    fn the_ground_assist_counts_its_step_offsets_and_snaps() {
+        // onto a 0.1 m step, then down its far side
+        let step = (
+            Vec3::new(2.0, 0.05, 0.0),
+            Vec3::new(1.0, 0.05, 5.0),
+            Quat::IDENTITY,
+        );
+        let (mut app, player) = movement_app(&[step], Vec3::ZERO);
+        app.update();
+        set_velocity(&mut app, player, Vec3::new(1.5, 0.0, 0.0));
+        let assist = |app: &App| *app.world().get::<GroundAssist>(player).unwrap();
+        for _ in 0..100 {
+            if app.world().get::<Transform>(player).unwrap().translation.y > 0.05 {
+                break;
+            }
+            app.update();
+        }
+        let up = assist(&app);
+        assert_eq!(up.steps, 1, "{up:?}");
+        // onto the step's corner, which the walk then rounds
+        let rise = up.last_step_rise.unwrap();
+        assert!(rise > 0.05 && rise < 0.11, "{up:?}");
+        // on the flat floor before it, nothing to snap down to
+        assert_eq!(up.snaps, 0, "{up:?}");
+        for _ in 0..150 {
+            app.update();
+        }
+        let down = assist(&app);
+        assert!(down.snaps > up.snaps, "{down:?}");
+        assert!(down.last_snap_drop.unwrap() > 0.0, "{down:?}");
     }
 
     #[test]
