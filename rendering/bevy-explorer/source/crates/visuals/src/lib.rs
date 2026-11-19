@@ -1,17 +1,16 @@
 #![forbid(unsafe_code)]
 
-mod atmosphere_params;
 mod coast;
 mod day_night;
 mod debug_panel;
 mod environment;
-mod nishita_cloud;
 mod props;
 pub mod shell_texturing;
 mod sky_envmap;
 pub use common::sky_preset;
 mod solids;
 mod stars;
+mod stylized_sky;
 pub mod terrain;
 mod trees;
 pub mod upscale;
@@ -30,7 +29,7 @@ use bevy_atmosphere::{
     prelude::{AtmosphereCamera, AtmosphereModel, AtmospherePlugin, AtmosphereSettings},
     system_param::AtmosphereMut,
 };
-use nishita_cloud::{init_noise, NishitaCloud};
+use stylized_sky::{load_horizon_noise, sky_lut_image, StylizedSky};
 
 use bevy_console::ConsoleCommand;
 use common::{
@@ -42,7 +41,6 @@ use common::{
     },
 };
 use console::DoAddConsoleCommand;
-use scene_runner::update_world::lights::{moon_direction, SUN_COLOR_NOON};
 
 use crate::{
     coast::CoastPlugin,
@@ -50,7 +48,9 @@ use crate::{
     props::PropsPlugin,
     shell_texturing::ShellTexturingPlugin,
     sky_envmap::{SkyAmbient, SkyEnvmapPlugin, SkyEnvmapSettings},
-    sky_preset::{ambient_trilight, fog_color, fog_falloff_density, FOG_DENSITY_PER_METRE},
+    sky_preset::{
+        ambient_trilight, fog_color, fog_falloff_density, time_to_phase, FOG_DENSITY_PER_METRE,
+    },
     solids::SolidsPlugin,
     terrain::TerrainPlugin,
     trees::TreesPlugin,
@@ -99,7 +99,7 @@ impl Plugin for VisualsPlugin {
                     99999.0,
                 ),
         })
-        .insert_resource(AtmosphereModel::new(NishitaCloud::default()))
+        .insert_resource(AtmosphereModel::new(StylizedSky::default()))
         .add_plugins(AtmospherePlugin)
         .add_plugins(environment::SceneEnvironmentPlugin)
         .add_plugins(SkyEnvmapPlugin)
@@ -137,7 +137,7 @@ impl Plugin for VisualsPlugin {
         render_app.init_resource::<AtmosphereImageBindGroupLayout>();
         if snapshots_only {
             // The player camera is inactive and snapshot cameras have no sky or
-            // environment map. Do not raymarch an unused 1024px sky cubemap every
+            // environment map. Do not draw an unused 1024px sky cubemap every
             // frame; scene lighting and snapshot rendering still run normally.
             render_app.add_systems(
                 Render,
@@ -146,7 +146,7 @@ impl Plugin for VisualsPlugin {
             );
         }
 
-        app.add_atmosphere_model::<NishitaCloud>();
+        app.add_atmosphere_model::<StylizedSky>();
     }
 }
 
@@ -156,8 +156,9 @@ struct DirectionalLightLayer(Layer);
 fn setup(
     mut commands: Commands,
     camera: Res<PrimaryCameraRes>,
-    mut atmosphere: AtmosphereMut<NishitaCloud>,
+    mut atmosphere: AtmosphereMut<StylizedSky>,
     mut images: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
 ) {
     info!("visuals::setup");
 
@@ -175,10 +176,8 @@ fn setup(
             render_layers: Some(RenderLayers::default()),
         });
 
-        let noise = init_noise(512);
-        let h_noise = images.add(noise);
-
-        atmosphere.noise_texture = h_noise;
+        atmosphere.lut = images.add(sky_lut_image());
+        atmosphere.noise = load_horizon_noise(&asset_server);
     }
 }
 
@@ -187,8 +186,7 @@ static TRANSITION_TIME: f32 = 1.0;
 fn apply_global_light(
     mut commands: Commands,
     setting: Res<AppConfig>,
-    mut atmosphere: AtmosphereMut<NishitaCloud>,
-    cloud: Res<CloudCover>,
+    mut atmosphere: AtmosphereMut<StylizedSky>,
     mut sun: Query<(
         Entity,
         &DirectionalLightLayer,
@@ -205,7 +203,6 @@ fn apply_global_light(
     fog_density: Res<FogDensity>,
     shadow_bias: Res<ShadowBiasOverride>,
     mut prev: Local<(f32, SceneGlobalLight)>,
-    mut cloud_dt: Local<f32>,
 ) {
     let (scene_global_light, environment) = scene_light;
     // the transition has settled once the previous output exactly matches the target
@@ -250,21 +247,12 @@ fn apply_global_light(
 
     let rotation = Quat::from_rotation_arc(Vec3::NEG_Z, next_light.dir_direction);
 
-    // physically-simulated sky: the rayleigh coefficient (hue) follows the light colour, so a
-    // scene's light colour changes the sky; the mie coefficient (haze) rises with the sun; the
-    // sun sets naturally (no floor), and a flat night colour (added in-shader) provides the
-    // night sky
-    let sun_elevation = -next_light.sun_direction.y;
-    let light_ratio = next_light.dir_color.to_srgba().to_vec3() / SUN_COLOR_NOON;
-    atmosphere.sun_position = -next_light.sun_direction;
-    atmosphere.rayleigh_coefficient = atmosphere_params::RAYLEIGH_NOON * light_ratio.powf(3.0);
-    atmosphere.mie_coefficient = atmosphere_params::mie(sun_elevation);
-    atmosphere.night_color = atmosphere_params::NIGHT_SKY;
-    // the moon is drawn where the night light comes from
-    atmosphere.moon_position = -moon_direction(time_of_day.elapsed_secs() / 3600.0);
-    atmosphere.dir_light_intensity = next_light.sun_illuminance;
-    atmosphere.sun_color = next_light.dir_color.to_srgba().to_vec3();
-    atmosphere.tick += 1;
+    // the sky follows the clock: the lookup's phase, the scrolls and the next dither step. a
+    // scene's own sky colours blend over the lookup
+    let clock_fraction = day_fraction(time_of_day.elapsed_secs() / 3600.0);
+    atmosphere.phase = time_to_phase(clock_fraction);
+    atmosphere.time += time.delta_secs();
+    atmosphere.tick = atmosphere.tick.wrapping_add(1);
     let band = |color: Option<Vec3>| color.map(|c| c.extend(1.0)).unwrap_or(Vec4::ZERO);
     atmosphere.scene_zenith = band(environment.zenith);
     atmosphere.scene_horizon = band(environment.horizon);
@@ -272,52 +260,13 @@ fn apply_global_light(
     atmosphere.scene_rim = band(environment.rim);
     let procedural_clouds = environment.texture.is_none();
     atmosphere.scene_cloud_color = band(environment.cloud_color.filter(|_| procedural_clouds));
-    atmosphere.scene_cloud_opacity = environment
-        .cloud_opacity
-        .filter(|_| procedural_clouds)
-        .unwrap_or(1.0);
     atmosphere.scene_sun_visible = if next_light.sun_hidden { 0.0 } else { 1.0 };
-    if let Some(speed) = environment.cloud_speed.filter(|_| procedural_clouds) {
-        atmosphere.scene_cloud_rotation = (atmosphere.scene_cloud_rotation as f64
-            + speed as f64 * time.delta_secs_f64())
-        .rem_euclid(std::f64::consts::TAU) as f32;
-    } else {
-        atmosphere.scene_cloud_rotation = 0.0;
-    }
-
-    if atmosphere.cloudy != cloud.cover {
-        *cloud_dt = (*cloud_dt + time.delta_secs() * 20.0)
-            .min(80.0 * (atmosphere.cloudy - cloud.cover).abs())
-            .max(1.0);
-        atmosphere.cloudy += (cloud.cover - atmosphere.cloudy).clamp(
-            -time.delta_secs() * 0.005 * *cloud_dt,
-            time.delta_secs() * 0.005 * *cloud_dt,
-        );
-        // atmosphere.time += time.delta_secs() * 10.0;
-    } else {
-        *cloud_dt = f32::max(*cloud_dt - time.delta_secs(), cloud.speed);
-    }
-
-    // An explicit angular speed controls the authored cloud layer, including a static zero.
-    if environment.cloud_speed.is_none() || !procedural_clouds {
-        atmosphere.time += time.delta_secs() * *cloud_dt;
-    }
-
-    // cloud look (live-tunable, baked later)
-    atmosphere.cloud_density_cap = cloud.density_cap;
-    atmosphere.cloud_shadow = cloud.shadow;
-    atmosphere.cloud_scale = cloud.scale;
-    atmosphere.cloud_steps = cloud.steps;
-    atmosphere.cloud_lacunarity = cloud.lacunarity;
-    atmosphere.cloud_sharpness = cloud.sharpness;
-    atmosphere.cloud_sharp_mid = cloud.sharp_mid;
 
     // the fog and the Trilight ambient follow the clock, not the scene light, so they are kept
     // out of the gate below; each is written only when its value changes, which also covers a
     // (re)inserted DistanceFog.
     // a scene's fog component replaces the colour and the density; the density is in the same
     // units as the preset's either way
-    let clock_fraction = day_fraction(time_of_day.elapsed_secs() / 3600.0);
     let (new_fog_color, new_fog_density) = match setting.graphics.fog {
         FogSetting::Off => (fog_color(clock_fraction), 0.0),
         FogSetting::On => (

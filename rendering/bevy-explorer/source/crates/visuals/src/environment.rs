@@ -457,16 +457,16 @@ mod tests {
         assert!(!valid_sky_image(&image));
     }
 
-    #[test]
-    fn fog_sky_and_ambient_overrides_reset_without_bypassing_quality() {
+    /// An app running `apply_global_light` at noon, a second into the session, with the fog on
+    /// and the scene's sun hidden.
+    fn light_app() -> App {
         use crate::{
-            nishita_cloud::NishitaCloud,
             sky_envmap::{SkyAmbient, SkyEnvmapSettings},
-            sky_preset::{ambient_trilight, fog_falloff_density},
-            CloudCover, FogDensity, ShadowBiasOverride,
+            stylized_sky::StylizedSky,
+            FogDensity, ShadowBiasOverride,
         };
         use bevy_atmosphere::prelude::AtmosphereModel;
-        use common::structs::{AppConfig, FogSetting, SceneGlobalLight};
+        use common::structs::{AppConfig, FogSetting};
         let mut app = App::new();
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_secs(1));
@@ -488,29 +488,37 @@ mod tests {
                 sun_hidden: true,
                 ..default()
             })
-            .insert_resource(AtmosphereModel::new(NishitaCloud::default()))
-            .insert_resource(CloudCover {
-                cover: 0.375,
-                speed: 5.0,
-                density_cap: 0.8,
-                shadow: 0.05,
-                scale: 1.5,
-                steps: 44,
-                lacunarity: 2.0,
-                sharpness: 50.0,
-                sharp_mid: 0.1,
-            })
+            .insert_resource(AtmosphereModel::new(StylizedSky::default()))
             .init_resource::<AmbientLight>()
             .init_resource::<SkyEnvmapSettings>()
             .init_resource::<ShadowBiasOverride>()
-            .insert_resource(SceneEnvironment {
-                fog_density: Some(0.01),
-                zenith: Some(Vec3::X * 2.0),
-                nadir: Some(Vec3::Z),
-                cloud_opacity: Some(0.0),
-                ..default()
-            })
+            .init_resource::<SceneEnvironment>()
             .add_systems(Update, crate::apply_global_light);
+        app
+    }
+
+    fn sky(app: &App) -> &crate::stylized_sky::StylizedSky {
+        app.world()
+            .resource::<bevy_atmosphere::prelude::AtmosphereModel>()
+            .to_ref()
+            .unwrap()
+    }
+
+    #[test]
+    fn fog_sky_and_ambient_overrides_reset_without_bypassing_quality() {
+        use crate::{
+            sky_envmap::{SkyAmbient, SkyEnvmapSettings},
+            sky_preset::{ambient_trilight, fog_falloff_density, time_to_phase},
+        };
+        use common::structs::{AppConfig, FogSetting};
+        let mut app = light_app();
+        app.insert_resource(SceneEnvironment {
+            fog_density: Some(0.01),
+            zenith: Some(Vec3::X * 2.0),
+            nadir: Some(Vec3::Z),
+            cloud_opacity: Some(0.0),
+            ..default()
+        });
         let camera = app
             .world_mut()
             .spawn((Camera3d::default(), DistanceFog::default()))
@@ -518,7 +526,7 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
-        let world = app.world_mut();
+        let world = app.world();
         assert!(
             world
                 .resource::<SkyEnvmapSettings>()
@@ -537,16 +545,18 @@ mod tests {
             world.resource::<SkyAmbient>().bands,
             [Vec3::X * 2.0, preset[1], Vec3::Z]
         );
-        let atmosphere = world
-            .resource::<AtmosphereModel>()
-            .to_ref::<NishitaCloud>()
-            .unwrap();
+        let atmosphere = sky(&app);
         assert_eq!(atmosphere.scene_zenith, Vec4::new(2.0, 0.0, 0.0, 1.0));
         assert_eq!(atmosphere.scene_sun_visible, 0.0);
+        // the sky follows the clock: the lookup's phase at noon, a further dither step every
+        // frame and the scrolls a second on each
+        assert_eq!(atmosphere.phase, time_to_phase(0.5));
+        assert_eq!(atmosphere.tick, 3);
+        assert_eq!(atmosphere.time, 3.0);
         let ambient = world.resource::<AmbientLight>();
         assert!(ambient.color.to_linear().alpha * ambient.brightness < -1.5);
         // the Off setting is no fog, whatever the scene asks for
-        world.resource_mut::<AppConfig>().graphics.fog = FogSetting::Off;
+        app.world_mut().resource_mut::<AppConfig>().graphics.fog = FogSetting::Off;
         app.update();
         assert!(matches!(
             app.world().get::<DistanceFog>(camera).unwrap().falloff,
@@ -557,103 +567,107 @@ mod tests {
             .resource_mut::<SceneGlobalLight>()
             .sun_hidden = false;
         app.update();
-        let world = app.world_mut();
+        let world = app.world();
         assert_eq!(world.resource::<SkyAmbient>().bands, preset);
         assert!(
             !world
                 .resource::<SkyEnvmapSettings>()
                 .authored_lower_hemisphere
         );
-        let atmosphere = world
-            .resource::<AtmosphereModel>()
-            .to_ref::<NishitaCloud>()
-            .unwrap();
+        let atmosphere = sky(&app);
         assert_eq!(atmosphere.scene_zenith, Vec4::ZERO);
         assert_eq!(atmosphere.scene_sun_visible, 1.0);
-        assert_eq!(atmosphere.scene_cloud_opacity, 1.0);
         let ambient = world.resource::<AmbientLight>();
         assert!(ambient.color.to_linear().alpha * ambient.brightness >= -1.0);
     }
 
-    /// Compiles the procedural compute shader and the panorama skybox on a GPU.
+    #[test]
+    fn scene_bands_clear_when_the_component_goes() {
+        use common::structs::{OutOfWorld, PrimaryPlayerRes};
+        use scene_runner::initialize_scene::{
+            LiveScenes, PortableScenes, PortableSource, ScenePointers,
+        };
+        let mut app = light_app();
+        app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_resource::<ScenePointers>()
+            .init_resource::<LiveScenes>()
+            .init_resource::<PortableScenes>()
+            .add_systems(Update, update_environment.before(crate::apply_global_light));
+        // a player out of the world is in the super-user portables
+        let scene = app
+            .world_mut()
+            .spawn((
+                RendererSceneContext::new(
+                    dcl_types::SceneId::DUMMY,
+                    "hash".to_owned(),
+                    "storage_root".to_owned(),
+                    true,
+                    0,
+                    "title".to_owned(),
+                    IVec2::ZERO,
+                    [IVec2::ZERO].into_iter().collect(),
+                    vec![],
+                    Default::default(),
+                    vec![],
+                    Entity::PLACEHOLDER,
+                    0.0,
+                    false,
+                    "sdk_version",
+                    false,
+                    false,
+                ),
+                Skybox::from(PbSkybox {
+                    sky_colors: Some(pb_skybox::SkyColors {
+                        zenith: Some(gradient(&[(0.0, 3.0)])),
+                        ..default()
+                    }),
+                    ..default()
+                }),
+            ))
+            .id();
+        let world = app.world_mut();
+        world
+            .resource_mut::<LiveScenes>()
+            .scenes
+            .insert("hash".to_owned(), scene);
+        world.resource_mut::<PortableScenes>().insert(
+            "hash".to_owned(),
+            PortableSource::new("pid".to_owned(), None, None, true),
+        );
+        let player = world.spawn((GlobalTransform::default(), OutOfWorld)).id();
+        world.insert_resource(PrimaryPlayerRes(player));
+        app.update();
+        assert_eq!(sky(&app).scene_zenith, Vec4::new(3.0, 0.0, 0.0, 1.0));
+        app.world_mut().entity_mut(scene).remove::<Skybox>();
+        app.update();
+        assert_eq!(sky(&app).scene_zenith, Vec4::ZERO);
+    }
+
+    /// Compiles the sky's compute shader and the panorama skybox on a GPU.
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn scene_environment_pipelines_compile() {
-        use crate::nishita_cloud::{init_noise, NishitaCloud};
+        use crate::stylized_sky::{
+            test_support::{read_cube, sky_test_app, start_sky, texel},
+            StylizedSky,
+        };
         use bevy::{
             core_pipeline::tonemapping::Tonemapping,
             render::{
                 camera::RenderTarget,
-                gpu_readback::{Readback, ReadbackComplete},
-                render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+                render_resource::{
+                    CachedPipelineState, Extent3d, PipelineCache, PipelineDescriptor,
+                    TextureDimension, TextureFormat, TextureUsages,
+                },
                 view::screenshot::{Screenshot, ScreenshotCaptured},
                 RenderApp,
             },
         };
-        use pipeline_test::{
-            compile_pipelines, headless_app_without_embedded_assets, render_target,
-        };
+        use bevy_atmosphere::prelude::*;
+        use pipeline_test::{compile_pipelines, render_target};
         #[derive(Resource, Default)]
         struct Captured(Option<Image>);
-        #[derive(Resource, Default)]
-        struct RawCaptured(Option<Vec<u8>>);
-        fn raw_cube(
-            app: &mut App,
-            handle: &Handle<Image>,
-            size: usize,
-            label: &str,
-        ) -> Vec<[u16; 4]> {
-            app.world_mut().resource_mut::<RawCaptured>().0 = None;
-            let entity = app
-                .world_mut()
-                .spawn(Readback::texture(handle.clone()))
-                .observe(
-                    |event: Trigger<ReadbackComplete>, mut captured: ResMut<RawCaptured>| {
-                        captured.0 = Some(event.event().0.clone());
-                    },
-                )
-                .id();
-            let start = std::time::Instant::now();
-            let bytes = loop {
-                app.update();
-                if let Some(bytes) = app.world_mut().resource_mut::<RawCaptured>().0.take() {
-                    break bytes;
-                }
-                assert!(
-                    start.elapsed().as_secs() < 30,
-                    "{label}: raw GPU readback timed out"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            };
-            app.world_mut().despawn(entity);
-            // Readback rows are aligned to 256 bytes; skip padding, retain every face/texel/channel.
-            let stride = (size * 8).div_ceil(256) * 256;
-            assert_eq!(bytes.len(), stride * size * 6, "{label}: six cubemap faces");
-            let mut texels = Vec::with_capacity(size * size * 6);
-            for face in 0..6 {
-                for y in 0..size {
-                    for x in 0..size {
-                        let offset = (face * size + y) * stride + x * 8;
-                        let channels = std::array::from_fn(|channel| {
-                            let i = offset + channel * 2;
-                            u16::from_le_bytes([bytes[i], bytes[i + 1]])
-                        });
-                        for value in channels {
-                            assert_ne!(
-                                value & 0x7c00,
-                                0x7c00,
-                                "{label}: nonfinite f16 face={face} x={x} y={y}: {channels:?}"
-                            );
-                        }
-                        texels.push(channels);
-                    }
-                }
-            }
-            texels
-        }
-        fn tick(mut atmosphere: bevy_atmosphere::system_param::AtmosphereMut<NishitaCloud>) {
-            atmosphere.tick = atmosphere.tick.wrapping_add(1);
-        }
         fn capture(app: &mut App, target: &Handle<Image>, label: &str) -> [u8; 4] {
             app.world_mut().resource_mut::<Captured>().0 = None;
             app.world_mut()
@@ -682,42 +696,22 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        use bevy_atmosphere::{
-            model::AddAtmosphereModel, pipeline::AtmosphereImageBindGroupLayout, prelude::*,
-        };
-        let mut app = headless_app_without_embedded_assets();
+        let mut app = sky_test_app(128);
         app.init_resource::<SceneEnvironment>()
             .init_resource::<Captured>()
-            .init_resource::<RawCaptured>()
             .init_resource::<common::structs::AppConfig>()
             .add_plugins(console::ConsolePlugin {
                 add_bevy_console: false,
             })
-            .insert_resource(AtmosphereSettings {
-                resolution: 128,
-                ..default()
-            })
-            .insert_resource(AtmosphereModel::new(NishitaCloud::default()))
-            .add_plugins(AtmospherePlugin)
             .add_plugins(crate::sky_envmap::SkyEnvmapPlugin)
-            .add_systems(Update, (tick, update_sky_panorama).chain())
-            .add_plugins(assets::EmbedAssetsPlugin);
-        app.finish();
-        app.cleanup();
-        app.sub_app_mut(RenderApp)
-            .init_resource::<AtmosphereImageBindGroupLayout>();
-        app.add_atmosphere_model::<NishitaCloud>();
-        let raw_sky = app
-            .world()
-            .resource::<bevy_atmosphere::pipeline::AtmosphereImage>()
-            .handle
-            .clone();
+            .add_systems(Update, update_sky_panorama);
+        let raw_sky = start_sky(&mut app);
         let maps = app
             .world()
             .resource::<crate::sky_envmap::SkyEnvmap>()
             .clone();
         // the ambient map is written on the CPU and takes no part in the sky's passes
-        for handle in [&raw_sky, &maps.specular, &maps.trilight_specular] {
+        for handle in [&maps.specular, &maps.trilight_specular] {
             app.world_mut()
                 .resource_mut::<Assets<Image>>()
                 .get_mut(handle)
@@ -725,10 +719,6 @@ mod tests {
                 .texture_descriptor
                 .usage |= TextureUsages::COPY_SRC;
         }
-        let noise = app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .add(init_noise(16));
         // Centre columns face DCL +Z; the seam faces -Z.
         let mut sky_image = Image::new(
             Extent3d {
@@ -754,19 +744,14 @@ mod tests {
             address_mode_u: ImageAddressMode::Repeat,
             ..ImageSamplerDescriptor::linear()
         });
-        let sky = app
+        let panorama = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
             .add(sky_image);
-        app.world_mut().resource_mut::<SceneEnvironment>().texture = Some(sky);
+        app.world_mut().resource_mut::<SceneEnvironment>().texture = Some(panorama);
         app.world_mut()
             .resource_mut::<crate::sky_envmap::SkyEnvmapSettings>()
             .authored_lower_hemisphere = true;
-        app.world_mut()
-            .resource_mut::<AtmosphereModel>()
-            .to_mut::<NishitaCloud>()
-            .unwrap()
-            .noise_texture = noise;
         let target = render_target(&mut app);
         let camera = app
             .world_mut()
@@ -786,9 +771,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         {
-            use bevy::render::render_resource::{
-                CachedPipelineState, PipelineCache, PipelineDescriptor,
-            };
             let cache = app.sub_app(RenderApp).world().resource::<PipelineCache>();
             for pipeline in cache.pipelines() {
                 if matches!(pipeline.state, CachedPipelineState::Ok(_)) {
@@ -822,13 +804,14 @@ mod tests {
         app.world_mut().resource_mut::<SceneEnvironment>().texture = None;
         {
             let mut model = app.world_mut().resource_mut::<AtmosphereModel>();
-            let atmosphere = model.to_mut::<NishitaCloud>().unwrap();
+            let atmosphere = model.to_mut::<StylizedSky>().unwrap();
             atmosphere.scene_zenith = Vec4::new(0.0, 0.0, 1.0, 1.0);
             atmosphere.scene_horizon = atmosphere.scene_zenith;
             atmosphere.scene_nadir = atmosphere.scene_zenith;
-            atmosphere.scene_cloud_opacity = 0.0;
-            atmosphere.scene_sun_visible = 0.0;
         }
+        // the sky without the image is another skybox pipeline: wait for it, then for every
+        // dither step of the cube
+        compile_pipelines(&mut app);
         for _ in 0..80 {
             app.update();
         }
@@ -837,17 +820,15 @@ mod tests {
             restored[2] > 200 && restored[0] < 30 && restored[1] < 30,
             "removing image restores authored procedural sky: {restored:?}"
         );
-        // Nonzero daylight evaluates the procedural fallback even at an authored lower pole.
-        // Horizontal screenshots and a zero light intensity cannot detect a NaN at face -Y.
+        // Under the horizon the lookup holds its horizon colour down to the pole, where the
+        // azimuth is undefined; only an authored nadir replaces it. A horizontal screenshot
+        // cannot detect a NaN at face -Y.
+        let lut_horizon = crate::sky_preset::bake_sky_lut()[2 * crate::sky_preset::SKY_LUT_WIDTH];
         for band in ["nadir", "zenith", "horizon", "rim", "none"] {
             {
                 let mut model = app.world_mut().resource_mut::<AtmosphereModel>();
-                let atmosphere = model.to_mut::<NishitaCloud>().unwrap();
-                atmosphere.dir_light_intensity = 11000.0;
-                atmosphere.sun_intensity = 22.0;
-                atmosphere.sun_position = Vec3::Y;
-                atmosphere.scene_cloud_opacity = 0.0;
-                atmosphere.scene_sun_visible = 0.0;
+                let atmosphere = model.to_mut::<StylizedSky>().unwrap();
+                atmosphere.phase = 0.5;
                 atmosphere.scene_zenith = Vec4::ZERO;
                 atmosphere.scene_horizon = Vec4::ZERO;
                 atmosphere.scene_nadir = Vec4::ZERO;
@@ -875,14 +856,19 @@ mod tests {
                 for _ in 0..80 {
                     app.update();
                 }
-                let raw = raw_cube(&mut app, &raw_sky, 128, band);
-                let pole = raw[3 * 128 * 128 + 64 * 128 + 64];
-                let expected_red = if band == "nadir" { 0x3c00 } else { 0 };
-                assert_eq!(
-                    pole.map(|c| c & 0x7fff),
-                    [expected_red, 0, 0, 0],
-                    "{band}: exact raw -Y pole"
-                );
+                let raw = read_cube(&mut app, &raw_sky, 128, band);
+                let pole = texel(&raw, 128, 3, 64, 64);
+                let expected = if band == "nadir" {
+                    [1.0, 0.0, 0.0, 0.0]
+                } else {
+                    [lut_horizon[0], lut_horizon[1], lut_horizon[2], 0.0]
+                };
+                for channel in 0..4 {
+                    assert!(
+                        (pole[channel] - expected[channel]).abs() < 1e-2,
+                        "{band}: raw -Y pole {pole:?}, expected {expected:?}"
+                    );
+                }
                 let handle = match quality {
                     common::structs::SkyReflectionSetting::High => &maps.specular,
                     common::structs::SkyReflectionSetting::Low => &maps.trilight_specular,
@@ -893,7 +879,7 @@ mod tests {
                     .get(handle)
                     .unwrap()
                     .width() as usize;
-                raw_cube(
+                read_cube(
                     &mut app,
                     handle,
                     size,

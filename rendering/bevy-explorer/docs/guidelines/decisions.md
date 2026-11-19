@@ -48,6 +48,14 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   the extension is not the fix; the long-term answer is still open.
 - **Sky preset curves are linear.** The fog colour, light colour, light intensity and Trilight
   ambient keys are interpolated linearly; Unity's curve tangents are not carried.
+- **The sky below the horizon is the horizon colour.** The sky cube is Unity's lookup by day
+  phase and elevation (`stylized_sky.wgsl`), and as in Unity the elevation clamps at the
+  horizon, so every direction under it holds the horizon colour; the cube does not fade to
+  black there. A scene's authored sky colours blend over that colour, not over black. The
+  reflection map is unaffected: it reads directions under the horizon from their mirror image
+  above it unless a scene authors a nadir. One difference from Unity: the horizon noise is
+  sampled at its full resolution, because the cube is drawn by a compute shader, which has no
+  screen derivatives to choose a mip from.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
   UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
   the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
