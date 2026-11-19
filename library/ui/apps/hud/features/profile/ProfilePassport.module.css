@@ -5,6 +5,8 @@
    side, and on the right the name, the tab row and the scrolling sections. */
 .scrim.scrim {
   background: var(--passport-scrim);
+  /* under 92% black a blur is barely visible, so the full-screen filter is skipped */
+  backdrop-filter: none;
 }
 .panel {
   /* The Photos tab's viewer covers the panel. */

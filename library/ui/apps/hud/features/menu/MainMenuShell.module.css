@@ -40,9 +40,9 @@
 .darkFrame {
   position: absolute;
   inset: 0;
-  /* above every layer a page stacks inside the overlay */
+  /* above every persistent layer a page stacks inside the overlay; hover tooltips and dropdowns sit higher */
   z-index: 10;
-  background: #000;
+  background: var(--black);
   pointer-events: none;
   opacity: 0;
   animation: darkFrameOut var(--dur-pop) linear;
@@ -54,6 +54,11 @@
   }
   100% {
     opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .darkFrame {
+    display: none;
   }
 }
 /* Transparent-body pages (engine map / avatar preview): the overlay itself becomes a

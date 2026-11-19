@@ -52,6 +52,15 @@ describe('main menu shell entrance', () => {
     expect(darkFrames(container)).toBe(1)
   })
 
+  it('the lobby card opens without a dark frame', () => {
+    const { container } = render(
+      <MainMenuShell active="map" presentation="lobbyCard" onNavigate={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </MainMenuShell>
+    )
+    expect(darkFrames(container)).toBe(0)
+  })
+
   it('a page switch keeps the open view without a dark frame', () => {
     const page = (active: string): React.JSX.Element => (
       <MainMenuShell key={active} active={active} onNavigate={vi.fn()} onClose={vi.fn()}>
