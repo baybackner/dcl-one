@@ -13,6 +13,8 @@ var microphonePermission = "denied";
 var reportMicrophoneDevices = () => {};
 // numbers each listing, so one that resolves after a newer one is dropped
 var microphoneListing = 0;
+// a listing has shown the inputs' ids, which the browser hides without permission
+var microphoneIdsShown = false;
 const roomPlayback = new WeakMap();
 
 /**
@@ -90,10 +92,12 @@ export function watchMicrophoneDevices(on_change) {
                 }
                 const audio = devices.filter((device) => device.kind === "audioinput");
                 // hidden ids, or a list that may be empty only for want of permission
-                if (
-                    audio.some((device) => !device.deviceId) ||
-                    (audio.length === 0 && microphonePermission !== "granted")
-                ) {
+                if (audio.some((device) => !device.deviceId)) {
+                    return;
+                }
+                if (audio.length > 0) {
+                    microphoneIdsShown = true;
+                } else if (microphonePermission !== "granted" && !microphoneIdsShown) {
                     return;
                 }
                 const inputs = audio.filter(

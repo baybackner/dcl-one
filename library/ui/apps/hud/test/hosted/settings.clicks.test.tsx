@@ -132,10 +132,14 @@ describe('settings panel microphone', () => {
 
   beforeEach(() => resetSettingsTab())
 
-  it('a lone choice is a select', () => {
-    render(panel({ ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }))
-    expect(screen.getByRole('button', { name: 'Microphone' })).toBeEnabled()
-    expect(screen.queryByRole('slider', { name: 'Microphone' })).toBeNull()
+  it('a lone choice opens as a list with it selected, and picking it sets it', async () => {
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }
+    render(panel(settings))
+    await userEvent.click(screen.getByRole('button', { name: 'Microphone' }))
+    const option = screen.getByRole('option', { name: 'System Default' })
+    expect(option).toHaveAttribute('aria-selected', 'true')
+    await userEvent.click(option)
+    expect(vi.mocked(settings.set)).toHaveBeenCalledWith('Microphone', 0)
   })
 
   it('choices re-read under the same value can be picked', async () => {

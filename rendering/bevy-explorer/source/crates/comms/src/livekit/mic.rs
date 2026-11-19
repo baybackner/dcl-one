@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use bevy::{ecs::relationship::Relationship, prelude::*};
+use common::structs::MicrophoneDevices;
 use common::structs::{AppConfig, ClientWindowFocus, MicState, SystemAudio};
-use system_bridge::settings::microphone_setting::MicrophoneDevices;
 use tokio::{sync::oneshot, task::JoinHandle};
 use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
@@ -1078,8 +1078,8 @@ mod routing_tests {
             .build()
             .unwrap();
         let drain = MicrophoneDrain::default();
-        let devices = MicrophoneDevices::default();
-        let headset = system_bridge::settings::microphone_setting::MicrophoneInput {
+        let mut devices = MicrophoneDevices::default();
+        let headset = common::structs::MicrophoneInput {
             id: "headset".to_owned(),
             label: "Headset".to_owned(),
         };

@@ -139,8 +139,11 @@ function isBinary(s: Setting): boolean {
 }
 // Any named choice is a select, even a lone one: the engine's Microphone lists only System Default
 // until the browser reveals the inputs.
+function isSelect(s: Setting): boolean {
+  return !isBinary(s) && s.namedVariants.length > 0
+}
 function isSlider(s: Setting): boolean {
-  return !isBinary(s) && s.namedVariants.length === 0
+  return !isBinary(s) && !isSelect(s)
 }
 // The engine's Microphone choices follow the devices plugged in. On open the fields render the held
 // list first, and the re-read can bring new or renamed choices under the same value.
@@ -180,7 +183,7 @@ function Control({ s, onSet }: { s: Setting; onSet: (name: string, value: number
   if (isBinary(s)) {
     return <Toggle checked={s.value >= 1} disabled={unset} onChange={(c) => onSet(s.name, c ? 1 : 0)} aria-label={s.name} />
   }
-  if (s.namedVariants.length > 0) {
+  if (isSelect(s)) {
     return (
       <Select
         variant="light"

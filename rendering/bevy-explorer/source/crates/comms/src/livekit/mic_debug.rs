@@ -38,8 +38,6 @@ impl Plugin for MicDebugPlugin {
                     ("Current input device", "device"),
                     #[cfg(target_arch = "wasm32")]
                     ("Chosen input device", "device"),
-                    #[cfg(target_arch = "wasm32")]
-                    ("Input device choices", "choices"),
                     #[cfg(not(target_arch = "wasm32"))]
                     ("Capture sample rate (Hz)", "rate"),
                     #[cfg(not(target_arch = "wasm32"))]
@@ -121,7 +119,6 @@ fn microphone_info(
     devices: Res<MicrophoneDevices>,
     routes: Query<&MicrophonePublication>,
     #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
-    #[cfg(target_arch = "wasm32")] settings: Res<system_bridge::settings::Settings>,
 ) {
     let Some(Ok(_)) = input.take() else { return };
     let speakers: BTreeSet<_> = speakers.iter().map(|p| p.identity().to_string()).collect();
@@ -167,29 +164,9 @@ fn microphone_info(
                 .unwrap_or_else(|| "Chosen device (unknown)".to_owned())
         });
         report["device"] = json!(chosen.as_deref().unwrap_or("System Default"));
-        report["devices"] = json!(devices.reported().then(|| devices
-            .read()
-            .iter()
-            .filter(|known| known.present)
-            .count()));
-        // the indices `/debug_settings Audio` sets
-        report["choices"] = json!(settings
-            .settings
-            .iter()
-            .find(|setting| setting.info.name == system_bridge::settings::microphone_setting::TITLE)
-            .map(|setting| {
-                setting
-                    .info
-                    .named_variants
-                    .iter()
-                    .enumerate()
-                    .map(|(index, variant)| format!("{index}: {}", variant.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }));
+        report["devices"] = json!(devices.offered());
         report["unavailable"] = json!({
             "devices": "The page has not listed its inputs",
-            "choices": "No Microphone setting",
         });
     }
     input.reply_ok(report.to_string());

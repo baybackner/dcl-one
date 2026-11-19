@@ -1961,6 +1961,144 @@ impl ClientWindowFocus {
 #[derive(Event, Debug, Clone, Copy)]
 pub struct RequestClientWindowFocus;
 
+/// An audio input the host offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicrophoneInput {
+    pub id: String,
+    pub label: String,
+}
+
+/// An input reported during this session, kept after it is unplugged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KnownMicrophone {
+    input: MicrophoneInput,
+    present: bool,
+    /// How many reports found it gone: after one listing it, or as the first report.
+    absences: u32,
+}
+
+/// Every audio input the host reported this session, in first-report order. An input keeps its
+/// place once seen, so a choice index read from an older list still names the same input.
+#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+pub struct MicrophoneDevices {
+    known: Vec<KnownMicrophone>,
+    /// The host has reported its inputs at least once.
+    reported: bool,
+}
+
+impl MicrophoneDevices {
+    /// Whether the host has reported its inputs at least once.
+    pub fn reported(&self) -> bool {
+        self.reported
+    }
+
+    fn present(&self, id: &str) -> bool {
+        self.known
+            .iter()
+            .any(|known| known.present && known.input.id == id)
+    }
+
+    /// Whether the host reported its inputs and `id` was not among them.
+    pub fn missing(&self, id: &str) -> bool {
+        self.reported && !self.present(id)
+    }
+
+    /// Whether the host reported its inputs and `id` was among them.
+    pub fn offers(&self, id: &str) -> bool {
+        self.reported && self.present(id)
+    }
+
+    /// How many inputs the host offers now; `None` before its first report.
+    pub fn offered(&self) -> Option<usize> {
+        self.reported
+            .then(|| self.known.iter().filter(|known| known.present).count())
+    }
+
+    /// How many reports found `id` gone; a change means it went missing in between.
+    pub fn absences(&self, id: &str) -> u32 {
+        self.known
+            .iter()
+            .find(|known| known.input.id == id)
+            .map_or(0, |known| known.absences)
+    }
+
+    /// Every known input's id, in choice order.
+    pub fn ids(&self) -> Vec<String> {
+        self.known
+            .iter()
+            .map(|known| known.input.id.clone())
+            .collect()
+    }
+
+    /// Every known input's name, in choice order; before the first report nothing is known to be
+    /// unplugged.
+    pub fn labels(&self) -> Vec<String> {
+        self.known.iter().map(|known| self.shown(known)).collect()
+    }
+
+    /// How `id` is named among the choices, if it is one.
+    pub fn label(&self, id: &str) -> Option<String> {
+        self.known
+            .iter()
+            .find(|known| known.input.id == id)
+            .map(|known| self.shown(known))
+    }
+
+    fn shown(&self, known: &KnownMicrophone) -> String {
+        if known.present || !self.reported {
+            known.input.label.clone()
+        } else {
+            format!("{} (unplugged)", known.input.label)
+        }
+    }
+
+    /// Lists a saved choice the host has not reported yet, so the first report that lacks it
+    /// counts as an absence.
+    pub fn remember(&mut self, id: &str) {
+        if !self.known.iter().any(|known| known.input.id == id) {
+            self.known.push(KnownMicrophone {
+                input: MicrophoneInput {
+                    id: id.to_owned(),
+                    label: "Saved microphone".to_owned(),
+                },
+                present: false,
+                absences: 0,
+            });
+        }
+    }
+
+    /// Takes the host's current inputs.
+    pub fn replace(&mut self, reported: Vec<MicrophoneInput>) {
+        let first = !self.reported;
+        self.reported = true;
+        for known in self.known.iter_mut() {
+            if !reported.iter().any(|input| input.id == known.input.id) {
+                if known.present || first {
+                    known.absences += 1;
+                }
+                known.present = false;
+            }
+        }
+        for input in reported {
+            match self
+                .known
+                .iter_mut()
+                .find(|known| known.input.id == input.id)
+            {
+                Some(known) => {
+                    known.input.label = input.label;
+                    known.present = true;
+                }
+                None => self.known.push(KnownMicrophone {
+                    input,
+                    present: true,
+                    absences: 0,
+                }),
+            }
+        }
+    }
+}
+
 #[derive(Resource, Default, Serialize, Deserialize, Clone)]
 pub struct MicState {
     pub available: bool,

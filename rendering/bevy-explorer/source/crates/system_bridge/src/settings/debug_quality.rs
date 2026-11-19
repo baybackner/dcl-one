@@ -94,10 +94,20 @@ fn register_group(app: &mut App, settings: &[(SettingInfo, bool)], category: &st
             },
         )
         .collect();
+    // choices that change at runtime are listed beside their by-index input
+    let choice_fields: Vec<_> = rows
+        .iter()
+        .filter(|((_, runtime_choices), _, _)| *runtime_choices)
+        .map(|((s, _), field, _)| (format!("{} choices", s.name), format!("{field}:choices")))
+        .collect();
+    let fields: Vec<_> = choice_fields
+        .iter()
+        .map(|(label, field)| (label.as_str(), field.as_str()))
+        .collect();
     app.add_debug_section(DebugSection {
         title,
         query: &format!("/debug_settings {category}"),
-        fields: &[],
+        fields: &fields,
         actions: &[],
         inputs: &inputs,
     });
@@ -149,18 +159,28 @@ fn quality(
             Err(error) => input.reply_failed(error.to_string()),
         }
     } else {
-        let values: Map<_, _> = settings
+        let mut values = Map::new();
+        for (i, s) in settings
             .settings
             .iter()
             .enumerate()
             .filter(|(_, s)| s.info.category == cmd.category)
-            .map(|(i, s)| {
-                (
-                    i.to_string(),
-                    Value::from(panel_number(s.info.value, s.info.step_size)),
-                )
-            })
-            .collect();
+        {
+            values.insert(
+                i.to_string(),
+                Value::from(panel_number(s.info.value, s.info.step_size)),
+            );
+            if s.runtime_choices {
+                let choices: Vec<_> = s
+                    .info
+                    .named_variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variant)| format!("{index}: {}", variant.name))
+                    .collect();
+                values.insert(format!("{i}:choices"), Value::from(choices.join(", ")));
+            }
+        }
         input.reply_ok(Value::Object(values).to_string());
     }
 }

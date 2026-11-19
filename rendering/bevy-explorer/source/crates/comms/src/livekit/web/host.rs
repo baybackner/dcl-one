@@ -8,10 +8,10 @@ use bevy::{
     platform::collections::HashMap,
     prelude::error,
 };
+use common::structs::MicrophoneInput;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_lite::StreamExt;
 use js_sys::{Object, Reflect};
-use system_bridge::settings::microphone_setting::MicrophoneInput;
 use wasm_bindgen::{closure::Closure, prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::HtmlVideoElement;
 

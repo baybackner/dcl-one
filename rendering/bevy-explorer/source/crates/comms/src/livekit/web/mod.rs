@@ -31,10 +31,10 @@ use std::{
 };
 
 use bevy::{platform::collections::HashMap, prelude::*};
+use common::structs::{MicrophoneDevices, MicrophoneInput};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use media::MediaId;
 use once_cell::sync::OnceCell;
-use system_bridge::settings::microphone_setting::{MicrophoneDevices, MicrophoneInput};
 use tokio::sync::{mpsc, oneshot};
 
 pub use crate::livekit::web::{
@@ -540,9 +540,7 @@ pub fn dispatch_page_events(
                 microphone.permission = permission;
             }
             LivekitEvent::MicrophoneDevices(devices) => {
-                if microphone_devices.replace(devices) {
-                    microphone_devices.set_changed();
-                }
+                microphone_devices.replace(devices);
             }
         }
     }
