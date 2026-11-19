@@ -1599,3 +1599,31 @@ async fn a_reversed_refund_withdraws_its_unsent_revocations_and_lifts_its_block(
     assert_eq!(out["action"], "reinstated", "{out}");
     assert!(blocked(&pool, &w.address).await);
 }
+
+#[tokio::test]
+async fn a_reversed_refund_keeps_a_revocation_a_later_refund_relies_on() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 2).await;
+    // 200 available; a newer 150 and an older 40 pledged.
+    let newer = pledge(&pool, &w.address, 1500, 0, 300).await;
+    let older = pledge(&pool, &w.address, 400, 60, 300).await;
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[1].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+    assert!(queued(&pool, &older).await);
+
+    // 100 back cannot cover the newer 150 once more.
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert_eq!(out["revocationsWithdrawn"], 0, "{out}");
+    assert!(queued(&pool, &newer).await);
+    assert!(blocked(&pool, &w.address).await);
+}

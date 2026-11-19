@@ -32,8 +32,9 @@
 //! transaction never credited, or held, leaves a `refunded` row that keeps
 //! it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
-//! what was charged back, withdraws its revocations not sent yet and lifts
-//! a block it raised once the balance covers the live pledges, or clears
+//! what was charged back, withdraws its revocations not sent yet while the
+//! balance covers the credits left unqueued, lifts a block it raised once
+//! the balance covers the live pledges, or clears
 //! the `refunded` row of a purchase never credited so it can be credited.
 
 use std::collections::HashMap;
@@ -658,7 +659,8 @@ impl Credits {
 
     /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited purchase
     /// gets back what its refund charged back, its revocations not sent yet
-    /// are withdrawn (a sent one is final) and a block it raised is lifted
+    /// are withdrawn while the balance covers the unexpired credits left
+    /// unqueued (a sent one is final), and a block it raised is lifted
     /// once the balance covers the live pledges; a refund of a transaction
     /// never credited is cleared so the purchase can be credited.
     pub async fn reinstate_iap(
@@ -721,12 +723,22 @@ impl Credits {
             )
             .await?;
         }
-        let withdrawn =
-            sqlx::query("DELETE FROM credits.revocations WHERE reason = $1 AND status = 'pending'")
-                .bind(revocation_reason(transaction_id))
-                .execute(&mut *tx)
-                .await?
-                .rows_affected();
+        // Only while the balance covers every unexpired credit the withdrawal leaves unqueued.
+        let withdrawn = sqlx::query(
+            "DELETE FROM credits.revocations WHERE reason = $1 AND status = 'pending' \
+               AND COALESCE((SELECT available FROM credits.wallets WHERE address = $2), 0) * $3::numeric >= ( \
+                   SELECT COALESCE(SUM(usd_cents), 0) FROM credits.authorizations a \
+                   WHERE address = $2 AND status IN ('authorized', 'retired') \
+                     AND expires_at > timezone('UTC', now()) \
+                     AND NOT EXISTS (SELECT 1 FROM credits.revocations r WHERE r.credit_hash = a.credit_hash \
+                                     AND NOT (r.reason = $1 AND r.status = 'pending')))",
+        )
+        .bind(revocation_reason(transaction_id))
+        .bind(&address)
+        .bind(UsdCents::CENTS_PER_CREDIT)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if row.get::<bool, _>("raised_block") {
             sqlx::query(
                 "UPDATE credits.wallets SET is_blocked_for_claiming = false, updated_at = timezone('UTC', now()) \

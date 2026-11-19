@@ -1573,7 +1573,8 @@ credits not queued yet that pledge beyond the balance in `credits.revocations`
 (reason `reversed:apple-iap:<transaction id>`) and records in `raised_block`
 whether it blocked the wallet, in one transaction. `REFUND_REVERSED` grants
 `revoked_credits` back (a `refund` ledger row), deletes its revocations still
-`pending` (a sent one is final), lifts the block it raised when `available`
+`pending` when `available` covers the unexpired credits that leaves unqueued
+(a sent one is final), lifts the block it raised when `available`
 covers the wallet's live pledges, and returns the row to `paid`, or deletes a `refunded` row never
 credited (not an imported upstream marker) so the purchase can be credited. Readers are the wallet's credit
 orders (`address, created_at DESC`, rows this node credited), the caps
