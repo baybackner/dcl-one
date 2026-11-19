@@ -9,7 +9,7 @@ use common::structs::AppConfig;
 
 use super::{NamedVariant, Setting, SettingCategory, SettingInfo, Settings};
 
-const TITLE: &str = "Microphone";
+pub const TITLE: &str = "Microphone";
 const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem Default follows the device's own choice. While a chosen microphone is unplugged, voice chat uses the system default.";
 
 /// An audio input the host offers.
@@ -44,7 +44,8 @@ impl MicrophoneDevices {
         self.known.read().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn reported(&self) -> bool {
+    /// Whether the host has reported its inputs at least once.
+    pub fn reported(&self) -> bool {
         self.reported.load(Ordering::SeqCst)
     }
 

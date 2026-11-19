@@ -145,7 +145,10 @@ function isSlider(s: Setting): boolean {
 // The engine's Microphone choices follow the devices plugged in. On open the fields render the held
 // list first, and the re-read can bring new or renamed choices under the same value.
 function sameVariants(a: Setting, b: Setting): boolean {
-  return a.namedVariants.length === b.namedVariants.length && a.namedVariants.every((v, i) => v.name === b.namedVariants[i].name)
+  return (
+    a.namedVariants.length === b.namedVariants.length &&
+    a.namedVariants.every((v, i) => v.name === b.namedVariants[i].name && v.description === b.namedVariants[i].description)
+  )
 }
 // Values are f32 widened to f64 on the way over, so 19.95 arrives as 19.950000762939453. Showing
 // them at f32's own precision drops the noise, and the trailing zeros with it. Display only.

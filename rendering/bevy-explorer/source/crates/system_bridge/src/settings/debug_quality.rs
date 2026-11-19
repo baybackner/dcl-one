@@ -34,7 +34,8 @@ fn register_group(app: &mut App, settings: &[SettingInfo], category: &str, title
     let rows: Vec<_> = settings
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.category == category)
+        // its choices change at runtime; the voice chat section picks it
+        .filter(|(_, s)| s.category == category && s.name != super::microphone_setting::TITLE)
         .map(|(i, s)| {
             (
                 s,

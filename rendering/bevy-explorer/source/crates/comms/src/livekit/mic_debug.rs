@@ -20,72 +20,88 @@ impl Plugin for MicDebugPlugin {
     fn build(&self, app: &mut App) {
         app.add_console_command::<MicrophoneInfo, _>(microphone_info)
             .add_console_command::<NearbyVoice, _>(nearby_voice)
-            .add_console_command::<VoicePanning, _>(voice_panning)
-            .add_debug_section(DebugSection {
-                title: "Voice chat",
-                query: "/microphone_info",
-                fields: &[
-                    ("Microphone available", "available"),
-                    ("Microphone enabled", "enabled"),
-                    ("Room connected", "connected"),
-                    ("Permission", "permission"),
-                    ("Client window focus", "windowFocus"),
-                    ("Local microphone track active", "transmitting"),
-                    ("Active remote speakers (up to 32)", "speakers"),
-                    ("Available input devices", "devices"),
-                    ("Current input device", "device"),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ("Capture sample rate (Hz)", "rate"),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ("Capture channels", "channels"),
-                ],
-                actions: &[],
-                inputs: &[],
-            })
-            .add_debug_section(DebugSection {
-                title: "Nearby voice chat",
-                query: "/nearby_voice",
-                fields: &[
-                    ("Island connected", "connected"),
-                    ("Turned off by the scene", "sceneBlocked"),
-                    ("Mic opens refused by the scene", "refusals"),
-                    ("Local speaking", "speaking"),
-                    ("Remote participants", "participants"),
-                    ("Active speakers", "speakerCount"),
-                    ("Speakers (up to 32)", "speakers"),
-                    ("Subscribed microphone tracks (all rooms)", "tracks"),
-                    ("Player audio sources (all transports)", "sources"),
-                    (
-                        "Sources with a selected transport (all transports)",
-                        "assigned",
-                    ),
-                ],
-                actions: &[],
-                inputs: &[
-                    DebugInput {
-                        label: "Spatialize",
-                        field: "spatialize",
-                        command: "/voice_panning spatialize {value}",
-                        kind: DebugInputKind::Toggle,
+            .add_console_command::<VoicePanning, _>(voice_panning);
+        #[cfg(target_arch = "wasm32")]
+        app.add_console_command::<MicrophoneChoice, _>(microphone_choice);
+        app.add_debug_section(DebugSection {
+            title: "Voice chat",
+            query: "/microphone_info",
+            fields: &[
+                ("Microphone available", "available"),
+                ("Microphone enabled", "enabled"),
+                ("Room connected", "connected"),
+                ("Permission", "permission"),
+                ("Client window focus", "windowFocus"),
+                ("Local microphone track active", "transmitting"),
+                ("Active remote speakers (up to 32)", "speakers"),
+                ("Available input devices", "devices"),
+                ("Current input device", "device"),
+                #[cfg(target_arch = "wasm32")]
+                ("Input device choices", "choices"),
+                #[cfg(not(target_arch = "wasm32"))]
+                ("Capture sample rate (Hz)", "rate"),
+                #[cfg(not(target_arch = "wasm32"))]
+                ("Capture channels", "channels"),
+            ],
+            actions: &[],
+            inputs: &[
+                #[cfg(target_arch = "wasm32")]
+                DebugInput {
+                    label: "Input device choice",
+                    field: "choice",
+                    command: "/microphone_choice {value}",
+                    kind: DebugInputKind::Number {
+                        min: 0.0,
+                        max: 64.0,
+                        step: 1.0,
                     },
-                    DebugInput {
-                        label: "Smooth panning",
-                        field: "smooth",
-                        command: "/voice_panning smooth {value}",
-                        kind: DebugInputKind::Toggle,
+                },
+            ],
+        })
+        .add_debug_section(DebugSection {
+            title: "Nearby voice chat",
+            query: "/nearby_voice",
+            fields: &[
+                ("Island connected", "connected"),
+                ("Turned off by the scene", "sceneBlocked"),
+                ("Mic opens refused by the scene", "refusals"),
+                ("Local speaking", "speaking"),
+                ("Remote participants", "participants"),
+                ("Active speakers", "speakerCount"),
+                ("Speakers (up to 32)", "speakers"),
+                ("Subscribed microphone tracks (all rooms)", "tracks"),
+                ("Player audio sources (all transports)", "sources"),
+                (
+                    "Sources with a selected transport (all transports)",
+                    "assigned",
+                ),
+            ],
+            actions: &[],
+            inputs: &[
+                DebugInput {
+                    label: "Spatialize",
+                    field: "spatialize",
+                    command: "/voice_panning spatialize {value}",
+                    kind: DebugInputKind::Toggle,
+                },
+                DebugInput {
+                    label: "Smooth panning",
+                    field: "smooth",
+                    command: "/voice_panning smooth {value}",
+                    kind: DebugInputKind::Toggle,
+                },
+                DebugInput {
+                    label: "Stereo panning strength",
+                    field: "strength",
+                    command: "/voice_panning strength {value}",
+                    kind: DebugInputKind::Number {
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
                     },
-                    DebugInput {
-                        label: "Stereo panning strength",
-                        field: "strength",
-                        command: "/voice_panning strength {value}",
-                        kind: DebugInputKind::Number {
-                            min: 0.0,
-                            max: 1.0,
-                            step: 0.05,
-                        },
-                    },
-                ],
-            });
+                },
+            ],
+        });
     }
 }
 
@@ -116,6 +132,7 @@ fn microphone_info(
         system_bridge::settings::microphone_setting::MicrophoneDevices,
     >,
     #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
+    #[cfg(target_arch = "wasm32")] settings: Option<Res<system_bridge::settings::Settings>>,
 ) {
     let Some(Ok(_)) = input.take() else { return };
     let speakers: BTreeSet<_> = speakers.iter().map(|p| p.identity().to_string()).collect();
@@ -154,9 +171,69 @@ fn microphone_info(
                 })
         });
         report["device"] = json!(chosen.as_deref().unwrap_or("System Default"));
-        report["devices"] = json!(devices.read().iter().filter(|known| known.present).count());
+        report["devices"] = json!(devices.reported().then(|| devices
+            .read()
+            .iter()
+            .filter(|known| known.present)
+            .count()));
+        let setting = settings.as_ref().and_then(|settings| {
+            settings.settings.iter().find(|setting| {
+                setting.info.name == system_bridge::settings::microphone_setting::TITLE
+            })
+        });
+        report["choice"] = json!(setting.map(|setting| setting.info.value));
+        report["choices"] = json!(setting.map(|setting| {
+            setting
+                .info
+                .named_variants
+                .iter()
+                .enumerate()
+                .map(|(index, variant)| format!("{index}: {}", variant.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }));
+        report["unavailable"] = json!({
+            "devices": "The page has not listed its inputs",
+            "choice": "No Microphone setting",
+            "choices": "No Microphone setting",
+        });
     }
     input.reply_ok(report.to_string());
+}
+
+/// Choose the microphone by its index among the Microphone setting's choices (0 = System Default).
+#[cfg(target_arch = "wasm32")]
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/microphone_choice")]
+struct MicrophoneChoice {
+    index: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn microphone_choice(
+    mut input: ConsoleCommand<MicrophoneChoice>,
+    mut config: ResMut<AppConfig>,
+    settings: Option<ResMut<system_bridge::settings::Settings>>,
+) {
+    let Some(Ok(command)) = input.take() else {
+        return;
+    };
+    let Some(mut settings) = settings else {
+        input.reply_failed("No Microphone setting");
+        return;
+    };
+    if command.index.fract() != 0.0 || command.index < 0.0 {
+        input.reply_failed("The choice is a whole number from 0");
+        return;
+    }
+    match settings.set_value(
+        &mut config,
+        system_bridge::settings::microphone_setting::TITLE,
+        command.index,
+    ) {
+        Ok(()) => input.reply_ok(format!("Microphone choice {}", command.index)),
+        Err(error) => input.reply_failed(error.to_string()),
+    }
 }
 
 /// Inspect nearby voice membership and the current spatial playback settings.
