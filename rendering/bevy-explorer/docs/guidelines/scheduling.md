@@ -110,13 +110,16 @@ later in a loop. At most one tick stays in flight, so this happens at most once 
 the loop still ends at its deadline. A re-dispatch's reply that is late
 too is applied in the next frame. The movement scene tells a reply the engine has not applied
 yet from a takeover by the requested velocity it receives. The re-dispatch is sent the player's
-rotation as the late reply sets it, staged after each loop pass (`stage_redispatch_rotation`,
+rotation as the frame's movement sets it, staged after each loop pass (`stage_redispatch_rotation`,
 `SceneTickTiming::redispatch_rotation`): the engine applies the reply's orientation only in
 `PostUpdate` (`apply_rotation`, first in `PlayerUpdate`), and the scene turns from the rotation
 it is sent, so from the player's current rotation every other frame would continue a different
-chain of replies. A reply whose orientation the engine will not apply (a `movePlayerTo` facing
-holds), or the reply of a movement scene that no longer moves the player (a parcel scene's
-`AvatarMovement` took over), leaves the player's current rotation.
+chain of replies. The staging chooses the frame's movement as the pick in `PostLoop` will
+(`choose_latest_frame`, over the `AvatarMovement` changed since that pick last ran): a scene
+that takes over in the frame gives its rotation, and a reply that changes no movement, or comes
+from a scene the player has left, gives none. A choice the engine will not apply (none, or a
+`movePlayerTo` facing holds), or the reply of a movement scene that no longer moves the player
+(a parcel scene's `AvatarMovement` took over), leaves the player's current rotation.
 
 Everything downstream of the loop reads bevy components. A system that needs scene data never
 reads the CRDT store directly; it queries the component the `UpdateWorld` system wrote.
