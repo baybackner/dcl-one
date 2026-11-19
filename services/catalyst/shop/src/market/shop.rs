@@ -51,8 +51,9 @@ use recommendations::{
 use recommendations::{MIN_PERSONAL_ROWS, personal_rows};
 pub use recommendations::{aggregate_sales, rank_trending};
 
+use crate::content::Denylist;
 use crate::types::{ASSET_TYPE_ERC20, ASSET_TYPE_USD_PEGGED_MANA, ManaUsdRate};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
@@ -72,6 +73,7 @@ use super::catalog::{
 };
 use super::items::{USD_WEI_PER_CREDIT, mana_usd_rate, rate_to_numeric_string, recent_sales};
 use super::readers::{self, Ttl, cached, memoized};
+use super::search::{CreatorProfile, creator_profiles, directory_snapshot};
 use super::wire::{
     ApiError, ChainId, DataTotal, Network, Params, body_shapes_for_genders, emote_play_mode_clause,
     network_and_chain, where_from,
@@ -837,6 +839,10 @@ pub struct UnifiedItem {
     pub chain_id: ChainId,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub created_at: i64,
+    /// The creator's profile on the item and trending feeds (`name_creators`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub creator_profile: Option<CreatorProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -868,6 +874,10 @@ pub struct TopCreator {
     pub collections: i64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub items: i64,
+    /// Set by `get_top_creators`, never cached with the ranking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub profile: Option<CreatorProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1214,7 +1224,7 @@ pub async fn top_creators(
             .filter_map(|creator| {
                 let (volume, sales) = ranked.get(&creator).copied()?;
                 let (items, collections) = catalogue.get(&creator).copied().unwrap_or((0, 0));
-                (items >= TOP_CREATORS_MIN_ITEMS).then(|| TopCreator { id: creator, volume_wei: volume.to_string(), sales, total_sales: sales, collections, items })
+                (items >= TOP_CREATORS_MIN_ITEMS).then(|| TopCreator { id: creator, volume_wei: volume.to_string(), sales, total_sales: sales, collections, items, profile: None })
             })
             .collect();
         rows.sort_by(|a, b| b.volume_wei.parse::<u128>().unwrap_or(0).cmp(&a.volume_wei.parse::<u128>().unwrap_or(0)).then(a.id.cmp(&b.id)));
@@ -1304,9 +1314,16 @@ pub async fn get_unified_catalog(
     };
     let read = || async {
         match group_by {
-            UnifiedGroupBy::Item => unified_items(&state, &filters, rate)
-                .await
-                .and_then(|(data, total)| body_of(DataTotal { data, total })),
+            UnifiedGroupBy::Item => {
+                let (page, directory) = tokio::join!(
+                    unified_items(&state, &filters, rate),
+                    directory_snapshot(&state)
+                );
+                page.and_then(|(mut data, total)| {
+                    name_creators(directory.as_deref(), &state.denylist, data.iter_mut());
+                    body_of(DataTotal { data, total })
+                })
+            }
             UnifiedGroupBy::Listing => unified_listings(&state, &filters, rate)
                 .await
                 .and_then(|(data, total)| body_of(DataTotal { data, total })),
@@ -1401,13 +1418,38 @@ pub async fn get_trending_catalog(
     );
     let key = format!("trending:{first}:{days}:{:?}", req.filters);
     let body = memoized(&state, Ttl::S30, key, || async {
-        let data = trending_items(&state, Some(first), Some(days), &req.filters, rate).await?;
+        let (trending, directory) = tokio::join!(
+            trending_items(&state, Some(first), Some(days), &req.filters, rate),
+            directory_snapshot(&state)
+        );
+        let mut data = trending?;
+        name_creators(
+            directory.as_deref(),
+            &state.denylist,
+            data.iter_mut().map(|t| &mut t.item),
+        );
         body_of(TrendingResponseBody { data }).map_err(IntoResponse::into_response)
     })
     .await;
     match body {
         Ok(body) => (hour_cache(), Json(body.as_ref())).into_response(),
         Err(r) => r,
+    }
+}
+
+/// Sets each row's `creator_profile` from the creator directory, read beside
+/// the feed, so the overview's cards need no `/lambdas/profiles` request.
+fn name_creators<'a>(
+    directory: Option<&Value>,
+    denylist: &Denylist,
+    items: impl Iterator<Item = &'a mut UnifiedItem>,
+) {
+    let Some(directory) = directory else { return };
+    let mut items: Vec<&mut UnifiedItem> = items.collect();
+    let wanted: HashSet<String> = items.iter().map(|i| i.creator.to_lowercase()).collect();
+    let profiles = creator_profiles(directory, &wanted, denylist);
+    for item in &mut items {
+        item.creator_profile = profiles.get(&item.creator.to_lowercase()).cloned();
     }
 }
 
@@ -1517,14 +1559,25 @@ pub async fn get_top_creators(
         return r;
     }
     let p = Params::new(&pairs);
-    match top_creators(
-        &state,
-        finite_i64(p.get_number("first", None)),
-        finite_i64(p.get_number("days", None)),
-    )
-    .await
-    {
-        Ok(data) => (hour_cache(), Json(TopCreatorsResponseBody { data })).into_response(),
+    let (ranked, directory) = tokio::join!(
+        top_creators(
+            &state,
+            finite_i64(p.get_number("first", None)),
+            finite_i64(p.get_number("days", None)),
+        ),
+        directory_snapshot(&state)
+    );
+    match ranked {
+        Ok(mut data) => {
+            if let Some(directory) = directory.as_deref() {
+                let ids = data.iter().map(|c| c.id.clone()).collect();
+                let profiles = creator_profiles(directory, &ids, &state.denylist);
+                for creator in &mut data {
+                    creator.profile = profiles.get(&creator.id).cloned();
+                }
+            }
+            (hour_cache(), Json(TopCreatorsResponseBody { data })).into_response()
+        }
         Err(r) => r,
     }
 }
@@ -2134,9 +2187,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trending_takes_the_sales_cut_then_volume() {
-        let mk = |c: &str, i: &str| UnifiedItem {
+    fn unified_item(c: &str, i: &str) -> UnifiedItem {
+        UnifiedItem {
             source: "native".into(),
             acquisition: "trade".into(),
             trade_id: Some("t".into()),
@@ -2162,7 +2214,47 @@ mod tests {
             network: Network::Matic,
             chain_id: ChainId::MaticMainnet,
             created_at: 0,
+            creator_profile: None,
+        }
+    }
+
+    #[test]
+    fn the_feeds_name_their_creators_inline() {
+        let row = |creator: &str| UnifiedItem {
+            creator: creator.into(),
+            ..unified_item("0xc", "1")
         };
+        let mut items = vec![row("0xAA"), row("0xcc")];
+        let directory = json!([{ "address": "0xaa", "entity_id": "bafyquack", "name": "Quack", "face": null, "claimed": true, "names": ["Quack"], "items": 2, "collections": 1 }]);
+        let denylist = Denylist::default();
+        name_creators(None, &denylist, items.iter_mut());
+        assert!(items.iter().all(|i| i.creator_profile.is_none()));
+        name_creators(Some(&directory), &denylist, items.iter_mut());
+        let body = serde_json::to_value(&items).unwrap();
+        assert_eq!(
+            body[0]["creatorProfile"],
+            json!({ "name": "Quack", "face": null, "claimed": true })
+        );
+        assert!(
+            body[1].get("creatorProfile").is_none(),
+            "an unknown creator is left to the client: {}",
+            body[1]
+        );
+        // A denylisted profile entity leaves the feed, as /lambdas/profiles leaves it out.
+        denylist.set_remote(
+            "https://registry.example/denylist",
+            ["bafyquack".to_string()],
+        );
+        name_creators(Some(&directory), &denylist, items.iter_mut());
+        assert_eq!(
+            serde_json::to_value(&items[0].creator_profile).unwrap(),
+            json!({ "name": "", "face": null, "claimed": false })
+        );
+    }
+
+    #[test]
+    fn trending_takes_the_sales_cut_then_volume() {
+        let mk = unified_item;
         let sales = |c: &str, i: &str, n: usize, price: &str| {
             (0..n)
                 .map(|_| json!({"searchContractAddress": c, "searchItemId": i, "price": price}))
