@@ -587,7 +587,6 @@ def runtime_env(config):
             'MARKETPLACE_NFT_INDEX_ENABLED': 'true', 'LAND_AUTHZ_INDEX_ENABLED': 'true',
             'SHOP_RENTALS_INDEX_ENABLED': 'true',
             'ETH_RPC_URL': 'https://rpc.decentraland.org/mainnet',
-            'BUILDER_CONTENT_BUCKET_URL': 'https://builder-items.decentraland.org',
             # Credit prices need a MANA spot; the map (Places, the HUD's map, estate images) its grid.
             'PRICE_POLL_ENABLED': 'true', 'COINGECKO_URL': 'https://api.coingecko.com/api/v3',
             'PRICE_FALLBACK_SOURCES': 'coinbase=https://api.coinbase.com,binance=https://api.binance.com,'

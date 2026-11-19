@@ -65,13 +65,15 @@ export async function fetchCreatorItems(
 
 const MAX_COLLECTION_THUMBS = 4;
 
-export function collectionThumbsFrom(items: OrphanItem[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
+export type CollectionThumb = { url: string; signed: boolean };
+
+export function collectionThumbsFrom(items: OrphanItem[]): Map<string, CollectionThumb[]> {
+  const map = new Map<string, CollectionThumb[]>();
   for (const it of items) {
     if (!it.collection_id || !it.image) continue;
     const arr = map.get(it.collection_id) ?? [];
     if (arr.length >= MAX_COLLECTION_THUMBS) continue;
-    arr.push(it.image);
+    arr.push({ url: it.image, signed: it.imageSigned });
     map.set(it.collection_id, arr);
   }
   return map;
@@ -120,7 +122,7 @@ export type CollectionCardVM = {
   type: "collection" | "third_party";
   status: BuilderCollection["status"];
   count: number;
-  thumbs: string[];
+  thumbs: CollectionThumb[];
   pending?: boolean;
 };
 

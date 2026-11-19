@@ -195,6 +195,15 @@ impl ReadView {
     }
 }
 
+/// [`ReadView::chain_join`] and [`ReadView::published`] without a view, for
+/// a grant that only "published" opens: the copy never deletes a collection,
+/// so a row of any age shows it on chain, and a stale copy, or one without a
+/// complete pass, can only leave a collection the node holds no record of
+/// unpublished a while longer.
+pub(crate) fn published_by_any_pass() -> (&'static str, &'static str) {
+    (CHAIN_JOIN, PUBLISHED)
+}
+
 /// What the copy can tell, logged when it changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

@@ -1,4 +1,4 @@
-# ADR: The builder keeps item documents in order and stores only named, verified files
+# ADR: The builder keeps item documents in order, stores only named, verified files and serves them only to their readers
 
 - Status: Accepted
 - Date: 2026-11-19
@@ -39,6 +39,12 @@ The builder answers items as `github.com/decentraland/builder-server` at
 - **Naming grants nothing.** An item may name any hash. What proves a wallet
   holds a file is its own upload record (`builder.uploaded_contents`, one row
   per hash and uploader), never a name in an item.
+- **Each name has a writer.** Every row of `builder.item_contents` keeps
+  `named_by`, the wallet whose save wrote that name. A save keeps the writer
+  of a file and hash it re-sends, and of a hash the item already named
+  under another file name; only a hash the item didn't name takes the
+  saving signer. A name counts only while its writer holds an upload record
+  for its hash.
 - **Records follow names.** When a save or a delete leaves a hash no item
   names, its upload records go in the same transaction. The blob collector
   counts upload records and never a name a save writes: neither a hash in
@@ -48,25 +54,63 @@ The builder answers items as `github.com/decentraland/builder-server` at
   by a save or an upload. So it may take the bytes once no record and
   nothing else names them.
 - **A publication takes only uploaded files.** Both publications refuse an
-  item that names a hash its owner holds no upload record for. The
+  item with a name that doesn't count: a hash whose writer holds no upload
+  record for it. The
   publication snapshot computes it (`missing_content` in `SNAPSHOT_QUERY`,
   `services/catalyst/builder/src/publication.rs`); the tests
-  `a_standard_publication_takes_only_files_the_items_owner_uploaded` and
-  `a_linked_publication_takes_only_files_the_items_owner_uploaded` hold it.
+  `a_standard_publication_takes_only_files_each_names_writer_uploaded` and
+  `a_linked_publication_takes_only_files_each_names_writer_uploaded` hold it.
 - **Imported records.** Builder-server keeps no uploader, so the import
-  records each item's owner as an uploader of every hash the item names,
-  with the blob's size from the blob copy's inventory. A wallet whose
+  attributes every name to the item's owner and records that owner as an
+  uploader of every hash the item names, with the blob's size from the blob
+  copy's inventory. A wallet whose
   imported item names a hash therefore holds a record for it, whoever sent
   the bytes. The node treats an imported record as one written on upload:
   it protects the bytes from the collector, it satisfies a publication's
-  check, and what it lets a wallet read is the file routes' decision.
+  check, and it opens the file to that wallet as the file routes below
+  decide.
+- **Files are private until published.** The node serves item files from
+  its own blob store, at `GET` and `HEAD /v1/storage/contents/{hash}` and
+  the `exists` probe, and never redirects to a bucket. A request without a
+  signature reads a file only while a published item names it in a name
+  that counts. A standard item is published once its collection is; a
+  third-party item once the node submitted it. A signed request also reads a
+  file its signer holds an upload record for, and a file that an item the
+  signer owns, or a third-party item whose collection the signer manages,
+  names in a name that counts. On-chain roles, the committee and other
+  wallets read what an unsigned request reads.
+  `access::read_file` (`services/catalyst/builder/src/access.rs`) decides;
+  the table `tests/item_files.rs` holds it.
+- **A refusal reveals nothing.** A hash that isn't a canonical CID, a
+  withheld hash, a private file and a hash with no file all answer the same
+  404 with `Cache-Control: no-store`, and the probe answers 404 `{ok:true}`
+  for each. A signature that doesn't verify answers 401 whatever the hash.
+- **Bytes never become active content.** The node reads the file's type
+  from its first bytes, never from its upload; a type that isn't a media
+  type is sent as an attachment, and every answer carries
+  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`.
+  An unsigned answer is cached publicly for a year, since a hash names its
+  bytes for good; a signed answer is `private, no-store`.
 
 ## Consequences
 
 - No file is stored that its item doesn't name, so what an owner stores
   beyond what its items name is bounded by what is in flight.
-- The file routes can decide a private file by the reader's upload records
-  and the items that name it; a hash learned from elsewhere opens nothing.
+- A hash learned from elsewhere opens nothing: naming it in an item, even a
+  published one, makes it readable only when the wallet that wrote the name
+  uploaded the bytes.
+- A save or a delete that leaves no item naming a hash removes its upload
+  records, so the file is refused at once and the collector may take the
+  bytes. A record that no item names, such as an imported record whose
+  item is gone or a blob of a retired scene project, stays readable by its
+  uploader alone.
+- The decision reads no committee and no fresh chain fact. The chain copy
+  never removes a collection, so a stale copy, or one without a complete
+  pass, can only leave a collection the node holds no record of unpublished
+  a while longer.
+- A client that shows a draft's file signs that request, so a browser
+  fetches the bytes with the signature headers and shows them through an
+  object URL.
 - A database the release hasn't run on keeps `jsonb` documents and one
   upload record per hash until the release
   `schemas/releases/builder-item-documents-and-uploaders.sql` runs

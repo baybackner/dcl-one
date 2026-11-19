@@ -14,6 +14,7 @@ import {
   type CollectionCardVM,
 } from "@/data/lib/catalyst/builder/collections";
 import { listCollectionDrafts, type CollectionDraftSummary } from "@/data/lib/catalyst/builder/collection-drafts";
+import { useSignedObjectUrls } from "@/features/creator-hub/wearables-home/useSignedObjectUrls";
 import { deleteWearableDraft, listItemDrafts, type ItemDraftSummary } from "@/data/lib/catalyst/builder/drafts";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoader } from "@/core/lib/telemetry/page-loader";
@@ -79,7 +80,15 @@ function WearablesHome({
     return () => controller.abort();
   }, [isConnected, address, authFetch, listRetry]);
   const ownList = isConnected && listState?.address === address ? listState : null;
-  const collections = ownList?.collections ?? [];
+  const listed = ownList?.collections ?? [];
+  const objectUrls = useSignedObjectUrls(
+    listed.flatMap(collection => (collection.thumbs[0]?.signed ? [collection.thumbs[0].url] : [])),
+    authFetch as typeof fetch,
+  );
+  const collections = listed.map(collection => ({
+    ...collection,
+    thumbs: collection.thumbs.flatMap(thumb => (thumb.signed ? objectUrls.get(thumb.url) ?? [] : [thumb.url])),
+  }));
   const [draftState, setDraftState] = useState<{ address: string; rows: ItemDraftSummary[]; collections: CollectionDraftSummary[]; error: boolean } | null>(null);
   const [draftRetry, setDraftRetry] = useState(0);
   useEffect(() => {

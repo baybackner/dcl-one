@@ -69,7 +69,7 @@ export const BuilderCollectionSchema = z
       status: statusOf(row),
       pending: row.lock !== null,
       count: Number(row.item_count),
-      thumbs: [] as string[],
+      thumbs: [] as { url: string; signed: boolean }[],
     };
   });
 export type BuilderCollection = z.infer<typeof BuilderCollectionSchema>;
@@ -111,6 +111,7 @@ export function orphanItem(row: OrphanItemRow, storage = ""): OrphanItem {
     updatedAt: row.updated_at,
     grad: null,
     image: thumbnail ? `${storage}/v1/storage/contents/${encodeURIComponent(thumbnail)}` : null,
+    imageSigned: !row.is_published,
     collection_id: row.collection_id,
   };
 }
@@ -124,6 +125,7 @@ export type OrphanItem = {
   updatedAt: number | null;
   grad: string | null;
   image: string | null;
+  imageSigned: boolean;
   collection_id: string | null;
 };
 

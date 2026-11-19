@@ -13,11 +13,6 @@ pub struct CreateConfig {
     #[arg(long, env = "CREATE_WRITES_ENABLED", default_value_t = false, action = clap::ArgAction::Set)]
     pub create_writes_enabled: bool,
 
-    /// Public http(s) URL of the item content bucket; unset, a storage miss
-    /// answers 404 instead of the 301.
-    #[arg(long, env = "BUILDER_CONTENT_BUCKET_URL")]
-    pub builder_content_bucket_url: Option<String>,
-
     /// The Foundation's builder API a linked publication is verified against
     /// (the mirror posture's: Decentraland's); empty answers that route 503.
     #[arg(long, env = "BUILDER_FOUNDATION_URL", default_value = "")]
@@ -105,10 +100,7 @@ mod tests {
         let cli = parse(&["x", "--database-url", "postgres:///catalyst"]).unwrap();
         let c = cli;
         assert!(!c.create.create_writes_enabled, "creator writes are opt-in");
-        assert!(
-            c.create.builder_content_bucket_url.is_none()
-                && c.create.builder_polygon_rpc_url.is_none()
-        );
+        assert!(c.create.builder_polygon_rpc_url.is_none());
         assert_eq!(c.create.builder_admin_addresses, "");
         assert!(c.create.catalyrst_builder_admin_token.is_none());
         assert!(

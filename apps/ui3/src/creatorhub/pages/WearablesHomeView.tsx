@@ -378,7 +378,7 @@ function fallbackGrad(i: number): string {
 }
 
 function isImageRef(t: string): boolean {
-  return /^(https?:)?\/\//i.test(t) || t.startsWith("/") || t.startsWith("data:");
+  return /^(https?:)?\/\//i.test(t) || t.startsWith("/") || t.startsWith("data:") || t.startsWith("blob:");
 }
 
 function thumbStyle(c: CwhCollectionCard, i: number): CSSProperties {

@@ -774,7 +774,6 @@ pub async fn serve(
             eip1654.clone(),
             builder::Settings::parse(builder::RawSettings {
                 writes_enabled: config.create.create_writes_enabled,
-                content_bucket_url: config.create.builder_content_bucket_url.clone(),
                 polygon_rpc_url: config.create.builder_polygon_rpc_url.clone(),
                 admin_addresses: config.create.builder_admin_addresses.clone(),
                 admin_token: config.create.catalyrst_builder_admin_token.clone(),

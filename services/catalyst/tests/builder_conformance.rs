@@ -1942,11 +1942,12 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .await
         .unwrap_or_else(|e| panic!("seed.json item {}: {e}", i.id));
         for (position, (file, hash)) in i.contents.iter().enumerate() {
-            sqlx::query("INSERT INTO builder.item_contents (item_id, file, hash, position) VALUES ($1, $2, $3, $4)")
+            sqlx::query("INSERT INTO builder.item_contents (item_id, file, hash, position, named_by) VALUES ($1, $2, $3, $4, $5)")
                 .bind(i.id)
                 .bind(file)
                 .bind(hash)
                 .bind(position as i32)
+                .bind(&seed.wallets[&i.owner])
                 .execute(pool)
                 .await
                 .unwrap_or_else(|e| panic!("seed.json item {} contents: {e}", i.id));

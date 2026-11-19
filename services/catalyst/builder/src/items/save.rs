@@ -241,6 +241,19 @@ pub(crate) async fn lock_item(
     Ok(())
 }
 
+/// A save's contents, each name attributed to the wallet that wrote it: the
+/// writer of the same file and hash before the save, else of the same hash
+/// under another file (one holding an upload record for it first), else the
+/// saving signer `$7`.
+const NAMED_CONTENTS: &str = "INSERT INTO builder.item_contents (item_id, file, hash, position, named_by) \
+     SELECT $1, t.f, t.h, (t.n - 1)::int, COALESCE( \
+       (SELECT p.w FROM unnest($4::text[], $5::text[], $6::text[]) AS p(f, h, w) WHERE p.f = t.f AND p.h = t.h), \
+       (SELECT p.w FROM unnest($4::text[], $5::text[], $6::text[]) AS p(f, h, w) WHERE p.h = t.h \
+          ORDER BY EXISTS (SELECT 1 FROM builder.uploaded_contents u WHERE u.hash = p.h AND u.uploaded_by = p.w) DESC, p.w \
+          LIMIT 1), \
+       $7) \
+     FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t(f, h, n)";
+
 /// Drops the upload records of `hashes` that no item names any more.
 pub(crate) async fn forget_unnamed(
     tx: &mut Transaction<'_, Postgres>,
@@ -392,25 +405,32 @@ impl ItemsComponent {
         .bind(keep_video)
         .execute(&mut *tx)
         .await?;
-        let previous: Vec<String> = sqlx::query_scalar(
-            "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING hash",
+        let previous: Vec<(String, String, String)> = sqlx::query_as(
+            "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING file, hash, named_by",
         )
         .bind(id)
         .fetch_all(&mut *tx)
         .await?;
         let files: Vec<&str> = input.contents.iter().map(|(f, _)| f.as_str()).collect();
         let hashes: Vec<&str> = input.contents.iter().map(|(_, h)| h.as_str()).collect();
-        sqlx::query(
-            "INSERT INTO builder.item_contents (item_id, file, hash, position) \
-             SELECT $1, f, h, (n - 1)::int FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t(f, h, n)",
-        )
-        .bind(id)
-        .bind(&files)
-        .bind(&hashes)
-        .execute(&mut *tx)
-        .await?;
+        let (before_files, before_hashes, before_writers): (Vec<&str>, Vec<&str>, Vec<&str>) =
+            previous
+                .iter()
+                .map(|(f, h, w)| (f.as_str(), h.as_str(), w.as_str()))
+                .collect();
+        sqlx::query(NAMED_CONTENTS)
+            .bind(id)
+            .bind(&files)
+            .bind(&hashes)
+            .bind(&before_files)
+            .bind(&before_hashes)
+            .bind(&before_writers)
+            .bind(save.signer())
+            .execute(&mut *tx)
+            .await?;
         let dropped: Vec<String> = previous
             .into_iter()
+            .map(|(_, h, _)| h)
             .filter(|h| !hashes.contains(&h.as_str()))
             .collect();
         forget_unnamed(&mut tx, &dropped).await?;

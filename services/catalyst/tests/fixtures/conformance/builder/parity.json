@@ -183,6 +183,45 @@
       "text": "PUT /v1/items/:idOrURN: beyond builder-server's schema, the node refuses with 400 Invalid request body a contents value that is not a content hash, a contents key that is not a relative file path, more than 256 contents entries, mappings under a network the schema doesn't name or for a contract key that is not an address, an empty price or beneficiary, and a name blank once trimmed. Upstream stores them (mappings it can't name as an empty object).",
       "captures": [],
       "anchors": []
+    },
+    "item-files-from-disk": {
+      "text": "GET and HEAD /v1/storage/contents/:hash: upstream answers every request with 301 to its bucket (<bucket>/contents/<hash>, a text/plain body naming the target, an immutable public Cache-Control). The node keeps item files on its own disk and answers a file it serves itself: 200, or 206 for a Range, with the file's bytes and its Content-Type read from the bytes, never from the upload (an attachment unless it is a media type, always nosniff and sandboxed), cached publicly for an unsigned request and private, no-store for a signed one. A client that follows the redirect receives the same bytes.",
+      "captures": [
+        "source/248-storage-published-unsigned.json",
+        "source/249-storage-published-head.json",
+        "source/251-storage-draft-owner.json"
+      ],
+      "anchors": [
+        "status: fixture=301 candidate=200"
+      ]
+    },
+    "item-files-private-until-published": {
+      "text": "The node serves an unpublished item's file only to its readers. Each name in an item is attributed to the wallet whose save wrote it, and a name counts only while that wallet holds an upload record for the hash. An unsigned request gets a file only while a published item (a standard item once its collection is on chain, a third-party item once the node submitted it) names it in a name that counts; a signed request also gets a file its signer uploaded, or one that an item it owns, or a third-party item whose collection it manages, names in a name that counts. Any other request gets the 404 a hash with no file gets. Upstream redirects every request to its public bucket, so a client that loads a draft's file without a signature must sign that request.",
+      "captures": [
+        "source/250-storage-draft-unsigned.json",
+        "source/252-storage-draft-stranger.json"
+      ],
+      "anchors": [
+        "status: fixture=301 candidate=404"
+      ]
+    },
+    "item-files-absent": {
+      "text": "GET /v1/storage/contents/:hash of a hash the node holds no file for: upstream redirects it to its bucket like any other hash; the node answers 404 with the error envelope and Cache-Control: no-store.",
+      "captures": [
+        "source/253-storage-unknown-unsigned.json"
+      ],
+      "anchors": [
+        "status: fixture=301 candidate=404"
+      ]
+    },
+    "item-files-exists-private": {
+      "text": "GET /v1/storage/contents/:hash/exists answers 200 {ok:true} only for a file the caller may read as GET /v1/storage/contents/:hash decides (deliberate gap item-files-private-until-published), and 404 {ok:true} for any other, a private file included. Upstream's probe answers 200 for any file its bucket holds.",
+      "captures": [
+        "source/255-storage-exists-draft-unsigned.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=404"
+      ]
     }
   },
   "operations": [
@@ -855,6 +894,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/243-item-create-folder-and-empty-entries.json",
           "scope": "PUT /items/{id} signed by the owner, creating an item whose contents name a folder entry and an empty file as the old builder web packages them.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/246-item-create-private-draft.json",
+          "scope": "PUT /items/{id} signed by the owner, creating an item with no collection whose model no other item names.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -1038,6 +1082,11 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/244-item-files-folder-and-empty-entries.json",
           "scope": "POST /items/{id}/files signed by the owner, the model and the folder entry and empty file under the empty-content hash, as the old builder web sends them.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/247-item-files-private-draft.json",
+          "scope": "POST /items/{id}/files signed by the owner, uploading the model of the item with no collection.",
           "replay": []
         }
       ],
@@ -2839,29 +2888,170 @@
     {
       "id": "api_http:GET:/v1/storage/contents/:filename",
       "owner": "item-files",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "Unsigned reads of a file a minted item names and of a hash nobody uploaded, and an unsigned, the owner's and a stranger's read of a file only an item with no collection names, were compared; the node answers the file's bytes from its disk to whoever may read it and 404 to anyone else, where upstream redirects every request to its bucket. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/248-storage-published-unsigned.json",
+          "scope": "GET /storage/contents/{hash} unsigned, the model a minted item names.",
+          "replay": [
+            "status: fixture=301 candidate=200",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=<missing>",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=\"conformance model glb\""
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=200": "deliberate:item-files-from-disk",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"": "deliberate:item-files-from-disk",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=<missing>": "deliberate:item-files-from-disk",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=\"conformance model glb\"": "deliberate:item-files-from-disk"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/250-storage-draft-unsigned.json",
+          "scope": "GET /storage/contents/{hash} unsigned, the model only an item with no collection names.",
+          "replay": [
+            "status: fixture=301 candidate=404",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\""
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=404": "deliberate:item-files-private-until-published",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"": "deliberate:item-files-private-until-published",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"": "deliberate:item-files-private-until-published",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>": "deliberate:item-files-private-until-published",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\"": "deliberate:item-files-private-until-published"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/251-storage-draft-owner.json",
+          "scope": "GET /storage/contents/{hash} signed by the owner, the model of its item with no collection.",
+          "replay": [
+            "status: fixture=301 candidate=200",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"private, no-store\"",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"conformance draft model glb\""
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=200": "deliberate:item-files-from-disk",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"private, no-store\"": "deliberate:item-files-from-disk",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"": "deliberate:item-files-from-disk",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>": "deliberate:item-files-from-disk",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"conformance draft model glb\"": "deliberate:item-files-from-disk"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/252-storage-draft-stranger.json",
+          "scope": "GET /storage/contents/{hash} signed by a wallet with no role on the item, the model of an item with no collection.",
+          "replay": [
+            "status: fixture=301 candidate=404",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\""
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=404": "deliberate:item-files-private-until-published",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"": "deliberate:item-files-private-until-published",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"": "deliberate:item-files-private-until-published",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=<missing>": "deliberate:item-files-private-until-published",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\"": "deliberate:item-files-private-until-published"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/253-storage-unknown-unsigned.json",
+          "scope": "GET /storage/contents/{hash} unsigned, a hash nobody uploaded.",
+          "replay": [
+            "status: fixture=301 candidate=404",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=<missing>",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\""
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=404": "deliberate:item-files-absent",
+            "header cache-control: fixture=\"public,max-age=31536000,immutable\" candidate=\"no-store\"": "deliberate:item-files-absent",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/json\"": "deliberate:item-files-absent",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=<missing>": "deliberate:item-files-absent",
+            "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\"": "deliberate:item-files-absent"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:item-files-absent",
+        "deliberate:item-files-from-disk",
+        "deliberate:item-files-private-until-published",
+        "open:item-curation-publicity"
+      ],
+      "remaining_verification": "Compare a third-party item's file before and after its submission, and a Range request. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
     {
       "id": "api_http:HEAD:/v1/storage/contents/:filename",
       "owner": "item-files",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "The unsigned HEAD of a file a minted item names was compared; the node answers the file's headers from its disk where upstream redirects to its bucket. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/249-storage-published-head.json",
+          "scope": "HEAD /storage/contents/{hash} unsigned, the model a minted item names.",
+          "replay": [
+            "status: fixture=301 candidate=200",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=<missing>"
+          ],
+          "explained_by": {
+            "status: fixture=301 candidate=200": "deliberate:item-files-from-disk",
+            "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"": "deliberate:item-files-from-disk",
+            "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=<missing>": "deliberate:item-files-from-disk"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:item-files-from-disk",
+        "open:item-curation-publicity"
+      ],
+      "remaining_verification": "Compare a HEAD of a draft's file signed and unsigned. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
     {
       "id": "api_http:GET:/v1/storage/contents/:filename/exists",
       "owner": "item-files",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "known_gap",
+      "result": "The unsigned probe of a file a minted item names and of a hash nobody uploaded, and the unsigned and the owner's probe of a file only an item with no collection names, were compared; they match but for the unsigned probe of the draft's file, which the node answers 404 {ok:true} as for an absent file. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/254-storage-exists-published-unsigned.json",
+          "scope": "GET /storage/contents/{hash}/exists unsigned, the model a minted item names.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/255-storage-exists-draft-unsigned.json",
+          "scope": "GET /storage/contents/{hash}/exists unsigned, the model only an item with no collection names.",
+          "replay": [
+            "status: fixture=200 candidate=404"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=404": "deliberate:item-files-exists-private"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/256-storage-exists-draft-owner.json",
+          "scope": "GET /storage/contents/{hash}/exists signed by the owner, the model of its item with no collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/257-storage-exists-unknown-unsigned.json",
+          "scope": "GET /storage/contents/{hash}/exists unsigned, a hash nobody uploaded.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:item-files-exists-private",
+        "open:item-curation-publicity"
+      ],
+      "remaining_verification": "Compare the probe of a third-party item's file before and after its submission."
     },
     {
       "id": "api_http:POST:/v1/newsletter",
@@ -2890,9 +3080,9 @@
       "anchors": []
     },
     "item-curation-publicity": {
-      "text": "The node keeps no item curations: a third-party item's is_published is the node's record of its submission, its isMappingComplete is whether it has mappings, a third-party item's URN change and delete are refused once it is submitted, and the synced and third-party status filters match nothing. Upstream reads item curations: a by-id read of a third-party item answers is_published from its collection's latest item curation, so a never-submitted item of a collection with any curated item is public to any signer, while lists answer each item's own; isMappingComplete is the latest curation's flag; the URN change and delete refusals follow the item's own curations; synced and status match items by their latest curation.",
+      "text": "The node keeps no item curations: a third-party item's is_published is the node's record of its submission, its isMappingComplete is whether it has mappings, a third-party item's URN change and delete are refused once it is submitted, the synced and third-party status filters match nothing, and the file routes (GET and HEAD /v1/storage/contents/:hash, its exists probe) treat a third-party item as published only once the node holds its own linked submission of it, so the file of a third-party item curated elsewhere, such as an imported one, answers 404 to an unsigned request and to anyone but its readers. Upstream reads item curations: a by-id read of a third-party item answers is_published from its collection's latest item curation, so a never-submitted item of a collection with any curated item is public to any signer, while lists answer each item's own; isMappingComplete is the latest curation's flag; its file routes redirect every hash to its public bucket; the URN change and delete refusals follow the item's own curations; synced and status match items by their latest curation.",
       "captures": [],
-      "closes": "The node keeps item curations and answers each item's published state, mapping flag and curation filters from them, a by-id read from the item's own curation.",
+      "closes": "The node keeps item curations and answers each item's published state, mapping flag and curation filters from them, a by-id read from the item's own curation, and the file routes take a third-party item with an item curation as published.",
       "anchors": []
     },
     "lock": {

@@ -9,16 +9,16 @@
 //! asset packs or scene files. Schema `builder` (`schemas/50_create.sql`).
 //!
 //! What it reuses: the ONE pool; the ONE `http::Outbound` client for the
-//! content bucket HEAD probes, the Polygon RPC and the newsletter forward;
-//! the ONE blob store (`storage`) for uploaded item files, by hash; signed
+//! Polygon RPC and the newsletter forward; the ONE blob store (`storage`)
+//! for uploaded item files, by hash, which it serves itself (who
+//! may read a file is [`access::read_file`]); signed
 //! fetch through `src/auth` and the shared verifier the explore and social
 //! routes use (`shared::signed_fetch`, [`auth`]); the marketplace subgraph
 //! readers (`marketplace::graph`) where the old code read the squid
 //! ([`onchain`]); the shop's copy of the Polygon collections subgraph,
 //! read by shared SQL, for a collection's published and approved state
 //! ([`chain_state`]: 503 while the copy can't tell) and the chain facts a
-//! collection's body and listings merge ([`collections`]); `shared::cache::TtlMap`
-//! for the in-process memos. The one
+//! collection's body and listings merge ([`collections`]). The one
 //! client it does not share is the Foundation review's
 //! (`linked_publication_review::foundation_client`: guarded as the shared
 //! one, but no redirects; the reason is in that module). Every write goes behind
@@ -40,9 +40,7 @@
 //! the shared verifier's 5 minutes (the old required path allowed 30); the
 //! subgraph readers replace the squid side pool (empty curation listings
 //! without a collections subgraph, as the old node answered without its
-//! pool); `BUILDER_CONTENT_BUCKET_URL` is
-//! optional (unset: an unknown storage hash answers 404 instead of the 301);
-//! `BUILDER_POLYGON_RPC_URL`
+//! pool); `BUILDER_POLYGON_RPC_URL`
 //! must be https to a public host (a plaintext verifier could be fed a fake
 //! receipt); `is_approved` is the declared projection of `curation_status`
 //! (`linked_publication_review::finish_linked_publication`).
@@ -88,7 +86,6 @@ pub mod writes;
 pub(crate) mod tests;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::bail;
 use axum::Router;
@@ -97,7 +94,6 @@ use axum::routing::{get, patch, post};
 use sqlx::PgPool;
 
 use crate::chain_index::ChainIndex;
-use crate::shared::cache::TtlMap;
 use crate::storage::Storage;
 use dcl_auth::eip1654::Eip1654Validator;
 use dcl_http::Outbound;
@@ -105,8 +101,6 @@ use dcl_http::Outbound;
 use items::{ItemsComponent, NewsletterComponent};
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_BUILDER_ADMIN_TOKEN";
-const EXISTS_TTL: Duration = Duration::from_secs(300);
-const EXISTS_CACHE_MAX: usize = 8192;
 /// One 20 MiB upload with its framing.
 const UPLOAD_BODY_LIMIT: usize = 21 * 1024 * 1024;
 
@@ -125,9 +119,6 @@ pub struct NewsletterForward {
 pub struct RawSettings {
     /// `CREATE_WRITES_ENABLED` (false).
     pub writes_enabled: bool,
-    /// `BUILDER_CONTENT_BUCKET_URL`: the item content bucket the storage
-    /// route redirects to and its `exists` probe asks.
-    pub content_bucket_url: Option<String>,
     /// `BUILDER_POLYGON_RPC_URL`: the Polygon JSON-RPC that verifies
     /// publication receipts; unset refuses begin/claim/verify with 503.
     pub polygon_rpc_url: Option<String>,
@@ -146,7 +137,6 @@ pub struct RawSettings {
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
     pub writes_enabled: bool,
-    pub content_bucket_url: Option<String>,
     pub polygon_rpc_url: Option<String>,
     pub admin_addresses: Vec<String>,
     pub admin_token: Option<String>,
@@ -174,13 +164,6 @@ impl Settings {
     /// The old `Config::from_env` checks over [`RawSettings`], plus the
     /// upstream guards every configured endpoint passes in v2.
     pub fn parse(raw: RawSettings) -> anyhow::Result<Self> {
-        let content_bucket_url =
-            non_empty(&raw.content_bucket_url).map(|u| u.trim_end_matches('/').to_string());
-        if let Some(url) = &content_bucket_url
-            && !dcl_http::is_safe_http_url(url)
-        {
-            bail!("BUILDER_CONTENT_BUCKET_URL must be a public http(s) URL");
-        }
         let polygon_rpc_url = non_empty(&raw.polygon_rpc_url);
         if let Some(url) = &polygon_rpc_url {
             let parsed = url::Url::parse(url)
@@ -219,7 +202,6 @@ impl Settings {
         }
         Ok(Self {
             writes_enabled: raw.writes_enabled,
-            content_bucket_url,
             polygon_rpc_url,
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
             admin_token: non_empty(&raw.admin_token),
@@ -246,7 +228,6 @@ pub struct State {
     pub denylist: Arc<crate::content::Denylist>,
     /// The current curation committee (`committee`), kept an hour.
     pub committee: committee::Committee,
-    pub(crate) exists_memo: TtlMap<String, bool>,
 }
 
 pub type SharedState = Arc<State>;
@@ -271,15 +252,13 @@ impl State {
             eip1654,
             denylist,
             committee: committee::Committee::default(),
-            exists_memo: TtlMap::bounded(EXISTS_TTL, EXISTS_CACHE_MAX),
         })
     }
 
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "bucket={} polygon_rpc={} collections_reader={} admins={} newsletter={}",
-            self.settings.content_bucket_url.is_some(),
+            "polygon_rpc={} collections_reader={} admins={} newsletter={}",
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),
@@ -375,7 +354,7 @@ fn api_routes() -> Router<SharedState> {
         )
         .route(
             "/v1/storage/contents/{hash}/exists",
-            get(handlers::storage::head_storage_content_exists),
+            get(handlers::storage::get_storage_content_exists),
         )
         .route(
             "/v1/newsletter",
@@ -413,7 +392,6 @@ mod router_tests {
         let s = Settings::parse(RawSettings {
             admin_addresses: " 0xABC, ,0xdef ".into(),
             admin_token: Some("  ".into()),
-            content_bucket_url: Some("https://builder-items.decentraland.org/".into()),
             polygon_rpc_url: Some("https://polygon-rpc.com".into()),
             newsletter_service_url: Some("https://api.beehiiv.com/v2".into()),
             newsletter_publication_id: Some("pub_1".into()),
@@ -423,10 +401,6 @@ mod router_tests {
         .unwrap();
         assert_eq!(s.admin_addresses, vec!["0xabc", "0xdef"]);
         assert_eq!(s.admin_token, None, "a blank token is unset");
-        assert_eq!(
-            s.content_bucket_url.as_deref(),
-            Some("https://builder-items.decentraland.org")
-        );
         assert!(
             s.newsletter.is_none(),
             "the forward needs all three settings"
@@ -441,13 +415,6 @@ mod router_tests {
         assert!(
             err.contains("http:// to rpc.example") && !err.contains("SECRET"),
             "{err}"
-        );
-        assert!(
-            Settings::parse(RawSettings {
-                content_bucket_url: Some("http://127.0.0.1:9/".into()),
-                ..RawSettings::default()
-            })
-            .is_err()
         );
         assert!(
             Settings::parse(RawSettings {

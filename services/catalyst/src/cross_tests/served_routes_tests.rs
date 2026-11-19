@@ -243,6 +243,35 @@ impl Rig {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO builder.collections (id, name, eth_address, contract_address) VALUES ($1, 'served routes', $2, $3)",
+        )
+        .bind(corpus.community)
+        .bind(&user)
+        .bind(format!("0x{}", &corpus.community.simple().to_string()[..20].repeat(2)))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let item = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id) \
+             VALUES ($1, $2, $3, 'served routes', 'wearable', '0')",
+        )
+        .bind(item)
+        .bind(corpus.community)
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
+        )
+        .bind(item)
+        .bind(&corpus.hash)
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
         let deployment: i32 = sqlx::query_scalar(
             "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, \
                  entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
@@ -361,6 +390,16 @@ impl Rig {
             .await
             .unwrap();
         sqlx::query("DELETE FROM social.communities WHERE id = $1")
+            .bind(corpus.community)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM builder.items WHERE collection_id = $1")
+            .bind(corpus.community)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM builder.collections WHERE id = $1")
             .bind(corpus.community)
             .execute(&self.pool)
             .await

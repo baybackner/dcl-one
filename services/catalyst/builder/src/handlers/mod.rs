@@ -7,6 +7,7 @@ pub mod linked_publication;
 pub mod newsletter;
 pub mod publication;
 pub mod storage;
+pub mod svg;
 
 pub async fn ping() -> &'static str {
     "pong"

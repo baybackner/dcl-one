@@ -384,12 +384,17 @@ async fn verify_answers_503_while_no_foundation_is_named() {
 }
 
 #[tokio::test]
-async fn a_linked_publication_takes_only_files_the_items_owner_uploaded() {
+async fn a_linked_publication_takes_only_files_each_names_writer_uploaded() {
     use super::publication_preparation::{Uploader, name_files};
     let Some(store) = scratch_component().await else {
         return;
     };
-    for uploaded in [Uploader::Nobody, Uploader::AnotherWallet, Uploader::Owner] {
+    for uploaded in [
+        Uploader::Nobody,
+        Uploader::AnotherWallet,
+        Uploader::NamedByAnother,
+        Uploader::Owner,
+    ] {
         let id = Uuid::new_v4();
         super::support::save_collection(
             &store,

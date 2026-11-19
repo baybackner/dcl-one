@@ -912,10 +912,11 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO builder.item_contents (item_id, file, hash) VALUES ($1, 'model.glb', $2)",
+            "INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
         )
         .bind(item)
         .bind(&named)
+        .bind(owner)
         .execute(&pool)
         .await
         .unwrap();

@@ -85,8 +85,25 @@ describe("when the node answers an address's collection rows", () => {
     const genesis = rows.find((c) => c.name === "Genesis Threads")!;
     const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), collection_id: genesis.id }], "https://builder.test");
     expect(mergeCollectionThumbs(rows, [item]).find((c) => c.id === genesis.id)!.thumbs).toEqual([
-      "https://builder.test/v1/storage/contents/bafkreicjyysmiyonyudrmq6ejc6b7m42uma5fcnqoy6h4frcmugd7jtfma",
+      { url: "https://builder.test/v1/storage/contents/bafkreicjyysmiyonyudrmq6ejc6b7m42uma5fcnqoy6h4frcmugd7jtfma", signed: false },
     ]);
+  });
+
+  describe("and the item that names the thumbnail is not published", () => {
+    let genesisId: string;
+    let thumbs: unknown;
+
+    beforeEach(() => {
+      genesisId = rows.find((c) => c.name === "Genesis Threads")!.id;
+      const [item] = parseOrphanItems([{ ...(ITEMS[0] as object), collection_id: genesisId, is_published: false }], "https://builder.test");
+      thumbs = mergeCollectionThumbs(rows, [item]).find((c) => c.id === genesisId)!.thumbs;
+    });
+
+    it("should mark the thumbnail as one only a signed request reads", () => {
+      expect(thumbs).toEqual([
+        { url: "https://builder.test/v1/storage/contents/bafkreicjyysmiyonyudrmq6ejc6b7m42uma5fcnqoy6h4frcmugd7jtfma", signed: true },
+      ]);
+    });
   });
 });
 

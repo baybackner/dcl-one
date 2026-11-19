@@ -3,8 +3,8 @@
 //! `CREATE_WRITES_ENABLED=true` and a complete, fresh pass of the Polygon
 //! collections copy (`MARKETPLACE_MIRRORS_ENABLED=true` with
 //! `MATIC_COLLECTIONS_SUBGRAPH_URL`): the builder answers 503 without it. A random wallet saves a collection and the old publication vector's item
-//! over signed fetch, uploads its model and thumbnail (served back from the
-//! ONE blob store), reads its drafts, a curator approves the item (the
+//! over signed fetch, uploads its model and thumbnail (served back to it, and
+//! only to it, from the ONE blob store), reads its drafts, a curator approves the item (the
 //! operator bearer and the `BUILDER_ADMIN_ADDRESSES` wallet), and the
 //! prepared publication matches the vector byte for byte
 //! (`1:w:Hat:A blue hat:hat:BaseFemale,BaseMale`, `DCL-MYCLLCTN`, chain
@@ -393,20 +393,45 @@ async fn the_creator_plane_end_to_end_against_a_running_node() {
     assert_eq!(uploaded.body["data"]["thumbnail.png"], thumb_hash);
 
     let stored = node
-        .get(&format!("{BUILDER}/v1/storage/contents/{thumb_hash}"))
+        .signed(
+            &owner,
+            "get",
+            &format!("{BUILDER}/v1/storage/contents/{thumb_hash}"),
+            None,
+        )
         .await;
     assert_eq!(stored.status, 200);
     assert_eq!(
         stored.bytes, thumb,
-        "the thumbnail is served back from the ONE blob store"
+        "the thumbnail is served back to its owner from the ONE blob store"
     );
     assert_eq!(stored.header("content-type"), "image/png");
+    assert_eq!(stored.header("cache-control"), "private, no-store");
+    assert_eq!(
+        node.get(&format!("{BUILDER}/v1/storage/contents/{thumb_hash}"))
+            .await
+            .status,
+        404,
+        "a draft's file is refused to an unsigned request"
+    );
+    assert_eq!(
+        node.signed(
+            &owner,
+            "get",
+            &format!("/v1/storage/contents/{thumb_hash}/exists"),
+            None
+        )
+        .await
+        .status,
+        200,
+        "the root path (the old builder-api vhost) answers too"
+    );
     assert_eq!(
         node.get(&format!("/v1/storage/contents/{thumb_hash}/exists"))
             .await
             .status,
-        200,
-        "the root path (the old builder-api vhost) answers too"
+        404,
+        "the probe of a draft's file answers an unsigned request as for an absent one"
     );
     assert_eq!(
         node.get(&format!(

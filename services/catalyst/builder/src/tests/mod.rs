@@ -9,6 +9,7 @@ mod chain_state;
 mod curation_auth;
 mod curation_auth_fuzz;
 mod draft_persistence;
+mod item_files;
 mod items;
 mod linked_publication;
 mod publication_preparation;

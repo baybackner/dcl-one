@@ -50,12 +50,15 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 ## Blobs
 
 `builder.item_contents` keeps each file of an item's `contents` at its
-position in the stored object. `uploaded_contents` records, per hash and
-uploader, a blob the node holds and its size. Upstream keeps no uploader, so
-the import records each item's owner as an uploader of every hash the item
-names, whoever first sent the bytes; upstream served those files to anyone.
-What an imported record lets its wallet read is the file routes' decision,
-the same as for a record the node writes on upload. The blob copy (out of
+position in the stored object, with `named_by`, the wallet that wrote the
+name. `uploaded_contents` records, per hash and uploader, a blob the node
+holds and its size. Upstream keeps neither, so the import attributes every
+name an item holds to the item's owner and records that owner as an
+uploader of every hash the item names, whoever first sent the bytes;
+upstream served those files to anyone. A re-import that changes an entry's
+hash attributes it to the owner again; one that only moves the entry keeps
+its writer. What an imported name and record let a wallet read is the file
+routes' decision, the same as for a save and an upload on the node. The blob copy (out of
 scope) must record each hash in `dcl_migration.blob_inventory (source,
 object_key, hash, size)` with `source = 'builder-server'` and
 `object_key = hash`; `item_content` stops the batch on any missing hash.

@@ -123,6 +123,23 @@ pub struct Publisher {
     signer: String,
 }
 
+/// May read the item file `hash`; `public` when the published rule alone
+/// opened it to an unsigned request.
+#[derive(Debug)]
+pub struct FileRead {
+    hash: String,
+    public: bool,
+}
+
+impl FileRead {
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+    pub fn public(&self) -> bool {
+        self.public
+    }
+}
+
 impl Wallet {
     pub fn address(&self) -> &str {
         &self.address
@@ -1000,6 +1017,76 @@ pub async fn publisher(
         }),
         Some(_) => Err(unauthorized_user(s, COLLECTIONS, id)),
     }
+}
+
+/// Whether a published item names the hash `$1` in an entry whose writer
+/// (`item_contents.named_by`) holds an upload record for it, and, for a
+/// signer `$2`, whether the signer holds one itself or owns an item, or
+/// manages the third-party collection of an item, with such an entry. Each
+/// branch starts from the hash's upload records, so it never visits a name
+/// written by a wallet without the bytes; the public one takes the uploaders
+/// in upload order, so a published file's first uploader answers first. The
+/// signer's branches run only when the public answer is false.
+const FILE_READ: &str = "SELECT p.public, CASE WHEN p.public OR $2::text IS NULL THEN false ELSE ( \
+         EXISTS (SELECT 1 FROM builder.uploaded_contents WHERE hash = $1 AND uploaded_by = $2) \
+         OR EXISTS (SELECT 1 FROM builder.uploaded_contents u \
+           JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
+           JOIN builder.items i ON i.id = ic.item_id \
+           WHERE u.hash = $1 AND i.eth_address = $2) \
+         OR EXISTS (SELECT 1 FROM builder.uploaded_contents u \
+           JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
+           JOIN builder.items i ON i.id = ic.item_id \
+           JOIN builder.collections c ON c.id = i.collection_id \
+           WHERE u.hash = $1 AND c.third_party_id IS NOT NULL AND c.eth_address = $2)) END \
+     FROM (SELECT \
+       EXISTS (SELECT 1 FROM (SELECT u.uploaded_by FROM builder.uploaded_contents u \
+           WHERE u.hash = $1 ORDER BY u.created_at, u.uploaded_by OFFSET 0) w \
+         CROSS JOIN LATERAL (SELECT 1 FROM builder.item_contents ic \
+           JOIN builder.items i ON i.id = ic.item_id \
+           JOIN builder.collections c ON c.id = i.collection_id \
+           {chain_join} \
+           WHERE ic.hash = $1 AND ic.named_by = w.uploaded_by \
+             AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
+           LIMIT 1) named) AS public OFFSET 0) p";
+
+/// [`FILE_READ`] with the published rule of [`chain_state::published_by_any_pass`].
+pub(crate) fn file_read_sql() -> String {
+    let (chain_join, published) = chain_state::published_by_any_pass();
+    FILE_READ
+        .replace("{chain_join}", chain_join)
+        .replace("{published}", published)
+}
+
+/// `GET /v1/storage/contents/:hash` and its `exists` probe: who may read an
+/// item file. Anyone, signed or not, while a published item names the hash
+/// in an entry whose writer holds an upload record for it (a standard item is
+/// published once its collection is; a third-party item once the node
+/// submitted it). A signer also reads a file it uploaded itself, and a file
+/// that an item it owns, or a third-party item whose collection it manages,
+/// names in such an entry. A name opens a file only for the wallet that
+/// wrote it holding the bytes; the committee and on-chain managers read what
+/// anyone reads.
+/// `None` refuses: a hash that is not a canonical CID or that the node
+/// withholds (`content::Denylist`) is refused before any read, and a private
+/// file is refused as an absent one. Reads no committee and no fresh chain fact
+/// ([`chain_state::published_by_any_pass`]).
+pub async fn read_file(
+    state: &SharedState,
+    signer: Option<&Signer>,
+    hash: &str,
+) -> Result<Option<FileRead>, ApiError> {
+    if !dcl_auth::is_canonical_cid(hash) || state.denylist.contains(hash) {
+        return Ok(None);
+    }
+    let (public, readable): (bool, bool) = sqlx::query_as(sqlx::AssertSqlSafe(file_read_sql()))
+        .bind(hash)
+        .bind(signer.map(Signer::as_str))
+        .fetch_one(state.items.pool())
+        .await?;
+    Ok((public || readable).then(|| FileRead {
+        hash: hash.to_string(),
+        public: signer.is_none(),
+    }))
 }
 
 /// Grants for store tests that exercise a store function by itself; the

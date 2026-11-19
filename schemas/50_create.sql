@@ -183,14 +183,18 @@ CREATE TABLE builder.item_contents (
     file text NOT NULL,
     hash text NOT NULL,
     position integer NOT NULL DEFAULT 0,
+    named_by text NOT NULL DEFAULT '',
     CONSTRAINT item_contents_pkey PRIMARY KEY (item_id, file),
     CONSTRAINT item_contents_item_id_fkey FOREIGN KEY (item_id)
         REFERENCES builder.items (id) ON DELETE CASCADE,
     CONSTRAINT item_contents_file_check
-        CHECK (file <> '' AND char_length(file) <= 256 AND position('\' in file) = 0)
+        CHECK (file <> '' AND char_length(file) <= 256 AND position('\' in file) = 0),
+    CONSTRAINT item_contents_named_by_check CHECK (named_by <> '' AND named_by = lower(named_by))
 );
 
 CREATE INDEX item_contents_hash_idx ON builder.item_contents (hash);
+
+CREATE INDEX item_contents_hash_named_by_idx ON builder.item_contents (hash, named_by);
 
 -- ── publication ────────────────────────────────────────────────────────────
 

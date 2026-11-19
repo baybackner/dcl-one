@@ -849,9 +849,9 @@ It keeps every item, collection and publication row, and every
 `uploaded_contents` row an item names or no row names. A row no row names is
 an item file that was replaced or whose item was deleted, an imported row
 whose item is gone, or a project blob that never entered a file set. The last
-kind cannot be told apart from the others, so it stays: it keeps answering
-anonymously on `/v1/storage/contents/{hash}` and keeps its blob from the
-collector. Blob bytes are never deleted by the release; they stay in the
+kind cannot be told apart from the others, so it stays: its uploader alone
+reads it on `/v1/storage/contents/{hash}` ("Builder item files workload"),
+and it keeps its blob from the collector. Blob bytes are never deleted by the release; they stay in the
 store (`STORAGE_ROOT_FOLDER`) until the collector unlinks them.
 
 Rollout, in order:
@@ -1214,10 +1214,10 @@ Invariants:
 - A publication takes only uploaded files. The publication snapshot
   (`SNAPSHOT_QUERY` in `services/catalyst/builder/src/publication.rs`) marks
   an item `missing_content` when it names a hash with no upload record by the
-  item's owner, and both the standard and the linked publication refuse such
+  wallet that wrote that name (`item_contents.named_by`), and both the standard and the linked publication refuse such
   an item before they start (tests
-  `a_standard_publication_takes_only_files_the_items_owner_uploaded` and
-  `a_linked_publication_takes_only_files_the_items_owner_uploaded`).
+  `a_standard_publication_takes_only_files_each_names_writer_uploaded` and
+  `a_linked_publication_takes_only_files_each_names_writer_uploaded`).
 
 Upgrade: step `0054_builder_item_contents_order` adds `item_contents.position`
 and drops the key from `item_contents.hash` to `uploaded_contents`. A step
@@ -1254,6 +1254,89 @@ Rollout, in order:
 The retype holds an exclusive lock on `builder.items` and
 `builder.uploaded_contents` while it rewrites them, about ten seconds at the
 reference data's size without secondary indexes and longer with them.
+
+## Builder item files workload
+
+The builder serves item files from the ONE blob store at `GET` and `HEAD
+/v1/storage/contents/{hash}` and answers `GET .../exists`
+(`services/catalyst/builder/src/handlers/storage.rs`). One statement,
+`FILE_READ` in `services/catalyst/builder/src/access.rs`, decides each
+request before any byte is read.
+
+Each `builder.item_contents` row keeps `named_by`, the wallet whose save wrote
+that name (`items/save.rs`: a re-sent file and hash, or a hash the item
+already named under another file name, keeps its writer; a hash the item
+didn't name takes the saving signer; the import writes the item's owner). A
+name counts only while `builder.uploaded_contents` holds `(hash, named_by)`.
+
+It reads, never writes:
+
+- `builder.uploaded_contents` by `hash`: the wallets that sent the bytes, in
+  upload order for the public answer, and `(hash, signer)` for a signed one.
+- `builder.item_contents` by `(hash, named_by)` for each of those wallets,
+  then `builder.items` and `builder.collections` by primary key: whether a
+  name that counts sits in a published item (a third-party item's
+  `is_published`), or in an item the signer owns or whose third-party
+  collection it manages.
+- The chain copy row of each standard collection (`shop.collections` by
+  network and contract, any age) and the node's own publication records, for
+  whether the collection is published.
+
+Workload, at the reference size (51,744 collections, 116,181 items, 417,340
+content rows, 302,093 upload records, 5,575 chain rows; scratch copy, custom
+and generic plans):
+
+| Request | Measured |
+| --- | --- |
+| an unsigned read of a published item's file (the hot path) | 0.25 to 0.3 ms |
+| the same, with a wallet that holds the bytes naming them in 100,000 drafts | 0.22 to 0.26 ms |
+| a signed read of that file, by a stranger or by that wallet | about 0.3 ms |
+| a draft's file named in 100,000 drafts of a wallet without the bytes, unsigned or signed | 0.1 to 0.4 ms |
+| an unsigned read of the hash most items name (2,421) | 2.4 to 2.6 ms |
+| a stranger's signed read of that hash | 2.5 to 13 ms |
+| the largest owner's (12,669 items) signed read of that hash | 9.9 to 13.3 ms |
+| an absent hash | under 0.2 ms |
+| worst case: a hash no published item names, its bytes held by a wallet that names it in 100,000 of its own drafts | about 100 ms |
+
+Every probe is index-served (`uploaded_contents_pkey`,
+`item_contents_hash_named_by_idx`, primary keys,
+`items_minted_collection_idx`). A request's cost grows only with the names
+written by wallets that hold the hash's bytes: names written without the
+bytes are never visited, the public answer stops at the earliest uploader's
+published name, and a signed request runs its own branches only when the
+public answer is no. So a published file's reads, signed or not, stay bounded
+however many drafts name it. The worst case needs a hash no published name
+reaches first, and a wallet that uploaded its bytes itself and names it in
+many drafts: for a private file that wallet already holds the bytes, and the
+cost grows linearly with its own names (about 100 ms at 100,000). Per-signer
+limits on saves bound it.
+
+Invariants:
+
+- The answer depends on the hash and the verified signer only. A hash that
+  isn't a canonical CID never reaches SQL or the store.
+- A stale copy never grants. The copy never deletes a collection row, so a
+  row of any age proves a collection on chain; the decision takes no
+  `DecisionView` and no committee read, and a stale copy only leaves a
+  collection the node holds no record of unpublished a while longer.
+- An upload record is the only proof a wallet holds a file, and a name in an
+  item opens a file only when its writer holds one. On-chain roles never
+  stand in for the writer.
+- A save or a delete that leaves no item naming a hash removes its upload
+  records in the same transaction, so the file is refused at once. A record
+  that no item names (an imported record whose item is gone, a blob of a
+  retired scene project) stays readable by its uploader alone and keeps its
+  blob from the collector.
+
+Upgrade: step `0055_builder_item_contents_named_by` adds `named_by` (`NOT
+NULL DEFAULT ''`, a check that refuses an empty or uppercase writer) and fills
+it in place. Each existing name goes to the first wallet that could have
+written it and holds the bytes, else to the item's owner: in order, the
+item's owner, the stored owner of a third-party collection, a standard
+collection's chain creator (else its stored owner), a chain manager, each
+only when it holds an upload record for the name's hash. The index
+`item_contents_hash_named_by_idx` is created by `schema migrate` from
+`schemas/50_create.sql`.
 
 ## Notification writer
 

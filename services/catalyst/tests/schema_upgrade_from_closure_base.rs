@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 33] = [
+const PREPARED_PENDING_STEPS: [&str; 34] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -45,6 +45,7 @@ const PREPARED_PENDING_STEPS: [&str; 33] = [
     "0052_builder_collection_flags_retired",
     "0053_builder_collection_listings",
     "0054_builder_item_contents_order",
+    "0055_builder_item_contents_named_by",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -1935,8 +1936,8 @@ async fn the_builder_scenes_release_waits_for_the_new_binary_and_a_quiet_editor_
            VALUES ('22222222-2222-4222-8222-222222222222', '0x' || repeat('a', 40), 'Hat', 'wearable', \
                    'bafkreiitemthumbnail', 'bafkreiitemvideo', 'bafkreiitemlocal', 'bafkreiitemcontent', \
                    'bafkreiitemcatalyst'); \
-         INSERT INTO builder.item_contents (item_id, file, hash) \
-           VALUES ('22222222-2222-4222-8222-222222222222', 'model.glb', 'bafkreiitemfile'); \
+         INSERT INTO builder.item_contents (item_id, file, hash, named_by) \
+           VALUES ('22222222-2222-4222-8222-222222222222', 'model.glb', 'bafkreiitemfile', '0x' || repeat('a', 40)); \
          INSERT INTO builder.projects (id, eth_address, title, scene_id, cols, rows, thumbnail) \
            VALUES ('33333333-3333-4333-8333-333333333333', '0x' || repeat('a', 40), 'Scene', \
                    '44444444-4444-4444-8444-444444444444', 1, 1, 'bafkreiprojectthumbnail'); \
@@ -2255,9 +2256,9 @@ async fn the_builder_item_documents_release_waits_for_its_step_then_retypes_them
            ('22222222-2222-4222-8222-000000000001', '11111111-1111-4111-8111-000000000001', '0x' || repeat('a', 40), \
             'Hat', 'wearable', '{\"tags\": [\"a\"], \"category\": \"hat\"}', '{\"triangles\": 1}'), \
            ('22222222-2222-4222-8222-000000000002', NULL, '0x' || repeat('a', 40), 'Cap', 'wearable', '{}', NULL); \
-         INSERT INTO builder.item_contents (item_id, file, hash, position) VALUES \
-           ('22222222-2222-4222-8222-000000000001', 'b.png', 'bafkb', 0), \
-           ('22222222-2222-4222-8222-000000000001', 'a.glb', 'bafka', 1); \
+         INSERT INTO builder.item_contents (item_id, file, hash, position, named_by) VALUES \
+           ('22222222-2222-4222-8222-000000000001', 'b.png', 'bafkb', 0, '0x' || repeat('a', 40)), \
+           ('22222222-2222-4222-8222-000000000001', 'a.glb', 'bafka', 1, '0x' || repeat('a', 40)); \
          INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES \
            ('bafka', 1, '0x' || repeat('a', 40));",
     )
@@ -2342,4 +2343,81 @@ async fn the_builder_item_documents_release_waits_for_its_step_then_retypes_them
     );
     fresh.drop().await;
     old.drop().await;
+}
+
+const BUILDER_NAMED_BY_STEP: &str = "0055_builder_item_contents_named_by";
+
+#[tokio::test]
+async fn the_builder_named_by_step_attributes_each_name_to_the_writer_the_file_routes_counted() {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    release_result(pool, &scenes_release()).await.unwrap();
+    release_result(pool, &item_documents_release())
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE builder.item_contents DROP CONSTRAINT item_contents_named_by_check; \
+         ALTER TABLE builder.item_contents DROP COLUMN named_by; \
+         DELETE FROM meta.schema_steps WHERE step = '0055_builder_item_contents_named_by'; \
+         INSERT INTO builder.collections (id, name, eth_address, contract_address) VALUES \
+           ('11111111-1111-4111-8111-000000000101', 'On chain', '0x' || repeat('0', 39) || '1', '0x' || repeat('c', 40)); \
+         INSERT INTO builder.collections (id, name, eth_address, third_party_id, urn_suffix) VALUES \
+           ('11111111-1111-4111-8111-000000000102', 'Linked', '0x' || repeat('0', 39) || '5', \
+            'urn:decentraland:matic:collections-thirdparty:tp', 'urn:decentraland:matic:collections-thirdparty:tp:hats'); \
+         INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, is_completed, \
+           is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) VALUES \
+           ('matic', '0x' || repeat('c', 40), 137, 'On chain', '0x' || repeat('0', 39) || '3', '0x' || repeat('0', 39) || '3', \
+            'urn:c', true, false, true, ARRAY['0x' || repeat('0', 39) || '4'], '{}', 1, 1, 1, timezone('UTC', now())); \
+         INSERT INTO builder.items (id, collection_id, eth_address, name, type) VALUES \
+           ('22222222-2222-4222-8222-000000000101', '11111111-1111-4111-8111-000000000101', '0x' || repeat('0', 39) || '2', 'Hat', 'wearable'), \
+           ('22222222-2222-4222-8222-000000000102', '11111111-1111-4111-8111-000000000102', '0x' || repeat('0', 39) || '6', 'Cap', 'wearable'); \
+         INSERT INTO builder.item_contents (item_id, file, hash) VALUES \
+           ('22222222-2222-4222-8222-000000000101', 'owner.glb', 'bafkowner'), \
+           ('22222222-2222-4222-8222-000000000101', 'creator.glb', 'bafkcreator'), \
+           ('22222222-2222-4222-8222-000000000101', 'manager.glb', 'bafkmanager'), \
+           ('22222222-2222-4222-8222-000000000101', 'nobody.glb', 'bafknobody'), \
+           ('22222222-2222-4222-8222-000000000102', 'provider.glb', 'bafkprovider'); \
+         INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES \
+           ('bafkowner', 1, '0x' || repeat('0', 39) || '2'), ('bafkowner', 1, '0x' || repeat('0', 39) || '4'), \
+           ('bafkcreator', 1, '0x' || repeat('0', 39) || '3'), ('bafkmanager', 1, '0x' || repeat('0', 39) || '4'), \
+           ('bafkprovider', 1, '0x' || repeat('0', 39) || '5');",
+    )
+    .execute(pool)
+    .await
+    .expect("item contents without a writer, as the earlier steps left them");
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    let writers: Vec<(String, String)> = sqlx::query_as(
+        "SELECT file, right(named_by, 1) FROM builder.item_contents \
+         WHERE item_id::text LIKE '22222222-2222-4222-8222-0000000001%' ORDER BY file",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        writers,
+        [
+            ("creator.glb", "3"),
+            ("manager.glb", "4"),
+            ("nobody.glb", "2"),
+            ("owner.glb", "2"),
+            ("provider.glb", "5")
+        ]
+        .map(|(f, w)| (f.to_string(), w.to_string())),
+        "the item's owner when it holds the bytes, else the first writer the file routes counted that does, else the owner"
+    );
+    let steps: Vec<String> =
+        sqlx::query_scalar("SELECT step FROM meta.schema_steps WHERE step = $1")
+            .bind(BUILDER_NAMED_BY_STEP)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(steps, [BUILDER_NAMED_BY_STEP]);
 }

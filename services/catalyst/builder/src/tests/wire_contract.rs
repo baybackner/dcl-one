@@ -153,7 +153,11 @@ async fn public_file_reads_keep_their_own_cache_rule() {
         send(&app, "GET", "/v1/storage/contents/not-a-hash/exists", "").await;
     assert_eq!(
         (status, cache, body),
-        (StatusCode::NOT_FOUND, None, json!({ "ok": true }))
+        (
+            StatusCode::NOT_FOUND,
+            Some("no-store".to_string()),
+            json!({ "ok": true })
+        )
     );
 }
 

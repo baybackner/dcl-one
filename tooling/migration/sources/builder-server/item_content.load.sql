@@ -12,8 +12,9 @@ FROM stage s
 JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
 ON CONFLICT (hash, uploaded_by) DO NOTHING;
 
-INSERT INTO builder.item_contents AS c (item_id, file, hash, position)
-SELECT s.item_id, s.file, s.hash, s.position
+INSERT INTO builder.item_contents AS c (item_id, file, hash, position, named_by)
+SELECT s.item_id, s.file, s.hash, s.position, lower(s.owner)
 FROM stage s
-ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash, position = EXCLUDED.position
+ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash, position = EXCLUDED.position,
+    named_by = CASE WHEN c.hash = EXCLUDED.hash THEN c.named_by ELSE EXCLUDED.named_by END
 WHERE (c.hash, c.position) IS DISTINCT FROM (EXCLUDED.hash, EXCLUDED.position);

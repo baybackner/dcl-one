@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::access::Wallet;
+use crate::access::{FileRead, Wallet};
 use crate::chain_state::{self, ReadView};
 use crate::storage::OpenedContent;
 use dcl_auth::{is_canonical_cid, is_eth_address};
@@ -277,8 +277,7 @@ impl ItemsComponent {
         .await?)
     }
 
-    /// The accepted upload's bytes, whole: for tests and small files; the
-    /// serve route streams through [`Self::open_uploaded_content`].
+    /// The accepted upload's bytes, whole, for tests.
     pub async fn uploaded_content(&self, hash: &str) -> Result<Option<Bytes>, ApiError> {
         if !self.uploaded_content_exists(hash).await? {
             return Ok(None);
@@ -289,17 +288,11 @@ impl ItemsComponent {
             .map_err(|e| ApiError::internal(e.to_string()))
     }
 
-    /// `None` unless `builder.uploaded_contents` names the hash (a blob the
-    /// store holds for content or worlds is not a builder upload).
-    pub async fn open_uploaded_content(
-        &self,
-        hash: &str,
-    ) -> Result<Option<OpenedContent>, ApiError> {
-        if !self.uploaded_content_exists(hash).await? {
-            return Ok(None);
-        }
+    /// The file [`crate::access::read_file`] granted, opened once for its whole
+    /// answer; `None` when the store holds no bytes for it.
+    pub async fn open_file(&self, read: &FileRead) -> Result<Option<OpenedContent>, ApiError> {
         self.blobs
-            .open(hash)
+            .open(read.hash())
             .await
             .map_err(|e| ApiError::internal(e.to_string()))
     }

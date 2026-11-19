@@ -342,10 +342,11 @@ async fn insert_item(
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO builder.item_contents (item_id, file, hash) VALUES ($1, 'model.glb', $2)",
+        "INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
     )
     .bind(id)
     .bind(dcl_auth::hash_bytes_v1(MATRIX_FILE))
+    .bind(Owner.address())
     .execute(pool)
     .await
     .unwrap();

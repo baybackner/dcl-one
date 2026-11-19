@@ -299,12 +299,14 @@ async fn a_published_collection_cannot_begin_another_publication() {
 }
 
 /// How the publications see a named file: its owner uploaded it, only another
-/// wallet did, or nobody did.
+/// wallet did, nobody did, or the owner did while another wallet wrote the
+/// name.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Uploader {
     Owner,
     AnotherWallet,
     Nobody,
+    NamedByAnother,
 }
 
 /// Saves `item` as `owner` naming `model` and `thumbnail`, and records the
@@ -335,15 +337,31 @@ pub(super) async fn name_files(
             }
         }
         Uploader::Nobody => {}
+        Uploader::NamedByAnother => {
+            upload(store, owner, item_id, &[files[0].1, files[1].1])
+                .await
+                .unwrap();
+            sqlx::query("UPDATE builder.item_contents SET named_by = $2 WHERE item_id = $1")
+                .bind(item_id)
+                .bind(other)
+                .execute(store.pool())
+                .await
+                .unwrap();
+        }
     }
 }
 
 #[tokio::test]
-async fn a_standard_publication_takes_only_files_the_items_owner_uploaded() {
+async fn a_standard_publication_takes_only_files_each_names_writer_uploaded() {
     let Some(store) = scratch_component().await else {
         return;
     };
-    for uploaded in [Uploader::Nobody, Uploader::AnotherWallet, Uploader::Owner] {
+    for uploaded in [
+        Uploader::Nobody,
+        Uploader::AnotherWallet,
+        Uploader::NamedByAnother,
+        Uploader::Owner,
+    ] {
         let id = Uuid::new_v4();
         super::support::save_collection(
             &store,

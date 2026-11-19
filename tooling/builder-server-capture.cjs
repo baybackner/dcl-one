@@ -66,6 +66,10 @@ const ITEM_TEXTURE = 'bafkreihguhxlcxdu6hacttsy5lwuggfmehebqdb6ngpey2le77bibwl7x
 const ITEM_MODEL_V2 = 'bafkreiefylq3hbo4poewjyrt2yheyzadw3agtgqvt2xw5jypyyygqac4k4'
 const ITEM_OTHER_MODEL = 'bafkreidt4shc7ymjpyczl3qv7kuk4jf5r254fdi4lbycn5jjtiauqllvqa'
 const ITEM_EMPTY = 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku'
+const ITEM_DRAFT_MODEL = 'bafkreigtbcabv6bu27zstecfipauq63zdag7z3qmjbku3cfytp4cykvkka'
+const ITEM_NEVER = 'bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay'
+/** Upstream's bucket URL when no S3 endpoint overrides it (`getBucketURL()` of bucket `conformance`). */
+const BUCKET_URL = 'https://conformance.s3.amazonaws.com'
 const ADDRESS = {
   owner: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
   stranger: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
@@ -214,7 +218,19 @@ const ITEM_CASES = [
   { name: '242-item-linked-after-saves-owner', description: 'GET /items/{id} signed by the provider manager after its third-party item was saved with mappings', method: 'GET', path: `/v1/items/${id('3c1')}`, signer: 'owner', volatile: UPDATED },
   { name: '243-item-create-folder-and-empty-entries', description: 'PUT /items/{id} signed by the owner, creating an item whose contents name a folder entry and an empty file as the old builder web packages them', method: 'PUT', path: `/v1/items/${id('3e8')}`, signer: 'owner', body: itemBody({ id: id('3e8'), collection_id: id('301'), name: 'Packaged hat', contents: { 'male/': ITEM_EMPTY, 'model.glb': ITEM_MODEL, 'notes.txt': ITEM_EMPTY, 'thumbnail.png': ITEM_THUMBNAIL } }), volatile: SAVED },
   { name: '244-item-files-folder-and-empty-entries', description: 'POST /items/{id}/files signed by the owner, the model and the folder entry and empty file under the empty-content hash, as the old builder web sends them', method: 'POST', path: `/v1/items/${id('3e8')}/files`, signer: 'owner', multipart: [{ name: ITEM_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance model glb' }, { name: ITEM_EMPTY, filename: 'blob', type: 'application/octet-stream', text: '' }, { name: ITEM_EMPTY, filename: 'blob', type: 'application/octet-stream', text: '' }] },
-  { name: '245-item-after-folder-and-empty-entries', description: 'GET /items/{id} signed by the owner of the item saved with a folder entry and an empty file', method: 'GET', path: `/v1/items/${id('3e8')}`, signer: 'owner', volatile: SAVED }
+  { name: '245-item-after-folder-and-empty-entries', description: 'GET /items/{id} signed by the owner of the item saved with a folder entry and an empty file', method: 'GET', path: `/v1/items/${id('3e8')}`, signer: 'owner', volatile: SAVED },
+  { name: '246-item-create-private-draft', description: 'PUT /items/{id} signed by the owner, creating an item with no collection whose model no other item names', method: 'PUT', path: `/v1/items/${id('3e9')}`, signer: 'owner', body: itemBody({ id: id('3e9'), name: 'Private hat', contents: { 'model.glb': ITEM_DRAFT_MODEL, 'thumbnail.png': ITEM_THUMBNAIL } }), volatile: SAVED },
+  { name: '247-item-files-private-draft', description: 'POST /items/{id}/files signed by the owner, uploading the model of the item with no collection', method: 'POST', path: `/v1/items/${id('3e9')}/files`, signer: 'owner', multipart: [{ name: ITEM_DRAFT_MODEL, filename: 'blob', type: 'application/octet-stream', text: 'conformance draft model glb' }] },
+  { name: '248-storage-published-unsigned', description: 'GET /storage/contents/{hash} unsigned, the model a minted item names', method: 'GET', path: `/v1/storage/contents/${ITEM_MODEL}` },
+  { name: '249-storage-published-head', description: 'HEAD /storage/contents/{hash} unsigned, the model a minted item names', method: 'HEAD', path: `/v1/storage/contents/${ITEM_MODEL}` },
+  { name: '250-storage-draft-unsigned', description: 'GET /storage/contents/{hash} unsigned, the model only an item with no collection names', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}` },
+  { name: '251-storage-draft-owner', description: 'GET /storage/contents/{hash} signed by the owner, the model of its item with no collection', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}`, signer: 'owner' },
+  { name: '252-storage-draft-stranger', description: 'GET /storage/contents/{hash} signed by a wallet with no role on the item, the model of an item with no collection', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}`, signer: 'stranger' },
+  { name: '253-storage-unknown-unsigned', description: 'GET /storage/contents/{hash} unsigned, a hash nobody uploaded', method: 'GET', path: `/v1/storage/contents/${ITEM_NEVER}` },
+  { name: '254-storage-exists-published-unsigned', description: 'GET /storage/contents/{hash}/exists unsigned, the model a minted item names', method: 'GET', path: `/v1/storage/contents/${ITEM_MODEL}/exists` },
+  { name: '255-storage-exists-draft-unsigned', description: 'GET /storage/contents/{hash}/exists unsigned, the model only an item with no collection names', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}/exists` },
+  { name: '256-storage-exists-draft-owner', description: 'GET /storage/contents/{hash}/exists signed by the owner, the model of its item with no collection', method: 'GET', path: `/v1/storage/contents/${ITEM_DRAFT_MODEL}/exists`, signer: 'owner' },
+  { name: '257-storage-exists-unknown-unsigned', description: 'GET /storage/contents/{hash}/exists unsigned, a hash nobody uploaded', method: 'GET', path: `/v1/storage/contents/${ITEM_NEVER}/exists` }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2415,8 +2431,9 @@ function selected(field, rows, variables, unfaked) {
 
 /**
  * The fake S3's answer to one request of upstream's AWS SDK: `PutObject`, `CopyObject` (a PUT
- * naming `x-amz-copy-source`) and `DeleteObject` on the `conformance` bucket, kept in `objects`;
- * undefined for anything else.
+ * naming `x-amz-copy-source`) and `DeleteObject` on the `conformance` bucket, kept in `objects`,
+ * and the public `GET` of an object upstream's `exists` probe sends (404 for a key it doesn't
+ * hold); undefined for anything else.
  */
 function s3Answer(method, url, headers, bytes, objects) {
   const key = decodeURIComponent(url.replace(/^\/s3\/conformance\//, '').split('?')[0])
@@ -2433,6 +2450,9 @@ function s3Answer(method, url, headers, bytes, objects) {
   if (method === 'DELETE') {
     objects.delete(key)
     return { status: 204, headers: {}, body: '' }
+  }
+  if (method === 'GET') {
+    return objects.has(key) ? { status: 200, headers: {}, body: objects.get(key) } : { status: 404, headers: {}, body: '' }
   }
   return undefined
 }
@@ -2646,7 +2666,12 @@ function requestBody(item) {
   return { body: form, recorded: { body: null, multipart: item.multipart } }
 }
 
-async function record(req, base, signers, volatileFields, item) {
+/** `value` with the fake bucket's origin `bucket` written as upstream's own bucket URL. */
+function bucketNamed(value, bucket) {
+  return bucket ? value.split(bucket).join(BUCKET_URL) : value
+}
+
+async function record(req, base, signers, volatileFields, item, bucket) {
   const query = item.query || {}
   const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
   const headers = item.signer ? await signedHeaders(req, signers[item.signer], item) : { ...item.headers }
@@ -2656,13 +2681,14 @@ async function record(req, base, signers, volatileFields, item) {
     method: item.method,
     headers,
     body: sent.body,
+    redirect: 'manual',
     signal: AbortSignal.timeout(5000)
   })
-  const bytes = Buffer.from(await response.arrayBuffer())
+  const bytes = Buffer.from(bucketNamed(Buffer.from(await response.arrayBuffer()).toString('latin1'), bucket), 'latin1')
   const kept = {}
   for (const name of KEPT_RESPONSE_HEADERS) {
     const value = response.headers.get(name)
-    if (value !== null) kept[name] = value
+    if (value !== null) kept[name] = bucketNamed(value, bucket)
   }
   const recorded = { status: response.status, headers: kept }
   if ((kept['content-type'] || '').startsWith('application/json')) recorded.body_json = JSON.parse(bytes.toString('utf8'))
@@ -2716,7 +2742,8 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     })
     const base = `http://127.0.0.1:${listener.address().port}`
     const fixtures = []
-    for (const item of CASES) fixtures.push([`${item.name}.json`, fixtureJson(await capture.record(base, item))])
+    const bucket = `${environment.AWS_STORAGE_URL}/${environment.AWS_BUCKET_NAME}`
+    for (const item of CASES) fixtures.push([`${item.name}.json`, fixtureJson(await capture.record(base, item, bucket))])
     return fixtures
   } finally {
     try {
@@ -2743,7 +2770,7 @@ async function main() {
   const seed = readSeed()
   const signers = wallets(capture.req, seed)
   const { volatile_fields: volatileFields } = ledger
-  capture.record = (base, item) => record(capture.req, base, signers, volatileFields, item)
+  capture.record = (base, item, bucket) => record(capture.req, base, signers, volatileFields, item, bucket)
   const unfaked = []
   const { Client } = capture.req('pg')
   const admin = new Client({ connectionString: databaseUrl(adminUrl, 'postgres') })
@@ -2771,4 +2798,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

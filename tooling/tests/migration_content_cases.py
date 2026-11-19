@@ -101,6 +101,27 @@ class ContentMigrationCases:
                                       "FROM builder.uploaded_contents;\n").strip(),
                          f'bafkamodel {OWNER},bafkzthumb {OWNER}')
 
+    def test_when_importing_an_items_contents_it_should_attribute_each_name_to_the_items_owner(self):
+        db = self.content_db('content_builder_named_by')
+        collection, item = self.builder_rows('Named', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        self.content_load(db, 'builder-server', 'item', [item])
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkzthumb', 'bafkzthumb', 3, 'image/png'),"
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
+                     "('builder-server', 'bafkbmodel', 'bafkbmodel', 5, 'model/gltf-binary');\n")
+        rows = [f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER.upper().replace('0X', '0x')}', 0",
+                f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1"]
+        self.content_load(db, 'builder-server', 'item_content', rows)
+        writers = f"SELECT string_agg(file || ' ' || named_by, ',' ORDER BY file) FROM builder.item_contents WHERE item_id = '{ITEM}';\n"
+        self.assertEqual(self.sql(db, writers).strip(), f'model.glb {OWNER.lower()},thumbnail.png {OWNER.lower()}')
+        other = '0x' + 'b' * 40
+        self.sql(db, f"UPDATE builder.item_contents SET named_by = '{other}' WHERE item_id = '{ITEM}';\n")
+        self.content_load(db, 'builder-server', 'item_content', [
+            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 1",
+            f"'{ITEM}', 'model.glb', 'bafkbmodel', '{OWNER}', 0"])
+        self.assertEqual(self.sql(db, writers).strip(), f'model.glb {OWNER.lower()},thumbnail.png {other}')
+
     def test_when_the_item_documents_release_has_not_run_it_should_refuse_to_import_items(self):
         db = self.content_db('content_builder_before_release')
         collection, item = self.builder_rows('Early', '2026-02-01Z')
