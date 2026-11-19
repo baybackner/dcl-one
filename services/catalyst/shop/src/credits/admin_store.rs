@@ -330,6 +330,21 @@ impl Credits {
             }
         }
 
+        // A flagged wallet receives no granted Credits; a replay above still answers its first outcome.
+        if kind == "grant" {
+            let flagged: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM credits.wallet_flags WHERE address = $1)",
+            )
+            .bind(address)
+            .fetch_one(&mut **tx)
+            .await?;
+            if flagged {
+                return Err(ApiError::conflict(format!(
+                    "Wallet {address} is flagged for multi-accounting and cannot receive granted credits"
+                )));
+            }
+        }
+
         let row = sqlx::query(
             "INSERT INTO credits.wallets (address, available, has_started_program, updated_at) \
              VALUES ($1, $2::numeric, FALSE, timezone('UTC', now())) \

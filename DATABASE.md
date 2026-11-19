@@ -1527,7 +1527,9 @@ operator's unblock
 transaction that clears its block. Readers are the credits claim (`EXISTS` by
 address, folded into the captcha claim and the balance reports as
 `is_blocked_for_claiming`; the spend and the reservation read the operator's
-block alone, so a flag never holds credits a wallet has) and the admin list
+block alone, so a flag never holds credits a wallet has), the operator grant
+(`EXISTS` by address in the grant's transaction: a flagged wallet receives no
+granted credits) and the admin list
 (`GET /credits/admin/flags`, by address or paged by `flagged_at`). Rows are
 small and few: a flag per wallet reported.
 

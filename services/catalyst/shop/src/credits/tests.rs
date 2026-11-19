@@ -9804,3 +9804,71 @@ async fn a_trial_refuses_mana_top_ups_and_the_broker_checkout_before_any_work() 
     .await;
     assert_ne!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+/// An operator grant to a flagged wallet answers 409 and moves nothing; a grant made before the flag still
+/// replays its first outcome, and a recovered paid top-up is not a grant.
+#[tokio::test]
+async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
+    let Some(pool) = pool().await else { return };
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            admin_token: Some("s3cret"),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let mut bearer = HeaderMap::new();
+    bearer.insert(header::AUTHORIZATION, "Bearer s3cret".parse().unwrap());
+    let addr = scratch_wallet().address;
+    let key = unique("g-flag");
+    let grant = |key: &str| json!({ "address": addr, "amount": "5", "reason": "qc", "idempotencyKey": key });
+
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(grant(&key)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/flags",
+        bearer.clone(),
+        Some(json!({ "addresses": [addr, scratch_wallet().address], "source": "explorer_ip_multi_accounting", "ip": "203.0.113.9" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(grant(&key)),
+    )
+    .await;
+    assert_eq!(
+        (status, v["replayed"].as_bool()),
+        (StatusCode::OK, Some(true)),
+        "{v}"
+    );
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(grant(&unique("g-flag"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        available(&pool, &addr).await,
+        "5",
+        "the refused grant moved nothing"
+    );
+    cleanup(&pool, &addr).await;
+}
