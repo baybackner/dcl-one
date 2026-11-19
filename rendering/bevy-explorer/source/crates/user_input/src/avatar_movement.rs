@@ -806,6 +806,8 @@ pub(crate) fn apply_movement(
     let mut held_at_riser = false;
     // on the ground at the end of the last step: the assists below hold for a walking avatar
     let grounded = dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
+    // on the ground and asking for no rise: not the step a jump takes off in
+    let walking = grounded && movement.component.velocity.y <= 0.0;
 
     // deliberately penetrating (placed here by movePlayerTo): don't move deeper into
     // whatever we're inside, but otherwise let the scene walk us out
@@ -838,7 +840,7 @@ pub(crate) fn apply_movement(
         position += velocity * step_time + contact_normal * PLAYER_COLLIDER_OVERLAP as f64;
         time -= step_time;
         let horizontal = velocity.with_y(0.0);
-        if grounded
+        if walking
             && contact_normal != DVec3::ZERO
             && !walkable(contact_normal)
             && horizontal != DVec3::ZERO
@@ -846,7 +848,8 @@ pub(crate) fn apply_movement(
             && movement_control.suppress_clipping.is_empty()
         {
             // step offset: a riser up to MAX_STEP_HEIGHT is stepped onto, keeping the move. A move
-            // slower than step_push_speed() first pushes against it for STEP_PUSH.
+            // slower than step_push_speed() first pushes against it for STEP_PUSH. Not as a jump
+            // takes off: that step rises, and stepping would trade its rise for the riser's.
             let speed = horizontal.length();
             if speed < step_push_speed() && speed * time + *step_push < STEP_PUSH {
                 *step_push += speed * time;
@@ -879,9 +882,8 @@ pub(crate) fn apply_movement(
         *step_push = 0.0;
     }
 
-    // a walking step that asked for no rise follows the ground down
-    if grounded
-        && movement.component.velocity.y <= 0.0
+    // a walking step follows the ground down
+    if walking
         && !movement_control.deliberate_penetration
         && movement_control.suppress_clipping.is_empty()
     {
@@ -1697,6 +1699,20 @@ mod tests {
             (at_60 - at_15).abs() <= 1.0 / 15.0 + 1e-6,
             "{at_60} s at 60 fps, {at_15} s at 15"
         );
+    }
+
+    #[test]
+    fn a_running_jump_into_a_riser_does_not_step_onto_it_as_it_takes_off() {
+        // 0.05 m short of a 0.4 m riser, on the ground
+        let (mut app, player) = movement_app(&[riser(0.4)], Vec3::new(0.65, 0.0, 0.0));
+        app.update();
+        // a run at 10 m/s takes off for a 1 m jump
+        set_velocity(&mut app, player, Vec3::new(10.0, 8.94, 0.0));
+        app.update();
+        let end = app.world().get::<Transform>(player).unwrap().translation;
+        // the take-off step rises at 8.94 m/s for its 20 ms, against the riser's face
+        assert!((end.y - 8.94 * 0.02).abs() < 0.01, "rose to {end}");
+        assert!(end.x < 0.71, "went onto the riser to {end}");
     }
 
     #[test]
