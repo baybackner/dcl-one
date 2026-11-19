@@ -33,7 +33,7 @@ pub use queries::{
     build_unified_listings_sql,
 };
 #[cfg(test)]
-use queries::{related_rarity_sort_key, unified_branch, unified_selection};
+use queries::{id_contracts, related_rarity_sort_key, unified_branch, unified_selection};
 #[path = "shop_projection.rs"]
 mod projection;
 use projection::{
@@ -63,7 +63,10 @@ use serde_json::Value;
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 
-use super::catalog::{Builder, ITEM_ID_SHIFT, MAX_NUMERIC_NUMBER, escape_like, unified_trades_cte};
+use super::catalog::{
+    Builder, ITEM_ID_SHIFT, MAX_NUMERIC_NUMBER, escape_like, unified_trades_cte,
+    unified_trades_cte_of,
+};
 use super::items::{USD_WEI_PER_CREDIT, mana_usd_rate, rate_to_numeric_string, recent_sales};
 use super::readers::{self, Ttl, cached};
 use super::wire::{
@@ -1857,6 +1860,30 @@ mod tests {
             "both empty fails closed"
         );
         assert_eq!(where_of(&UnifiedCatalogFilters::default()), None);
+    }
+
+    #[test]
+    fn items_by_ids_read_only_the_open_trades_of_the_ids_contracts() {
+        let ids = vec![
+            "0xaa-1".to_string(),
+            "0xAA-2".to_string(),
+            "0xbb-3".to_string(),
+        ];
+        assert_eq!(id_contracts(&ids), vec!["0xaa", "0xbb"]);
+        let rate = ManaUsdRate::parse_usd_per_mana("0.5").unwrap();
+        let by_ids =
+            build_items_by_ids_sql(&ids, &UnifiedCatalogFilters::default(), rate, None).sql;
+        assert!(
+            by_ids.contains(
+                "sent.direction = 'sent' AND sent.contract_address IN (SELECT unnest($3::text[]))"
+            ) && by_ids.contains("(d.contract_address || '-' || d.item_id) = ANY("),
+            "{by_ids}"
+        );
+        let feed = build_unified_items_sql(&UnifiedCatalogFilters::default(), rate, None).sql;
+        assert!(
+            !feed.contains("unnest("),
+            "a feed reads every open trade: {feed}"
+        );
     }
 
     #[test]
