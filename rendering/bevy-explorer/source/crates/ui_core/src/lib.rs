@@ -79,7 +79,7 @@ pub fn user_font(name: FontName, weight: WeightName) -> Handle<Font> {
         .and_then(|fonts| fonts.get(&(name, weight)))
         .cloned()
         .unwrap_or_else(|| {
-            bevy::log::warn_once!("font {name:?} {weight:?} is not registered");
+            bevy::log::error_once!("font {name:?} {weight:?} is not registered");
             Handle::default()
         })
 }

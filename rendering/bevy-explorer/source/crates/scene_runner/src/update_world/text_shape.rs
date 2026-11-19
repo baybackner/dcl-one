@@ -838,6 +838,7 @@ impl AtlasPage {
         let new_size = old_size * 2;
         let bpp = self.bytes_per_pixel as usize;
         let Some(image) = images.get_mut(&self.image) else {
+            bevy::log::error!("glyph atlas page image is missing");
             return Err(AtlasFull);
         };
         let old = image.data.take().unwrap();
@@ -867,6 +868,7 @@ impl AtlasPage {
         let bpp = self.bytes_per_pixel as usize;
         let row = width as usize * bpp;
         let Some(image) = images.get_mut(&self.image) else {
+            bevy::log::error!("glyph atlas page image is missing");
             return Err(AtlasFull);
         };
         let data = image.data.as_mut().unwrap();
@@ -998,13 +1000,9 @@ impl GlyphAtlas {
         let (w, h) = (Self::WHITE.width(), Self::WHITE.height());
         let white = self.sdf.allocate(w, h).unwrap();
         debug_assert_eq!(white, Self::WHITE.min);
-        if self
+        let _ = self
             .sdf
-            .write(images, white, w, h, &vec![255u8; (w * h) as usize])
-            .is_err()
-        {
-            bevy::log::error!("glyph atlas page image is missing");
-        }
+            .write(images, white, w, h, &vec![255u8; (w * h) as usize]);
     }
 
     fn page(&self, page: Page) -> Option<&AtlasPage> {
