@@ -6,13 +6,13 @@ use std::sync::{
 };
 
 use bevy::{ecs::relationship::Relationship, prelude::*};
-use common::structs::{ClientWindowFocus, MicState, SystemAudio};
+use common::structs::{AudioSettings, ClientWindowFocus, MicState, SystemAudio};
 use tokio::{sync::oneshot, task::JoinHandle};
 use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
 use {
     bevy::render::view::RenderLayers,
-    common::{structs::AudioSettings, util::AsH160, util::VolumePanning},
+    common::{util::AsH160, util::VolumePanning},
     livestream_manager::AudioTransmitterVolume,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,6 +73,7 @@ impl Plugin for MicPlugin {
         app.init_state::<MicrophoneState>();
         app.init_state::<MicrophoneTransmissionState>();
         app.init_resource::<MicrophoneDrain>();
+        app.init_resource::<AudioSettings>();
         app.init_resource::<LastTransmission>();
 
         #[cfg(target_arch = "wasm32")]
@@ -350,9 +351,11 @@ fn transmission_state(
     mut next_state: ResMut<NextState<MicrophoneTransmissionState>>,
     mut last: ResMut<LastTransmission>,
     focus: Res<ClientWindowFocus>,
+    audio: Res<AudioSettings>,
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
 ) {
+    let focus = audio.microphone_focus(*focus);
     let mut transmitting = false;
     let mut call = false;
     for (publication, room) in &tracks {
@@ -369,8 +372,8 @@ fn transmission_state(
         last.call = call;
     }
     // the pause ends on focus with nothing left to resume or a mic change since
-    if *focus == ClientWindowFocus::Focused
-        && (!can_capture_microphone(&mic, &call_mic, *focus)
+    if focus == ClientWindowFocus::Focused
+        && (!can_capture_microphone(&mic, &call_mic, focus)
             || mic.is_changed()
             || call_mic.is_changed())
     {
@@ -378,7 +381,7 @@ fn transmission_state(
     }
     if !transmitting && microphone_transmission_state.get() == &MicrophoneTransmissionState::Enabled
     {
-        last.focus_paused = *focus == ClientWindowFocus::NoFocus;
+        last.focus_paused = focus == ClientWindowFocus::NoFocus;
         next_state.set(MicrophoneTransmissionState::Disabled);
     } else if transmitting
         && microphone_transmission_state.get() == &MicrophoneTransmissionState::Disabled
@@ -529,8 +532,13 @@ fn enable_microphone_state_system(
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
     focus: Res<ClientWindowFocus>,
+    audio: Res<AudioSettings>,
 ) {
-    if can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(*focus)) {
+    if can_capture_microphone(
+        &mic_state,
+        &call_mic,
+        microphone_state_focus(audio.microphone_focus(*focus)),
+    ) {
         debug!("Microphone is now enabled.");
         commands.set_state(MicrophoneState::Enabled);
     }
@@ -614,8 +622,13 @@ fn disable_microphone_state_system(
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
     focus: Res<ClientWindowFocus>,
+    audio: Res<AudioSettings>,
 ) {
-    if !can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(*focus)) {
+    if !can_capture_microphone(
+        &mic_state,
+        &call_mic,
+        microphone_state_focus(audio.microphone_focus(*focus)),
+    ) {
         debug!("Microphone is now disabled.");
         commands.set_state(MicrophoneState::Disabled);
     }
@@ -679,6 +692,7 @@ fn reconcile_publications(
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
     focus: Res<ClientWindowFocus>,
+    audio: Res<AudioSettings>,
     permission: Res<State<MicrophonePermission>>,
     availability: Res<State<MicrophoneAvailability>>,
     drain: Res<MicrophoneDrain>,
@@ -686,7 +700,12 @@ fn reconcile_publications(
     #[cfg(not(target_arch = "wasm32"))] source: Res<LocalAudioSource>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
 ) {
-    let enabled = microphone_routes_open(*focus, &mic, *permission.get(), *availability.get());
+    let enabled = microphone_routes_open(
+        audio.microphone_focus(*focus),
+        &mic,
+        *permission.get(),
+        *availability.get(),
+    );
     let eligible = |room: Entity, participant: &LivekitParticipant| {
         rooms.get(room).is_ok_and(|room| {
             enabled
@@ -1452,6 +1471,7 @@ mod routing_tests {
             .insert_resource(mic_state(true, true))
             .init_resource::<CallMic>()
             .insert_resource(ClientWindowFocus::Focused)
+            .init_resource::<AudioSettings>()
             .add_systems(Startup, add_ping_systems)
             .add_systems(Update, transmission_state);
         let room = app.world_mut().spawn_empty().id();

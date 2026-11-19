@@ -3,7 +3,7 @@ use common::{
     debug_panic,
     inputs::SystemAction,
     rpc::{RpcCall, RpcCallEvent, RpcOrigin},
-    structs::{ClientWindowFocus, MicState},
+    structs::{AudioSettings, ClientWindowFocus, MicState},
 };
 use dcl_component::proto_components::kernel::apis::{
     VideoTrackSourceType, VideoTracksActiveStreamsData, VideoTracksActiveStreamsResponse,
@@ -390,19 +390,20 @@ fn respond_to_system_api(
     mut events: EventReader<SystemApi>,
     mut mic: ResMut<MicState>,
     focus: Option<Res<ClientWindowFocus>>,
+    audio: Option<Res<AudioSettings>>,
 ) {
     for ev in events.read() {
         match ev {
             // headless has no client window focus and never pauses the mic
             SystemApi::GetMicState(rpc_result_sender) => {
-                rpc_result_sender.send(
-                    mic.gated_by_client_window_focus(
-                        focus
-                            .as_deref()
-                            .copied()
-                            .unwrap_or(ClientWindowFocus::Focused),
-                    ),
-                );
+                let focus = focus
+                    .as_deref()
+                    .copied()
+                    .unwrap_or(ClientWindowFocus::Focused);
+                let focus = audio
+                    .as_deref()
+                    .map_or(focus, |audio| audio.microphone_focus(focus));
+                rpc_result_sender.send(mic.gated_by_client_window_focus(focus));
             }
             SystemApi::SetMicEnabled(enabled) => {
                 mic.request_enabled(*enabled);

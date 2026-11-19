@@ -17,12 +17,10 @@ use bevy::{
     prelude::*,
 };
 use bevy_console::ConsoleCommand;
-#[cfg(target_arch = "wasm32")]
-use common::structs::AudioSettings;
 use common::{
     rpc::RpcStreamSender,
     sets::SceneSets,
-    structs::{ClientWindowFocus, SystemAudio},
+    structs::{AudioSettings, ClientWindowFocus, SystemAudio},
     util::{redact_access_token, AsH160},
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
@@ -73,6 +71,7 @@ impl Plugin for VoiceChatPlugin {
         }
         app.init_resource::<VoiceChat>()
             .init_resource::<CallMic>()
+            .init_resource::<AudioSettings>()
             .init_resource::<VoiceInputs>();
         app.add_systems(
             Update,
@@ -422,7 +421,7 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// The state as the HUD sees it; the mic shows off while the client window lacks focus.
+    /// The state as the HUD sees it; the mic shows off while `focus`, the microphone's, lacks it.
     pub fn snapshot(
         &self,
         mic: &CallMic,
@@ -583,6 +582,7 @@ fn drive_voice_chat(
     mut voice: ResMut<VoiceChat>,
     mut call_mic: ResMut<CallMic>,
     focus: Res<ClientWindowFocus>,
+    audio: Res<AudioSettings>,
     mut inputs: ResMut<VoiceInputs>,
     mut system_api: EventReader<SystemApi>,
     mut social_events: EventReader<VoiceEventReceived>,
@@ -881,11 +881,12 @@ fn drive_voice_chat(
         || changed
         || connection_changed
         || call_mic.is_changed()
-        || focus.is_changed();
+        || focus.is_changed()
+        || audio.is_changed();
     if voice.state_streams.is_empty() || !dirty {
         return;
     }
-    let snapshot = voice.snapshot(&call_mic, *focus, &participants);
+    let snapshot = voice.snapshot(&call_mic, audio.microphone_focus(*focus), &participants);
     for sender in &voice.state_streams {
         let _ = sender.send(snapshot.clone());
     }
@@ -1104,6 +1105,7 @@ mod tests {
             .init_resource::<VoiceChat>()
             .init_resource::<CallMic>()
             .insert_resource(ClientWindowFocus::Focused)
+            .init_resource::<AudioSettings>()
             .init_resource::<VoiceInputs>()
             .init_resource::<SocialClient>()
             .init_resource::<Wallet>()

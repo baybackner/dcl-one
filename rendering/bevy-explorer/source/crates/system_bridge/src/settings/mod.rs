@@ -44,6 +44,7 @@ use language_setting::LanguageSetting;
 use load_distance::{LoadDistanceSetting, UnloadDistanceSetting};
 use max_avatars::MaxAvatarsSetting;
 use max_downloads::MaxDownloadsSetting;
+use mute_mic_in_background_setting::MuteMicInBackgroundSetting;
 use oob_setting::OobSetting;
 use player_settings::{JumpSetting, RunSpeedSetting, WalkSpeedSetting};
 use scene_threads::SceneThreadsSetting;
@@ -75,6 +76,7 @@ pub mod language_setting;
 pub mod load_distance;
 pub mod max_avatars;
 pub mod max_downloads;
+pub mod mute_mic_in_background_setting;
 pub mod oob_setting;
 pub mod parcel_grass_settings;
 pub mod player_settings;
@@ -227,6 +229,7 @@ impl Plugin for SettingBridgePlugin {
         add_int_setting::<VoiceChatVolumeSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<SystemVolumeSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<AvatarVolumeSetting>(app, &mut settings, &mut schedule, &config);
+        add_enum_setting::<MuteMicInBackgroundSetting>(app, &mut settings, &mut schedule, &config);
 
         add_enum_setting::<DmPrivacy>(app, &mut settings, &mut schedule, &config);
         app.init_resource::<PlayerLanguage>();
