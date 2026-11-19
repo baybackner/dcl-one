@@ -17,10 +17,12 @@ use bevy::{
     prelude::*,
 };
 use bevy_console::ConsoleCommand;
+#[cfg(any(target_arch = "wasm32", test))]
+use common::structs::AudioSettings;
 use common::{
     rpc::RpcStreamSender,
     sets::SceneSets,
-    structs::{AudioSettings, ClientWindowFocus, SystemAudio},
+    structs::{ClientWindowFocus, SystemAudio},
     util::{redact_access_token, AsH160},
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
@@ -71,7 +73,6 @@ impl Plugin for VoiceChatPlugin {
         }
         app.init_resource::<VoiceChat>()
             .init_resource::<CallMic>()
-            .init_resource::<AudioSettings>()
             .init_resource::<VoiceInputs>();
         app.add_systems(
             Update,
@@ -581,8 +582,7 @@ fn drive_voice_chat(
     mut commands: Commands,
     mut voice: ResMut<VoiceChat>,
     mut call_mic: ResMut<CallMic>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: crate::livekit::mic::MicrophoneFocus,
     mut inputs: ResMut<VoiceInputs>,
     mut system_api: EventReader<SystemApi>,
     mut social_events: EventReader<VoiceEventReceived>,
@@ -881,12 +881,11 @@ fn drive_voice_chat(
         || changed
         || connection_changed
         || call_mic.is_changed()
-        || focus.is_changed()
-        || audio.is_changed();
+        || focus.is_changed();
     if voice.state_streams.is_empty() || !dirty {
         return;
     }
-    let snapshot = voice.snapshot(&call_mic, audio.microphone_focus(*focus), &participants);
+    let snapshot = voice.snapshot(&call_mic, focus.get(), &participants);
     for sender in &voice.state_streams {
         let _ = sender.send(snapshot.clone());
     }

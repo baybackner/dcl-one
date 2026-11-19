@@ -59,6 +59,8 @@ impl Plugin for LivekitPlugin {
                 .add_systems(PreUpdate, crate::livekit::web::dispatch_page_events);
         }
 
+        app.init_resource::<AudioSettings>();
+
         // a headless app has no microphone, and plays no voices
         let headless = app
             .world()
@@ -390,7 +392,7 @@ fn respond_to_system_api(
     mut events: EventReader<SystemApi>,
     mut mic: ResMut<MicState>,
     focus: Option<Res<ClientWindowFocus>>,
-    audio: Option<Res<AudioSettings>>,
+    audio: Res<AudioSettings>,
 ) {
     for ev in events.read() {
         match ev {
@@ -400,10 +402,8 @@ fn respond_to_system_api(
                     .as_deref()
                     .copied()
                     .unwrap_or(ClientWindowFocus::Focused);
-                let focus = audio
-                    .as_deref()
-                    .map_or(focus, |audio| audio.microphone_focus(focus));
-                rpc_result_sender.send(mic.gated_by_client_window_focus(focus));
+                rpc_result_sender
+                    .send(mic.gated_by_client_window_focus(audio.microphone_focus(focus)));
             }
             SystemApi::SetMicEnabled(enabled) => {
                 mic.request_enabled(*enabled);

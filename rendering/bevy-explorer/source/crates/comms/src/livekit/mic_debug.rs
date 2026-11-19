@@ -110,8 +110,7 @@ fn microphone_info(
         ),
     >,
     permission: Res<State<MicrophonePermission>>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: MicrophoneFocus,
     transmission: Res<State<MicrophoneTransmissionState>>,
     speakers: Query<&LivekitParticipant, (With<ActiveSpeaker>, Without<Local>)>,
     #[cfg(not(target_arch = "wasm32"))] device: Option<Res<MicrophoneDevice>>,
@@ -120,7 +119,7 @@ fn microphone_info(
     let Some(Ok(_)) = input.take() else { return };
     let speakers: BTreeSet<_> = speakers.iter().map(|p| p.identity().to_string()).collect();
     #[allow(unused_mut)]
-    let mut report = json!({"available": mic.available, "enabled": mic.enabled, "connected": !connected.is_empty(), "permission": format!("{:?}", permission.get()), "windowFocus": format!("{:?}", *focus), "muteMicInBackground": audio.mute_mic_in_background,
+    let mut report = json!({"available": mic.available, "enabled": mic.enabled, "connected": !connected.is_empty(), "permission": format!("{:?}", permission.get()), "windowFocus": format!("{:?}", *focus.focus), "muteMicInBackground": focus.audio.mute_mic_in_background,
         "transmitting": *transmission.get() == MicrophoneTransmissionState::Enabled, "speakers": speakers.into_iter().take(32).collect::<Vec<_>>()});
     #[cfg(not(target_arch = "wasm32"))]
     {

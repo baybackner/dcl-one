@@ -342,16 +342,15 @@ fn voice_state_cmd(
 ) {
     if let Some(Ok(_)) = input.take() {
         #[cfg(feature = "livekit")]
-        let call = call
-            .zip(call_mic)
-            .zip(focus)
-            .map(|((call, call_mic), focus)| {
-                let focus = audio
-                    .as_deref()
-                    .map_or(*focus, |audio| audio.microphone_focus(*focus));
-                serde_json::to_value(call.snapshot(&call_mic, focus, &call_participants))
-                    .unwrap_or(Value::Null)
-            });
+        let call =
+            call.zip(call_mic)
+                .zip(focus)
+                .zip(audio)
+                .map(|(((call, call_mic), focus), audio)| {
+                    let focus = audio.microphone_focus(*focus);
+                    serde_json::to_value(call.snapshot(&call_mic, focus, &call_participants))
+                        .unwrap_or(Value::Null)
+                });
         #[cfg(not(feature = "livekit"))]
         let call = None;
         #[cfg(feature = "livekit")]

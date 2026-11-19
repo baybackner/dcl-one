@@ -5,7 +5,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use bevy::{ecs::relationship::Relationship, prelude::*};
+use bevy::{
+    ecs::{relationship::Relationship, system::SystemParam},
+    prelude::*,
+};
 use common::structs::{AudioSettings, ClientWindowFocus, MicState, SystemAudio};
 use tokio::{sync::oneshot, task::JoinHandle};
 use web_time::Instant;
@@ -73,7 +76,6 @@ impl Plugin for MicPlugin {
         app.init_state::<MicrophoneState>();
         app.init_state::<MicrophoneTransmissionState>();
         app.init_resource::<MicrophoneDrain>();
-        app.init_resource::<AudioSettings>();
         app.init_resource::<LastTransmission>();
 
         #[cfg(target_arch = "wasm32")]
@@ -339,6 +341,24 @@ fn suppress_nearby_voice_on_refusal(
     }
 }
 
+/// The focus every mic decision reads: the client window's while Mute Mic in Background is on,
+/// always `Focused` while it is off.
+#[derive(SystemParam)]
+pub(crate) struct MicrophoneFocus<'w> {
+    focus: Res<'w, ClientWindowFocus>,
+    audio: Res<'w, AudioSettings>,
+}
+
+impl MicrophoneFocus<'_> {
+    pub(crate) fn get(&self) -> ClientWindowFocus {
+        self.audio.microphone_focus(*self.focus)
+    }
+
+    pub(crate) fn is_changed(&self) -> bool {
+        self.focus.is_changed() || self.audio.is_changed()
+    }
+}
+
 /// While the scene blocks nearby voice, only the call's mic can be the one that stopped by choice.
 fn mic_off_pings(scene_blocked: bool, call_was_transmitting: bool) -> bool {
     !scene_blocked || call_was_transmitting
@@ -350,12 +370,11 @@ fn transmission_state(
     microphone_transmission_state: Res<State<MicrophoneTransmissionState>>,
     mut next_state: ResMut<NextState<MicrophoneTransmissionState>>,
     mut last: ResMut<LastTransmission>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: MicrophoneFocus,
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
 ) {
-    let focus = audio.microphone_focus(*focus);
+    let focus = focus.get();
     let mut transmitting = false;
     let mut call = false;
     for (publication, room) in &tracks {
@@ -531,14 +550,9 @@ fn enable_microphone_state_system(
     mut commands: Commands,
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: MicrophoneFocus,
 ) {
-    if can_capture_microphone(
-        &mic_state,
-        &call_mic,
-        microphone_state_focus(audio.microphone_focus(*focus)),
-    ) {
+    if can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(focus.get())) {
         debug!("Microphone is now enabled.");
         commands.set_state(MicrophoneState::Enabled);
     }
@@ -621,14 +635,9 @@ fn disable_microphone_state_system(
     mut commands: Commands,
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: MicrophoneFocus,
 ) {
-    if !can_capture_microphone(
-        &mic_state,
-        &call_mic,
-        microphone_state_focus(audio.microphone_focus(*focus)),
-    ) {
+    if !can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(focus.get())) {
         debug!("Microphone is now disabled.");
         commands.set_state(MicrophoneState::Disabled);
     }
@@ -691,8 +700,7 @@ fn reconcile_publications(
     )>,
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: Res<ClientWindowFocus>,
-    audio: Res<AudioSettings>,
+    focus: MicrophoneFocus,
     permission: Res<State<MicrophonePermission>>,
     availability: Res<State<MicrophoneAvailability>>,
     drain: Res<MicrophoneDrain>,
@@ -700,12 +708,7 @@ fn reconcile_publications(
     #[cfg(not(target_arch = "wasm32"))] source: Res<LocalAudioSource>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
 ) {
-    let enabled = microphone_routes_open(
-        audio.microphone_focus(*focus),
-        &mic,
-        *permission.get(),
-        *availability.get(),
-    );
+    let enabled = microphone_routes_open(focus.get(), &mic, *permission.get(), *availability.get());
     let eligible = |room: Entity, participant: &LivekitParticipant| {
         rooms.get(room).is_ok_and(|room| {
             enabled
@@ -1532,5 +1535,13 @@ mod routing_tests {
         app.world_mut().resource_mut::<CallMic>().enabled = true;
         transmit(true);
         assert_eq!(chimes(&mut app), 1, "the player's call mic starts");
+
+        // with Mute Mic in Background off, a stop without focus is the player's own
+        app.world_mut()
+            .resource_mut::<AudioSettings>()
+            .mute_mic_in_background = false;
+        app.insert_resource(ClientWindowFocus::NoFocus);
+        transmit(false);
+        assert_eq!(chimes(&mut app), 1, "the player closes the mic while away");
     }
 }
