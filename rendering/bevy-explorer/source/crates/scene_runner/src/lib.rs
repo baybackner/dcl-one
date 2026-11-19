@@ -67,9 +67,7 @@ use self::{
     initialize_scene::{
         LiveScenes, PointerResult, SceneLifecyclePlugin, SceneLoading, ScenePointers, PARCEL_SIZE,
     },
-    renderer_context::{
-        RendererSceneContext, SceneState, SCENE_FIRST_DISPATCH_TICK, SCENE_FIRST_UPDATE_TICK,
-    },
+    renderer_context::{RendererSceneContext, SceneState, SCENE_FIRST_DISPATCH_TICK},
     update_scene::SceneInputPlugin,
     update_world::{CrdtExtractors, SceneOutputPlugin},
 };
@@ -1694,14 +1692,19 @@ fn receive_scene_updates(
                                         frame: frame.0,
                                     });
                                 if Some(root) == movement_scene {
-                                    redispatch = movement_redispatch_due(
-                                        &mut updates,
-                                        &context,
-                                        &tick_timing,
-                                        first_poll,
-                                        time.elapsed_secs_f64(),
-                                    )
-                                    .then_some(root);
+                                    let previous_loop_end = updates.previous_loop_end;
+                                    let loop_end = updates.loop_end_time;
+                                    redispatch = updates
+                                        .movement_ticks
+                                        .redispatch_due(
+                                            &context,
+                                            &tick_timing,
+                                            first_poll,
+                                            time.elapsed_secs_f64(),
+                                            previous_loop_end,
+                                            loop_end,
+                                        )
+                                        .then_some(root);
                                 }
                             }
                             // extend (not assign) so renderer-side births (the inspector's /new_entity
@@ -1785,45 +1788,6 @@ fn receive_scene_updates(
             return;
         }
     }
-}
-
-/// Records the movement scene's tick that just replied and tells whether to dispatch the scene
-/// again now ([`movement_redispatch`]): its reply came in a later frame than its dispatch, the
-/// scene can run and, unless the reply is seen at this loop's first poll, the time left in this
-/// frame's scene loop covers its recent ticks.
-fn movement_redispatch_due(
-    updates: &mut SceneUpdates,
-    context: &RendererSceneContext,
-    tick_timing: &renderer_context::SceneTickTiming,
-    first_poll: bool,
-    now: f64,
-) -> bool {
-    let Some(reply) = tick_timing.reply else {
-        return false;
-    };
-    let late = reply.frame != reply.sent.frame;
-    updates
-        .movement_ticks
-        .record(movement_redispatch::tick_time(
-            reply.sent.at,
-            reply.at,
-            first_poll && late,
-            updates.previous_loop_end,
-        ));
-    updates.movement_ticks.late_replies += u64::from(late);
-    if !late
-        || context.last_sent >= now
-        || !context.blocked.is_empty()
-        || context.tick_number < SCENE_FIRST_UPDATE_TICK
-    {
-        return false;
-    }
-    let left = updates
-        .loop_end_time
-        .saturating_duration_since(Instant::now());
-    let due = updates.movement_ticks.redispatch_fits(left, first_poll);
-    updates.movement_ticks.redispatches += u64::from(due);
-    due
 }
 
 // entities deleted this loop

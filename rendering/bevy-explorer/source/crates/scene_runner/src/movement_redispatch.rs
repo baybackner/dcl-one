@@ -17,6 +17,8 @@ use std::{collections::VecDeque, time::Duration};
 
 use web_time::Instant;
 
+use crate::renderer_context::{RendererSceneContext, SceneTickTiming, SCENE_FIRST_UPDATE_TICK};
+
 /// Ticks the percentile is taken over.
 const TICK_SAMPLES: usize = 32;
 
@@ -36,7 +38,7 @@ pub(crate) struct MovementTickTimes {
 }
 
 impl MovementTickTimes {
-    pub(crate) fn record(&mut self, tick: Duration) {
+    fn record(&mut self, tick: Duration) {
         if self.samples.len() == TICK_SAMPLES {
             self.samples.pop_front();
         }
@@ -72,8 +74,45 @@ impl MovementTickTimes {
     /// The percentile cannot judge it there: a tick that missed its frame counts as lasting
     /// until its loop ended, so once over a tenth of the recent ticks miss, the percentile is at
     /// least a whole loop, more than any loop has left after its first poll.
-    pub(crate) fn redispatch_fits(&self, left: Duration, first_poll: bool) -> bool {
+    fn redispatch_fits(&self, left: Duration, first_poll: bool) -> bool {
         !left.is_zero() && (first_poll || self.p90().is_none_or(|p90| left >= p90))
+    }
+
+    /// Records the movement scene's tick that just replied and tells whether to dispatch the
+    /// scene again now: its reply came in a later frame than its dispatch, the scene can run and,
+    /// unless the reply is seen at this loop's first poll, the time left before `loop_end` covers
+    /// its recent ticks.
+    pub(crate) fn redispatch_due(
+        &mut self,
+        context: &RendererSceneContext,
+        tick_timing: &SceneTickTiming,
+        first_poll: bool,
+        now: f64,
+        previous_loop_end: Instant,
+        loop_end: Instant,
+    ) -> bool {
+        let Some(reply) = tick_timing.reply else {
+            return false;
+        };
+        let late = reply.frame != reply.sent.frame;
+        self.record(tick_time(
+            reply.sent.at,
+            reply.at,
+            first_poll && late,
+            previous_loop_end,
+        ));
+        self.late_replies += u64::from(late);
+        if !late
+            || context.last_sent >= now
+            || !context.blocked.is_empty()
+            || context.tick_number < SCENE_FIRST_UPDATE_TICK
+        {
+            return false;
+        }
+        let left = loop_end.saturating_duration_since(Instant::now());
+        let due = self.redispatch_fits(left, first_poll);
+        self.redispatches += u64::from(due);
+        due
     }
 }
 
@@ -81,7 +120,7 @@ impl MovementTickTimes {
 /// it runs, so a reply first seen at a loop's first poll, from a tick dispatched in an earlier
 /// frame, arrived some time after the previous loop ended: it counts as taking until then, the
 /// least it took.
-pub(crate) fn tick_time(
+fn tick_time(
     sent: Instant,
     received: Instant,
     first_poll_of_later_frame: bool,

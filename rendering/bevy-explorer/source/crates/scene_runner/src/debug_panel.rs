@@ -792,20 +792,24 @@ mod tests {
         let mut updates = app.world_mut().resource_mut::<SceneUpdates>();
         updates.priority_scenes.insert("movement_controller", scene);
         updates.loop_end_time = at + std::time::Duration::from_secs(1);
+        let previous_loop_end = updates.previous_loop_end;
+        let loop_end = updates.loop_end_time;
         // an on-time reply, then a late one, which is dispatched again
-        assert!(!crate::movement_redispatch_due(
-            &mut updates,
+        assert!(!updates.movement_ticks.redispatch_due(
             &context,
             &reply(6, 6),
             true,
-            1.0
+            1.0,
+            previous_loop_end,
+            loop_end
         ));
-        assert!(crate::movement_redispatch_due(
-            &mut updates,
+        assert!(updates.movement_ticks.redispatch_due(
             &context,
             &reply(6, 7),
             true,
-            1.0
+            1.0,
+            previous_loop_end,
+            loop_end
         ));
         updates
             .movement_ticks
