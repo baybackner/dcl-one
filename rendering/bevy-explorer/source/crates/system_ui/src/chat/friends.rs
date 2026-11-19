@@ -243,7 +243,7 @@ pub fn update_friends(
         let Ok(components) = components.single() else {
             return;
         };
-        // a disconnected client leaves the lists as they are
+        // without an initialized client the lists are left unchanged
         if let Some(client) = initialized_client {
             let new_friends = client
                 .friends

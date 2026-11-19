@@ -396,7 +396,7 @@ fn apply_player_move(
             camera_rotation,
             origin,
         } => {
-            // an interpolated move reports through its response; a move without one is instant
+            // a move with both a duration and a response interpolates; any other move is instant
             match (duration, response) {
                 (Some(d), Some(response)) => {
                     let d = d.max(f32::EPSILON);

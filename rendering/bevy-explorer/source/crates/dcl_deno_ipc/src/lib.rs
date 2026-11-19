@@ -454,7 +454,7 @@ pub fn spawn_scene(
     (main_sx, None)
 }
 
-/// Writes one length-prefixed message; an error means the pipe is closed.
+/// Writes one length-prefixed message and returns the first write error.
 pub async fn write_msg<T: Serialize>(stream: &mut SendHalf, value: &T) -> std::io::Result<()> {
     let bytes = rmp_encode(value).unwrap();
     stream

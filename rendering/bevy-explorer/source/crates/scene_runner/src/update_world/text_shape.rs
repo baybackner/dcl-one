@@ -1034,7 +1034,7 @@ impl GlyphAtlas {
         for (key, slot) in inked {
             let (page, old) = match slot.page {
                 Page::Sdf => (&mut self.sdf, &old_sdf_data),
-                // a colour glyph exists only with a colour page
+                // a colour glyph is dropped when either colour page is missing
                 Page::Color => {
                     let (Some(page), Some(old)) = (self.color.as_mut(), old_color_data.as_ref())
                     else {

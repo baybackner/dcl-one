@@ -1126,7 +1126,6 @@ impl NodeProcessing<'_, '_> {
                     .or_default();
                 *index += 1u32;
 
-                // a skinned mesh collides with its unskinned copy
                 let h_collider = data
                     .maybe_collider
                     .clone()
@@ -1151,7 +1150,6 @@ impl NodeProcessing<'_, '_> {
                     .or_default();
                 *index += 1u32;
 
-                // a skinned mesh collides with its unskinned copy
                 let h_collider = data
                     .maybe_collider
                     .clone()
@@ -2127,7 +2125,7 @@ fn expose_gltfs(
                     //     },
                     // )
                 }
-                // the gltf spawn inserts a node's material together with its name
+                // a material without a `GltfMaterialName` is not linked
                 if let (Some(material), Some(mat_name)) = (maybe_material, maybe_mat_name) {
                     debug!("link material ({} / {:?})", src, mat_name);
                     // hide
