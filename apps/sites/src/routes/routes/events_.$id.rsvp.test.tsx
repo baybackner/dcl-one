@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToString } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -16,7 +17,11 @@ describe("when the RSVP route renders a recurring event", () => {
         rsvp: { event, attendees: [], count: 0, fromFixture: false },
       } } },
     });
-    html = renderToString(<RouterProvider router={router} />);
+    html = renderToString(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
   });
   it("should display the next occurrence in both the event date and schedule", () => {
     expect(html.split(formatEventWhen(event.next_start_at))).toHaveLength(3);

@@ -1,5 +1,5 @@
 
-import LdRsvpEventView from "@ui/landings/pages/LdRsvpEventView";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 
 import {
   eventCoords,
@@ -86,20 +86,22 @@ export default function LandingsRsvpEvent({ loaderData }: Route.ComponentProps) 
   };
 
   return (
-    <LdRsvpEventView>
-      <RsvpWizard
-        trackCtx={{
-          sid,
-          story: STORY,
-          variant: assignment.variant,
-        }}
-        event={view}
-        count={rsvp.count}
-        initialStep={step ?? undefined}
-        commit={commit}
-        signedIn={auth.isConnected}
-        onSignIn={openSignIn}
-      />
-    </LdRsvpEventView>
+    <SitesLayout active="whatson">
+      <main className="landings-rsvp-route">
+        <RsvpWizard
+          trackCtx={{
+            sid,
+            story: STORY,
+            variant: assignment.variant,
+          }}
+          event={view}
+          count={rsvp.count}
+          initialStep={step ?? undefined}
+          commit={commit}
+          signedIn={auth.isConnected}
+          onSignIn={openSignIn}
+        />
+      </main>
+    </SitesLayout>
   );
 }
