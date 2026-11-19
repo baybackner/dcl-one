@@ -175,6 +175,9 @@ pub struct Settings {
     /// `OPS_WRITES_ENABLED` (false): the relay's write gate under `CREDITS_TRIAL_MODE`
     /// ([`router`]), in place of `DATA_WRITES_ENABLED`.
     pub ops_writes_enabled: bool,
+    /// `HTTP_TRUSTED_PROXY_CIDRS`: peers whose `X-Real-IP` names the client to the relay's
+    /// per-client limit.
+    pub trusted_proxy_cidrs: Vec<ipnet::IpNet>,
 }
 
 impl Settings {
@@ -219,6 +222,7 @@ impl Settings {
             usd_pegged_slippage_bps: 100,
             data_writes_enabled: false,
             ops_writes_enabled: false,
+            trusted_proxy_cidrs: Vec::new(),
         }
     }
 
@@ -397,7 +401,8 @@ pub struct State {
     pub eth_signer: Option<Arc<DirectSigner>>,
     pub runtime: Arc<RuntimeConfig>,
     /// `POST /v1/transactions` per client address ([`RELAY_REQUESTS_PER_WINDOW`] per
-    /// [`RELAY_RATE_WINDOW`]), checked before any validation.
+    /// [`RELAY_RATE_WINDOW`]), checked before any validation. In memory: each API process
+    /// counts its own requests, and a restart clears it.
     pub relay_limiter: RateLimiter,
 }
 

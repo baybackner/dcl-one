@@ -705,6 +705,7 @@ pub async fn serve(
         usd_pegged_slippage_bps: config.economy.usd_pegged_slippage_bps,
         data_writes_enabled: config.writes.data_writes_enabled,
         ops_writes_enabled: config.ops.ops_writes_enabled,
+        trusted_proxy_cidrs: config.node.http_trusted_proxy_cidrs.clone(),
     };
     // Names the variable, never echoes a value.
     economy_settings

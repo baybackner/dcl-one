@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
@@ -20,10 +20,12 @@ use crate::evm::upstream::UpstreamForwarder;
 /// forwarded from an upstream relay, is answered without it.
 pub async fn send_transaction(
     State(state): State<SharedState>,
+    peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    if let Some(refused) = refuse_over_client_limit(&state, &headers).await {
+    let peer = peer.map(|Extension(ConnectInfo(p))| p);
+    if let Some(refused) = refuse_over_client_limit(&state, &headers, peer).await {
         return refused;
     }
     match relay(&state, &headers, body).await {
@@ -33,27 +35,46 @@ pub async fn send_transaction(
     }
 }
 
-/// Seconds until a client over its limit earns its next request.
-const RETRY_AFTER_SECS: u64 =
-    crate::evm::RELAY_RATE_WINDOW.as_secs() / crate::evm::RELAY_REQUESTS_PER_WINDOW as u64;
+/// Seconds until a client over its limit earns its next request: the bucket's refill interval,
+/// rounded up and never 0.
+pub(crate) const RETRY_AFTER_SECS: u64 = retry_after_secs(
+    crate::evm::RELAY_RATE_WINDOW.as_secs(),
+    crate::evm::RELAY_REQUESTS_PER_WINDOW as u64,
+);
 
-/// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address ([`crate::shared::client_ip::client_ip`],
-/// pinned by the server) spent its window, before the body is parsed or validated. Requests
-/// without an address share one bucket.
-async fn refuse_over_client_limit(state: &SharedState, headers: &HeaderMap) -> Option<Response> {
-    let ip = crate::shared::client_ip::client_ip(headers);
-    let key = if ip.is_empty() {
-        "unspecified".to_string()
-    } else {
-        crate::shared::client_ip::source_key(&ip)
-    };
+pub(crate) const fn retry_after_secs(window_secs: u64, requests: u64) -> u64 {
+    let secs = window_secs.div_ceil(if requests == 0 { 1 } else { requests });
+    if secs == 0 { 1 } else { secs }
+}
+
+/// The unix second a limited client may retry at: the first whole second at least `wait` after
+/// `now`, so it is never early.
+pub(crate) fn retry_at(now: chrono::DateTime<chrono::Utc>, wait: u64) -> i64 {
+    let ms = now.timestamp_millis() + wait as i64 * 1000;
+    ms.div_euclid(1000) + i64::from(ms.rem_euclid(1000) != 0)
+}
+
+/// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address spent
+/// its window, before the body is parsed or validated. Only an address naming one client
+/// ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's own
+/// address would put every client in one bucket. The limiter is per process.
+async fn refuse_over_client_limit(
+    state: &SharedState,
+    headers: &HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+) -> Option<Response> {
+    let ip = crate::shared::client_ip::distinct_client_ip(
+        headers,
+        peer,
+        &state.settings.trusted_proxy_cidrs,
+    )?;
+    let key = crate::shared::client_ip::source_key(&ip);
     if state.relay_limiter.check(&key) == crate::shared::limits::RateLimitDecision::Allow {
         return None;
     }
-    let retry_at = chrono::Utc::now().timestamp() + RETRY_AFTER_SECS as i64;
     let mut response = not_sent(ApiError::RateLimited {
         message: format!("Too many requests. Retry in {RETRY_AFTER_SECS} seconds."),
-        retry_at,
+        retry_at: retry_at(chrono::Utc::now(), RETRY_AFTER_SECS),
     })
     .await;
     response

@@ -504,48 +504,204 @@ fn unique_address() -> String {
     format!("{:#x}", PrivateKeySigner::random().address())
 }
 
+/// `POST /v1/transactions` from TCP peer `peer`, with `real_ip` as its `X-Real-IP`.
+async fn post_from(
+    app: &axum::Router,
+    peer: &str,
+    real_ip: Option<&str>,
+    body: String,
+) -> axum::response::Response {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/v1/transactions")
+        .header("content-type", "application/json")
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::new(
+            peer.parse().unwrap(),
+            4242,
+        )));
+    if let Some(ip) = real_ip {
+        req = req.header("x-real-ip", ip);
+    }
+    app.clone()
+        .oneshot(req.body(Body::from(body)).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn json_of(res: axum::response::Response) -> (u16, Value) {
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+/// The relay as `serve` mounts it: forwarding headers pinned to the peer unless it is a listed proxy.
+fn pinned_relay(settings: Settings) -> axum::Router {
+    let trusted = settings.trusted_proxy_cidrs.clone();
+    crate::shared::client_ip::pin_client_headers(router(state(lazy_pool(), settings)), trusted)
+}
+
+/// Spends the client's whole window with requests refused at parse time.
+async fn exhaust_relay_window(app: &axum::Router, peer: &str, real_ip: Option<&str>) {
+    for _ in 0..super::RELAY_REQUESTS_PER_WINDOW {
+        assert_eq!(
+            post_from(app, peer, real_ip, "{}".into()).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
 /// Each client address gets 30 relay requests per minute; the next one is answered 429 with
 /// `Retry-After` before the body is parsed or validated, while another address is still served.
 #[tokio::test]
 async fn relay_requests_are_limited_per_client_address() {
-    let app = router(state(lazy_pool(), Settings::for_tests()));
-    let post_as = |ip: &'static str| {
-        let app = app.clone();
-        async move {
-            let req = Request::builder()
-                .method("POST")
-                .uri("/v1/transactions")
-                .header("content-type", "application/json")
-                .header("x-real-ip", ip)
-                .body(Body::from("{}"))
-                .unwrap();
-            app.oneshot(req).await.unwrap()
-        }
-    };
-    for _ in 0..super::RELAY_REQUESTS_PER_WINDOW {
-        assert_eq!(
-            post_as("203.0.113.7").await.status(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-    let limited = post_as("203.0.113.7").await;
+    let app = pinned_relay(Settings::for_tests());
+    exhaust_relay_window(&app, "203.0.113.7", None).await;
+    let before = chrono::Utc::now().timestamp();
+    let limited = post_from(&app, "203.0.113.7", None, "{}".into()).await;
     assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(limited.headers()["retry-after"], "2");
-    let bytes = axum::body::to_bytes(limited.into_body(), 1 << 16)
-        .await
-        .unwrap();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let (_, body) = json_of(limited).await;
     assert_eq!(body["error"], "api_limit_reached", "{body}");
     assert_eq!(body["code"], "api_limit_reached", "{body}");
     assert_eq!(body["not_sent"], true, "{body}");
     assert!(body.get("quota").is_none(), "{body}");
     let retry_at = body["retryAt"].as_i64().expect("retryAt");
-    let now = chrono::Utc::now().timestamp();
-    assert!((now..=now + 2).contains(&retry_at), "{body}");
+    let after = chrono::Utc::now().timestamp();
+    assert!((before + 2..=after + 3).contains(&retry_at), "{body}");
     assert_eq!(
-        post_as("203.0.113.8").await.status(),
+        post_from(&app, "203.0.113.8", None, "{}".into())
+            .await
+            .status(),
         StatusCode::BAD_REQUEST
     );
+}
+
+/// Behind a listed proxy each `X-Real-IP` is its own client.
+#[tokio::test]
+async fn a_trusted_proxy_names_each_client_to_the_relay_limit() {
+    let settings = Settings {
+        trusted_proxy_cidrs: vec!["10.0.0.0/8".parse().unwrap()],
+        ..Settings::for_tests()
+    };
+    let app = pinned_relay(settings);
+    exhaust_relay_window(&app, "10.0.0.2", Some("203.0.113.7")).await;
+    assert_eq!(
+        post_from(&app, "10.0.0.2", Some("203.0.113.7"), "{}".into())
+            .await
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        post_from(&app, "10.0.0.2", Some("203.0.113.8"), "{}".into())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+/// An unlisted private peer (a gateway missing from `HTTP_TRUSTED_PROXY_CIDRS`) names no single
+/// client, so its requests are not limited per client and its clients never share one bucket.
+#[tokio::test]
+async fn an_unlisted_gateway_does_not_put_every_client_in_one_relay_bucket() {
+    let app = pinned_relay(Settings::for_tests());
+    for n in 0..super::RELAY_REQUESTS_PER_WINDOW * 2 {
+        let client = format!("198.51.100.{}", n % 250);
+        assert_eq!(
+            post_from(&app, "172.18.0.5", Some(&client), "{}".into())
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[test]
+fn the_relay_retry_wait_rounds_up_and_is_never_zero() {
+    use super::handlers::transactions::{RETRY_AFTER_SECS, retry_after_secs};
+    assert_eq!(RETRY_AFTER_SECS, 2);
+    assert_eq!(retry_after_secs(60, 30), 2);
+    assert_eq!(retry_after_secs(60, 40), 2, "a 1.5s refill waits 2s");
+    assert_eq!(retry_after_secs(60, 120), 1, "never 0");
+    assert_eq!(retry_after_secs(60, 0), 60);
+}
+
+#[test]
+fn the_relay_retry_time_is_never_early() {
+    use super::handlers::transactions::retry_at;
+    let at = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap();
+    assert_eq!(retry_at(at(1_000_000), 2), 1_002);
+    assert_eq!(retry_at(at(1_000_001), 2), 1_003);
+    assert_eq!(retry_at(at(1_000_999), 2), 1_003);
+}
+
+/// A limited request reaches neither the quota nor the free-call budget: a sale and a free call
+/// from a client over its limit are answered 429 and reserve nothing, while the same calls from
+/// another client relay and reserve one row each.
+#[tokio::test]
+async fn a_limited_relay_request_reserves_no_quota_or_free_call() {
+    use super::abi::{ItemToBuy, buyCall};
+    use crate::policy_entry::{call_args, manager_routes};
+    use crate::types::ChainId;
+    let _mirror_rows = crate::market::tests::support::MIRROR_STATE_LOCK
+        .lock()
+        .await;
+    let Some(pool) = scratch_pool().await else {
+        return;
+    };
+    seed_collection(&pool, COLLECTION).await;
+    seed_collection(&pool, MANAGER).await;
+    seed_item(&pool, COLLECTION, 4, "wearable_v2", VICTIM).await;
+    let app = oz_app(&pool).await;
+    let key = PrivateKeySigner::random();
+    let user = format!("{:#x}", key.address());
+    let buy = buyCall {
+        itemsToBuy: vec![ItemToBuy {
+            collection: COLLECTION.parse().unwrap(),
+            ids: vec![U256::from(4)],
+            prices: vec![U256::from(1_000_000_000_000_000_000u128)],
+            beneficiaries: vec![key.address()],
+        }],
+    };
+    let sale = tx_body(
+        &user,
+        MANAGER,
+        &signed_split_calldata(
+            &key,
+            &use_credits(
+                manager_routes(ChainId::POLYGON).unwrap().collection_store,
+                buyCall::SELECTOR,
+                call_args(&buy),
+                U256::ZERO,
+            ),
+        ),
+    );
+    let free = tx_body(&user, COLLECTION, &signed_split_calldata(&key, FS));
+
+    exhaust_relay_window(&app, "203.0.113.7", None).await;
+    let (sale_status, sale_body) =
+        json_of(post_from(&app, "203.0.113.7", None, sale.clone()).await).await;
+    let (free_status, free_body) =
+        json_of(post_from(&app, "203.0.113.7", None, free.clone()).await).await;
+    let limited_rows = row_count(&pool, &user).await;
+    let (sale_ok, sale_ok_body) = json_of(post_from(&app, "203.0.113.8", None, sale).await).await;
+    let (free_ok, free_ok_body) = json_of(post_from(&app, "203.0.113.8", None, free).await).await;
+    let served_rows = row_count(&pool, &user).await;
+    cleanup_user(&pool, &user).await;
+
+    assert_eq!(sale_status, 429, "{sale_body}");
+    assert_eq!(free_status, 429, "{free_body}");
+    assert_eq!(limited_rows, 0, "a limited request reserves nothing");
+    assert_eq!(
+        sale_ok, 200,
+        "the sale relays for another client: {sale_ok_body}"
+    );
+    assert_eq!(
+        free_ok, 200,
+        "the free call relays for another client: {free_ok_body}"
+    );
+    assert_eq!(served_rows, 2, "each relayed call reserves one row");
 }
 
 /// A spent free-call budget says when the next free call is admitted, counted over every free
