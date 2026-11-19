@@ -31,6 +31,31 @@
     opacity: 1;
   }
 }
+/* A fresh open over the world fades through black, as unity-explorer does: the view fades in under
+   an opaque veil for the first half of --dur-pop, so the world darkens to black, then the veil fades
+   out over the second half and reveals the page, an engine-drawn body included. */
+.animateThroughDark {
+  animation: menuIn calc(var(--dur-pop) / 2) linear;
+}
+.darkFrame {
+  position: absolute;
+  inset: 0;
+  /* above every layer a page stacks inside the overlay */
+  z-index: 10;
+  background: #000;
+  pointer-events: none;
+  opacity: 0;
+  animation: darkFrameOut var(--dur-pop) linear;
+}
+@keyframes darkFrameOut {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
 /* Transparent-body pages (engine map / avatar preview): the overlay itself becomes a
    pass-through hole so the scene behind receives map-drag / avatar-rotate events. The
    top bar re-enables pointer events for its own controls. */

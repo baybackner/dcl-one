@@ -117,7 +117,7 @@ export function MainMenuShell({
     )
   }
   return (
-    <div className={`${styles.overlay} ${animate ? styles.animateIn : ''} ${transparentBody ? styles.overlayPass : ''}`.trim()}>
+    <div className={`${styles.overlay} ${animate ? styles.animateThroughDark : ''} ${transparentBody ? styles.overlayPass : ''}`.trim()}>
       <header className={styles.topbar}>
         <div className={styles.brand}>
           <DclLogo size={25} />
@@ -171,6 +171,7 @@ export function MainMenuShell({
       <div className={styles.accent} />
       {!transparentBody && <MenuBackdrop className={styles.backdropSlot} watermark={active === 'settings' ? 'settings' : undefined} />}
       <div className={`${styles.body} ${transparentBody ? styles.bodyTransparent : ''}`.trim()}>{children}</div>
+      {animate && <div className={styles.darkFrame} aria-hidden="true" />}
     </div>
   )
 }

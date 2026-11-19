@@ -1,7 +1,11 @@
-/* The dimmed, DPI-scaled scrim is drawn by the popup layer (openPassport → PopupHost `.dim`); the
-   panel is centered inside it on the 1920x1080 canvas, so every length here is a canvas pixel.
+/* The dimmed, DPI-scaled scrim is drawn by the popup layer (openPassport → PopupHost `.dim`) and
+   darkened by `.scrim`; the panel is centered inside it on the 1920x1080 canvas, so every length
+   here is a canvas pixel.
    Layout: the avatar (or the selected badge) down the whole left
    side, and on the right the name, the tab row and the scrolling sections. */
+.scrim.scrim {
+  background: var(--passport-scrim);
+}
 .panel {
   /* The Photos tab's viewer covers the panel. */
   position: relative;

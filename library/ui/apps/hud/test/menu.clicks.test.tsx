@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MainMenuShell } from '../features/menu/MainMenuShell'
 import { ProfileChip } from '../features/menu/ProfileChip'
+import shellStyles from '../features/menu/MainMenuShell.module.css'
 
 describe('main menu shell nav', () => {
   function shell() {
@@ -36,6 +37,31 @@ describe('main menu shell nav', () => {
     const { onClose } = shell()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('main menu shell entrance', () => {
+  const darkFrames = (container: HTMLElement): number => container.getElementsByClassName(shellStyles.darkFrame).length
+
+  it('a fresh open fades through a dark frame', () => {
+    const { container } = render(
+      <MainMenuShell active="map" onNavigate={vi.fn()} onClose={vi.fn()}>
+        <div>body</div>
+      </MainMenuShell>
+    )
+    expect(darkFrames(container)).toBe(1)
+  })
+
+  it('a page switch keeps the open view without a dark frame', () => {
+    const page = (active: string): React.JSX.Element => (
+      <MainMenuShell key={active} active={active} onNavigate={vi.fn()} onClose={vi.fn()}>
+        <div>{active}</div>
+      </MainMenuShell>
+    )
+    const { container, rerender } = render(page('map'))
+    rerender(page('backpack'))
+    expect(screen.getByText('backpack')).toBeTruthy()
+    expect(darkFrames(container)).toBe(0)
   })
 })
 
