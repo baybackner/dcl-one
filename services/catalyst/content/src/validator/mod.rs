@@ -330,7 +330,8 @@ pub async fn validate(
 
 /// The access step alone, asked of the chain as it stands now instead of at
 /// the entity timestamp: a deployer must still hold the pointers of an
-/// entity published after `REQUEST_TTL_BACKWARDS` (a partial upload).
+/// entity published after `REQUEST_TTL_BACKWARDS` (a partial upload). The
+/// block five minutes before now still grants, as for every access check.
 pub async fn validate_current_access(
     entity: &Entity,
     ctx: &Context<'_>,

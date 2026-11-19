@@ -931,9 +931,11 @@ impl WriteDeployer {
         }
     }
 
-    /// Access at the current chain state, for a local scene older than
-    /// `REQUEST_TTL_BACKWARDS` (only a partial upload's publication gets
-    /// there): access at its timestamp alone may predate a LAND transfer.
+    /// Access at the current chain state, for a partial upload's scene
+    /// published past `REQUEST_TTL_BACKWARDS`: access at its timestamp alone
+    /// may predate a LAND transfer. Like every access check it grants what
+    /// the block five minutes before allows, so a transfer in the last five
+    /// minutes does not refuse it.
     async fn validate_current_access(
         &self,
         entity: &Entity,
@@ -1260,9 +1262,9 @@ impl WriteDeployer {
         }
 
         if context == "LOCAL"
+            && ttl_anchor_ms.is_some()
             && entity.entity_type == EntityType::Scene
-            && chrono::Utc::now().timestamp_millis() - entity.timestamp
-                > self.request_ttl_backwards_ms()
+            && now_ms - entity.timestamp > self.request_ttl_backwards_ms()
             && let Err(failure) = self.validate_current_access(&entity, &auth_chain).await
         {
             warn!(entity_id, errors = ?failure, "deployment refused: no current access");
