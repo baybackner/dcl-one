@@ -108,4 +108,26 @@ describe("the Shop's nametag feed", () => {
     nametag.tick(0, null)
     expect(sent).toEqual([A, null])
   })
+
+  it('follows the view as it moves, from the last anchor read and without reading again, until the stage goes', async () => {
+    const reads: ((p: Point | null) => void)[] = []
+    const sent: (Point | null)[] = []
+    let lift = 0 // the view's move: a point shows this much higher in the window
+    const nametag = createNametagFeed<number, Point>({
+      read: () => new Promise<Point | null>((resolve) => reads.push(resolve)),
+      project: (p) => ({ x: p.x, y: p.y - lift }),
+      send: (p) => sent.push(p)
+    })
+    nametag.reproject() // nothing read yet: nothing to tell
+    nametag.tick(0, 7)
+    reads[0](A)
+    await settle()
+    lift = 0.05 // the camera eases to Names' framing
+    nametag.reproject()
+    expect(sent).toEqual([A, { x: A.x, y: A.y - 0.05 }])
+    expect(reads).toHaveLength(1)
+    nametag.restage() // the stage goes
+    nametag.reproject()
+    expect(sent).toEqual([A, { x: A.x, y: A.y - 0.05 }, null])
+  })
 })

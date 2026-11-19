@@ -23,7 +23,7 @@ import type { AvatarLook } from '@explorer-core/engine/avatarEquip'
 import { LOBBY_STAGE_PRESETS } from '@explorer-core/engine/lobbyStage'
 import { BevyApi } from '../bevy-api'
 import { createNametagFeed } from './previewNametagFeed'
-import { shiftWithin, windowPoint, type SceneOffset } from './previewView'
+import { SHOP_FRAMING, SHOP_NAMES_FRAMING, shiftWithin, windowPoint, type SceneOffset } from './previewView'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -52,9 +52,7 @@ const FRAMING: Record<PreviewFocus, { range: number; centerY: number }> = {
   bottom: { range: 3.96, centerY: 1.15 },
   shoes: { range: 3.03, centerY: 0.35 }
 }
-// The Shop's whole body in its 573×942 window, as the design draws it: the avatar ~751px tall, its feet on
-// the stage's floor logo (~970px down the screen). The Shop frames nothing else.
-const SHOP_FRAMING = { range: 4.9, centerY: 1.84 }
+// The Shop frames the whole body only, as its page draws it: ./previewView's SHOP_FRAMING and SHOP_NAMES_FRAMING.
 // The sign-in screens' whole body: the head about 23% down the screen, the feet about 77%, on a podium
 // about a quarter of the screen wide.
 const SIGNIN_FRAMING = { range: 7.3, centerY: 1.95 }
@@ -747,6 +745,8 @@ export function registerAvatarPreview(ctx: Ctx): void {
       pollEmotes(dt)
     }
   })
+  // Whether the camera eased this frame: the Shop's nametag follows the view (below).
+  let eased = false
   ctx.push((dt) => {
     if (framingT >= 1 || cameraEntity == null || stage !== 'backpack') return
     framingT = Math.min(1, framingT + dt / FOCUS_SECONDS)
@@ -756,6 +756,7 @@ export function registerAvatarPreview(ctx: Ctx): void {
       centerY: framingFrom.centerY + (framingTo.centerY - framingFrom.centerY) * e
     }
     applyFraming(framing)
+    eased = true
   })
 
   // The Shop's nametag stands where the engine puts its avatar's own: over the head and what it wears, following the
@@ -769,14 +770,27 @@ export function registerAvatarPreview(ctx: Ctx): void {
   })
   ctx.push((dt) => {
     nametag.tick(dt, shopStage != null && stage === 'backpack' && BevyApi.avatarNametagAnchor != null ? avatarEntity : null)
+    if (eased) {
+      eased = false
+      nametag.reproject()
+    }
   })
 
   // The Shop draws its stage around the avatar's window: the same image goes behind the avatar, standing on
-  // the floor the image has, so the Backpack's podium steps aside.
+  // the floor the image has, so the Backpack's podium steps aside. The avatar is framed as the page draws it.
   ctx.on('previewStage', (msg) => {
+    const page = msg.framing === 'names' ? SHOP_NAMES_FRAMING : SHOP_FRAMING
+    // Another page of the Shop, its stage staying up: the camera eases to that page's framing, the nametag with it.
+    if (shopStage != null && msg.rect != null && page !== framingTo) {
+      shopStage = msg.rect
+      framingFrom = framing
+      framingTo = page
+      framingT = 0
+      return
+    }
     shopStage = msg.rect
     showPodium(shopStage == null)
-    framing = framingFrom = framingTo = shopStage != null ? SHOP_FRAMING : FRAMING.body
+    framing = framingFrom = framingTo = shopStage != null ? page : FRAMING.body
     framingT = 1
     applyFraming(framing)
     nametag.restage()

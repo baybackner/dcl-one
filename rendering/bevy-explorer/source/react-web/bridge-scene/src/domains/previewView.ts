@@ -8,6 +8,14 @@ export type SceneOffset = { x: number; y: number; z: number }
 /** Shares of the preview window: of its width from its left, of its height from its top. */
 export type WindowPoint = { x: number; y: number }
 
+/** The Shop's whole body in its 573×942 window, as the design's catalogue pages draw it: the avatar ~751px tall,
+ *  its feet on the stage's floor logo (~970px down the screen). */
+export const SHOP_FRAMING: Framing = { range: 4.9, centerY: 1.84 }
+/** The Shop's Names pages draw the same avatar smaller and lower, with room over its head for the nametag: the
+ *  design's Player at 91.9% of the catalogue's (842.9px tall against 917.4px), its box from 109px down the window
+ *  rather than 1.4px above it. So the view is the catalogue's over 0.919, centred 0.42m higher. */
+export const SHOP_NAMES_FRAMING: Framing = { range: 5.33, centerY: 2.26 }
+
 /** The view's centre moved `shift` metres up at zoom `z`, kept inside the framing. */
 export function shiftWithin(f: { range: number }, z: number, shift: number): number {
   const room = (f.range - f.range / z) / 2

@@ -17,4 +17,15 @@ describe("the Shop avatar's nametag", () => {
     act(() => h.driver.emit({ kind: 'previewNametag', anchor: null }))
     await waitFor(() => expect(h.session().shop.nametagAnchor).toBeNull())
   })
+
+  it("tells the engine how the Shop's page draws the avatar with its stage, and nothing more when not told", () => {
+    const h = renderSession({ userId: null })
+    const rect = { x: 0, y: -70, width: 1920, height: 1080 }
+    act(() => h.session().backpack.stage(rect, 'names'))
+    expect(h.driver.last('previewStage')).toEqual({ kind: 'previewStage', rect, framing: 'names' })
+    act(() => h.session().backpack.stage(rect))
+    expect(h.driver.last('previewStage')).toEqual({ kind: 'previewStage', rect })
+    act(() => h.session().backpack.stage(null))
+    expect(h.driver.last('previewStage')).toEqual({ kind: 'previewStage', rect: null })
+  })
 })

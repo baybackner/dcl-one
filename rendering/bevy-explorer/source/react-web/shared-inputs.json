@@ -5916,11 +5916,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewNametagFeed.ts",
-      "sha256": "818c855a0cde1255ab1858b8dbe54d09860cb50c624a8d28a5fa57ce7a401e89"
+      "sha256": "c1665f0617f89c633d52fa51c3c411afe9b43a20a141f1015d079a2357a460ec"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
-      "sha256": "64f115e99516d4e8669daef8d7c735ab0da052b2409d672aa11025a87228f744"
+      "sha256": "ffcf866aa56c38f48292d4f275b0109cd88b74bd2cfcee261f993fd311b6314e"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/profile.ts",
@@ -6152,11 +6152,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewNametagFeed.test.ts",
-      "sha256": "a557b5784b1bc9c204bad2322a242a882602aaa036daf1c3c9f354961afd34ee"
+      "sha256": "1001728bade7c197d11ff45abc4a610916fec5b94bdd41038482db93e6bb6a29"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",
-      "sha256": "cf2c514178e2309404c7ac073c3fc230dd7fd645cb2c415db6778560707c4fe3"
+      "sha256": "a54a522a2d95afaca060afff8e61548acc869d1fea7b6a1cce869c00ebc4e2e8"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",
@@ -6495,7 +6495,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "8bbc19c6ff507bdc179806d926ba34923702093c549db3c7bc61f2bfafee88fc"
+      "sha256": "1e4f0c1461c0525871d93d0cae1c825d29a6824cf5b9dd9296634d85d93f2c97"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -10007,7 +10007,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "22a0428716b565b8e17a64f816de5908aa01c19f0884182baba8810aaee8fb9a"
+      "sha256": "fafa2d2738c2abd276948c8b5bfcdbac30fd8b66b968f990db11f9630c9a6425"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -10723,7 +10723,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/shopNametag.test.tsx",
-      "sha256": "c35bfd18fca7a9fb966863014e8d4e93014bc12d2556ef036d79dc989baf7549"
+      "sha256": "29acf864949e7a5b34cfc5066a7336044ec1d9cd8506803eeb1db8a8d6d62bce"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebar.test.tsx",

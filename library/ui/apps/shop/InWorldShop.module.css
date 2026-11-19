@@ -284,8 +284,9 @@
 }
 /* Over an avatar the engine has measured, the nametag's foot stands on the engine's nametag anchor (--nametag-x and
    --nametag-y, set on the stage, in the avatar's window at its left): over the head and what the avatar wears,
-   following the head, as in the world. The tag is 54.07px tall. */
+   following the head, as in the world. The tag is 54.07px tall, placed by its centre. Over a hat too tall for the
+   window it stays in the window, its top on the window's, rather than over the Shop's tabs. */
 .nametagAnchored {
   left: var(--nametag-x);
-  top: calc(var(--nametag-y) - 27.03px);
+  top: max(27.03px, calc(var(--nametag-y) - 27.03px));
 }

@@ -16,6 +16,9 @@ export interface NametagFeed<A> {
   restage(): void
   /** A frame, `dt` seconds on: `avatar` is the Shop's avatar while its stage is up, else null. */
   tick(dt: number, avatar: A | null): void
+  /** The view moved (the camera easing to another page's framing): the last anchor read is told where it falls
+   *  now, without waiting for the next read. */
+  reproject(): void
 }
 
 export function createNametagFeed<A, O>(deps: {
@@ -26,6 +29,8 @@ export function createNametagFeed<A, O>(deps: {
   send: (anchor: WindowPoint | null) => void
 }): NametagFeed<A> {
   let told: WindowPoint | null = null
+  // The last anchor read for the avatar on the stage, as the engine gave it: none since the last drop.
+  let last: O | null = null
   let generation = 0
   let reading = false
   let wait = 0
@@ -46,6 +51,7 @@ export function createNametagFeed<A, O>(deps: {
     generation++
     reading = false
     wait = 0
+    last = null
   }
   return {
     restage(): void {
@@ -75,15 +81,20 @@ export function createNametagFeed<A, O>(deps: {
         (anchor) => {
           if (asked !== generation) return
           reading = false
+          last = anchor
           publish(anchor == null ? null : deps.project(anchor))
         },
         () => {
           // a failed read: the design's place until a read answers again
           if (asked !== generation) return
           reading = false
+          last = null
           publish(null)
         }
       )
+    },
+    reproject(): void {
+      if (last != null) publish(deps.project(last))
     }
   }
 }
