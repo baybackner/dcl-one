@@ -10,7 +10,7 @@ use common::structs::AppConfig;
 use super::{NamedVariant, Setting, SettingCategory, SettingInfo, Settings};
 
 pub const TITLE: &str = "Microphone";
-const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem Default follows the device's own choice. While a chosen microphone is unplugged, voice chat uses the system default.";
+const DESCRIPTION: &str = "The microphone voice chat captures from.\n\nSystem Default follows the device's own choice. While a chosen microphone is unplugged, voice chat uses the system default.\n\nThe list fills in once microphone access is granted.";
 
 /// An audio input the host offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +58,15 @@ impl MicrophoneDevices {
     /// Whether the host reported its inputs and `id` was not among them.
     pub fn missing(&self, id: &str) -> bool {
         self.reported() && !self.contains(id)
+    }
+
+    /// How `id` is named in the choices, if it is one.
+    pub fn label(&self, id: &str) -> Option<String> {
+        let reported = self.reported();
+        self.read()
+            .iter()
+            .find(|entry| entry.device.id == id)
+            .map(|entry| shown_label(entry, reported))
     }
 
     /// Whether the host reported its inputs and `id` was among them.
@@ -119,9 +128,17 @@ impl MicrophoneDevices {
     }
 }
 
+/// Before the first report nothing is known to be unplugged.
+fn shown_label(entry: &KnownMicrophone, reported: bool) -> String {
+    if entry.present || !reported {
+        entry.device.label.clone()
+    } else {
+        format!("{} (unplugged)", entry.device.label)
+    }
+}
+
 fn choice(devices: &MicrophoneDevices, config: &AppConfig) -> f32 {
     config
-        .audio
         .microphone
         .as_ref()
         .and_then(|id| {
@@ -139,7 +156,6 @@ fn info(devices: &MicrophoneDevices, config: &AppConfig) -> SettingInfo {
         description: DESCRIPTION.to_owned(),
     };
     let value = choice(devices, config);
-    // before the first report nothing is known to be unplugged
     let reported = devices.reported();
     let known = devices.read();
     SettingInfo {
@@ -149,13 +165,11 @@ fn info(devices: &MicrophoneDevices, config: &AppConfig) -> SettingInfo {
         min_value: 0.0,
         max_value: (known.len() + 1) as f32,
         named_variants: std::iter::once(variant("System Default".to_owned()))
-            .chain(known.iter().map(|entry| {
-                variant(if entry.present || !reported {
-                    entry.device.label.clone()
-                } else {
-                    format!("{} (unplugged)", entry.device.label)
-                })
-            }))
+            .chain(
+                known
+                    .iter()
+                    .map(|entry| variant(shown_label(entry, reported))),
+            )
             .collect(),
         value,
         default: 0.0,
@@ -171,7 +185,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
         .world_mut()
         .get_resource_or_init::<MicrophoneDevices>()
         .clone();
-    if let Some(id) = &config.audio.microphone {
+    if let Some(id) = &config.microphone {
         devices.remember(id);
     }
     let apply_devices = devices.clone();
@@ -181,7 +195,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
         apply: Some(Box::new(
             move |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
                 let index = value as usize;
-                config.audio.microphone = match index {
+                config.microphone = match index {
                     0 => None,
                     index => Some(
                         apply_devices
@@ -197,6 +211,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
             },
         )),
         load: Box::new(move |config: &AppConfig| choice(&devices, config)),
+        runtime_choices: true,
     });
     app.add_systems(
         Update,
@@ -270,17 +285,13 @@ mod tests {
 
         set(&mut app, 2.0).unwrap();
         assert_eq!(
-            app.world()
-                .resource::<AppConfig>()
-                .audio
-                .microphone
-                .as_deref(),
+            app.world().resource::<AppConfig>().microphone.as_deref(),
             Some("b")
         );
         assert_eq!(shown(&app).value, 2.0);
 
         set(&mut app, 0.0).unwrap();
-        assert_eq!(app.world().resource::<AppConfig>().audio.microphone, None);
+        assert_eq!(app.world().resource::<AppConfig>().microphone, None);
     }
 
     #[test]
@@ -288,15 +299,11 @@ mod tests {
         let mut app = app();
         report(&mut app, &["a"]);
         assert!(set(&mut app, 2.0).is_err());
-        assert_eq!(app.world().resource::<AppConfig>().audio.microphone, None);
+        assert_eq!(app.world().resource::<AppConfig>().microphone, None);
 
         set(&mut app, 1.0).unwrap();
         assert_eq!(
-            app.world()
-                .resource::<AppConfig>()
-                .audio
-                .microphone
-                .as_deref(),
+            app.world().resource::<AppConfig>().microphone.as_deref(),
             Some("a")
         );
     }
@@ -327,20 +334,12 @@ mod tests {
         report(&mut app, &["c", "a"]);
         set(&mut app, 1.0).unwrap();
         assert_eq!(
-            app.world()
-                .resource::<AppConfig>()
-                .audio
-                .microphone
-                .as_deref(),
+            app.world().resource::<AppConfig>().microphone.as_deref(),
             Some("a")
         );
         set(&mut app, 2.0).unwrap();
         assert_eq!(
-            app.world()
-                .resource::<AppConfig>()
-                .audio
-                .microphone
-                .as_deref(),
+            app.world().resource::<AppConfig>().microphone.as_deref(),
             Some("b")
         );
     }
@@ -348,7 +347,7 @@ mod tests {
     #[test]
     fn a_saved_choice_not_yet_reported_shows_as_chosen_by_its_saved_name() {
         let mut config = AppConfig::default();
-        config.audio.microphone = Some("headset".to_owned());
+        config.microphone = Some("headset".to_owned());
         let mut app = App::new();
         app.insert_resource(config.clone());
         let mut settings = Settings {

@@ -11,6 +11,8 @@ function error(...args) {
 var audioContext = null;
 var microphonePermission = "denied";
 var reportMicrophoneDevices = () => {};
+// numbers each listing, so one that resolves after a newer one is dropped
+var microphoneListing = 0;
 const roomPlayback = new WeakMap();
 
 /**
@@ -79,9 +81,13 @@ export function watchMicrophoneDevices(on_change) {
         return;
     }
     reportMicrophoneDevices = () => {
+        const listing = ++microphoneListing;
         navigator.mediaDevices
             .enumerateDevices()
             .then((devices) => {
+                if (listing !== microphoneListing) {
+                    return;
+                }
                 const audio = devices.filter((device) => device.kind === "audioinput");
                 // hidden ids, or a list that may be empty only for want of permission
                 if (

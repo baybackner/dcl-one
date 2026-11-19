@@ -228,8 +228,8 @@ impl MicrophonePublication {
         self.device = device;
     }
 
-    /// A different choice, or the chosen input offered again after the route fell back from it
-    /// or it went missing, needs a new route.
+    /// A different choice needs a new route, and so does the chosen input going missing (the new
+    /// route falls back to the system default) or being offered again after a fallback.
     fn captures_choice(&self, choice: Option<&str>, devices: &MicrophoneDevices) -> bool {
         if self.device.as_deref() != choice {
             return false;
@@ -237,7 +237,11 @@ impl MicrophonePublication {
         let Some(id) = choice else {
             return true;
         };
-        !(devices.offers(id) && (self.fell_back || devices.absences(id) != self.absences))
+        if self.fell_back {
+            !devices.offers(id)
+        } else {
+            devices.absences(id) == self.absences
+        }
     }
 
     fn should_remove(&self, eligible: bool) -> bool {
@@ -730,7 +734,7 @@ fn reconcile_publications(
     let mut revoking = false;
     for (entity, participant, room, publication) in &participants {
         if let Some(publication) = publication {
-            let current = publication.captures_choice(config.audio.microphone.as_deref(), &devices);
+            let current = publication.captures_choice(config.microphone.as_deref(), &devices);
             if publication.should_remove(current && eligible(room.get(), participant)) {
                 commands
                     .entity(entity)
@@ -780,7 +784,7 @@ fn reconcile_publications(
         let receiver = source.subscribe();
         #[cfg(not(target_arch = "wasm32"))]
         let (sample_rate, channels) = (format.sample_rate, format.channels);
-        let device = config.audio.microphone.clone();
+        let device = config.microphone.clone();
         #[cfg(target_arch = "wasm32")]
         let task_device = device.clone();
 
@@ -1069,7 +1073,7 @@ mod routing_tests {
     }
 
     #[test]
-    fn a_route_is_replaced_for_another_choice_or_when_its_fallen_back_choice_returns() {
+    fn a_route_is_replaced_for_another_choice_or_when_its_choice_goes_missing_or_returns() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -1085,42 +1089,43 @@ mod routing_tests {
         assert!(!default.captures_choice(Some("headset"), &devices));
 
         let headset_id = || Some("headset".to_owned());
+        let route = |devices: &MicrophoneDevices| {
+            let mut route = pending(&runtime, &drain);
+            route.choose(headset_id(), devices);
+            route
+        };
 
-        // built on a saved choice before the page reported any input, which then lists it
-        // the setting lists the saved choice before any report
+        // the setting lists the saved choice before any report; the first report lists it
         devices.remember("headset");
-        let mut early = pending(&runtime, &drain);
-        early.choose(headset_id(), &devices);
+        let early = route(&devices);
         assert!(early.captures_choice(Some("headset"), &devices));
         devices.replace(vec![headset.clone()]);
         assert!(early.captures_choice(Some("headset"), &devices));
 
-        // built on a saved choice before the page reported any input, which then lacks it
+        // the first report lacks the saved choice: rebuilt on the default, then on the headset
         let fresh = MicrophoneDevices::default();
         fresh.remember("headset");
-        let mut early_missing = pending(&runtime, &drain);
-        early_missing.choose(headset_id(), &fresh);
+        let early_missing = route(&fresh);
         fresh.replace(Vec::new());
-        assert!(early_missing.captures_choice(Some("headset"), &fresh));
-        fresh.replace(vec![headset.clone()]);
         assert!(!early_missing.captures_choice(Some("headset"), &fresh));
+        let fallback = route(&fresh);
+        assert!(fallback.captures_choice(Some("headset"), &fresh));
+        fresh.replace(vec![headset.clone()]);
+        assert!(!fallback.captures_choice(Some("headset"), &fresh));
 
-        // built while the headset is missing, then plugged in
-        devices.replace(Vec::new());
-        let mut fallen_back = pending(&runtime, &drain);
-        fallen_back.choose(headset_id(), &devices);
-        assert!(fallen_back.captures_choice(Some("headset"), &devices));
-        devices.replace(vec![headset.clone()]);
-        assert!(!fallen_back.captures_choice(Some("headset"), &devices));
-
-        // built on the headset, then unplugged and replugged before any check
-        let mut on_headset = pending(&runtime, &drain);
-        on_headset.choose(headset_id(), &devices);
+        // on the headset: unplugging it rebuilds, as does replugging it before any check
+        let on_headset = route(&devices);
         assert!(on_headset.captures_choice(Some("headset"), &devices));
         assert!(!on_headset.captures_choice(None, &devices));
         devices.replace(Vec::new());
-        devices.replace(vec![headset]);
         assert!(!on_headset.captures_choice(Some("headset"), &devices));
+        let replugged = route(&devices);
+        devices.replace(vec![headset.clone()]);
+        assert!(!replugged.captures_choice(Some("headset"), &devices));
+        let quick = route(&devices);
+        devices.replace(Vec::new());
+        devices.replace(vec![headset]);
+        assert!(!quick.captures_choice(Some("headset"), &devices));
     }
 
     #[test]

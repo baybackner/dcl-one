@@ -32,6 +32,7 @@ impl Plugin for MicDebugPlugin {
                     ("Client window focus", "windowFocus"),
                     ("Local microphone track active", "transmitting"),
                     ("Active remote speakers (up to 32)", "speakers"),
+                    ("Microphone routes", "routes"),
                     ("Available input devices", "devices"),
                     #[cfg(not(target_arch = "wasm32"))]
                     ("Current input device", "device"),
@@ -117,9 +118,8 @@ fn microphone_info(
     speakers: Query<&LivekitParticipant, (With<ActiveSpeaker>, Without<Local>)>,
     #[cfg(not(target_arch = "wasm32"))] device: Option<Res<MicrophoneDevice>>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
-    #[cfg(target_arch = "wasm32")] devices: Res<
-        system_bridge::settings::microphone_setting::MicrophoneDevices,
-    >,
+    devices: Res<MicrophoneDevices>,
+    routes: Query<&MicrophonePublication>,
     #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
     #[cfg(target_arch = "wasm32")] settings: Res<system_bridge::settings::Settings>,
 ) {
@@ -144,20 +144,28 @@ fn microphone_info(
             "devices": "Input device enumeration failed",
         });
     }
+    report["routes"] = json!(routes
+        .iter()
+        .map(|route| {
+            let input = route
+                .device
+                .as_deref()
+                .map_or("System Default".to_owned(), |id| {
+                    devices.label(id).unwrap_or_else(|| id.to_owned())
+                });
+            if route.fell_back {
+                format!("{input}: fell back to the system default")
+            } else {
+                input
+            }
+        })
+        .collect::<Vec<_>>());
     #[cfg(target_arch = "wasm32")]
     {
-        let chosen = config.audio.microphone.as_ref().map(|id| {
+        let chosen = config.microphone.as_ref().map(|id| {
             devices
-                .read()
-                .iter()
-                .find(|known| &known.device.id == id)
-                .map_or("Chosen device (unknown)".to_owned(), |known| {
-                    if known.present || !devices.reported() {
-                        known.device.label.clone()
-                    } else {
-                        format!("{} (unplugged)", known.device.label)
-                    }
-                })
+                .label(id)
+                .unwrap_or_else(|| "Chosen device (unknown)".to_owned())
         });
         report["device"] = json!(chosen.as_deref().unwrap_or("System Default"));
         report["devices"] = json!(devices.reported().then(|| devices

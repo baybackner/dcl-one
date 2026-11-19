@@ -658,6 +658,8 @@ pub struct AppConfig {
     pub camera_smoothing: CameraSmoothing,
     /// The language the player chose (BCP-47); `None` follows the system language.
     pub language: Option<String>,
+    /// The chosen audio input's device id; `None` uses the system default.
+    pub microphone: Option<String>,
     /// Base url of an abgen Bevy variants service (prototype), when `--bevy-variants-url` /
     /// `?bevyVariants=` is absent; `None` = the asset-bundle generator's CDN for the base
     /// domain, `off` = off.
@@ -722,6 +724,7 @@ impl Default for AppConfig {
             dm_privacy: None,
             camera_smoothing: Default::default(),
             language: None,
+            microphone: None,
             bevy_variants_url: None,
             settings_generation: SETTINGS_GENERATION,
             inputs_generation: INPUTS_GENERATION,
@@ -1064,8 +1067,6 @@ pub struct AudioSettings {
     pub scene: i32,
     pub system: i32,
     pub avatar: i32,
-    /// The chosen audio input's device id; `None` uses the system default.
-    pub microphone: Option<String>,
 }
 
 impl Default for AudioSettings {
@@ -1077,7 +1078,6 @@ impl Default for AudioSettings {
             scene: 100,
             system: 100,
             avatar: 100,
-            microphone: None,
         }
     }
 }
@@ -2502,7 +2502,6 @@ mod tests {
                 scene: 30,
                 system: 20,
                 avatar: 10,
-                microphone: None,
             }
         );
     }

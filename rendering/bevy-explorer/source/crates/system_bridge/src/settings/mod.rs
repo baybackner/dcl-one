@@ -354,6 +354,8 @@ pub struct Setting {
     >,
     /// The displayed value for the current config, for settings changed outside `set_value`.
     load: Box<dyn Fn(&AppConfig) -> f32 + Send + Sync + 'static>,
+    /// The named choices change at runtime, so a list taken once goes stale.
+    runtime_choices: bool,
 }
 
 #[derive(Resource)]
@@ -422,6 +424,7 @@ impl Settings {
                 },
             )),
             load: Box::new(|config: &AppConfig| S::load(config).value() as f32 * S::scale()),
+            runtime_choices: false,
         });
     }
 
@@ -466,6 +469,7 @@ impl Settings {
                 },
             )),
             load: Box::new(|config: &AppConfig| displayed::<S>(config)),
+            runtime_choices: false,
         });
     }
 }
