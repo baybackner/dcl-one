@@ -22,6 +22,8 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 wallet = { workspace = true }
 system_bridge = { workspace = true }
+parking_lot = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
+parking_lot = { workspace = true, features = ["nightly"] }

@@ -17,3 +17,7 @@ clap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+parking_lot = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+parking_lot = { workspace = true, features = ["nightly"] }

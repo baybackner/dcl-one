@@ -5,7 +5,7 @@ use bevy_console::{
 };
 use clap::Parser;
 use common::{rpc::RpcResultReceiver, sets::SceneSets};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 mod debug_panel;
 pub use debug_panel::{AddDebugSection, DebugInput, DebugInputKind, DebugSection};
@@ -266,7 +266,7 @@ impl PendingConsoleResponses {
         let receiver = Mutex::new(receiver);
         self.0.push(PendingResponse {
             poll: Box::new(move || {
-                let mut guard = receiver.lock().unwrap();
+                let mut guard = receiver.lock();
                 match guard.poll_once() {
                     Ok(Some(val)) => Some(map(val)),
                     Ok(None) => None,
@@ -290,7 +290,7 @@ impl PendingConsoleResponses {
         let receiver = Mutex::new(receiver);
         self.0.push(PendingResponse {
             poll: Box::new(move || {
-                let mut guard = receiver.lock().unwrap();
+                let mut guard = receiver.lock();
                 match guard.try_recv() {
                     Ok(val) => Some(map(val)),
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,

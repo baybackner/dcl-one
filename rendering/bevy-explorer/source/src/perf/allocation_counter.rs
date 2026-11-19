@@ -64,9 +64,7 @@ mod tests {
     #[test]
     fn every_allocation_counts_once_and_a_reallocation_counts_its_growth() {
         // the counters are process-wide: serialised with the other tests that touch them
-        let _shared = crate::perf::profiled_scopes::SHARED_PROFILER_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let _shared = crate::perf::profiled_scopes::SHARED_PROFILER_TEST_LOCK.lock();
         let allocator = CountingAllocator(System);
         let before = (
             ALLOCATION_COUNT.load(Ordering::Relaxed),

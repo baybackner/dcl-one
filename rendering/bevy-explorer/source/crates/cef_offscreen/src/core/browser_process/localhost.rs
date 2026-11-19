@@ -17,9 +17,10 @@ use cef::{
     Response, SchemeHandlerFactory, WrapResourceHandler, WrapSchemeHandlerFactory, sys,
 };
 use cef_dll_sys::{_cef_resource_handler_t, cef_base_ref_counted_t};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::os::raw::c_int;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// `cef://` scheme response asset.
 #[derive(Asset, Reflect, Debug, Clone, Serialize, Deserialize)]
@@ -214,11 +215,8 @@ impl ImplResourceHandler for LocalResourceHandlerBuilder {
                     })
                     .await;
                 let response = rx.recv().await.unwrap_or_default();
-                headers_responser.lock().unwrap().prepare(&response, &range);
-                data_responser
-                    .lock()
-                    .unwrap()
-                    .prepare(response.data, &range);
+                headers_responser.lock().prepare(&response, &range);
+                data_responser.lock().prepare(response.data, &range);
                 callback.cont();
             })
             .detach();
@@ -231,9 +229,7 @@ impl ImplResourceHandler for LocalResourceHandlerBuilder {
         response_length: Option<&mut i64>,
         _redirect_url: Option<&mut CefString>,
     ) {
-        let Ok(responser) = self.headers.lock() else {
-            return;
-        };
+        let responser = self.headers.lock();
         if let Some(response) = response {
             response.set_mime_type(Some(&responser.mime_type.as_str().into()));
             response.set_status(responser.status_code as _);
@@ -262,9 +258,7 @@ impl ImplResourceHandler for LocalResourceHandlerBuilder {
             // If no bytes_read is provided, we cannot read data
             return 0;
         };
-        let Ok(mut responser) = self.data.lock() else {
-            return 0;
-        };
+        let mut responser = self.data.lock();
         match responser.read(bytes_to_read as _) {
             Some(data) if !data.is_empty() => {
                 let n = data.len();

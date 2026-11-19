@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
@@ -96,7 +97,7 @@ impl Room {
     }
 
     pub fn metadata(&self) -> String {
-        self.metadata.lock().unwrap().clone()
+        self.metadata.lock().clone()
     }
 
     pub fn local_participant(&self) -> LocalParticipant {

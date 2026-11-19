@@ -1,8 +1,9 @@
+use parking_lot::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::borrow::Cow;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 
 use bevy::{ecs::relationship::Relationship, prelude::*};
@@ -216,20 +217,14 @@ impl MicrophonePublication {
         // A task exit without an acknowledged stop still needs the drain barrier.
         !eligible
             || self.revoked.load(Ordering::SeqCst)
-            || (self.task.is_finished()
-                && self
-                    .state
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .stopped_at
-                    .is_none())
+            || (self.task.is_finished() && self.state.lock().stopped_at.is_none())
     }
 
     fn retry_state(&self, now: Instant) -> Option<RetryState> {
         if !self.task.is_finished() {
             return None;
         }
-        let state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let state = self.state.lock();
         let elapsed = now
             .saturating_duration_since(state.stopped_at?)
             .as_secs_f64();
@@ -238,7 +233,7 @@ impl MicrophonePublication {
 
     pub(crate) fn revoke(&self) {
         self.revoked.store(true, Ordering::SeqCst);
-        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let mut state = self.state.lock();
         state.revoked = true;
         state.transmitting = false;
         if let Some(track) = &state.track {
@@ -259,7 +254,7 @@ impl Drop for MicrophonePublication {
 }
 
 fn complete_publication(state: &Mutex<PublicationControl>, drain: &MicrophoneDrain, stopped: bool) {
-    let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut state = state.lock();
     state.transmitting = false;
     if stopped {
         state.track = None;
@@ -356,10 +351,7 @@ fn transmission_state(
     let mut transmitting = false;
     let mut call = false;
     for (publication, room) in &tracks {
-        let state = publication
-            .state
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let state = publication.state.lock();
         if state.transmitting {
             transmitting = true;
             call |= voice_rooms.contains(room.get());
@@ -781,7 +773,7 @@ fn reconcile_publications(
             // Both backends create tracks muted. Publishing itself may outlive cancellation;
             // a canceled publication is never unmuted.
             {
-                let mut state = task_state.lock().unwrap_or_else(|err| err.into_inner());
+                let mut state = task_state.lock();
                 state.track = Some(track.clone());
             }
             let mut published = false;
@@ -802,7 +794,7 @@ fn reconcile_publications(
             }
             if published {
                 {
-                    let mut state = task_state.lock().unwrap_or_else(|err| err.into_inner());
+                    let mut state = task_state.lock();
                     if !state.revoked {
                         mute_local_track(&track, false);
                         state.transmitting = true;
@@ -945,11 +937,7 @@ async fn build_audio_local_track(
                 break;
             }
             // Keep real samples out of the source until this route has activated transmission.
-            if !state
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .transmitting
-            {
+            if !state.lock().transmitting {
                 continue;
             }
             if let Err(e) = new_source
@@ -1132,7 +1120,7 @@ mod routing_tests {
         assert_eq!(drain.pending(), 1);
         assert!(revoked.load(Ordering::SeqCst));
         // A late completion retains revocation; it can never unmute the old route.
-        assert!(state.lock().unwrap().revoked);
+        assert!(state.lock().revoked);
         complete_publication(&state, &drain, true);
         assert_eq!(drain.pending(), 0);
     }
@@ -1176,7 +1164,7 @@ mod routing_tests {
         publication.task =
             runtime.spawn(async move { complete_publication(&state, &task_drain, true) });
         runtime.block_on(&mut publication.task).unwrap();
-        let stopped_at = publication.state.lock().unwrap().stopped_at.unwrap();
+        let stopped_at = publication.state.lock().stopped_at.unwrap();
         assert!(publication.retry_state(stopped_at).is_none());
         assert!(publication.should_remove(false));
         assert!(!publication.should_remove(true));
@@ -1277,7 +1265,7 @@ mod routing_tests {
             publication.revoked.clone(),
             publication.state.clone(),
         ));
-        publication.state.lock().unwrap().track = Some(track.clone());
+        publication.state.lock().track = Some(track.clone());
         // Native LiveKit finishes publish by enabling the RTC track while its mute bit is set.
         track.enable();
         assert!(track.is_muted() && track.is_enabled());
@@ -1472,7 +1460,7 @@ mod routing_tests {
                 .sum::<usize>()
         };
         let transmit = |transmitting: bool| {
-            control.lock().unwrap().transmitting = transmitting;
+            control.lock().transmitting = transmitting;
         };
 
         transmit(true);

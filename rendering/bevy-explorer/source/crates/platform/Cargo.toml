@@ -36,6 +36,7 @@ async-compat = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 sys-locale = { workspace = true }
+parking_lot = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = { workspace = true }

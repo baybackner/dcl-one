@@ -44,7 +44,7 @@ pub fn media_host_main(render_worker: Worker) {
     if HOST
         .set(HostHandle {
             commands: commands_tx,
-            events: std::sync::Mutex::new(Some(events_rx)),
+            events: parking_lot::Mutex::new(Some(events_rx)),
         })
         .is_err()
     {

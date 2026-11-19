@@ -202,7 +202,7 @@ mod request_tests {
             tokio::sync::mpsc::unbounded_channel().0,
         ));
         {
-            let mut failed = ipfs.failed_remotes.lock().unwrap();
+            let mut failed = ipfs.failed_remotes.lock();
             failed.record(
                 "https://a.example/contents/x".into(),
                 Some(reqwest::StatusCode::NOT_FOUND),
@@ -214,7 +214,7 @@ mod request_tests {
         ipfs.record_scene_batch(2);
         ipfs.record_attachment_batch(4);
         {
-            let mut metrics = ipfs.request_metrics.downloads.lock().unwrap();
+            let mut metrics = ipfs.request_metrics.downloads.lock();
             metrics.download(0, Duration::from_millis(500), None);
             metrics.download(
                 10 * 1024,
@@ -279,7 +279,6 @@ fn web_state(mut input: ConsoleCommand<WebState>, ipfs: Res<IpfsResource>, confi
                 "missingForSession": ipfs
                     .failed_remotes
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .session_len(),
                 "cacheChecks": cache_checks,
                 "cacheDrops": cache_drops,

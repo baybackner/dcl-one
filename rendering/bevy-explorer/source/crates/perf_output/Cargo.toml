@@ -17,7 +17,11 @@ bevy = { workspace = true }
 web-time = { workspace = true }
 # the query-set and pass-timestamp types of the GPU frame time (gpu.rs), which bevy does not re-export
 wgpu = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 # the panic hook main.rs installs, for the end-to-end test
 log-panics = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+parking_lot = { workspace = true, features = ["nightly"] }

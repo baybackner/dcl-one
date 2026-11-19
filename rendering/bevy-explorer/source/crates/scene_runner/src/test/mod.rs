@@ -1,4 +1,5 @@
-use std::{path::PathBuf, sync::Mutex, time::Instant};
+use parking_lot::Mutex;
+use std::{path::PathBuf, time::Instant};
 
 use std::{collections::BTreeMap, fs::File, io::Write};
 
@@ -69,7 +70,7 @@ impl PluginGroup for TestPlugins {
     fn build(self) -> PluginGroupBuilder {
         let builder = PluginGroupBuilder::start::<Self>();
 
-        let mut log_added = LOG_ADDED.lock().unwrap();
+        let mut log_added = LOG_ADDED.lock();
         let builder = if !*log_added {
             *log_added = true;
             builder.add(LogPlugin::default())

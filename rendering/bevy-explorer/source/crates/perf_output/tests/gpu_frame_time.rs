@@ -9,8 +9,9 @@
 //! WGPU_BACKEND=vulkan cargo test -p perf_output --test gpu_frame_time -- --ignored --nocapture
 //! ```
 
+use parking_lot::Mutex;
 use std::{
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -205,17 +206,14 @@ impl<S: Subscriber> Layer<S> for Lines {
         }
         let mut message = Message(String::new());
         event.record(&mut message);
-        self.0
-            .lock()
-            .unwrap()
-            .push((*event.metadata().level(), message.0));
+        self.0.lock().push((*event.metadata().level(), message.0));
     }
 }
 
 #[test]
 #[ignore = "needs a GPU with TIMESTAMP_QUERY; run with --ignored"]
 fn the_frame_s_gpu_work_is_measured_and_the_render_world_s_cpu_time_is_not() {
-    let _renderer = ONE_RENDERER.lock().unwrap_or_else(|e| e.into_inner());
+    let _renderer = ONE_RENDERER.lock();
     let mut app = app(WgpuSettings::default(), Some(WorkAndStallPlugin));
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut values = Vec::new();
@@ -238,7 +236,7 @@ fn the_frame_s_gpu_work_is_measured_and_the_render_world_s_cpu_time_is_not() {
 #[test]
 #[ignore = "needs a GPU; run with --ignored"]
 fn an_adapter_without_timestamp_queries_logs_once_and_registers_nothing() {
-    let _renderer = ONE_RENDERER.lock().unwrap_or_else(|e| e.into_inner());
+    let _renderer = ONE_RENDERER.lock();
     let lines = Lines::default();
     let subscriber = registry().with(lines.clone());
     tracing::subscriber::with_default(subscriber, || {
@@ -255,7 +253,7 @@ fn an_adapter_without_timestamp_queries_logs_once_and_registers_nothing() {
         assert_eq!(measurements(&app), None);
     });
     assert_eq!(
-        *lines.0.lock().unwrap(),
+        *lines.0.lock(),
         [(
             Level::INFO,
             "GPU frame time unavailable: the adapter has no timestamp queries".to_owned()

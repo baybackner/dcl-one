@@ -97,7 +97,7 @@ struct AvSources(HashMap<MediaId, AvSource>);
 
 /// Relays the open sources' commands to the page and the page's events back as [`VideoData`].
 fn serve_av_sources(mut sources: ResMut<AvSources>, mut receiver: ResMut<MediaEventReceiver>) {
-    for source in NEW_SOURCES.lock().unwrap().drain(..) {
+    for source in NEW_SOURCES.lock().drain(..) {
         sources.0.insert(source.id, source);
     }
 
@@ -116,9 +116,7 @@ fn serve_av_sources(mut sources: ResMut<AvSources>, mut receiver: ResMut<MediaEv
     });
 
     if receiver.0.is_none() {
-        receiver.0 = HOST
-            .get()
-            .and_then(|host| host.events.lock().unwrap().take());
+        receiver.0 = HOST.get().and_then(|host| host.events.lock().take());
     }
     let Some(receiver) = receiver.0.as_mut() else {
         return;

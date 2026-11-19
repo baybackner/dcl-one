@@ -10,8 +10,8 @@ use cef::{
     ImplV8Context, ImplV8Value, ProcessId, ProcessMessage, V8Context, V8Propertyattribute, V8Value,
     WrapRenderProcessHandler, sys, v8_value_create_function, v8_value_create_object,
 };
+use parking_lot::Mutex;
 use std::os::raw::c_int;
-use std::sync::Mutex;
 
 pub(crate) static LISTEN_EVENTS: Mutex<HashMap<String, V8Value>> = Mutex::new(HashMap::new());
 
@@ -132,10 +132,7 @@ fn handle_listen_message(message: &ProcessMessage, mut ctx: V8Context) {
     let id = argument_list.string(0).into_string();
     let payload = argument_list.string(1).into_string();
 
-    let callback = LISTEN_EVENTS
-        .lock()
-        .ok()
-        .and_then(|events| events.get(&id).cloned());
+    let callback = LISTEN_EVENTS.lock().get(&id).cloned();
     let Some(callback) = callback else {
         return; // no listener yet (page still loading) — drop the event
     };

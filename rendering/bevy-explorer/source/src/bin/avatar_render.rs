@@ -17,10 +17,8 @@
 //! behind a proxy. Exits 0 once every file is written, 1 when the avatars never
 //! finish loading within `--max-frames`, 2 on bad arguments.
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use parking_lot::Mutex;
+use std::{path::PathBuf, sync::Arc};
 
 use avatar::{
     avatar_texture::{BoothInstance, PhotoBooth},
@@ -299,7 +297,7 @@ fn drive_capture(
 ) {
     let expected = jobs.jobs.len() * 2;
     if state.captured {
-        let written = state.written.lock().unwrap();
+        let written = state.written.lock();
         if written.len() < expected {
             return;
         }
@@ -362,7 +360,7 @@ fn drive_capture(
                                 .map(|()| path.clone())
                                 .map_err(|e| format!("{}: {e}", path.display()))
                         });
-                    written.lock().unwrap().push(result);
+                    written.lock().push(result);
                 });
         }
     }

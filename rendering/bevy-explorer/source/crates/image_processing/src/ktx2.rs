@@ -18,9 +18,10 @@
 //! with dds, so the next load reads dds. One it can't transcode fails to load: glTF content never
 //! reaches bevy's own KTX2 decode, which trusts the header's sizes and offsets.
 
+use parking_lot::Mutex;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -48,9 +49,9 @@ const RESULT_LIFETIME: Duration = Duration::from_secs(60);
 
 /// Drops the transcodes stashed longer than `RESULT_LIFETIME`.
 pub(crate) fn evict_stale_results() {
-    if let Ok(mut results) = KTX2_RESULTS.lock() {
-        results.retain(|_, (stashed, _)| stashed.elapsed() < RESULT_LIFETIME);
-    }
+    KTX2_RESULTS
+        .lock()
+        .retain(|_, (stashed, _)| stashed.elapsed() < RESULT_LIFETIME);
 }
 
 /// Whether a transcode for `path` is stashed for a cache write: an unlabelled path, which has a
@@ -105,14 +106,12 @@ pub(crate) fn transcode_ktx2_image(
         Ok(dds) => {
             match path {
                 Some(path) if is_cacheable_path(path) => {
-                    if let Ok(mut results) = KTX2_RESULTS.lock() {
-                        results.insert(path.to_string(), (Instant::now(), dds.clone()));
-                    }
+                    KTX2_RESULTS
+                        .lock()
+                        .insert(path.to_string(), (Instant::now(), dds.clone()));
                 }
                 Some(path) => {
-                    if let Ok(mut noted) = EMBEDDED_TRANSCODES.lock() {
-                        noted.insert(path.to_string());
-                    }
+                    EMBEDDED_TRANSCODES.lock().insert(path.to_string());
                 }
                 None => {}
             }
@@ -142,15 +141,11 @@ mod tests {
     const DDS_MAGIC: &[u8] = b"DDS ";
 
     fn stashed(path: &str) -> bool {
-        KTX2_RESULTS.lock().unwrap().contains_key(path)
+        KTX2_RESULTS.lock().contains_key(path)
     }
 
     fn unstash(path: &str) -> Option<Vec<u8>> {
-        KTX2_RESULTS
-            .lock()
-            .unwrap()
-            .remove(path)
-            .map(|(_, dds)| dds)
+        KTX2_RESULTS.lock().remove(path).map(|(_, dds)| dds)
     }
 
     /// `bytes` decoded by bevy as `image_type`, through the installed transcoder.

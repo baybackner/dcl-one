@@ -1,9 +1,7 @@
 pub mod js;
 
-use std::{
-    panic::{self, AssertUnwindSafe},
-    sync::Mutex,
-};
+use parking_lot::Mutex;
+use std::panic::{self, AssertUnwindSafe};
 
 use bevy::{log::error, platform::collections::HashMap};
 use common::structs::GlobalCrdtStateUpdate;
@@ -33,7 +31,7 @@ pub(crate) static VM_HANDLES: Lazy<Mutex<HashMap<SceneId, (IsolateHandle, KillFl
 /// loop doesn't exit on uncaught errors, so without the flag a deterministic
 /// wedge would just re-enter its loop on the next tick.
 pub fn terminate_scene(scene_id: SceneId) {
-    if let Some((handle, kill_flag)) = VM_HANDLES.lock().unwrap().get(&scene_id) {
+    if let Some((handle, kill_flag)) = VM_HANDLES.lock().get(&scene_id) {
         bevy::log::warn!("[{scene_id:?}] scene thread still running after kill; force-terminating");
         kill_flag.kill();
         handle.terminate_execution();
@@ -100,7 +98,7 @@ pub fn spawn_scene(
                 error!("[{id:?}] caught scene thread panic: {e:?}");
             }
 
-            VM_HANDLES.lock().unwrap().remove(&id);
+            VM_HANDLES.lock().remove(&id);
         })
         .unwrap();
 

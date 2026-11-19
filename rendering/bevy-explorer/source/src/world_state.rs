@@ -174,7 +174,8 @@ fn world_state_cmd(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     use bevy_console::{ConsoleCommandEntered, ConsoleResponder};
     use console::ConsolePlugin;
@@ -241,7 +242,7 @@ mod tests {
         let answer = Arc::new(Mutex::new(None));
         let responder: ConsoleResponder = {
             let answer = answer.clone();
-            Arc::new(move |result| *answer.lock().unwrap() = Some(result))
+            Arc::new(move |result| *answer.lock() = Some(result))
         };
         app.world_mut().send_event(ConsoleCommandEntered {
             command_name: "/world_state".to_owned(),
@@ -250,7 +251,7 @@ mod tests {
         });
         app.update();
 
-        let reply = answer.lock().unwrap().take().expect("no reply");
+        let reply = answer.lock().take().expect("no reply");
         let state: serde_json::Value = serde_json::from_str(&reply.unwrap()).unwrap();
         assert_eq!(state["inWorld"], false);
         assert_eq!(state["signedIn"], false);
@@ -282,7 +283,7 @@ mod tests {
             let answer = Arc::new(Mutex::new(None));
             let responder: ConsoleResponder = {
                 let answer = answer.clone();
-                Arc::new(move |result| *answer.lock().unwrap() = Some(result))
+                Arc::new(move |result| *answer.lock() = Some(result))
             };
             app.world_mut().send_event(ConsoleCommandEntered {
                 command_name: "/world_state".to_owned(),
@@ -290,7 +291,7 @@ mod tests {
                 responder: Some(responder),
             });
             app.update();
-            let reply = answer.lock().unwrap().take().expect("no reply");
+            let reply = answer.lock().take().expect("no reply");
             serde_json::from_str(&reply.unwrap()).unwrap()
         };
 

@@ -1,12 +1,13 @@
 //! The server the page under test talks to: the web app's files, and under `/__perf/<token>` the
 //! stream the page sends its run on. It listens on loopback only.
 
+use parking_lot::Mutex;
 use std::convert::Infallible;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -63,7 +64,7 @@ pub struct EndSignal {
 
 impl EndSignal {
     fn set(&self, report: EndReport) {
-        let mut slot = self.report.lock().expect("end report lock");
+        let mut slot = self.report.lock();
         if slot.is_none() {
             *slot = Some(report);
             self.arrived.notify_waiters();
@@ -71,7 +72,7 @@ impl EndSignal {
     }
 
     pub fn get(&self) -> Option<EndReport> {
-        self.report.lock().expect("end report lock").clone()
+        self.report.lock().clone()
     }
 
     pub async fn wait(&self) {

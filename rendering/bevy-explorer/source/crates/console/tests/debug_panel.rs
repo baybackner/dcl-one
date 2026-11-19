@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy_console::ConsoleCommandEntered;
@@ -77,11 +78,9 @@ fn manifest(app: &mut App) -> Value {
     app.world_mut().send_event(ConsoleCommandEntered {
         command_name: "/debug_panel".into(),
         args: vec![],
-        responder: Some(Arc::new(move |result| {
-            *output.lock().unwrap() = Some(result)
-        })),
+        responder: Some(Arc::new(move |result| *output.lock() = Some(result))),
     });
     app.update();
-    let text = reply.lock().unwrap().take().unwrap().unwrap();
+    let text = reply.lock().take().unwrap().unwrap();
     serde_json::from_str(&text).unwrap()
 }
