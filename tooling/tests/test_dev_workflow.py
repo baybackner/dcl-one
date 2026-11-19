@@ -232,6 +232,34 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 prune(deps, "")
 
+    def test_smoke_prunes_verified_binary_and_dynamic_library_variants(self):
+        prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
+        with tempfile.TemporaryDirectory() as temporary:
+            deps = Path(temporary) / 'deps'
+            deps.mkdir()
+            app = deps.parent / 'catalyst'
+            app.write_bytes(b'current')
+            current = deps / ('catalyst-' + 'a' * 16)
+            old = deps / ('catalyst-' + 'b' * 16)
+            old.write_bytes(b'old')
+            other = deps / ('other-' + 'b' * 16)
+            other.touch()
+            for suffix in ('.so', '.dylib'):
+                active = deps / ('libmacro-' + 'a' * 16 + suffix)
+                stale = deps / ('libmacro-' + 'b' * 16 + suffix)
+                active.touch()
+                stale.write_bytes(b'old')
+                receipts = json.dumps({'reason': 'compiler-artifact', 'filenames': [str(app), str(active)]})
+                self.assertEqual(prune(deps, receipts), 3)
+                self.assertTrue(old.exists())
+                self.assertTrue(active.exists())
+            os.link(app, current)
+            self.assertEqual(prune(deps, receipts), 3)
+            self.assertFalse(old.exists())
+            self.assertTrue(current.samefile(app))
+            self.assertTrue(other.exists())
+            self.assertEqual(prune(deps, receipts), 0)
+
     def test_smoke_gives_unchanged_sources_the_snapshot_file_times(self):
         # Cargo decides by file time. The snapshot is of no use to Cargo unless the checkout's
         # unchanged files get the times they had when the snapshot was built.
@@ -249,7 +277,7 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         condition = lambda name: re.search(r'(?m)^        if: (.+)$', steps[name]).group(1)
         self.assertEqual(condition('Record the source file times in the snapshot'),
                          condition('Save successful smoke build snapshot'))
-        self.assertEqual(condition('Prune superseded Rust libraries from the smoke snapshot'),
+        self.assertEqual(condition('Prune superseded Rust build artifacts from the smoke snapshot'),
                          condition('Save successful smoke build snapshot'))
         self.assertLess(smoke.index('python3 tooling/catalyst-smoke-cache.py'), smoke.index(record))
         self.assertNotIn('        if:', steps['Give unchanged sources the file times of the snapshot'])
