@@ -25,11 +25,12 @@ function isSavedReport(value: unknown): value is SavedReport {
   );
 }
 
-export function saveReportFormDraft(draft: WrittenReport): void {
+export function saveReportFormDraft(draft: WrittenReport): boolean {
   try {
     sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, savedAt: Date.now() }));
+    return true;
   } catch {
-    // Sign-in still works when the browser disallows session storage.
+    return false;
   }
 }
 

@@ -219,6 +219,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [draftSaveFailed, setDraftSaveFailed] = useState(false);
 
   useEffect(() => {
     const currentSearch = params.toString();
@@ -257,13 +258,17 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const shown = (e: string) => (submitted ? e || undefined : undefined);
 
   function signIn() {
-    saveReportFormDraft({
+    const hasDraft = Boolean(reportedAddress !== reportedParam || reason || description || comments);
+    if (hasDraft && !saveReportFormDraft({
       searchParams: params.toString(),
       reportedAddress,
       reason,
       description,
       additionalComments: comments,
-    });
+    })) {
+      setDraftSaveFailed(true);
+      return;
+    }
     openSignIn();
   }
 
@@ -332,6 +337,12 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
                   Sign In
                 </Button>
               </div>
+            )}
+
+            {!isConnected && draftSaveFailed && (
+              <p className={styles.error} role="alert">
+                Your browser couldn’t save your draft. Copy your text and clear the form before signing in.
+              </p>
             )}
 
             <Field

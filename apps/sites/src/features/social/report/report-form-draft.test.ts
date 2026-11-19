@@ -37,9 +37,9 @@ describe("when restoring a report draft", () => {
     expect(takeReportFormDraft(draft.searchParams)).toBeNull();
   });
 
-  it("should allow sign-in to continue when storage is unavailable", () => {
+  it("should report that a draft could not be saved when storage is unavailable", () => {
     vi.stubGlobal("sessionStorage", undefined);
-    expect(() => saveReportFormDraft(draft)).not.toThrow();
+    expect(saveReportFormDraft(draft)).toBe(false);
     expect(takeReportFormDraft(draft.searchParams)).toBeNull();
   });
 });

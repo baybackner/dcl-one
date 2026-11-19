@@ -24,8 +24,8 @@ vi.mock("@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground", (
 
 afterEach(() => {
   cleanup();
-  sessionStorage.clear();
   vi.unstubAllGlobals();
+  sessionStorage.clear();
   auth.value = { identity: null, address: null, isConnected: false };
 });
 
@@ -74,6 +74,29 @@ describe("when a signed-out visitor fills the report form", () => {
     await user.click(button);
     vi.unstubAllGlobals();
     expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Freport-user%3Fplayer%3D0xab");
+  });
+
+  it("should keep a written draft on the page when the browser refuses to save it", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ReportForm trackCtx={{ sid: "sid", story: "report" } as never} />
+      </MemoryRouter>,
+    );
+    const description = screen.getByPlaceholderText<HTMLTextAreaElement>("Write your description here...");
+    await user.type(description, "Report text");
+    const assign = vi.fn();
+    vi.stubGlobal("location", { pathname: "/report", search: "", hash: "", assign });
+    vi.stubGlobal("sessionStorage", undefined);
+    await user.click(screen.getByRole("button", { name: "Sign In" }));
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(description.value).toBe("Report text");
+    expect(screen.getByRole("alert").textContent).toContain("couldn’t save your draft");
+
+    await user.clear(description);
+    await user.click(screen.getByRole("button", { name: "Sign In" }));
+    expect(assign).toHaveBeenCalledExactlyOnceWith("/auth/login?redirectTo=%2Freport");
   });
 });
 
