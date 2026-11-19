@@ -356,10 +356,15 @@ fn process_room_events(
                         room: entity,
                     });
                 }
-                RoomEvent::ParticipantMetadataChanged { participant, .. } => {
+                RoomEvent::ParticipantMetadataChanged {
+                    participant,
+                    metadata,
+                    ..
+                } => {
                     commands.trigger(ParticipantMetadataChanged {
                         room: entity,
                         participant: participant.into(),
+                        metadata,
                     });
                 }
                 RoomEvent::RoomMetadataChanged { metadata, .. } => {

@@ -116,7 +116,7 @@ the mic, hanging up, raising a hand, promoting, demoting, kicking and ending a s
 The gatekeeper's mute only sets `muted` in the participant metadata, so the client enforces it:
 when its own metadata turns muted and that is not the echo of a mute it sent, `sync_local` takes
 the mic down and keeps it down across a re-dial. The speaker may raise it again, which sends
-`muted: false`.
+`muted: false`; if that unmute fails while the room still reads muted, the mic goes back down.
 
 ## Client readiness for video
 

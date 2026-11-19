@@ -104,6 +104,7 @@ impl Plugin for VoiceChatPlugin {
                 ("Local role", "call.localRole"),
                 ("Local speaker", "call.localSpeaker"),
                 ("Hand raised", "call.localRequestingToSpeak"),
+                ("Muted (room)", "call.localMuted"),
                 ("Participants", "call.participants"),
                 ("Last error", "call.error"),
             ],
@@ -442,6 +443,7 @@ impl VoiceChat {
             local_speaker: state.local_speaker,
             local_role: state.local_role,
             local_requesting_to_speak: state.local_requesting_to_speak,
+            local_muted: state.local_muted(),
             error: state.error.clone(),
             error_is_notice: state.error_is_notice,
             error_seq: state.error_seq(),
@@ -961,7 +963,11 @@ fn participant_metadata_changed(
     participants: Query<&CallParticipant>,
     mut inputs: ResMut<VoiceInputs>,
 ) {
-    let ParticipantMetadataChanged { participant, room } = trigger.event();
+    let ParticipantMetadataChanged {
+        participant,
+        room,
+        metadata,
+    } = trigger.event();
     let Ok(index) = rooms.get(*room) else {
         return;
     };
@@ -971,7 +977,7 @@ fn participant_metadata_changed(
     let Some(&entity) = index.get(&ParticipantIndex::key(participant.identity().as_str())) else {
         return;
     };
-    let metadata = Metadata::parse(&participant.metadata());
+    let metadata = Metadata::parse(metadata);
     let previous = participants.get(entity).ok();
     if previous.is_some_and(|p| p.metadata == metadata) {
         return;
