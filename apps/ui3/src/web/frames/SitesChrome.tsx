@@ -3,7 +3,6 @@ import DclTopBar from "./DclTopBar";
 import SitesCreditsChip from "./SitesCreditsChip";
 import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import "../../atoms/maskicon.css";
-import { siteHost } from "../../data/site";
 import { docsUrl } from "@web-core/docs";
 import "./siteschrome.css";
 import { SITES_NAV_AREAS, type SitesNavId } from "@dcl/one-ui/apps/sites/chrome/sites-navigation";
@@ -13,8 +12,6 @@ import { subscribeSiteNewsletter } from "@web-core/newsletter";
 import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import SiteSectionNavigation from "./SiteSectionNavigation";
 import { ProfileNavigationContext } from "@dcl/one-ui/apps/sites/chrome/profile-navigation";
-
-const subscribe = (email: string) => subscribeSiteNewsletter(email, siteHost());
 
 type SitesChromeProps = {
   children?: ReactNode;
@@ -70,7 +67,7 @@ export default function SitesChrome({
 
       <div className="st__page" id={pageId} tabIndex={-1}>{children}</div>
 
-      <SitesFooter footerCopy={footerCopy} docsUrl={docsUrl} onSubscribe={subscribe} />
+      <SitesFooter footerCopy={footerCopy} docsUrl={docsUrl} onSubscribe={subscribeSiteNewsletter} />
     </div>
     </SiteLayout>
   );

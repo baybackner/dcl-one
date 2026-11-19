@@ -14,5 +14,6 @@ interface ImportMeta {
     readonly VITE_SHOP_API_MODE?: string;
     readonly VITE_SHOP_CHAIN_ID?: string;
     readonly VITE_SHOP_ETHEREUM_CHAIN_ID?: string;
+    readonly VITE_SITE_URL?: string;
   };
 }

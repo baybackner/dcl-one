@@ -37,8 +37,6 @@ function SitesCreditsChip({ account }: { account: string }) {
   return <NavCreditsBalance as={Link} to="/shop/credits" label={shown} aria-label={`${shown} credits`} />;
 }
 
-const subscribe = (email: string) => subscribeSiteNewsletter(email, window.location.host);
-
 export default function SitesLayout({
   children,
   active = "whatson",
@@ -82,7 +80,7 @@ export default function SitesLayout({
       <div className={styles.body}>
         <a className={styles.skip} href={`#${pageId}`}>Skip to content</a>
         <div className={styles.page} id={pageId} tabIndex={-1}>{children}</div>
-        <SitesFooter footerCopy={footerCopy} docsUrl={docsUrl} onSubscribe={subscribe} />
+        <SitesFooter footerCopy={footerCopy} docsUrl={docsUrl} onSubscribe={subscribeSiteNewsletter} />
       </div>
     </SiteLayout>
   );
