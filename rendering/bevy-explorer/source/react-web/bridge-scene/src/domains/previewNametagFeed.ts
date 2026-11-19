@@ -1,7 +1,7 @@
 // The Shop's nametag over its avatar, told to the page (previewNametag): where the engine has the avatar's nametag
 // anchor, read now and then while the Shop's stage is up and told once it moves; or none, for the page to keep the
-// design's place, when the stage comes up again or goes, the avatar goes, or a read fails. A read begun before the
-// stage came up again, or for another avatar, never lands.
+// design's place, when the stage comes up again or goes, the avatar goes or changes, or a read fails. A read begun
+// before the stage came up again, or for another avatar, never lands.
 
 import type { WindowPoint } from './previewView'
 
@@ -61,8 +61,10 @@ export function createNametagFeed<A, O>(deps: {
         return
       }
       if (avatar !== lastAvatar) {
+        // another avatar: the last one's place isn't its, until its own read answers
         drop()
         lastAvatar = avatar
+        publish(null)
       }
       wait -= dt
       if (reading || wait > 0) return

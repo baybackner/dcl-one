@@ -5916,7 +5916,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewNametagFeed.ts",
-      "sha256": "ee5fab6b730ac3e6679ad477f2f42387686af8936c3772d5efb53fcd977843b7"
+      "sha256": "818c855a0cde1255ab1858b8dbe54d09860cb50c624a8d28a5fa57ce7a401e89"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
@@ -6152,7 +6152,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewNametagFeed.test.ts",
-      "sha256": "86830d810686048018233dd69c8281d2d31766aa4ede81ce60182e06bbe2153c"
+      "sha256": "a557b5784b1bc9c204bad2322a242a882602aaa036daf1c3c9f354961afd34ee"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",

@@ -81,10 +81,21 @@ describe("the Shop's nametag feed", () => {
     nametag.tick(NAMETAG_READ_SECONDS, 7) // pending for avatar 7...
     nametag.tick(0, 8) // ...when avatar 8 takes the stage
     reads[2].answer(B)
-    reads[3].answer(A)
     await settle()
     expect(reads.map((r) => r.avatar)).toEqual([7, 7, 7, 8])
-    expect(sent).toEqual([A])
+    expect(sent).toEqual([A, null])
+  })
+
+  it("leaves the last avatar's place as soon as another takes the stage, until the new one's read answers", async () => {
+    const { nametag, reads, sent } = feed()
+    nametag.tick(0, 7)
+    reads[0].answer(A)
+    await settle()
+    nametag.tick(0, 8) // avatar 8's read is held
+    expect(sent).toEqual([A, null])
+    reads[1].answer(B)
+    await settle()
+    expect(sent).toEqual([A, null, B])
   })
 
   it('tells the page there is none once the avatar goes, and reads only every so often', async () => {
