@@ -5584,6 +5584,14 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
         foreign.clone(),
         mana_payment_from("0x2222222222222222222222222222222222222222"),
     );
+    let shallow = fresh_tx_hash();
+    let mut shallow_payment = mana_payment_from(&wallet.address);
+    if let ManaPaymentVerification::Confirmed { block, .. } = &mut shallow_payment {
+        block.confirmations = 1;
+    }
+    broker
+        .verifications
+        .insert(shallow.clone(), shallow_payment);
     let state = state_with(
         pool.clone(),
         StateCfg {
@@ -5610,6 +5618,19 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {v}");
     }
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(json!({ "address": wallet.address, "amount": "40", "idempotencyKey": format!("mana-topup:{shallow}") })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a transfer not yet deep enough is retried later: {v}"
+    );
     assert_eq!(
         available(&pool, &wallet.address).await,
         "0",

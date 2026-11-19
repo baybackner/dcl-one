@@ -6,9 +6,11 @@
 //! A transfer mined while no MANA/USD rate was recorded (a price poller down
 //! longer than the freshness window) answers 422 for good. An operator credits
 //! it with `POST /admin/credits/grant` and `idempotencyKey` `mana-topup:<txHash>`
-//! (lowercase) once the economy module confirms that wallet paid it: the grant
-//! is booked as a purchase, like the claim, and a later claim of that hash
-//! replays it instead of granting again.
+//! (lowercase) once the claim's own checks pass for that wallet (it paid the
+//! transfer, after `CREDITS_TOPUP_START_BLOCK`, with enough confirmations): the
+//! grant is booked as a purchase, like the claim, and a later claim of that
+//! hash replays it instead of granting again. A transfer paid by another wallet
+//! (an exchange, a smart wallet) cannot be recovered this way.
 
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};
@@ -78,34 +80,37 @@ pub fn recovered_topup_key(key: &str) -> Option<Result<String, ApiError>> {
     )
 }
 
-/// A recovery names a confirmed MANA transfer `address` paid to the top-up
-/// address; anything else is not a paid top-up.
+/// A recovery is booked only when the claim itself would grant that transfer
+/// to `address`; a transfer paid by another wallet (an exchange, a smart
+/// wallet) is refused here too.
 pub async fn verify_recovered_topup(
     state: &SharedState,
     key: &str,
     address: &str,
 ) -> Result<(), ApiError> {
     let tx_hash = &key[MANA_TOPUP_KEY_PREFIX.len()..];
-    match state.broker.verify_mana_payment(tx_hash).await? {
-        ManaPaymentVerification::Confirmed { from, to, .. } => {
-            let escrow = state.broker.escrow_address();
-            if !from.eq_ignore_ascii_case(address) {
-                Err(ApiError::unprocessable(
-                    "the MANA payment was sent by a different wallet than the grant names",
-                ))
-            } else if from.eq_ignore_ascii_case(&to)
-                || escrow.iter().any(|a| a.eq_ignore_ascii_case(&from))
-            {
-                Err(ApiError::unprocessable(
-                    "transfers from the Shop's own wallets are not top-ups",
-                ))
-            } else {
-                Ok(())
-            }
-        }
-        _ => Err(ApiError::unprocessable(
-            "the transaction is not a confirmed MANA payment to the top-up address",
-        )),
+    let verification = state.broker.verify_mana_payment(tx_hash).await?;
+    let escrow = state.broker.escrow_address();
+    let operator: Vec<&str> = escrow.iter().map(String::as_str).collect();
+    recovery_decision(verification, address, &state.settings.topup, &operator)
+}
+
+/// The claim's [`decide`] for an operator: a refusal answers 422 and a
+/// transfer not yet deep enough 409, so the operator can retry it later.
+fn recovery_decision(
+    verification: ManaPaymentVerification,
+    address: &str,
+    policy: &TopupPolicy,
+    operator: &[&str],
+) -> Result<(), ApiError> {
+    match decide(verification, address, policy, operator) {
+        Ok(TopupDecision::Granted { .. }) => Ok(()),
+        Ok(TopupDecision::Pending) => Err(ApiError::conflict(format!(
+            "the MANA payment is not confirmed yet; retry once it has {} confirmations",
+            policy.min_confirmations
+        ))),
+        Err(ApiError::Forbidden(msg)) => Err(ApiError::unprocessable(msg)),
+        Err(e) => Err(e),
     }
 }
 
@@ -564,6 +569,36 @@ mod tests {
         ] {
             let err = decide(v, SIGNER).unwrap_err();
             assert!(matches!(err, ApiError::Unprocessable(_)), "got {err:?}");
+        }
+    }
+
+    #[test]
+    fn a_recovery_applies_the_claim_policy() {
+        let recover = |v| recovery_decision(v, SIGNER, &POLICY, &[ESCROW]);
+        assert!(recover(confirmed(SIGNER, "42")).is_ok());
+        let early = TransferBlock {
+            number: 999,
+            ..BLOCK
+        };
+        let shallow = TransferBlock {
+            confirmations: 63,
+            ..BLOCK
+        };
+        for (v, why) in [
+            (confirmed_at(SIGNER, "42", early), "before the start block"),
+            (confirmed(OTHER, "42"), "paid by another wallet"),
+            (confirmed(ESCROW, "42"), "an own wallet"),
+            (ManaPaymentVerification::NoPayment, "no payment"),
+        ] {
+            let err = recover(v).unwrap_err();
+            assert!(matches!(err, ApiError::Unprocessable(_)), "{why}: {err:?}");
+        }
+        for v in [
+            confirmed_at(SIGNER, "42", shallow),
+            ManaPaymentVerification::Pending,
+        ] {
+            let err = recover(v).unwrap_err();
+            assert!(matches!(err, ApiError::Conflict(_)), "retry later: {err:?}");
         }
     }
 
