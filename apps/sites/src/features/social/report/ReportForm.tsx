@@ -152,7 +152,11 @@ function ConfirmCheckbox({ checked, onChange, error }: { checked: boolean; onCha
   );
 }
 
-function FileUpload({ files, onChange }: { files: EvidenceUpload[]; onChange: (files: EvidenceUpload[]) => void }) {
+function FileUpload({ files, canAttach, onChange }: {
+  files: EvidenceUpload[];
+  canAttach: boolean;
+  onChange: (files: EvidenceUpload[]) => void;
+}) {
   const input = useRef<HTMLInputElement>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -179,7 +183,6 @@ function FileUpload({ files, onChange }: { files: EvidenceUpload[]; onChange: (f
 
   return (
     <div className={styles.upload}>
-      <input ref={input} className={styles.fileInput} type="file" multiple accept={ACCEPTED_TYPES.join(",")} onChange={select} />
       {files.length > 0 && (
         <div className={styles.chips}>
           {files.map((f) => (
@@ -192,10 +195,17 @@ function FileUpload({ files, onChange }: { files: EvidenceUpload[]; onChange: (f
           ))}
         </div>
       )}
-      <Button variant="secondary" size="md" className={styles.addFile} onClick={() => input.current?.click()} disabled={files.length >= REPORT_LIMITS.maxFiles}>
-        Add File
-      </Button>
-      {problem && <p className={styles.error}>{problem}</p>}
+      {canAttach ? (
+        <>
+          <input ref={input} className={styles.fileInput} type="file" multiple accept={ACCEPTED_TYPES.join(",")} onChange={select} />
+          <Button variant="secondary" size="md" className={styles.addFile} onClick={() => input.current?.click()} disabled={files.length >= REPORT_LIMITS.maxFiles}>
+            Add File
+          </Button>
+          {problem && <p className={styles.error}>{problem}</p>}
+        </>
+      ) : (
+        <p className={styles.hint}>Sign in before attaching evidence.</p>
+      )}
     </div>
   );
 }
@@ -220,6 +230,14 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [draftSaveFailed, setDraftSaveFailed] = useState(false);
+  const [confirmingSignIn, setConfirmingSignIn] = useState(false);
+  const signInTrigger = useRef<HTMLElement | null>(null);
+  const cancelSignIn = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (isConnected) setConfirmingSignIn(false);
+    else if (confirmingSignIn) cancelSignIn.current?.focus();
+  }, [confirmingSignIn, isConnected]);
 
   useEffect(() => {
     const currentSearch = params.toString();
@@ -258,6 +276,17 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const shown = (e: string) => (submitted ? e || undefined : undefined);
 
   function signIn() {
+    if (evidence.length === 0) {
+      continueSignIn();
+      return;
+    }
+    const focused = document.activeElement;
+    signInTrigger.current = focused instanceof HTMLElement ? focused : null;
+    setConfirmingSignIn(true);
+    cancelSignIn.current?.focus();
+  }
+
+  function continueSignIn() {
     const hasDraft = Boolean(reportedAddress !== reportedParam || reason || description || comments);
     if (hasDraft && !saveReportFormDraft({
       searchParams: params.toString(),
@@ -270,6 +299,11 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
       return;
     }
     openSignIn();
+  }
+
+  function keepEditing() {
+    setConfirmingSignIn(false);
+    signInTrigger.current?.focus();
   }
 
   const busy = useRef(false);
@@ -303,7 +337,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   };
 
   return (
-    <SitesLayout active="legal" overlayNav>
+    <SitesLayout active="legal" overlayNav onSignIn={signIn}>
       <main className={styles.page}>
         <AnimatedBackground />
         <div className={styles.content}>
@@ -336,6 +370,20 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
                 <Button variant="text" size="sm" className={styles.signInButton} onClick={signIn}>
                   Sign In
                 </Button>
+              </div>
+            )}
+
+            {!isConnected && confirmingSignIn && (
+              <div className={`${styles.signIn} ${styles.signInNotice}`}>
+                <span role="status">Opening the sign-in page clears the attached files. You’ll need to attach them again after signing in.</span>
+                <div className={styles.signInActions}>
+                  <Button ref={cancelSignIn} variant="text" size="sm" className={styles.signInButton} onClick={keepEditing}>
+                    Cancel
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={continueSignIn}>
+                    Continue to sign in
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -407,17 +455,15 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
               helper={`Upload up to ${REPORT_LIMITS.maxFiles} screenshots, videos or PDF files to support your report.`}
               error={shown(errors.evidence)}
             >
-              {isConnected ? (
-                <FileUpload
-                  files={evidence}
-                  onChange={(files) => {
-                    if (files.length > evidence.length) track("report_evidence_added", { file_count: files.length }, trackCtx);
-                    setEvidence(files);
-                  }}
-                />
-              ) : (
-                <p className={styles.hint}>Sign in before attaching evidence.</p>
-              )}
+              <FileUpload
+                files={evidence}
+                canAttach={isConnected}
+                onChange={(files) => {
+                  if (files.length > evidence.length) track("report_evidence_added", { file_count: files.length }, trackCtx);
+                  if (files.length === 0) setConfirmingSignIn(false);
+                  setEvidence(files);
+                }}
+              />
             </Field>
 
             <Field number={6} label="Additional Comments" optional helper="Provide any extra information that might help moderators investigate.">
