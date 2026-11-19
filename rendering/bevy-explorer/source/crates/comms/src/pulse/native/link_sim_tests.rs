@@ -520,10 +520,10 @@ fn a_lossy_link_rarely_holds_inputs() {
     assert!(holds.len() <= 1, "{}", describe(&holds, 120_000));
 }
 
-/// Whatever the round trip, up to 3 s and off by up to a quarter either way, the inputs sent between the start of a stall and the
-/// gate closing, which the link delivers together when it recovers, stay within the servers'
-/// input burst, and the servers' bucket never turns one away. The movement systems offer the most
-/// `movement_pacing` lets out.
+/// Whatever the round trip, up to 3 s and off by up to a quarter either way, the inputs sent
+/// between the start of a stall and the gate closing, which the link delivers together when it
+/// recovers, stay within the servers' input burst, and the servers' bucket never turns one away.
+/// The movement systems offer the most `movement_pacing` lets out.
 #[test]
 fn a_stall_delivers_no_more_inputs_than_the_servers_burst() {
     let mut failures = Vec::new();

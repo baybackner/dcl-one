@@ -243,6 +243,9 @@ impl PulseLink {
     /// Tell the driver to drop a teleport it holds back. In band, so a teleport sent after this is
     /// never the one dropped.
     pub(crate) fn withdraw_teleport(&mut self) {
+        // A full queue drops the signal, and a held teleport then goes once the uplink is
+        // confirmed: at worst a brief misplacement in the realm left, which is accepted. The queue
+        // is full only while the driver is not draining it.
         let _ = self.outbound.try_send(PulseFrame {
             bytes: Vec::new(),
             reliability: PulseReliability::Reliable,
