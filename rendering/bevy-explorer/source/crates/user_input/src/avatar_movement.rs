@@ -641,18 +641,23 @@ pub fn apply_rotation(
 /// [`SceneTickTiming::redispatch_rotation`]: the
 /// rotation [`apply_rotation`] will set from its late reply that landed in this frame, for its
 /// re-dispatch, which the next pass sends before that. Runs after the pass's `AvatarMovement`
-/// updates are applied.
+/// updates are applied. Every other scene's is cleared: the engine applies no movement from
+/// them, so a movement scene that no longer drives the player is not sent a rotation it staged
+/// while it did.
 fn stage_redispatch_rotation(
     player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
-    mut scenes: Query<(&RendererSceneContext, &mut SceneTickTiming)>,
+    mut scenes: Query<(Entity, &RendererSceneContext, &mut SceneTickTiming)>,
     movements: Query<&AvatarMovement>,
     movement_control: Res<EngineMovementControl>,
     frame: Res<FrameCount>,
 ) {
-    let Ok(active) = player.single() else {
-        return;
-    };
-    let Ok((context, mut tick_timing)) = scenes.get_mut(active.scene()) else {
+    let active = player.single().ok().map(|active| active.scene());
+    for (scene, _, mut tick_timing) in &mut scenes {
+        if Some(scene) != active && tick_timing.redispatch_rotation.is_some() {
+            tick_timing.redispatch_rotation = None;
+        }
+    }
+    let Some(Ok((_, context, mut tick_timing))) = active.map(|scene| scenes.get_mut(scene)) else {
         return;
     };
     let applied = tick_timing.late_reply_in(frame.0)
@@ -1619,7 +1624,6 @@ mod tests {
     /// frame.
     fn late_replies(turning: u32, frames: u32, imposed: Option<f32>) -> Vec<(f32, f32)> {
         use bevy::ecs::system::RunSystemOnce;
-        use dcl_types::SceneId;
         use scene_runner::renderer_context::{ReplyTiming, SentTiming};
 
         let yaw = |rotation: Quat| rotation.to_euler(EulerRot::YXZ).0.to_degrees();
@@ -1628,45 +1632,14 @@ mod tests {
             accept_movement_after: if imposed.is_some() { f64::MAX } else { -1.0 },
             ..default()
         });
-        let scene = app.world_mut().spawn_empty().id();
-        let scene_player = app.world_mut().spawn(AvatarMovement::default()).id();
-        let mut context = RendererSceneContext::new(
-            SceneId::DUMMY,
-            "hash".to_owned(),
-            "storage_root".to_owned(),
-            false,
-            0,
-            "movement".to_owned(),
-            IVec2::ZERO,
-            HashSet::from_iter([IVec2::ZERO]),
-            vec![],
-            default(),
-            vec![],
-            scene,
-            0.0,
-            false,
-            "sdk_version",
-            false,
-            false,
-        );
-        context.associate_bevy_entity(SceneEntityId::PLAYER, scene_player);
-        app.world_mut().entity_mut(scene).insert(context);
+        let (scene, scene_player) = scene_with_player(&mut app);
         let player = app
             .world_mut()
             .spawn((
-                PrimaryUser::default(),
                 Transform::from_rotation(Quat::from_rotation_y(
                     imposed.unwrap_or_default().to_radians(),
                 )),
-                ActivePlayerComponent {
-                    scene,
-                    entity: scene_player,
-                    scene_last_update: 0,
-                    scene_start_tick: 0,
-                    scene_is_portable: false,
-                    initiated_at: f64::MIN,
-                    component: AvatarMovement::default(),
-                },
+                driven_by(scene, scene_player),
             ))
             .id();
 
@@ -1719,6 +1692,82 @@ mod tests {
             frames_out.push((sent, applied));
         }
         frames_out
+    }
+
+    /// A scene root and the entity its player maps to, which holds the scene's `AvatarMovement`.
+    fn scene_with_player(app: &mut App) -> (Entity, Entity) {
+        use dcl_types::SceneId;
+
+        let scene = app.world_mut().spawn_empty().id();
+        let scene_player = app.world_mut().spawn(AvatarMovement::default()).id();
+        let mut context = RendererSceneContext::new(
+            SceneId::DUMMY,
+            "hash".to_owned(),
+            "storage_root".to_owned(),
+            false,
+            0,
+            "movement".to_owned(),
+            IVec2::ZERO,
+            HashSet::from_iter([IVec2::ZERO]),
+            vec![],
+            default(),
+            vec![],
+            scene,
+            0.0,
+            false,
+            "sdk_version",
+            false,
+            false,
+        );
+        context.associate_bevy_entity(SceneEntityId::PLAYER, scene_player);
+        app.world_mut().entity_mut(scene).insert(context);
+        (scene, scene_player)
+    }
+
+    /// The primary user's movement, taken from `scene`'s player entity.
+    fn driven_by(
+        scene: Entity,
+        scene_player: Entity,
+    ) -> (PrimaryUser, ActivePlayerComponent<AvatarMovement>) {
+        (
+            PrimaryUser::default(),
+            ActivePlayerComponent {
+                scene,
+                entity: scene_player,
+                scene_last_update: 0,
+                scene_start_tick: 0,
+                scene_is_portable: false,
+                initiated_at: f64::MIN,
+                component: AvatarMovement::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn a_scene_no_longer_driving_the_player_is_not_sent_its_staged_rotation() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.insert_resource(EngineMovementControl {
+            accept_movement_after: -1.0,
+            ..default()
+        })
+        .insert_resource(FrameCount(1));
+        // the movement scene staged a rotation while it drove the player
+        let (movement_scene, _) = scene_with_player(&mut app);
+        app.world_mut()
+            .get_mut::<SceneTickTiming>(movement_scene)
+            .unwrap()
+            .redispatch_rotation = Some(Quat::from_rotation_y(1.0));
+        // then a parcel scene took over
+        let (parcel_scene, parcel_player) = scene_with_player(&mut app);
+        app.world_mut()
+            .spawn(driven_by(parcel_scene, parcel_player));
+        app.world_mut()
+            .run_system_once(stage_redispatch_rotation)
+            .unwrap();
+        let tick_timing = app.world().get::<SceneTickTiming>(movement_scene).unwrap();
+        assert_eq!(tick_timing.redispatch_rotation, None);
     }
 
     #[test]
