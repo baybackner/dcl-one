@@ -1046,7 +1046,7 @@ impl GlyphAtlas {
                 Page::Sdf => (&mut self.sdf, old_sdf_data.as_ref()),
                 Page::Color => (self.color.as_mut().unwrap(), old_color_data.as_ref()),
             };
-            // without its old pixels the glyph is rastered again on next use
+            // a glyph whose old pixels are gone is left out of the rebuilt atlas
             let Some(old) = old else {
                 continue;
             };
