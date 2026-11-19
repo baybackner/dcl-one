@@ -5,8 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use alloy::signers::{Signer as _, local::PrivateKeySigner};
 use axum::Router;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
@@ -14,6 +15,10 @@ use super::apple::testkit::{Chain, ChainSpec, chain};
 use super::apple::{Environment, account_token};
 use super::iap::{Iap, Limits};
 use super::tests::{StateCfg, Wallet, app, call, pool, scratch_wallet, send, test_state};
+use crate::auth::{AuthLink, AuthLinkType};
+use crate::shared::signed_fetch::{
+    AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, build_legacy_payload,
+};
 
 const PRODUCT: &str = "org.example.credits100";
 
@@ -408,10 +413,17 @@ async fn the_caps_hold_on_quote_and_on_credit() {
 async fn the_operator_routes_credit_by_product_and_refund_once() {
     let Some(pool) = pool().await else { return };
     let c = chain(ChainSpec::default());
+    // A wallet cap below one product: the operator credit reconciles what it refused.
     let app = app(test_state(
         pool.clone(),
         StateCfg {
-            iap: Some(iap(&c, open_limits())),
+            iap: Some(iap(
+                &c,
+                Limits {
+                    wallet_total_cents: 500,
+                    ..open_limits()
+                },
+            )),
             admin_token: Some("op-secret-123456789012345678901234"),
             ..StateCfg::default()
         },
@@ -491,4 +503,179 @@ async fn a_node_without_app_store_configuration_answers_503() {
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// The iOS app's request: the wallet delegates to an ephemeral key ("Decentraland Login"),
+/// which signs the pre-6.0.0 folded payload with camelCase metadata.
+async fn login_signed_legacy(
+    w: &Wallet,
+    method: &str,
+    path: &str,
+    metadata: &str,
+    expiration: &str,
+) -> HeaderMap {
+    let ephemeral = PrivateKeySigner::random();
+    let login = format!(
+        "Decentraland Login\nEphemeral address: {:#x}\nExpiration: {expiration}",
+        ephemeral.address()
+    );
+    let login_signature = w
+        .signer
+        .sign_message(login.as_bytes())
+        .await
+        .unwrap()
+        .to_string();
+    let timestamp = chrono::Utc::now().timestamp_millis().to_string();
+    let payload = build_legacy_payload(method, path, &timestamp, metadata);
+    let signature = ephemeral
+        .sign_message(payload.as_bytes())
+        .await
+        .unwrap()
+        .to_string();
+    let chain = [
+        AuthLink {
+            link_type: AuthLinkType::SIGNER,
+            payload: w.address.clone(),
+            signature: None,
+        },
+        AuthLink {
+            link_type: AuthLinkType::EcdsaEphemeral,
+            payload: login,
+            signature: Some(login_signature),
+        },
+        AuthLink {
+            link_type: AuthLinkType::EcdsaSignedEntity,
+            payload,
+            signature: Some(signature),
+        },
+    ];
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTH_TIMESTAMP_HEADER,
+        HeaderValue::from_str(&timestamp).unwrap(),
+    );
+    headers.insert(
+        AUTH_METADATA_HEADER,
+        HeaderValue::from_str(metadata).unwrap(),
+    );
+    for (i, link) in chain.iter().enumerate() {
+        headers.insert(
+            HeaderName::from_bytes(format!("{AUTH_CHAIN_HEADER_PREFIX}{i}").as_bytes()).unwrap(),
+            HeaderValue::from_str(&serde_json::to_string(link).unwrap()).unwrap(),
+        );
+    }
+    headers
+}
+
+#[tokio::test]
+async fn the_app_login_chain_signing_the_folded_payload_quotes_and_verifies() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let live = "2099-01-01T00:00:00.000Z";
+
+    let path = "/credits/credits/iap/quote";
+    let metadata = json!({ "productId": PRODUCT }).to_string();
+    let headers = login_signed_legacy(&w, "post", path, &metadata, live).await;
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        path,
+        headers,
+        Some(json!({ "productId": PRODUCT })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["appAccountToken"], account_token(&w.address));
+
+    let signed_tx = c.transaction(&tx_id(), PRODUCT, Some(&account_token(&w.address)));
+    let path = "/credits/credits/iap/verify";
+    let metadata = json!({ "jwsRepresentation": signed_tx }).to_string();
+    let expired =
+        login_signed_legacy(&w, "post", path, &metadata, "2001-01-01T00:00:00.000Z").await;
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        path,
+        expired,
+        Some(json!({ "jwsRepresentation": signed_tx })),
+    )
+    .await;
+    assert!(
+        status.is_client_error(),
+        "an expired login delegation: {out}"
+    );
+    assert_eq!(out["error"], "Invalid Auth Chain", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+
+    let headers = login_signed_legacy(&w, "post", path, &metadata, live).await;
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        path,
+        headers,
+        Some(json!({ "jwsRepresentation": signed_tx })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["data"]["credited"], true, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+#[tokio::test]
+async fn app_store_grants_reconcile_with_their_purchases() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_reconcile").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let w = scratch_wallet();
+    let token = register(&app, &w).await;
+    let signed_tx = c.transaction(&tx_id(), PRODUCT, Some(&token));
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed_tx.clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let report = state.credits.reconcile().await.unwrap();
+    assert!(
+        report.purchase_grant_mismatches.is_empty(),
+        "{:?}",
+        report.purchase_grant_mismatches
+    );
+
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed_tx))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let report = state.credits.reconcile().await.unwrap();
+    assert!(
+        report.purchase_grant_mismatches.is_empty(),
+        "{:?}",
+        report.purchase_grant_mismatches
+    );
+    drop(app);
+    drop(state);
+    own.drop().await;
+}
+
+#[tokio::test]
+async fn concurrent_registrations_of_one_wallet_all_return_its_token() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let calls = (0..16).map(|_| call(&app, &w, "post", "/credits/credits/iap/register", &[], None));
+    for (status, out) in futures::future::join_all(calls).await {
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["data"]["appAccountToken"], account_token(&w.address));
+    }
 }

@@ -363,7 +363,7 @@ pub(super) fn test_state(pool: PgPool, cfg: StateCfg) -> SharedState {
 }
 
 pub(super) struct Wallet {
-    signer: PrivateKeySigner,
+    pub(super) signer: PrivateKeySigner,
     pub(super) address: String,
 }
 

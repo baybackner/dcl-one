@@ -213,6 +213,39 @@ class FinancialMigrationCases:
         self.credits_load(db, 'purchase', [row.replace("'2026-01-02'", "'2026-03-01'")])
         self.assertEqual(self.sql(db, 'SELECT status, refunded_cents FROM credits.purchases;\n').strip(), 'paid\t0')
 
+    def test_when_upstream_credited_an_app_store_purchase_it_should_never_be_credited_again(self):
+        upstream = self.fresh_db('credits_iap_upstream')
+        self.sql(upstream, '''
+            CREATE TABLE iap_credits(credit_id text, apple_transaction_id text, apple_product_id text);
+            INSERT INTO iap_credits VALUES ('c1', '2000001', 'credits_100'), (NULL, '2000002', NULL);
+            CREATE TABLE iap_account_tokens(app_account_token text, wallet text, created_at bigint, updated_at bigint);
+            INSERT INTO iap_account_tokens VALUES ('B6F6D6BE-A49D-16CC-D4C2-425B671E63C7',
+                '0x0000000000000000000000000000000000000001', 1767225600000, 1767225600000);
+        ''')
+        folder = migrate.SOURCES / 'credits-server'
+        extract = (folder / 'iap_transaction.extract.sql').read_text() + ' ORDER BY 1'
+        self.assertEqual(self.sql(upstream, extract).strip().splitlines(),
+                         ['2000001\tcredits_100', '2000002\tunknown'])
+        tokens = self.sql(upstream, (folder / 'iap_account_token.extract.sql').read_text()).strip()
+        self.assertTrue(tokens.startswith('b6f6d6be-a49d-16cc-d4c2-425b671e63c7\t'
+                                          '0x0000000000000000000000000000000000000001\t2026-01-01'), tokens)
+        db = self.catalyst_db('credits_iap')
+        node = '0x' + 'f' * 40
+        self.sql(db, "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, "
+                     f"amount_cents, status, credited_by) VALUES ('2000002', 'credits_100', '{node}', 100, 1000, "
+                     "'paid', 'device');\n")
+        rows = ["'2000001', 'credits_100'", "'2000002', 'unknown'"]
+        self.credits_load(db, 'iap_transaction', rows)
+        self.credits_load(db, 'iap_transaction', rows)
+        self.assertEqual(self.sql(db, 'SELECT transaction_id, status, address FROM credits.iap_transactions '
+                                      'ORDER BY 1;\n').strip().splitlines(),
+                         ['2000001\trefunded\t', f'2000002\tpaid\t{node}'])
+        self.credits_load(db, 'iap_account_token',
+                          ["'b6f6d6be-a49d-16cc-d4c2-425b671e63c7', '0x0000000000000000000000000000000000000001', "
+                           "'2026-01-01'"])
+        self.assertEqual(self.sql(db, 'SELECT address FROM credits.iap_account_tokens;\n').strip(),
+                         '0x0000000000000000000000000000000000000001')
+
     # ── signatures-server: one open listing per asset ──
 
     def test_when_a_batch_cancels_a_listing_and_carries_its_open_replacement_it_should_land_both(self):

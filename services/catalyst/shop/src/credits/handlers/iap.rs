@@ -19,7 +19,8 @@
 //!   account token.
 //! - operator `POST /credits/iap` (`/admin/iap/credits`) and
 //!   `POST /credits/iap/refund` (`/admin/iap/refunds`): the same credit and
-//!   reversal for support, behind the operator bearer.
+//!   reversal for support, behind the operator bearer; the credit is held
+//!   to the node's daily ceiling, not the per-wallet caps.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;

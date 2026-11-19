@@ -1568,8 +1568,14 @@ partial indexes, rows with a wallet only). Rows are one per purchase.
 
 `credits.iap_account_tokens` maps an `appAccountToken` (a one-way
 derivation of the wallet, `credits::apple::account_token`) to its wallet:
-written by `/iap/register` and an allowed `/iap/quote` (insert, never
-updated), read by the notification to find the wallet. One row per wallet.
+written by `/iap/register` and an allowed `/iap/quote` (insert; a repeat,
+concurrent or not, returns the existing row), read by the notification to
+find the wallet. One row per wallet.
+
+The credits-server import (`tooling/migration`) writes each upstream App
+Store transaction id as a `refunded` row without a wallet and copies the
+account tokens, both insert-only, so a purchase credited upstream is never
+credited again.
 
 Invariants: a transaction id credits at most once and never after a refund;
 a refund of a transaction never credited leaves a `refunded` row without a

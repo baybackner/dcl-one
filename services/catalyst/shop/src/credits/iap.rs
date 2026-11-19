@@ -11,7 +11,8 @@
 //! caps (`IAP_WALLET_TOTAL_LIMIT_CENTS`, `IAP_WALLET_DAILY_LIMIT_CENTS`, 0
 //! uncapped) and the node's daily ceiling (`IAP_DAILY_LIMIT_CENTS`, 0
 //! closed) are checked under one advisory lock with the insert, over the
-//! last 24 hours.
+//! last 24 hours; an operator credit, which reconciles a paid purchase a
+//! wallet cap refused, is held to the node's ceiling only.
 //!
 //! A refund charges the purchase's Credits back from the wallet in the
 //! refund's transaction (`Credits::revoke_in_tx`, floored at zero, the wallet
@@ -321,9 +322,18 @@ impl Credits {
             .ok_or_else(|| ApiError::bad_request("credits out of range"))?
             .get();
 
+        // An operator credit is how a purchase refused by a wallet cap is reconciled.
+        let limits = match p.channel {
+            Channel::Operator => Limits {
+                wallet_total_cents: 0,
+                wallet_daily_cents: 0,
+                ..iap.limits
+            },
+            _ => iap.limits,
+        };
         lock(&mut tx, DAILY_LOCK).await?;
         let totals = Self::iap_totals(&mut *tx, p.address).await?;
-        if let Some(reason) = totals.decide(&iap.limits, cents) {
+        if let Some(reason) = totals.decide(&limits, cents) {
             return Ok(CreditOutcome::Capped(reason));
         }
 
@@ -460,13 +470,10 @@ impl Credits {
     /// Records `address` as the wallet behind its account token.
     pub async fn link_iap_token(&self, address: &str) -> Result<String, ApiError> {
         let token = super::apple::account_token(address);
+        // A no-op update returns the existing row, waiting for a concurrent insert of it.
         let owner: String = sqlx::query_scalar(
-            "WITH ins AS ( \
-                 INSERT INTO credits.iap_account_tokens (token, address) VALUES ($1, $2) \
-                 ON CONFLICT (token) DO NOTHING RETURNING address \
-             ) \
-             SELECT address FROM ins UNION ALL \
-             SELECT address FROM credits.iap_account_tokens WHERE token = $1 LIMIT 1",
+            "INSERT INTO credits.iap_account_tokens AS t (token, address) VALUES ($1, $2) \
+             ON CONFLICT (token) DO UPDATE SET address = t.address RETURNING t.address",
         )
         .bind(&token)
         .bind(address)

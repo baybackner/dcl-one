@@ -14,6 +14,8 @@ stopped.
 | `wallet_flag` | `flagged_wallets` (live `multi-account`) | `credits.wallet_flags` |
 | `purchase` | `stripe_orders` + their `user_credits` | `credits.purchases` |
 | `ledger` | USD `user_credits`, SETTLED `usd_purchase_intents` | `credits.ledger`, `credits.wallets` balances |
+| `iap_transaction` | `iap_credits` (transaction ids) | `credits.iap_transactions` |
+| `iap_account_token` | `iap_account_tokens` | `credits.iap_account_tokens` |
 
 ## Known limitations
 
@@ -24,9 +26,11 @@ stopped.
   keep spending them on-chain until they expire, and the node's balance
   shows only USD credits.
 - **In-app (Apple) credits cannot be clawed back.** USD credits granted by an
-  Apple purchase import as ordinary grants; the node has no App Store
-  integration, so an Apple refund issued after cutover does not reverse
-  them.
+  Apple purchase import as ordinary grants, and MANA ones are not imported,
+  so an Apple refund issued after cutover does not reverse them. The
+  `iap_transaction` step records each upstream transaction id as a
+  `refunded` row without a wallet, so the node's App Store routes never
+  credit an upstream purchase a second time.
 
 ## Money
 
@@ -118,7 +122,8 @@ when every upstream flag really has expired or been lifted, rerun with
 - `stripe_events`, `stripe_payment_refunds`, `stripe_payment_disputes`:
   upstream endpoint's de-duplication and reconciliation state; their outcome
   is in `purchases` and the refund ledger rows.
-- `iap_credits`, `iap_account_tokens` (no IAP on the node), `seasons`,
+- `iap_credits` beyond their transaction ids (their Credits are
+  `user_credits` rows), `seasons`,
   `goals`, `season_goals`, `user_progress`, `sale_proceeds`,
   `proceeds_cursor`, `proceeds_abandoned_fills`, `studios`,
   `studio_operators`, `studio_budget_entries`, `shop_daily_summaries`,
