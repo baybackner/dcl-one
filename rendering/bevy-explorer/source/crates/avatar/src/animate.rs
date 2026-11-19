@@ -786,7 +786,8 @@ fn animate(
                     MoveKind::DoubleJump,
                 )
             } else if dynamic_state.move_kind == MoveKind::Glide {
-                // Set on foreign avatars from rfc4::Movement.glide_state ∈ {OPENING_PROP, GLIDING}.
+                // Set on foreign avatars from rfc4::Movement.glide_state ∈ {OPENING_PROP, GLIDING},
+                // or CLOSING_PROP in the air.
                 // Frozen at the neutral (straight) pose since we have no tilt input available.
                 (
                     ActiveEmote {
