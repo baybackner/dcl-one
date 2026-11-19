@@ -60,7 +60,6 @@ struct LastAnim {
     jump_count: JumpCount,
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn broadcast_position(
     player: Query<
         (
