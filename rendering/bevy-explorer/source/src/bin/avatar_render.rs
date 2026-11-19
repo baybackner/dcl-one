@@ -187,7 +187,7 @@ fn main() -> AppExit {
         graphics: GraphicsSettings {
             vsync: false,
             log_fps: false,
-            fps_target: system_bridge::settings::frame_rate::UNCAPPED_FPS,
+            fps_target: common::structs::UNCAPPED_FPS,
             ..base_config.graphics
         },
         scene_imposter_bake: SceneImposterBake::Off,

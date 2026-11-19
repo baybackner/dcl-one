@@ -486,8 +486,8 @@ impl Plugin for SceneRunnerPlugin {
     }
 }
 
-/// The frame rate the scene loop assumes under vsync when the display's refresh rate is unknown
-/// (always on the web).
+/// The frame rate the scene loop targets under vsync when the display's refresh rate is unknown:
+/// always on the web, and on native displays that report none.
 const UNKNOWN_REFRESH_RATE_FPS: f64 = 60.0;
 
 fn run_scene_loop(world: &mut World) {
@@ -507,14 +507,12 @@ fn run_scene_loop(world: &mut World) {
     let fps = if config.graphics.vsync {
         // TODO this should use video mode if we add fullscreen video modes
         // the player's target is disabled under vsync; a host's session cap still holds
-        refresh_rate
+        let vsync_fps = refresh_rate
             .map(|rr| ((rr as f64 + 999.0) / 1000.0).ceil())
-            .or_else(|| {
-                session
-                    .and_then(|session| session.fps_target)
-                    .map(|fps| fps as f64)
-            })
-            .unwrap_or(UNKNOWN_REFRESH_RATE_FPS)
+            .unwrap_or(UNKNOWN_REFRESH_RATE_FPS);
+        session
+            .and_then(|session| session.fps_target)
+            .map_or(vsync_fps, |cap| (cap as f64).min(vsync_fps))
     } else {
         fps_target as f64
     };

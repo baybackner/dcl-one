@@ -444,6 +444,12 @@ const mockSettings: Setting[] = [
   choice('Language', 'chat', ['English', 'Español', 'Français', 'Deutsch', 'Português', '中文', '日本語', '한국어'], 0),
   choice('Chat Reactions', 'chat', ON_OFF, 0)
 ]
+// VSync overrides the frame-rate cap, as in the engine
+function syncDisabled(): void {
+  const fpsLimit = mockSettings.find((x) => x.name === 'FPS Limit')
+  if (fpsLimit) fpsLimit.disabled = mockSettings.find((x) => x.name === 'VSync')?.value === 1
+}
+syncDisabled()
 
 // The engine's default binding table (mirrors InputMap::default() in crates/common/src/inputs.rs)
 // — drives the mock keydown→systemAction relay and the Key Bindings tab under ?mock=1.
@@ -1225,9 +1231,7 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
     if (msg.kind === 'setSetting') {
       const s = mockSettings.find((x) => x.name === msg.name)
       if (s) s.value = msg.value
-      // VSync overrides the frame-rate cap, as in the engine
-      const fpsLimit = mockSettings.find((x) => x.name === 'FPS Limit')
-      if (fpsLimit) fpsLimit.disabled = mockSettings.find((x) => x.name === 'VSync')?.value === 1
+      syncDisabled()
       reply({ kind: 'settings', settings: mockSettings })
       return
     }

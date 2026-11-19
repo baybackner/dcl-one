@@ -1,10 +1,7 @@
 use bevy::prelude::*;
-use common::structs::AppConfig;
+use common::structs::{AppConfig, UNCAPPED_FPS};
 
 use super::{AppSetting, EnumAppSetting};
-
-/// The "Uncapped" target frame rate.
-pub const UNCAPPED_FPS: usize = 999;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FpsTargetSetting(usize);

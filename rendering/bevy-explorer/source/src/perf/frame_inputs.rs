@@ -17,11 +17,10 @@ use common::{
     perf::{HudMainThreadCostDataPoint, JsHeapDataPoint, SamplingPausedReason},
     structs::{
         AppConfig, ClientWindowFocus, CurrentRealm, OutOfWorld, PrimaryUser, SessionGraphics,
-        WorldHold,
+        WorldHold, UNCAPPED_FPS,
     },
 };
 use scene_runner::renderer_context::RendererSceneContext;
-use system_bridge::settings::frame_rate::UNCAPPED_FPS;
 use wallet::Wallet;
 
 /// What the frame brought, as of `First`.

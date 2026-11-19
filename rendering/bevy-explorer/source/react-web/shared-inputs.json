@@ -6470,7 +6470,7 @@
     },
     {
       "path": "library/explorer-core/engine/mockBridge.ts",
-      "sha256": "1ce0e2708d54412ff216b0886843444498161d5e8334cc0a1a070b201fe97336"
+      "sha256": "913611ac18d4cab77355265ac896b132b14e47ac1c7cfbcdf75ad4f39c88bde7"
     },
     {
       "path": "library/explorer-core/engine/mockEvents.ts",
@@ -8942,7 +8942,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Select.tsx",
-      "sha256": "9707b850d4a3aa9c0b51846e50ed4e001f202557570667b021acefc745287daa"
+      "sha256": "d7f5cf773a833a5eac4abed5b5528b5a24ceeca4e39bf55af1a3173a7a01cdf8"
     },
     {
       "path": "library/ui/apps/hud/design/Showcase.tsx",
@@ -8962,7 +8962,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Slider.tsx",
-      "sha256": "f2903668f8de1465409107720b84e8a43b9b2bd9cf4acfa51ddd7a2b32523359"
+      "sha256": "cde0aafa17e4f6a793fc6db278214ea2cc7492cbee5985ea6e91d3f3c83ba615"
     },
     {
       "path": "library/ui/apps/hud/design/Spinner.module.css",
@@ -9034,7 +9034,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Toggle.tsx",
-      "sha256": "f402f7ab1afb9ca4a71f641308834390582be6b4ee25f7e8c06c057421317df1"
+      "sha256": "8e2b6243cf62a30f5a61fc38dceac3e193d1d4b57847378e29448faf6f79d506"
     },
     {
       "path": "library/ui/apps/hud/design/Tooltip.module.css",
@@ -10058,11 +10058,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/settings/SettingsPanel.module.css",
-      "sha256": "1bdcf550666e71ebdaddb18e8deb44b67b660786849b1dd784aed0fb0d910893"
+      "sha256": "32cbe604ee4160b7cef69d41ed69a23bf575eb3d943ae22159ab09bee6443b2e"
     },
     {
       "path": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
-      "sha256": "c0481576d3b0ca2684ea1e2e9fe5eef1e8a7423bfd160d867e192fd0ee0e0c86"
+      "sha256": "dcf0f1a67c5efb25bf48c6481d303789b5413c7b51236ce3214890ad6c70167a"
     },
     {
       "path": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
@@ -10742,7 +10742,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/settings.clicks.test.tsx",
-      "sha256": "db701a3845566337fcaa021a37bbe5326896b6d79a39d978f8a44bed787e3254"
+      "sha256": "72bb66eae2da846507b659dec730bf39522ef2838b7ed9e7a15a5efe02d2f955"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/settings.test.tsx",

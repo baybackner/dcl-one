@@ -128,12 +128,13 @@ describe('settings panel unset controls', () => {
 // visible, the control does not change it.
 describe('settings panel disabled controls', () => {
   it('a disabled select keeps its value and does not set', async () => {
-    const FPS = base({ name: 'Target Frame Rate', category: 'graphics', namedVariants: [{ name: '30 fps', description: '' }, { name: '60 fps', description: '' }], value: 1, default: 1, maxValue: 2, disabled: true })
+    const FPS = base({ name: 'Target Frame Rate', category: 'graphics', namedVariants: [{ name: '30 fps', description: 'Disabled while VSync is on.' }, { name: '60 fps', description: 'Disabled while VSync is on.' }], value: 1, default: 1, maxValue: 2, disabled: true })
     const settings: SettingsState = { ...fakeSession().settings, open: true, list: [FPS], set: vi.fn() }
     render(<SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={settings} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />)
     const select = screen.getByRole('button', { name: 'Target Frame Rate' })
     expect(select).toBeDisabled()
     expect(select.textContent).toContain('60 fps')
+    expect(select).toHaveAccessibleDescription('Disabled while VSync is on.')
     await userEvent.click(select)
     expect(screen.queryByRole('listbox')).toBeNull()
     expect(settings.set).not.toHaveBeenCalled()

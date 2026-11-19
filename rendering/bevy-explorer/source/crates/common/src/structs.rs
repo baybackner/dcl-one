@@ -946,6 +946,9 @@ impl AppConfig {
     }
 }
 
+/// The `fps_target` meaning no cap.
+pub const UNCAPPED_FPS: usize = 999;
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct GraphicsSettings {

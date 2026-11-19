@@ -13,7 +13,7 @@ use common::{
     rpc::RpcResultSender,
     structs::{
         AppConfig, CurrentRealm, EditorMode, PreviewMode, PrimaryUser, SessionGraphics,
-        StartupScenes, WorldHold,
+        StartupScenes, WorldHold, UNCAPPED_FPS,
     },
     util::JsThread,
 };
@@ -27,7 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use system_bridge::{settings::frame_rate::UNCAPPED_FPS, SystemApi, SystemBridge};
+use system_bridge::{SystemApi, SystemBridge};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::js_sys;
 use web_sys::{HtmlCanvasElement, OffscreenCanvas};
