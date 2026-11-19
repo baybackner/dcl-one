@@ -333,6 +333,46 @@ fn a_body_that_exhausted_its_fallback_reports_failure_to_the_renderer_host() {
 }
 
 #[test]
+fn a_build_waits_for_the_face_textures_and_masks() {
+    use bevy::asset::LoadState;
+    let face = |texture: u128, mask: Option<u128>| Wearable {
+        category: WearableCategory::MOUTH,
+        hides: HashSet::default(),
+        model: None,
+        texture: Some(Handle::weak_from_u128(texture)),
+        mask: mask.map(Handle::weak_from_u128),
+    };
+    let loading = |ids: &'static [u128]| {
+        move |handle: &Handle<Image>| {
+            if ids
+                .iter()
+                .any(|id| handle.id() == Handle::<Image>::weak_from_u128(*id).id())
+            {
+                Some(LoadState::Loading)
+            } else {
+                Some(LoadState::Loaded)
+            }
+        }
+    };
+    let worn = [face(1, Some(2)), face(3, None)];
+    assert!(!face_images_loading(&worn, loading(&[])));
+    // a texture or a mask still on its way holds the build
+    assert!(face_images_loading(&worn, loading(&[3])));
+    assert!(face_images_loading(&worn, loading(&[2])));
+    // a failed image does not: the face is built without it
+    assert!(!face_images_loading(&worn, |_: &Handle<Image>| Some(
+        LoadState::Failed(Arc::new(
+            bevy::asset::AssetLoadError::RequestedHandleTypeMismatch {
+                path: "face.png".into(),
+                requested: std::any::TypeId::of::<Image>(),
+                actual_asset_name: "",
+                loader_name: "",
+            }
+        ))
+    )));
+}
+
+#[test]
 fn a_body_failure_waits_for_its_fallback_before_reporting_a_terminal_error() {
     let mut app = app_with_render_avatar();
     let world = app.world_mut();

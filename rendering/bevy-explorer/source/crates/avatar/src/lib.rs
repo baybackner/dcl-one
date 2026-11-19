@@ -1226,6 +1226,18 @@ fn update_render_avatar(
     }
 }
 
+/// Whether a face wearable's texture or mask is still loading. A failed one does not hold the
+/// build: that face is drawn without it.
+fn face_images_loading<'a>(
+    wearables: impl IntoIterator<Item = &'a Wearable>,
+    load_state: impl Fn(&Handle<Image>) -> Option<bevy::asset::LoadState>,
+) -> bool {
+    wearables
+        .into_iter()
+        .flat_map(|wearable| wearable.texture.iter().chain(&wearable.mask))
+        .any(|image| matches!(load_state(image), Some(bevy::asset::LoadState::Loading)))
+}
+
 #[derive(Component)]
 pub struct AvatarLoaded {
     body_instance: InstanceId,
@@ -1281,7 +1293,14 @@ fn spawn_scenes(
                 }
             });
 
-        if any_loading {
+        // the face's textures and masks too: the avatar on show stays until this one can draw its
+        // eyes, eyebrows and mouth, instead of showing a bare face while they load
+        let face_loading = face_images_loading(
+            def.wearables.iter().map(|(_, wearable)| wearable),
+            |image| asset_server.get_load_state(image),
+        );
+
+        if any_loading || face_loading {
             continue;
         }
 
