@@ -95,8 +95,8 @@ const CLIP_GLIDE_LANDING = ANIM + 'Hard_Landing_GliderRig.glb';
 const CLIP_JOG_STOP = ANIM + 'Jog_Stop.glb';
 // Hard landing on a stunning touchdown (the vertical model's stunned()): Enter once, Loop while the stun lasts, then
 // Exit, cut short at HARD_LANDING_EXIT_END of its length into whatever plays next. Only after the long fall loop;
-// other stunning landings play the usual landing clip. The engine's network state reads a stun from a `Hard_Landing`
-// clip played at speed 1 or slower: Enter and Loop, not Exit.
+// other stunning landings play the usual landing clip. The engine's network state reads a stun from these clips played
+// at speed 1 or slower: Enter and Loop, not the faster Exit, nor the plain `Hard_Landing` of any big drop.
 const HARD_LANDING = {
   enter: ANIM + 'Hard_Landing_Enter.glb',
   loop: ANIM + 'Hard_Landing_Loop.glb',

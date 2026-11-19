@@ -13,6 +13,13 @@ use crate::gait;
 /// Vertical speed (m/s, up positive) below which an avatar off the ground is falling far.
 const LONG_FALLING_SPEED: f32 = -8.0;
 
+/// The phases of a hard landing's stun, by file name prefix.
+const STUN_CLIPS: [&str; 3] = [
+    "hard_landing_enter",
+    "hard_landing_loop",
+    "hard_landing_exit",
+];
+
 /// What the file name of a movement clip says about the avatar's motion. The naming convention,
 /// matched case-insensitively on the file name without its folder and extension:
 ///
@@ -22,8 +29,10 @@ const LONG_FALLING_SPEED: f32 = -8.0;
 ///   is opening, with `End` it is closing;
 /// - `*Jump_Start`, `*Jump_Rise_Loop`, `*Jump_Mid` (any prefix, e.g. `Jog_`, `Run_`): a jump
 ///   under way; the fall loops are not jumps, so walking off a ledge is not one;
-/// - `Hard_Landing*` played at speed 1 or slower: a hard landing; played faster it is the quick
-///   dip of a soft landing, which is nothing;
+/// - `Hard_Landing_Enter*`, `Hard_Landing_Loop*`, `Hard_Landing_Exit*` played at speed 1 or
+///   slower: a hard landing, the stun; the scene plays Exit faster as the stun ends;
+/// - plain `Hard_Landing`: the landing of any big drop, or sped up the quick dip of a soft
+///   landing, which is nothing;
 /// - any other name: nothing.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ClipMotion {
@@ -62,7 +71,7 @@ impl ClipMotion {
             .any(|phase| name.ends_with(phase))
         {
             Self::Jump
-        } else if name.starts_with("hard_landing") && speed <= 1.0 {
+        } else if speed <= 1.0 && STUN_CLIPS.iter().any(|phase| name.starts_with(phase)) {
             Self::HardLanding
         } else {
             Self::None
@@ -183,7 +192,10 @@ mod tests {
             ("Gliding_AvatarIdleRig.glb", ClipMotion::Gliding),
             ("Gliding_AvatarEndRig.glb", ClipMotion::GlideClosing),
             ("Hard_Landing_GliderRig.glb", ClipMotion::GlideClosing),
-            ("Hard_Landing.glb", ClipMotion::HardLanding),
+            ("Hard_Landing_Enter.glb", ClipMotion::HardLanding),
+            ("Hard_Landing_Loop.glb", ClipMotion::HardLanding),
+            // a big drop that does not stun plays the plain clip at full speed
+            ("Hard_Landing.glb", ClipMotion::None),
         ] {
             assert_eq!(
                 ClipMotion::of_clip(&format!("{anim}{clip}"), 1.0),
@@ -191,9 +203,14 @@ mod tests {
                 "{clip}"
             );
         }
-        // the soft landing replays the hard landing's end faster
+        // the soft landing replays the plain clip's end faster, and the stun's Exit plays faster
+        // once the stun is over
         assert_eq!(
             ClipMotion::of_clip("assets/animations/Hard_Landing.glb", 1.5),
+            ClipMotion::None
+        );
+        assert_eq!(
+            ClipMotion::of_clip("assets/animations/Hard_Landing_Exit.glb", 1.2),
             ClipMotion::None
         );
         // case, folder and extension do not matter
