@@ -1,5 +1,4 @@
-use bevy::math::{DVec2, DVec3, IVec2};
-use common::partition::PARCEL_SIZE;
+use bevy::math::{DVec2, DVec3, Vec3Swizzles};
 use scene_material::BoundRegion;
 
 /// How far past its parcels and above its height limit a scene is drawn, in metres: the scene
@@ -30,16 +29,16 @@ pub(super) struct Stretch {
 
 impl SceneVolume {
     pub(super) fn new(regions: &[BoundRegion]) -> Self {
-        let parcel_size = f64::from(PARCEL_SIZE);
         Self(
             regions
                 .iter()
                 .map(|region| {
-                    let (min, max) = region.cells();
+                    let min = region.world_min().as_dvec3();
+                    let max = region.world_max().as_dvec3();
                     Block {
-                        min: min.as_dvec2() * parcel_size - DRAWN_PAST_BOUNDS,
-                        max: (max + IVec2::ONE).as_dvec2() * parcel_size + DRAWN_PAST_BOUNDS,
-                        top: f64::from(region.height) + DRAWN_PAST_BOUNDS,
+                        min: min.xz() - DRAWN_PAST_BOUNDS,
+                        max: max.xz() + DRAWN_PAST_BOUNDS,
+                        top: max.y + DRAWN_PAST_BOUNDS,
                     }
                 })
                 .collect(),
