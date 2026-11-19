@@ -1535,7 +1535,7 @@ mod routing_tests {
         transmit(true);
         assert_eq!(chimes(&mut app), 1, "the player's call mic starts");
 
-        // with Mute Mic in Background off, a stop without focus is the player's own
+        // Mute Mic in Background off: a stop without focus chimes
         app.world_mut()
             .resource_mut::<AudioSettings>()
             .mute_mic_in_background = false;
