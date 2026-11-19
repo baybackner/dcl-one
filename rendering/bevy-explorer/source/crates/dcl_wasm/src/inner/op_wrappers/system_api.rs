@@ -96,7 +96,7 @@ pub async fn op_kernel_fetch_headers(
 
 #[wasm_bindgen]
 pub async fn op_set_avatar(state: &WorkerContext, avatar: JsValue) -> Result<u32, WasmError> {
-    // with deny_unknown_fields a caller mistake throws in JS, naming the op
+    // an unknown field (deny_unknown_fields) returns an error naming the op
     let avatar = serde_wasm_bindgen::from_value(avatar)
         .map_err(|e| WasmError::from(anyhow::anyhow!("setAvatar: {e}")))?;
     dcl_js::system_api::op_set_avatar(state.rc(), avatar)
@@ -192,7 +192,7 @@ pub async fn op_get_satellite_view(state: &WorkerContext) -> Result<JsValue, Was
 
 #[wasm_bindgen]
 pub fn op_set_lobby_stage(state: &WorkerContext, stage: JsValue) -> Result<(), WasmError> {
-    // a malformed stage throws in JS, naming the op, as on Deno
+    // a malformed stage returns an error naming the op
     let stage = serde_wasm_bindgen::from_value(stage)
         .map_err(|e| WasmError::from(anyhow::anyhow!("setLobbyStage: {e}")))?;
     dcl_js::system_api::op_set_lobby_stage(state.rc(), stage);
@@ -795,7 +795,7 @@ pub fn op_close_community_voice_update_stream(state: &WorkerContext, rid: u32) {
 
 #[wasm_bindgen]
 pub fn op_voice_chat_action(state: &WorkerContext, action: JsValue) -> Result<(), WasmError> {
-    // an action this engine does not know (a newer HUD) throws in JS, naming the op
+    // an unknown action returns an error naming the op
     let action = serde_wasm_bindgen::from_value(action)
         .map_err(|e| WasmError::from(anyhow::anyhow!("voiceChatAction: {e}")))?;
     dcl_js::system_api::op_voice_chat_action(state.rc(), action).map_err(WasmError::from)

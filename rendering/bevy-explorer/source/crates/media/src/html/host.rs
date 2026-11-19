@@ -243,7 +243,7 @@ fn clear_screen(id: MediaId) {
     render_worker.post_message(&message).report();
 }
 
-/// The render worker's message carrying `frame` of media `id`.
+/// A `VIDEO_FRAME` message carrying `frame` of media `id`.
 fn video_frame_message(id: MediaId, frame: &VideoFrame) -> Result<js_sys::Object, JsValue> {
     let message = js_sys::Object::new();
     Reflect::set(&message, &"type".into(), &"VIDEO_FRAME".into())?;
