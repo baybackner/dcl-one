@@ -1038,6 +1038,16 @@ impl SessionGraphics {
         self.fps_target.unwrap_or(config.graphics.fps_target)
     }
 
+    /// The fps target that caps the frame rate: under vsync only this session's own, since vsync
+    /// disables the player's; `None` when the display alone sets the rate.
+    pub fn applied_fps_target(&self, config: &AppConfig) -> Option<usize> {
+        if config.graphics.vsync {
+            self.fps_target
+        } else {
+            Some(self.fps_target(config))
+        }
+    }
+
     pub fn parcel_grass(&self, config: &AppConfig) -> ParcelGrassSetting {
         self.parcel_grass.unwrap_or(config.parcel_grass_setting)
     }

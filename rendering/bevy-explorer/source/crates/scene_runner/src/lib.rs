@@ -500,21 +500,18 @@ fn run_scene_loop(world: &mut World) {
         .and_then(|window| window.current_monitor())
         .and_then(|monitor| monitor.refresh_rate_millihertz());
     let config = world.resource::<AppConfig>();
-    let session = world.get_resource::<SessionGraphics>();
-    let fps_target = session.map_or(config.graphics.fps_target, |session| {
-        session.fps_target(config)
-    });
+    let applied_fps_target = world.get_resource::<SessionGraphics>().map_or(
+        (!config.graphics.vsync).then_some(config.graphics.fps_target),
+        |session| session.applied_fps_target(config),
+    );
     let fps = if config.graphics.vsync {
         // TODO this should use video mode if we add fullscreen video modes
-        // the player's target is disabled under vsync; a host's session cap still holds
         let vsync_fps = refresh_rate
             .map(|rr| ((rr as f64 + 999.0) / 1000.0).ceil())
             .unwrap_or(UNKNOWN_REFRESH_RATE_FPS);
-        session
-            .and_then(|session| session.fps_target)
-            .map_or(vsync_fps, |cap| (cap as f64).min(vsync_fps))
+        applied_fps_target.map_or(vsync_fps, |cap| (cap as f64).min(vsync_fps))
     } else {
-        fps_target as f64
+        applied_fps_target.unwrap_or(config.graphics.fps_target) as f64
     };
     let mut loop_schedule = world.resource_mut::<SceneLoopSchedule>();
     let mut schedule = std::mem::take(&mut loop_schedule.schedule);
