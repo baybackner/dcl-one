@@ -770,8 +770,8 @@ impl DecentralandApp {
         // Analytics plugins
         app.add_plugins(MetricsPlugin);
 
-        if decentraland_app_config.arguments.test_scenes.is_some() {
-            app.add_plugins(AutomaticTestingPlugin);
+        if let Some(test_scenes) = decentraland_app_config.arguments.test_scenes.clone() {
+            app.add_plugins(AutomaticTestingPlugin { test_scenes });
         }
 
         // the GPU frame time (`common::gpu_time::GPU_FRAME_TIME`), in every build of the rendering

@@ -3,7 +3,7 @@ use bevy::{
     log::{
         debug, info,
         tracing_subscriber::{self, EnvFilter},
-        warn, warn_once,
+        warn,
     },
     platform::collections::HashMap,
 };
@@ -66,24 +66,13 @@ fn main() -> Result<()> {
 
     info!("IPC scene host running");
 
-    let _ = rt.block_on(async move { tokio::join!(f_in, f_out) });
+    // the first loop to fail ends the host with an error
+    rt.block_on(async move { tokio::try_join!(async { f_in.await? }, async { f_out.await? }) })?;
 
     Ok(())
 }
 
 async fn scene_ipc_out(
-    stream: SendHalf,
-    scene_rx: SceneResponseReceiver,
-    close_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
-    system_api_rx: tokio::sync::mpsc::UnboundedReceiver<SystemApi>,
-) {
-    if let Err(e) = scene_ipc_out_until_write_error(stream, scene_rx, close_rx, system_api_rx).await
-    {
-        warn!("scene_ipc_out exit on write failure: {e}");
-    }
-}
-
-async fn scene_ipc_out_until_write_error(
     mut stream: SendHalf,
     mut scene_rx: SceneResponseReceiver,
     mut close_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
@@ -106,12 +95,9 @@ async fn scene_ipc_out_until_write_error(
 
                 let was_open = SCENE_IPC_CONTEXT.with(|ctx| {
                     let mut ctx = ctx.borrow_mut();
-                    let Some(ctx) = ctx.as_mut() else {
-                        warn_once!("ignoring ipc close for channel {close_id}: ipc context is not set");
-                        return false;
-                    };
-                    ctx.registry.remove(&close_id).is_some()
-                });
+                    let ctx = ctx.as_mut().ok_or_else(ipc_context_missing)?;
+                    Ok::<_, std::io::Error>(ctx.registry.remove(&close_id).is_some())
+                })?;
 
                 if was_open {
                     write_msg(&mut stream, &SceneToEngine::IpcMessage(close_id, IpcMessage::Closed)).await?;
@@ -132,7 +118,7 @@ async fn scene_ipc_in(
     mut stream: RecvHalf,
     scene_sx: TaggedSceneResponseSender,
     system_api_sx: tokio::sync::mpsc::UnboundedSender<SystemApi>,
-) {
+) -> std::io::Result<()> {
     let mut renderer_senders = HashMap::new();
 
     // one broadcast channel per presence context; scenes subscribe to their own
@@ -198,10 +184,7 @@ async fn scene_ipc_in(
             EngineToScene::IpcMessage(id, ipc_message) => {
                 SCENE_IPC_CONTEXT.with(|ctx| {
                     let mut ctx = ctx.borrow_mut();
-                    let Some(ctx) = ctx.as_mut() else {
-                        warn_once!("ignoring ipc message for channel {id}: ipc context is not set");
-                        return;
-                    };
+                    let ctx = ctx.as_mut().ok_or_else(ipc_context_missing)?;
 
                     debug!(
                         "ipc response {} -> {}",
@@ -219,8 +202,15 @@ async fn scene_ipc_in(
                             let _ = ctx.registry.remove(&id);
                         }
                     }
-                });
+                    Ok::<_, std::io::Error>(())
+                })?;
             }
         }
     }
+    Ok(())
+}
+
+/// The error for an IPC message that arrives while `SCENE_IPC_CONTEXT` is unset.
+fn ipc_context_missing() -> std::io::Error {
+    std::io::Error::other("scene ipc context is not set")
 }

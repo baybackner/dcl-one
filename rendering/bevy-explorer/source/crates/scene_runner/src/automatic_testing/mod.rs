@@ -29,15 +29,18 @@ use ipfs::IpfsAssetServer;
 use wallet::Wallet;
 
 use crate::{
-    initialize_scene::{SceneLoading, TestingData, PARCEL_SIZE},
+    initialize_scene::{SceneLoading, TestScenes, PARCEL_SIZE},
     renderer_context::RendererSceneContext,
     ContainingScene, OutOfWorld, Toaster,
 };
 
-pub struct AutomaticTestingPlugin;
+pub struct AutomaticTestingPlugin {
+    pub test_scenes: TestScenes,
+}
 
 impl Plugin for AutomaticTestingPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(self.test_scenes.clone());
         let ready = SnapshotRenderReadiness::default();
         app.insert_resource(ready.clone());
         app.init_resource::<SnapshotInProgress>();
@@ -81,7 +84,7 @@ struct SnapshotResult {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn automatic_testing(
     mut commands: Commands,
-    mut testing_data: ResMut<TestingData>,
+    mut test_scenes: ResMut<TestScenes>,
     player: Query<(Entity, Option<&OutOfWorld>), With<PrimaryUser>>,
     containing_scene: ContainingScene,
     mut toaster: Toaster,
@@ -114,10 +117,6 @@ fn automatic_testing(
     ),
     ui_roots: Query<(Entity, Option<&mut UiTargetCamera>), (With<ComputedNode>, Without<ChildOf>)>,
 ) {
-    let Some(test_scenes) = testing_data.test_scenes.as_mut() else {
-        return;
-    };
-
     // load screenshots before entering any scenes (to ensure we don't have to async wait later)
     if screenshots.is_weak() {
         *screenshots = ipfas

@@ -215,6 +215,20 @@ impl RpcCallEvent {
     }
 }
 
+/// How a `RpcCall::MovePlayer` reaches its target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PlayerMoveTiming {
+    /// Jumps to the target; `response`, when present, receives `true`.
+    Instant {
+        response: Option<RpcResultSender<bool>>,
+    },
+    /// Moves to the target over `duration` seconds; `response` receives the outcome.
+    Interpolate {
+        duration: f32,
+        response: RpcResultSender<bool>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RpcCall {
     ChangeRealm {
@@ -229,9 +243,8 @@ pub enum RpcCall {
     MovePlayer {
         to: Vec3,
         looking_at: Option<Vec3>,
-        duration: Option<f32>,
         camera_rotation: Option<Quat>,
-        response: Option<RpcResultSender<bool>>,
+        timing: PlayerMoveTiming,
     },
     WalkPlayer {
         to: Vec3,

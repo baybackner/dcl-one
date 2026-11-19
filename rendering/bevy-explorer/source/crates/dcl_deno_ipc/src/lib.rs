@@ -338,7 +338,13 @@ async fn next_global_update(
     futures_util::future::select_all(recvs).await.0
 }
 
-pub async fn renderer_ipc_in(mut stream: RecvHalf) {
+pub async fn renderer_ipc_in(stream: RecvHalf) {
+    if let Err(e) = renderer_ipc_in_until_error(stream).await {
+        error!("renderer_ipc_in exit: {e}");
+    }
+}
+
+async fn renderer_ipc_in_until_error(mut stream: RecvHalf) -> std::io::Result<()> {
     while let Ok(len) = stream.read_u64_le().await {
         let mut buffer = vec![0u8; len as usize];
         stream.read_exact(&mut buffer).await.unwrap();
@@ -347,10 +353,9 @@ pub async fn renderer_ipc_in(mut stream: RecvHalf) {
         match msg {
             SceneToEngine::SceneResponse(id, scene_response) => RENDERER_SENDER.with(|sender| {
                 let mut sender = sender.borrow_mut();
-                let Some(sender) = sender.as_mut() else {
-                    warn_once!("dropping scene response: renderer sender is not set");
-                    return;
-                };
+                let sender = sender.as_mut().ok_or_else(|| {
+                    std::io::Error::other("scene response before any scene was started")
+                })?;
                 // HEADLESS-ONLY: EXIT_ON_SIDECAR_LOSS marks the orchestrated headless server,
                 // where every scene shares one engine. There, a panic in this IPC task ends
                 // the loop and trips the process exit above — killing the whole engine and
@@ -364,7 +369,8 @@ pub async fn renderer_ipc_in(mut stream: RecvHalf) {
                 } else {
                     sender.try_send((id, scene_response)).unwrap();
                 }
-            }),
+                Ok::<_, std::io::Error>(())
+            })?,
             SceneToEngine::IpcMessage(id, ipc_message) => {
                 let IpcMessage::Closed = ipc_message else {
                     warn!("ignoring unexpected ipc data message for channel {id}");
@@ -373,15 +379,15 @@ pub async fn renderer_ipc_in(mut stream: RecvHalf) {
 
                 ENGINE_IPC_CONTEXT.with(|ctx| {
                     let mut ctx = ctx.borrow_mut();
-                    let Some(ctx) = ctx.as_mut() else {
-                        warn_once!("ignoring ipc close for channel {id}: ipc context is not set");
-                        return;
-                    };
+                    let ctx = ctx
+                        .as_mut()
+                        .ok_or_else(|| std::io::Error::other("engine ipc context is not set"))?;
 
                     if let Some(token) = ctx.ipc_channel_registry.remove(&id) {
                         token.cancel();
                     }
-                })
+                    Ok::<_, std::io::Error>(())
+                })?
             }
             SceneToEngine::SystemApi(system_command) => {
                 SYSTEM_API_SENDER.with(|sender| {
@@ -396,6 +402,7 @@ pub async fn renderer_ipc_in(mut stream: RecvHalf) {
             }
         }
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

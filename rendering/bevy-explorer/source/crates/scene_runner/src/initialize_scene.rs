@@ -622,7 +622,7 @@ pub(crate) fn load_scene_javascript(
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Resource)]
 pub struct TestScenes(pub VecDeque<TestScene>);
 
 #[derive(Clone)]

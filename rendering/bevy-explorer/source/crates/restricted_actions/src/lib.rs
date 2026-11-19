@@ -23,8 +23,9 @@ use collectibles::wearables::WearableUrn;
 use common::{
     profile::SerializedProfile,
     rpc::{
-        EntityDefinitionResponse, PortableLocation, RPCSendableMessage, ReadFileResponse, RpcCall,
-        RpcCallEvent, RpcEventSender, RpcOrigin, RpcResultSender, SpawnResponse,
+        EntityDefinitionResponse, PlayerMoveTiming, PortableLocation, RPCSendableMessage,
+        ReadFileResponse, RpcCall, RpcCallEvent, RpcEventSender, RpcOrigin, RpcResultSender,
+        SpawnResponse,
     },
     sets::SceneSets,
     structs::{
@@ -164,9 +165,8 @@ pub enum PendingPlayerMove {
         origin: RpcOrigin,
         target: Vec3,
         looking_at: Option<Vec3>,
-        duration: Option<f32>,
         camera_rotation: Option<Quat>,
-        response: Option<RpcResultSender<bool>>,
+        timing: PlayerMoveTiming,
     },
     Walk {
         origin: RpcOrigin,
@@ -187,10 +187,18 @@ impl PendingPlayerMove {
     fn send_fail(self) {
         match self {
             Self::Move {
-                response: Some(r), ..
-            } => r.send(false),
-            Self::Walk { response, .. } => response.send(false),
-            _ => {}
+                timing:
+                    PlayerMoveTiming::Instant {
+                        response: Some(response),
+                    }
+                    | PlayerMoveTiming::Interpolate { response, .. },
+                ..
+            }
+            | Self::Walk { response, .. } => response.send(false),
+            Self::Move {
+                timing: PlayerMoveTiming::Instant { response: None },
+                ..
+            } => {}
         }
     }
 }
@@ -247,16 +255,14 @@ pub fn handle_player_move_requests(
             RpcCall::MovePlayer {
                 to,
                 looking_at,
-                duration,
                 camera_rotation,
-                response,
+                timing,
             } => PendingPlayerMove::Move {
                 origin: ev.origin.clone(),
                 target: *to,
                 looking_at: *looking_at,
-                duration: *duration,
                 camera_rotation: *camera_rotation,
-                response: response.clone(),
+                timing: timing.clone(),
             },
             RpcCall::WalkPlayer {
                 to,
@@ -391,15 +397,13 @@ fn apply_player_move(
         PendingPlayerMove::Move {
             target,
             looking_at,
-            duration,
-            response,
+            timing,
             camera_rotation,
             origin,
         } => {
-            // a move with both a duration and a response interpolates; any other move is instant
-            match (duration, response) {
-                (Some(d), Some(response)) => {
-                    let d = d.max(f32::EPSILON);
+            match timing {
+                PlayerMoveTiming::Interpolate { duration, response } => {
+                    let d = duration.max(f32::EPSILON);
                     let from = player_transform.translation;
                     debug!("player interpolation start: {from} -> {world_target} over {d}s");
                     movement_control
@@ -412,7 +416,7 @@ fn apply_player_move(
                         kind: PlayerMoveKind::Interpolate { from, duration: d },
                     });
                 }
-                (_, response) => {
+                PlayerMoveTiming::Instant { response } => {
                     player_transform.translation = world_target;
                     movement_control.deliberate_penetration = true;
                     debug!("player teleported to {world_target}");
