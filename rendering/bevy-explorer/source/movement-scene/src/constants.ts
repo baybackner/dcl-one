@@ -34,7 +34,6 @@ export const MAX_EXTERNAL_SPEED = 50;
 // Reply prediction: the engine applies a reply from the frame it lands on until the next one. The reply delay in frames
 // is estimated from previousStepTime / stepTime, and the reply carries the state predicted for the last frame it is held.
 export const FRAME_TIME_SMOOTHING = 0.1; // weight of the newest sample in the frame-time average
-export const DELAY_ROUNDING = 0; // subtracted from the frame ratio before rounding
 export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
 // Ramp guard, against the prediction switching between ticks: while the same input is held on the ground and the model
 // accelerates, a reply never slows below the previous one; between two airborne replies (no launch, glide, landing or
@@ -44,7 +43,7 @@ export const MAX_TICK_TIME = 0.25; // s, longest tick the model integrates
 // the per-tick delay estimate.
 // Height tracking during a jump: the engine integrates whatever velocity it is sent, so a reply that lands earlier
 // or later than estimated leaves a height error that adds up over the jump. Each reply adds the error between the
-// model's height and the avatar's, divided by VERTICAL_TRACK_TIME (s), at most VERTICAL_TRACK_MAX (m/s). 0 = off.
+// model's height and the avatar's, divided by VERTICAL_TRACK_TIME (s), at most VERTICAL_TRACK_MAX (m/s).
 export const VERTICAL_TRACK_TIME: number = 0.15;
 export const VERTICAL_TRACK_MAX: number = 2;
 // Height tracking stops for the rest of the jump when the applied vertical velocity differs from the requested one by

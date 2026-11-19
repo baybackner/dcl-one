@@ -1,7 +1,7 @@
 // Step clock shared by the horizontal and vertical models. Both integrate in fixed steps
 // (FIXED_STEP); this module turns the engine's tick timing into the time each tick covers
 // and the reply delay to predict over.
-import { DELAY_ROUNDING, FRAME_TIME_SMOOTHING, MAX_TICK_TIME } from './constants';
+import { FRAME_TIME_SMOOTHING, MAX_TICK_TIME } from './constants';
 
 // Time to add to the step accumulators this tick: from the end of the previous tick's frame
 // to the end of this tick's frame.
@@ -35,6 +35,6 @@ export function beginTick(tickTime: number, stepTime: number, previousStepTime: 
   meanFrameTime = meanFrameTime > 0 ? meanFrameTime + (frameTime - meanFrameTime) * FRAME_TIME_SMOOTHING : frameTime;
   const ratio = Math.min(previousStepTime, MAX_TICK_TIME) / meanFrameTime + lateFrames;
   meanRatio += (ratio - meanRatio) * FRAME_TIME_SMOOTHING;
-  replyDelay = Math.max(0, Math.min(2, Math.round(ratio - DELAY_ROUNDING) - 1));
+  replyDelay = Math.max(0, Math.min(2, Math.round(ratio) - 1));
   replyDelaySmooth = Math.max(0, Math.min(2, meanRatio - 1));
 }

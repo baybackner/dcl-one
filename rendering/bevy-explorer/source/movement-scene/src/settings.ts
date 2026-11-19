@@ -16,11 +16,6 @@ export const settings = {
   accelTimeGround: HORIZONTAL_ACCEL_TIME_GROUND,
   // Smoothing time (s) of a released input axis; 0 stops within one integration step.
   dampTimeGround: HORIZONTAL_DAMP_TIME_GROUND,
-  // 1 = ignore engine-provided locomotion settings and use the values above
-  // (so tuning always takes effect). 0 = defer to engine locomotion when present.
-  // Production defaults to 0 so a deployment honors the engine's locomotion
-  // settings; flip to 1 when tuning local speeds in isolation.
-  forceLocalSpeeds: 0,
 
   // --- Animation phasing ---
   // Horizontal speed (m/s) above which the run clip is used instead of walk.
@@ -35,8 +30,6 @@ export const settings = {
   transRun: 0.2,
   transIdle: 0.2,
   transAir: 0.1, // jump phases / glide / double-jump / landing
-  // 1 = play the Jog_Stop clip when decelerating to a halt from jog/run.
-  useJogStop: 1,
   // Minimum sustained jog+ time (s) before stopping plays the Jog_Stop clip.
   // Short taps / repositioning moves settle straight into idle instead of
   // foot-planting after two steps.
@@ -69,9 +62,6 @@ export const settings = {
   // Playback time (s) the jump start clip begins at — raise to skip the clip's
   // anticipation/crouch wind-up frames so the up-pose shows immediately.
   jumpStartSkip: 0,
-  // 1 = play the landing/recover clip; 0 = skip it entirely (snap straight to
-  // idle/run on touchdown — removes the forward lean completely).
-  playLanding: 1,
   // Phased-jump thresholds (metres fallen):
   // drop past which touchdown plays Hard_Landing instead of the normal *_Jump_End.
   hardLandingDrop: 3.0,

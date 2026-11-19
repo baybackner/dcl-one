@@ -23,25 +23,21 @@ export function initParamters(
     locomotion: DeepReadonlyObject<PBAvatarLocomotionSettings> | undefined,
     modifiers: DeepReadonlyObject<PBInputModifier> | undefined
 ) {
-    // When forceLocalSpeeds is on, ignore engine-provided locomotion so the
-    // speeds in settings.ts always take effect; otherwise prefer engine values
-    // and fall back to settings.ts.
-    const useLocal = settings.forceLocalSpeeds !== 0;
-    const baseSprintSpeed = useLocal ? settings.sprintSpeed : (locomotion?.runSpeed ?? settings.sprintSpeed);
-    const baseJogSpeed = useLocal ? settings.jogSpeed : (locomotion?.jogSpeed ?? settings.jogSpeed);
-    const baseWalkSpeed = useLocal ? settings.walkSpeed : (locomotion?.walkSpeed ?? settings.walkSpeed);
+    // Engine-provided locomotion values win; settings.ts supplies the defaults.
+    const baseSprintSpeed = locomotion?.runSpeed ?? settings.sprintSpeed;
+    const baseJogSpeed = locomotion?.jogSpeed ?? settings.jogSpeed;
+    const baseWalkSpeed = locomotion?.walkSpeed ?? settings.walkSpeed;
 
-    const baseJumpHeight = useLocal ? settings.jumpHeight : (locomotion?.jumpHeight ?? settings.jumpHeight);
-    const baseSprintJumpHeight = useLocal ? settings.sprintJumpHeight : (locomotion?.runJumpHeight ?? settings.sprintJumpHeight);
+    const baseJumpHeight = locomotion?.jumpHeight ?? settings.jumpHeight;
+    const baseSprintJumpHeight = locomotion?.runJumpHeight ?? settings.sprintJumpHeight;
 
     // Double-jump height and glide speeds have no entry in settings.ts; the constants
-    // are the local defaults, overridden by the engine locomotion component
-    // unless forceLocalSpeeds pins them local.
-    doubleJumpHeight = useLocal ? DOUBLE_JUMP_HEIGHT : (locomotion?.doubleJumpHeight ?? DOUBLE_JUMP_HEIGHT);
-    glidingSpeed = useLocal ? GLIDE_HORIZONTAL_SPEED : (locomotion?.glidingSpeed ?? GLIDE_HORIZONTAL_SPEED);
-    glidingFallingSpeed = useLocal ? GLIDE_FALL_SPEED : (locomotion?.glidingFallingSpeed ?? GLIDE_FALL_SPEED);
+    // are the defaults, overridden by the engine locomotion component.
+    doubleJumpHeight = locomotion?.doubleJumpHeight ?? DOUBLE_JUMP_HEIGHT;
+    glidingSpeed = locomotion?.glidingSpeed ?? GLIDE_HORIZONTAL_SPEED;
+    glidingFallingSpeed = locomotion?.glidingFallingSpeed ?? GLIDE_FALL_SPEED;
     // the scene's hardLandingCooldown as set: 0 or less leaves no stun
-    landingStunTime = useLocal ? LANDING_STUN_TIME : (locomotion?.hardLandingCooldown ?? LANDING_STUN_TIME);
+    landingStunTime = locomotion?.hardLandingCooldown ?? LANDING_STUN_TIME;
 
     const jogEnabled = !modifiers?.mode?.standard.disableJog && !modifiers?.mode?.standard.disableAll;
     const walkEnabled = !modifiers?.mode?.standard.disableWalk && !modifiers?.mode?.standard.disableAll;

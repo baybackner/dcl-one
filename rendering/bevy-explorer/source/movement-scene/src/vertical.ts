@@ -455,7 +455,7 @@ function applyJumpAndGravity(noGravity: boolean) {
     || prevActualVelocity.y > Math.max(0, prevRequestedVelocity.y) + VERTICAL_TRACK_BLOCK;
   if (jumpTracked && (vstate.prop === GlideProp.GLIDING || stepping || vstate.ve !== 0 || horizontalResync || noGravity || blocked
     || (onGround && vstate.vy <= 0 && !vstate.launched && !launchPending))) jumpTracked = false;
-  if (VERTICAL_TRACK_MAX > 0 && VERTICAL_TRACK_TIME > 0 && jumpTracked && frameTime > 0) {
+  if (jumpTracked && frameTime > 0) {
     // compared at the start of this frame, where the avatar's height is known whichever reply the engine applies
     // over this frame (the model state is at the end of this frame minus the part of a step not yet run)
     const err = vstate.y + vstate.vy * (vpending - frameTime) - playerPosition.y;

@@ -440,16 +440,8 @@ function jumpPhaseAnimation(newJump: boolean, horizontalSpeed: number): Movement
 }
 
 // Touchdown animation: plays the chosen End / Hard_Landing clip once, then
-// returns null to let locomotion resume. Returns null immediately if landing
-// anim is disabled.
+// returns null to let locomotion resume.
 function landingAnimation(justLanded: boolean): MovementAnimation | null {
-  if (settings.playLanding === 0) {
-    requestingLanding = false;
-    jumpPhase = 'none';
-    if (justLanded) maxUngroundedY = -Infinity;
-    return null;
-  }
-
   // Landing while moving (and not stunned) shows the touchdown briefly, then
   // blends out into locomotion after landRunBlend seconds instead of holding
   // the planted-feet clip to completion (which reads as a sliding crouch).
@@ -767,30 +759,28 @@ function selectAnimation(): MovementAnimation {
 
   // Jog/run stop: if we halted within a moment of moving at jog+ pace, play the
   // one-shot stop clip before settling into idle.
-  if (settings.useJogStop !== 0) {
-    let newStop = false;
-    // Only foot-plant after a sustained run (jogStopMinRun) — brief taps and
-    // small repositions settle straight into idle instead.
-    const ranLongEnough = lastFastMoveTime - fastMoveStartTime >= settings.jogStopMinRun;
-    if (!stopping && time - lastFastMoveTime < 0.25 && ranLongEnough) {
-      stopping = true;
-      newStop = true;
-    }
-    if (stopping) {
-      if (clipFinished(CLIP_JOG_STOP)) {
-        stopping = false;
-      } else {
-        return {
-          src: CLIP_JOG_STOP,
-          speed: settings.jogStopSpeed,
-          loop: false,
-          idle: false,
-          transitionSeconds: settings.transWalk,
-          // Skip past the clip's opening step if tuned (jogStopStart > 0).
-          ...(newStop ? { playbackTime: settings.jogStopStart } : {}),
-          sounds: [],
-        };
-      }
+  let newStop = false;
+  // Only foot-plant after a sustained run (jogStopMinRun) — brief taps and
+  // small repositions settle straight into idle instead.
+  const ranLongEnough = lastFastMoveTime - fastMoveStartTime >= settings.jogStopMinRun;
+  if (!stopping && time - lastFastMoveTime < 0.25 && ranLongEnough) {
+    stopping = true;
+    newStop = true;
+  }
+  if (stopping) {
+    if (clipFinished(CLIP_JOG_STOP)) {
+      stopping = false;
+    } else {
+      return {
+        src: CLIP_JOG_STOP,
+        speed: settings.jogStopSpeed,
+        loop: false,
+        idle: false,
+        transitionSeconds: settings.transWalk,
+        // Skip past the clip's opening step if tuned (jogStopStart > 0).
+        ...(newStop ? { playbackTime: settings.jogStopStart } : {}),
+        sounds: [],
+      };
     }
   }
 
