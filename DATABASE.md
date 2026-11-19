@@ -1513,7 +1513,7 @@ notified on the `credits.wallet_flags` channel, `{action: "flag", addresses,
 source, ip}` (`shop/src/credits/wallet_flags.rs`), or posted through the
 admin, `POST /credits/admin/flags {addresses, source, ip}` (the shape the
 events-notifier posted to the credits server's `/flag`, which names the
-addresses `addressesLinked`; both keys are accepted): one row per flagged
+addresses `addressesLinked`; either key is accepted, a body naming both is refused): one row per flagged
 wallet, keyed by address, with the source that raised it, the IP it reported
 and the wallets it was linked with (`linked_addresses`, the body's list). The
 node runs no detector: it keeps the flags it is told of.
@@ -1529,8 +1529,8 @@ transaction that clears its block. Readers are the credits claim (`EXISTS` by
 address, folded into the captcha claim and the balance reports as
 `is_blocked_for_claiming`; the spend and the reservation read the operator's
 block alone, so a flag never holds credits a wallet has), the operator grant
-(`EXISTS` by address in the grant's transaction: a flagged wallet receives no
-granted credits) and the admin list
+(its `source` by address in the grant's transaction: a flagged wallet receives
+no granted credits) and the admin list
 (`GET /credits/admin/flags`, by address or paged by `flagged_at`). Rows are
 small and few: a flag per wallet reported.
 

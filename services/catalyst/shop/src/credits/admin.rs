@@ -379,6 +379,7 @@ pub const MAX_FLAGGED_ADDRESSES: usize = 100;
 /// and the `credits.wallet_flags` notification.
 #[derive(Debug, Deserialize)]
 pub struct FlagBody {
+    /// Either key, not both: a body naming both is refused as a duplicate field.
     #[serde(alias = "addressesLinked")]
     pub addresses: Vec<String>,
     pub source: String,

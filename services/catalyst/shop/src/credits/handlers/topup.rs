@@ -6,8 +6,9 @@
 //! A transfer mined while no MANA/USD rate was recorded (a price poller down
 //! longer than the freshness window) answers 422 for good. An operator credits
 //! it with `POST /admin/credits/grant` and `idempotencyKey` `mana-topup:<txHash>`
-//! (lowercase): the grant is booked as a purchase, like the claim, and a later
-//! claim of that hash replays it instead of granting again.
+//! (lowercase) once the economy module confirms that wallet paid it: the grant
+//! is booked as a purchase, like the claim, and a later claim of that hash
+//! replays it instead of granting again.
 
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};
@@ -75,6 +76,37 @@ pub fn recovered_topup_key(key: &str) -> Option<Result<String, ApiError>> {
         validate_tx_hash(&key[MANA_TOPUP_KEY_PREFIX.len()..])
             .map(|hash| topup_idempotency_key(&hash)),
     )
+}
+
+/// A recovery names a confirmed MANA transfer `address` paid to the top-up
+/// address; anything else is not a paid top-up.
+pub async fn verify_recovered_topup(
+    state: &SharedState,
+    key: &str,
+    address: &str,
+) -> Result<(), ApiError> {
+    let tx_hash = &key[MANA_TOPUP_KEY_PREFIX.len()..];
+    match state.broker.verify_mana_payment(tx_hash).await? {
+        ManaPaymentVerification::Confirmed { from, to, .. } => {
+            let escrow = state.broker.escrow_address();
+            if !from.eq_ignore_ascii_case(address) {
+                Err(ApiError::unprocessable(
+                    "the MANA payment was sent by a different wallet than the grant names",
+                ))
+            } else if from.eq_ignore_ascii_case(&to)
+                || escrow.iter().any(|a| a.eq_ignore_ascii_case(&from))
+            {
+                Err(ApiError::unprocessable(
+                    "transfers from the Shop's own wallets are not top-ups",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        _ => Err(ApiError::unprocessable(
+            "the transaction is not a confirmed MANA payment to the top-up address",
+        )),
+    }
 }
 
 /// Which confirmed MANA transfers a top-up credits.

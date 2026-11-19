@@ -332,15 +332,14 @@ impl Credits {
 
         // A flagged wallet receives no granted Credits; a replay above still answers its first outcome.
         if kind == "grant" {
-            let flagged: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM credits.wallet_flags WHERE address = $1)",
-            )
-            .bind(address)
-            .fetch_one(&mut **tx)
-            .await?;
-            if flagged {
+            let source: Option<String> =
+                sqlx::query_scalar("SELECT source FROM credits.wallet_flags WHERE address = $1")
+                    .bind(address)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+            if let Some(source) = source {
                 return Err(ApiError::conflict(format!(
-                    "Wallet {address} is flagged for multi-accounting and cannot receive granted credits"
+                    "Wallet {address} is flagged ({source}) and cannot receive granted credits"
                 )));
             }
         }

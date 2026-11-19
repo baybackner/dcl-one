@@ -96,3 +96,23 @@ pub async fn apply(credits: &Credits, payload: &str) -> Result<(), ApiError> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Notification;
+
+    #[test]
+    fn a_flag_takes_either_address_key_but_not_both() {
+        for key in ["addresses", "addressesLinked"] {
+            let payload = format!(r#"{{"action":"flag","{key}":["0xab"],"source":"s"}}"#);
+            assert!(
+                matches!(serde_json::from_str::<Notification>(&payload), Ok(Notification::Flag(body)) if body.addresses == ["0xab"]),
+                "{key}"
+            );
+        }
+        let both =
+            r#"{"action":"flag","addresses":["0xab"],"addressesLinked":["0xab"],"source":"s"}"#;
+        let error = serde_json::from_str::<Notification>(both).err().unwrap();
+        assert!(error.to_string().contains("duplicate field"), "{error}");
+    }
+}

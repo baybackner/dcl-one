@@ -115,7 +115,9 @@ async fn grant_credits(
         .and_then(super::topup::recovered_topup_key)
     {
         Some(key) => {
-            idempotency_key = Some(key?);
+            let key = key?;
+            super::topup::verify_recovered_topup(&state, &key, &address).await?;
+            idempotency_key = Some(key);
             true
         }
         None => false,
