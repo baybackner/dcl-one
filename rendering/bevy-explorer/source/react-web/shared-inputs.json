@@ -5856,7 +5856,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarPreview.tsx",
-      "sha256": "b1c54eefaffd9c463a15c30d3e8c3041fc6d03a2199b2df6af064d9d9bbe8b2b"
+      "sha256": "ab4836992881257ee2d7bc6c114d2da743c9bf92d2059d0579eb6e0c40b7d54f"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/chat.ts",
@@ -5920,11 +5920,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewNametagFeed.ts",
-      "sha256": "c1665f0617f89c633d52fa51c3c411afe9b43a20a141f1015d079a2357a460ec"
+      "sha256": "c8f69bc12033e00ee2a7a8c8d6dcf1252043b591f6f3da5f3ee1d28d6b1370f3"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
-      "sha256": "ffcf866aa56c38f48292d4f275b0109cd88b74bd2cfcee261f993fd311b6314e"
+      "sha256": "d26aa4d8d4edbb187e32cac4eb678d6b8aa113b4a09c020ad46a2b12c4f06b4d"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/profile.ts",
@@ -6100,7 +6100,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeAvatarPreviewShop.test.ts",
-      "sha256": "7f454062f8752dd63e25bd5555f1ea66c6df7078d1ee5757aabb2bfec27ac0c1"
+      "sha256": "9310ecb0011e305921a64e1b2a7ba884400a1d9e0fc4defaefeedcf274c795eb"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeChat.test.ts",
@@ -6160,11 +6160,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewNametagFeed.test.ts",
-      "sha256": "1001728bade7c197d11ff45abc4a610916fec5b94bdd41038482db93e6bb6a29"
+      "sha256": "50fbf72d35b2c91f4a645d91a72c6cda9cb86b257e8d74f0dc8006dc0a42daaa"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",
-      "sha256": "a54a522a2d95afaca060afff8e61548acc869d1fea7b6a1cce869c00ebc4e2e8"
+      "sha256": "4b625ec28cfe3324c78a63b86da29f3113f3f523aa1ddbb2d72f2bcb8c308986"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",

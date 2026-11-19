@@ -27,9 +27,11 @@ export function createNametagFeed<A, O>(deps: {
   /** The anchor in the window, by the view as it is when the answer lands. */
   project: (anchor: O) => WindowPoint
   send: (anchor: WindowPoint | null) => void
+  /** The anchor kept from a read, given the one kept before (none since the last drop); the read itself without it. */
+  settle?: (held: O | null, read: O) => O
 }): NametagFeed<A> {
   let told: WindowPoint | null = null
-  // The last anchor read for the avatar on the stage, as the engine gave it: none since the last drop.
+  // The last anchor kept for the avatar on the stage: none since the last drop.
   let last: O | null = null
   let generation = 0
   let reading = false
@@ -81,8 +83,8 @@ export function createNametagFeed<A, O>(deps: {
         (anchor) => {
           if (asked !== generation) return
           reading = false
-          last = anchor
-          publish(anchor == null ? null : deps.project(anchor))
+          last = anchor == null ? null : deps.settle != null ? deps.settle(last, anchor) : anchor
+          publish(last == null ? null : deps.project(last))
         },
         () => {
           // a failed read: the design's place until a read answers again

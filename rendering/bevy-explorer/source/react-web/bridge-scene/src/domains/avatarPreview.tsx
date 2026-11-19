@@ -23,7 +23,7 @@ import type { AvatarLook } from '@explorer-core/engine/avatarEquip'
 import { LOBBY_STAGE_PRESETS } from '@explorer-core/engine/lobbyStage'
 import { BevyApi } from '../bevy-api'
 import { createNametagFeed } from './previewNametagFeed'
-import { SHOP_FRAMING, SHOP_NAMES_FRAMING, shiftWithin, windowPoint, type SceneOffset } from './previewView'
+import { SHOP_FRAMING, SHOP_NAMES_FRAMING, shiftWithin, steadyAnchor, windowPoint, type SceneOffset } from './previewView'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -756,12 +756,14 @@ export function registerAvatarPreview(ctx: Ctx): void {
     applyFraming(framing)
   })
 
-  // The Shop's nametag stands where the engine puts its avatar's own: over the head and what it wears, following the
-  // head. While the Shop's stage is up the engine's anchor is read now and then and told to the page as a point in
-  // the avatar's window (./previewNametagFeed).
+  // The Shop's nametag stands at the height the engine puts its avatar's own, over the head and what it wears, and
+  // on the avatar's axis. It stays still while the head sways in the idle or turns with a drag (./previewView's
+  // steadyAnchor). While the Shop's stage is up the engine's anchor is read now and then and told to the page as a
+  // point in the avatar's window (./previewNametagFeed).
   const aspect = (): number => (rect != null && rect.height > 0 ? rect.width / rect.height : 1)
   const nametag = createNametagFeed<Entity, SceneOffset>({
     read: (avatar) => BevyApi.avatarNametagAnchor?.(avatar) ?? Promise.resolve(null),
+    settle: steadyAnchor,
     project: (anchor) => windowPoint(anchor, framing, zoom, zoomShift, CAMERA_PITCH, aspect(), PREVIEW_FEET_Y),
     send: (anchor) => ctx.send({ kind: 'previewNametag', anchor })
   })

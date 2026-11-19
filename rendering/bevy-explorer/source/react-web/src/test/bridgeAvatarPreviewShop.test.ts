@@ -75,13 +75,16 @@ const STAGE = { x: 0, y: 68, width: 1920, height: 1080 }
 
 type Anchor = { x: number; y: number } | null
 
-/** A fresh preview, its Shop stage up on the catalogue, the anchor read once: later reads never answer, so whatever
- *  the tag does after comes from the anchor already read. */
-async function openShop() {
+type Offset = { x: number; y: number; z: number }
+
+/** A fresh preview, its Shop stage up on the catalogue, the engine answering `answers` to the first reads, in order
+ *  (the anchor, read once, by default): later reads never answer, so whatever the tag does after comes from the
+ *  anchors already read. */
+async function openShop(answers: Offset[] = [ANCHOR]) {
   vi.resetModules()
   ecs.reset()
   let reads = 0
-  api.avatarNametagAnchor = vi.fn(() => (reads++ === 0 ? Promise.resolve(ANCHOR) : new Promise(() => {})))
+  api.avatarNametagAnchor = vi.fn(() => (reads < answers.length ? Promise.resolve(answers[reads++]) : new Promise(() => {})))
   const { registerAvatarPreview } = await import('../../bridge-scene/src/domains/avatarPreview')
   const handlers = new Map<string, (msg: PageToScene) => void>()
   const systems: ((dt: number) => void)[] = []
@@ -156,6 +159,24 @@ describe("the Shop's avatar preview", () => {
     await shop.frame()
     expect(shop.tags().at(-1)!.x).toBeCloseTo(unzoomed!.x, 9)
     expect(shop.tags().at(-1)!.y).toBeCloseTo(unzoomed!.y, 9)
+  })
+
+  it("stands the tag on the avatar's axis, still while the head sways and turns, and moves it for a hat", async () => {
+    // the head off the axis, then swaying 3cm up and turned the other way, then under a hat
+    const shop = await openShop([
+      { x: 0.2, y: 3.6, z: -0.3 },
+      { x: -0.15, y: 3.63, z: 0.2 },
+      { x: 0.1, y: 3.95, z: 0 }
+    ])
+    const [first] = shop.tags()
+    expect(first!.x).toBeCloseTo(0.5, 9)
+    await shop.frame(0.25) // the sway's read
+    expect(shop.tags()).toEqual([first])
+    await shop.frame(0.25) // the hat's read
+    const tags = shop.tags()
+    expect(tags).toHaveLength(2)
+    expect(tags[1]!.x).toBeCloseTo(0.5, 9)
+    expect(tags[1]!.y).toBeLessThan(first!.y)
   })
 
   it('opens on Names in its framing, and takes the tag away when the stage goes', async () => {

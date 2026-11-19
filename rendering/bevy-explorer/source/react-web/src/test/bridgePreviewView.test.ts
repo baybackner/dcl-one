@@ -1,7 +1,7 @@
 // The avatar preview's view arithmetic (bridge-scene/src/domains/previewView): where a point by the avatar falls in the
 // preview's window, for the Shop's nametag, and how far a zoomed view moves.
 import { describe, expect, it } from 'vitest'
-import { SHOP_FRAMING, SHOP_NAMES_FRAMING, shiftWithin, windowPoint } from '../../bridge-scene/src/domains/previewView'
+import { NAMETAG_SWAY, SHOP_FRAMING, SHOP_NAMES_FRAMING, shiftWithin, steadyAnchor, windowPoint } from '../../bridge-scene/src/domains/previewView'
 
 const SHOP = SHOP_FRAMING
 const PITCH = 12
@@ -48,6 +48,28 @@ describe("the avatar preview's view", () => {
     const east = at(0.3, 3.6, 0)
     expect(east.y).toBeCloseTo(centre.y, 9)
     expect((east.x - centre.x) * 573).toBeCloseTo((0.3 * 573) / (SHOP.range * ASPECT), 6)
+  })
+
+  it("stands the Shop's nametag on the avatar's axis, at the anchor's height, wherever the head turns", () => {
+    expect(steadyAnchor(null, { x: 0.2, y: 3.6, z: -0.3 })).toEqual({ x: 0, y: 3.6, z: 0 })
+  })
+
+  it('keeps the place while the head sways, and moves it for a change of look, up or down', () => {
+    const held = steadyAnchor(null, { x: 0, y: 3.6, z: 0 })
+    // the idle's breath and a turn: a few centimetres up or down, the head off the axis
+    expect(steadyAnchor(held, { x: -0.15, y: 3.63, z: 0.2 })).toBe(held)
+    expect(steadyAnchor(held, { x: 0.1, y: 3.6 - NAMETAG_SWAY / 2, z: 0 })).toBe(held)
+    // a hat put on, then off
+    const hat = steadyAnchor(held, { x: 0.1, y: 3.95, z: 0 })
+    expect(hat).toEqual({ x: 0, y: 3.95, z: 0 })
+    expect(steadyAnchor(hat, { x: 0, y: 3.6, z: 0 })).toEqual({ x: 0, y: 3.6, z: 0 })
+  })
+
+  it("lets the tag sway by no more than about 14px of Names' window", () => {
+    const names = (y: number) => windowPoint({ x: 0, y, z: 0 }, SHOP_NAMES_FRAMING, 1, 0, PITCH, ASPECT)
+    const px = (names(3.6).y - names(3.6 + NAMETAG_SWAY).y) * 942
+    expect(px).toBeGreaterThan(13)
+    expect(px).toBeLessThan(15)
   })
 
   it('zooms about the moved centre, which stays inside the framing', () => {

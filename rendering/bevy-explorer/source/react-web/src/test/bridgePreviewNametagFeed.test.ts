@@ -109,6 +109,42 @@ describe("the Shop's nametag feed", () => {
     expect(sent).toEqual([A, null])
   })
 
+  it('tells what it keeps of each read, from what it kept before, and keeps nothing over a restage or a failed read', async () => {
+    const reads: { answer: (p: Point | null) => void; fail: () => void }[] = []
+    const sent: (Point | null)[] = []
+    const held: (Point | null)[] = []
+    const nametag = createNametagFeed<number, Point>({
+      read: () => new Promise<Point | null>((resolve, reject) => reads.push({ answer: resolve, fail: () => reject(new Error('read failed')) })),
+      // keeps the first place it is given
+      settle: (kept, read) => {
+        held.push(kept)
+        return kept ?? read
+      },
+      project: (p) => p,
+      send: (p) => sent.push(p)
+    })
+    nametag.tick(0, 7)
+    reads[0].answer(A)
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7)
+    reads[1].answer(B)
+    await settle()
+    expect(sent).toEqual([A])
+    nametag.restage()
+    nametag.restage()
+    nametag.tick(0, 7)
+    reads[2].answer(B)
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7)
+    reads[3].fail()
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7)
+    reads[4].answer(A)
+    await settle()
+    expect(sent).toEqual([A, null, B, null, A])
+    expect(held).toEqual([null, A, null, null])
+  })
+
   it('follows the view as it moves, from the last anchor read and without reading again, until the stage goes', async () => {
     const reads: ((p: Point | null) => void)[] = []
     const sent: (Point | null)[] = []

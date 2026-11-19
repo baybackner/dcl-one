@@ -16,6 +16,20 @@ export const SHOP_FRAMING: Framing = { range: 4.9, centerY: 1.84 }
  *  rather than 1.4px above it. So the view is the catalogue's over 0.919, centred 0.42m higher. */
 export const SHOP_NAMES_FRAMING: Framing = { range: 5.33, centerY: 2.26 }
 
+/** How far the nametag anchor's height moves before the Shop's tag follows it: 8cm of the Shop's 2×-scale avatar
+ *  (4cm of its own), about 14px up the 942px window in Names' framing, unzoomed. More than the head sways in an idle,
+ *  less than a hat adds. It bounds the height only: on the axis, the tag also drops the head's offset across and in
+ *  depth. */
+export const NAMETAG_SWAY = 0.08
+
+/** Where the Shop's nametag stands, from the engine's anchor `read` and the place it `held`: on the avatar's axis,
+ *  at the anchor's height. The place is kept while the head only sways or turns (the idle's breath, a drag), and
+ *  moves with a change of look: a hat put on or off, another body. */
+export function steadyAnchor(held: SceneOffset | null, read: SceneOffset): SceneOffset {
+  if (held != null && Math.abs(read.y - held.y) < NAMETAG_SWAY) return held
+  return { x: 0, y: read.y, z: 0 }
+}
+
 /** The view's centre moved `shift` metres up at zoom `z`, kept inside the framing. */
 export function shiftWithin(f: { range: number }, z: number, shift: number): number {
   const room = (f.range - f.range / z) / 2
