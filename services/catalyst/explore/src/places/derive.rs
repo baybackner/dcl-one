@@ -1622,8 +1622,7 @@ mod tests {
         assert_eq!(rating(&j).await.as_deref(), Some("R"));
         assert_eq!(kinds(&j).await, ["rating_downgrade_refused"]);
 
-        // A pass over an unchanged deployment records a row from before the
-        // parcel ratings.
+        // A pass over an unchanged deployment fills its parcels' missing ratings.
         let k = parcel(15);
         upsert_page(&pool, deploy(&k, &[&k], "A", 0), site)
             .await
