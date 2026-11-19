@@ -8621,7 +8621,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/ArmedButton.tsx",
-      "sha256": "30b07387265952b3a41b3544f7aa113b804c227f8b2028416d4f383fba9c5089"
+      "sha256": "7aeca9a261720e390a7da96dcc5518c444322447eebb7d48a0095cea35b199da"
     },
     {
       "path": "library/ui/apps/hud/design/Avatar.module.css",
@@ -8901,7 +8901,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Showcase.tsx",
-      "sha256": "4fb4daad4575f013a6bfd83fba314acec4edb9c5b1c74ff109a271a816f8a460"
+      "sha256": "2c5367462f9e0e8a4a166ac2e69be3e4102043a6a9b94fe05f952397b28502c7"
     },
     {
       "path": "library/ui/apps/hud/design/Skeleton.module.css",
