@@ -129,7 +129,7 @@ scenario('the System button opens a panel with the help rows, Escape closes it',
   assert.equal((await explorer.hud.get({ name: 'System', role: 'button' })).checked, false, 'System should not read pressed once its panel is closed')
 })
 
-/** The view sizes Unity's HUD fits whole, tall then wide. */
+/** A tall and a wide view: the HUD's scale fits any window shape, so the rail stays whole in both. */
 const VIEW_SIZES: Array<[number, number]> = [[700, 900], [1600, 400]]
 /** Only a browser lays the page out at another size inside the same window. */
 const NO_VIEW_RESIZE = target.transport === 'native' ? 'the standalone: the suite cannot resize its window' : undefined

@@ -234,8 +234,9 @@ console. Its scenario has a session of its own (`E2eSignOut`), waits until `/wor
 
 On the web it also lays the page out at 700x900 and then 1600x400 inside the same window (the web
 driver's `resizeView`, which returns once the HUD has drawn at that size) and waits until every
-rail button lies wholly inside the view and a click would land on it, as Unity's HUD fits any window shape; the view returns to the window's size
-afterwards. The standalone's window is not resized, so that scenario is skipped there.
+rail button lies wholly inside the view and a click would land on it: the HUD's scale fits any
+window shape. The view returns to the window's size afterwards. The standalone's window is not
+resized, so that scenario is skipped there.
 
 Specs with no explorer-automation counterpart, outside the counts above:
 

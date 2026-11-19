@@ -537,19 +537,21 @@ function jpegSize(jpeg) {
   throw new Error('no JPEG frame header');
 }
 
-describe('resizeView', { skip: noChrome }, () => {
-  // the frame fills the page and runs out of process, as the web client's app frame does
-  const page = openPage({ isolated: true, mode: 'hud', query: '&fill=1' });
-  const frameSize = async () => (await json(page.driver, '/fixture_state')).size;
+for (const isolated of [true, false]) {
+  describe(`resizeView, app frame ${isolated ? 'out of process' : 'in process'}`, { skip: noChrome }, () => {
+    // the frame fills the page, as the web client's app frame does
+    const page = openPage({ isolated, mode: 'hud', query: '&fill=1' });
+    const frameSize = async () => (await json(page.driver, '/fixture_state')).size;
 
-  test('resolves once the page and its app frame are at the size given, and null returns them to the window', async () => {
-    const windowSize = jpegSize(await page.driver.screenshot());
-    assert.deepEqual(await frameSize(), windowSize);
-    await page.driver.resizeView([640, 480]);
-    assert.deepEqual(await frameSize(), [640, 480]);
-    assert.deepEqual(jpegSize(await page.driver.screenshot()), [640, 480]);
-    await page.driver.resizeView(null);
-    assert.deepEqual(await frameSize(), windowSize);
-    assert.deepEqual(jpegSize(await page.driver.screenshot()), windowSize);
+    test('resolves once the page and its app frame are at the size given, and null returns them to the window', async () => {
+      const windowSize = jpegSize(await page.driver.screenshot());
+      assert.deepEqual(await frameSize(), windowSize);
+      await page.driver.resizeView([640, 480]);
+      assert.deepEqual(await frameSize(), [640, 480]);
+      assert.deepEqual(jpegSize(await page.driver.screenshot()), [640, 480]);
+      await page.driver.resizeView(null);
+      assert.deepEqual(await frameSize(), windowSize);
+      assert.deepEqual(jpegSize(await page.driver.screenshot()), windowSize);
+    });
   });
-});
+}
