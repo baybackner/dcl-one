@@ -14,10 +14,15 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 - `collections.urn_suffix` is the full urn the node keeps: the provider urn
   (`third_party_id:urn_suffix`) for a linked collection; the collections-v2 urn
   of the contract for a published standard collection; NULL otherwise.
-- `collections.contract_address` only for a published standard collection
-  (upstream stores the CREATE2 address from the draft on; the node's CHECK
-  ties a contract to publication). `publication_pending` starts false: the
-  upstream `lock` is a short-lived publish lock.
+- `collections.contract_address`: the CREATE2 address upstream computed for
+  every standard collection's draft, lowercased; NULL for a linked
+  collection. `publication_pending` starts false: the upstream `lock` is a
+  short-lived publish lock.
+- A collection's published and approved state is not imported. Upstream's
+  `collections.is_published` and `is_approved` columns are not carried; the
+  node derives both on read from its copy of the Polygon collections
+  subgraph (by contract address), its own publication records and the items'
+  `blockchain_item_id`.
 - `items.is_published`: a blockchain item id in a published standard
   collection. Third-party items stay `false` (they have no blockchain id; the
   node's CHECK requires one) and carry their state in `curation_status`.
@@ -48,6 +53,7 @@ stops the batch on any missing hash. `uploaded_by` is the item owner.
   `collection_events`, `slot_usage_cheques`, `virtual_third_parties`,
   `deployments`, `pools`, `pool_groups`, `pool_likes`: no target. The node
   keeps no scenes.
+- `collections.is_published`, `is_approved`: derived on the node, not stored.
 - `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`,
   `lock`, `linked_contract_address`, `linked_contract_network`: no target column.
 - Left to the node: `collection_publications`, `linked_collection_publications`,

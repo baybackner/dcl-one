@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use dcl_auth::hash_bytes_v1;
 
+use super::chain_state;
 use super::drafts::{CollectionDraft, ItemDraft};
 use super::http::ApiError;
 use super::items::ItemsComponent;
 use super::linked_publication::LinkedPublicationCheque;
-use super::publication::SNAPSHOT_QUERY;
+use super::publication::{SNAPSHOT_QUERY, already_published};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
@@ -128,12 +129,17 @@ impl ItemsComponent {
         if let Some(state) = self.linked_publication_state(signer, id).await? {
             return Ok(state.preparation);
         }
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_decision(&mut conn).await?;
         let snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
             .bind(id)
             .bind(signer)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+        if chain_state::published(&mut conn, &view, id).await? {
+            return Err(already_published());
+        }
         prepare(&snapshot, signer)
     }
 
@@ -144,6 +150,7 @@ impl ItemsComponent {
         revision: &str,
     ) -> Result<LinkedPublicationState, ApiError> {
         let mut tx = self.pool.begin().await?;
+        let view = chain_state::for_decision(&mut tx).await?;
         lock_collection(&mut tx, signer, id).await?;
         if let Some(prior) = sqlx::query_scalar::<_, Value>(STATE_QUERY)
             .bind(id)
@@ -169,6 +176,9 @@ impl ItemsComponent {
             .bind(signer)
             .fetch_one(&mut *tx)
             .await?;
+        if chain_state::published(&mut tx, &view, id).await? {
+            return Err(already_published());
+        }
         if snapshot["collection"]["publication_pending"] == true {
             return Err(ApiError::http(
                 409,

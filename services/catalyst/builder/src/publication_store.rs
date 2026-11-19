@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::chain_state;
 use super::http::ApiError;
 use super::items::ItemsComponent;
-use super::publication::{PublicationPreparation, SNAPSHOT_QUERY, prepare};
+use super::publication::{PublicationPreparation, SNAPSHOT_QUERY, already_published, prepare};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
@@ -57,6 +58,7 @@ impl ItemsComponent {
         revision: &str,
     ) -> Result<PublicationState, ApiError> {
         let mut tx = self.pool.begin().await?;
+        let view = chain_state::for_decision(&mut tx).await?;
         let owned: Option<Uuid> = sqlx::query_scalar(LOCK_OWNED)
             .bind(id)
             .bind(signer)
@@ -91,6 +93,9 @@ impl ItemsComponent {
             .bind(signer)
             .fetch_one(&mut *tx)
             .await?;
+        if chain_state::published(&mut tx, &view, id).await? {
+            return Err(already_published());
+        }
         let preparation = prepare(snapshot, signer)?;
         if preparation.revision != revision {
             return Err(ApiError::http(
@@ -256,10 +261,16 @@ impl ItemsComponent {
                     ));
                 }
             }
-            sqlx::query("UPDATE builder.collections SET is_published=true, publication_pending=false, contract_address=$2, \
-                urn_suffix=$3, salt=$4, updated_at=timezone('UTC', now()) WHERE id=$1")
-                .bind(id).bind(contract).bind(format!("urn:decentraland:matic:collections-v2:{contract}"))
-                .bind(&state.preparation.salt).execute(&mut *tx).await?;
+            sqlx::query(
+                "UPDATE builder.collections SET publication_pending=false, contract_address=$2, \
+                urn_suffix=$3, salt=$4, updated_at=timezone('UTC', now()) WHERE id=$1",
+            )
+            .bind(id)
+            .bind(contract)
+            .bind(format!("urn:decentraland:matic:collections-v2:{contract}"))
+            .bind(&state.preparation.salt)
+            .execute(&mut *tx)
+            .await?;
             state.status = "published".into();
             state.contract_address = Some(contract.into());
         } else {

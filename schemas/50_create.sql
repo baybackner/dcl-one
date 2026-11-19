@@ -50,14 +50,6 @@ CREATE SCHEMA camera_reel;
 
 -- ── collections ────────────────────────────────────────────────────────────
 
--- A creator's collection draft. `eth_address` is the owner (the signed-fetch
--- signer at creation; every write re-checks it). A standard collection is
--- published through collection_publications (contract_address and the
--- collections-v2 urn land on publication); a linked (third-party)
--- collection carries its provider urn from the draft on (third_party_id is
--- the urn minus its last segment) and is published through
--- linked_collection_publications. `publication_pending` freezes the draft
--- and its items while either publication row is in flight.
 CREATE TABLE builder.collections (
     id uuid NOT NULL,
     name text NOT NULL,
@@ -66,8 +58,6 @@ CREATE TABLE builder.collections (
     contract_address text,
     urn_suffix text,
     third_party_id text,
-    is_published boolean NOT NULL DEFAULT false,
-    is_approved boolean NOT NULL DEFAULT false,
     publication_pending boolean NOT NULL DEFAULT false,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
@@ -78,13 +68,11 @@ CREATE TABLE builder.collections (
     CONSTRAINT collections_salt_len_check CHECK (salt IS NULL OR char_length(salt) <= 128),
     CONSTRAINT collections_third_party_urn_check
         CHECK (third_party_id IS NULL
-               OR (urn_suffix IS NOT NULL AND left(urn_suffix, char_length(third_party_id) + 1) = third_party_id || ':')),
-    CONSTRAINT collections_contract_published_check CHECK (contract_address IS NULL OR is_published),
-    CONSTRAINT collections_pending_not_published_check CHECK (NOT (publication_pending AND is_published))
+               OR (urn_suffix IS NOT NULL AND left(urn_suffix, char_length(third_party_id) + 1) = third_party_id || ':'))
 );
 
--- "My collections" (GET /v1/collections: eth_address = $1 AND (NOT
--- is_published OR third_party_id IS NOT NULL) ORDER BY updated_at DESC), a
+-- "My collections" (GET /v1/drafts/collections: eth_address = $1 AND (not
+-- published OR third_party_id IS NOT NULL) ORDER BY updated_at DESC), a
 -- per-owner set of tens of rows.
 CREATE INDEX collections_owner_idx ON builder.collections (eth_address);
 
@@ -336,11 +324,6 @@ CREATE INDEX images_ranking_pending_idx ON camera_reel.images (id) WHERE NOT ran
 -- ══ Domain-agent sections: append inside the matching block only ═══════════
 
 -- ==== section: builder ====
--- The on-chain reads (/v1/{address}/collections, /v1/{address}/items, the
--- curation console's committee and under-review listings) read the
--- marketplace subgraph readers (src/marketplace/graph.rs), not a squid copy,
--- so they add no table; the Polygon receipt verification of a submitted
--- publication reads the chain and writes collection_publications above.
 -- ==== end section: builder ====
 
 -- ==== section: camera_reel ====

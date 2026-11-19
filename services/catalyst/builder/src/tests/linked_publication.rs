@@ -243,12 +243,12 @@ async fn linked_publication_freezes_content_and_recovers_the_same_authorization(
     .unwrap();
     assert_eq!(snapshot["items"][0]["contents"], json!(item.contents));
     assert_eq!(snapshot["collection"]["name"], "Updated hats");
-    let published: bool =
-        sqlx::query_scalar("SELECT is_published FROM builder.collections WHERE id=$1")
-            .bind(id)
-            .fetch_one(store.pool())
-            .await
-            .unwrap();
+    let published = store
+        .collection_by_id(&id)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_published;
     assert!(!published, "authorization is not proof of publication");
     cleanup(&store, &[id], &hashes).await;
 }

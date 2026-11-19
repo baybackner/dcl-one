@@ -14,7 +14,10 @@
 //! fetch through `src/auth` and the shared verifier the explore and social
 //! routes use (`shared::signed_fetch`, [`auth`]); the marketplace subgraph
 //! readers (`marketplace::graph`) where the old code read the squid
-//! ([`onchain`]); `shared::cache::TtlMap` for the in-process memos. The one
+//! ([`onchain`]); the shop's copy of the Polygon collections subgraph,
+//! read by shared SQL, for a collection's published and approved state
+//! ([`chain_state`]: 503 while the copy can't tell); `shared::cache::TtlMap`
+//! for the in-process memos. The one
 //! client it does not share is the Foundation review's
 //! (`linked_publication_review::foundation_client`: guarded as the shared
 //! one, but no redirects; the reason is in that module). Every write goes behind
@@ -64,6 +67,7 @@ pub(crate) use catalyst_shared as shared;
 pub(crate) use catalyst_storage as storage;
 
 pub mod auth;
+pub mod chain_state;
 pub mod drafts;
 pub mod handlers;
 pub mod http;

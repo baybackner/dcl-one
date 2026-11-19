@@ -311,3 +311,27 @@ test('a case cannot record a signature defect the replay would drop', () => {
   }
   assert.throws(() => recordedSign({ name: 'a', metadata: '{"x":1}', sign: { untimestamped: true } }), /a: sign untimestamped takes no path, offset, metadata or sentMetadata/)
 })
+
+test('the fake subgraph answers the rows its where argument selects and reports a filter it cannot apply', () => {
+  const { selected } = require(script)
+  const rows = [
+    { id: '0x5eed000000000000000000000000000000000006', creator: '0xc1', managers: [], minters: ['0xm1'] },
+    { id: '0x5eed000000000000000000000000000000000007', creator: '0xc2', managers: ['0xa1'], minters: [] }
+  ]
+  const variable = name => ({ kind: 'Variable', name: { value: name } })
+  const field = fields => ({
+    name: { value: 'collections' },
+    arguments: [{ name: { value: 'where' }, value: { kind: 'ObjectValue', fields: Object.entries(fields).map(([key, value]) => ({ name: { value: key }, value })) } }]
+  })
+  const unfaked = []
+  const ids = found => found.map(row => row.id.slice(-1))
+  assert.deepEqual(ids(selected(field({ id: variable('id') }), rows, { id: '0x5EED000000000000000000000000000000000007' }, unfaked)), ['7'])
+  assert.deepEqual(ids(selected(field({ id_in: { kind: 'ListValue', values: [variable('a')] } }), rows, { a: rows[0].id }, unfaked)), ['6'])
+  assert.deepEqual(ids(selected(field({ managers_contains: variable('users') }), rows, { users: ['0xA1'] }, unfaked)), ['7'])
+  assert.deepEqual(ids(selected(field({ minters_contains: variable('users') }), rows, { users: ['0xm1'] }, unfaked)), ['6'])
+  assert.deepEqual(ids(selected(field({ creator: { kind: 'StringValue', value: '0xc2' } }), rows, {}, unfaked)), ['7'])
+  assert.deepEqual(ids(selected({ name: { value: 'collections' }, arguments: [] }, rows, {}, unfaked)), ['6', '7'])
+  assert.deepEqual(unfaked, [])
+  assert.deepEqual(selected(field({ isApproved: { kind: 'BooleanValue', value: true } }), rows, {}, unfaked), [])
+  assert.deepEqual(unfaked, ['graph collections where isApproved', 'graph collections where isApproved'])
+})

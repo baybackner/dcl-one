@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 29] = [
+const PREPARED_PENDING_STEPS: [&str; 31] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -41,6 +41,8 @@ const PREPARED_PENDING_STEPS: [&str; 29] = [
     "0048_broker_purchases_write_ahead",
     "0049_land_authz_cursor_block_hash",
     "0050_builder_scenes_retired",
+    "0051_shop_items_content_hash",
+    "0052_builder_collection_flags_retired",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -2025,5 +2027,159 @@ async fn the_builder_scenes_release_waits_for_the_new_binary_and_a_quiet_editor_
     release_result(pool, &release)
         .await
         .expect("a second run notes the tables are gone");
+    old.drop().await;
+}
+
+const BUILDER_COLLECTION_FLAGS_RETIRED: &str = include_str!(concat!(
+    env!("DCL_ONE_ROOT"),
+    "/schemas/releases/builder-collection-flags-retired.sql"
+));
+
+const BUILDER_COLLECTION_FLAGS_STEP: &str = "0052_builder_collection_flags_retired";
+
+/// The columns, constraints and indexes of `tables`, as the catalog shows
+/// them, in column order.
+async fn layout(pool: &PgPool, tables: &[&str]) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object( \
+           'columns', (SELECT jsonb_agg(jsonb_build_array(a.attrelid::regclass::text, a.attname, \
+                         format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid)) \
+                         ORDER BY a.attrelid::regclass::text, a.attnum) \
+                       FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+                       WHERE a.attrelid = ANY($1::regclass[]) AND a.attnum > 0 AND NOT a.attisdropped), \
+           'constraints', (SELECT jsonb_agg(jsonb_build_array(conrelid::regclass::text, conname, pg_get_constraintdef(oid)) \
+                             ORDER BY conrelid::regclass::text, conname) \
+                           FROM pg_constraint WHERE conrelid = ANY($1::regclass[])), \
+           'indexes', (SELECT jsonb_agg(indexdef ORDER BY indexdef) FROM pg_indexes \
+                       WHERE (schemaname || '.' || tablename) = ANY($2)))",
+    )
+    .bind(tables)
+    .bind(tables)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn collection_rows(pool: &PgPool) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object( \
+           'collections', (SELECT jsonb_agg(to_jsonb(c) - 'is_published' - 'is_approved' ORDER BY id) FROM builder.collections c), \
+           'items', (SELECT jsonb_agg(to_jsonb(i) ORDER BY id) FROM builder.items i))",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_flags_and_keeps_every_other_value()
+ {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    catalyst::db::bootstrap(pool)
+        .await
+        .expect("the binary that derives collection state serves beside the old flags");
+    sqlx::raw_sql(
+        "INSERT INTO builder.collections (id, name, eth_address, salt, contract_address, urn_suffix, is_published, is_approved, created_at, updated_at) VALUES \
+           ('11111111-1111-4111-8111-000000000001', 'Published', '0x' || repeat('a', 40), '0x01', '0x' || repeat('c', 40), \
+            'urn:decentraland:matic:collections-v2:0x' || repeat('c', 40), true, true, '2025-01-01', '2025-01-02'), \
+           ('11111111-1111-4111-8111-000000000002', 'Draft', '0x' || repeat('a', 40), '0x02', '0x' || repeat('d', 40), \
+            NULL, false, false, '2025-02-01', '2025-02-02'); \
+         INSERT INTO builder.collections (id, name, eth_address, urn_suffix, third_party_id, is_published, is_approved) VALUES \
+           ('11111111-1111-4111-8111-000000000003', 'Linked', '0x' || repeat('a', 40), \
+            'urn:decentraland:matic:collections-thirdparty:p:c', 'urn:decentraland:matic:collections-thirdparty:p', true, false); \
+         INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix, blockchain_item_id, is_published, curation_status, is_approved) VALUES \
+           ('22222222-2222-4222-8222-000000000001', '11111111-1111-4111-8111-000000000001', '0x' || repeat('a', 40), 'Hat', 'wearable', \
+            'urn:decentraland:matic:collections-v2:0x' || repeat('c', 40) || ':0', '0', true, 'approved', true), \
+           ('22222222-2222-4222-8222-000000000002', '11111111-1111-4111-8111-000000000003', '0x' || repeat('a', 40), 'Cap', 'wearable', \
+            'urn:decentraland:matic:collections-thirdparty:p:c:cap', 'cap', true, 'pending', false);",
+    )
+    .execute(pool)
+    .await
+    .expect("a draft holds its computed contract once the step dropped the check");
+    let before = collection_rows(pool).await;
+    let stop_on_error = "\\set ON_ERROR_STOP on\n";
+    assert_eq!(
+        BUILDER_COLLECTION_FLAGS_RETIRED
+            .matches(stop_on_error)
+            .count(),
+        1
+    );
+    let release = BUILDER_COLLECTION_FLAGS_RETIRED.replace(stop_on_error, "");
+    let flags = async || -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'builder' \
+             AND table_name = 'collections' AND column_name IN ('is_published', 'is_approved')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+
+    sqlx::query("DELETE FROM meta.schema_steps WHERE step = $1")
+        .bind(BUILDER_COLLECTION_FLAGS_STEP)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "the new binary's schema migrate has not recorded its step"
+    );
+    assert_eq!(flags().await, 2);
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address, is_published) \
+         VALUES ('11111111-1111-4111-8111-000000000004', 'Unbacked', '0x' || repeat('a', 40), true)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "a collection flagged published with nothing the node derives publication from"
+    );
+    assert_eq!(flags().await, 2);
+    sqlx::query(
+        "DELETE FROM builder.collections WHERE id = '11111111-1111-4111-8111-000000000004'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    release_result(pool, &release).await.unwrap();
+    assert_eq!(flags().await, 0);
+    assert_eq!(
+        collection_rows(pool).await,
+        before,
+        "every other column of every row is kept"
+    );
+    catalyst::db::bootstrap(pool).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    assert_eq!(flags().await, 0, "a later migrate does not bring them back");
+    release_result(pool, &release)
+        .await
+        .expect("a second run notes the flags are gone");
+
+    let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
+        return;
+    };
+    let tables = ["builder.collections", "builder.items", "shop.items"];
+    assert_eq!(
+        layout(pool, &tables).await,
+        layout(&fresh.pool, &tables).await,
+        "an upgraded database matches a fresh one"
+    );
+    fresh.drop().await;
     old.drop().await;
 }

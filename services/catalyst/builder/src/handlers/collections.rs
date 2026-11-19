@@ -335,7 +335,7 @@ mod tests {
     }
 
     async fn state(committee: &str) -> Option<SharedState> {
-        let pool = crate::db::scratch::pool(4).await?;
+        let pool = crate::tests::support::scratch_pool(4).await?;
         let settings = crate::Settings {
             admin_addresses: vec![committee.to_string()],
             ..Default::default()
@@ -440,11 +440,16 @@ mod tests {
             )
             .await
             .unwrap();
-        sqlx::query("UPDATE builder.collections SET is_published = TRUE WHERE id = $1")
-            .bind(published)
-            .execute(state.items.pool())
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id) \
+             VALUES ($1, $2, $3, 'Minted', 'wearable', '0')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(published)
+        .bind(&owner)
+        .execute(state.items.pool())
+        .await
+        .unwrap();
         let item = Uuid::new_v4();
         let item_draft = serde_json::from_value(json!({
             "id": item, "name": "My wearable", "collection_id": draft,

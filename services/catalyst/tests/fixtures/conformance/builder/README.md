@@ -106,12 +106,16 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
   `volatile_equal` group.
 
 `seed.json` accepts only the fields both seeders apply; any other field
-fails the replay test with its name. A draft's `contract_address` is the one
-seed fact the node can't hold: its schema refuses a contract address on an
-unpublished collection (`collections_contract_published_check`), so the node
-seeder stores the draft without it when, and only when, that constraint
-refuses it. The capture answers an empty committee and lists no third
-parties.
+fails the replay test with its name. `collections` are the builder's rows,
+each with the contract address its draft computed. `chain` names, once, what
+the Polygon collections subgraph holds: its collections (contract, name,
+creator and owner roles, approval, managers, minters and unix timestamps) and
+their items. The capture serves `chain` from its fake subgraph to upstream;
+the replay writes the same facts into the node's copy of that subgraph
+(`shop.collections` and `shop.items`) and records a fresh complete pass of
+both mirrors in `shop.mirror_state`, so a collection is published on both
+sides exactly when `chain` holds its contract. The capture answers an empty
+committee and lists no third parties.
 
 ```sh
 cd services/catalyst
@@ -140,8 +144,11 @@ Then it:
    can create databases and owns nothing else.
 2. Runs upstream's migrations and inserts the rows of `seed.json`.
 3. Starts a loopback fake for the collections and third-party subgraphs,
-   which answers the `accounts`, `collections` and `thirdParties` fields with
-   an empty list, and points the peer, RPC, forum, warehouse, S3, SNS and
+   which answers the collections subgraph's `collections` and `items` fields
+   with the `seed.json` `chain` rows their `where` argument selects (by `id`,
+   `id_in`, `creator`, `managers_contains`, `minters_contains` or
+   `collection`), its `accounts` field and the third-party subgraph's fields
+   with an empty list, and points the peer, RPC, forum, warehouse, S3, SNS and
    OpenSea settings at it. Slack is off and the feature flags are set off
    through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
@@ -149,10 +156,11 @@ Then it:
    removed, and a TCP connection to anything but localhost or a loopback
    address is refused, as is a `dns.lookup` of any other hostname. The
    capture fails if anything was refused, if upstream asked the fake for
-   another subgraph field, or if it called a fake route other than the
-   subgraphs. A case that needs another answer adds it to the fake first.
-   The guard covers `net` connections and `dns.lookup` on the main thread of
-   the capture process and on every thread of the migration process. It
+   another subgraph field or filtered by a `where` key the fake doesn't
+   apply, or if it called a fake route other than the subgraphs. A case
+   that needs another answer adds it to the fake first. The guard covers
+   `net` connections and `dns.lookup` on the main thread of the capture
+   process and on every thread of the migration process. It
    doesn't cover worker threads the capture process starts, DNS queries sent
    through `dns.resolve*` or `dns.promises` (a TCP connection they lead to is
    still refused), UDP, other child processes or native code.

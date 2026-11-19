@@ -1,6 +1,8 @@
 // from: tests/social_live.rs (the wallet, the node client and the multipart helper), catalyrst/crates/catalyrst-builder/src/ports/publication/tests.rs (the wearable vector), catalyrst/crates/catalyrst-camera-reel/src/handlers/tests (the upload metadata shape)
 //! The creator-plane live checks against a RUNNING node with
-//! `CREATE_WRITES_ENABLED=true`. A random wallet saves a collection and the old publication vector's item
+//! `CREATE_WRITES_ENABLED=true` and a complete, fresh pass of the Polygon
+//! collections copy (`MARKETPLACE_MIRRORS_ENABLED=true` with
+//! `MATIC_COLLECTIONS_SUBGRAPH_URL`): the builder answers 503 without it. A random wallet saves a collection and the old publication vector's item
 //! over signed fetch, uploads its model and thumbnail (served back from the
 //! ONE blob store), reads its drafts, a curator approves the item (the
 //! operator bearer and the `BUILDER_ADMIN_ADDRESSES` wallet), and the

@@ -4,8 +4,9 @@ revision = "98897af692f26063a088aebb2ea5bb3f683168a2"
 database_env = "BUILDER_SERVER_DATABASE_URL"
 after = []
 notes = """
-Imports collection and item drafts (publication, approval and curation state
-derived from the upstream columns and item_curations) and item contents. See
+Imports collection and item drafts (item curation state derived from the
+upstream columns and item_curations; a collection's published and approved
+state is not imported, the node derives it) and item contents. See
 MAPPING.md.
 
 Prerequisite, out of scope for a DB import: every item content hash must be
@@ -38,8 +39,6 @@ columns = [
   { name = "contract_address", type = "text" },
   { name = "urn_suffix", type = "text" },
   { name = "third_party_id", type = "text" },
-  { name = "is_published", type = "boolean" },
-  { name = "is_approved", type = "boolean" },
   { name = "created_at", type = "timestamptz" },
   { name = "updated_at", type = "timestamptz" },
 ]

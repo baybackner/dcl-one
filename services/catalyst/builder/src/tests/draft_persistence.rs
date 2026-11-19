@@ -5,7 +5,7 @@ use crate::drafts::{CollectionDraft, ItemDraft};
 use crate::items::ItemsComponent;
 use dcl_auth::{hash_bytes_v1, verify_hash};
 
-use super::support::{cleanup, scratch_component, unique};
+use super::support::{cleanup, off_chain, on_chain, scratch_component, unique};
 
 const OWNER: &str = "0x1111111111111111111111111111111111111111";
 const OTHER: &str = "0x2222222222222222222222222222222222222222";
@@ -74,13 +74,12 @@ async fn draft_delete_preserves_shared_uploads_and_serializes_with_publication()
     assert_eq!(delete.await.unwrap_err().status(), 403);
     assert_eq!(store.item_draft(OWNER, deleted_id).await.unwrap(), before);
 
-    sqlx::query(
-        "UPDATE builder.collections SET publication_pending=false, is_published=true WHERE id=$1",
-    )
-    .bind(collection)
-    .execute(store.pool())
-    .await
-    .unwrap();
+    sqlx::query("UPDATE builder.collections SET publication_pending=false WHERE id=$1")
+        .bind(collection)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let contract = on_chain(store.pool(), collection, false).await;
     assert_eq!(
         store
             .delete_item_draft(OWNER, deleted_id)
@@ -89,11 +88,7 @@ async fn draft_delete_preserves_shared_uploads_and_serializes_with_publication()
             .status(),
         403
     );
-    sqlx::query("UPDATE builder.collections SET is_published=false WHERE id=$1")
-        .bind(collection)
-        .execute(store.pool())
-        .await
-        .unwrap();
+    off_chain(store.pool(), &contract).await;
     sqlx::query("UPDATE builder.items SET is_published=true, urn_suffix='0', blockchain_item_id='0' WHERE id=$1")
         .bind(deleted_id).execute(store.pool()).await.unwrap();
     assert_eq!(
@@ -104,7 +99,7 @@ async fn draft_delete_preserves_shared_uploads_and_serializes_with_publication()
             .status(),
         403
     );
-    sqlx::query("UPDATE builder.items SET is_published=false WHERE id=$1")
+    sqlx::query("UPDATE builder.items SET is_published=false, urn_suffix=NULL, blockchain_item_id=NULL WHERE id=$1")
         .bind(deleted_id)
         .execute(store.pool())
         .await
@@ -254,11 +249,7 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
         "invalid writes roll back metadata and content links"
     );
     item.contents.remove("missing.glb");
-    sqlx::query("UPDATE builder.collections SET is_published=true WHERE id=$1")
-        .bind(collection)
-        .execute(store.pool())
-        .await
-        .unwrap();
+    let contract = on_chain(store.pool(), collection, true).await;
     assert!(store.save_collection_draft(OWNER, &draft).await.is_err());
     assert!(
         store
@@ -315,6 +306,7 @@ async fn drafts_and_files_persist_with_owner_and_publication_guards() {
     assert!(linked.validate(linked_id, OWNER).is_err());
     linked.urn = Some(format!("{provider}:bad suffix"));
     assert!(linked.validate(linked_id, OWNER).is_err());
+    off_chain(store.pool(), &contract).await;
     cleanup(&store, &[collection, linked_id], &[hash]).await;
 }
 

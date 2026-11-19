@@ -210,7 +210,6 @@ struct ReviewedItem {
     urn: String,
     content_hash: String,
     status: String,
-    approved: bool,
 }
 struct VerifiedReview {
     items: Vec<ReviewedItem>,
@@ -297,7 +296,6 @@ fn verify_review(
             urn: item_urn,
             content_hash: hash.into(),
             status: status.into(),
-            approved: item["is_approved"] == true && status == "approved",
         });
     }
     if curations.is_empty() {
@@ -339,11 +337,9 @@ fn verify_review(
 impl ItemsComponent {
     /// Marks the items published with the Foundation's urn, content hash and
     /// curation status (`is_approved` is the declared projection of the
-    /// status; the old rows could carry an approved status with the
-    /// Foundation's `is_approved: false`, which the `items_approved_projection_check`
-    /// forbids, so that combination approves the item's status and keeps the
-    /// collection unapproved), the collection published, the attempt
-    /// `submitted`. Idempotent once submitted.
+    /// status), unfreezes the collection and records the attempt
+    /// `submitted`, which with the items' on-chain ids makes the collection
+    /// published ([`crate::chain_state`]). Idempotent once submitted.
     async fn finish_linked_publication(
         &self,
         owner: &str,
@@ -368,7 +364,6 @@ impl ItemsComponent {
         if state.status != "authorized" || state.cheque.is_none() {
             return Err(ApiError::http(409, "Linked publication is not authorized"));
         }
-        let approved = review.items.iter().all(|item| item.approved);
         for item in review.items {
             let changed = sqlx::query("UPDATE builder.items SET is_published=true,urn_suffix=$2,blockchain_item_id=$3,local_content_hash=$4,curation_status=$5,is_approved=($5='approved'),price='0',beneficiary='0x0000000000000000000000000000000000000000',rarity=NULL,total_supply=0,updated_at=timezone('UTC', now()) \
                 WHERE id=$1 AND collection_id=$6 AND eth_address=$7 AND NOT is_published")
@@ -381,7 +376,7 @@ impl ItemsComponent {
                 ));
             }
         }
-        sqlx::query("UPDATE builder.collections SET is_published=true,is_approved=$2,publication_pending=false,updated_at=timezone('UTC', now()) WHERE id=$1").bind(id).bind(approved).execute(&mut *tx).await?;
+        sqlx::query("UPDATE builder.collections SET publication_pending=false,updated_at=timezone('UTC', now()) WHERE id=$1").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE builder.linked_collection_publications SET status='submitted',forum_url=$2,updated_at=timezone('UTC', now()) WHERE collection_id=$1")
             .bind(id).bind(&review.forum_url).execute(&mut *tx).await?;
         state.status = "submitted".into();

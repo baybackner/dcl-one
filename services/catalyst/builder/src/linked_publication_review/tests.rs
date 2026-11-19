@@ -48,7 +48,6 @@ fn only_matching_authoritative_content_curations_prove_submission() {
         .unwrap();
     assert_eq!(review.items[0].content_hash, "entity-hash");
     assert_eq!(review.items[0].status, "pending");
-    assert!(!review.items[0].approved);
     assert_eq!(
         review.forum_url.as_deref(),
         Some("https://forum.decentraland.org/t/hats/123")
@@ -297,14 +296,19 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         saved,
         (true, format!("{URN}:{item}"), "pending".into(), false)
     );
-    let saved: (bool, bool, bool) = sqlx::query_as(
-        "SELECT is_published,publication_pending,is_approved FROM builder.collections WHERE id=$1",
-    )
-    .bind(id)
-    .fetch_one(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(saved, (true, false, false));
+    let saved = store.collection_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(
+        (saved.is_published, saved.is_approved),
+        (true, false),
+        "submitted with an item under review"
+    );
+    let pending: bool =
+        sqlx::query_scalar("SELECT publication_pending FROM builder.collections WHERE id=$1")
+            .bind(id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert!(!pending);
     let cards = store.collection_drafts(OWNER).await.unwrap();
     let card = cards
         .iter()

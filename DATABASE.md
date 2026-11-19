@@ -888,8 +888,184 @@ started after the drop fails its bootstrap on the missing relations; an old
 build's `catalyst schema migrate` re-creates the seven tables empty, and the
 release drops them again. Do not reset a database.
 
+### Retired builder collection flags
+
+The builder stores no published or approved flag on a collection: it derives
+both on read ("Builder chain state workload" below). Step
+`0052_builder_collection_flags_retired` drops the two checks that tied a
+contract address to the flag (`collections_contract_published_check`,
+`collections_pending_not_published_check`), so a draft can hold the contract
+address computed before its deployment. A database bootstrapped before the
+change keeps `builder.collections.is_published` and `is_approved` until the
+release script `schemas/releases/builder-collection-flags-retired.sql` drops
+them. The binary neither reads nor writes them, and the bootstrap and the
+object pass neither create nor drop them, so until then they are inert
+(`false` on every row the binary inserts).
+
+What the two checks enforced, and where it holds now:
+
+- `collections_contract_published_check` allowed a contract address only on a
+  published collection. It is gone on purpose: a draft may hold the contract
+  address computed before its deployment.
+- `collections_pending_not_published_check` kept a published collection from
+  having a publication in flight. The code holds it: the standard and the
+  linked publication flows refuse a published collection when they prepare
+  and when they begin, after the collection row is locked
+  (`chain_state::published`), and every draft write refuses it after the same
+  lock.
+
+What the release destroys: the two columns and their values. Every other
+column of every collection and item is kept.
+
+Rollout, in order:
+
+1. Set `CREATE_WRITES_ENABLED=false` on every replica. An old `serve` guards
+   creator writes with the stored `is_published`, which this binary no longer
+   sets, so beside it an old replica would accept edits to a collection the
+   new binary published. This holds from the first replica that runs the new
+   binary, whether or not the release has run.
+2. Deploy the binary that derives collection state on every replica and run
+   its `catalyst schema migrate`, which records step
+   `0052_builder_collection_flags_retired`. Confirm no `serve` of the old
+   build is left, then set `CREATE_WRITES_ENABLED` back.
+3. Take a restore point: back up the database and test the restore. The
+   drop is not reversible without that backup.
+4. Run the release once, with the administrative role:
+
+   ```sh
+   psql "$DATABASE_URL" -X -f schemas/releases/builder-collection-flags-retired.sql
+   ```
+
+The release refuses, changing nothing, a database without
+`meta.schema_steps`, one where step `0052_builder_collection_flags_retired` is
+not recorded, one that holds only one of the two columns, and one where a
+collection flagged published has no row in the Polygon collections copy, no
+verified publication, no submitted linked publication and no item with an
+on-chain id (the derived state would read it as a draft). It runs in one transaction and
+waits at most 10 s for its lock. A second run notes the columns are gone. An
+old `serve` started after the drop fails its collection reads and writes.
+The standard publication's review revision is the content hash of the draft
+row, so a publication prepared before the drop and reverted after it is
+reviewed again. Do not reset a database.
+
 Peer sync is not a backup of local state: a node taking local writes holds the only copy of that data. Before turning a write switch on, the operator backs up the database, the blob store (`STORAGE_ROOT_FOLDER`) and the credentials (`ENCRYPTION_KEY` among them) and tests a restore; the application does not enforce this. Development and commit builds sharing a database must agree on its schema; do not reset or silently migrate shared state to fit a working tree.
 
+
+## Builder chain state workload
+
+The builder derives a collection's chain state on read and never stores it
+as a flag (`services/catalyst/builder/src/chain_state.rs`, decided in
+[the builder chain state ADR](docs/adr/2026-11-19-builder-derives-collection-chain-state.md)).
+It reads the shop's copy of the Polygon collections subgraph by shared SQL
+and never writes it: `shop.collections` (`network`, `contract_address`,
+`is_approved`, `creator`, `owner`, `managers`, `minters`, `reviewed_at`,
+`mirrored_at`) and `shop.mirror_state` (`last_complete_pass_at`,
+`pass_started_at` and `cursor_id` of `('collections', 'matic')`). The shop's
+`collections-mirror` job writes both; the builder reads `network = 'matic'`
+only, as upstream reads only the Polygon subgraph.
+
+The builder's own rows: a `builder.collections` row is a creator's draft.
+
+- `eth_address` is its owner: the signed-fetch signer at creation, which
+  every write checks again.
+- A standard collection is published through
+  `builder.collection_publications`, whose verified finish writes its
+  contract address and collections-v2 urn, or it arrives with the contract
+  address computed before its deployment.
+- A linked (third-party) collection carries its provider urn from the draft
+  on (`third_party_id` is the urn without its last segment) and is published
+  through `builder.linked_collection_publications`.
+- `publication_pending` freezes the draft and its items while either
+  publication row is in flight.
+
+The address listings and the curation console's committee and under-review
+listings read the collections subgraph through the marketplace's subgraph
+readers and add no table.
+
+Deployment: the node that serves the builder needs that copy, either by
+running the collections mirror (`MARKETPLACE_MIRRORS_ENABLED=true` with
+`MATIC_COLLECTIONS_SUBGRAPH_URL`; `MARKETPLACE_MIRROR_INTERVAL_SECS` sets its
+period) or by sharing a database a mirroring node fills. Without a complete
+pass every builder route that reads published or approved state answers 503:
+the collection read, the draft listings and searches, every draft write and
+the publication preparations. Nodes under the `island` and `journey`
+postures, and the `offline` development profile, run no mirror, so those
+routes answer 503 there. The builder logs the condition (no complete pass,
+or a stale one) once each time it changes, with the settings above.
+
+Invariants:
+
+- Readiness first. Every request that reads derived state reads the copy's
+  last pass in the same connection. No complete pass: 503 in the builder's
+  envelope, with the write gate's kind of message and nothing more. A last
+  complete pass older than 30 minutes (`chain_state::STALE_AFTER`, twice the
+  collections mirror's default period): listings and bodies are served from
+  the copy. Every decision that grants access or allows a write answers 503,
+  and so do the standard and the linked publication preparations, which
+  refuse a published collection.
+- A decision also dates what it read. A row older than 30 minutes by its own
+  `mirrored_at` (every pass rewrites every row it walks) answers 503 when its
+  facts are asked for. An absence is dated by the start of the pass that saw
+  it: the start of the last complete pass, or of the pass in progress once
+  its cursor is past the contract. The cursor comparison is a string
+  comparison of lowercase `0x` contract addresses of one length, the order
+  the subgraph walks them in (`orderBy: id`). An absence older than 30
+  minutes, or one whose pass start was overwritten by the next pass, answers
+  503. A guard reads no copy row for a collection without a contract address.
+- Clocks: the mirror stamps `last_complete_pass_at`, `pass_started_at` and
+  `mirrored_at` with its own host's clock, and the builder measures their age
+  with its own host's clock. The hosts that run the mirror and the builder
+  keep synchronized clocks: a mirror clock ahead of the builder's by some
+  amount lets a decision accept data that much older than 30 minutes, and
+  one behind refuses data that much younger.
+- Published is any of: a `shop.collections` row for `('matic',
+  lower(builder.collections.contract_address))`; a `published`
+  `builder.collection_publications` row; a `submitted`
+  `builder.linked_collection_publications` row; an item of the collection
+  with a `blockchain_item_id`. The node's own records close the window
+  between a deployment and the copy's next pass. `publication_pending` stays
+  a stored state of the node's flow, not a published flag.
+- Approved is the copy's `is_approved` for a standard collection. A linked
+  collection, which has no contract, is never approved.
+- A published collection begins no publication and takes no draft write.
+  Both publication flows refuse it when they prepare and when they begin
+  (`chain_state::published`, after the collection row is locked); every draft
+  write refuses it after the same lock. A collection may hold its contract
+  address before deployment.
+- Addresses: the copy stores contract, creator and owner lowercase and the
+  role lists as the subgraph sends them; the builder compares
+  `lower(contract_address)` and lowercases the role lists it returns.
+- A write guard takes the collection row `FOR UPDATE` first and reads the
+  derived state in a later statement, so a writer that waited on a
+  publication sees what it committed.
+
+Queries and indexes, measured with `EXPLAIN (ANALYZE, BUFFERS)` on PostgreSQL
+18 with its default JIT, over 52,042 copy rows, 90,000 copy items, 51,745
+builder collections (every standard one on the copy) and 89,000 builder
+items:
+
+| Query | Plan | Time |
+| --- | --- | --- |
+| Readiness, by `(mirror, network)` | a scan of the one-row `mirror_state` | 0.01 ms |
+| A collection's facts by contract | `shop.collections` primary key | 0.01 ms |
+| One collection's derived state (every write guard, `GET /v1/collections/{id}`) | `builder.collections` primary key, the copy joined by its primary key, `items_collection_created_idx` | 0.03 to 0.04 ms |
+| An owner's drafts | `collections_owner_idx`, then per row as above | 0.1 ms |
+| The public search, `LIMIT 1000` | a scan of `builder.collections` filtered by name, the copy hash-joined once | 25 ms (1,111 matches), 53 ms (every row), 13 ms (none) |
+| The committee's drafts, `LIMIT 1000` | the same join; the node's own records probed per row, which costs the plan past the JIT threshold | 272 ms, 191 ms of it JIT |
+| The committee's item drafts, `LIMIT 1000` | an anti join of `builder.items` to `collections_pkey`, a copy probe per item | 547 ms when every item's collection is published |
+
+No index on the copy is added: every probe is a primary-key lookup. The two
+committee listings read every row's derived state; they are signed and
+committee-only.
+
+Freshness: a collection deployed outside the node's own flow reads as a
+draft until the next collections pass, up to three times
+`MARKETPLACE_MIRROR_INTERVAL_SECS` (15 minutes at the default 300) plus the
+subgraph's lag; with the mirror failing, its backoff decides, up to an hour,
+and decisions answer 503 once the pass, the row or the absence is 30 minutes
+old. `shop.items.content_hash` (the subgraph `Item.contentHash`, written by
+the items mirror) follows the items pass, once per interval; a row the
+mirror hasn't walked since the column was added holds NULL.
 
 ## Notification writer
 

@@ -88,6 +88,43 @@ struct Defect {
 struct Seed {
     wallets: BTreeMap<String, String>,
     collections: Vec<SeedCollection>,
+    chain: SeedChain,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedChain {
+    collections: Vec<ChainCollection>,
+    items: Vec<ChainItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChainCollection {
+    contract_address: String,
+    name: String,
+    creator: String,
+    owner: String,
+    is_approved: bool,
+    managers: Vec<String>,
+    minters: Vec<String>,
+    created_at: i64,
+    updated_at: i64,
+    reviewed_at: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChainItem {
+    contract_address: String,
+    blockchain_id: String,
+    name: String,
+    category: String,
+    rarity: String,
+    price: String,
+    beneficiary: String,
+    total_supply: String,
+    content_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -1223,49 +1260,88 @@ async fn fresh_signature(
     headers
 }
 
-const DRAFT_CONTRACT_REFUSED: &str = "collections_contract_published_check";
-
-async fn insert_collection(
-    pool: &sqlx::PgPool,
-    c: &SeedCollection,
-    owner: &str,
-    contract_address: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO builder.collections \
-         (id, name, eth_address, salt, contract_address, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind(c.id)
-    .bind(&c.name)
-    .bind(owner)
-    .bind(&c.salt)
-    .bind(contract_address)
-    .bind(c.created_at.naive_utc())
-    .bind(c.updated_at.naive_utc())
-    .execute(pool)
-    .await
-    .map(|_| ())
-}
-
 async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
     for c in &seed.collections {
-        let owner = &seed.wallets[&c.owner];
-        let Err(error) = insert_collection(pool, c, owner, c.contract_address.as_deref()).await
-        else {
-            continue;
-        };
-        let refused_draft_contract = error
-            .as_database_error()
-            .and_then(|e| e.constraint())
-            .is_some_and(|name| name == DRAFT_CONTRACT_REFUSED);
-        assert!(
-            refused_draft_contract,
-            "seed.json collection {}: {error}",
-            c.id
-        );
-        insert_collection(pool, c, owner, None).await.unwrap();
+        sqlx::query(
+            "INSERT INTO builder.collections \
+         (id, name, eth_address, salt, contract_address, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(c.id)
+        .bind(&c.name)
+        .bind(&seed.wallets[&c.owner])
+        .bind(&c.salt)
+        .bind(&c.contract_address)
+        .bind(c.created_at.naive_utc())
+        .bind(c.updated_at.naive_utc())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json collection {}: {e}", c.id));
     }
+    for c in &seed.chain.collections {
+        sqlx::query(
+            "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
+               is_completed, is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) \
+             VALUES ('matic', $1, 137, $2, $3, $4, 'urn:decentraland:matic:collections-v2:' || $1, true, $5, true, \
+               $6, $7, $8, $9, $10, timezone('UTC', now()))",
+        )
+        .bind(&c.contract_address)
+        .bind(&c.name)
+        .bind(&seed.wallets[&c.creator])
+        .bind(&seed.wallets[&c.owner])
+        .bind(c.is_approved)
+        .bind(&c.managers)
+        .bind(&c.minters)
+        .bind(c.created_at)
+        .bind(c.updated_at)
+        .bind(c.reviewed_at)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json chain collection {}: {e}", c.contract_address));
+    }
+    for i in &seed.chain.items {
+        let creator = seed
+            .chain
+            .collections
+            .iter()
+            .find(|c| c.contract_address == i.contract_address)
+            .map(|c| &seed.wallets[&c.creator])
+            .unwrap_or_else(|| {
+                panic!(
+                    "seed.json chain item of an unknown collection {}",
+                    i.contract_address
+                )
+            });
+        sqlx::query(
+            "INSERT INTO shop.items (network, contract_address, item_id, chain_id, item_type, urn, creator, beneficiary, \
+               rarity, total_supply, max_supply, available, price, name, category, body_shapes, created_at, updated_at, \
+               reviewed_at, mirrored_at, content_hash) \
+             VALUES ('matic', $1, $2::numeric, 137, 'wearable_v2', \
+               'urn:decentraland:matic:collections-v2:' || $1 || ':' || $2, $3, $4, $5, $6::numeric, 100, \
+               100 - $6::numeric, $7::numeric, $8, $9, ARRAY['BaseMale'], 0, 0, 0, timezone('UTC', now()), $10)",
+        )
+        .bind(&i.contract_address)
+        .bind(&i.blockchain_id)
+        .bind(creator)
+        .bind(&seed.wallets[&i.beneficiary])
+        .bind(&i.rarity)
+        .bind(&i.total_supply)
+        .bind(&i.price)
+        .bind(&i.name)
+        .bind(&i.category)
+        .bind(&i.content_hash)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json chain item {}: {e}", i.contract_address));
+    }
+    sqlx::query(
+        "INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at, pass_started_at) \
+         VALUES ('collections', 'matic', 'https://subgraph.example', timezone('UTC', now()), timezone('UTC', now())), \
+                ('items', 'matic', 'https://subgraph.example', timezone('UTC', now()), timezone('UTC', now()))",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 struct TempDir(PathBuf);

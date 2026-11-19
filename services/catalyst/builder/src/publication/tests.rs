@@ -49,8 +49,6 @@ fn revision_tracks_content_even_when_contract_metadata_does_not_change() {
 #[test]
 fn refuses_unready_and_unsafe_publication_inputs() {
     for (pointer, value) in [
-        ("/collection/is_published", json!(true)),
-        ("/collection/contract_address", json!(OWNER)),
         ("/collection/third_party_id", json!("provider")),
         ("/collection/salt", json!("0x1234")),
         (

@@ -1,0 +1,106 @@
+# ADR: The builder derives a collection's chain state
+
+- Status: Accepted
+- Date: 2026-11-19
+
+## Context
+
+A standard collection that the builder holds as a draft becomes a contract on
+Polygon. From then on the chain decides several things about it:
+
+- whether it is published;
+- whether the committee approved it;
+- its creator and owner;
+- its managers and minters;
+- when it was reviewed.
+
+A stored copy of any of these goes stale the moment the chain changes it.
+Examples: a deployment the node didn't make, an approval, a manager added or
+removed. A collection can also be deployed outside the node's own
+publication flow, so the node can't keep a stored flag right by itself.
+
+The node already holds a copy of the Polygon collections subgraph. The shop's
+`collections-mirror` job walks the whole subgraph every period and writes
+`shop.collections`, and it records each complete pass in `shop.mirror_state`.
+
+## Decision
+
+- **No stored flag.** The builder stores no published or approved flag for a
+  collection. It derives those, together with the creator, owner, managers,
+  minters and review date, on read. It stores only what the chain can't
+  supply:
+  - the draft;
+  - the contract address computed before deployment;
+  - each item's on-chain id;
+  - its own publication records.
+- **Shared SQL, read only.** The builder reads `shop.collections` and
+  `shop.mirror_state` by shared SQL, Polygon rows only
+  (`network = 'matic'`), and never writes them. No crate dependency is added;
+  the columns it reads are listed in the root `AGENTS.md` "Ownership" section
+  and in `DATABASE.md`, "Builder chain state workload".
+- **Published** is any of:
+  - the copy holds a row for the collection's contract address;
+  - the node holds its own verified publication receipt;
+  - the node holds a submitted linked publication;
+  - an item of the collection has an on-chain id.
+
+  The node's own records make a collection published as soon as the node
+  publishes it, without waiting for the copy.
+- **Approved** is the copy's approval of the contract. A linked (third-party)
+  collection has no contract and is never approved.
+- **Fail closed.** Every read starts with the copy's readiness:
+  - With no complete pass, every route that needs published or approved
+    state answers 503.
+  - When the last complete pass is more than 30 minutes old:
+    - listings and response bodies still read the copy;
+    - every decision that grants access or allows a write answers 503.
+  - A decision also refuses data older than 30 minutes:
+    - a row, by when the copy last wrote it;
+    - an absence, by the start of the pass that saw it.
+  - After a complete pass, a contract the copy doesn't hold is not on
+    chain.
+  - The facts and the write guard can't be reached without a decision view,
+    which only the readiness check builds.
+- **Deployment.** The node that serves the builder runs the Polygon
+  collections mirror (`MARKETPLACE_MIRRORS_ENABLED=true`,
+  `MATIC_COLLECTIONS_SUBGRAPH_URL`), or shares a database with a node that
+  does.
+
+## Consequences
+
+- **Lag.** A collection deployed outside the node's own flow reads as a
+  draft until the copy's next pass. The bound is three times
+  `MARKETPLACE_MIRROR_INTERVAL_SECS` (15 minutes at the default 300) plus the
+  subgraph's own lag. Until then its owner can still edit the draft. An
+  approval or a role change shows after the same delay.
+- **Nodes without the mirror.** Nodes under the `island` and `journey`
+  postures, and the `offline` development profile, run no mirror, so the
+  builder's draft routes answer 503 there. The builder logs which condition
+  holds each time it changes.
+- **Clocks.** The mirror stamps its pass and row times with its host's
+  clock, and the builder measures their age with its own. The hosts that run
+  them keep synchronized clocks: any skew between them weakens the 30-minute
+  bound by its size, and a mirror clock that runs ahead lets a decision accept
+  older data.
+- **Reorged deployments stay published.** The copy never deletes a row. A
+  collection whose deployment a reorganization removed stays published:
+  closed for writes, open for anything that reads published content.
+- **Older databases.** A database bootstrapped with the stored flags keeps
+  the columns until the release script
+  `schemas/releases/builder-collection-flags-retired.sql` drops them.
+  `DATABASE.md`, "Retired builder collection flags", gives the procedure,
+  including closing creator writes while old and new replicas run together.
+- **Listing cost.** The committee's whole-table listings derive state for
+  every row they read. `DATABASE.md` records their measured cost.
+
+## Alternatives considered
+
+- **A live subgraph read per request.** Each read and decision would depend
+  on an external service's availability and latency, with no local
+  readiness signal to fail closed on.
+- **An RPC `isContract` check per decision.** It tells only whether a
+  contract exists, not approval or roles. It also adds an external call to
+  every write.
+- **Stored flags kept in sync.** The chain changes them without the node, so
+  a sync job would be a second copy of the mirror with its own lag. A stale
+  flag would also read as a fact rather than as data of a known age.

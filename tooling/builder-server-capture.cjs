@@ -21,8 +21,9 @@ const ROOT = path.resolve(__dirname, '..')
 const FIXTURES = path.join(ROOT, 'services/catalyst/tests/fixtures/conformance/builder')
 const GUARD = path.join(__dirname, 'builder-server-offline.cjs')
 const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
-const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'thirdParties'])
-const SEED_KEYS = ['wallets', 'collections']
+const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'thirdParties'])
+const SEED_KEYS = ['wallets', 'collections', 'chain']
+const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'creator', 'managers_contains', 'minters_contains', 'collection'])
 const VOLATILE = '<<VOLATILE>>'
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
@@ -225,6 +226,20 @@ const CASES = [
       },
       data: '0x00'
     }
+  },
+  {
+    name: '20-collection-published-unapproved-owner',
+    description: 'GET /collections/{id} signed by the owner of a collection on chain and not approved',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000006',
+    signer: 'owner'
+  },
+  {
+    name: '21-collection-published-approved-owner',
+    description: 'GET /collections/{id} signed by the owner of a collection on chain and approved',
+    method: 'GET',
+    path: '/v1/collections/c011ec71-0000-4000-8000-000000000007',
+    signer: 'owner'
   }
 ]
 
@@ -383,7 +398,91 @@ async function signedHeaders(req, wallet, item) {
   }
 }
 
-function startFakes(req, unfaked) {
+/** The collections subgraph's rows for `seed.chain`, in the shape upstream's fragments select. */
+function chainRows(seed, signers) {
+  const collections = seed.chain.collections.map(c => ({
+    __typename: 'Collection',
+    id: c.contract_address,
+    creator: signers[c.creator].address,
+    owner: signers[c.owner].address,
+    name: c.name,
+    isApproved: c.is_approved,
+    isCompleted: true,
+    minters: c.minters,
+    managers: c.managers,
+    reviewedAt: String(c.reviewed_at),
+    updatedAt: String(c.updated_at),
+    createdAt: String(c.created_at)
+  }))
+  const items = seed.chain.items.map(i => {
+    const collection = collections.find(c => c.id === i.contract_address)
+    return {
+      __typename: 'Item',
+      id: `${i.contract_address}-${i.blockchain_id}`,
+      blockchainId: i.blockchain_id,
+      urn: `urn:decentraland:matic:collections-v2:${i.contract_address}:${i.blockchain_id}`,
+      totalSupply: i.total_supply,
+      price: i.price,
+      beneficiary: signers[i.beneficiary].address,
+      managers: [],
+      minters: [],
+      contentHash: i.content_hash,
+      collection: {
+        __typename: 'Collection',
+        id: collection.id,
+        creator: collection.creator,
+        owner: collection.owner,
+        name: collection.name,
+        isApproved: collection.isApproved,
+        minters: collection.minters,
+        managers: collection.managers
+      },
+      metadata: {
+        __typename: 'Metadata',
+        wearable: {
+          __typename: 'Wearable',
+          name: i.name,
+          description: '',
+          category: i.category,
+          rarity: i.rarity,
+          bodyShapes: ['BaseMale']
+        }
+      }
+    }
+  })
+  return { collections, items }
+}
+
+/** The value of a GraphQL argument node, with its variables substituted. */
+function argumentValue(node, variables) {
+  if (node.kind === 'Variable') return variables[node.name.value]
+  if (node.kind === 'ListValue') return node.values.map(v => argumentValue(v, variables))
+  if (node.kind === 'ObjectValue') return Object.fromEntries(node.fields.map(f => [f.name.value, argumentValue(f.value, variables)]))
+  if (node.kind === 'NullValue') return null
+  return node.value
+}
+
+/** The rows of `field` its `where` argument selects; a filter the fake can't apply is reported. */
+function selected(field, rows, variables, unfaked) {
+  const whereNode = (field.arguments || []).find(a => a.name.value === 'where')
+  const where = whereNode ? argumentValue(whereNode.value, variables) : {}
+  const lower = value => String(value).toLowerCase()
+  return rows.filter(row => Object.entries(where).every(([key, value]) => {
+    if (value === undefined || value === null) return true
+    if (!FAKED_WHERE_KEYS.has(key)) {
+      unfaked.push(`graph ${field.name.value} where ${key}`)
+      return false
+    }
+    if (key === 'id') return row.id === lower(value)
+    if (key === 'id_in') return value.map(lower).includes(row.id)
+    if (key === 'creator') return row.creator === lower(value)
+    if (key === 'managers_contains') return value.map(lower).some(v => (row.managers || []).includes(v))
+    if (key === 'minters_contains') return value.map(lower).some(v => (row.minters || []).includes(v))
+    return row.collection?.id === lower(value)
+  }))
+}
+
+function startFakes(req, unfaked, chain) {
   const { parse } = req('graphql')
   const server = http.createServer((request, response) => {
     const chunks = []
@@ -397,12 +496,14 @@ function startFakes(req, unfaked) {
         unfaked.push(`${request.method} ${request.url}`)
         return send(404, { error: 'not faked' })
       }
-      const { query } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      const { query, variables = {} } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       const operation = parse(query).definitions.find(d => d.kind === 'OperationDefinition')
+      const subgraph = request.url === '/graph/collections' ? chain : {}
       const data = {}
       for (const field of operation.selectionSet.selections) {
         if (!FAKED_GRAPH_FIELDS.has(field.name.value)) unfaked.push(`graph ${field.name.value}`)
-        data[(field.alias || field.name).value] = []
+        const rows = subgraph[field.name.value]
+        data[(field.alias || field.name).value] = rows ? selected(field, rows, variables, unfaked) : []
       }
       send(200, { data })
     })
@@ -585,7 +686,7 @@ async function closeServer(server) {
 
 async function runUpstream(capture, url, seed, signers, unfaked) {
   const { upstream, req, load } = capture
-  const fakes = await startFakes(req, unfaked)
+  const fakes = await startFakes(req, unfaked, chainRows(seed, signers))
   let listener, db
   try {
     const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url)
@@ -658,4 +759,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { recordedSign, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers }
+module.exports = { recordedSign, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

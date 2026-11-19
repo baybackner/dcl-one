@@ -29,10 +29,69 @@ pub async fn temp_storage() -> Arc<Storage> {
     Arc::new(Storage::from_config(&dir).await.unwrap())
 }
 
+/// The process's scratch database with a fresh complete pass of the
+/// Polygon collections copy, so derived chain state answers; `None` (skip)
+/// without `CATALYST_TEST_DATABASE_URL`.
+pub async fn scratch_pool(max_connections: u32) -> Option<sqlx::PgPool> {
+    let pool = crate::db::scratch::pool(max_connections).await?;
+    sqlx::query(
+        "INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at, pass_started_at) \
+         VALUES ('collections', 'matic', 'https://subgraph.example', timezone('UTC', now()), timezone('UTC', now())) \
+         ON CONFLICT (mirror, network) DO UPDATE SET last_complete_pass_at = EXCLUDED.last_complete_pass_at, \
+           pass_started_at = EXCLUDED.pass_started_at, cursor_id = NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Some(pool)
+}
+
+/// Puts collection `id` on chain the way the shop's copy shows it: a
+/// contract address on the builder row and its Polygon row in
+/// `shop.collections`. Returns the contract for [`off_chain`].
+pub async fn on_chain(pool: &sqlx::PgPool, id: Uuid, approved: bool) -> String {
+    let contract = format!("0x{}", Uuid::new_v4().simple().to_string()[..20].repeat(2));
+    sqlx::query("UPDATE builder.collections SET contract_address = $2 WHERE id = $1")
+        .bind(id)
+        .bind(&contract)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
+           is_completed, is_approved, is_editable, created_at, updated_at, reviewed_at, mirrored_at) \
+         VALUES ('matic', $1, 137, 'On chain', $1, $1, 'urn:c', true, $2, true, 1, 1, 1, timezone('UTC', now()))",
+    )
+    .bind(&contract)
+    .bind(approved)
+    .execute(pool)
+    .await
+    .unwrap();
+    contract
+}
+
+/// Undoes [`on_chain`].
+pub async fn off_chain(pool: &sqlx::PgPool, contract: &str) {
+    sqlx::query("DELETE FROM shop.collections WHERE network = 'matic' AND contract_address = $1")
+        .bind(contract)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE builder.collections SET contract_address = NULL WHERE contract_address = $1",
+    )
+    .bind(contract)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 /// `None` (skip) without `CATALYST_TEST_DATABASE_URL`.
 pub async fn scratch_component() -> Option<ItemsComponent> {
-    let pool = crate::db::scratch::pool(6).await?;
-    Some(ItemsComponent::new(pool, temp_storage().await))
+    Some(ItemsComponent::new(
+        scratch_pool(6).await?,
+        temp_storage().await,
+    ))
 }
 
 /// Deletes the test's collections (items, contents and publications cascade)

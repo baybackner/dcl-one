@@ -2,9 +2,10 @@
 //! validation (the owner in the body must be the signer, no draft write can
 //! claim publication or approval), the owner-scoped listings and the guarded
 //! upserts. A draft write is refused once its collection is publishing or
-//! published (`publication_pending` / `is_published`, the parent rows taken
-//! `FOR UPDATE` first so a waiting writer re-reads the committed lock), and
-//! an item's owner always equals its collection's. Uploaded files go to the
+//! published (`publication_pending`, or published as [`crate::chain_state`]
+//! derives it, read after the parent rows are taken `FOR UPDATE` so a
+//! waiting writer re-reads the committed publication), and an item's owner
+//! always equals its collection's. Uploaded files go to the
 //! ONE blob store under their CIDv1 and `builder.uploaded_contents` keeps the
 //! acceptance record; a draft can only name a hash this node accepted (the
 //! `item_contents.hash` FK, the old "upload before saving" rule).
@@ -17,11 +18,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::chain_state::{self, DecisionView, ReadView};
 use crate::storage::OpenedContent;
 use dcl_auth::{hash_bytes_v1, is_canonical_cid, is_eth_address};
 
 use super::http::{ApiError, iso};
-use super::items::{CollectionMetaOut, CollectionMetaRow, ItemsComponent};
+use super::items::{
+    CollectionMetaOut, CollectionMetaRow, ItemsComponent, collection_meta, collection_meta_columns,
+};
 
 #[derive(Debug, sqlx::FromRow)]
 struct CollectionListingRow {
@@ -225,15 +229,33 @@ const FK_VIOLATION: &str = "23503";
 /// ones are a wallet's own handful, these span every wallet.
 pub const LISTING_LIMIT: i64 = 1000;
 
-const COLLECTION_LISTING: &str = "SELECT c.id, c.name, c.eth_address, c.contract_address, c.urn_suffix, c.third_party_id, \
-    c.is_published, c.is_approved, c.created_at, c.updated_at, \
-    (SELECT count(*) FROM builder.items i WHERE i.collection_id=c.id) AS item_count FROM builder.collections c";
-const DRAFT_PREDICATE: &str = "(NOT c.is_published OR c.third_party_id IS NOT NULL)";
-const ITEM_DRAFT_LISTING: &str = "SELECT jsonb_build_object('id', id, 'name', name, 'type', type, 'collection_id', collection_id) FROM builder.items";
-const ITEM_DRAFT_PREDICATE: &str = "NOT EXISTS (SELECT 1 FROM builder.collections c WHERE c.id=items.collection_id \
-    AND (c.is_published OR c.publication_pending))";
+fn collection_listing(view: &ReadView) -> String {
+    format!(
+        "SELECT {}, (SELECT count(*) FROM builder.items i WHERE i.collection_id=c.id) AS item_count \
+         FROM {}",
+        collection_meta_columns(view),
+        view.collections()
+    )
+}
 
-fn collection_listing(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
+fn draft_predicate(view: &ReadView) -> String {
+    format!("(NOT {} OR c.third_party_id IS NOT NULL)", view.published())
+}
+
+const ITEM_DRAFT_LISTING: &str = "SELECT jsonb_build_object('id', id, 'name', name, 'type', type, 'collection_id', collection_id) FROM builder.items";
+
+fn item_draft_predicate(view: &ReadView) -> String {
+    format!(
+        "NOT EXISTS (SELECT 1 FROM builder.collections c WHERE c.id=items.collection_id \
+         AND (c.publication_pending OR {}))",
+        view.published_subquery()
+    )
+}
+
+const PARENT_NOT_PUBLISHING: &str = "NOT EXISTS (SELECT 1 FROM builder.collections c \
+    WHERE c.id=items.collection_id AND c.publication_pending)";
+
+fn listing_out(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
     rows.iter()
         .map(|row| CollectionListingOut {
             collection: CollectionMetaOut::from(&row.collection),
@@ -249,24 +271,35 @@ impl ItemsComponent {
         draft: &CollectionDraft,
     ) -> Result<CollectionMetaOut, ApiError> {
         draft.validate(draft.id, signer)?;
+        let mut tx = self.pool.begin().await?;
+        let view = chain_state::for_decision(&mut tx).await?;
+        sqlx::query("SELECT id FROM builder.collections WHERE id=$1 FOR UPDATE")
+            .bind(draft.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if chain_state::published(&mut tx, &view, draft.id).await? {
+            return Err(ApiError::forbidden(
+                "Collection is publishing, published, or belongs to another wallet",
+            ));
+        }
         let changed = sqlx::query(
-            "INSERT INTO builder.collections (id, name, eth_address, salt, urn_suffix, third_party_id) VALUES ($1, $2, $3, $4, $5, $6) \
+            "INSERT INTO builder.collections AS c (id, name, eth_address, salt, urn_suffix, third_party_id) VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, salt = EXCLUDED.salt, updated_at = timezone('UTC', now()) \
-             WHERE collections.eth_address = $3 AND NOT collections.is_published AND NOT collections.publication_pending \
-             AND collections.urn_suffix IS NOT DISTINCT FROM $5 AND collections.third_party_id IS NOT DISTINCT FROM $6 \
+             WHERE c.eth_address = $3 AND NOT c.publication_pending \
+             AND c.urn_suffix IS NOT DISTINCT FROM $5 AND c.third_party_id IS NOT DISTINCT FROM $6 \
              RETURNING id",
         ).bind(draft.id).bind(draft.name.trim()).bind(signer).bind(&draft.salt)
             .bind(&draft.urn).bind(draft.urn.as_deref().and_then(|urn| urn.rsplit_once(':').map(|(provider, _)| provider)))
-            .fetch_optional(&self.pool).await?;
+            .fetch_optional(&mut *tx).await?;
         if changed.is_none() {
             return Err(ApiError::forbidden(
                 "Collection is publishing, published, or belongs to another wallet",
             ));
         }
-        let row = self
-            .collection_by_id(&draft.id)
+        let row = collection_meta(&mut tx, &view, &draft.id)
             .await?
             .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+        tx.commit().await?;
         Ok(CollectionMetaOut::from(&row))
     }
 
@@ -276,13 +309,17 @@ impl ItemsComponent {
         &self,
         signer: &str,
     ) -> Result<Vec<CollectionListingOut>, ApiError> {
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
         let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{COLLECTION_LISTING} WHERE c.eth_address = $1 AND {DRAFT_PREDICATE} ORDER BY c.updated_at DESC"
+            "{} WHERE c.eth_address = $1 AND {} ORDER BY c.updated_at DESC",
+            collection_listing(&view),
+            draft_predicate(&view)
         )))
         .bind(signer)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await?;
-        Ok(collection_listing(&rows))
+        Ok(listing_out(&rows))
     }
 
     /// Every wallet's drafts, newest first: the committee's `GET
@@ -291,13 +328,17 @@ impl ItemsComponent {
     pub async fn collection_drafts_of_everyone(
         &self,
     ) -> Result<Vec<CollectionListingOut>, ApiError> {
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
         let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{COLLECTION_LISTING} WHERE {DRAFT_PREDICATE} ORDER BY c.updated_at DESC LIMIT $1"
+            "{} WHERE {} ORDER BY c.updated_at DESC LIMIT $1",
+            collection_listing(&view),
+            draft_predicate(&view)
         )))
         .bind(LISTING_LIMIT)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await?;
-        Ok(collection_listing(&rows))
+        Ok(listing_out(&rows))
     }
 
     /// The published collections whose name contains `q` (case-insensitive,
@@ -312,35 +353,45 @@ impl ItemsComponent {
             .replace('\\', "\\\\")
             .replace('%', "\\%")
             .replace('_', "\\_");
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
         let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
-            "{COLLECTION_LISTING} WHERE c.is_published AND c.name ILIKE '%' || $1 || '%' ESCAPE '\\' \
-             ORDER BY c.updated_at DESC LIMIT $2"
+            "{} WHERE {} AND c.name ILIKE '%' || $1 || '%' ESCAPE '\\' \
+             ORDER BY c.updated_at DESC LIMIT $2",
+            collection_listing(&view),
+            view.published()
         )))
         .bind(pattern)
         .bind(LISTING_LIMIT)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await?;
-        Ok(collection_listing(&rows))
+        Ok(listing_out(&rows))
     }
 
     /// "My item drafts" (`items_owner_updated_idx`).
     pub async fn item_drafts(&self, signer: &str) -> Result<Vec<Value>, ApiError> {
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
         Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "{ITEM_DRAFT_LISTING} WHERE eth_address = $1 AND NOT is_published AND {ITEM_DRAFT_PREDICATE} ORDER BY updated_at DESC"
+            "{ITEM_DRAFT_LISTING} WHERE eth_address = $1 AND NOT is_published AND {} ORDER BY updated_at DESC",
+            item_draft_predicate(&view)
         )))
         .bind(signer)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await?)
     }
 
     /// Every wallet's item drafts, newest first: the committee's `GET
     /// /v1/items` (builder-server's `getItems`), at most [`LISTING_LIMIT`].
     pub async fn item_drafts_of_everyone(&self) -> Result<Vec<Value>, ApiError> {
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
         Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "{ITEM_DRAFT_LISTING} WHERE NOT is_published AND {ITEM_DRAFT_PREDICATE} ORDER BY updated_at DESC LIMIT $1"
+            "{ITEM_DRAFT_LISTING} WHERE NOT is_published AND {} ORDER BY updated_at DESC LIMIT $1",
+            item_draft_predicate(&view)
         )))
         .bind(LISTING_LIMIT)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *conn)
         .await?)
     }
 
@@ -360,7 +411,8 @@ impl ItemsComponent {
     /// lock order; cascading content links go away, shared uploaded bytes remain.
     pub async fn delete_item_draft(&self, signer: &str, id: Uuid) -> Result<(), ApiError> {
         let mut tx = self.pool.begin().await?;
-        lock_item_draft(&mut tx, signer, id, None).await?;
+        let view = chain_state::for_decision(&mut tx).await?;
+        lock_item_draft(&mut tx, &view, signer, id, None).await?;
         let deleted = sqlx::query(
             "DELETE FROM builder.items WHERE id=$1 AND eth_address=$2 AND NOT is_published",
         )
@@ -382,16 +434,16 @@ impl ItemsComponent {
     ) -> Result<Value, ApiError> {
         draft.validate(draft.id, signer)?;
         let mut tx = self.pool.begin().await?;
-        lock_item_draft(&mut tx, signer, draft.id, draft.collection_id).await?;
-        let changed = sqlx::query(
+        let view = chain_state::for_decision(&mut tx).await?;
+        lock_item_draft(&mut tx, &view, signer, draft.id, draft.collection_id).await?;
+        let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO builder.items (id, name, eth_address, collection_id, description, thumbnail, type, rarity, price, beneficiary, data, metrics) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
              ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, collection_id=EXCLUDED.collection_id, \
              description=EXCLUDED.description, thumbnail=EXCLUDED.thumbnail, type=EXCLUDED.type, \
              rarity=EXCLUDED.rarity, price=EXCLUDED.price, beneficiary=EXCLUDED.beneficiary, data=EXCLUDED.data, metrics=COALESCE(EXCLUDED.metrics,items.metrics), updated_at=timezone('UTC', now()) \
-             WHERE items.eth_address=$3 AND NOT items.is_published \
-             AND NOT EXISTS (SELECT 1 FROM builder.collections c WHERE c.id=items.collection_id AND (c.is_published OR c.publication_pending)) RETURNING id",
-        ).bind(draft.id).bind(draft.name.trim()).bind(signer).bind(draft.collection_id)
+             WHERE items.eth_address=$3 AND NOT items.is_published AND {PARENT_NOT_PUBLISHING} RETURNING id"
+        ))).bind(draft.id).bind(draft.name.trim()).bind(signer).bind(draft.collection_id)
             .bind(&draft.description).bind(&draft.thumbnail).bind(&draft.item_type).bind(&draft.rarity)
             .bind(&draft.price).bind(&draft.beneficiary).bind(&draft.data).bind(&draft.metrics).fetch_optional(&mut *tx).await?;
         if changed.is_none() {
@@ -450,11 +502,12 @@ impl ItemsComponent {
             ));
         }
         let mut tx = self.pool.begin().await?;
-        lock_item_draft(&mut tx, signer, id, None).await?;
-        let allowed: Option<Uuid> = sqlx::query_scalar(
-            "SELECT i.id FROM builder.items i WHERE i.id=$1 AND i.eth_address=$2 AND NOT i.is_published \
-             AND NOT EXISTS (SELECT 1 FROM builder.collections c WHERE c.id=i.collection_id AND (c.is_published OR c.publication_pending)) FOR UPDATE OF i",
-        ).bind(id).bind(signer).fetch_optional(&mut *tx).await?;
+        let view = chain_state::for_decision(&mut tx).await?;
+        lock_item_draft(&mut tx, &view, signer, id, None).await?;
+        let allowed: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT items.id FROM builder.items WHERE items.id=$1 AND items.eth_address=$2 AND NOT items.is_published \
+             AND {PARENT_NOT_PUBLISHING} FOR UPDATE OF items"
+        ))).bind(id).bind(signer).fetch_optional(&mut *tx).await?;
         if allowed.is_none() {
             return Err(ApiError::forbidden(
                 "Item is publishing, published, or belongs to another wallet",
@@ -531,6 +584,7 @@ impl ItemsComponent {
 
 async fn lock_item_draft(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    view: &DecisionView,
     signer: &str,
     id: Uuid,
     next_collection: Option<Uuid>,
@@ -554,15 +608,15 @@ async fn lock_item_draft(
     parents.sort();
     parents.dedup();
     for parent in parents {
-        let allowed: Option<Uuid> = sqlx::query_scalar(
+        let locked: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM builder.collections WHERE id=$1 AND eth_address=$2 \
-            AND NOT is_published AND NOT publication_pending FOR UPDATE",
+            AND NOT publication_pending FOR UPDATE",
         )
         .bind(parent)
         .bind(signer)
         .fetch_optional(&mut **tx)
         .await?;
-        if allowed.is_none() {
+        if locked.is_none() || chain_state::published(tx, view, parent).await? {
             return Err(ApiError::forbidden(
                 "Collection is publishing, published, or belongs to another wallet",
             ));

@@ -30,15 +30,15 @@ class ContentMigrationCases:
         return db
 
     @staticmethod
-    def builder_rows(name, updated):
-        collection = (f"'{COLLECTION}', '{name}', '{OWNER}', NULL, NULL, NULL, NULL, false, false, "
+    def builder_rows(name, updated, contract='NULL'):
+        collection = (f"'{COLLECTION}', '{name}', '{OWNER}', NULL, {contract}, NULL, NULL, "
                       f"'2026-01-01Z', '{updated}'")
         item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', '{name}', 'd', NULL, NULL, 'wearable', 'Common', '', '', "
                 f"'{{}}', NULL, NULL, NULL, NULL, NULL, false, 'pending', 0, NULL, NULL, '2026-01-01Z', '{updated}'")
         return collection, item
 
-    def import_builder(self, db, name, updated):
-        collection, item = self.builder_rows(name, updated)
+    def import_builder(self, db, name, updated, contract='NULL'):
+        collection, item = self.builder_rows(name, updated, contract)
         self.content_load(db, 'builder-server', 'collection', [collection])
         self.content_load(db, 'builder-server', 'item', [item])
 
@@ -58,6 +58,16 @@ class ContentMigrationCases:
         self.assertEqual(self.builder_names(db), 'Upstream\tUpstream')
         self.assertEqual(self.sql(db, f"SELECT rarity, price IS NULL, beneficiary IS NULL, is_approved "
                                       f"FROM builder.items WHERE id = '{ITEM}';\n").strip(), 'common\tt\tt\tf')
+
+    def test_when_importing_a_standard_collection_it_should_keep_its_contract_and_store_no_published_state(self):
+        db = self.content_db('content_builder_contract')
+        contract = '0x' + 'c' * 40
+        self.import_builder(db, 'Upstream', '2026-02-01Z', f"'{contract}'")
+        self.assertEqual(self.sql(db, f"SELECT contract_address, publication_pending FROM builder.collections "
+                                      f"WHERE id = '{COLLECTION}';\n").strip(), f'{contract}\tf')
+        self.assertEqual(self.sql(db, "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'builder' "
+                                      "AND table_name = 'collections' AND column_name IN ('is_published', 'is_approved');\n"
+                                      ).strip(), '0')
 
     def test_when_the_node_wrote_builder_rows_after_upstream_it_should_keep_them_on_reimport(self):
         db = self.content_db('content_builder_node_wins')

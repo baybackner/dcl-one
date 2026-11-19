@@ -13,9 +13,10 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use crate::chain_state::{self, ReadView};
 use crate::storage::Storage;
 
 use super::http::{ApiError, iso_timestamp};
@@ -162,19 +163,15 @@ impl ItemsComponent {
         Ok(row.map(|(addr,)| addr))
     }
 
+    /// The collection with its derived published and approved state; 503
+    /// while the chain copy can't tell.
     pub async fn collection_by_id(
         &self,
         collection_id: &Uuid,
     ) -> Result<Option<CollectionMetaRow>, ApiError> {
-        let row = sqlx::query_as::<_, CollectionMetaRow>(
-            "SELECT id, name, eth_address, contract_address, urn_suffix, third_party_id, \
-                    is_published, is_approved, created_at, updated_at \
-             FROM builder.collections WHERE id = $1",
-        )
-        .bind(collection_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_read(&mut conn).await?;
+        collection_meta(&mut conn, &view, collection_id).await
     }
 
     pub async fn set_item_curation_status(
@@ -330,6 +327,34 @@ impl ItemDbRow {
             contents: self.contents.0,
         }
     }
+}
+
+/// The [`CollectionMetaRow`] columns over [`ReadView::collections`],
+/// published and approved derived through `view`.
+pub(crate) fn collection_meta_columns(view: &ReadView) -> String {
+    format!(
+        "c.id, c.name, c.eth_address, c.contract_address, c.urn_suffix, c.third_party_id, \
+         {} AS is_published, {} AS is_approved, c.created_at, c.updated_at",
+        view.published(),
+        view.approved()
+    )
+}
+
+pub(crate) async fn collection_meta(
+    conn: &mut PgConnection,
+    view: &ReadView,
+    collection_id: &Uuid,
+) -> Result<Option<CollectionMetaRow>, ApiError> {
+    Ok(
+        sqlx::query_as::<_, CollectionMetaRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {} FROM {} WHERE c.id = $1",
+            collection_meta_columns(view),
+            view.collections()
+        )))
+        .bind(collection_id)
+        .fetch_optional(conn)
+        .await?,
+    )
 }
 
 #[derive(Debug, sqlx::FromRow)]

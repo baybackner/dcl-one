@@ -12,6 +12,76 @@
       "contract_address": "0x00cc1666ebe7da593c2a77d5bb9686e923f44e26",
       "created_at": "2025-12-01T00:00:00.000Z",
       "updated_at": "2025-12-01T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000006",
+      "name": "Chain unapproved",
+      "owner": "owner",
+      "salt": "0x6c2f0e5b1f5d4a8e9b3c7d1e2f3a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c",
+      "contract_address": "0x5eed000000000000000000000000000000000006",
+      "created_at": "2025-12-02T00:00:00.000Z",
+      "updated_at": "2025-12-02T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000007",
+      "name": "Chain approved",
+      "owner": "owner",
+      "salt": "0x7d3a1f6c2e6e5b9fac4d8e2f3a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d",
+      "contract_address": "0x5eed000000000000000000000000000000000007",
+      "created_at": "2025-12-02T00:00:00.000Z",
+      "updated_at": "2025-12-02T00:00:00.000Z"
     }
-  ]
+  ],
+  "chain": {
+    "collections": [
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000006",
+        "name": "Chain unapproved",
+        "creator": "owner",
+        "owner": "owner",
+        "is_approved": false,
+        "managers": [],
+        "minters": [],
+        "created_at": 1764720000,
+        "updated_at": 1764720000,
+        "reviewed_at": 0
+      },
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000007",
+        "name": "Chain approved",
+        "creator": "owner",
+        "owner": "owner",
+        "is_approved": true,
+        "managers": [],
+        "minters": [],
+        "created_at": 1764720000,
+        "updated_at": 1764806400,
+        "reviewed_at": 1764806400
+      }
+    ],
+    "items": [
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000006",
+        "blockchain_id": "0",
+        "name": "Chain hat",
+        "category": "hat",
+        "rarity": "common",
+        "price": "1000000000000000000",
+        "beneficiary": "owner",
+        "total_supply": "0",
+        "content_hash": "bafkreichainunapprovedhat"
+      },
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000007",
+        "blockchain_id": "0",
+        "name": "Chain cap",
+        "category": "hat",
+        "rarity": "common",
+        "price": "1000000000000000000",
+        "beneficiary": "owner",
+        "total_supply": "1",
+        "content_hash": "bafkreichainapprovedcap"
+      }
+    ]
+  }
 }

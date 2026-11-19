@@ -13,7 +13,8 @@
   "deliberate_gaps": {
     "timestamped-signatures-only": "Every signed operation: upstream also accepts a request whose auth chain signs only its method and its path below /v1 (lowercased), whatever x-identity-timestamp or x-identity-metadata header the request carries or omits, valid until the delegated key expires. The node accepts only the timestamped payload over its own method and path, at most five minutes old and one minute ahead, and refuses such a request with upstream's 401 {ok:false, data:{message}, error:'Unauthenticated'}.",
     "signature-window": "Every signed operation: upstream accepts a timestamp up to 30 minutes old or ahead; the node accepts at most five minutes old and one minute ahead, and refuses the rest with the same 401.",
-    "unauthenticated-message": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message."
+    "unauthenticated-message": "Every signed operation: when a signature does not verify, upstream's data.message is its verifier's own text, which includes the payload it expected and its local clock; the node's is a fixed text naming the failed check (Invalid auth chain, Invalid timestamp, Expired signature, Invalid signature). The status, error and envelope are upstream's, and no client reads data.message.",
+    "chain-copy-lag": "Every operation that reads a collection's published or approved state: upstream asks the Polygon collections subgraph on each request; the node reads its copy of that subgraph, which the shop's collections mirror refreshes every three times MARKETPLACE_MIRROR_INTERVAL_SECS (15 minutes at the default 300). A collection deployed outside the node's own publication flow reads as unpublished, and an approval or a role change as not yet made, until the next pass, so a client that polls after a deployment (the old builder web retries its publish every 5 seconds) waits up to that bound plus the subgraph's lag. When the copy has no complete pass the node answers 503, and when its last pass, or the row or absence a decision reads, is more than 30 minutes old it answers 503 to every request that grants access or writes."
   },
   "operations": [
     {
@@ -31,7 +32,9 @@
       "status": "not_reviewed",
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
     {
@@ -76,7 +79,9 @@
       "status": "not_reviewed",
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
     {
@@ -85,7 +90,9 @@
       "status": "not_reviewed",
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
     {
@@ -94,7 +101,9 @@
       "status": "not_reviewed",
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
     {
@@ -127,7 +136,9 @@
           "replay": []
         }
       ],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the committee listing, pagination (with page and limit, upstream answers {total, limit, pages, page, results}), the review, tag and type filters, and a search that finds published collections."
     },
     {
@@ -143,13 +154,12 @@
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
       "status": "known_gap",
-      "result": "The owner's read, the unsigned refusal, a stranger's refusal and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. The refusals answer upstream's status and envelope; the owner's read differs in its fields, and a request signed over method and path alone is refused where upstream serves it.",
+      "result": "The owner's reads of a draft, a published unapproved and a published approved collection, the unsigned refusal, a stranger's refusal and each signature refusal were compared; the signature refusals are re-signed at replay time with their defect, so each reaches the check it names. The refusals answer upstream's status and envelope; the owner's reads answer upstream's is_published and is_approved and differ in other fields, and a request signed over method and path alone is refused where upstream serves it.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
           "scope": "Signed GET by the owner of a draft standard collection.",
           "replay": [
-            "data.contract_address value",
             "data.forum_id missing",
             "data.forum_link missing",
             "data.is_mapping_complete missing",
@@ -162,6 +172,48 @@
             "data.reviewed_at missing",
             "data.salt missing",
             "data.third_party_id extra",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/20-collection-published-unapproved-owner.json",
+          "scope": "Signed GET by the owner of a standard collection the collections subgraph holds as not approved; the replay seeds the same facts into the node's copy of the subgraph.",
+          "replay": [
+            "data.created_at value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.updated_at value",
+            "data.urn value"
+          ]
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/21-collection-published-approved-owner.json",
+          "scope": "Signed GET by the owner of a standard collection the collections subgraph holds as approved; the replay seeds the same facts into the node's copy of the subgraph.",
+          "replay": [
+            "data.created_at value",
+            "data.forum_id missing",
+            "data.forum_link missing",
+            "data.is_mapping_complete missing",
+            "data.item_count missing",
+            "data.linked_contract_address missing",
+            "data.linked_contract_network missing",
+            "data.lock missing",
+            "data.managers missing",
+            "data.minters missing",
+            "data.reviewed_at missing",
+            "data.salt missing",
+            "data.third_party_id extra",
+            "data.updated_at value",
             "data.urn value"
           ]
         },
@@ -291,12 +343,13 @@
         }
       ],
       "gaps": [
-        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers contract_address and urn as null: its schema cannot store the contract address upstream computes for a draft.",
+        "Owner read: the node omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, adds third_party_id, and answers urn as null for a draft and for a collection it did not publish itself. For a published collection upstream answers created_at and updated_at from the subgraph; the node answers the draft row's.",
+        "deliberate:chain-copy-lag",
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:unauthenticated-message"
       ],
-      "remaining_verification": "Capture reads by the committee, an on-chain manager, a third-party manager and any signer of a published collection, and a missing id."
+      "remaining_verification": "Capture reads by the committee, an on-chain manager and minter, a third-party manager and any signer of a published collection, and a missing id."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
@@ -304,7 +357,9 @@
       "status": "not_reviewed",
       "result": "Registered upstream; no answer has been compared in this ledger.",
       "evidence": [],
-      "gaps": [],
+      "gaps": [
+        "deliberate:chain-copy-lag"
+      ],
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     },
     {
@@ -418,7 +473,8 @@
         "Create: upstream stores the salt and the contract address it computes from the id and data and answers them with the collection urn; the node answers contract_address and urn as null and omits salt, managers, minters, reviewed_at, forum_link, forum_id, lock, linked_contract_address, linked_contract_network, is_mapping_complete and item_count, and adds third_party_id. The timestamps are volatile in this capture, so their format is compared by the owner read of GET /v1/collections/:id.",
         "Invalid body: both answer 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema errors, the node's is {}.",
         "deliberate:timestamped-signatures-only",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:chain-copy-lag"
       ],
       "remaining_verification": "Capture an update of an existing draft, a third-party collection, a locked and a published collection (423 and 409 upstream), a name already in use, a stranger's write and mismatched body and URL ids."
     },

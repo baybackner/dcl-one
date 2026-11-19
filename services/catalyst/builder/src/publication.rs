@@ -6,7 +6,8 @@
 //! and each item's on-chain metadata string). The `revision` is the CIDv1 of
 //! the snapshot text, so any edit invalidates a review. Nothing here writes
 //! or signs: `publication_store` records the attempt, `publication_chain`
-//! verifies the receipt.
+//! verifies the receipt. A published collection is refused before its
+//! snapshot is prepared ([`chain_state::published`]).
 
 use alloy_primitives::{Address, B256, U256, keccak256};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use uuid::Uuid;
 
 use dcl_auth::hash_bytes_v1;
 
+use super::chain_state;
 use super::drafts::ItemDraft;
 use super::http::ApiError;
 use super::items::ItemsComponent;
@@ -63,25 +65,29 @@ impl ItemsComponent {
         {
             return Ok(state.preparation);
         }
+        let mut conn = self.pool.acquire().await?;
+        let view = chain_state::for_decision(&mut conn).await?;
         let snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
             .bind(id)
             .bind(signer)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+        if chain_state::published(&mut conn, &view, id).await? {
+            return Err(already_published());
+        }
         prepare(snapshot, signer)
     }
+}
+
+pub(super) fn already_published() -> ApiError {
+    ApiError::bad_request("Collection has already been published")
 }
 
 pub(super) fn prepare(snapshot: Value, signer: &str) -> Result<PublicationPreparation, ApiError> {
     let collection = &snapshot["collection"];
     let id = text(collection, "id")?;
     let name = text(collection, "name")?;
-    if collection["is_published"] == true || !collection["contract_address"].is_null() {
-        return Err(ApiError::bad_request(
-            "Collection has already been published",
-        ));
-    }
     if !collection["third_party_id"].is_null() {
         return Err(ApiError::bad_request(
             "Linked collections use their registered provider's publication flow",
