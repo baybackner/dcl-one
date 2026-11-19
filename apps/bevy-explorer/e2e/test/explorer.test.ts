@@ -598,7 +598,7 @@ describe('Explorer', () => {
 
   test('hoverEntity, clickEntity, pressInput, walk, camera, move, reticle, sweep, raycast and scene log commands compose the lines', async () => {
     const report = JSON.stringify({ hit: null, entries: [], events: [], diagnosis: 'blocked by entity 9' })
-    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, walk: report, camera_look: report, look_at: report, player_state: report, move_to: report, set_camera_mode: report, get_reticle: report, sweep_pointer: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: 'latestSeq=7 dropped=0 source=scene\n5 [1.00] Log: a\n7 [2.00] Log: b' })
+    const fake = new FakeConsole({ hover_entity: report, click_entity: report, press_input: report, walk: report, camera_look: report, look_at: report, player_state: report, move_to: report, set_camera_mode: report, set_camera_pose: report, get_reticle: report, sweep_pointer: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: 'latestSeq=7 dropped=0 source=scene\n5 [1.00] Log: a\n7 [2.00] Log: b' })
     const explorer = new Explorer(fake)
     assert.equal((await explorer.hoverEntity(512, { bounds: true, frames: 10 })).diagnosis, 'blocked by entity 9')
     await explorer.clickEntity('512', { button: 'primary', event: 'down', timeoutFrames: 60 })
@@ -616,6 +616,9 @@ describe('Explorer', () => {
     await explorer.moveTo(2400, 0, 2400, { lookAt: [2388, 6, 2400] })
     await explorer.moveTo(-1.5, 0, 2, { timeoutSeconds: 4 })
     await explorer.setCameraMode('first_person')
+    await explorer.setCameraPose(2400, 12, 2390, { lookAt: [2403, 1, 2400], fov: 50 })
+    await explorer.setCameraPose(-3, 2, 2, { timeoutSeconds: 8 })
+    await explorer.setCameraMode('free')
     await explorer.getReticle()
     await explorer.sweepPointer({ entity: 591 }, { dx: 10, dy: -5, seconds: 2 })
     await explorer.sweepPointer({ at: [2398, 2.2, 2393] }, { button: 'primary' })
@@ -639,6 +642,9 @@ describe('Explorer', () => {
       '/move_to 2400 0 2400 --look-at 2388 6 2400',
       '/move_to -1.5 0 2 --timeout-seconds 4',
       '/set_camera_mode first_person',
+      '/set_camera_pose 2400 12 2390 --look-at 2403 1 2400 --fov 50',
+      '/set_camera_pose -3 2 2 --timeout-seconds 8',
+      '/set_camera_mode free',
       '/get_reticle',
       '/sweep_pointer --entity 591 --dx 10 --dy -5 --seconds 2',
       '/sweep_pointer --at 2398 2.2 2393 --button primary',

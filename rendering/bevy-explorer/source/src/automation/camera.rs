@@ -1,9 +1,12 @@
-//! `/camera_look`, `/look_at`, `/move_to`, `/set_camera_mode` and `/player_state`: turn the
-//! player's camera as the mouse does, aim it at a world point, move the player, switch between first
-//! and third person, and read the player's and the camera's pose. The turns go through
-//! [`SyntheticLook`], which `update_camera` adds to the mouse's turn, so a scene camera, the pitch
-//! clamp and a cinematic camera's ranges hold them back as they hold back a person's. `drive_camera`
-//! follows a turn frame by frame and answers once it is done:
+//! `/camera_look`, `/look_at`, `/move_to`, `/set_camera_mode`, `/set_camera_pose` and
+//! `/player_state`: turn the player's camera as the mouse does, aim it at a world point, move the
+//! player, switch between first person, third person and the free camera, place the free camera,
+//! and read the player's and the camera's pose. The turns go through [`SyntheticLook`], which
+//! `update_camera` adds to the mouse's turn, so a scene camera, the pitch clamp and a cinematic
+//! camera's ranges hold them back as they hold back a person's. The free camera is photo mode's
+//! (`camera_reel`): while it holds the view the turns and the pose are written to it directly, as
+//! nothing but the pointer steers it. `drive_camera` follows a turn frame by frame and answers once
+//! it is done:
 //!
 //! - `/camera_look`: `{"deltaX", "deltaY", "units", "seconds", "turned": {"x", "y"},
 //!   "cameraRotationEuler", "warning"?}`
@@ -12,12 +15,17 @@
 //! - `/move_to`: `{"position", "rotationEuler", "parcel", "settled", "cameraRotationEuler",
 //!   "cameraPosition"}`, with `--look-at` also `"lookAt", "aimErrorDegrees", "aimSettled", "frames",
 //!   "mode", "warning"?`
+//! - `/set_camera_mode`: `{"before", "after", "changed"}`, answered once the free camera has
+//!   opened or closed
+//! - `/set_camera_pose`: `{"position", "rotationEuler", "fov", "mode", "settled", "opened",
+//!   "warning"?}`, with `--look-at` also `"lookAt", "aimErrorDegrees"`
 //!
 //! Euler angles are Decentraland's (as a scene reads them): degrees from 0 to 360, `x` the pitch,
 //! looking down positive, `y` the yaw clockwise from north, `z` the roll.
 
 use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
+use camera_reel::{PhotoCamera, PhotoModeRequest, PhotoModeSource};
 use common::{
     rpc::{RpcCall, RpcCallEvent, RpcResultReceiver, RpcResultSender},
     sets::SceneSets,
@@ -40,6 +48,7 @@ use scene_runner::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use tween::SystemTween;
 use user_input::camera::{update_camera, SyntheticLook, PITCH_LIMIT};
 
 use super::{pointer::Point, walk::parcel_of};
@@ -62,6 +71,15 @@ const STILL_METRES: f32 = 0.005;
 const STILL_FRAMES: u32 = 3;
 /// How long the player may take to settle after a move.
 const SETTLE_SECONDS: f32 = 3.0;
+/// How far the free camera may be from the point it was placed at and count as there.
+const POSE_METRES: f32 = 0.1;
+/// How long photo mode may take to open or close for `/set_camera_mode`.
+const MODE_SECONDS: f32 = 3.0;
+/// The free camera's pitch clamp, straight up or down.
+const PHOTO_PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2;
+/// The free camera's vertical field of view, in degrees.
+const MIN_FOV: f32 = 10.0;
+const MAX_FOV: f32 = 120.0;
 
 pub(crate) struct AutomationCameraPlugin;
 
@@ -73,6 +91,7 @@ impl Plugin for AutomationCameraPlugin {
             .add_console_command::<PlayerStateCommand, _>(player_state_cmd)
             .add_console_command::<MoveToCommand, _>(move_to_cmd)
             .add_console_command::<SetCameraModeCommand, _>(set_camera_mode_cmd)
+            .add_console_command::<SetCameraPoseCommand, _>(set_camera_pose_cmd)
             .add_systems(
                 Update,
                 drive_camera.in_set(SceneSets::Input).before(update_camera),
@@ -138,14 +157,44 @@ pub struct MoveToCommand {
     timeout_seconds: f32,
 }
 
-/// Switch the player's camera to first_person or third_person, as zooming in or out does. Refused,
-/// naming it, while a scene's CameraModeArea or VirtualCamera holds the camera; drone and free are
-/// not modes of this client. Answers, as JSON, with the mode before and after
+/// Switch the camera to first_person or third_person, as zooming in or out does, or to free: the
+/// free camera (photo mode's), which stays where it is while the player moves, flown with the
+/// movement keys or placed with /set_camera_pose. First or third person closes the free camera.
+/// Refused, naming it, while a scene's CameraModeArea or VirtualCamera holds the camera; drone is
+/// not a mode of this client. Answers, as JSON, with the mode before and after, once the change
+/// has landed
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/set_camera_mode")]
 pub struct SetCameraModeCommand {
-    /// first_person, third_person, drone or free
+    /// first_person, third_person or free
     mode: String,
+}
+
+/// Place the free camera (photo mode's) at a world point (Decentraland coordinates), opening it
+/// when another mode holds the view, and with --look-at x y z aim it at a point and with --fov
+/// set its vertical field of view in degrees (10 to 120). The pose lands at once, through walls,
+/// and the camera stays put while the player moves; the movement keys fly it from there within
+/// photo mode's reach of the player. /set_camera_mode third_person restores a player-following
+/// view. Answers, as JSON, with position, rotationEuler, fov, mode, settled, opened and, with
+/// --look-at, aimErrorDegrees. Refused, naming it, while a scene camera holds the view
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/set_camera_pose")]
+pub struct SetCameraPoseCommand {
+    #[arg(allow_negative_numbers = true)]
+    x: f32,
+    #[arg(allow_negative_numbers = true)]
+    y: f32,
+    #[arg(allow_negative_numbers = true)]
+    z: f32,
+    /// A world point to aim the camera at
+    #[arg(long, num_args = 3, value_names = ["X", "Y", "Z"], allow_negative_numbers = true)]
+    look_at: Option<Vec<f32>>,
+    /// Vertical field of view in degrees, 10 to 120; unchanged by default
+    #[arg(long)]
+    fov: Option<f32>,
+    /// How long to wait for the camera to open and land
+    #[arg(long, default_value_t = 5.0)]
+    timeout_seconds: f32,
 }
 
 /// The player's and the camera's pose, as JSON: position, rotationEuler, parcel, velocity,
@@ -297,6 +346,28 @@ enum Gesture {
         /// the point to aim at once the player has settled, and the aim's timeout
         look_at: Option<(Vec3, f32)>,
     },
+    /// `/set_camera_pose`: waits for photo mode, writes the pose and answers once the camera is there
+    Pose {
+        /// the point, in bevy's world
+        position: Vec3,
+        /// the point to aim at, in bevy's world
+        look_at: Option<Vec3>,
+        /// degrees
+        fov: Option<f32>,
+        timeout: f32,
+        elapsed: f32,
+        /// photo mode was closed when the command came: this call opens it
+        opened: bool,
+        /// the pose has been written to the camera
+        placed: bool,
+    },
+    /// `/set_camera_mode` into or out of the free camera: answers once photo mode has followed and
+    /// the camera's transition has landed
+    Mode {
+        photo: bool,
+        before: &'static str,
+        elapsed: f32,
+    },
 }
 
 struct Job {
@@ -317,7 +388,8 @@ impl CameraJob {
 }
 
 /// Why a turn cannot start, or `None`. A cinematic camera refuses `/look_at` always and
-/// `/camera_look` when it allows no manual rotation.
+/// `/camera_look` when it allows no manual rotation. The free camera (photo mode) turns on its own
+/// yaw and pitch, so neither the HUD's hold on input nor a scene camera applies to it.
 fn refuse_turn(
     job: &CameraJob,
     camera: Option<(&PrimaryCamera, bool)>,
@@ -334,14 +406,14 @@ fn refuse_turn(
     let Some((camera, photo)) = camera else {
         return Some(refusal("no camera", None));
     };
-    if photo {
-        return Some(refusal("photo mode holds the camera", None));
-    }
     if out_of_world {
         return Some(refusal(
             "the player is out of world (loading): the camera looks at it from above",
             None,
         ));
+    }
+    if photo {
+        return None;
     }
     if priorities.get(InputType::All) > InputPriority::Scene {
         return Some(refusal("input held by the HUD", None));
@@ -366,7 +438,7 @@ fn camera_look_cmd(
     mut job: ResMut<CameraJob>,
     mut pending: ResMut<PendingConsoleResponses>,
     priorities: Res<InputPriorities>,
-    camera: Query<(&PrimaryCamera, Has<PhotoMode>)>,
+    camera: Query<(&PrimaryCamera, Option<&PhotoCamera>)>,
     player: Query<Has<OutOfWorld>, With<PrimaryUser>>,
 ) {
     let Some(Ok(command)) = input.take() else {
@@ -390,11 +462,18 @@ fn camera_look_cmd(
     }
     let camera = camera.single().ok();
     let out_of_world = player.single().unwrap_or_default();
-    if let Some(refused) = refuse_turn(&job, camera, out_of_world, &priorities, false) {
+    let refused = refuse_turn(
+        &job,
+        camera.map(|(c, photo)| (c, photo.is_some())),
+        out_of_world,
+        &priorities,
+        false,
+    );
+    if let Some(refused) = refused {
         input.reply_failed(refused);
         return;
     }
-    let start = camera.map_or(Vec2::ZERO, |(c, _)| Vec2::new(c.yaw, c.pitch));
+    let start = camera.map_or(Vec2::ZERO, |(c, photo)| angles(c, photo));
     let rx = start_job(
         &mut job,
         Gesture::Look {
@@ -539,59 +618,101 @@ fn move_to_cmd(
     pending.push_receiver(rx, |r| r, input.take_responder());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_camera_mode_cmd(
     mut input: ConsoleCommand<SetCameraModeCommand>,
+    mut job: ResMut<CameraJob>,
+    mut pending: ResMut<PendingConsoleResponses>,
+    mut requests: EventWriter<PhotoModeRequest>,
     mut camera: Query<(&mut PrimaryCamera, Has<PhotoMode>)>,
+    player: Query<Has<OutOfWorld>, With<PrimaryUser>>,
     hold: Res<CameraModeHold>,
     scenes: Query<&RendererSceneContext>,
 ) {
     let Some(Ok(command)) = input.take() else {
         return;
     };
-    let first_person = match command.mode.as_str() {
-        "first_person" => true,
-        "third_person" => false,
-        "drone" | "free" => {
+    let free = match command.mode.as_str() {
+        "first_person" => Some(true),
+        "third_person" => Some(false),
+        "free" => None,
+        "drone" => {
             input.reply_failed(refusal(
-                format!(
-                    "this client has no {} camera mode: its modes are first_person and \
-                     third_person (photo mode, opened from the HUD, is its free camera)",
-                    command.mode
-                ),
+                "this client has no drone camera mode: its modes are first_person, third_person \
+                 and free (photo mode's camera)",
                 None,
             ));
             return;
         }
         other => {
             input.reply_failed(format!(
-                "unknown mode `{other}`: use first_person, third_person, drone or free"
+                "unknown mode `{other}`: use first_person, third_person or free"
             ));
             return;
         }
     };
+    if job.0.is_some() {
+        input.reply_failed(refusal(
+            "a camera turn or move is still running; wait for its reply",
+            None,
+        ));
+        return;
+    }
     let Ok((mut camera, photo)) = camera.single_mut() else {
         input.reply_failed(refusal("no camera", None));
         return;
     };
-    if photo {
-        input.reply_failed(refusal("photo mode holds the camera", None));
-        return;
-    }
-    if let Some(hold) = &hold.0 {
-        let (reason, cause) = hold_cause(hold, &scenes);
-        input.reply_failed(refusal(reason, Some(cause)));
-        return;
-    }
-    if camera.scene_override.is_some() {
-        input.reply_failed(refusal("a scene camera holds the camera", None));
+    if let Some(refused) = refuse_hold(&camera, &hold, &scenes) {
+        input.reply_failed(refused);
         return;
     }
     let before = mode_name(&camera, photo);
+    let Some(first_person) = free else {
+        // the free camera: photo mode, opened as the HUD opens it
+        if photo {
+            input.reply_ok(
+                json!({ "before": before, "after": before, "changed": false }).to_string(),
+            );
+            return;
+        }
+        if player.single().unwrap_or_default() {
+            input.reply_failed(refusal(
+                "the player is out of world (loading): the camera looks at it from above",
+                None,
+            ));
+            return;
+        }
+        requests.write(PhotoModeRequest::Enable(PhotoModeSource::Console));
+        let rx = start_job(
+            &mut job,
+            Gesture::Mode {
+                photo: true,
+                before,
+                elapsed: 0.0,
+            },
+        );
+        pending.push_receiver(rx, |r| r, input.take_responder());
+        return;
+    };
     if first_person {
         camera.distance = 0.0;
     } else if camera.distance <= PrimaryCamera::FIRST_PERSON_DISTANCE {
         // the default follow distance; a player's own third-person zoom is kept
         camera.distance = 1.0;
+    }
+    if photo {
+        // the player camera takes over at the distance just set once photo mode has closed
+        requests.write(PhotoModeRequest::Disable);
+        let rx = start_job(
+            &mut job,
+            Gesture::Mode {
+                photo: false,
+                before,
+                elapsed: 0.0,
+            },
+        );
+        pending.push_receiver(rx, |r| r, input.take_responder());
+        return;
     }
     let after = mode_name(&camera, photo);
     input.reply_ok(
@@ -599,26 +720,195 @@ fn set_camera_mode_cmd(
     );
 }
 
+/// Why the camera cannot change mode or be placed, or `None`: a scene's `CameraModeArea` or
+/// `VirtualCamera` holds it.
+fn refuse_hold(
+    camera: &PrimaryCamera,
+    hold: &CameraModeHold,
+    scenes: &Query<&RendererSceneContext>,
+) -> Option<String> {
+    if let Some(hold) = &hold.0 {
+        let (reason, cause) = hold_cause(hold, scenes);
+        return Some(refusal(reason, Some(cause)));
+    }
+    if camera.scene_override.is_some() {
+        return Some(refusal("a scene camera holds the camera", None));
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_camera_pose_cmd(
+    mut input: ConsoleCommand<SetCameraPoseCommand>,
+    mut job: ResMut<CameraJob>,
+    mut pending: ResMut<PendingConsoleResponses>,
+    mut requests: EventWriter<PhotoModeRequest>,
+    camera: Query<(&PrimaryCamera, Has<PhotoMode>)>,
+    player: Query<Has<OutOfWorld>, With<PrimaryUser>>,
+    hold: Res<CameraModeHold>,
+    scenes: Query<&RendererSceneContext>,
+) {
+    let Some(Ok(command)) = input.take() else {
+        return;
+    };
+    let timeout = command.timeout_seconds;
+    if !timeout.is_finite() || timeout <= 0.0 || timeout > 30.0 {
+        input.reply_failed(format!(
+            "--timeout-seconds takes more than 0 and at most 30; got {timeout}"
+        ));
+        return;
+    }
+    let look_at = command
+        .look_at
+        .as_deref()
+        .map(|v| Vec3::new(v[0], v[1], v[2]));
+    let numbers = [command.x, command.y, command.z]
+        .into_iter()
+        .chain(look_at.iter().flat_map(|v| v.to_array()));
+    if !numbers.into_iter().all(f32::is_finite) {
+        input.reply_failed("the coordinates must be numbers");
+        return;
+    }
+    if let Some(fov) = command.fov {
+        if !fov.is_finite() || !(MIN_FOV..=MAX_FOV).contains(&fov) {
+            input.reply_failed(format!(
+                "--fov takes degrees from {MIN_FOV} to {MAX_FOV}; got {fov}"
+            ));
+            return;
+        }
+    }
+    if job.0.is_some() {
+        input.reply_failed(refusal(
+            "a camera turn or move is still running; wait for its reply",
+            None,
+        ));
+        return;
+    }
+    let Ok((camera, photo)) = camera.single() else {
+        input.reply_failed(refusal("no camera", None));
+        return;
+    };
+    if player.single().unwrap_or_default() {
+        input.reply_failed(refusal(
+            "the player is out of world (loading): the camera looks at it from above",
+            None,
+        ));
+        return;
+    }
+    if let Some(refused) = refuse_hold(camera, &hold, &scenes) {
+        input.reply_failed(refused);
+        return;
+    }
+    if !photo {
+        requests.write(PhotoModeRequest::Enable(PhotoModeSource::Console));
+    }
+    let position = DclTranslation([command.x, command.y, command.z]).to_bevy_translation();
+    let look_at = look_at.map(|v| DclTranslation(v.to_array()).to_bevy_translation());
+    let rx = start_job(
+        &mut job,
+        Gesture::Pose {
+            position,
+            look_at,
+            fov: command.fov,
+            timeout,
+            elapsed: 0.0,
+            opened: !photo,
+            placed: false,
+        },
+    );
+    pending.push_receiver(rx, |r| r, input.take_responder());
+}
+
+/// The camera's yaw and pitch, in bevy's radians: the free camera's while photo mode holds the
+/// view, else the player camera's.
+fn angles(camera: &PrimaryCamera, photo: Option<&PhotoCamera>) -> Vec2 {
+    match photo {
+        Some(photo) => Vec2::new(photo.yaw.to_radians(), photo.pitch.to_radians()),
+        None => Vec2::new(camera.yaw, camera.pitch),
+    }
+}
+
+/// Turns the free camera to `yaw` and `pitch` (bevy's radians) at once: its follow target and the
+/// rendered camera both, so nothing is left to ease.
+fn turn_photo_camera(photo: &mut PhotoCamera, transform: &mut Transform, yaw: f32, pitch: f32) {
+    photo.yaw = yaw.to_degrees();
+    photo.pitch = pitch.to_degrees();
+    photo.target.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, photo.roll.to_radians());
+    transform.rotation = photo.target.rotation;
+}
+
+/// Places the free camera: at `position`, aimed at `look_at` (else keeping its orientation, roll
+/// included), with `fov` when given. The rendered camera is put there too, so the pose lands this
+/// frame rather than easing in, and the follow target takes over from here.
+fn place_photo_camera(
+    photo: &mut PhotoCamera,
+    transform: &mut Transform,
+    projection: &mut Projection,
+    position: Vec3,
+    look_at: Option<Vec3>,
+    fov: Option<f32>,
+) {
+    photo.target.translation = position;
+    photo.target.scale = Vec3::ONE;
+    photo.following = true;
+    let (yaw, pitch) = match look_at {
+        Some(point) => {
+            photo.roll = 0.0;
+            photo.tilt.current = 0.0;
+            photo.tilt.target = 0.0;
+            photo.tilt.velocity = 0.0;
+            aim_angles(point - position)
+        }
+        None => (photo.yaw.to_radians(), photo.pitch.to_radians()),
+    };
+    turn_photo_camera(photo, transform, yaw, pitch);
+    transform.translation = position;
+    transform.scale = Vec3::ONE;
+    if let Some(fov) = fov {
+        photo.fov.current = fov;
+        photo.fov.target = fov;
+        photo.fov.velocity = 0.0;
+    }
+    if let Projection::Perspective(perspective) = projection {
+        perspective.fov = photo.fov.current.to_radians();
+    }
+}
+
 /// Follows the turn each frame, before `update_camera`: asks the camera for this frame's share of
 /// a `/camera_look`, or, for a `/look_at`, for the yaw and pitch that aim it at the point from where
 /// it now stands (a third-person camera moves as it turns, so it is asked again each frame), and
-/// answers once the turn is done or the aim error has stopped changing.
+/// answers once the turn is done or the aim error has stopped changing. While photo mode holds the
+/// view the turn is written to the free camera itself. A `/set_camera_pose` waits for photo mode to
+/// open, places the free camera and answers once it is there; a `/set_camera_mode` into or out of
+/// the free camera answers once photo mode has followed.
+#[allow(clippy::type_complexity)]
 fn drive_camera(
+    mut commands: Commands,
     mut job: ResMut<CameraJob>,
     mut look: ResMut<SyntheticLook>,
     time: Res<Time>,
-    camera: Query<(&Transform, &PrimaryCamera, Has<PhotoMode>)>,
+    mut camera: Query<(
+        Entity,
+        &mut Transform,
+        &mut Projection,
+        &PrimaryCamera,
+        Option<&mut PhotoCamera>,
+        Has<SystemTween>,
+    )>,
     player: Query<&GlobalTransform, With<PrimaryUser>>,
 ) {
     let Some(current) = job.0.as_mut() else {
         return;
     };
-    let Ok((transform, camera, photo)) = camera.single() else {
+    let Ok((entity, mut transform, mut projection, camera, mut photo_camera, tweening)) =
+        camera.single_mut()
+    else {
         if let Some(job) = job.0.take() {
             job.reply.send(Err(refusal("no camera", None)));
         }
         return;
     };
+    let photo = photo_camera.is_some();
     let dt = time.delta_secs();
     let mut next = None;
     let answer = match &mut current.gesture {
@@ -632,15 +922,31 @@ fn drive_camera(
         } => {
             if *done {
                 Some(Ok(look_reply(
-                    *rate, *seconds, *applied, *start, transform, camera,
+                    *rate,
+                    *seconds,
+                    *applied,
+                    *start,
+                    &transform,
+                    camera,
+                    photo_camera.as_deref(),
                 )))
             } else {
                 *elapsed = (*elapsed + dt).min(*seconds);
                 let want = *rate * *elapsed;
                 let step = want - *applied;
                 *applied = want;
-                look.yaw += step.x;
-                look.pitch += step.y;
+                match photo_camera.as_deref_mut() {
+                    Some(photo) => {
+                        // the free camera turns right by decreasing its yaw too
+                        let now = angles(camera, Some(photo));
+                        let pitch = (now.y + step.y).clamp(-PHOTO_PITCH_LIMIT, PHOTO_PITCH_LIMIT);
+                        turn_photo_camera(photo, &mut transform, now.x - step.x, pitch);
+                    }
+                    None => {
+                        look.yaw += step.x;
+                        look.pitch += step.y;
+                    }
+                }
                 *done = *elapsed >= *seconds;
                 None
             }
@@ -664,7 +970,7 @@ fn drive_camera(
             let settled = *steady >= STEADY_FRAMES;
             if settled || *elapsed >= *timeout {
                 let aim = aim_reply(
-                    *target, error, settled, *frames, *timeout, transform, camera, photo,
+                    *target, error, settled, *frames, *timeout, &transform, camera, photo,
                 );
                 Some(match current.moved.take() {
                     Some(moved) => Ok(with_aim(moved, aim)),
@@ -672,9 +978,14 @@ fn drive_camera(
                 })
             } else {
                 let (yaw, pitch) = aim_angles(to_point);
-                // `update_camera` turns right by decreasing the yaw
-                look.yaw = -wrap(yaw - camera.yaw);
-                look.pitch = pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT) - camera.pitch;
+                match photo_camera.as_deref_mut() {
+                    Some(photo) => turn_photo_camera(photo, &mut transform, yaw, pitch),
+                    None => {
+                        // `update_camera` turns right by decreasing the yaw
+                        look.yaw = -wrap(yaw - camera.yaw);
+                        look.pitch = pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT) - camera.pitch;
+                    }
+                }
                 *frames += 1;
                 None
             }
@@ -734,6 +1045,86 @@ fn drive_camera(
                 }
             }
         }
+        Gesture::Pose {
+            position,
+            look_at,
+            fov,
+            timeout,
+            elapsed,
+            opened,
+            placed,
+        } => {
+            *elapsed += dt;
+            match photo_camera.as_deref_mut() {
+                None if *elapsed >= *timeout => Some(Err(refusal(
+                    format!(
+                        "photo mode did not open within {timeout} s: a scene camera took the \
+                         view or the player left the world"
+                    ),
+                    None,
+                ))),
+                None => None,
+                Some(photo) if !*placed => {
+                    if tweening {
+                        // the opening transition from first person; the pose lands at once instead
+                        commands.entity(entity).remove::<SystemTween>();
+                    }
+                    place_photo_camera(
+                        photo,
+                        &mut transform,
+                        &mut projection,
+                        *position,
+                        *look_at,
+                        *fov,
+                    );
+                    *placed = true;
+                    None
+                }
+                Some(_) => {
+                    let settled = transform.translation.distance(*position) <= POSE_METRES;
+                    (settled || *elapsed >= *timeout).then(|| {
+                        Ok(pose_reply(
+                            &transform,
+                            &projection,
+                            *position,
+                            *look_at,
+                            settled,
+                            *opened,
+                            *timeout,
+                        ))
+                    })
+                }
+            }
+        }
+        Gesture::Mode {
+            photo: want,
+            before,
+            elapsed,
+        } => {
+            *elapsed += dt;
+            // the transition into or out of photo mode eases the camera over; answer once it is over
+            if photo == *want && !tweening {
+                let after = mode_name(camera, photo);
+                Some(Ok(json!({
+                    "before": before,
+                    "after": after,
+                    "changed": *before != after,
+                })
+                .to_string()))
+            } else if *elapsed >= MODE_SECONDS {
+                Some(Err(refusal(
+                    if *want {
+                        "photo mode did not open: a scene camera took the view or the player \
+                         left the world"
+                    } else {
+                        "photo mode did not close"
+                    },
+                    None,
+                )))
+            } else {
+                None
+            }
+        }
     };
     if let Some(gesture) = next {
         current.gesture = gesture;
@@ -782,9 +1173,11 @@ fn look_reply(
     start: Vec2,
     transform: &Transform,
     camera: &PrimaryCamera,
+    photo: Option<&PhotoCamera>,
 ) -> String {
     // turned right is a falling yaw
-    let turned = Vec2::new(start.x - camera.yaw, camera.pitch - start.y);
+    let now = angles(camera, photo);
+    let turned = Vec2::new(start.x - now.x, now.y - start.y);
     let mut reply = json!({
         "deltaX": reply::round(rate.x.to_degrees()),
         "deltaY": reply::round(rate.y.to_degrees()),
@@ -798,7 +1191,9 @@ fn look_reply(
     });
     let short = (applied - turned).abs() * 180.0 / std::f32::consts::PI;
     let warning = (short.max_element() > 0.5).then(|| {
-        let cause = if (camera.pitch.abs() - PITCH_LIMIT).abs() < 1e-3 {
+        let cause = if photo.is_some() {
+            "the free camera's pitch clamp (straight up or down) stopped it"
+        } else if (camera.pitch.abs() - PITCH_LIMIT).abs() < 1e-3 {
             "the pitch clamp (85.7 degrees up or down) stopped it"
         } else if camera.scene_override.is_some() {
             "a scene camera's range held it back"
@@ -845,7 +1240,9 @@ fn aim_reply(
             error
         ))
     } else if error > AIM_TOLERANCE_DEGREES {
-        Some(if pitch.abs() > PITCH_LIMIT {
+        Some(if photo {
+            format!("the free camera settled {error:.1} degrees off the point")
+        } else if pitch.abs() > PITCH_LIMIT {
             format!(
                 "the pitch clamp (85.7 degrees up or down) keeps the point {error:.1} degrees off \
                  the view; first person or a farther stand reaches it"
@@ -859,6 +1256,45 @@ fn aim_reply(
     } else {
         None
     };
+    reply::add_warning(&mut reply, warning);
+    reply.to_string()
+}
+
+/// Where `/set_camera_pose` left the free camera.
+fn pose_reply(
+    transform: &Transform,
+    projection: &Projection,
+    position: Vec3,
+    look_at: Option<Vec3>,
+    settled: bool,
+    opened: bool,
+    timeout: f32,
+) -> String {
+    let fov = match projection {
+        Projection::Perspective(perspective) => Some(reply::round(perspective.fov.to_degrees())),
+        _ => None,
+    };
+    let mut reply = json!({
+        "position": Point::from_bevy(transform.translation),
+        "rotationEuler": dcl_euler(transform.rotation),
+        "fov": fov,
+        "mode": "free",
+        "settled": settled,
+        "opened": opened,
+    });
+    if let Some(point) = look_at {
+        reply["lookAt"] = json!(Point::from_bevy(point));
+        reply["aimErrorDegrees"] = json!(reply::round(aim_error_degrees(
+            transform.forward().as_vec3(),
+            point - transform.translation
+        )));
+    }
+    let warning = (!settled).then(|| {
+        format!(
+            "timed out after {timeout} s: the camera is {:.2} m from the point asked for",
+            transform.translation.distance(position)
+        )
+    });
     reply::add_warning(&mut reply, warning);
     reply.to_string()
 }
@@ -964,6 +1400,52 @@ mod tests {
         let (yaw, pitch) = aim_angles(direction);
         let forward = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::NEG_Z;
         assert!(aim_error_degrees(forward, direction) < 0.01);
+    }
+
+    #[test]
+    fn placing_the_free_camera_lands_it_aimed_this_frame() {
+        let mut photo = PhotoCamera::new(Transform::IDENTITY, 60.0, PhotoModeSource::Console);
+        photo.roll = 15.0;
+        let mut transform = Transform::IDENTITY;
+        let mut projection = Projection::Perspective(PerspectiveProjection::default());
+        let position = Vec3::new(10.0, 5.0, -10.0);
+        let point = Vec3::new(10.0, 1.0, -20.0);
+        place_photo_camera(
+            &mut photo,
+            &mut transform,
+            &mut projection,
+            position,
+            Some(point),
+            Some(40.0),
+        );
+        assert_eq!(transform.translation, position);
+        assert_eq!(photo.target, transform);
+        assert!(photo.following);
+        assert_eq!(photo.roll, 0.0);
+        assert!(aim_error_degrees(transform.forward().as_vec3(), point - position) < 0.01);
+        assert!(close(photo.pitch, -21.8014));
+        assert_eq!(photo.fov.current, 40.0);
+        let Projection::Perspective(perspective) = &projection else {
+            panic!("still perspective");
+        };
+        assert!(close(perspective.fov, 40f32.to_radians()));
+        // without a point the orientation and the fov are kept
+        let mut kept = PhotoCamera::new(
+            Transform::from_rotation(Quat::from_rotation_y(1.0)),
+            60.0,
+            PhotoModeSource::Console,
+        );
+        place_photo_camera(
+            &mut kept,
+            &mut transform,
+            &mut projection,
+            Vec3::ONE,
+            None,
+            None,
+        );
+        assert!(close(kept.yaw, 1f32.to_degrees()));
+        assert_eq!(kept.fov.current, 60.0);
+        assert_eq!(transform.translation, Vec3::ONE);
     }
 
     #[test]

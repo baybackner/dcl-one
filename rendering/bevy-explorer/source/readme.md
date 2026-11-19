@@ -397,8 +397,12 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   `modeChangeAllowed` (with `heldBy` naming the `CameraModeArea` or `VirtualCamera`) and
   `pointerLocked`. `/move_to x y z [--look-at x y z]` moves the player straight there, as a
   scene's `movePlayerTo` does, and answers once it has settled, with the aim's `aimErrorDegrees`
-  when it looks at a point. `/set_camera_mode first_person|third_person` switches the view and is
-  refused, naming the area or camera, while a scene holds it. `/get_reticle` says what the pointer
+  when it looks at a point. `/set_camera_mode first_person|third_person|free` switches the view
+  (`free` is photo mode's camera, which stays put while the player moves) and is refused, naming
+  the area or camera, while a scene holds it. `/set_camera_pose x y z [--look-at x y z] [--fov F]`
+  places the free camera at a world point, opening it when needed, and answers with its pose and
+  `aimErrorDegrees`; `/look_at` and `/camera_look` turn the free camera while it holds the view.
+  `/get_reticle` says what the pointer
   ray reaches now (`kind`, `crdtEntityId`, `hitPoint`, `withinRange`, `hoverText`) and through
   which cursor (`cursorLocked`, `rayFromScreenCenter`, `cursor` with `screen`). `/sweep_pointer
   --entity <id> | --at x y z --dx D --dy D --seconds S` presses the pointer on a target, turns the

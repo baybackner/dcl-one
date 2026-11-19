@@ -183,6 +183,22 @@ export interface LookAtReport {
 
 export type CameraMode = 'first_person' | 'third_person' | 'cinematic' | 'free'
 
+/** What `/set_camera_pose` reports: where the free camera landed. */
+export interface CameraPoseReport {
+  position: { x: number; y: number; z: number }
+  rotationEuler: Euler
+  /** vertical, in degrees */
+  fov: number | null
+  mode: 'free'
+  /** the camera is within 0.1 m of the point asked for */
+  settled: boolean
+  /** this call opened photo mode */
+  opened: boolean
+  lookAt?: { x: number; y: number; z: number }
+  aimErrorDegrees?: number
+  warning?: string
+}
+
 /** What `/player_state` reports. Positions and velocity are Decentraland world coordinates. */
 export interface PlayerState {
   position: { x: number; y: number; z: number }
@@ -1805,8 +1821,23 @@ export class Explorer {
   }
 
   /** Switches the camera; rejects with the refusal while a scene holds it. */
-  setCameraMode(mode: 'first_person' | 'third_person'): Promise<{ before: CameraMode; after: CameraMode; changed: boolean }> {
+  /** Switches the camera; `free` opens the free camera (photo mode's), the other two close it. */
+  setCameraMode(mode: 'first_person' | 'third_person' | 'free'): Promise<{ before: CameraMode; after: CameraMode; changed: boolean }> {
     return this.json(`/set_camera_mode ${mode}`)
+  }
+
+  /** Places the free camera at a world point, opening it when needed; with `lookAt`, aims it there. */
+  setCameraPose(
+    x: number,
+    y: number,
+    z: number,
+    options: { lookAt?: [number, number, number]; fov?: number; timeoutSeconds?: number } = {}
+  ): Promise<CameraPoseReport> {
+    let line = `/set_camera_pose ${x} ${y} ${z}`
+    if (options.lookAt) line += ` --look-at ${options.lookAt.join(' ')}`
+    if (options.fov !== undefined) line += ` --fov ${options.fov}`
+    if (options.timeoutSeconds !== undefined) line += ` --timeout-seconds ${options.timeoutSeconds}`
+    return this.json<CameraPoseReport>(line)
   }
 
   getReticle(): Promise<ReticleReport> {

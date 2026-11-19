@@ -607,6 +607,8 @@ The HUD and input:
   has been steady for 5 frames, or after `--timeout-seconds` (3 by default, `settled:false`), with
   `target`, `aimErrorDegrees`, `cameraRotationEuler`, `cameraPosition`, `mode`, `settled`,
   `frames` and a `warning` above 2° naming the rig limit (the pitch clamp, the third-person orbit).
+  While the free camera holds the view (`mode` `free`) it and `/camera_look` turn the free camera
+  itself, from where it stands, with its own clamp (straight up or down).
 - `/player_state`: JSON `position`, `rotationEuler`, `parcel`, `velocity` (Decentraland axes),
   `grounded` (within 0.2 m of the ground), `outOfWorld`, `camera` (`mode`: `first_person`,
   `third_person`, `cinematic` under a scene's camera, `free` in photo mode; `position`,
@@ -614,11 +616,11 @@ The HUD and input:
   `VirtualCamera` holds the camera) and `pointerLocked` (the scene's pointer lock). Euler angles
   everywhere are Decentraland's, as a scene reads them: degrees 0 to 360, `x` the pitch with
   looking down positive, `y` the yaw clockwise from north. The camera commands refuse
-  (`{"refused", "cause"}`) while another turn runs, in photo mode, out of world, while the HUD
-  holds input, and under a scene's cinematic camera (`/camera_look` only when it allows no manual
-  rotation). `/world_state` stays the arrival and position read. `camera.heldBy` names what
-  holds the camera (as `/set_camera_mode`'s refusal does) and `camera.pointerLocked` repeats
-  `pointerLocked`.
+  (`{"refused", "cause"}`) while another turn runs, out of world, and, outside the free camera,
+  while the HUD holds input and under a scene's cinematic camera (`/camera_look` only when it
+  allows no manual rotation). `/world_state` stays the arrival and position read. `camera.heldBy`
+  names what holds the camera (as `/set_camera_mode`'s refusal does) and `camera.pointerLocked`
+  repeats `pointerLocked`.
 - `/move_to x y z [--look-at x y z] [--timeout-seconds S]`: move the player straight to a world
   point through the engine's own `movePlayerTo` path (as a console request, so it is not bound to
   a scene's parcels, and the height is kept at 0 or more), then wait until the player has been
@@ -626,12 +628,26 @@ The HUD and input:
   `parcel`, `settled`, `cameraRotationEuler` and `cameraPosition`. With `--look-at` the player
   faces the point and the camera is aimed at it as `/look_at` aims it; the reply adds `lookAt`,
   `aimErrorDegrees`, `aimSettled`, `frames`, `mode` and a rig-limit `warning`.
-- `/set_camera_mode first_person|third_person`: switch the player's camera, as zooming all the way
-  in or back out does (third person keeps the player's own zoom, or the default distance coming
-  from first person); JSON `before`, `after`, `changed`. Refused (`{"refused", "cause"}`) while a
-  scene holds the camera, naming it: a `CameraModeArea` with `sceneId`, `parcel`, `crdtEntityId`,
-  `forcedMode` and `size`, or a `VirtualCamera` with its `crdtEntityId`; in photo mode; and for
-  `drone` and `free`, which this client does not have.
+- `/set_camera_mode first_person|third_person|free`: switch the player's camera, as zooming all
+  the way in or back out does (third person keeps the player's own zoom, or the default distance
+  coming from first person), or to the free camera: photo mode's, which stays where it is while
+  the player moves and is flown with the movement keys (within photo mode's reach of the player)
+  or placed with `/set_camera_pose`. First or third person closes the free camera. JSON `before`,
+  `after`, `changed`, answered once the free camera has opened or closed (at most 3 s). Refused
+  (`{"refused", "cause"}`) while a scene holds the camera, naming it: a `CameraModeArea` with
+  `sceneId`, `parcel`, `crdtEntityId`, `forcedMode` and `size`, or a `VirtualCamera` with its
+  `crdtEntityId`; and for `drone`, which this client does not have.
+- `/set_camera_pose x y z [--look-at x y z] [--fov F] [--timeout-seconds S]`: place the free
+  camera at a world point (Decentraland coordinates), opening it when another mode holds the
+  view, aimed at `--look-at` (else keeping its orientation) and with the vertical `--fov` in
+  degrees (10 to 120; unchanged by default). The pose lands at once, through walls, and the
+  camera stays put while the player moves, so a scene is swept from any vantage without walking
+  the avatar; the view is a debug one, not what a player sees, so a screenshot that stands for
+  the player's view is taken back in first or third person. JSON `position`, `rotationEuler`,
+  `fov`, `mode` (`free`), `settled` (within 0.1 m of the point, else a `warning` after
+  `--timeout-seconds`, 5 by default), `opened` (this call opened photo mode) and, with
+  `--look-at`, `lookAt` and `aimErrorDegrees`. Refused while a scene holds the camera, naming it
+  as `/set_camera_mode` does, out of world, and while another camera turn or move runs.
 - `/get_reticle` (`src/automation/reticle.rs`): what the pointer ray reaches now, read from the
   pointer pipeline without pressing or hovering: `available`, `cursorLocked` (the window holds the
   cursor), `rayFromScreenCenter`, `aimedByCommand` (a pointer command's aim steers the ray),
