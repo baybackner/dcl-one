@@ -824,7 +824,12 @@ pub(crate) fn apply_movement(
 
     info.0.requested_velocity = Some(Vector3::world_vec_from_vec3(&movement.component.velocity));
     info.0.actual_velocity = Some(Vector3::world_vec_from_vec3(
-        &((position - transform.translation.as_dvec3()) / time_res.delta_secs_f64()).as_vec3(),
+        &actual_velocity(
+            transform.translation.as_dvec3(),
+            position,
+            time_res.delta_secs_f64(),
+        )
+        .as_vec3(),
     ));
     *last_step = LastMovementStep {
         requested_velocity: info.0.requested_velocity,
@@ -849,6 +854,17 @@ pub(crate) fn apply_movement(
     }
     dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
     end_jump_on_landing(&mut dynamic_state);
+}
+
+/// The velocity of a step that moved the avatar from `from` to `to` in `delta` seconds. A frame
+/// with no elapsed time (the first) reports none, though the ground snap can still move the
+/// avatar in it.
+fn actual_velocity(from: DVec3, to: DVec3, delta: f64) -> DVec3 {
+    if delta > 0.0 {
+        (to - from) / delta
+    } else {
+        DVec3::ZERO
+    }
 }
 
 /// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
@@ -1372,6 +1388,28 @@ mod tests {
 
     /// [`walk`] with the scene velocity changing: each phase's velocity for its number of steps.
     fn walk_phases(boxes: &[(Vec3, Vec3, Quat)], start: Vec3, phases: &[(Vec3, usize)]) -> Vec3 {
+        let (mut app, player) = movement_app(boxes, start);
+        for &(velocity, steps) in phases {
+            set_velocity(&mut app, player, velocity);
+            for _ in 0..steps {
+                app.update();
+            }
+        }
+        app.world().get::<Transform>(player).unwrap().translation
+    }
+
+    fn set_velocity(app: &mut App, player: Entity, velocity: Vec3) {
+        app.world_mut()
+            .get_mut::<ActivePlayerComponent<AvatarMovement>>(player)
+            .unwrap()
+            .component
+            .velocity = velocity;
+    }
+
+    /// An app running `apply_movement` over the floor (top at y 0) and the given boxes (centre,
+    /// half extents, rotation) in steps of 20 ms after the first, which has no elapsed time, and
+    /// its player, standing still at `start`.
+    fn movement_app(boxes: &[(Vec3, Vec3, Quat)], start: Vec3) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(TimePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(
@@ -1411,17 +1449,7 @@ mod tests {
                 Transform::from_translation(start),
             ))
             .id();
-        for &(velocity, steps) in phases {
-            app.world_mut()
-                .get_mut::<ActivePlayerComponent<AvatarMovement>>(player)
-                .unwrap()
-                .component
-                .velocity = velocity;
-            for _ in 0..steps {
-                app.update();
-            }
-        }
-        app.world().get::<Transform>(player).unwrap().translation
+        (app, player)
     }
 
     /// A ramp rising along +x at `degrees`, its surface from x 1 at y 0.
@@ -1485,6 +1513,19 @@ mod tests {
     fn an_avatar_standing_just_over_the_ground_settles_onto_it() {
         let end = walk(&[], Vec3::new(0.0, 0.03, 0.0), Vec3::ZERO);
         assert!(end.y < 1e-3, "hovers at {end}");
+    }
+
+    #[test]
+    fn settling_in_the_first_frame_reports_no_velocity() {
+        let (mut app, player) = movement_app(&[], Vec3::new(0.0, 0.03, 0.0));
+        app.update();
+        let end = app.world().get::<Transform>(player).unwrap().translation;
+        assert!(end.y < 1e-3, "hovers at {end}");
+        let step = *app.world().resource::<LastMovementStep>();
+        assert_eq!(
+            step.actual_velocity,
+            Some(Vector3::world_vec_from_vec3(&Vec3::ZERO))
+        );
     }
 
     #[test]
