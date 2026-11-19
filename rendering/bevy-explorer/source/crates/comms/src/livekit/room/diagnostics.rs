@@ -456,6 +456,7 @@ mod tests {
             crate::automation::CommsAutomationPlugin,
         ))
         .init_resource::<common::structs::MicState>()
+        .init_resource::<common::structs::AudioSettings>()
         .init_resource::<wallet::Wallet>()
         .add_event::<crate::global_crdt::ChatEvent>()
         .insert_resource(State::new(ConnectionAvailability::Available))
