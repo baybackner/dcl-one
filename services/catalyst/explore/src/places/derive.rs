@@ -1329,12 +1329,10 @@ mod tests {
         assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
         assert_eq!(kinds(id_a.clone()).await, ["rating_downgrade_refused"]);
 
-        // A scene that declares no rating keeps the held one, with no notice.
         upsert_page(&pool, deploy(&a, &[&a, &b], None, 3), site)
             .await
             .unwrap();
         assert_eq!(rating(id_a.clone()).await.as_deref(), Some("R"));
-        assert_eq!(kinds(id_a.clone()).await.len(), 1);
 
         // A raise moves the operator's rating, so a re-inserted row keeps it.
         operator(id_a.clone(), "T").await;
@@ -1373,6 +1371,11 @@ mod tests {
             ["rating_downgrade_refused", "rating_upgraded"],
             "a new row with nothing it replaces reports nothing"
         );
+        // A scene that declares no rating keeps the stored one, with no notice.
+        upsert_page(&pool, deploy(&c, &[&c], None, 8), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(id_c.clone()).await.as_deref(), Some("A"));
         assert!(kinds(id_c).await.is_empty());
     }
 
