@@ -187,7 +187,9 @@ mod tests {
     // command runs: the reply still carries the step that moved the player.
     #[test]
     fn a_moving_step_reports_its_actual_velocity_after_the_next_broadcast() {
-        use crate::avatar_movement::{apply_movement, broadcast_movement_info, CentralCollisions};
+        use crate::avatar_movement::{
+            apply_movement, broadcast_movement_info, CentralCollisions, RiserPush,
+        };
         use bevy::time::{TimePlugin, TimeUpdateStrategy};
         use common::structs::{EngineMovementControl, SceneDrivenAnimationFeedback};
 
@@ -202,6 +204,7 @@ mod tests {
             .init_resource::<LastMovementStep>()
             .init_resource::<CentralCollisions>()
             .init_resource::<SceneDrivenAnimationFeedback>()
+            .register_required_components::<PrimaryUser, RiserPush>()
             .insert_resource(EngineMovementControl {
                 // accept the test's movement, initiated at time zero
                 accept_movement_after: -1.0,

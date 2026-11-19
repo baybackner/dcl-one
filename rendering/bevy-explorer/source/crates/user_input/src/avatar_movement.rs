@@ -37,7 +37,7 @@ use ipfs::{
 
 use scene_runner::{
     initialize_scene::PARCEL_SIZE,
-    renderer_context::RendererSceneContext,
+    renderer_context::{RendererSceneContext, SceneTickTiming},
     update_world::{
         avatar_modifier_area::InputModifier,
         mesh_collider::{
@@ -72,6 +72,7 @@ impl Plugin for AvatarMovementPlugin {
         app.init_resource::<AvatarMovementInfo>();
         app.init_resource::<LastMovementStep>();
         app.register_required_components::<PrimaryUser, LocomotionSpeeds>();
+        app.register_required_components::<PrimaryUser, RiserPush>();
         app.register_required_components::<RendererSceneContext, MovementPeriod>();
         app.init_resource::<CollisionPush>();
         app.init_resource::<CentralCollisions>();
@@ -636,13 +637,14 @@ pub fn apply_rotation(
     }
 }
 
-/// After each pass of the scene loop, sets the movement scene's `redispatch_rotation`: the
+/// After each pass of the scene loop, sets the movement scene's
+/// [`SceneTickTiming::redispatch_rotation`]: the
 /// rotation [`apply_rotation`] will set from its late reply that landed in this frame, for its
 /// re-dispatch, which the next pass sends before that. Runs after the pass's `AvatarMovement`
 /// updates are applied.
 fn stage_redispatch_rotation(
     player: Query<&ActivePlayerComponent<AvatarMovement>, With<PrimaryUser>>,
-    mut scenes: Query<&mut RendererSceneContext>,
+    mut scenes: Query<(&RendererSceneContext, &mut SceneTickTiming)>,
     movements: Query<&AvatarMovement>,
     movement_control: Res<EngineMovementControl>,
     frame: Res<FrameCount>,
@@ -650,25 +652,31 @@ fn stage_redispatch_rotation(
     let Ok(active) = player.single() else {
         return;
     };
-    let Ok(mut context) = scenes.get_mut(active.scene()) else {
+    let Ok((context, mut tick_timing)) = scenes.get_mut(active.scene()) else {
         return;
     };
-    let applied = context.tick_timing.late_reply_in(frame.0)
+    let applied = tick_timing.late_reply_in(frame.0)
         && !movement_suppressed(&movement_control, context.reply_sent);
-    context.redispatch_rotation = context
+    tick_timing.redispatch_rotation = context
         .bevy_entity(SceneEntityId::PLAYER)
         .and_then(|entity| movements.get(entity).ok())
         .filter(|_| applied)
         .map(AvatarMovement::rotation);
 }
 
+/// How far the player's slow move has pushed against a riser it has not stepped onto yet, up to
+/// [`STEP_PUSH`]. Kept from frame to frame by [`apply_movement`].
+#[derive(Component, Default)]
+pub(crate) struct RiserPush(f64);
+
 #[allow(clippy::too_many_arguments)]
-pub fn apply_movement(
+pub(crate) fn apply_movement(
     mut player: Query<
         (
             &mut Transform,
             &mut AvatarDynamicState,
             &ActivePlayerComponent<AvatarMovement>,
+            &mut RiserPush,
         ),
         With<PrimaryUser>,
     >,
@@ -677,13 +685,14 @@ pub fn apply_movement(
     mut info: ResMut<AvatarMovementInfo>,
     mut last_step: ResMut<LastMovementStep>,
     mut jumping: Local<bool>,
-    mut step_push: Local<f64>,
     movement_control: Res<EngineMovementControl>,
     central: Res<CentralCollisions>,
 ) {
-    let Ok((mut transform, mut dynamic_state, movement)) = player.single_mut() else {
+    let Ok((mut transform, mut dynamic_state, movement, mut riser_push)) = player.single_mut()
+    else {
         return;
     };
+    let step_push = &mut riser_push.0;
 
     info.0.step_time = time_res.delta_secs();
 
@@ -799,25 +808,13 @@ pub fn apply_movement(
         *step_push = 0.0;
     }
 
-    // ground snap: a walking step that asked for no rise follows the ground down when it falls
-    // away by at most GROUND_SNAP_DROP beyond the slope of that ground or of the ground it
-    // followed, over the distance moved
+    // a walking step that asked for no rise follows the ground down
     if grounded
         && movement.component.velocity.y <= 0.0
         && !movement_control.deliberate_penetration
         && movement_control.suppress_clipping.is_empty()
     {
-        let moved = (position - start).with_y(0.0).length();
-        let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
-        if let Some((drop, normal)) = cast_down(&mut scenes, disabled, position, reach) {
-            let slope = normal.with_y(0.0).length() / normal.y;
-            if walkable(normal)
-                && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
-                && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope.max(followed)
-            {
-                position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
-            }
-        }
+        position = snap_to_ground(&mut scenes, disabled, start, position, followed);
     }
 
     debug!(
@@ -914,6 +911,30 @@ fn cast_down(
         }
     }
     hit
+}
+
+/// Ground snap: the end `position` of a walking step from `start`, moved down onto the ground
+/// when the ground falls away by at most [`GROUND_SNAP_DROP`] beyond the slope of that ground, or
+/// of the steepest ground the step `followed`, over the distance moved.
+fn snap_to_ground(
+    scenes: &mut Query<(Entity, &mut SceneColliderData)>,
+    disabled: &HashMap<Entity, HashSet<ColliderId>>,
+    start: DVec3,
+    mut position: DVec3,
+    followed: f64,
+) -> DVec3 {
+    let moved = (position - start).with_y(0.0).length();
+    let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
+    if let Some((drop, normal)) = cast_down(scenes, disabled, position, reach) {
+        let slope = normal.with_y(0.0).length() / normal.y;
+        if walkable(normal)
+            && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
+            && drop <= f64::from(GROUND_SNAP_DROP) + moved * slope.max(followed)
+        {
+            position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
+        }
+    }
+    position
 }
 
 /// Height over the ground below which an avatar standing still is not settled onto it.
@@ -1359,6 +1380,7 @@ mod tests {
             .init_resource::<AvatarMovementInfo>()
             .init_resource::<LastMovementStep>()
             .init_resource::<CentralCollisions>()
+            .register_required_components::<PrimaryUser, RiserPush>()
             .insert_resource(EngineMovementControl {
                 accept_movement_after: -1.0,
                 ..default()
@@ -1601,17 +1623,19 @@ mod tests {
                     .get_mut::<AvatarMovement>(scene_player)
                     .unwrap()
                     .orientation = orientation;
-                let mut context = world.get_mut::<RendererSceneContext>(scene).unwrap();
                 let sent = SentTiming {
                     at: now,
                     frame: frame - 1,
                 };
-                context.tick_timing.reply = Some(ReplyTiming {
+                world.get_mut::<SceneTickTiming>(scene).unwrap().reply = Some(ReplyTiming {
                     sent,
                     at: now,
                     frame,
                 });
-                context.reply_sent = f64::from(frame - 1);
+                world
+                    .get_mut::<RendererSceneContext>(scene)
+                    .unwrap()
+                    .reply_sent = f64::from(frame - 1);
                 let mut active = world
                     .get_mut::<ActivePlayerComponent<AvatarMovement>>(player)
                     .unwrap();
@@ -1623,7 +1647,7 @@ mod tests {
                 .unwrap();
             let world = app.world();
             let sent = yaw(world
-                .get::<RendererSceneContext>(scene)
+                .get::<SceneTickTiming>(scene)
                 .unwrap()
                 .player_rotation_to_send(frame, world.get::<Transform>(player).unwrap().rotation));
             in_flight = Some(if frame < turning {

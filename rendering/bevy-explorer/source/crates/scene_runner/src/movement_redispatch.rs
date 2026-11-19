@@ -7,7 +7,7 @@
 //! before the deadline covers the 90th percentile of the scene's recent ticks.
 //!
 //! The re-dispatch is sent the player's rotation as the late reply sets it
-//! (`RendererSceneContext::redispatch_rotation`): the engine applies that reply's orientation
+//! (`SceneTickTiming::redispatch_rotation`): the engine applies that reply's orientation
 //! only after the scene loop, and the scene turns from the rotation it is sent, so from the
 //! player's current rotation it would turn again from the one before that reply. Every other
 //! frame would then continue a different chain of replies, and the avatar would alternate
@@ -18,16 +18,16 @@ use std::{collections::VecDeque, time::Duration};
 use web_time::Instant;
 
 /// Ticks the percentile is taken over.
-pub const TICK_SAMPLES: usize = 32;
+const TICK_SAMPLES: usize = 32;
 
 /// The movement scene's recent tick times, dispatch to reply.
 #[derive(Debug, Default)]
-pub struct MovementTickTimes {
+pub(crate) struct MovementTickTimes {
     samples: VecDeque<Duration>,
 }
 
 impl MovementTickTimes {
-    pub fn record(&mut self, tick: Duration) {
+    pub(crate) fn record(&mut self, tick: Duration) {
         if self.samples.len() == TICK_SAMPLES {
             self.samples.pop_front();
         }
@@ -35,7 +35,7 @@ impl MovementTickTimes {
     }
 
     /// The 90th percentile (nearest rank) of the recorded ticks; None before the first.
-    pub fn p90(&self) -> Option<Duration> {
+    fn p90(&self) -> Option<Duration> {
         if self.samples.is_empty() {
             return None;
         }
@@ -52,7 +52,7 @@ impl MovementTickTimes {
     /// The percentile cannot judge it there: a tick that missed its frame counts as lasting
     /// until its loop ended, so once over a tenth of the recent ticks miss, the percentile is at
     /// least a whole loop, more than any loop has left after its first poll.
-    pub fn redispatch_fits(&self, left: Duration, first_poll: bool) -> bool {
+    pub(crate) fn redispatch_fits(&self, left: Duration, first_poll: bool) -> bool {
         !left.is_zero() && (first_poll || self.p90().is_none_or(|p90| left >= p90))
     }
 }
@@ -61,7 +61,7 @@ impl MovementTickTimes {
 /// it runs, so a reply first seen at a loop's first poll, from a tick dispatched in an earlier
 /// frame, arrived some time after the previous loop ended: it counts as taking until then, the
 /// least it took.
-pub fn tick_time(
+pub(crate) fn tick_time(
     sent: Instant,
     received: Instant,
     first_poll_of_later_frame: bool,
@@ -154,6 +154,7 @@ mod tests {
                 at,
                 frame,
             }),
+            redispatch_rotation: None,
         };
         // the reply of frame 6's tick landed in frame 7
         assert!(replied(6, 7).late_reply_in(7));

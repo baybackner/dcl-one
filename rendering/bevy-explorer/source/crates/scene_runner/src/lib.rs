@@ -81,7 +81,7 @@ pub use common::bounds_calc;
 pub mod gltf_resolver;
 pub mod initialize_scene;
 pub mod load_timing;
-pub mod movement_redispatch;
+mod movement_redispatch;
 pub mod permissions;
 pub mod portables;
 pub mod primary_entities;
@@ -120,9 +120,9 @@ pub struct SceneUpdates {
     /// but still occupy slots, preventing non-priority scenes from running.
     pub priority_scenes: HashMap<&'static str, Entity>,
     /// The movement controller's recent tick times, for its re-dispatch on a late reply.
-    pub movement_ticks: movement_redispatch::MovementTickTimes,
+    pub(crate) movement_ticks: movement_redispatch::MovementTickTimes,
     /// When the previous frame's scene loop ended.
-    pub previous_loop_end: Instant,
+    pub(crate) previous_loop_end: Instant,
     /// Replies have been polled in this frame's scene loop.
     loop_polled: bool,
 }
@@ -1267,6 +1267,7 @@ fn send_scene_updates(
     mut scenes: Query<(
         Entity,
         &mut RendererSceneContext,
+        &mut renderer_context::SceneTickTiming,
         &GlobalTransform,
         Has<SuperUserScene>,
         Option<&mut scene_traffic::SceneTraffic>,
@@ -1368,7 +1369,8 @@ fn send_scene_updates(
 
     updates.scene_queue.pop_front();
 
-    let (_, mut context, scene_transform, is_super, traffic) = scenes.get_mut(ent).unwrap();
+    let (_, mut context, mut tick_timing, scene_transform, is_super, traffic) =
+        scenes.get_mut(ent).unwrap();
 
     // only live scenes are queued, so this only fails if the scene broke this frame
     let Some(sender) = context.sender().cloned() else {
@@ -1380,7 +1382,7 @@ fn send_scene_updates(
     // generate updates for camera and player
     let mut player_transform = player.single().copied().unwrap_or_default();
     player_transform.rotation =
-        context.player_rotation_to_send(engine_info.frame.0, player_transform.rotation);
+        tick_timing.player_rotation_to_send(engine_info.frame.0, player_transform.rotation);
     for (mut affine, id, is_player) in [
         (
             player_transform.compute_affine(),
@@ -1551,7 +1553,7 @@ fn send_scene_updates(
     } else {
         context.set_in_flight(true);
         context.last_sent = now;
-        context.tick_timing.sent = Some(renderer_context::SentTiming {
+        tick_timing.sent = Some(renderer_context::SentTiming {
             at: Instant::now(),
             frame: engine_info.frame.0,
         });
@@ -1567,6 +1569,7 @@ fn receive_scene_updates(
     mut commands: Commands,
     mut updates: ResMut<SceneUpdates>,
     mut scenes: Query<&mut RendererSceneContext>,
+    mut tick_timings: Query<&mut renderer_context::SceneTickTiming>,
     crdt_interfaces: Res<CrdtExtractors>,
     frame: Res<FrameCount>,
     mut rpc_call_events: EventWriter<RpcCallEvent>,
@@ -1678,23 +1681,26 @@ fn receive_scene_updates(
                             }
                             context.total_runtime = runtime.0;
                             context.last_update_frame = frame.0;
-                            context.tick_timing.reply = context.tick_timing.sent.map(|sent| {
-                                renderer_context::ReplyTiming {
-                                    sent,
-                                    at: Instant::now(),
-                                    frame: frame.0,
-                                }
-                            });
                             // with at most one tick in flight, this reply's tick is the last sent
                             context.reply_sent = context.last_sent;
-                            if Some(root) == movement_scene {
-                                redispatch = movement_redispatch_due(
-                                    &mut updates,
-                                    &context,
-                                    first_poll,
-                                    time.elapsed_secs_f64(),
-                                )
-                                .then_some(root);
+                            // a context requires its timing, so this always holds
+                            if let Ok(mut tick_timing) = tick_timings.get_mut(root) {
+                                tick_timing.reply =
+                                    tick_timing.sent.map(|sent| renderer_context::ReplyTiming {
+                                        sent,
+                                        at: Instant::now(),
+                                        frame: frame.0,
+                                    });
+                                if Some(root) == movement_scene {
+                                    redispatch = movement_redispatch_due(
+                                        &mut updates,
+                                        &context,
+                                        &tick_timing,
+                                        first_poll,
+                                        time.elapsed_secs_f64(),
+                                    )
+                                    .then_some(root);
+                                }
                             }
                             // extend (not assign) so renderer-side births (the inspector's /new_entity
                             // adds the freshly-allocated ids straight to `nascent`) aren't clobbered by
@@ -1786,10 +1792,11 @@ fn receive_scene_updates(
 fn movement_redispatch_due(
     updates: &mut SceneUpdates,
     context: &RendererSceneContext,
+    tick_timing: &renderer_context::SceneTickTiming,
     first_poll: bool,
     now: f64,
 ) -> bool {
-    let Some(reply) = context.tick_timing.reply else {
+    let Some(reply) = tick_timing.reply else {
         return false;
     };
     let late = reply.frame != reply.sent.frame;
