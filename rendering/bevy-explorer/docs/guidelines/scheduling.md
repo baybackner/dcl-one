@@ -55,8 +55,9 @@ The capped tier runs the phases one request at a time, so its budget can stop be
 
 `run_scene_loop` runs a separate `Schedule` (`SceneLoopSchedule`) repeatedly inside the frame
 budget. It is also the frame pacer on native: the budget is one frame at the monitor refresh
-rate under vsync, or at the configured fps target, and after the loop the thread spin-sleeps to
-the deadline.
+rate under vsync (60 fps when the display reports none, always on the web), or at the configured
+fps target, and after the loop the thread spin-sleeps to the deadline. A session fps cap applies
+in either case; under vsync it only lowers the rate.
 
 Each pass of the loop runs four chained sets (`SceneLoopSets`):
 

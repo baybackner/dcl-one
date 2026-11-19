@@ -125,6 +125,7 @@ pub(super) fn performance_state(
             "frameMs": tenths(time.delta_secs_f64() * 1000.0),
             "fps": fps.map(f64::round),
             "targetFps": session.fps_target(&config),
+            "vsync": config.graphics.vsync,
             "overrideFps": session.fps_target,
             "limit30": session.fps_target == Some(30),
             "gpuFrameMs": gpu_ms.map(tenths),

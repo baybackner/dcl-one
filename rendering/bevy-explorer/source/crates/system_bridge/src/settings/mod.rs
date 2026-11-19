@@ -355,7 +355,7 @@ pub use system_api_types::{NamedVariant, SettingInfo};
 pub struct Setting {
     pub info: SettingInfo,
     apply: Option<
-        Box<dyn Fn(&mut AppConfig, f32) -> Result<f32, anyhow::Error> + Send + Sync + 'static>,
+        Box<dyn Fn(&mut AppConfig, f32) -> Result<(), anyhow::Error> + Send + Sync + 'static>,
     >,
     /// The displayed value for the current config, for settings changed outside `set_value`.
     load: Box<dyn Fn(&AppConfig) -> f32 + Send + Sync + 'static>,
@@ -386,7 +386,7 @@ impl Settings {
             .apply
             .take()
             .unwrap();
-        (apply)(config, value)?;
+        let applied = (apply)(config, value);
         let setting = self
             .settings
             .iter_mut()
@@ -394,6 +394,7 @@ impl Settings {
             .unwrap();
 
         setting.apply = Some(apply);
+        applied?;
         // a value can disable another setting; the next `GetSettings` may be answered before
         // `refresh_settings` runs
         self.refresh(config);
@@ -424,10 +425,9 @@ impl Settings {
                 disabled: S::is_disabled(config),
             },
             apply: Some(Box::new(
-                |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
-                    let new_value = S::from_int((value / S::scale()).round() as i32);
-                    new_value.save(config);
-                    Ok(new_value.value() as f32 * S::scale())
+                |config: &mut AppConfig, value: f32| -> Result<(), anyhow::Error> {
+                    S::from_int((value / S::scale()).round() as i32).save(config);
+                    Ok(())
                 },
             )),
             load: Box::new(|config: &AppConfig| S::load(config).value() as f32 * S::scale()),
@@ -468,12 +468,12 @@ impl Settings {
                 disabled: S::is_disabled(config),
             },
             apply: Some(Box::new(
-                |config: &mut AppConfig, value: f32| -> Result<f32, anyhow::Error> {
+                |config: &mut AppConfig, value: f32| -> Result<(), anyhow::Error> {
                     S::variants()
                         .get(value as usize)
                         .ok_or(anyhow::anyhow!("invalid variant index"))?
                         .save(config);
-                    Ok(value as usize as f32)
+                    Ok(())
                 },
             )),
             load: Box::new(|config: &AppConfig| displayed::<S>(config)),
