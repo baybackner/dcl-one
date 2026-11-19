@@ -1527,11 +1527,15 @@ fn load_active_entities(
                 ));
             }
         }
-    } else if let Some(task_result) = pointer_request.as_mut().and_then(|req| req.2.complete()) {
+    } else if let Some((mut requested_parcels, mut urn_lookup, task_result)) = pointer_request
+        .as_mut()
+        .and_then(|(parcels, lookup, task)| {
+            let task_result = task.complete()?;
+            Some((std::mem::take(parcels), std::mem::take(lookup), task_result))
+        })
+    {
+        *pointer_request = None;
         // process active scenes in the requested set
-        let Some((mut requested_parcels, mut urn_lookup, _)) = pointer_request.take() else {
-            return;
-        };
 
         let retrieved_parcels = match task_result {
             Ok(res) => {

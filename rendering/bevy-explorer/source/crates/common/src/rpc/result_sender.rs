@@ -23,7 +23,7 @@ impl<T> LocalChannel<T> {
         let id = match std::mem::replace(self, LocalChannel::Used) {
             LocalChannel::Channel(sender) => (f)(sender)?,
             LocalChannel::Serialized(id) => id,
-            LocalChannel::Used => panic!(),
+            LocalChannel::Used => return Err("result sender already used"),
         };
 
         *self = LocalChannel::Serialized(id);

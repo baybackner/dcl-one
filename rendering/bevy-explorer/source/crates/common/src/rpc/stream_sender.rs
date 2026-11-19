@@ -30,6 +30,8 @@ fn warn_dropped<T: Serialize>(val: &T) {
 pub enum LocalChannel<T> {
     Channel(tokio::sync::mpsc::Sender<T>),
     Serialized(u64),
+    // registration failed while serializing; the sender is dropped
+    Failed,
 }
 
 impl<T> LocalChannel<T> {
@@ -37,9 +39,10 @@ impl<T> LocalChannel<T> {
         &mut self,
         f: F,
     ) -> Result<u64, &'static str> {
-        let id = match std::mem::replace(self, LocalChannel::Serialized(u64::MAX)) {
+        let id = match std::mem::replace(self, LocalChannel::Failed) {
             LocalChannel::Channel(sender) => (f)(sender)?,
             LocalChannel::Serialized(id) => id,
+            LocalChannel::Failed => return Err("stream sender failed to serialize"),
         };
 
         *self = LocalChannel::Serialized(id);
@@ -126,6 +129,7 @@ impl<T: Serialize> RpcStreamSender<T> {
                     }
                 },
                 LocalChannel::Serialized(_) => panic!(),
+                LocalChannel::Failed => Err(tokio::sync::mpsc::error::SendError(val)),
             },
             RpcStreamSender::Remote {
                 id,
@@ -149,6 +153,7 @@ impl<T: Serialize> RpcStreamSender<T> {
             RpcStreamSender::Local { channel, .. } => match &*channel.lock().unwrap() {
                 LocalChannel::Channel(sender) => sender.is_closed(),
                 LocalChannel::Serialized(_) => panic!(),
+                LocalChannel::Failed => true,
             },
             RpcStreamSender::Remote {
                 receiver_dropped: close_token,
