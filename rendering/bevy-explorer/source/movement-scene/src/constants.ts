@@ -75,7 +75,6 @@ export const JUMP_HOLD_SCALE = 0.5;
 // Steps a press is buffered before landing, and steps after leaving the ground that a jump
 // is still allowed (one window for both; off while moving up).
 export const JUMP_GRACE_STEPS = 8;
-export const JUMP_COYOTE_TIME = 0.16; // s, the same window for the step-up check
 // Air jump: one per airtime, by a fresh press in the air after the ground jump (or once the grace window of a fall
 // off an edge has passed). The avatar holds its height for AIR_JUMP_HOVER_TIME (a flat hover, no height tracking),
 // then launches to DOUBLE_JUMP_HEIGHT (any gait). A press whose step reaches the ground is lost: the landing cancels
@@ -128,35 +127,20 @@ export const GROUNDED_HEIGHT = 0.05; // distance from surface at which player is
 export const GROUNDED_ANGLE = 46.5;
 // Speed on a slope: on the ground the gait speed is scaled by 1 - SLOPE_SPEED_FACTOR * angle / SLOPE_SPEED_MAX_ANGLE,
 // with the angle of the ground along the move (positive uphill, clamped to +-SLOPE_SPEED_MAX_ANGLE): uphill slower,
-// downhill faster, across unchanged. It scales the horizontal speed; on the ground the reply adds the vertical speed
-// that keeps the avatar on the slope. In the air the factor of the last ground holds.
+// downhill faster, across unchanged. It scales the horizontal speed; on the ground the engine keeps the avatar on the
+// slope. In the air the factor of the last ground holds.
 export const SLOPE_SPEED_FACTOR = 0.35;
 export const SLOPE_SPEED_MAX_ANGLE = 55; // degrees
 export const MAX_STEP_HEIGHT = 0.45; // highest step player can walk up (player may still walk up slightly higher steps if approached at an angle)
 export const MIN_STEP_HEIGHT = 0.05; // rises up to this need no step (the capsule slides over them)
-export const GROUND_SNAP_HEIGHT = 0.40 // height below which we snap to ground (if previously grounded)
-// Ground snap down a step: the snap follows the ground under the centre down at most GROUND_SNAP_STEP_DROP beyond the
-// ground's slope, so a 0.1 m riser keeps the avatar on the stairs, while from 0.2 m walk falls tread by tread and
-// jog/run fly over the whole staircase.
+export const GROUND_SNAP_HEIGHT = 0.40 // drop ahead at which the engine walk stops (walk.ts)
+// The ground follows a walking avatar down at most GROUND_SNAP_STEP_DROP beyond its slope; past a larger drop the centre
+// is over an edge.
 export const GROUND_SNAP_STEP_DROP = 0.15; // m
-// Sub-step ground probes: downward casts placed along the velocity at multiples of
-// GROUND_PROBE_INTERVAL from the avatar. When a tick covers more ground than one 60fps step
-// they let ground-snap check each sub-step's drop against GROUND_SNAP_HEIGHT, so stairs and
-// slopes stay sticky at low frame rates while a real ledge still falls.
-export const GROUND_PROBE_COUNT = 8;
-export const GROUND_PROBE_INTERVAL = 1 / 60;
-// Cap on the unrequested height gain that ground-snap will pull back down (see snapToGround).
-export const MAX_UNREQUESTED_LIFT = 1.0;
-// Step-up. The forward casts reach STEP_UP_LOOKAHEAD past the collider, so a riser is found before the capsule
-// reaches it. The climb starts when the riser would be reached within STEP_UP_REACH_TIME and ends as the centre
-// comes within STEP_UP_END_DISTANCE of the riser, so the capsule passes over the riser's edge at gait speed instead of
-// stopping against it; a riser the capsule already touches is climbed within one frame.
+// How far below the capsule's lower sphere the ground casts reach.
+export const GROUND_CAST_RANGE = 3.6; // m
+// The forward casts reach STEP_UP_LOOKAHEAD past the collider, so a riser the engine steps onto is told from a wall.
 export const STEP_UP_LOOKAHEAD = 1.0; // m
-export const STEP_UP_END_DISTANCE = 0.04; // m
-// A riser is planned once the capsule would reach it within this time (s) plus twice the reply delay (the reply lands
-// that late and is held as long), and at least two frames: a climb that starts this early rises gently enough not to
-// stop the capsule at the riser when replies land in their own frame.
-export const STEP_UP_REACH_TIME = 0.1;
 
 
 // don't edit

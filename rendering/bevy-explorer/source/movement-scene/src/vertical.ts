@@ -1,16 +1,16 @@
 import { ColliderLayer, engine, Entity, InputAction, inputSystem, RaycastQueryType, RaycastShape, raycastSystem, RaycastSystemCallback, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math';
-import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayDistance, groundRayNormal, lastGroundTime, prevGrounded, probesAllowSnap, setGrounded, stepDropAllowsSnap } from './ground';
+import { centreSupported, groundDistance, grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, prevGrounded, setGrounded } from './ground';
 import {
   AIR_JUMP_COOLDOWN, AIR_JUMP_HOVER_SPEED, AIR_JUMP_HOVER_TIME,
   FIXED_STEP, GLIDE_CLOSE_TIME, GLIDE_COOLDOWN, GLIDE_DAMP_TIME, GLIDE_MIN_GROUND_DISTANCE, GLIDE_OPEN_TIME,
   GRAVITY,
-  GROUND_SNAP_HEIGHT, JUMP_COYOTE_TIME, JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
-  JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MAX_UNREQUESTED_LIFT, MIN_STEP_HEIGHT,
-  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, STEP_UP_END_DISTANCE, STEP_UP_LOOKAHEAD, STEP_UP_REACH_TIME, VEC3_ZERO,
+  JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
+  JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MIN_STEP_HEIGHT,
+  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, STEP_UP_LOOKAHEAD, VEC3_ZERO,
   VERTICAL_DAMP_TIME, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
-import { engineAssist, engineDriven, horizontalResync, playerPosition, playerRotation, prevPlayerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, stepTime, tickTime, time, velocity } from '.';
+import { engineDriven, horizontalResync, playerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, tickTime, velocity } from '.';
 import { movementAxis } from './horizontal';
 import { doubleJumpHeight, glideEnabled, glidingFallingSpeed, jumpHeight, landingStunTime, maxAirJumps, maxGroundJumps, sprintJumpHeight, sprintSpeed } from './parameters';
 import { frameTime, replyDelay, replyDelaySmooth, tickAdvance } from './clock';
@@ -18,7 +18,6 @@ import { frameTime, replyDelay, replyDelaySmooth, tickAdvance } from './clock';
 const G = -GRAVITY.y;
 
 export function updateVerticalVelocity() {
-  followsGround = false;
   leftEdge = false;
   if (engineDriven) {
     // Hold the grounded state while the engine drives us (see engineDriven): a lerp lifting
@@ -26,7 +25,6 @@ export function updateVerticalVelocity() {
     // goes through so the player can cancel the move.
     // ... unless an upward push launches us off it
     setGrounded(isLaunched() ? false : prevGrounded);
-    unrequestedLift = 0;
     const top = vstate.topY;
     applyJumpAndGravity(true);
     // a fall from where the engine put us counts from the top before, raised only by heights above the placement, so a
@@ -34,26 +32,23 @@ export function updateVerticalVelocity() {
     vstate.topY = top; placedY = playerPosition.y;
     return;
   }
-  stepUp();
   leaveEdge();
   applyJumpAndGravity(false);
-  snapToGround();
+  // pushed upward: off the ground for this tick's horizontal move and the next tick
+  if (isLaunched()) setGrounded(false);
 }
 
 // The avatar stands on an edge: grounded with no ground under the centre (centreSupported), only the rim of the capsule
 // resting on the corner, its centre R * sin(tilt) past it, where the tilt of the contact normal reaches GROUNDED_ANGLE at
 // the most. A move off the edge that carries the centre past that before the next reply lands leaves the ground at
 // once: it goes on at air speed and falls (a jog released at a ledge carries on past it), where a slower one stays on
-// the edge until then. Standing on an edge, the capsule settles onto the corner (snapToGround).
+// the edge until then. Standing on an edge, the engine's ground snap settles the capsule onto the corner.
 export var onEdge = false;
 // The avatar leaves the edge this tick.
 export var leftEdge = false;
-// vertical velocity of the previous reply, still applied until this tick's reply lands
-var edgeLastVy = 0;
 const EDGE_REACH = PLAYER_COLLIDER_RADIUS * Math.sin(GROUNDED_ANGLE * Math.PI / 180);
 function leaveEdge() {
-  edgeLastVy = velocity.y;
-  onEdge = grounded && !stepping && jumpStartHeight === undefined && !centreSupported();
+  onEdge = grounded && jumpStartHeight === undefined && !centreSupported();
   const h = Math.hypot(groundNormal.x, groundNormal.z);
   if (!onEdge || h < 1e-3) return;
   const out = (velocity.x * groundNormal.x + velocity.z * groundNormal.z) / h;
@@ -365,12 +360,10 @@ function applyJumpAndGravity(noGravity: boolean) {
   }
   if (vstate.launched) {
     jumpStartHeight = playerPosition.y;
-    stepping = false;
     setGrounded(false);
   }
   if (vstate.airLaunched) {
     jumpStartHeight = playerPosition.y;
-    stepping = false;
   }
   if (vstate.airLaunched || (vstate.airLaunchStep !== NEVER && vstate.airPressStep !== pressBefore)) jumpTracked = true;
   // a published air jump (press or launch) is kept until the committed steps reach it
@@ -436,10 +429,9 @@ function applyJumpAndGravity(noGravity: boolean) {
   const hoverReply = (vstate.airLaunchStep !== NEVER && vstate.step < vstate.airLaunchStep && (!probeRan || vprobe.step < vprobe.airLaunchStep))
     || (probeRan && vprobe.airLaunchStep !== NEVER && vprobe.step < vprobe.airLaunchStep && vprobe.step > vstate.step);
   if (launchPending && jumpStartHeight === undefined) {
-    // published launch: no snap or step-up pulls the avatar back. The grounded state stays, so
-    // the launch step's horizontal move is still a ground move.
+    // published launch: the jump starts now. The grounded state stays, so the launch step's
+    // horizontal move is still a ground move.
     jumpStartHeight = playerPosition.y;
-    stepping = false;
   }
   // Until the committed steps launch, the model is on the ground even when the published launch has already
   // lifted the avatar past the grounded height: the launch step's horizontal move stays a ground move.
@@ -447,13 +439,12 @@ function applyJumpAndGravity(noGravity: boolean) {
   if (launchAhead) setGrounded(true);
 
   // Height tracking (VERTICAL_TRACK_TIME): from a launch (committed or published) until the model lands.
-  landedNow = jumpTracked && onGround && vstate.vy <= 0 && !vstate.launched && !launchPending;
   // Tracking stops when the engine did not move the avatar as asked: a rise cut short (a ceiling) or a lift it did not
   // ask for (a platform, a slope). The gap to the model is then geometry, not reply timing. In free flight the applied
   // vertical velocity equals the requested one; the ground stopping a fall is the landing, handled below.
   const blocked = (prevRequestedVelocity.y > 0 && prevActualVelocity.y < prevRequestedVelocity.y - VERTICAL_TRACK_BLOCK)
     || prevActualVelocity.y > Math.max(0, prevRequestedVelocity.y) + VERTICAL_TRACK_BLOCK;
-  if (jumpTracked && (vstate.prop === GlideProp.GLIDING || stepping || vstate.ve !== 0 || horizontalResync || noGravity || blocked
+  if (jumpTracked && (vstate.prop === GlideProp.GLIDING || vstate.ve !== 0 || horizontalResync || noGravity || blocked
     || (onGround && vstate.vy <= 0 && !vstate.launched && !launchPending))) jumpTracked = false;
   if (jumpTracked && frameTime > 0) {
     // compared at the start of this frame, where the avatar's height is known whichever reply the engine applies
@@ -499,13 +490,11 @@ function applyJumpAndGravity(noGravity: boolean) {
   // two airborne replies without a launch, glide, landing or push, a reply never rises above
   // the last one. It runs after the height tracking: a correction can slow a fall but never makes vy rise in the air.
   const inAir = !grounded && !vstate.launched && !launchPending && !isGliding && vstate.ve === 0
-    && !horizontalResync && !stepping && predictedLandFrame < 0 && !airJump;
+    && !horizontalResync && predictedLandFrame < 0 && !airJump;
   if (inAir && lastReplyAir) vy = Math.min(vy, lastReplyVy);
   lastReplyVy = vy;
   lastReplyAir = inAir;
 
-  // a step-up owns the vertical velocity while it climbs
-  if (stepping) return;
   velocity.y = vy + vstate.ve;
 }
 // A jump is in progress (launched or published): replies track the model's height (VERTICAL_TRACK_MAX).
@@ -523,8 +512,6 @@ export function stunned(): boolean { return vstate.step < vstate.stunEndStep; }
 export function landingStuns(): boolean { return landingStunSteps() > 0 && vstate.topY - groundY > LANDING_STUN_DROP; }
 // Steps a stunning landing holds the avatar for: none when the scene's hardLandingCooldown rounds to 0 or less.
 function landingStunSteps(): number { return Math.round(landingStunTime / FIXED_STEP); }
-// The model landed a tracked jump this tick (the avatar may still be up to the grounded height above the ground).
-var landedNow = false;
 // Height the engine last placed the avatar at, while it has not touched the ground since (a landing stun's top ignores
 // heights up to it).
 var placedY = -Infinity;
@@ -537,98 +524,6 @@ var lastReplyAir = false;
 // over the tick, so a force shows up as force * tickTime) stays on the ground.
 function isLaunched(): boolean {
   return prevExternalVelocity.y > -GRAVITY.y * tickTime;
-}
-
-export var snapSpeed = 0;
-// The avatar keeps to the ground this tick (ground snap holds it): the reply follows the slope under the centre.
-var followsGround = false;
-
-// Vertical speed that keeps a horizontal move (vx, vz) on walkable ground, so the engine does not turn part of an
-// uphill move into a slower one along the slope, nor leave the slope going down. It follows the mean grade of the
-// ground ahead over the time the reply is applied: on the landing probes' height profile when moving the way it faces,
-// as far as the profile runs without a step (a step is the step-up's or ground snap's), then on with the last grade.
-// The reply lands about replyDelay frames from now and is held for about a tick, but may land sooner and be held
-// longer: it takes the lowest grade from here or from there over up to FOLLOW_HOLD_TICKS ticks, as a move down into
-// the ground costs nothing (the engine stops it) while one up into the air lifts the avatar off.
-export function slopeFollowSpeed(vx: number, vz: number): number {
-  if (!followsGround || engineAssist.snap || groundRayNormal.y < GROUNDED_ANGLE_Y_LEN) return 0;
-  const speed = Math.hypot(vx, vz);
-  if (speed < 1e-3) return 0;
-  const frame = frameTime > 0 ? frameTime : FIXED_STEP;
-  const from = speed * replyDelay * frame, span = speed * Math.max(tickTime, frame);
-  const along = (vx * facing.x + vz * facing.z) / speed > 0.9;
-  let vy = Infinity;
-  for (const start of [0, from]) {
-    const h0 = groundAhead(start, vx / speed, vz / speed, along);
-    for (let k = 1; k <= FOLLOW_HOLD_TICKS; k++) {
-      vy = Math.min(vy, speed * (groundAhead(start + k * span, vx / speed, vz / speed, along) - h0) / (k * span));
-    }
-  }
-  return vy;
-}
-const FOLLOW_HOLD_TICKS = 3;
-
-// Height of the ground d ahead along the unit direction (dx, dz), relative to the ground under the centre.
-function groundAhead(d: number, dx: number, dz: number, probes: boolean): number {
-  const grade = (n: Vector3) => -(n.x * dx + n.z * dz) / n.y;
-  const h0 = -Math.max(0, groundRayDistance);
-  let x = 0, h = h0, g = grade(groundRayNormal);
-  for (let i = 0; probes && i < LANDING_CAST_COUNT && x < d; i++) {
-    const xi = PLAYER_COLLIDER_RADIUS + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
-    const hi = landingHeights[i];
-    if (hi === -Infinity || !landingWalkables[i]) break;
-    const gi = grade(landingNormals[i]);
-    if (Math.abs(hi - h) > (xi - x) * Math.max(Math.abs(g), Math.abs(gi)) + MIN_STEP_HEIGHT) break;
-    if (xi >= d) return h + (hi - h) * (d - x) / (xi - x) - h0;
-    x = xi; h = hi; g = gi;
-  }
-  return h + (d - x) * g - h0;
-}
-// Net height gained beyond what we asked for. The engine's collide-and-slide deflects
-// horizontal speed upward off step edges and bumps, and by the next tick that can carry the
-// avatar past GROUND_SNAP_HEIGHT; it widens the snap range so the avatar is pulled back down.
-var unrequestedLift = 0;
-function snapToGround() {
-  if (groundDistance < 1e-3 || jumpStartHeight !== undefined) {
-    unrequestedLift = 0;
-  } else {
-    const rise = playerPosition.y - prevPlayerPosition.y;
-    const requestedRise = Math.max(0, prevRequestedVelocity.y) * tickTime;
-    unrequestedLift = Math.min(MAX_UNREQUESTED_LIFT, Math.max(0, unrequestedLift + rise - requestedRise));
-  }
-
-  const launched = isLaunched();
-
-  if (
-    !engineAssist.snap // the engine does not keep the avatar on the ground itself
-    && jumpStartHeight === undefined // not jumping
-    && !launched // not pushed upward
-    && !stepping // not stepping
-    && (prevGrounded || landedNow) // was grounded last frame, or a jump just landed (within the grounded height)
-    && (groundDistance < GROUND_SNAP_HEIGHT + unrequestedLift || probesAllowSnap(GROUND_SNAP_HEIGHT + unrequestedLift)) // close enough
-    && stepDropAllowsSnap() // not down a step (GROUND_SNAP_STEP_DROP)
-    && groundRayNormal.y >= GROUNDED_ANGLE_Y_LEN // not onto a slope too steep to walk (off a crest the avatar falls)
-    && !onEdge // not onto the corner of an edge (below)
-  ) {
-    snapSpeed = Math.max(0, groundDistance / stepTime);
-    velocity.y -= snapSpeed;
-    setGrounded(true); // maintain prevGrounded for next frame
-    followsGround = true;
-  } else if (!engineAssist.snap && onEdge && grounded && jumpStartHeight === undefined && !launched && !stepping && prevGrounded
-    && Vector3.lengthSquared(movementAxis) === 0 && Math.hypot(velocity.x, velocity.z) < 0.1) {
-    // standing on an edge: the capsule settles onto the corner. The engine must not push it into the corner, which would
-    // slide it off the edge: the reply closes half the gap the previous reply leaves until this one lands, over the time
-    // a reply is held (frame times jitter, so the rest is left to the next ticks).
-    const gap = Math.max(0, groundDistance) + Math.min(0, edgeLastVy) * replyDelay * frameTime;
-    snapSpeed = Math.max(0, gap) / (2 * Math.max(stepTime, tickTime));
-    velocity.y -= snapSpeed;
-    followsGround = false;
-  } else {
-    snapSpeed = 0;
-    followsGround = false;
-    // no longer grounded for the next tick's snap either, or it would undo a small launch
-    if (launched) setGrounded(false);
-  }
 }
 
 // The forward cast reaches STEP_UP_LOOKAHEAD past the collider: a riser ahead is found before the capsule reaches it.
@@ -647,12 +542,10 @@ const LANDING_CAST_RANGE = LANDING_CAST_HEIGHT + FWD_CAST_LENGTH * Math.tan(GROU
 var fwdDistance: number = Infinity; // capsule travel to the hit
 var fwdWalkable: boolean = true;
 var fwdNormal: Vector3 = Vector3.Zero();
-// casts down onto the ground ahead, nearest first: height above the feet (-Infinity: no hit), walkability (false for a
-// probe that starts inside a collider) and the slope (tangent of the ground angle)
+// casts down onto the ground ahead, nearest first: height above the feet (-Infinity: no hit) and walkability (false for
+// a probe that starts inside a collider)
 const landingHeights: number[] = [];
 const landingWalkables: boolean[] = [];
-const landingSlopes: number[] = [];
-const landingNormals: Vector3.MutableVector3[] = [];
 
 export function initStepCasts() {
   function initCast(position: Vector3, local: boolean, opts: { direction: Vector3, maxDistance: number, shape: RaycastShape, queryType?: RaycastQueryType }, cb: RaycastSystemCallback): Entity {
@@ -693,8 +586,6 @@ export function initStepCasts() {
   for (let i = 0; i < LANDING_CAST_COUNT; i++) {
     landingHeights.push(-Infinity);
     landingWalkables.push(false);
-    landingSlopes.push(0);
-    landingNormals.push(Vector3.create(0, 1, 0));
     // local forward offset, along the avatar's facing (the parent's yaw turns the position)
     const forward = PLAYER_COLLIDER_RADIUS + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
     initCast({ x: 0, y: LANDING_CAST_HEIGHT, z: forward }, false, { direction: Vector3.Down(), maxDistance: LANDING_CAST_RANGE, shape: RaycastShape.RS_RAY }, (hits) => {
@@ -704,34 +595,16 @@ export function initStepCasts() {
         const ny = hit.normalHit?.y ?? 0;
         landingHeights[i] = LANDING_CAST_HEIGHT - hit.length;
         landingWalkables[i] = hit.length > 1e-4 && ny >= GROUNDED_ANGLE_Y_LEN;
-        landingSlopes[i] = ny > 0 ? Math.sqrt(Math.max(0, 1 - ny * ny)) / ny : Infinity;
-        Vector3.copyFrom(hit.normalHit ?? VEC3_ZERO, landingNormals[i]);
       }
     })
   }
 }
 
-// A slope too steep to walk ahead along the facing (not a wall): the horizontal unit normal pointing away from it and
-// the capsule's distance to it; null if none.
-const steepFace = { x: 0, z: 0, distance: 0 };
-export function steepAhead(): { x: number, z: number, distance: number } | null {
-  if (fwdDistance === Infinity || fwdWalkable || fwdNormal.y < 0.05) return null;
-  // the capsule meets the edge of a riser at a slant too: a slope goes on past the contact, where a tread is flat
-  const probe = Math.max(0, Math.ceil(fwdDistance / LANDING_CAST_SPACING - 1e-3));
-  if (probe >= LANDING_CAST_COUNT || landingWalkables[probe]) return null;
-  const h = Math.hypot(fwdNormal.x, fwdNormal.z);
-  if (h < 1e-6) return null;
-  steepFace.x = fwdNormal.x / h;
-  steepFace.z = fwdNormal.z / h;
-  steepFace.distance = fwdDistance;
-  return steepFace;
-}
-
 // A face too steep to walk that the capsule touches along the facing (a wall, a steep slope, a riser higher than a
-// step) while no step-up climbs: the horizontal unit normal pointing away from it; null if none.
+// step): the horizontal unit normal pointing away from it; null if none.
 const wallFace = { x: 0, z: 0 };
 export function wallContact(): { x: number, z: number } | null {
-  if (fwdDistance > WALL_CONTACT_DISTANCE || fwdWalkable || stepping || engineStepAhead()) return null;
+  if (fwdDistance > WALL_CONTACT_DISTANCE || fwdWalkable || engineStepAhead()) return null;
   const h = Math.hypot(fwdNormal.x, fwdNormal.z);
   if (h < 1e-6) return null;
   wallFace.x = fwdNormal.x / h;
@@ -740,107 +613,11 @@ export function wallContact(): { x: number, z: number } | null {
 }
 const WALL_CONTACT_DISTANCE = 0.02; // m of capsule travel to the face
 
-// With the engine's step (engineAssist.step), the face along the facing is a riser it steps onto: the landing probe just
-// past the face finds walkable ground no higher than MAX_STEP_HEIGHT above the feet.
+// The face along the facing is a riser the engine steps onto: the landing probe just past the face finds walkable
+// ground no higher than MAX_STEP_HEIGHT above the feet.
 function engineStepAhead(): boolean {
-  if (!engineAssist.step) return false;
   const i = Math.max(0, Math.ceil((fwdDistance - LANDING_CAST_INSET) / LANDING_CAST_SPACING - 1e-3));
   return i < LANDING_CAST_COUNT && landingWalkables[i]
     && landingHeights[i] + Math.max(0, groundDistance) >= MIN_STEP_HEIGHT
     && landingHeights[i] + Math.max(0, groundDistance) <= MAX_STEP_HEIGHT + 1e-3;
-}
-
-var stepping = false;
-// feet height the current step episode is ascending to: the highest tread planned so far
-var stepTargetY = 0;
-// climb speed, from the latest plan, held until the landing is reached
-var stepSpeed = 0;
-var prevSteppingY = 0;
-// consecutive ticks a step episode has not risen
-var stepStalls = 0;
-// highest tread the latest plan climbs to
-var planTargetY = -Infinity;
-const facing: Vector3.MutableVector3 = Vector3.create(0, 0, 0);
-
-// Risers ahead on the landing probes' height profile. A riser is a rise between neighbouring probes of more than
-// MIN_STEP_HEIGHT beyond the slope of the ground on either side, up to MAX_STEP_HEIGHT (higher is a wall: nothing past
-// it counts). For each riser the capsule reaches within STEP_UP_REACH_TIME plus twice the reply delay (this reply lands
-// replyDelay frames from now and is held about as long), the speed that puts the feet on its tread by the time the
-// centre comes within STEP_UP_END_DISTANCE of it. Returns the highest such speed (-Infinity: nothing to
-// climb yet) and sets planTargetY.
-function planStepUp(speed: number): number {
-  planTargetY = -Infinity;
-  const frame = frameTime > 0 ? frameTime : FIXED_STEP;
-  const reach = 2 * replyDelay * frame + Math.max(2 * frame, STEP_UP_REACH_TIME);
-  const r = PLAYER_COLLIDER_RADIUS;
-  let need = -Infinity;
-  let prev = -Math.max(0, groundDistance); // the ground under the feet, relative to them
-  let prevSlope = 0;
-  for (let i = 0; i < LANDING_CAST_COUNT; i++) {
-    const h = landingHeights[i];
-    // no ground in range (a drop), a face the probe starts inside or a steep one: nothing to step onto past it
-    if (h === -Infinity || !landingWalkables[i]) break;
-    const rise = h - prev;
-    const gap = i === 0 ? r + LANDING_CAST_INSET : LANDING_CAST_SPACING; // from the previous sample
-    if (rise - gap * Math.max(prevSlope, landingSlopes[i]) > MIN_STEP_HEIGHT) {
-      if (rise > MAX_STEP_HEIGHT) break;
-      // the capsule touches a riser lower than its radius before its centre is a radius away, at sqrt(r^2 - (r - h)^2)
-      const face = rise >= r ? r : Math.sqrt(r * r - (r - rise) * (r - rise));
-      // the riser lies between this probe and the previous one: where the forward cast found it, if that is there
-      const offset = r + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
-      const hit = fwdDistance + face;
-      const distance = !fwdWalkable && hit <= offset && (i === 0 || hit > offset - LANDING_CAST_SPACING)
-        ? hit : Math.max(face, offset - LANDING_CAST_SPACING / 2);
-      if ((distance - face) / speed > reach) break; // reached later: a later tick plans it
-      const climb = Math.max((distance - STEP_UP_END_DISTANCE) / speed - replyDelay * frame, frame);
-      need = Math.max(need, h / climb);
-      planTargetY = playerPosition.y + h;
-    }
-    prev = h;
-    prevSlope = landingSlopes[i];
-  }
-  return need;
-}
-
-function stepUp() {
-  // a riser is climbed when the avatar moves the way it faces (the probes look along the facing)
-  Vector3.rotateToRef(Vector3.Forward(), playerRotation, facing);
-  facing.y = 0;
-  Vector3.normalizeToRef(facing, facing);
-  const speed = Math.hypot(velocity.x, velocity.z);
-  const plan = !engineAssist.step && speed > 0.1 && Vector3.dot(facing, movementAxis) > 0.9
-    && (stepping || grounded || lastGroundTime > time - JUMP_COYOTE_TIME) // step from (near-)ground only
-    ? planStepUp(speed) : -Infinity;
-  if (plan > -Infinity) {
-    if (!stepping) {
-      stepping = true;
-      stepStalls = 0;
-      prevSteppingY = -Infinity;
-      stepTargetY = planTargetY;
-    }
-    stepTargetY = Math.max(stepTargetY, planTargetY);
-    stepSpeed = plan;
-  } else if (stepping) {
-    stepStalls = playerPosition.y <= prevSteppingY + 1e-4 ? stepStalls + 1 : 0;
-  }
-
-  if (stepping) {
-    if (
-      Vector3.length(movementAxis) === 0 // input released
-      || playerPosition.y >= stepTargetY - 1e-3 // reached the landing
-      || stepStalls >= 2 // blocked, making no progress (the first tick of an early climb may not have risen yet)
-    ) {
-      stepping = false;
-      velocity.y = Math.min(0, velocity.y);
-    } else {
-      prevSteppingY = playerPosition.y;
-      // not past the tread when the reply is held until the next one lands
-      const held = ((frameTime > 0 ? replyDelay : 0) + 1) * (frameTime > 0 ? frameTime : tickTime);
-      velocity.y = Math.min(stepSpeed, (stepTargetY - playerPosition.y) / held);
-    }
-    // a step-up is ground locomotion: hold the grounded state through the
-    // episode (and its final frame) so the animation doesn't see an
-    // airborne flicker and play a landing bob on every stair step
-    setGrounded(true);
-  }
 }

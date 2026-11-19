@@ -6,10 +6,10 @@ import {
   MAX_FIXED_STEPS, SLOPE_SPEED_FACTOR, SLOPE_SPEED_MAX_ANGLE, TURN_FULL_TIME, TURN_MAX_DEGREES_SEC, VEC3_FORWARD, VEC3_HORIZONTAL_MASK, VEC3_RIGHT,
   VEC3_UP, VEC3_ZERO,
 } from './constants';
-import { engineAssist, horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
+import { horizontalResync, playerRotation, prevActualVelocity, prevExternalVelocity, tickTime, velocity } from '.';
 import { grounded, GROUNDED_ANGLE_Y_LEN, groundNormal, groundRayNormal } from './ground';
 import { disableOrientation, glidingSpeed, jogSpeed, sprintSpeed, walkSpeed } from './parameters';
-import { airLaunchStep, isGliding, landingStuns, launchAhead, leftEdge, predictedLandFrame, steepAhead, stunEndStep, stunned, wallContact } from './vertical';
+import { airLaunchStep, isGliding, landingStuns, launchAhead, leftEdge, predictedLandFrame, stunEndStep, stunned, wallContact } from './vertical';
 import { getWalkAxis } from './walk';
 import { frameTime, replyDelay, tickAdvance } from './clock';
 import { settings } from './settings';
@@ -321,19 +321,6 @@ export function updateHorizontalVelocity() {
       }
     }
   }
-  // A slope ahead too steep to walk (steeper than GROUNDED_ANGLE) stops the move into it at the contact, where the
-  // engine would slide the avatar up it: the speed toward it is cut to reach it no sooner than the next reply lands.
-  // An engine with the slope limit stops it itself.
-  const steep = input.grounded && !engineAssist.slopeLimit ? steepAhead() : null;
-  if (steep !== null) {
-    const into = -(ox * steep.x + oz * steep.z);
-    const allowed = steep.distance / ((2 * replyDelay + 1) * (frameTime > 0 ? frameTime : FIXED_STEP));
-    if (into > allowed) {
-      ox += (into - allowed) * steep.x;
-      oz += (into - allowed) * steep.z;
-    }
-  }
-
   // Against a wall on the ground the move slows with how squarely it meets the wall: by 1 - |cos| of the angle between
   // the move and the wall's normal, so head-on it stops and at 45 degrees it slides along the wall at 0.29 x 0.71 of
   // the speed. In the air a wall only blocks the move.

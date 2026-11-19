@@ -22,22 +22,15 @@ corepack pnpm@12.21.0 run build
 
 `build` bundles `src/index.ts` into `bin/game.js` and type-checks it.
 
-## Engine assist
+## Ground handling
 
 The engine's collide-and-slide (step 6 of the algorithm described in
-`library/protocol/proto/decentraland/sdk/components/avatar_movement.proto`) can do part of the
-ground handling for an avatar that starts the step on the ground. The engine announces which parts
-in the explorer configuration that `getExplorerConfiguration()` returns
-([`EnvironmentApi.js`](../crates/dcl_js/src/modules/EnvironmentApi.js)): the key
-`avatarMovementAssist` holds a comma-separated list of
+`library/protocol/proto/decentraland/sdk/components/avatar_movement.proto`) handles the ground for
+an avatar that starts the step on it:
 
-- `slopeLimit`: a surface steeper than 46.5 degrees stops the horizontal move into it;
-- `snap`: the move follows walkable ground, up a slope at its horizontal speed and down a slope or
-  a drop of up to 0.15m;
-- `step`: the avatar steps onto a riser up to 0.45m high.
+- a surface steeper than 46.5 degrees stops the horizontal move into it;
+- the move follows walkable ground, up a slope at its horizontal speed and down a slope or a drop
+  of up to 0.15m;
+- the avatar steps onto a riser up to 0.45m high.
 
-The scene reads the key once at start (`src/index.ts`) and leaves each listed part to the engine,
-skipping its own version of it. An engine that does not send the key gets the scene's own handling,
-so the scene keeps working on engine builds that predate it. The key is an entry in the
-configuration's string map, not a protocol field: a new part is a new name, added to the engine,
-the scene and this list in the same change.
+The scene leaves these to the engine, so it is deployed together with an Explorer that does them.

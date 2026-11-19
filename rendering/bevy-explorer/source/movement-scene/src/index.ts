@@ -1,9 +1,9 @@
 import { AssetLoad, AvatarAnimationState, AvatarMovement, AvatarMovementInfo, engine, MovementAnimation, Transform } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { getExplorerConfiguration } from '~system/EnvironmentApi';
-import { grounded, initGroundProbes, initGroundRaycast, updateGroundAdjust, updateGroundProbes } from './ground';
+import { grounded, initGroundRaycast, recordGroundForNextTick, updateGroundAdjust } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
-import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, slopeFollowSpeed, snapSpeed, stunned, updateVerticalVelocity } from './vertical';
+import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, stunned, updateVerticalVelocity } from './vertical';
 import { initParamters as initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
@@ -145,12 +145,6 @@ export * from '@dcl/sdk'
 
 // setup
 var positionAdjust = Vector3.Zero();
-// What the engine's collide-and-slide does for the avatar on the ground (explorer configuration avatarMovementAssist,
-// comma-separated); the model leaves each of these to it. An engine that announces none gets the model's own.
-// slopeLimit: a surface too steep to stand on stops the move into it. snap: the move follows walkable ground, up a slope
-// at its horizontal speed and down a slope or a step of up to GROUND_SNAP_STEP_DROP. step: a riser up to MAX_STEP_HEIGHT
-// is stepped onto.
-export const engineAssist = { slopeLimit: false, snap: false, step: false };
 export function main() {
   getExplorerConfiguration({}).then((config) => {
     positionAdjust = {
@@ -158,12 +152,7 @@ export function main() {
       "": Vector3.create(0, -0.08, 0), // probably explorer alpha...
     }[config.clientUri] ?? (console.log(`unknown client ${config.clientUri}`), Vector3.Zero());
     updateGroundAdjust(positionAdjust.y);
-    const assist = (config.configurations?.['avatarMovementAssist'] ?? '').split(',');
-    engineAssist.slopeLimit = assist.includes('slopeLimit');
-    engineAssist.snap = assist.includes('snap');
-    engineAssist.step = assist.includes('step');
   }).catch((error) => {
-    // engineAssist stays all false: the model does the slope limit, snap and step itself
     console.log(`explorer configuration unavailable: ${error}`);
   })
 
@@ -171,7 +160,6 @@ export function main() {
   AssetLoad.create(engine.addEntity(), { assets: PRELOAD_CLIPS });
 
   initGroundRaycast();
-  initGroundProbes();
   initStepCasts();
   initWalkSystem();
 
@@ -193,8 +181,8 @@ export var playerRotation: Quaternion = Quaternion.Identity();
 
 export var velocity = Vector3.Zero();
 // True on frames where the engine moved the player itself (movePlayerTo lerp / teleport,
-// or a platform carry) while consuming none of our velocity. Gravity and snap-to-ground
-// are skipped and the grounded state is held, so the lerp neither asserts a fall velocity
+// or a platform carry) while consuming none of our velocity. Gravity is skipped and the
+// grounded state is held, so the lerp neither asserts a fall velocity
 // (which would cancel the engine move) nor arms a landing on arrival.
 export var engineDriven = false;
 export var velocityNorm = Vector3.Zero();
@@ -840,7 +828,6 @@ function writeMovement() {
 function applyMovement() {
   updateVerticalVelocity();
   updateHorizontalVelocity();
-  velocity.y += slopeFollowSpeed(velocity.x, velocity.z);
 
   // Track smoothed turn rate (deg/s) from the change in facing, for glide lean.
   const turnDelta = relativeDegrees(0, orientation - glidePrevOrientation);
@@ -863,20 +850,16 @@ function applyMovement() {
 
   // External velocity is integrated by the horizontal and vertical models.
 
-  // The speed cap applies to movement, not to the ground-snap correction: a probe-approved
-  // snap can be large, and capping it would scale down the horizontal speed with it.
-  velocity.y += snapSpeed;
   const speed = Vector3.length(velocity);
   if (speed > MAX_SPEED) {
     Vector3.scaleToRef(velocity, MAX_SPEED / speed, velocity);
   }
-  velocity.y -= snapSpeed;
 
   if (Vector3.length(velocity) < 0.01 || Number.isNaN(Vector3.length(velocity))) {
     Vector3.copyFrom(VEC3_ZERO, velocity);
   }
   Vector3.normalizeToRef(velocity, velocityNorm);
   velocityLength = Vector3.length(velocity);
-  updateGroundProbes(velocity);
+  recordGroundForNextTick();
   writeMovement();
 }
