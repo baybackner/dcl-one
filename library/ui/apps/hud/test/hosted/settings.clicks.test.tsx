@@ -135,7 +135,18 @@ describe('settings panel disabled controls', () => {
     expect(select).toBeDisabled()
     expect(select.textContent).toContain('60 fps')
     await userEvent.click(select)
-    expect(vi.mocked(settings.set)).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('greys out a shown control when only its disabled flag changes', () => {
+    const FPS = base({ name: 'Target Frame Rate', category: 'graphics', namedVariants: [{ name: '30 fps', description: '' }, { name: '60 fps', description: '' }], value: 1, default: 1, maxValue: 2 })
+    const panel = (s: Setting): React.JSX.Element => (
+      <SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={{ ...fakeSession().settings, open: true, list: [s] }} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />
+    )
+    const { rerender } = render(panel(FPS))
+    expect(screen.getByRole('button', { name: 'Target Frame Rate' })).toBeEnabled()
+    rerender(panel({ ...FPS, disabled: true }))
+    expect(screen.getByRole('button', { name: 'Target Frame Rate' })).toBeDisabled()
   })
 })
 

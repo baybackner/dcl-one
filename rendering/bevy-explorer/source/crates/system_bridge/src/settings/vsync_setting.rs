@@ -48,7 +48,7 @@ impl AppSetting for VsyncSetting {
     }
 
     fn description(&self) -> String {
-        "Sync frames to the monitor refresh.\n\nOn: the display's refresh rate sets the frame rate and Target Frame Rate has no effect. Off: Target Frame Rate caps the frame rate.".to_owned()
+        "Sync frames to the monitor refresh.\n\nOn: the display's refresh rate sets the frame rate; Target Frame Rate applies only when that rate is unknown. Off: Target Frame Rate caps the frame rate.".to_owned()
     }
 
     fn category() -> super::SettingCategory {

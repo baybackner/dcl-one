@@ -395,10 +395,13 @@ impl Settings {
 
         setting.apply = Some(apply);
         setting.info.value = res;
+        // a value can disable another setting; the next `GetSettings` may be answered before
+        // `refresh_settings` runs
+        self.refresh(config);
         Ok(())
     }
 
-    /// Re-reads every displayed value from `config`.
+    /// Re-reads every displayed value and `disabled` flag from `config`.
     pub fn refresh(&mut self, config: &AppConfig) {
         for setting in self.settings.iter_mut() {
             setting.info.value = (setting.load)(config);
@@ -613,7 +616,6 @@ mod tests {
             .set_value(&mut config, &VsyncSetting::title(), 1.0)
             .unwrap();
         assert!(config.graphics.vsync);
-        settings.refresh(&config);
         let info = fps_target(&settings);
         assert!(info.disabled);
         // the value stays, so turning vsync off restores the cap
@@ -628,7 +630,6 @@ mod tests {
         settings
             .set_value(&mut config, &VsyncSetting::title(), 0.0)
             .unwrap();
-        settings.refresh(&config);
         assert!(!fps_target(&settings).disabled);
     }
 

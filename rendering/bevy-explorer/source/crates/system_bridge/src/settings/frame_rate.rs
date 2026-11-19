@@ -3,6 +3,9 @@ use common::structs::AppConfig;
 
 use super::{AppSetting, EnumAppSetting};
 
+/// The "Uncapped" target frame rate.
+pub const UNCAPPED_FPS: usize = 999;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct FpsTargetSetting(usize);
 
@@ -16,12 +19,12 @@ impl EnumAppSetting for FpsTargetSetting {
             Self(60),
             Self(120),
             Self(144),
-            Self(999),
+            Self(UNCAPPED_FPS),
         ]
     }
 
     fn name(&self) -> String {
-        if self.0 == 999 {
+        if self.0 == UNCAPPED_FPS {
             "Uncapped".to_owned()
         } else {
             format!("{} fps", self.0)

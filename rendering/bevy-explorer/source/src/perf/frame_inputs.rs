@@ -21,6 +21,7 @@ use common::{
     },
 };
 use scene_runner::renderer_context::RendererSceneContext;
+use system_bridge::settings::frame_rate::UNCAPPED_FPS;
 use wallet::Wallet;
 
 /// What the frame brought, as of `First`.
@@ -179,7 +180,7 @@ pub fn effective_target_fps(config: &AppConfig, session: Option<&SessionGraphics
     let target = session.map_or(config.graphics.fps_target, |session| {
         session.fps_target(config)
     });
-    (target > 0 && target < 999).then_some(target as f32)
+    (target > 0 && target < UNCAPPED_FPS).then_some(target as f32)
 }
 
 /// Every running scene's reported heap, summed; `None` when no scene reports one.

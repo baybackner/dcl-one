@@ -1225,6 +1225,9 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
     if (msg.kind === 'setSetting') {
       const s = mockSettings.find((x) => x.name === msg.name)
       if (s) s.value = msg.value
+      // VSync overrides the frame-rate cap, as in the engine
+      const fpsLimit = mockSettings.find((x) => x.name === 'FPS Limit')
+      if (fpsLimit) fpsLimit.disabled = mockSettings.find((x) => x.name === 'VSync')?.value === 1
       reply({ kind: 'settings', settings: mockSettings })
       return
     }

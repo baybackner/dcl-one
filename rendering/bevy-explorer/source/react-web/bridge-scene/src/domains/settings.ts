@@ -80,7 +80,8 @@ function withPreset(settings: Setting[]): Setting[] {
     ],
     value: currentPreset(settings),
     default: 0,
-    stepSize: 1
+    stepSize: 1,
+    disabled: false
   }
   return [preset, ...settings]
 }

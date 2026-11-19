@@ -27,7 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use system_bridge::{SystemApi, SystemBridge};
+use system_bridge::{settings::frame_rate::UNCAPPED_FPS, SystemApi, SystemBridge};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::js_sys;
 use web_sys::{HtmlCanvasElement, OffscreenCanvas};
@@ -851,9 +851,6 @@ fn update_text_focus(priorities: Res<InputPriorities>, mut prev: Local<bool>, _j
         set_engine_text_focus(focused);
     }
 }
-
-/// The Target Frame Rate setting's "Uncapped" value.
-const UNCAPPED_FPS: usize = 999;
 
 pub fn update_winit_fps(
     config: Res<AppConfig>,

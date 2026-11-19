@@ -29,7 +29,7 @@ use av::plugin::AVPlayerPlugin;
 use avatar::AvatarPlugin;
 use ban_block::BanBlockPlugin;
 #[cfg(not(target_arch = "wasm32"))]
-use bevy::window::{PresentMode, WindowResolution};
+use bevy::window::WindowResolution;
 use bevy::{
     app::{PluginGroupBuilder, Propagate, TaskPoolThreadAssignmentPolicy},
     core_pipeline::prepass::DepthPrepass,
@@ -85,7 +85,10 @@ use system_api_types::launch_options::{
     help_heading::{DEBUG, SETTINGS, SYSTEM_SCENES},
     ClientOptions, LaunchOptions,
 };
-use system_bridge::{settings::NewCameraEvent, NativeUi, SystemBridgePlugin};
+use system_bridge::{
+    settings::{vsync_setting::VsyncSetting, AppSetting, NewCameraEvent},
+    NativeUi, SystemBridgePlugin,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use system_ui::crash_report::CrashReportPlugin;
 use system_ui::SystemUiPlugin;
@@ -965,11 +968,8 @@ fn desktop_default_plugins(decentraland_app_config: &DecentralandAppConfig) -> P
         .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Decentraland Web Explorer".to_owned(),
-                present_mode: if decentraland_app_config.app_config.graphics.vsync {
-                    PresentMode::AutoVsync
-                } else {
-                    PresentMode::AutoNoVsync
-                },
+                present_mode: VsyncSetting::load(&decentraland_app_config.app_config)
+                    .present_mode(),
                 // Keep the same aspect ratio without spending CI's software renderer
                 // on a full-size player view. Snapshot windows remain 256x256.
                 resolution: if decentraland_app_config.arguments.test_scenes.is_some() {
