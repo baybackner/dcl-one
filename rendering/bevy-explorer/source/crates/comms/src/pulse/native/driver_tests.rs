@@ -533,7 +533,11 @@ fn inputs_are_spaced_by_a_long_round_trip() {
 
     let due = sent + spacing;
     assert_eq!(gate.wake_within(due), MAINTENANCE_INTERVAL);
-    assert_eq!(tags(&gate.admit(Vec::new(), due)), [(FrameKind::Input, 12)]);
+    // A newer input arriving as the held one is due replaces it.
+    assert_eq!(
+        tags(&gate.admit(vec![frame(FrameKind::Input, 13)], due)),
+        [(FrameKind::Input, 13)]
+    );
 }
 
 /// The driver itself, against a loopback server: probes go out on an idle link, and an input held

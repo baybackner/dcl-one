@@ -467,7 +467,7 @@ impl UplinkGate {
         stalled: bool,
         now: Instant,
     ) -> Vec<PulseFrame> {
-        let input_due = self.input_sent_at.map(|at| at + self.input_spacing());
+        let spacing = self.input_spacing();
         // Withdraw first, so nothing waits a pass behind a teleport for the realm left.
         if frames
             .iter()
@@ -476,7 +476,9 @@ impl UplinkGate {
             self.held.retain(|held| held.kind != FrameKind::Teleport);
         }
         let mut out = Vec::new();
-        for frame in std::mem::take(&mut self.held).into_iter().chain(frames) {
+        // A held input and a newer one right behind it are one: only the newer goes.
+        let queue = std::mem::take(&mut self.held).into_iter().chain(frames);
+        for frame in collapse_inputs(queue.collect()) {
             if frame.kind == FrameKind::WithdrawTeleport {
                 // The realm a held teleport names was left.
                 self.held.retain(|held| held.kind != FrameKind::Teleport);
@@ -491,7 +493,7 @@ impl UplinkGate {
                         .held
                         .iter()
                         .any(|held| DiscreteEventPacer::paces(held.kind))
-                    || input_due.is_some_and(|due| now < due)
+                    || self.input_sent_at.is_some_and(|at| now < at + spacing)
             } else {
                 false
             };
