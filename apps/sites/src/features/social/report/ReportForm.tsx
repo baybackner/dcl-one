@@ -23,6 +23,7 @@ import {
 import { openSignIn } from "../../components/auth/signin-store";
 
 import { GeneralDecentralandColor } from "@dcl/one-ui/foundations/icons";
+import { clearReportFormDraft, saveReportFormDraft, takeReportFormDraft } from "./report-form-draft";
 import styles from "./ReportForm.module.css";
 
 const REASONS: { value: ReportReason; label: string }[] = [
@@ -201,7 +202,7 @@ function FileUpload({ files, onChange }: { files: EvidenceUpload[]; onChange: (f
 
 export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { identity, address, isConnected } = useAuth();
   const submitReport = useMemo(() => buildSubmitReport(identity), [identity]);
 
@@ -218,6 +219,19 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    const currentSearch = params.toString();
+    const draft = takeReportFormDraft(currentSearch);
+    if (!draft) return;
+
+    if (!currentSearch && draft.searchParams) setParams(draft.searchParams, { replace: true });
+    if (!reportedParam) setReportedAddress(draft.reportedAddress);
+    setReason(draft.reason);
+    setDescription(draft.description);
+    setComments(draft.additionalComments);
+    // Take a stored report once on mount. Later URL changes use the report's normal param handling.
+  }, []);
 
   useEffect(() => {
     if (reportedParam) setReportedAddress(reportedParam);
@@ -242,6 +256,17 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
   };
   const shown = (e: string) => (submitted ? e || undefined : undefined);
 
+  function signIn() {
+    saveReportFormDraft({
+      searchParams: params.toString(),
+      reportedAddress,
+      reason,
+      description,
+      additionalComments: comments,
+    });
+    openSignIn();
+  }
+
   const busy = useRef(false);
   const submit = async () => {
     if (busy.current) return;
@@ -261,6 +286,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
         draft,
       });
       track("report_completed", { reason, report_id: result.reportId, evidence_count: evidence.length }, trackCtx);
+      clearReportFormDraft();
       navigate("/report/success", { state: { submitted: true } });
     } catch (err) {
       track("report_failed", { reason: err instanceof ReportSubmitError ? err.step : "request" }, trackCtx);
@@ -302,7 +328,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
             {!isConnected && (
               <div className={styles.signIn}>
                 Please sign in with your wallet to submit a report.
-                <Button variant="text" size="sm" className={styles.signInButton} onClick={() => openSignIn()}>
+                <Button variant="text" size="sm" className={styles.signInButton} onClick={signIn}>
                   Sign In
                 </Button>
               </div>
@@ -370,13 +396,17 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
               helper={`Upload up to ${REPORT_LIMITS.maxFiles} screenshots, videos or PDF files to support your report.`}
               error={shown(errors.evidence)}
             >
-              <FileUpload
-                files={evidence}
-                onChange={(files) => {
-                  if (files.length > evidence.length) track("report_evidence_added", { file_count: files.length }, trackCtx);
-                  setEvidence(files);
-                }}
-              />
+              {isConnected ? (
+                <FileUpload
+                  files={evidence}
+                  onChange={(files) => {
+                    if (files.length > evidence.length) track("report_evidence_added", { file_count: files.length }, trackCtx);
+                    setEvidence(files);
+                  }}
+                />
+              ) : (
+                <p className={styles.hint}>Sign in before attaching evidence.</p>
+              )}
             </Field>
 
             <Field number={6} label="Additional Comments" optional helper="Provide any extra information that might help moderators investigate.">
@@ -396,7 +426,7 @@ export default function ReportForm({ trackCtx }: { trackCtx: TrackContext }) {
             </Field>
 
             <div className={styles.field}>
-              <ConfirmCheckbox checked={confirmed} onChange={setConfirmed} error={submitted && !!errors.confirm} />
+              {isConnected && <ConfirmCheckbox checked={confirmed} onChange={setConfirmed} error={submitted && !!errors.confirm} />}
               {submitted && errors.confirm && <p className={styles.error}>{errors.confirm}</p>}
             </div>
 
