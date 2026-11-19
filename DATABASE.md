@@ -487,6 +487,15 @@ edit throttle window are preserved. `(created_at,id)` supports retention order. 
 and edit-bucket columns on earlier shared development layouts without removing
 intents, and the object pass recreates the changed due/creator indexes.
 
+The places channel carries operator disables and rating upgrades, and a
+creator's rating change: a stricter rating, which the row takes
+(`rating_upgraded`), or a laxer one, which it keeps out
+(`rating_downgrade_refused`; step `0051_explore_rating_downgrade_notice` admits
+the kind). A creator notice is captured in the transaction of the deployment
+pass or world write that saw the change, once per new deployment or setting
+write, and only while the places webhook is configured; an unsent notice of the
+same row and kind takes the newer message instead of a new row.
+
 Event notification delivery is owned by Social in
 `social.event_notification_intents`. Explore inserts an event transition snapshot
 through qualified SQL in the same transaction as the event change; Social owns

@@ -914,6 +914,7 @@ pub async fn serve(
         &local_urls,
         &jobs,
         live_presence.clone(),
+        explore.settings.places_notices(),
     )
     .await?;
     // One process holds every connector socket: the primary mounts /ws, /ws/v4

@@ -38,6 +38,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
+use super::moderation::{self, CreatorRating, RatedRow};
 use super::query::{EXCLUDE_FROM_RANKING_SQL, raw_float8_sql};
 use crate::jobs::{Jobs, PeriodicCfg};
 
@@ -241,7 +242,8 @@ pub const SELECT_SCENES: &str = r#"
 /// preservation object: the pass rebuilds `raw` wholesale from the deployment,
 /// so a key it does not carry forward is erased by the next pass. The
 /// moderation overlay (`place_moderation`) decides `disabled`, `highlighted`
-/// and `content_rating` of a new row; an existing row keeps its own. A row the
+/// and `content_rating` of a new row; an existing row keeps its own, but for a
+/// rating a new deployment raises ([`upsert_page`]). A row the
 /// places mirror wrote is left to the mirror.
 const UPSERT: &str = r#"
     INSERT INTO explore.place
@@ -479,7 +481,7 @@ pub async fn run_once(
     scope: DeriveScope,
     content_public_url: &str,
 ) -> Result<PassSummary> {
-    run_once_with_storage(pool, scope, content_public_url, None).await
+    run_once_with_storage(pool, scope, content_public_url, None, None).await
 }
 
 /// The stored, hash-addressed scene.json supplies creator/runtimeVersion.
@@ -537,6 +539,7 @@ async fn run_once_with_storage(
     scope: DeriveScope,
     content_public_url: &str,
     storage: Option<&crate::storage::Storage>,
+    notify: Option<&str>,
 ) -> Result<PassSummary> {
     let started: NaiveDateTime = sqlx::query_scalar("SELECT timezone('UTC', clock_timestamp())")
         .fetch_one(pool)
@@ -631,7 +634,7 @@ async fn run_once_with_storage(
             sqlx::query("UPDATE explore.place SET fetched_at = timezone('UTC', clock_timestamp()) WHERE id = ANY($1) AND raw->>'source' = 'content'")
                 .bind(&failed).execute(pool).await?;
         }
-        upsert_page(pool, page).await?;
+        upsert_page(pool, page, notify).await?;
         if fetched < PAGE {
             break;
         }
@@ -673,7 +676,15 @@ fn positions_of(p: &DerivedPlace) -> Vec<String> {
 
 /// One transaction per page: a multi-row upsert, one overlap query for the fresh rows,
 /// and one batched curation update. Later duplicates of an id win, as they did row by row.
-async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>) -> Result<()> {
+/// A derived row's rating before this page: `(content_rating, deployed_at)`
+/// by id, locked until the page commits.
+const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.place \
+     WHERE id = ANY($1) AND raw->>'source' = 'content' ORDER BY id FOR UPDATE";
+
+const RAISE_RATINGS: &str = "UPDATE explore.place SET content_rating = u.rating \
+     FROM unnest($1::text[], $2::text[]) AS u(id, rating) WHERE explore.place.id = u.id";
+
+async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str>) -> Result<()> {
     let mut slot_of: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<usize> = Vec::with_capacity(page.len());
     for (i, p) in page.iter().enumerate() {
@@ -690,6 +701,22 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>) -> Result<()> {
         return Ok(());
     }
     let mut tx = pool.begin().await?;
+    let before: HashMap<String, (Option<String>, Option<NaiveDateTime>)> =
+        sqlx::query(LOCK_RATINGS)
+            .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|r| {
+                (
+                    r.try_get::<String, _>("id").unwrap_or_default(),
+                    (
+                        r.try_get("content_rating").unwrap_or(None),
+                        r.try_get("deployed_at").unwrap_or(None),
+                    ),
+                )
+            })
+            .collect();
     let inserted: HashMap<String, bool> = sqlx::query(UPSERT)
         .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
         .bind(
@@ -730,6 +757,45 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>) -> Result<()> {
             )
         })
         .collect();
+    // A new deployment's rating: a creator raises it, never lowers it
+    // (places::moderation::CreatorRating); a pass over the same deployment
+    // leaves the stored rating, an operator's included.
+    let mut raised: (Vec<String>, Vec<String>) = Default::default();
+    for p in &rows {
+        let Some((stored, deployed_at)) = before.get(&p.id) else {
+            continue;
+        };
+        if inserted.get(&p.id) != Some(&false) || *deployed_at == p.deployed_at {
+            continue;
+        }
+        // A scene without a rating is pending, as ingestion reads it.
+        let Some(proposed) = p
+            .content_rating
+            .as_deref()
+            .map(moderation::normalize_rating)
+            .or(stored.is_some().then_some("RP"))
+        else {
+            continue;
+        };
+        if CreatorRating::of(stored.as_deref(), proposed).applies() {
+            raised.0.push(p.id.clone());
+            raised.1.push(proposed.to_string());
+        }
+        if let (Some(base), Some(stored)) = (notify, stored.as_deref()) {
+            let row = RatedRow::Place {
+                id: &p.id,
+                base_position: &p.base_position,
+            };
+            moderation::capture_creator_rating(&mut tx, base, row, stored, proposed).await?;
+        }
+    }
+    if !raised.0.is_empty() {
+        sqlx::query(RAISE_RATINGS)
+            .bind(&raised.0)
+            .bind(&raised.1)
+            .execute(&mut *tx)
+            .await?;
+    }
     let fresh: Vec<(&DerivedPlace, Vec<String>)> = rows
         .iter()
         .filter(|p| inserted.get(&p.id).copied().unwrap_or(false))
@@ -828,15 +894,28 @@ pub fn spawn_job(
     interval: Duration,
     content_public_url: String,
     storage: Option<Arc<crate::storage::Storage>>,
+    notify: Option<String>,
 ) {
     tracing::info!(scope = ?scope, interval_secs = interval.as_secs(), "place catalogue: deriving from content deployments");
     jobs.spawn_periodic_leased(
         JOB_NAME,
         PeriodicCfg::every(interval).with_error_backoff(Duration::from_secs(3600)),
         move |ctx| {
-            let (pool, url, storage) = (pool.clone(), content_public_url.clone(), storage.clone());
+            let (pool, url, storage, notify) = (
+                pool.clone(),
+                content_public_url.clone(),
+                storage.clone(),
+                notify.clone(),
+            );
             async move {
-                let out = run_once_with_storage(&pool, scope, &url, storage.as_deref()).await?;
+                let out = run_once_with_storage(
+                    &pool,
+                    scope,
+                    &url,
+                    storage.as_deref(),
+                    notify.as_deref(),
+                )
+                .await?;
                 ctx.progress(format!(
                     "{} places derived, {} pruned",
                     out.derived, out.pruned
@@ -926,12 +1005,13 @@ mod tests {
         meta["v"]["scene"]["parcels"] = json!([base]);
         let place = derive("0xauthor", &[], None, &meta, None, "/content", true).unwrap();
         let id = place.id.clone();
-        upsert_page(&pool, vec![place]).await.unwrap();
+        upsert_page(&pool, vec![place], None).await.unwrap();
         sqlx::query("UPDATE explore.place SET categories = array_append(categories, 'featured') WHERE id = $1").bind(&id).execute(&pool).await.unwrap();
         meta["v"]["tags"] = json!(["music"]);
         upsert_page(
             &pool,
             vec![derive("0xauthor", &[], None, &meta, None, "/content", true).unwrap()],
+            None,
         )
         .await
         .unwrap();
@@ -946,6 +1026,7 @@ mod tests {
         upsert_page(
             &pool,
             vec![derive("0xauthor", &[], None, &meta, None, "/content", true).unwrap()],
+            None,
         )
         .await
         .unwrap();
@@ -956,6 +1037,101 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(unchanged, categories);
+    }
+
+    #[tokio::test]
+    async fn a_new_deployment_raises_the_rating_and_never_lowers_it() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let base = format!(
+            "{},{}",
+            u16::from_str_radix(&token[..4], 16).unwrap(),
+            u16::from_str_radix(&token[4..8], 16).unwrap()
+        );
+        let deploy = |rating: &str, minute: u32| {
+            let mut meta = wrapped();
+            meta["v"]["scene"]["base"] = json!(base);
+            meta["v"]["scene"]["parcels"] = json!([base]);
+            meta["v"]["policy"] = json!({ "contentRating": rating });
+            let at = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, minute, 0);
+            vec![derive("0xauthor", &[], at, &meta, None, "/content", true).unwrap()]
+        };
+        let id = deploy("T", 0)[0].id.clone();
+        let rating = || async {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT content_rating FROM explore.place WHERE id = $1",
+            )
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let notices = || async {
+            sqlx::query_as::<_, (String, Value)>(
+                "SELECT kind, payload FROM explore.moderation_hooks \
+                 WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+            )
+            .bind(&id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let site = Some("https://decentraland.org/places");
+
+        upsert_page(&pool, deploy("T", 0), site).await.unwrap();
+        assert_eq!(rating().await.as_deref(), Some("T"));
+        upsert_page(&pool, deploy("A", 1), site).await.unwrap();
+        assert_eq!(rating().await.as_deref(), Some("A"), "a redeploy raises");
+        upsert_page(&pool, deploy("A", 1), site).await.unwrap();
+        upsert_page(&pool, deploy("E", 2), site).await.unwrap();
+        assert_eq!(
+            rating().await.as_deref(),
+            Some("A"),
+            "a redeploy never lowers"
+        );
+        upsert_page(&pool, deploy("E", 2), site).await.unwrap();
+        let sent = notices().await;
+        let kinds: Vec<&str> = sent.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            kinds,
+            ["rating_upgraded", "rating_downgrade_refused"],
+            "one notice per new deployment"
+        );
+        let text = sent[0].1.to_string();
+        assert!(text.contains("upgraded by Content Creator"), "{text}");
+        assert!(
+            text.contains("Previous rating: T - New rating: A"),
+            "{text}"
+        );
+        let text = sent[1].1.to_string();
+        assert!(
+            text.contains("Actual rating: A - Proposed rating: E"),
+            "{text}"
+        );
+
+        // An operator lowers it; passes over the same deployment keep that.
+        moderation::apply(
+            &pool,
+            moderation::Target::Place(&id),
+            &moderation::Decision::Rating("T".into()),
+            "0xmoderator",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        upsert_page(&pool, deploy("E", 2), site).await.unwrap();
+        assert_eq!(rating().await.as_deref(), Some("T"));
+        upsert_page(&pool, deploy("R", 3), None).await.unwrap();
+        assert_eq!(
+            rating().await.as_deref(),
+            Some("R"),
+            "a later raise applies"
+        );
+        assert_eq!(notices().await.len(), 2, "no notice without the webhook");
     }
 
     #[test]
@@ -1166,7 +1342,7 @@ mod tests {
             sqlx::query("INSERT INTO content.content_files (deployment, content_hash, key) VALUES ($1, $2, 'scene.json')")
                 .bind(deployment).bind(&hash).execute(&pool).await.unwrap();
         }
-        run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage))
+        run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage), None)
             .await
             .unwrap();
         let path = storage.file_path(&hash).await.unwrap().unwrap();
@@ -1175,7 +1351,7 @@ mod tests {
         assert!(scene_file(&storage, "first", &hash).await.is_err());
         // Both unchanged deployments use the cached immutable blob despite an I/O fault.
         assert_eq!(
-            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage))
+            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage), None)
                 .await
                 .unwrap()
                 .derived,
@@ -1197,7 +1373,7 @@ mod tests {
             .unwrap();
         // One changed deployment faults; the other still refreshes and pruning retains the old usable row.
         assert_eq!(
-            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage))
+            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage), None)
                 .await
                 .unwrap()
                 .derived,
@@ -1221,7 +1397,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage))
+            run_once_with_storage(&pool, DeriveScope::All, "/content", Some(&storage), None)
                 .await
                 .unwrap()
                 .derived,

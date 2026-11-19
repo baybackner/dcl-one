@@ -17,11 +17,13 @@ Each row becomes a fact marked as imported in its `source` column, with its voti
 
 ## Moderation notices
 
-A disable or a rating upgrade posts a Slack-compatible notice to `PLACES_MODERATION_WEBHOOK`; the events notices post to `SLACK_WEBHOOK` ([events](events.md)). Both are captured in the writing transaction as rows of one outbox, `explore.moderation_hooks` (`channel` is `events` or `places`), and posted by the `moderation-hook` job every minute: six attempts with exponential backoff, rows kept thirty days, nothing posted before the node's first capture. Both need `OPS_WRITES_ENABLED`. While the database has the table `explore.event_moderation_hooks`, every pass of the job first moves its pending rows into the outbox ([events](events.md)).
+A disable, a rating upgrade or a creator's refused rating downgrade posts a Slack-compatible notice to `PLACES_MODERATION_WEBHOOK`; the events notices post to `SLACK_WEBHOOK` ([events](events.md)). Both are captured in the writing transaction as rows of one outbox, `explore.moderation_hooks` (`channel` is `events` or `places`), and posted by the `moderation-hook` job every minute: six attempts with exponential backoff, rows kept thirty days, nothing posted before the node's first capture. Both need `OPS_WRITES_ENABLED`. While the database has the table `explore.event_moderation_hooks`, every pass of the job first moves its pending rows into the outbox ([events](events.md)).
 
 ## Content ratings
 
 `PUT /api/places/{id}/rating` and `PUT /api/worlds/{id}/rating` take the old places service's rating codes. The stored code `RP`, which its PUT schema refuses, is accepted as well as `PR`; the code is answered verbatim. A disabled genesis place takes no rating or highlight, as the old service's update matched no such row; the rating audit row is written either way, and the route echoes the sent code as the old one did.
+
+A creator may raise a rating and never lower it; only these operator routes lower one. A new deployment of a scene this node derives takes the scene's `policy.contentRating` (none reads as `RP`) when it is at least the stored rating, `E` counting as `T`; a pass over the same deployment leaves the stored rating, an operator's included. A world's settings and the publish of its only scene apply the same rule to `worlds.worlds`. A stricter creator rating posts the rating upgrade notice (by Content Creator), and a laxer one, which the row keeps out, posts a downgrade notice; each is captured once per new deployment or settings write, and an unsent notice of the same kind takes the newer message.
 
 ## Browser origins
 

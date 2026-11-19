@@ -32,6 +32,10 @@
 //!   the `places` channel of the moderation outbox
 //!   (`crate::moderation_hooks`), which delivers it.
 //!
+//! A creator's rating (a scene deployment, a world's settings or publish)
+//! only raises the stored one ([`CreatorRating`]); its raise or refused
+//! lower is reported on the same channel ([`capture_creator_rating`]).
+//!
 //! The pending rating has two spellings upstream: the route schema's `PR`
 //! (`Place/schemas.ts:343`) and the code enum's `RP`
 //! (`SceneContentRating.RATING_PENDING`), which ingestion and the worlds
@@ -71,6 +75,52 @@ pub fn normalize_rating(code: &str) -> &str {
 pub fn is_upgrading_rating(rating: &str, original: &str) -> bool {
     let index = |code: &str| RATING_SCALE.iter().position(|c| *c == code);
     matches!((index(original), index(rating)), (Some(o), Some(n)) if o < n)
+}
+
+/// A code's place on the creator scale, least to most restrictive: the
+/// scale above with ingestion's reading of `E` as `T` and `M` as `A`;
+/// `None` off the scale.
+fn creator_rank(code: &str) -> Option<u8> {
+    match code {
+        "RP" | "PR" => Some(0),
+        "T" | "E" => Some(1),
+        "A" | "M" => Some(2),
+        "R" => Some(3),
+        _ => None,
+    }
+}
+
+/// What a creator's rating (a deployment's `contentRating`, a world's
+/// settings or publish) does to the stored one: a creator may raise a
+/// rating, never lower it; only an operator lowers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatorRating {
+    /// Off the scale: the stored rating stays.
+    Keep,
+    /// Nothing rated is stored, or the same rank: the proposal is stored.
+    Set,
+    /// Stricter than the stored rating: stored, and moderation is told.
+    Raise,
+    /// Laxer than the stored rating: the stored rating stays, and
+    /// moderation is told.
+    Lower,
+}
+
+impl CreatorRating {
+    pub fn of(stored: Option<&str>, proposed: &str) -> Self {
+        match (stored.and_then(creator_rank), creator_rank(proposed)) {
+            (_, None) => Self::Keep,
+            (None, Some(_)) => Self::Set,
+            (Some(s), Some(p)) if p > s => Self::Raise,
+            (Some(s), Some(p)) if p < s => Self::Lower,
+            _ => Self::Set,
+        }
+    }
+
+    /// Whether the proposal is stored.
+    pub fn applies(self) -> bool {
+        matches!(self, Self::Set | Self::Raise)
+    }
 }
 
 /// `to_char` format of the timestamps the projection writes into `raw`
@@ -369,7 +419,31 @@ fn disabled_message(row: &Resolved) -> Value {
 /// the link is `whatsOnPlaceUrl` / `whatsOnWorldUrl` (`Place/utils.ts:41-56`:
 /// the base with pathname `/whats-on`, so the base's own path is replaced).
 fn rating_upgraded_message(row: &Resolved, original: &str, rating: &str, base: &str) -> Value {
-    let (kind, link) = if row.world {
+    rating_upgraded_by(row, original, rating, base, "Content Moderator")
+}
+
+fn rating_upgraded_by(row: &Resolved, original: &str, rating: &str, base: &str, by: &str) -> Value {
+    let (kind, link) = row_link(row, base);
+    json!({ "blocks": [
+        { "type": "section", "text": { "type": "mrkdwn", "text": format!(":white_check_mark: The {kind} upgrade rating: {link}") } },
+        { "type": "section", "text": { "type": "plain_text", "text": format!("The rating was upgraded by {by}") } },
+        { "type": "section", "text": { "type": "plain_text", "text": format!("Previous rating: {original} - New rating: {rating}") } }
+    ] })
+}
+
+/// `notifyDowngradeRating(place, proposed)` (`Slack/utils.ts`): a creator's
+/// laxer rating, which the row did not take.
+fn rating_downgrade_message(row: &Resolved, stored: &str, proposed: &str, base: &str) -> Value {
+    let (kind, link) = row_link(row, base);
+    json!({ "blocks": [
+        { "type": "section", "text": { "type": "mrkdwn", "text": format!(":warning: The {kind} updated trying to downgrade rating: {link}") } },
+        { "type": "section", "text": { "type": "plain_text", "text": format!("Actual rating: {stored} - Proposed rating: {proposed}") } }
+    ] })
+}
+
+/// The kind and the What's On link of a notice's row.
+fn row_link(row: &Resolved, base: &str) -> (&'static str, String) {
+    if row.world {
         let name = row.world_name.as_deref().unwrap_or(&row.id);
         (
             "world",
@@ -395,12 +469,77 @@ fn rating_upgraded_message(row: &Resolved, original: &str, rating: &str, base: &
                 mrkdwn_escape(&row.base_position)
             ),
         )
+    }
+}
+
+/// The catalogue row a creator's rating is about: a place by its id and
+/// base parcel, or a world by its name.
+#[derive(Debug, Clone, Copy)]
+pub enum RatedRow<'a> {
+    Place { id: &'a str, base_position: &'a str },
+    World(&'a str),
+}
+
+/// Queues the notice of a creator's [`CreatorRating::Raise`] (`rating_upgraded`,
+/// by Content Creator) or [`CreatorRating::Lower`] (`rating_downgrade_refused`)
+/// in the write's transaction, linking into the places site at `base`; any
+/// other outcome queues nothing. The caller holds the row's lock, and a notice
+/// of the same kind not yet sent takes the new message instead of a new row.
+pub async fn capture_creator_rating(
+    tx: &mut Transaction<'_, Postgres>,
+    base: &str,
+    row: RatedRow<'_>,
+    stored: &str,
+    proposed: &str,
+) -> Result<(), sqlx::Error> {
+    let resolved = match row {
+        RatedRow::Place { id, base_position } => Resolved {
+            id: id.to_string(),
+            world: false,
+            disabled: false,
+            disabled_reason: None,
+            title: None,
+            base_position: base_position.to_string(),
+            world_name: None,
+            content_rating: Some(stored.to_string()),
+        },
+        RatedRow::World(name) => Resolved {
+            id: name.to_string(),
+            world: true,
+            disabled: false,
+            disabled_reason: None,
+            title: None,
+            base_position: String::new(),
+            world_name: Some(name.to_string()),
+            content_rating: Some(stored.to_string()),
+        },
     };
-    json!({ "blocks": [
-        { "type": "section", "text": { "type": "mrkdwn", "text": format!(":white_check_mark: The {kind} upgrade rating: {link}") } },
-        { "type": "section", "text": { "type": "plain_text", "text": "The rating was upgraded by Content Moderator" } },
-        { "type": "section", "text": { "type": "plain_text", "text": format!("Previous rating: {original} - New rating: {rating}") } }
-    ] })
+    let (kind, message) = match CreatorRating::of(Some(stored), proposed) {
+        CreatorRating::Raise => (
+            "rating_upgraded",
+            rating_upgraded_by(&resolved, stored, proposed, base, "Content Creator"),
+        ),
+        CreatorRating::Lower => (
+            "rating_downgrade_refused",
+            rating_downgrade_message(&resolved, stored, proposed, base),
+        ),
+        CreatorRating::Keep | CreatorRating::Set => return Ok(()),
+    };
+    // One undelivered notice per row and kind: a newer change replaces its message.
+    let pending = sqlx::query(
+        "UPDATE explore.moderation_hooks SET payload = $3 WHERE channel = 'places' \
+         AND subject = $1 AND kind = $2 AND completed_at IS NULL AND attempts = 0",
+    )
+    .bind(&resolved.id)
+    .bind(kind)
+    .bind(&message)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if pending > 0 {
+        return Ok(());
+    }
+    capture(tx, &resolved.id, kind, &message).await
 }
 
 /// Queues one notice in the decision's transaction.
@@ -490,6 +629,23 @@ mod tests {
             !is_upgrading_rating("T", "PR"),
             "the unnormalised spelling never upgraded upstream"
         );
+    }
+
+    #[test]
+    fn a_creator_raises_a_rating_and_never_lowers_it() {
+        use CreatorRating::*;
+        assert_eq!(CreatorRating::of(Some("T"), "A"), Raise);
+        assert_eq!(CreatorRating::of(Some("RP"), "R"), Raise);
+        assert_eq!(CreatorRating::of(Some("A"), "T"), Lower);
+        assert_eq!(CreatorRating::of(Some("R"), "RP"), Lower);
+        assert_eq!(CreatorRating::of(Some("A"), "E"), Lower, "E reads as T");
+        assert_eq!(CreatorRating::of(Some("E"), "A"), Raise);
+        assert_eq!(CreatorRating::of(Some("E"), "T"), Set, "the same rank");
+        assert_eq!(CreatorRating::of(Some("T"), "T"), Set);
+        assert_eq!(CreatorRating::of(Some("T"), "X"), Keep, "off the scale");
+        assert_eq!(CreatorRating::of(None, "A"), Set);
+        assert_eq!(CreatorRating::of(Some("X"), "A"), Set);
+        assert!(Raise.applies() && Set.applies() && !Lower.applies() && !Keep.applies());
     }
 
     #[test]

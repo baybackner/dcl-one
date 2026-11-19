@@ -116,6 +116,9 @@ pub struct Settings {
     pub owner_reconcile_interval: std::time::Duration,
     /// `ACCESS_MAX_WALLETS`, `ACCESS_MAX_COMMUNITIES`: the access allow-list caps.
     pub access_caps: store::AccessCaps,
+    /// The places site base a creator's rating change is reported under, while
+    /// the places moderation webhook is on (`explore::Settings::places_notices`).
+    pub places_notices: Option<String>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -144,6 +147,7 @@ impl Settings {
             partial_uploads: PartialUploadLimits::default(),
             owner_reconcile_interval: DEFAULT_OWNER_RECONCILE_INTERVAL,
             access_caps: store::AccessCaps::default(),
+            places_notices: None,
         })
     }
 
@@ -176,6 +180,11 @@ impl Settings {
         self
     }
 
+    pub fn with_places_notices(mut self, base: Option<&str>) -> Self {
+        self.places_notices = base.map(str::to_string);
+        self
+    }
+
     pub fn with_max_file_count(mut self, max_file_count: u32) -> Self {
         self.max_file_count = max_file_count as usize;
         self
@@ -199,6 +208,7 @@ impl Settings {
             partial_uploads: PartialUploadLimits::default(),
             owner_reconcile_interval: DEFAULT_OWNER_RECONCILE_INTERVAL,
             access_caps: store::AccessCaps::default(),
+            places_notices: None,
         }
     }
 }

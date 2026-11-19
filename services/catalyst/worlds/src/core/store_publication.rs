@@ -1,5 +1,6 @@
 //! Worlds publication persistence on the shared pool.
 use super::*;
+use crate::explore::places::moderation::{CreatorRating, RatedRow, capture_creator_rating};
 
 /// `$delete` (a `DELETE FROM worlds.world_scenes ...`) moving the rows it
 /// removes into `worlds.retired_world_scenes` (a re-retired id restarts its TTL).
@@ -140,6 +141,7 @@ pub async fn deploy_scene_with_on(
         replacement,
         forward_to,
         quota,
+        places_notices,
     } = deployment;
     let mut s = scene_settings_from_entity(entity);
     if let Some(hash) = s.thumbnail_hash.take() {
@@ -161,12 +163,13 @@ pub async fn deploy_scene_with_on(
         .execute(&mut *tx)
         .await?;
     // Locks an existing row so the owner read is the one this write replaces.
-    let previous_owner: Option<String> =
-        sqlx::query_scalar("SELECT owner FROM worlds.worlds WHERE name = $1 FOR UPDATE")
-            .bind(world.key())
-            .fetch_optional(&mut *tx)
-            .await?
-            .flatten();
+    let (previous_owner, stored_rating): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT owner, content_rating FROM worlds.worlds WHERE name = $1 FOR UPDATE",
+    )
+    .bind(world.key())
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or_default();
 
     let (is_insert, disabled): (bool, bool) = sqlx::query_as(
         r#"INSERT INTO worlds.worlds AS w (
@@ -230,6 +233,22 @@ pub async fn deploy_scene_with_on(
         .await?;
 
         if sole_occupant {
+            // A creator raises the world's rating, never lowers it.
+            let proposed = s.content_rating.as_deref();
+            let content_rating =
+                proposed.filter(|r| CreatorRating::of(stored_rating.as_deref(), r).applies());
+            if let (Some(base), Some(stored), Some(proposed)) =
+                (places_notices, stored_rating.as_deref(), proposed)
+            {
+                capture_creator_rating(
+                    &mut tx,
+                    base,
+                    RatedRow::World(world.key()),
+                    stored,
+                    proposed,
+                )
+                .await?;
+            }
             sqlx::query(
                 r#"UPDATE worlds.worlds SET
                      title = COALESCE($2, title),
@@ -254,7 +273,7 @@ pub async fn deploy_scene_with_on(
             .bind(world.key())
             .bind(&s.title)
             .bind(&s.description)
-            .bind(&s.content_rating)
+            .bind(content_rating)
             .bind(s.skybox_time)
             .bind(&s.categories)
             .bind(s.single_player)

@@ -360,13 +360,7 @@ fn world_answer(row: PlaceRow) -> Json<ApiData<Value>> {
 /// The moderation webhook capture: on with operator writes and a configured
 /// endpoint (`places::moderation::Context::notify`).
 fn notify(state: &SharedState) -> Option<&str> {
-    let configured = state
-        .settings
-        .places_moderation_webhook
-        .as_deref()
-        .is_some_and(|w| !w.trim().is_empty());
-    (state.settings.operator_writes_enabled && configured)
-        .then_some(state.settings.places_base_url.as_str())
+    state.settings.places_notices()
 }
 
 /// `updatePlace`'s predicate on the row a places route addresses

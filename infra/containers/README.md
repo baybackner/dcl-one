@@ -165,6 +165,8 @@ describes cache scope, trust boundaries, stale-entry replacement and retention.
 
 Event poster upgrade: run `catalyst schema migrate` before deploying the API. Step `0050_explore_poster_avif` allows mirrored AVIF posters to be stored with their detected media type and preserves existing poster rows.
 
+Content rating notices: run `catalyst schema migrate` before deploying the API. Step `0051_explore_rating_downgrade_notice` widens the places moderation notice kinds and preserves existing notices.
+
 World-admission upgrade: the release script
 `schemas/releases/world-scene-ban-keys.sql` requires a maintenance window. Stop old API and
 scene-host replicas before `catalyst schema migrate`; the object pass installs the durable queue.
