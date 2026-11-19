@@ -75,6 +75,7 @@ pub mod language_setting;
 pub mod load_distance;
 pub mod max_avatars;
 pub mod max_downloads;
+pub mod microphone_setting;
 pub mod oob_setting;
 pub mod parcel_grass_settings;
 pub mod player_settings;
@@ -227,6 +228,8 @@ impl Plugin for SettingBridgePlugin {
         add_int_setting::<VoiceChatVolumeSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<SystemVolumeSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<AvatarVolumeSetting>(app, &mut settings, &mut schedule, &config);
+        #[cfg(target_arch = "wasm32")]
+        microphone_setting::add(app, &mut settings, &config);
 
         add_enum_setting::<DmPrivacy>(app, &mut settings, &mut schedule, &config);
         app.init_resource::<PlayerLanguage>();

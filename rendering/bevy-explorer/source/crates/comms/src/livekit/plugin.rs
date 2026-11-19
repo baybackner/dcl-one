@@ -56,6 +56,7 @@ impl Plugin for LivekitPlugin {
         {
             app.insert_resource(crate::livekit::web::take_event_receiver())
                 .init_resource::<crate::livekit::web::MicrophoneStatus>()
+                .init_resource::<system_bridge::settings::microphone_setting::MicrophoneDevices>()
                 .add_systems(PreUpdate, crate::livekit::web::dispatch_page_events);
         }
 

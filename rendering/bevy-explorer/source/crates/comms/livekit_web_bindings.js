@@ -10,6 +10,7 @@ function error(...args) {
 
 var audioContext = null;
 var microphonePermission = "denied";
+var reportMicrophoneDevices = () => {};
 const roomPlayback = new WeakMap();
 
 /**
@@ -23,6 +24,8 @@ export function setupMicrophonePermission(on_change) {
         permissionState.onchange = () => {
             microphonePermission = permissionState.state;
             on_change(microphonePermission);
+            // a grant reveals the devices' ids and labels
+            reportMicrophoneDevices();
         };
     });
 }
@@ -51,9 +54,46 @@ export function promptMicrophonePermission() {
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices
             .getUserMedia({ audio: true })
-            .then((stream) => stream.getTracks().forEach((track) => track.stop()))
+            .then((stream) => {
+                stream.getTracks().forEach((track) => track.stop());
+                reportMicrophoneDevices();
+            })
             .catch(() => {});
     }
+}
+
+/**
+ * Reports the audio inputs now and whenever they change. The browser's "default" and
+ * "communications" entries are aliases of real inputs and are left out; without microphone
+ * permission the browser hides every input's id, so none is reported.
+ * @param {function} on_change called with an array of { id, label }
+ */
+export function watchMicrophoneDevices(on_change) {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) {
+        return;
+    }
+    reportMicrophoneDevices = () => {
+        navigator.mediaDevices
+            .enumerateDevices()
+            .then((devices) => {
+                const inputs = devices.filter(
+                    (device) =>
+                        device.kind === "audioinput" &&
+                        device.deviceId &&
+                        device.deviceId !== "default" &&
+                        device.deviceId !== "communications"
+                );
+                on_change(
+                    inputs.map((device, index) => ({
+                        id: device.deviceId,
+                        label: device.label || `Microphone ${index + 1}`,
+                    }))
+                );
+            })
+            .catch((err) => warn("listing microphones failed", err));
+    };
+    navigator.mediaDevices.addEventListener("devicechange", reportMicrophoneDevices);
+    reportMicrophoneDevices();
 }
 
 /**

@@ -137,8 +137,14 @@ function isBinary(s: Setting): boolean {
   if (s.namedVariants.length === 2) return s.namedVariants.every((v) => /^(off|on)$/i.test(v.name))
   return s.namedVariants.length === 0 && s.maxValue - s.minValue <= 1 && s.stepSize >= 1
 }
+// Any named choice is a select, even a lone one: the engine's Microphone lists only System Default
+// until the browser reveals the inputs.
 function isSlider(s: Setting): boolean {
-  return !isBinary(s) && s.namedVariants.length < 2
+  return !isBinary(s) && s.namedVariants.length === 0
+}
+// The engine's Microphone choices follow the devices plugged in.
+function sameVariants(a: Setting, b: Setting): boolean {
+  return a.namedVariants.length === b.namedVariants.length && a.namedVariants.every((v, i) => v.name === b.namedVariants[i].name)
 }
 // Values are f32 widened to f64 on the way over, so 19.95 arrives as 19.950000762939453. Showing
 // them at f32's own precision drops the noise, and the trailing zeros with it. Display only.
@@ -170,7 +176,7 @@ function Control({ s, onSet }: { s: Setting; onSet: (name: string, value: number
   if (isBinary(s)) {
     return <Toggle checked={s.value >= 1} disabled={unset} onChange={(c) => onSet(s.name, c ? 1 : 0)} aria-label={s.name} />
   }
-  if (s.namedVariants.length >= 2) {
+  if (s.namedVariants.length > 0) {
     return (
       <Select
         variant="light"
@@ -211,7 +217,11 @@ const SettingField = memo(
       </div>
     )
   },
-  (prev, next) => prev.s.name === next.s.name && prev.s.value === next.s.value && prev.onSet === next.onSet
+  (prev, next) =>
+    prev.s.name === next.s.name &&
+    prev.s.value === next.s.value &&
+    sameVariants(prev.s, next.s) &&
+    prev.onSet === next.onSet
 )
 
 /** The chat settings kept by the HUD rather than the engine: translation (the language is the

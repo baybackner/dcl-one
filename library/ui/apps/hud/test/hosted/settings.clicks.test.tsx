@@ -123,6 +123,28 @@ describe('settings panel unset controls', () => {
   })
 })
 
+// The engine's Microphone lists only System Default until the browser reveals the inputs.
+describe('settings panel microphone', () => {
+  const DEFAULT_ONLY = base({ name: 'Microphone', category: 'Audio', namedVariants: [{ name: 'System Default', description: '' }], maxValue: 1 })
+  const panel = (settings: SettingsState): React.JSX.Element => (
+    <SettingsPanel lobbyStage={{ preset: 'halloween-2026', set: vi.fn() }} settings={settings} bindings={fakeSession().bindings} profile={fakeProfileState()} onNavigate={vi.fn()} />
+  )
+
+  it('a lone choice is a select, and the devices reported later become choices', async () => {
+    resetSettingsTab()
+    const settings: SettingsState = { ...fakeSession().settings, open: true, list: [DEFAULT_ONLY], set: vi.fn() }
+    const { rerender } = render(panel(settings))
+    expect(screen.getByRole('button', { name: 'Microphone' })).toBeEnabled()
+    expect(screen.queryByRole('slider', { name: 'Microphone' })).toBeNull()
+
+    const reported = { ...DEFAULT_ONLY, namedVariants: [...DEFAULT_ONLY.namedVariants, { name: 'USB Headset', description: '' }], maxValue: 2 }
+    rerender(panel({ ...settings, list: [reported] }))
+    await userEvent.click(screen.getByRole('button', { name: 'Microphone' }))
+    await userEvent.click(screen.getByRole('option', { name: 'USB Headset' }))
+    expect(vi.mocked(settings.set)).toHaveBeenCalledWith('Microphone', 1)
+  })
+})
+
 describe('compact settings', () => {
   beforeEach(() => resetSettingsTab())
 

@@ -32,9 +32,7 @@ impl Plugin for MicDebugPlugin {
                     ("Client window focus", "windowFocus"),
                     ("Local microphone track active", "transmitting"),
                     ("Active remote speakers (up to 32)", "speakers"),
-                    #[cfg(not(target_arch = "wasm32"))]
                     ("Available input devices", "devices"),
-                    #[cfg(not(target_arch = "wasm32"))]
                     ("Current input device", "device"),
                     #[cfg(not(target_arch = "wasm32"))]
                     ("Capture sample rate (Hz)", "rate"),
@@ -114,6 +112,10 @@ fn microphone_info(
     speakers: Query<&LivekitParticipant, (With<ActiveSpeaker>, Without<Local>)>,
     #[cfg(not(target_arch = "wasm32"))] device: Option<Res<MicrophoneDevice>>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
+    #[cfg(target_arch = "wasm32")] devices: Res<
+        system_bridge::settings::microphone_setting::MicrophoneDevices,
+    >,
+    #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
 ) {
     let Some(Ok(_)) = input.take() else { return };
     let speakers: BTreeSet<_> = speakers.iter().map(|p| p.identity().to_string()).collect();
@@ -135,6 +137,18 @@ fn microphone_info(
             "device": "No current input device",
             "devices": "Input device enumeration failed",
         });
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let chosen = config.audio.microphone.as_ref().map(|id| {
+            devices
+                .0
+                .iter()
+                .find(|device| &device.id == id)
+                .map_or("Chosen device (unplugged)", |device| device.label.as_str())
+        });
+        report["device"] = json!(chosen.unwrap_or("System Default"));
+        report["devices"] = json!(devices.0.len());
     }
     input.reply_ok(report.to_string());
 }

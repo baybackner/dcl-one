@@ -12,7 +12,11 @@ use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
 use {
     bevy::render::view::RenderLayers,
-    common::{structs::AudioSettings, util::AsH160, util::VolumePanning},
+    common::{
+        structs::{AppConfig, AudioSettings},
+        util::AsH160,
+        util::VolumePanning,
+    },
     livestream_manager::AudioTransmitterVolume,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -195,6 +199,9 @@ pub(crate) struct MicrophonePublication {
     cancel: tokio::sync::watch::Sender<bool>,
     drain: MicrophoneDrain,
     task: JoinHandle<()>,
+    /// The input chosen when the route started.
+    #[cfg(target_arch = "wasm32")]
+    device: Option<String>,
 }
 
 impl MicrophonePublication {
@@ -685,6 +692,7 @@ fn reconcile_publications(
     livekit_runtime: LivekitRuntimeRes,
     #[cfg(not(target_arch = "wasm32"))] source: Res<LocalAudioSource>,
     #[cfg(not(target_arch = "wasm32"))] format: Option<Res<CaptureFormat>>,
+    #[cfg(target_arch = "wasm32")] config: Res<AppConfig>,
 ) {
     let enabled = microphone_routes_open(*focus, &mic, *permission.get(), *availability.get());
     let eligible = |room: Entity, participant: &LivekitParticipant| {
@@ -700,7 +708,12 @@ fn reconcile_publications(
     let mut revoking = false;
     for (entity, participant, room, publication) in &participants {
         if let Some(publication) = publication {
-            if publication.should_remove(eligible(room.get(), participant)) {
+            // A route captures from the input chosen when it started; another choice replaces it.
+            #[cfg(target_arch = "wasm32")]
+            let current = publication.device == config.audio.microphone;
+            #[cfg(not(target_arch = "wasm32"))]
+            let current = true;
+            if publication.should_remove(current && eligible(room.get(), participant)) {
                 commands
                     .entity(entity)
                     .try_remove::<MicrophonePublication>();
@@ -749,6 +762,10 @@ fn reconcile_publications(
         let receiver = source.subscribe();
         #[cfg(not(target_arch = "wasm32"))]
         let (sample_rate, channels) = (format.sample_rate, format.channels);
+        #[cfg(target_arch = "wasm32")]
+        let device = config.audio.microphone.clone();
+        #[cfg(target_arch = "wasm32")]
+        let task_device = device.clone();
 
         let task = livekit_runtime.spawn(async move {
             if installed.await.is_err() || task_revoked.load(Ordering::SeqCst) {
@@ -765,7 +782,7 @@ fn reconcile_publications(
             )
             .await;
             #[cfg(target_arch = "wasm32")]
-            let track = match build_audio_local_track().await {
+            let track = match build_audio_local_track(task_device).await {
                 Ok(Ok(track)) => track,
                 Ok(Err(err)) => {
                     warn!("microphone creation failed: {err}");
@@ -842,6 +859,8 @@ fn reconcile_publications(
             cancel,
             drain: drain.clone(),
             task,
+            #[cfg(target_arch = "wasm32")]
+            device,
         }
         .queue_insert(&mut commands, entity, start);
     }
@@ -974,8 +993,11 @@ async fn build_audio_local_track(
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn build_audio_local_track() -> super::web::RoomResult<Result<LocalAudioTrack, String>> {
+async fn build_audio_local_track(
+    device_id: Option<String>,
+) -> super::web::RoomResult<Result<LocalAudioTrack, String>> {
     LocalAudioTrack::new(AudioCaptureOptions {
+        device_id,
         echo_cancellation: Some(true),
         noise_suppression: Some(true),
         auto_gain_control: Some(true),

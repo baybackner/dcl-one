@@ -11,6 +11,7 @@ use bevy::{
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_lite::StreamExt;
 use js_sys::{Object, Reflect};
+use system_bridge::settings::microphone_setting::MicrophoneDevice;
 use wasm_bindgen::{closure::Closure, prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::HtmlVideoElement;
 
@@ -29,6 +30,8 @@ extern "C" {
     fn is_microphone_available() -> bool;
     #[wasm_bindgen(js_name = "promptMicrophonePermission")]
     fn prompt_microphone_permission();
+    #[wasm_bindgen(js_name = "watchMicrophoneDevices")]
+    fn watch_microphone_devices(on_change: &Closure<dyn FnMut(JsValue)>);
 
     #[wasm_bindgen(catch)]
     async fn room_connect(
@@ -503,6 +506,23 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
             setup_microphone_permission(&on_change);
             // lives as long as the page
             on_change.forget();
+
+            let events = events.clone();
+            let on_devices = Closure::new(move |devices: JsValue| {
+                let devices = js_sys::Array::from(&devices)
+                    .iter()
+                    .filter_map(|device| {
+                        Some(MicrophoneDevice {
+                            id: get_string(&device, "id")?,
+                            label: get_string(&device, "label")?,
+                        })
+                    })
+                    .collect();
+                let _ = events.unbounded_send(LivekitEvent::MicrophoneDevices(devices));
+            });
+            watch_microphone_devices(&on_devices);
+            // lives as long as the page
+            on_devices.forget();
         }
         LivekitCommand::PromptMicrophonePermission => prompt_microphone_permission(),
     }
@@ -620,6 +640,12 @@ fn track_publish_options(options: &TrackPublishOptions) -> JsValue {
 
 fn audio_capture_options(options: &AudioCaptureOptions) -> JsValue {
     let object = Object::new();
+    if let Some(id) = &options.device_id {
+        // `ideal`, unlike `exact`, falls back to another input when this one is gone
+        let device_id = Object::new();
+        set(&device_id, "ideal", id.as_str());
+        set(&object, "deviceId", device_id);
+    }
     if let Some(v) = options.auto_gain_control {
         set(&object, "autoGainControl", v);
     }

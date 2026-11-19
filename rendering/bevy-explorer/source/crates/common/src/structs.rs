@@ -1064,6 +1064,8 @@ pub struct AudioSettings {
     pub scene: i32,
     pub system: i32,
     pub avatar: i32,
+    /// The chosen audio input's device id; `None` uses the system default.
+    pub microphone: Option<String>,
 }
 
 impl Default for AudioSettings {
@@ -1075,6 +1077,7 @@ impl Default for AudioSettings {
             scene: 100,
             system: 100,
             avatar: 100,
+            microphone: None,
         }
     }
 }
@@ -2499,6 +2502,7 @@ mod tests {
                 scene: 30,
                 system: 20,
                 avatar: 10,
+                microphone: None,
             }
         );
     }
