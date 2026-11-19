@@ -3,7 +3,7 @@
 //! task on the page's event loop; nothing here may block.
 
 use bevy::{
-    log::{debug, warn},
+    log::{debug, debug_once, warn},
     platform::collections::HashMap,
     prelude::AssetId,
 };
@@ -58,14 +58,13 @@ pub(crate) fn send(command: AudioCommand) {
         Some(host) => {
             let _ = host.unbounded_send(command);
         }
-        None => debug!("no audio host: dropping {command:?}"),
+        None => debug_once!("no audio host: dropping audio commands"),
     }
 }
 
 /// Page entry: starts serving audio commands. Call after the module is initialised on the page
 /// and before the engine worker starts (exported by the root crate's `web.rs`).
 pub fn audio_host_main() {
-    // without a context no host is set
     let context = match AudioContext::new() {
         Ok(context) => context,
         Err(e) => {
