@@ -199,6 +199,15 @@ impl<T: CollectibleType> CollectibleUrn<T> {
         self.urn.as_str()
     }
 
+    /// The urn [`Self::new`] gives a bare name without `:`: the name lowercased, keyed under
+    /// `UNKNOWN_SOURCE_COLLECTION`.
+    pub(crate) fn unknown_source(name: &'static str) -> Self {
+        Self {
+            urn: format!("{UNKNOWN_SOURCE_COLLECTION}:{}", name.to_ascii_lowercase()),
+            _p: PhantomData,
+        }
+    }
+
     /// The bare name of a urn keyed under `UNKNOWN_SOURCE_COLLECTION`.
     pub(crate) fn unknown_source_name(&self) -> Option<&str> {
         self.urn

@@ -50,6 +50,11 @@ pub type EmoteUrn = CollectibleUrn<Emote>;
 pub type EmoteInstance = CollectibleInstance<Emote>;
 
 impl EmoteUrn {
+    /// The urn of a built-in emote's bare name (`"idle_male"`, no `:`), built without parsing.
+    pub fn builtin(name: &'static str) -> Self {
+        Self::unknown_source(name)
+    }
+
     pub fn scene_emote(&self) -> Option<&str> {
         self.skip_take(0, 6)
             .rsplit_once(':')

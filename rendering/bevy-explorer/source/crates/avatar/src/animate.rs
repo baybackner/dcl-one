@@ -47,20 +47,19 @@ use crate::{process_avatar, upload_cpu_mesh, AvatarDefinition};
 #[derive(Component)]
 pub struct AvatarAnimPlayer(pub Entity);
 
-// engine-emote urns used every frame by the velocity selector; parsed once
-// (EmoteUrn::new re-validates and re-allocates several times per call)
-static URN_IDLE: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("idle_male").unwrap());
+// engine-emote urns used every frame by the velocity selector; built once
+pub(crate) static URN_IDLE: std::sync::LazyLock<EmoteUrn> =
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("idle_male"));
 static URN_JUMP: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("jump").unwrap());
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("jump"));
 static URN_WALK: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("walk").unwrap());
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("walk"));
 static URN_RUN: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("run").unwrap());
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("run"));
 static URN_DOUBLE_JUMP: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("double_jump").unwrap());
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("double_jump"));
 static URN_GLIDE: std::sync::LazyLock<EmoteUrn> =
-    std::sync::LazyLock::new(|| EmoteUrn::new("glide").unwrap());
+    std::sync::LazyLock::new(|| EmoteUrn::builtin("glide"));
 
 // per-avatar animate state previously held in per-frame-rebuilt Local HashMaps
 #[derive(Component, Default)]

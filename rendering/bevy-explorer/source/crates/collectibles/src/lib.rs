@@ -473,6 +473,21 @@ mod tests {
     }
 
     #[test]
+    fn builtin_emote_urns_match_parsed_bare_names() {
+        for name in [
+            "idle_male",
+            "Idle_Male",
+            "jump",
+            "walk",
+            "run",
+            "double_jump",
+            "glide",
+        ] {
+            assert_eq!(EmoteUrn::builtin(name), EmoteUrn::new(name).unwrap());
+        }
+    }
+
+    #[test]
     fn bare_emote_names_are_tried_under_every_source_collection() {
         let bare = EmoteUrn::new("sittingChair2").unwrap();
         assert_eq!(
