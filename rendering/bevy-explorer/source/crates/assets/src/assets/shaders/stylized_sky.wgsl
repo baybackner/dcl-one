@@ -1,7 +1,8 @@
 // The stylized sky, drawn into the atmosphere cube: the sky colour from a lookup by day phase
-// and elevation, with a scene's own sky colours blended over it, under three strips of cloud.
-// The lookup follows Unity's SkyLut.hlsl and the clouds its CloudsV2.hlsl; colours are used as
-// authored, with no conversion.
+// and elevation, with a scene's own sky colours blended over it, then the sun or the moon as a
+// disc in a halo, under three strips of cloud. The lookup follows Unity's SkyLut.hlsl, the disc
+// its SunDisc.hlsl, the halo its SunRadiance sub-graph and the clouds its CloudsV2.hlsl; colours
+// are used as authored, with no conversion.
 
 struct StylizedSky {
     tick: u32,
@@ -14,7 +15,10 @@ struct StylizedSky {
     disc_opacity: f32,
     disc_color: vec3<f32>,
     disc_size: f32,
+    // the halo around the disc: radius, intensity
     halo: vec2<f32>,
+    // where the crescent's mask sits off the disc's centre, in the body's own frame
+    mask_offset: vec2<f32>,
     // scales every cloud strip's opacity
     cloud_opacity: f32,
     // how much the body behind a cloud lights it through
@@ -22,6 +26,8 @@ struct StylizedSky {
     cloud_lit: vec3<f32>,
     scene_sun_visible: f32,
     cloud_shadow: vec3<f32>,
+    // the size of the circle that cuts the moon's disc to a crescent; 0 leaves a disc whole
+    mask_size: f32,
     // strength, tiling U, tiling V, speed
     horizon_noise: vec4<f32>,
     // scene-authored linear sky colours; alpha flags whether each band is overridden
@@ -137,6 +143,34 @@ fn clouds(dir: vec3<f32>, azimuth: f32, elevation_deg: f32) -> vec4<f32> {
     return vec4<f32>(color, alpha);
 }
 
+// The sun's or the moon's disc toward `dir`: Unity's SunDisc_float without the haze and the
+// second sun, which the preset leaves off.
+fn disc(dir: vec3<f32>) -> vec3<f32> {
+    // Unity's own vectors, so its maths applies as written: its +Z is -Z here, its light
+    // direction runs from the body and its view direction from the sky to the eye
+    let light = vec3<f32>(-sky.body_direction.x, -sky.body_direction.y, sky.body_direction.z);
+    let view = vec3<f32>(-dir.x, -dir.y, dir.z);
+    let body = step(acos(clamp(dot(light, view), -1.0, 1.0)), sky.disc_size * 0.3);
+
+    // the crescent: a second circle, off the centre in the body's own frame so it keeps one
+    // shape wherever the body is, cuts a hole. Size 0 leaves the disc whole
+    let up_hint = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(light.y) > 0.999);
+    let right = normalize(cross(up_hint, light));
+    let up = cross(light, right);
+    let mask_centre = normalize(light + right * sky.mask_offset.x + up * sky.mask_offset.y);
+    let mask = step(sky.mask_size * sky.mask_size, acos(clamp(dot(mask_centre, view), -1.0, 1.0)));
+
+    return body * sky.disc_color * sky.disc_opacity * sky.disc_opacity * mask;
+}
+
+// The glow around the body toward `dir`: Unity's SunRadiance sub-graph. It is whole within the
+// radius of the body and gone a radian further out. The graph's colour is a vec4, so its length
+// counts an alpha of 1.
+fn halo(dir: vec3<f32>) -> vec3<f32> {
+    let angle = acos(clamp(dot(sky.body_direction, dir), -1.0, 1.0));
+    return saturate((1.0 - angle + sky.halo.x) * sky.halo.y) * normalize(vec4<f32>(sky.disc_color, 1.0)).rgb;
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
     let size = textureDimensions(image).x;
@@ -209,12 +243,30 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
         color = mix(color, sky.scene_rim.rgb, rim_weight);
     }
 
-    // the clouds over the sky. Alpha is how much they hide of what lies behind them, the stars
-    // and the sun: only mostly opaque cloud does, or soft edges would wear a dark ring. The
-    // edges are kept apart, as above
+    // Alpha is how much the clouds hide of what lies behind them, the stars and the disc: only
+    // mostly opaque cloud does, or soft edges would wear a dark ring. The edges are kept apart,
+    // as above
     let cloud = clouds(ray, azimuth, elevation_deg);
-    color = color * (1.0 - cloud.a) + cloud.rgb;
     let occlusion = smoothstep(sky.cloud_fades.z, max(sky.cloud_fades.w, sky.cloud_fades.z + 1e-4), cloud.a);
+
+    // The body goes on the sky under the clouds, in the order of the edges of Unity's
+    // GenesisSky.shadergraph with its stylized keyword on:
+    //   SkyLut -> Blend (Screen; Blend = Sun Radiance, Opacity = Sun Opacity)
+    //          -> SunComposite.Base (Blend = SunAndMoon * saturate(1 - Occlusion),
+    //                                Opacity = saturate(1 - Occlusion))
+    //          -> CloudsV2Composite.Base
+    // So the halo is added once, screened onto the sky at the disc's opacity, and no cloud
+    // occlusion masks it: the clouds only cover it. The disc is added (SunComposite, stylized)
+    // and the occlusion counts twice, in what is blended and in how much of the blend shows.
+    if sky.scene_sun_visible > 0.0 {
+        let screened = 1.0 - (1.0 - halo(ray)) * (1.0 - color);
+        color = mix(color, screened, sky.disc_opacity);
+        let shown = 1.0 - occlusion;
+        color += disc(ray) * shown * shown;
+    }
+
+    // the clouds over the sky and the body, so a soft cloud edge dims the sun behind it
+    color = color * (1.0 - cloud.a) + cloud.rgb;
 
     textureStore(
         image,

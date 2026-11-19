@@ -615,6 +615,63 @@ mod tests {
     }
 
     #[test]
+    fn the_disc_follows_the_light_and_the_scene_sun() {
+        use crate::sky_preset::{
+            sample_ramp, time_to_phase, MOON_COLOR_RAMP, MOON_MASK_SIZE, SUN_COLOR_RAMP,
+        };
+        use scene_runner::update_world::lights::moon_progress;
+        let mut app = light_app();
+        // midnight: the light is on the moon's arc and the sky's sun under the horizon
+        let moonlight = Vec3::new(0.6, -0.8, 0.0);
+        app.world_mut().resource_mut::<TimeOfDay>().time = 0.0;
+        let mut light = app.world_mut().resource_mut::<SceneGlobalLight>();
+        light.dir_direction = moonlight;
+        light.sun_direction = Vec3::Y;
+        app.update();
+        let atmosphere = sky(&app);
+        assert!(atmosphere.body_direction.abs_diff_eq(-moonlight, 1e-6));
+        assert_eq!(
+            (atmosphere.moon_active, atmosphere.mask_size),
+            (1.0, MOON_MASK_SIZE)
+        );
+        assert_eq!(
+            (atmosphere.disc_opacity, atmosphere.backlight_weight),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            atmosphere.disc_color,
+            sample_ramp(&MOON_COLOR_RAMP, moon_progress(0.0))
+        );
+
+        // a scene's direction is the light's and the sky sun's: the sun's whole disc is there
+        app.world_mut()
+            .resource_mut::<SceneGlobalLight>()
+            .sun_direction = moonlight;
+        app.update();
+        let atmosphere = sky(&app);
+        assert!(atmosphere.body_direction.abs_diff_eq(-moonlight, 1e-6));
+        assert_eq!((atmosphere.moon_active, atmosphere.mask_size), (0.0, 0.0));
+        assert_eq!(
+            atmosphere.disc_color,
+            sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0))
+        );
+
+        // and its sun colour is the disc's as authored, above 1 included
+        let scene = app
+            .world_mut()
+            .spawn(Sun {
+                color: ColorRamp::new(&gradient(&[(0.0, 4.0)])),
+                visible: None,
+                intensity: None,
+                direction: None,
+            })
+            .id();
+        app.world_mut().resource_mut::<SceneGlobalLight>().source = Some(scene);
+        app.update();
+        assert_eq!(sky(&app).disc_color, Vec3::X * 4.0);
+    }
+
+    #[test]
     fn scene_bands_clear_when_the_component_goes() {
         use common::structs::{OutOfWorld, PrimaryPlayerRes};
         use scene_runner::initialize_scene::{

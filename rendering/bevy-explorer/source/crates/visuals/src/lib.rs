@@ -29,9 +29,10 @@ use bevy_atmosphere::{
     prelude::{AtmosphereCamera, AtmosphereModel, AtmospherePlugin, AtmosphereSettings},
     system_param::AtmosphereMut,
 };
+use scene_runner::update_world::lights::Sun;
 use stylized_sky::{
-    cloud_colors, cloud_scroll_rates, load_cloud_strips, load_horizon_noise, sky_lut_image,
-    stack_cloud_strips, CloudStrips, StylizedSky,
+    cloud_colors, cloud_scroll_rates, disc_color, disc_params, load_cloud_strips,
+    load_horizon_noise, sky_lut_image, stack_cloud_strips, CloudStrips, StylizedSky,
 };
 
 use bevy_console::ConsoleCommand;
@@ -205,6 +206,7 @@ fn apply_global_light(
     time: Res<Time>,
     mut fogs: Query<&mut DistanceFog, With<Camera3d>>,
     scene_light: (Res<SceneGlobalLight>, Res<environment::SceneEnvironment>),
+    scene_suns: Query<&Sun>,
     time_of_day: Res<TimeOfDay>,
     mut envmap_settings: ResMut<SkyEnvmapSettings>,
     mut sky_ambient: ResMut<SkyAmbient>,
@@ -278,6 +280,25 @@ fn apply_global_light(
         + cloud_scroll_rates(environment.cloud_speed) * time.delta_secs())
     .fract_gl();
     atmosphere.scene_sun_visible = if next_light.sun_hidden { 0.0 } else { 1.0 };
+
+    // the disc is where the light comes from, so it follows the swing between the sun's arc and
+    // the moon's, and a scene's own direction. A scene's direction is written to the light and
+    // to the sky's sun alike. Without one the two differ whenever the moon is the body, which
+    // is the only time the flag changes the disc
+    let scene_direction = scene_global_light.dir_direction == scene_global_light.sun_direction;
+    let disc = disc_params(clock_fraction, scene_direction);
+    let scene_sun_color = scene_global_light
+        .source
+        .and_then(|scene| scene_suns.get(scene).ok())
+        .and_then(|sun| sun.color.as_ref())
+        .map(|ramp| ramp.sample(clock_fraction));
+    atmosphere.set_disc(&disc);
+    atmosphere.disc_color = disc_color(&disc, clock_fraction, scene_sun_color);
+    atmosphere.body_direction = (-next_light.dir_direction)
+        .try_normalize()
+        .unwrap_or(atmosphere.body_direction);
+    // the backlight fades with the disc, so it changes bodies unseen
+    atmosphere.backlight_weight = disc.opacity;
 
     // the fog and the Trilight ambient follow the clock, not the scene light, so they are kept
     // out of the gate below; each is written only when its value changes, which also covers a

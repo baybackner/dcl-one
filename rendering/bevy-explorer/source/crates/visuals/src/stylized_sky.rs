@@ -1,8 +1,8 @@
 //! The sky: Unity's stylized skybox (the StylizedV1 preset), drawn into the atmosphere cube by
 //! `shaders/stylized_sky.wgsl`. The sky colour is a lookup by day phase and elevation, baked
 //! from the preset's four gradients (`sky_preset::bake_sky_lut`); a scene's own sky colours
-//! blend over it. Three cloud strips wrap the dome over that, and the cube's alpha is how much
-//! they hide.
+//! blend over it. The sun or the moon is a disc in a halo on that sky, and three cloud strips
+//! wrap the dome over them; the cube's alpha is how much the clouds hide.
 //!
 //! The authored colours go to the shader as they are, and the skybox material writes the cube
 //! to the view unscaled, so the cube is in the units of Unity's sky output.
@@ -28,9 +28,13 @@ use bevy_atmosphere::{
     system_param::AtmosphereMut,
 };
 
+use scene_runner::update_world::lights::{celestial_swap, moon_progress};
+
 use crate::sky_preset::{
-    bake_sky_lut, evaluate_by_phase, sample_ramp, CLOUD_FADES, CLOUD_LAYERS, CLOUD_LIT_RAMP,
-    CLOUD_PARAMS, CLOUD_SHADOW_RAMP, HORIZON_NOISE, SKY_LUT_ROWS, SKY_LUT_WIDTH,
+    bake_sky_lut, evaluate_by_phase, sample_keys, sample_ramp, time_to_phase, CLOUD_FADES,
+    CLOUD_LAYERS, CLOUD_LIT_RAMP, CLOUD_PARAMS, CLOUD_SHADOW_RAMP, HORIZON_NOISE, MOON_COLOR_RAMP,
+    MOON_DISC_SIZE, MOON_MASK_OFFSET, MOON_MASK_SIZE, SKY_LUT_ROWS, SKY_LUT_WIDTH, SUN_COLOR_RAMP,
+    SUN_RADIANCE_CURVE, SUN_RADIANCE_INTENSITY_CURVE, SUN_SIZE_CURVE,
 };
 
 const SHADER_PATH: &str = "embedded://shaders/stylized_sky.wgsl";
@@ -59,6 +63,8 @@ pub struct StylizedSky {
     pub moon_active: f32,
     pub disc_opacity: f32,
     pub disc_size: f32,
+    /// The size of the circle that cuts the moon's disc to a crescent; 0 leaves a disc whole.
+    pub mask_size: f32,
     pub disc_color: Vec3,
     /// The halo around the disc: radius, intensity.
     pub halo: Vec2,
@@ -94,6 +100,7 @@ impl Default for StylizedSky {
             moon_active: 0.0,
             disc_opacity: 0.0,
             disc_size: 0.0,
+            mask_size: 0.0,
             disc_color: Vec3::ONE,
             halo: Vec2::ZERO,
             cloud_lit: Vec3::ONE,
@@ -131,11 +138,14 @@ mod uniform {
         pub disc_color: Vec3,
         pub disc_size: f32,
         pub halo: Vec2,
+        /// Where the crescent's mask sits off the disc's centre, in the body's own frame.
+        pub mask_offset: Vec2,
         pub cloud_opacity: f32,
         pub backlight_weight: f32,
         pub cloud_lit: Vec3,
         pub scene_sun_visible: f32,
         pub cloud_shadow: Vec3,
+        pub mask_size: f32,
         pub horizon_noise: Vec4,
         pub scene_zenith: Vec4,
         pub scene_horizon: Vec4,
@@ -165,11 +175,13 @@ impl From<&StylizedSky> for StylizedSkyUniform {
             disc_color: sky.disc_color,
             disc_size: sky.disc_size,
             halo: sky.halo,
+            mask_offset: MOON_MASK_OFFSET,
             cloud_opacity: sky.cloud_opacity,
             backlight_weight: sky.backlight_weight,
             cloud_lit: sky.cloud_lit,
             scene_sun_visible: sky.scene_sun_visible,
             cloud_shadow: sky.cloud_shadow,
+            mask_size: sky.mask_size,
             horizon_noise: HORIZON_NOISE,
             scene_zenith: sky.scene_zenith,
             scene_horizon: sky.scene_horizon,
@@ -235,6 +247,68 @@ pub fn cloud_scroll_rates(scene_speed: Option<f32>) -> Vec3 {
     match scene_speed {
         Some(speed) => Vec3::splat(speed / std::f32::consts::TAU),
         None => Vec3::from_array(CLOUD_LAYERS.map(|layer| layer.speed * CLOUD_SCROLL_TURNS)),
+    }
+}
+
+/// The disc the sky draws at an hour: which body, and its shape.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiscParams {
+    pub moon_active: bool,
+    pub opacity: f32,
+    pub size: f32,
+    /// The size of the circle that cuts the disc to a crescent; 0 leaves it whole.
+    pub mask_size: f32,
+    /// The halo's radius and intensity.
+    pub halo: Vec2,
+}
+
+/// The disc at `day_fraction`: Unity's `UpdateCelestialPath` and `UpdateDirectionalLight`. The
+/// moon is the body once the light has swung past halfway onto its arc, and the disc is hidden
+/// mid-swing. A direction a scene gives the sun (`scene_direction`) keeps the sun's whole disc
+/// there all night.
+pub fn disc_params(day_fraction: f32, scene_direction: bool) -> DiscParams {
+    let (moon_weight, dip) = celestial_swap(day_fraction);
+    let moon_active = moon_weight > 0.5 && !scene_direction;
+    DiscParams {
+        moon_active,
+        opacity: 1.0 - dip,
+        // the moon keeps one size, so its crescent keeps one shape
+        size: if moon_active {
+            MOON_DISC_SIZE
+        } else {
+            sample_keys(&SUN_SIZE_CURVE, day_fraction)
+        },
+        mask_size: if moon_active { MOON_MASK_SIZE } else { 0.0 },
+        halo: Vec2::new(
+            sample_keys(&SUN_RADIANCE_CURVE, day_fraction),
+            sample_keys(&SUN_RADIANCE_INTENSITY_CURVE, day_fraction),
+        ),
+    }
+}
+
+/// The colour of the disc and its halo at `day_fraction`: a scene's sun colour as authored, or
+/// the moon's ramp along its rise to set while it is the body, or the sun's ramp at the phase.
+/// Unity's `DiscColor`.
+pub fn disc_color(disc: &DiscParams, day_fraction: f32, scene: Option<Vec3>) -> Vec3 {
+    scene.unwrap_or_else(|| {
+        if disc.moon_active {
+            sample_ramp(
+                &MOON_COLOR_RAMP,
+                moon_progress(day_fraction).clamp(0.0, 1.0),
+            )
+        } else {
+            sample_ramp(&SUN_COLOR_RAMP, time_to_phase(day_fraction))
+        }
+    })
+}
+
+impl StylizedSky {
+    pub fn set_disc(&mut self, disc: &DiscParams) {
+        self.moon_active = if disc.moon_active { 1.0 } else { 0.0 };
+        self.disc_opacity = disc.opacity;
+        self.disc_size = disc.size;
+        self.mask_size = disc.mask_size;
+        self.halo = disc.halo;
     }
 }
 
@@ -607,8 +681,11 @@ mod tests {
         *,
     };
     use crate::sky_preset::{
-        day_fraction, sample_ramp, time_to_phase, CLOUD_LAYERS, CLOUD_LIT_RAMP, CLOUD_SHADOW_RAMP,
+        day_fraction, sample_keys, sample_ramp, time_to_phase, CLOUD_LAYERS, CLOUD_LIT_RAMP,
+        CLOUD_SHADOW_RAMP, MOON_COLOR_RAMP, MOON_DISC_SIZE, MOON_MASK_SIZE, SUN_COLOR_RAMP,
+        SUN_RADIANCE_CURVE, SUN_RADIANCE_INTENSITY_CURVE, SUN_SIZE_CURVE,
     };
+    use scene_runner::update_world::lights::{moon_progress, MOONRISE, MOON_SWAP_DURATION};
     use std::f32::consts::TAU;
 
     const SIZE: usize = 128;
@@ -730,6 +807,88 @@ mod tests {
         assert_eq!(night.cloud_looks[2], Vec4::new(1.2, 1.0, 0.0, 0.3));
         sky.phase = 0.5;
         assert_eq!(StylizedSkyUniform::from(&sky).cloud_looks[2].z, 1.0);
+    }
+
+    #[test]
+    fn disc_is_hidden_mid_swap() {
+        // half the swing before moonrise the dip is whole
+        let half_swap_hours = MOON_SWAP_DURATION * 12.0;
+        let disc = disc_params((MOONRISE - half_swap_hours) / 24.0, false);
+        assert_eq!(disc.opacity, 0.0);
+        // and clear of the swings the disc is whole
+        assert_eq!(disc_params(day_fraction(12.0), false).opacity, 1.0);
+        assert_eq!(disc_params(day_fraction(0.0), false).opacity, 1.0);
+    }
+
+    #[test]
+    fn moon_disc_is_a_crescent_by_night() {
+        let disc = disc_params(day_fraction(0.0), false);
+        assert!(disc.moon_active);
+        assert_eq!((disc.size, disc.mask_size), (0.12, 0.16));
+        assert_eq!(
+            (disc.size, disc.mask_size),
+            (MOON_DISC_SIZE, MOON_MASK_SIZE)
+        );
+    }
+
+    #[test]
+    fn sun_disc_follows_the_curve() {
+        let disc = disc_params(0.5, false);
+        assert!(!disc.moon_active);
+        assert_eq!(disc.size, sample_keys(&SUN_SIZE_CURVE, 0.5));
+        assert_eq!(disc.mask_size, 0.0);
+        // the halo keeps its curves at any hour, the moon's included
+        for fraction in [0.0, 0.3, 0.5] {
+            assert_eq!(
+                disc_params(fraction, false).halo,
+                Vec2::new(
+                    sample_keys(&SUN_RADIANCE_CURVE, fraction),
+                    sample_keys(&SUN_RADIANCE_INTENSITY_CURVE, fraction),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn scene_sun_direction_draws_a_whole_disc() {
+        let midnight = day_fraction(0.0);
+        let disc = disc_params(midnight, true);
+        assert!(!disc.moon_active);
+        assert_eq!(disc.mask_size, 0.0);
+        assert_eq!(disc.size, sample_keys(&SUN_SIZE_CURVE, midnight));
+    }
+
+    #[test]
+    fn disc_colour_is_the_active_body_or_the_scene() {
+        let midnight = day_fraction(0.0);
+        let moon = disc_params(midnight, false);
+        assert_eq!(
+            disc_color(&moon, midnight, None),
+            sample_ramp(&MOON_COLOR_RAMP, moon_progress(midnight))
+        );
+        let sun = disc_params(0.5, false);
+        assert_eq!(
+            disc_color(&sun, 0.5, None),
+            sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5))
+        );
+        // a scene's sun colour is the disc's as authored, whichever body is up
+        let authored = Vec3::new(0.0, 4.0, 0.5);
+        assert_eq!(disc_color(&moon, midnight, Some(authored)), authored);
+        assert_eq!(disc_color(&sun, 0.5, Some(authored)), authored);
+    }
+
+    #[test]
+    fn the_uniform_carries_the_disc() {
+        let mut sky = StylizedSky::default();
+        sky.set_disc(&disc_params(day_fraction(0.0), false));
+        assert_eq!(
+            (sky.moon_active, sky.disc_opacity, sky.disc_size),
+            (1.0, 1.0, 0.12)
+        );
+        let uniform = StylizedSkyUniform::from(&sky);
+        assert_eq!(uniform.mask_size, 0.16);
+        assert_eq!(uniform.mask_offset, Vec2::new(-0.009, -0.007));
+        assert_eq!(uniform.halo, sky.halo);
     }
 
     /// Renders the model into its cube at noon and at midnight and reads all six faces back.
@@ -857,6 +1016,76 @@ mod tests {
         assert!(
             distance(zenith, sunrise) < 1e-2,
             "sunrise zenith {zenith:?}, lookup {sunrise:?}"
+        );
+    }
+
+    /// The disc straight up, where the centre texel of the up face looks along it: the sun at
+    /// noon, then the moon at midnight.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn the_disc_and_the_crescent_are_drawn() {
+        let sum = |texel: [f32; 4]| texel[0] + texel[1] + texel[2];
+        let mut app = sky_test_app(SIZE as u32);
+        let cube = start_sky(&mut app);
+        let draw_body = |sky: &mut StylizedSky, fraction: f32| {
+            let disc = disc_params(fraction, false);
+            sky.phase = time_to_phase(fraction);
+            sky.body_direction = Vec3::Y;
+            sky.disc_color = disc_color(&disc, fraction, None);
+            sky.set_disc(&disc);
+        };
+
+        // no body: the model's default disc has no opacity
+        let noon = day_fraction(12.0);
+        draw_sky(&mut app, |sky| sky.phase = time_to_phase(noon));
+        let bare = read_cube(&mut app, &cube, SIZE, "noon, no body");
+        draw_sky(&mut app, |sky| draw_body(sky, noon));
+        let texels = read_cube(&mut app, &cube, SIZE, "noon");
+        // the sun's disc is a texel or two across here, far brighter than the sky beside it
+        let sun = sum(texel(&texels, SIZE, UP, CENTRE, CENTRE));
+        let beside = sum(texel(&texels, SIZE, UP, CENTRE + 8, CENTRE));
+        assert!(sun > beside + 10.0, "sun {sun}, the sky beside it {beside}");
+        // the halo lights the sky around the disc, and none of it a radian and more away
+        let bare_beside = sum(texel(&bare, SIZE, UP, CENTRE + 8, CENTRE));
+        assert!(
+            beside > bare_beside + 0.2,
+            "the sky by the sun {beside}, with no sun {bare_beside}"
+        );
+        assert_eq!(
+            texel(&texels, SIZE, NORTH, CENTRE, CENTRE),
+            texel(&bare, SIZE, NORTH, CENTRE, CENTRE)
+        );
+        // a scene hides the disc and its halo
+        draw_sky(&mut app, |sky| sky.scene_sun_visible = 0.0);
+        assert_eq!(read_cube(&mut app, &cube, SIZE, "noon, hidden"), bare);
+
+        // the moon: its mask leaves a crescent, so the middle of the disc is the night sky
+        // and a texel beside it is lit
+        let midnight = day_fraction(0.0);
+        draw_sky(&mut app, |sky| {
+            sky.scene_sun_visible = 1.0;
+            draw_body(sky, midnight);
+        });
+        let crescent = read_cube(&mut app, &cube, SIZE, "midnight");
+        let around = |cube: &[[f32; 4]]| {
+            (CENTRE - 3..=CENTRE + 3)
+                .flat_map(|y| (CENTRE - 3..=CENTRE + 3).map(move |x| (x, y)))
+                .map(|(x, y)| sum(texel(cube, SIZE, UP, x, y)))
+                .fold(f32::MIN, f32::max)
+        };
+        let middle = sum(texel(&crescent, SIZE, UP, CENTRE, CENTRE));
+        assert!(
+            around(&crescent) > middle + 3.0,
+            "no crescent: the middle {middle}, the brightest by it {}",
+            around(&crescent)
+        );
+        // without the mask the disc is whole
+        draw_sky(&mut app, |sky| sky.mask_size = 0.0);
+        let whole = read_cube(&mut app, &cube, SIZE, "midnight, no mask");
+        let unmasked = sum(texel(&whole, SIZE, UP, CENTRE, CENTRE));
+        assert!(
+            unmasked > middle + 3.0,
+            "the mask hides nothing: {middle} with it, {unmasked} without"
         );
     }
 }
