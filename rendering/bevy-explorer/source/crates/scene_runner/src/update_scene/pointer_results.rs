@@ -452,6 +452,7 @@ fn update_pointer_target(
         let distance = (nearest_point - player_translation).length();
 
         let Some(avatar) = avatar_colliders.lookup.get(&avatar_hit.id) else {
+            bevy::log::error_once!("avatar collider has no avatar entity");
             return;
         };
 
@@ -467,9 +468,11 @@ fn update_pointer_target(
             ty: PointerTargetType::Avatar,
         });
     } else if let Some((scene_entity, hit)) = maybe_nearest_hit {
-        let Ok((_, context, collider_data)) = scenes.get_mut(scene_entity) else {
-            return;
-        };
+        #[allow(
+            clippy::unwrap_used,
+            reason = "`maybe_nearest_hit` comes from iterating this query above"
+        )]
+        let (_, context, collider_data) = scenes.get_mut(scene_entity).unwrap();
 
         // get player distance
         let nearest_point = collider_data

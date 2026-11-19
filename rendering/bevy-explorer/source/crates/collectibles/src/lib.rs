@@ -242,6 +242,7 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
             }
             Some(PointerResult::Builtin(handle)) => {
                 let Some(reps) = self.assets.get(handle) else {
+                    bevy::log::error!("builtin collectible {} has no asset", urn.as_ref());
                     return Err(CollectibleError::Missing);
                 };
                 match reps.representations.get(body_shape) {
@@ -296,11 +297,13 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
                     Err(CollectibleError::Loading)
                 }
             }
-            Some(PointerResult::Builtin(handle)) => self
-                .assets
-                .get(handle)
-                .map(|asset| &asset.data)
-                .ok_or(CollectibleError::Missing),
+            Some(PointerResult::Builtin(handle)) => match self.assets.get(handle) {
+                Some(asset) => Ok(&asset.data),
+                None => {
+                    bevy::log::error!("builtin collectible {} has no asset", urn.as_ref());
+                    Err(CollectibleError::Missing)
+                }
+            },
             None => {
                 self.collectibles
                     .pointer_request
@@ -316,11 +319,11 @@ impl<T: CollectibleType> CollectibleManager<'_, '_, T> {
     }
 
     pub fn add_builtin(&mut self, urn: CollectibleUrn<T>, value: Collectible<T>) {
-        let existing = match self.collectibles.pointers.get(&urn) {
-            Some(PointerResult::Builtin(h)) => self.assets.get_mut(h),
-            _ => None,
-        };
-        if let Some(asset) = existing {
+        if let Some(PointerResult::Builtin(h)) = self.collectibles.pointers.get(&urn) {
+            let Some(asset) = self.assets.get_mut(h) else {
+                bevy::log::error!("builtin collectible {urn} has no asset");
+                return;
+            };
             asset.representations.extend(value.representations);
             asset
                 .data

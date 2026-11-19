@@ -135,6 +135,7 @@ pub(crate) fn update_billboards(
 
         // get reference frame
         let Ok(frame) = global_transforms.get(parent.parent()) else {
+            bevy::log::error_once!("billboard parent has no GlobalTransform");
             continue;
         };
 

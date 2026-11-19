@@ -932,6 +932,10 @@ pub fn process_transport_updates(
                             (*entity, *scene_id, channel.clone())
                         } else if let Some(existing) = state.lookup.get_by_left(&update.address) {
                             let Ok(mut foreign_player) = players.get_mut(*existing) else {
+                                bevy::log::error!(
+                                    "player lookup for {} points at missing {existing:?}",
+                                    update.address
+                                );
                                 continue;
                             };
                             foreign_player.transports.insert(update.transport_id);

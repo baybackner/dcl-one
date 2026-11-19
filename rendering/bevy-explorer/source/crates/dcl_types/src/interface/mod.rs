@@ -184,10 +184,11 @@ impl CrdtStore {
             // checks, so dirty entries are cloned rather than moved out.
             let updates = std::mem::take(&mut state.updates);
             let last_write = HashMap::from_iter(updates.iter().filter_map(|update| {
-                state
-                    .last_write
-                    .get(update)
-                    .map(|data| (*update, data.clone()))
+                let Some(data) = state.last_write.get(update) else {
+                    bevy::log::error!("crdt update for {update:?} has no last write");
+                    return None;
+                };
+                Some((*update, data.clone()))
             }));
             lww.insert(
                 *component_id,

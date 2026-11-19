@@ -404,13 +404,17 @@ impl SceneColliderData {
             if let Some(collider) = self.collider_set.get_mut(handle) {
                 let (req_scale, req_rotation, req_translation) =
                     transform.to_scale_rotation_translation();
-                let ColliderState {
+                let Some(ColliderState {
                     base_collider,
                     translation: init_translation,
                     scale: init_scale,
                     rotation: init_rotation,
                     ..
-                } = self.collider_state.get(id)?;
+                }) = self.collider_state.get(id)
+                else {
+                    bevy::log::error_once!("collider {id:?} has a handle but no state");
+                    return None;
+                };
 
                 if (&req_scale, &req_rotation, &req_translation)
                     != (init_scale, init_rotation, init_translation)
@@ -850,12 +854,13 @@ impl SceneColliderData {
         );
 
         result.and_then(|(handle, intersection)| {
-            let id = self.get_id(handle)?.clone();
-            let position = self
-                .collider_set
-                .get(handle)?
-                .position()
-                .transform_point(&intersection.witness1);
+            let (Some(id), Some(collider)) = (self.get_id(handle), self.collider_set.get(handle))
+            else {
+                bevy::log::error_once!("shape cast hit an unregistered collider");
+                return None;
+            };
+            let id = id.clone();
+            let position = collider.position().transform_point(&intersection.witness1);
             Some(RaycastResult {
                 id,
                 toi: intersection.time_of_impact as f32,
@@ -992,6 +997,7 @@ impl SceneColliderData {
             PLAYER_COLLIDER_RADIUS + PLAYER_COLLIDER_OVERLAP,
             |slf, h| {
                 let Some(collided) = slf.collider_set.get(h) else {
+                    bevy::log::error_once!("avatar intersection with an unregistered collider");
                     return;
                 };
                 let result = parry::query::closest_points(

@@ -432,15 +432,16 @@ fn play_videos(
                         height: height.max(16),
                         depth_or_array_layers: 1,
                     };
-                    if let Some(image) = images
-                        .get_mut(&video.image)
-                        .filter(|image| image.texture_descriptor.size != target_extent)
-                    {
-                        debug!("resize {target_extent:?}");
-                        image.data = None;
-                        image.texture_descriptor.size = target_extent;
-                        image.transfer_priority = RenderAssetTransferPriority::Immediate;
-                        video.resized = true;
+                    match images.get_mut(&video.image) {
+                        Some(image) if image.texture_descriptor.size != target_extent => {
+                            debug!("resize {target_extent:?}");
+                            image.data = None;
+                            image.texture_descriptor.size = target_extent;
+                            image.transfer_priority = RenderAssetTransferPriority::Immediate;
+                            video.resized = true;
+                        }
+                        Some(_) => (),
+                        None => bevy::log::error_once!("video image is missing"),
                     }
                     video.length = Some(length);
                     *sink_rate = Some(rate);
@@ -458,8 +459,8 @@ fn play_videos(
 
             // no pixels: the render world copied the frame into the gpu image itself
             if let Some(pixels) = frame.data() {
-                if let Some(image) = images.get_mut(&video.image) {
-                    match &mut image.data {
+                match images.get_mut(&video.image) {
+                    Some(image) => match &mut image.data {
                         Some(data) => {
                             data.copy_from_slice(pixels);
                             image.transfer_priority = RenderAssetTransferPriority::Priority(-2);
@@ -467,7 +468,8 @@ fn play_videos(
                         None => {
                             image.data = Some(pixels.to_owned());
                         }
-                    }
+                    },
+                    None => bevy::log::error_once!("video image is missing"),
                 }
             }
             if video.resized {

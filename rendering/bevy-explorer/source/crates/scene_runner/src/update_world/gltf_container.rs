@@ -2168,6 +2168,8 @@ fn expose_gltfs(
                                 }),
                             },
                         );
+                    } else {
+                        error!("gltf material of {src} is missing");
                     }
                 }
 

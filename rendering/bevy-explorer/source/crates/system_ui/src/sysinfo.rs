@@ -270,18 +270,25 @@ fn update_scene_load_state(
             } else {
                 Display::Flex
             };
-            if let Ok(mut style) = style.get_mut(child) {
-                if style.display != display {
-                    style.display = display;
+            match style.get_mut(child) {
+                Ok(mut style) => {
+                    if style.display != display {
+                        style.display = display;
+                    }
                 }
+                Err(_) => bevy::log::error_once!("sysinfo row has no Node"),
             }
             let Ok(container) = q_children.get(child) else {
+                bevy::log::error_once!("sysinfo row has no children");
                 return;
             };
-            if let Ok(mut text) = text.get_mut(container[1]) {
-                if text.0 != value {
-                    text.0 = value;
+            match text.get_mut(container[1]) {
+                Ok(mut text) => {
+                    if text.0 != value {
+                        text.0 = value;
+                    }
                 }
+                Err(_) => bevy::log::error_once!("sysinfo row has no Text"),
             }
         };
 

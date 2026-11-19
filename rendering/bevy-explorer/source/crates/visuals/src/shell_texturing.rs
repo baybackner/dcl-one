@@ -82,8 +82,9 @@ impl ParcelGrass {
         let parcel = deferred_world.get::<ParcelGrass>(entity).unwrap().parcel;
 
         let mut parcel_grass_map = deferred_world.resource_mut::<ParcelGrassMap>();
-        if let Some(removed_entity) = parcel_grass_map.remove(&parcel) {
-            assert_eq!(entity, removed_entity);
+        match parcel_grass_map.remove(&parcel) {
+            Some(removed_entity) => assert_eq!(entity, removed_entity),
+            None => bevy::log::error!("parcel grass {parcel:?} is not in the map"),
         }
     }
 }

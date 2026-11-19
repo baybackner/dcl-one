@@ -1030,6 +1030,9 @@ impl GlyphAtlas {
         let old_data = |handle: &Handle<Image>| images.get(handle).and_then(|i| i.data.clone());
         let old_sdf_data = old_data(&old_sdf);
         let old_color_data = old_color.as_ref().and_then(old_data);
+        if old_sdf_data.is_none() || (old_color.is_some() && old_color_data.is_none()) {
+            bevy::log::error!("glyph atlas rebuild: an old page has no pixels");
+        }
         // glyphs with no ink have nothing to move (and an empty rect has no size); dropped
         // glyphs start over
         let (mut inked, mut inkless): (Vec<_>, Vec<_>) = old_glyphs

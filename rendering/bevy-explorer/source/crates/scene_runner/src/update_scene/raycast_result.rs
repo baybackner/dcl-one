@@ -531,6 +531,7 @@ fn write_result(
     };
 
     let Ok((_, mut context, ..)) = scene_context.get_mut(scene_root) else {
+        bevy::log::error!("raycast result for missing scene {scene_root:?}");
         return;
     };
 

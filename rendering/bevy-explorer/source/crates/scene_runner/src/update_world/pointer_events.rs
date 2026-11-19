@@ -119,6 +119,10 @@ pub fn propagate_avatar_events(
     // add new/updated
     for (scene_entity, new_events) in new_events.iter() {
         let Some(scene_events) = new_events.msg.get(&None) else {
+            bevy::log::error!(
+                "pointer events of {:?} have no scene entry",
+                scene_entity.id
+            );
             continue;
         };
         if let Some((foreign_entity, _, maybe_pes)) = foreign_player_lookup

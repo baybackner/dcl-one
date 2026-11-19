@@ -899,6 +899,7 @@ fn manage_shadow_casters(
     // only write (and trigger change detection) when the target value differs
     for (light, _, importance, ..) in lights.drain(..).rev() {
         let Ok((maybe_p, maybe_s, mut vis)) = write_lights.get_mut(light) else {
+            bevy::log::error_once!("light {light:?} has no Visibility");
             continue;
         };
 
