@@ -1600,11 +1600,12 @@ fn handle_foreign_audio(
             }
         } else if source.current_transport.is_none() {
             // request a new source
-            if let Some((entity, control)) = source
-                .available_transports
-                .iter()
-                .find_map(|entity| transports.get(entity).map(|control| (entity, control)))
-            {
+            if let Some(entity) = source.available_transports.iter().next() {
+                #[allow(
+                    clippy::unwrap_used,
+                    reason = "`available_transports` is retained against `transports` above"
+                )]
+                let control = transports.get(entity).unwrap();
                 let (sx, rx) = oneshot::channel();
                 if let Ok(()) = control.try_send(ChannelControl::VoiceSubscribe(player.address, sx))
                 {
