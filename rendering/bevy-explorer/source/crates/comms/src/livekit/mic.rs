@@ -1095,23 +1095,11 @@ mod routing_tests {
             route
         };
 
-        // the setting lists the saved choice before any report; the first report lists it
-        devices.remember("headset");
+        // built before any report, which then lists the headset
         let early = route(&devices);
         assert!(early.captures_choice(Some("headset"), &devices));
         devices.replace(vec![headset.clone()]);
         assert!(early.captures_choice(Some("headset"), &devices));
-
-        // the first report lacks the saved choice: rebuilt on the default, then on the headset
-        let fresh = MicrophoneDevices::default();
-        fresh.remember("headset");
-        let early_missing = route(&fresh);
-        fresh.replace(Vec::new());
-        assert!(!early_missing.captures_choice(Some("headset"), &fresh));
-        let fallback = route(&fresh);
-        assert!(fallback.captures_choice(Some("headset"), &fresh));
-        fresh.replace(vec![headset.clone()]);
-        assert!(!fallback.captures_choice(Some("headset"), &fresh));
 
         // on the headset: unplugging it rebuilds, as does replugging it before any check
         let on_headset = route(&devices);

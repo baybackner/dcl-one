@@ -22,7 +22,7 @@ pub struct MicrophoneInput {
 /// An input reported during this session, kept after it is unplugged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownMicrophone {
-    pub device: MicrophoneInput,
+    device: MicrophoneInput,
     pub present: bool,
     /// How many reports found it gone: after one listing it, or as the first report.
     absences: u32,
@@ -84,7 +84,7 @@ impl MicrophoneDevices {
 
     /// Lists a saved choice the host has not reported yet, so the first report that lacks it
     /// counts as an absence.
-    pub fn remember(&self, id: &str) {
+    fn remember(&self, id: &str) {
         let mut known = self.known.write().unwrap_or_else(PoisonError::into_inner);
         if !known.iter().any(|entry| entry.device.id == id) {
             known.push(KnownMicrophone {
@@ -181,6 +181,8 @@ fn info(devices: &MicrophoneDevices, config: &AppConfig) -> SettingInfo {
 // Only the web host reports devices.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
+    // The livekit plugin, which fills the list, creates it too: either plugin can be built
+    // without the other, and whichever builds first creates the one shared list.
     let devices = app
         .world_mut()
         .get_resource_or_init::<MicrophoneDevices>()
@@ -368,5 +370,19 @@ mod tests {
         let shown_now = shown(&app);
         assert_eq!(shown_now.value, 1.0);
         assert_eq!(shown_now.named_variants[1].name, "headset label");
+    }
+
+    #[test]
+    fn a_first_report_without_the_saved_choice_counts_as_its_absence() {
+        let devices = MicrophoneDevices::default();
+        devices.remember("headset");
+        assert_eq!(devices.absences("headset"), 0);
+        assert!(!devices.missing("headset"));
+        devices.replace(Vec::new());
+        assert_eq!(devices.absences("headset"), 1);
+        assert!(devices.missing("headset"));
+        devices.replace(vec![device("headset")]);
+        assert_eq!(devices.absences("headset"), 1);
+        assert!(devices.offers("headset"));
     }
 }
