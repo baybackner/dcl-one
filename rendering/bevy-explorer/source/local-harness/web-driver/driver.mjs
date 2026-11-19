@@ -210,11 +210,12 @@ const debug = process.env.DCL_WEB_DRIVER_DEBUG
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// `promise`, or a rejection with `message` after `ms`.
+// Whether two [width, height] pairs are equal.
 function sameSize(a, b) {
   return a[0] === b[0] && a[1] === b[1];
 }
 
+// `promise`, or a rejection with `message` after `ms`.
 async function within(promise, ms, message) {
   let timer;
   try {
