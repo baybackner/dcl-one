@@ -47,7 +47,7 @@ use crate::{process_avatar, upload_cpu_mesh, AvatarDefinition};
 #[derive(Component)]
 pub struct AvatarAnimPlayer(pub Entity);
 
-// engine-emote urns, built and checked at compile time
+// engine-emote urns, borrowed from static strings, so a clone does not allocate
 pub(crate) static URN_IDLE: EmoteUrn =
     EmoteUrn::builtin("urn:decentraland:off-chain:unknown-source:idle_male");
 static URN_JUMP: EmoteUrn = EmoteUrn::builtin("urn:decentraland:off-chain:unknown-source:jump");
