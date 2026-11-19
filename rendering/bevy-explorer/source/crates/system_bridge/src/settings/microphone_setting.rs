@@ -75,7 +75,7 @@ pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
     app.add_systems(Startup, remember_saved_choice);
     app.add_systems(
         Update,
-        sync_choices.run_if(resource_exists_and_changed::<MicrophoneDevices>),
+        sync_choices.run_if(resource_changed::<MicrophoneDevices>),
     );
 }
 
@@ -88,8 +88,8 @@ fn saved(config: &AppConfig) -> MicrophoneDevices {
     devices
 }
 
-fn remember_saved_choice(devices: Option<ResMut<MicrophoneDevices>>, config: Res<AppConfig>) {
-    if let (Some(mut devices), Some(id)) = (devices, &config.microphone) {
+fn remember_saved_choice(mut devices: ResMut<MicrophoneDevices>, config: Res<AppConfig>) {
+    if let Some(id) = &config.microphone {
         devices.remember(id);
     }
 }
@@ -247,19 +247,5 @@ mod tests {
         let shown_now = shown(&app);
         assert_eq!(shown_now.value, 1.0);
         assert_eq!(shown_now.named_variants[1].name, "headset label");
-    }
-
-    #[test]
-    fn a_first_report_without_the_saved_choice_counts_as_its_absence() {
-        let mut devices = MicrophoneDevices::default();
-        devices.remember("headset");
-        assert_eq!(devices.absences("headset"), 0);
-        assert!(!devices.missing("headset"));
-        devices.replace(Vec::new());
-        assert_eq!(devices.absences("headset"), 1);
-        assert!(devices.missing("headset"));
-        devices.replace(vec![device("headset")]);
-        assert_eq!(devices.absences("headset"), 1);
-        assert!(devices.offers("headset"));
     }
 }

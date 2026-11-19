@@ -1987,11 +1987,6 @@ pub struct MicrophoneDevices {
 }
 
 impl MicrophoneDevices {
-    /// Whether the host has reported its inputs at least once.
-    pub fn reported(&self) -> bool {
-        self.reported
-    }
-
     fn present(&self, id: &str) -> bool {
         self.known
             .iter()
@@ -2623,6 +2618,23 @@ mod tests {
         // a distance under the minimum still yields a strictly increasing config
         let tiny = sun_cascades(ShadowSetting::High, 0.05).unwrap();
         assert!(tiny.bounds.windows(2).all(|w| w[0] < w[1]) && tiny.bounds[0] > MIN_CASCADE);
+    }
+
+    #[test]
+    fn a_first_report_without_the_saved_choice_counts_as_its_absence() {
+        let mut devices = MicrophoneDevices::default();
+        devices.remember("headset");
+        assert_eq!(devices.absences("headset"), 0);
+        assert!(!devices.missing("headset"));
+        devices.replace(Vec::new());
+        assert_eq!(devices.absences("headset"), 1);
+        assert!(devices.missing("headset"));
+        devices.replace(vec![MicrophoneInput {
+            id: "headset".to_owned(),
+            label: "Headset".to_owned(),
+        }]);
+        assert_eq!(devices.absences("headset"), 1);
+        assert!(devices.offers("headset"));
     }
 
     #[test]
