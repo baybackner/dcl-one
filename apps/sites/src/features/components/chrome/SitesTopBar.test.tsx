@@ -12,6 +12,7 @@ import {
 import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { getAddress } from "viem";
+import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import DclTopBar from "@ui/web/frames/DclTopBar";
 import SiteLayout from "@dcl/one-ui/components/chrome/SiteLayout";
 import { ChromeAuthContext, type ChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
@@ -149,6 +150,18 @@ describe("Sites native chrome integration", () => {
     ).toBe("/places");
     expect(screen.getByRole("link", { name: "Sign in" })).toBeTruthy();
     expect(screen.queryByLabelText("Credits")).toBeNull();
+  });
+
+  it("shows the decorative 40px Decentraland logo in the banner", () => {
+    render(<Host />);
+
+    const logos = Array.from(screen.getByRole("banner").querySelectorAll("img"))
+      .filter((image) => image.getAttribute("src") === sitesLogo);
+    expect(logos).toHaveLength(1);
+    const [logo] = logos;
+    expect(logo?.getAttribute("alt")).toBe("");
+    expect(logo?.getAttribute("width")).toBe("40");
+    expect(logo?.getAttribute("height")).toBe("40");
   });
   it("selects the Shop item from the router query and shows LAND after the wallet matches", async () => {
     enableMarketplace();
