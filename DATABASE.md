@@ -2501,8 +2501,8 @@ answered within 6 ms of these at 396 MB.
 
 Only `first=24, skip=0` under the newest sort is measured. Unmeasured: a
 deep window (`first + skip` up to the 100,000 cap, read from every source),
-a selective filter under the newest sort (one creator, a rare rarity: the
-walk of `nft_mint_order_idx` passes every non-matching token before it
+a selective filter under the newest sort (one creator, a rare rarity: a
+walk of `nft_mint_order_idx` may pass every non-matching token before it
 fills the window, most of the table when few tokens match) and the other
 sorts, which sort each source's candidates. These reads run under the
 pool's statement timeout (`PoolSettings`, 60 s by default) with no bound of their own.

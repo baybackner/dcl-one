@@ -28,8 +28,11 @@ Every read checks the index's cursor in the same `REPEATABLE READ, READ ONLY`
 transaction as its rows. Two rules:
 
 - Profiles need the index complete on the networks their items name: the
-  whole history walked and the last fold published, with no reorg rewind or
-  unpublishable fold since (`full_history` and `folded_block` set). An index
+  whole history walked and a fold published, with no reorg rewind since and
+  no later fold found unpublishable (`full_history` and `folded_block` set).
+  A pass commits its fold before it publishes or clears the marker, so until
+  that statement, or until the next pass when the chain head cannot be read
+  in between, the newer fold is read under the previous marker. An index
   that is complete but was published more than 30 minutes ago, as during an
   RPC outage, keeps serving them. An incomplete index fails the read: a
   direct read answers 503, and a Registry batch leaves the profile out and

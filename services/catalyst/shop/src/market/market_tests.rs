@@ -3466,25 +3466,47 @@ async fn an_open_listing_stays_only_while_its_signer_holds_that_token() {
         ids, want,
         "a node that does not walk the index serves the leg without the guard"
     );
+    // The leg waits for the networks the read names only.
     super::owned_items::test_support::publish(
         &pool,
-        &super::chain_walk::ChainNet::ALL,
+        &[super::chain_walk::ChainNet::Matic],
         false,
         Duration::ZERO,
     )
     .await;
-    let mut ids: Vec<String> = super::orders::trades_leg(&state, &open)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|k| k.order.id)
-        .collect();
-    ids.sort();
+    assert!(
+        super::orders::trades_leg(&state, &open)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a read of both networks waits for Ethereum"
+    );
+    let matic = super::orders::OrderFilters {
+        network: Some(super::wire::Network::Matic),
+        ..open.clone()
+    };
     let mut want = vec![held, elsewhere];
     want.sort();
-    assert_eq!(
-        ids, want,
-        "the sold ({sold}) and burned ({burned}) tokens' listings drop out"
-    );
+    for (label, filters, nets) in [
+        (
+            "Polygon alone",
+            &matic,
+            &[super::chain_walk::ChainNet::Matic][..],
+        ),
+        ("both", &open, &super::chain_walk::ChainNet::ALL[..]),
+    ] {
+        super::owned_items::test_support::publish(&pool, nets, false, Duration::ZERO).await;
+        let mut ids: Vec<String> = super::orders::trades_leg(&state, filters)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.order.id)
+            .collect();
+        ids.sort();
+        assert_eq!(
+            ids, want,
+            "{label}: the sold ({sold}) and burned ({burned}) tokens' listings drop out"
+        );
+    }
     own.drop().await;
 }
