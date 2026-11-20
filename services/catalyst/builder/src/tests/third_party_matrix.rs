@@ -329,13 +329,12 @@ enum Op {
     ThirdParty,
     ThirdParties,
     Publish,
-    ApprovalData,
     DraftCollections,
     ForumPost,
 }
 use Op::*;
 
-const OPS: [Op; 18] = [
+const OPS: [Op; 17] = [
     ReadCollection,
     CollectionItems,
     ReadItem,
@@ -351,7 +350,6 @@ const OPS: [Op; 18] = [
     ThirdParty,
     ThirdParties,
     Publish,
-    ApprovalData,
     DraftCollections,
     ForumPost,
 ];
@@ -442,11 +440,6 @@ impl Op {
                     } })),
                 )
             }
-            ApprovalData => (
-                "GET",
-                format!("/v1/collections/{}/approvalData", f.collection),
-                None,
-            ),
         }
     }
 
@@ -508,7 +501,6 @@ impl Op {
                 (true, true, false) => 409,
                 _ => 401,
             }),
-            ApprovalData => Expect::Status(401),
         }
     }
 }
@@ -666,8 +658,7 @@ async fn while_the_registry_cant_tell_every_third_party_decision_is_503_and_writ
                     true,
                     false,
                 );
-                let readable_anyway =
-                    (matches!(op, ReadItem | ReadFile) && caller == Creator) || op == ApprovalData;
+                let readable_anyway = matches!(op, ReadItem | ReadFile) && caller == Creator;
                 if status != StatusCode::SERVICE_UNAVAILABLE && !readable_anyway {
                     failures.push(format!("{op:?} {p:?} {caller:?}: {status} {answer}"));
                 }
