@@ -955,7 +955,8 @@ pub(crate) fn apply_movement(
         velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
     }
 
-    if !held_at_riser {
+    // a frame with no elapsed time (the first, or time paused) sweeps nothing, so it keeps the push
+    if !held_at_riser && time_res.delta_secs_f64() > 1e-10 {
         *step_push = 0.0;
     }
 
@@ -2265,6 +2266,24 @@ mod tests {
         assert_eq!(app.world().get::<RiserPush>(player).unwrap().0, 0.0);
     }
 
+    #[test]
+    fn a_frame_with_no_elapsed_time_keeps_the_push_against_a_riser() {
+        let (mut app, player) = movement_app(&[riser(0.2)], Vec3::new(0.695, 0.0, 0.0));
+        app.update();
+        set_velocity(&mut app, player, Vec3::new(0.5, 0.0, 0.0));
+        for _ in 0..5 {
+            app.update();
+        }
+        let pushed = app.world().get::<RiserPush>(player).unwrap().0;
+        assert!(pushed > 0.0, "not held at the riser");
+        // time paused: the move is still asked for, but no time passes
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
+        app.update();
+        assert_eq!(app.world().get::<RiserPush>(player).unwrap().0, pushed);
+    }
+
     /// The time a move at `speed` m/s from 0.15 m short of a 0.2 m riser takes to step onto it, at
     /// `fps` frames a second, and the furthest it pushed against the riser before.
     fn time_to_step_up(fps: f64, speed: f32) -> (f64, f64) {
@@ -2590,14 +2609,22 @@ mod tests {
         frames_out
     }
 
+    /// The movement scene's re-dispatch in the frame a parcel scene takes over is sent the parcel
+    /// scene's 70 degrees; something else then turns the player to 40. When the movement scene's
+    /// next reply lands late, its re-dispatch is sent the player's 40 degrees, not the 70 it was
+    /// sent while it drove the player.
     #[test]
     fn a_scene_no_longer_driving_the_player_is_not_sent_its_staged_rotation() {
         let (mut app, player) = rotation_app(0.0);
-        let (movement_scene, _) = add_scene(&mut app, "movement", Some(1));
-        // the parcel scene drives the player
+        let movement = add_scene(&mut app, "movement", Some(1));
         let parcel = add_scene(&mut app, "parcel", None);
-        land_reply(&mut app, parcel, 0, 0, Some(0.0));
-        run_frame(&mut app, 0, parcel.0, player);
+        land_reply(&mut app, movement, 0, 0, Some(10.0));
+        run_frame(&mut app, 0, movement.0, player);
+
+        land_reply(&mut app, movement, 0, 1, Some(30.0));
+        land_reply(&mut app, parcel, 1, 1, Some(70.0));
+        let (staged, _) = run_frame(&mut app, 1, movement.0, player);
+        assert!((staged - 70.0).abs() < 1e-3, "staged {staged}");
         assert_eq!(
             app.world()
                 .get::<ActivePlayerComponent<AvatarMovement>>(player)
@@ -2605,15 +2632,14 @@ mod tests {
                 .scene(),
             parcel.0
         );
-        // the movement scene still holds a rotation it staged while it drove the player
         app.world_mut()
-            .entity_mut(movement_scene)
-            .insert(RedispatchRotation(Quat::from_rotation_y(1.0)));
-        run_frame(&mut app, 1, parcel.0, player);
-        assert!(app
-            .world()
-            .get::<RedispatchRotation>(movement_scene)
-            .is_none());
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .rotation = Quat::from_rotation_y(40f32.to_radians());
+
+        land_reply(&mut app, movement, 1, 2, None);
+        let (sent, _) = run_frame(&mut app, 2, movement.0, player);
+        assert!((sent - 40.0).abs() < 1e-3, "sent {sent}");
     }
 
     /// A parcel scene sets the player's movement in the frame the movement scene's late reply
