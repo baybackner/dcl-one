@@ -283,6 +283,21 @@ describe("cancelling a listing", () => {
     const stranger = fakeWallet({ key: `0x${"5".repeat(64)}` });
     await expect(cancelTrade({ provider: stranger, trade, wait: noWait })).rejects.toThrow(/signed/);
   });
+
+  it("over the relay's request limit, reports it instead of paying gas for the cancellation", async () => {
+    const trade = await storedTrade();
+    const wallet = fakeWallet();
+    restore = fakeChain({ contracts: { [trade.contract]: { abi: MARKETPLACE_ABI, answer: () => 3n } } });
+    const original = globalThis.fetch;
+    const limited = { ok: false, not_sent: true, error: "api_limit_reached", code: "api_limit_reached", message: "Too many requests. Retry in 2 seconds.", retryAt: 1 };
+    globalThis.fetch = (async () => new Response(JSON.stringify(limited), { status: 429 })) as typeof fetch;
+    try {
+      await expect(cancelTrade({ provider: wallet, trade, wait: noWait })).rejects.toMatchObject({ refusal: { error: "api_limit_reached" } });
+      expect(wallet.sent).toHaveLength(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
 });
 
 describe("approvals", () => {

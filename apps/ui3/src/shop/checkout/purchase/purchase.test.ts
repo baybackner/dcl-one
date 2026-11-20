@@ -549,6 +549,22 @@ describe("a credits group the relay refuses for its limits", () => {
     expect(result).toMatchObject({ status: "pending" });
     expect(released(h)).toBeUndefined();
   });
+
+  it("a web3 wallet over the relay's request limit is told to wait and try again, never sent to pay gas itself", async () => {
+    const h = await harness({ relay: "refuse", refuseStatus: 429, refuseBody: { error: "api_limit_reached", message: "Too many requests. Retry in 2 seconds.", retryAt: 1 } });
+    const result = await runGroup(h.deps, h.group, h.resolved);
+    expect(result).toMatchObject({ status: "failed", failure: { message: "Too many requests from your connection. Wait a few seconds and try again." } });
+    expect(h.wallet.sent).toHaveLength(0);
+    expect(released(h)).toEqual({ salts: [`0x${"a1".repeat(32)}`] });
+  });
+
+  it("a web3 wallet over the relay's request limit buys a MANA group later, not from the wallet now", async () => {
+    const h = await harness({ method: "mana", relay: "refuse", refuseStatus: 429, refuseBody: { error: "api_limit_reached", message: "Too many requests. Retry in 2 seconds.", retryAt: 1 } });
+    h.chain.allowances.set(`137:${BOOK.buyer}:${BOOK.marketplace.contract}`, 10n ** 20n);
+    const result = await runGroup(h.deps, h.group, h.resolved);
+    expect(result).toMatchObject({ status: "failed", failure: { message: "Too many requests from your connection. Wait a few seconds and try again." } });
+    expect(h.wallet.sent).toHaveLength(0);
+  });
 });
 
 describe("a credits group the relay refuses", () => {

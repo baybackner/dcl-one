@@ -33,6 +33,13 @@ proxy's `X-Real-IP` or a public peer). Behind an unlisted private gateway that
 limit does not apply, so set `HTTP_TRUSTED_PROXY_CIDRS` to keep it. Each API
 process counts its own requests, so N processes allow up to N times that.
 
+Every per-client limit here needs both halves of the trust chain:
+`HTTP_TRUSTED_PROXY_CIDRS` on the API, naming the gateway's network, and
+`GATEWAY_TRUSTED_PROXY_CIDRS` on the gateway, naming the CDN's ranges (for
+Cloudflare, its published IP ranges). Without the gateway's setting the client
+address is a CDN edge address, which is public, so every client behind one edge
+shares that edge's limits.
+
 Place reports count against the reporter's wallet and, when its address names
 one client (a trusted proxy's `X-Real-IP` or a public peer), its network. Behind
 an unlisted private gateway only the wallet limit applies, and fresh wallets cost

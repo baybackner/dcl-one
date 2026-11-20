@@ -60,6 +60,15 @@ export function relayLimitText(e: unknown, now: Date = new Date()): string | nul
   return null;
 }
 
+/**
+ * The relay refused only for its per-connection request limit (`api_limit_reached`), which frees up within seconds:
+ * the buyer waits and tries again, so it is never a reason to fall back to a transaction the wallet pays for.
+ */
+export function isRequestLimited(e: unknown): boolean {
+  const refusal = e && typeof e === "object" ? (e as Refused).refusal : undefined;
+  return refusal?.error === "api_limit_reached";
+}
+
 /** The buyer bailed out: a wallet rejection (4001), an aborted fetch, or a reject/deny/cancel message. */
 export function isRejection(e: unknown): boolean {
   const err = (e ?? {}) as ErrLike;

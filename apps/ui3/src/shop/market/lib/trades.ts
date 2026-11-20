@@ -20,6 +20,7 @@ import {
   type ContractData,
 } from "@shop/market/lib/contracts";
 import { MetaTransactionError, sendMetaTransaction } from "./metaTx";
+import { isRequestLimited } from "../../checkout/lib/errors";
 import { readContract } from "./rpc";
 import { chainSalt, declined, sendCall, signTypedData, waitForReceipt, walletAccount, type WaitOptions } from "./tx";
 import { shopClient } from "../../api/host";
@@ -484,7 +485,7 @@ export async function cancelTrade(opts: { provider: Eip1193Provider; trade: Trad
     } catch (e) {
       if (declined(e)) throw e;
       if (mode === "gasless-only") throw new GaslessCancelFailedError(e);
-      if (!(e instanceof MetaTransactionError)) throw e;
+      if (!(e instanceof MetaTransactionError) || isRequestLimited(e)) throw e;
     }
   }
   await requireChain(provider, trade.chainId);
