@@ -1,5 +1,5 @@
-//! The environment maps attached as an `EnvironmentMapLight` to every camera that renders the
-//! sky: the reflection (specular) map generated from the atmosphere skybox whenever the sky is
+//! The environment maps attached as an `EnvironmentMapLight` to sky and scene snapshot cameras.
+//! The reflection (specular) map is generated from the atmosphere skybox whenever the sky is
 //! redrawn, its brightest channel limited to 1, and the diffuse map, which is not the sky at all
 //! but the Trilight ambient (`sky_preset::ambient_trilight`, or a scene's own sky colours),
 //! written on the CPU as the three colours change.
@@ -45,7 +45,7 @@ use bevy_atmosphere::{
 use bevy_console::ConsoleCommand;
 use common::structs::{AppConfig, SkyReflectionSetting};
 use console::DoAddConsoleCommand;
-use scene_runner::update_world::lights::LIGHT_UNIT_LUX;
+use scene_runner::{automatic_testing::SceneSnapshotCamera, update_world::lights::LIGHT_UNIT_LUX};
 use std::f32::consts::PI;
 
 const SKY_ENVMAP_SHADER_HANDLE: Handle<Shader> =
@@ -310,7 +310,7 @@ fn attach_sky_envmap(
     mut settings: ResMut<SkyEnvmapSettings>,
     mut cameras: Query<
         (Entity, Option<&Exposure>, Option<&mut EnvironmentMapLight>),
-        With<AtmosphereCamera>,
+        Or<(With<AtmosphereCamera>, With<SceneSnapshotCamera>)>,
     >,
 ) {
     let quality = config.graphics.sky_reflections;
