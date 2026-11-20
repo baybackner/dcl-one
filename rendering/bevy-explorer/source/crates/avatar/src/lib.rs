@@ -88,7 +88,9 @@ use crate::{
 };
 use common::{
     asset_cache::{clean_asset_cache, AssetCache},
-    structs::{AppConfig, AttachPoints, Clips, EmoteCommand, EmoteMask, PrimaryUser},
+    structs::{
+        AppConfig, AttachPoints, Clips, EmoteCommand, EmoteMask, PrimaryUser, SessionGraphics,
+    },
     util::{SceneSpawnerPlus, TryPushChildrenEx},
 };
 #[cfg(feature = "explorer")]
@@ -172,6 +174,8 @@ impl Plugin for AvatarRenderPlugin {
         app.add_event::<AvatarLoadReport>();
         // the emote lifecycle feed; comms and the emote report add it too, idempotently
         app.add_event::<common::structs::EmoteLifecycleEvent>();
+        // the session's Max Avatars; the Explorer's settings initialise it too
+        app.init_resource::<SessionGraphics>();
         // read by emote playback; the Explorer's input crate initialises it too
         app.init_resource::<common::structs::SceneDrivenAnimationFeedback>();
         app.add_plugins(MaskMaterialPlugin);
@@ -2326,10 +2330,12 @@ fn set_avatar_visibility(
     beyond_max: Query<(), With<BeyondMaxAvatars>>,
     player: Query<&GlobalTransform, With<PrimaryUser>>,
     config: Res<AppConfig>,
+    session: Res<SessionGraphics>,
 ) {
     let Ok(player_pos) = player.single().map(|gt| gt.translation()) else {
         return;
     };
+    let max_avatars = session.max_avatars(&config);
 
     let default_layer = RenderLayers::layer(0);
     let mut distances = q
@@ -2340,9 +2346,9 @@ fn set_avatar_visibility(
         .map(|(t, ..)| (t.translation() - player_pos).length_squared())
         .collect::<Vec<_>>();
     // only the (max_avatars)-th distance matters; partition instead of sorting
-    let cutoff = if distances.len() > config.max_avatars {
+    let cutoff = if distances.len() > max_avatars {
         *distances
-            .select_nth_unstable_by(config.max_avatars, |a, b| {
+            .select_nth_unstable_by(max_avatars, |a, b| {
                 a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less)
             })
             .1
