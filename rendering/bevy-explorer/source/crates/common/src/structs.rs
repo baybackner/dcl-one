@@ -1052,8 +1052,6 @@ pub struct GraphicsSettings {
     pub sky_reflections: SkyReflectionSetting,
     pub oob: f32,
     pub ambient_brightness: i32,
-    /// cel-shade avatars (toon shading) instead of standard PBR
-    pub cel_shading: bool,
     /// draw the dark edge outline around avatars
     pub avatar_outline: bool,
     /// show a hologram ghost where an avatar is still loading
@@ -1121,7 +1119,6 @@ impl Default for GraphicsSettings {
             sky_reflections: SkyReflectionSetting::High,
             oob: 2.0,
             ambient_brightness: AMBIENT_BRIGHTNESS_DEFAULT,
-            cel_shading: true,
             avatar_outline: true,
             avatar_ghosts: true,
             spring_bones: false,
@@ -1160,6 +1157,8 @@ pub struct SessionGraphics {
     pub fps_target: Option<usize>,
     pub parcel_grass: Option<ParcelGrassSetting>,
     pub render_scale: Option<f32>,
+    /// Set by the preview's `/avatar_demo cap`, which takes values past the setting's range.
+    pub max_avatars: Option<usize>,
 }
 
 impl SessionGraphics {
@@ -1170,6 +1169,10 @@ impl SessionGraphics {
 
     pub fn fps_target(&self, config: &AppConfig) -> usize {
         self.fps_target.unwrap_or(config.graphics.fps_target)
+    }
+
+    pub fn max_avatars(&self, config: &AppConfig) -> usize {
+        self.max_avatars.unwrap_or(config.max_avatars)
     }
 
     /// The frame rate the explorer paces to: the session's target, else the player's, and with
@@ -1289,6 +1292,11 @@ pub const MIN_CASCADE: f32 = 0.1;
 /// shadows on or off.
 #[derive(Component)]
 pub struct StageLight;
+
+/// A light that never casts shadows (a photo booth's key light): the shadow settings leave it
+/// alone.
+#[derive(Component)]
+pub struct ShadowlessLight;
 
 /// The camera that shows the lobby stage, drawn with no post-processing: the bloom setting
 /// leaves it alone.
@@ -2553,6 +2561,19 @@ mod tests {
     use super::*;
     use crate::inputs::CommonInputAction;
 
+    /// the removed `cel_shading` field in a saved config must not stop it loading
+    #[test]
+    fn old_config_with_cel_shading_still_loads() {
+        let mut graphics = serde_json::to_value(GraphicsSettings::default()).unwrap();
+        graphics["cel_shading"] = serde_json::Value::Bool(false);
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "graphics": graphics })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&config.graphics).unwrap(),
+            serde_json::to_value(GraphicsSettings::default()).unwrap()
+        );
+    }
+
     #[test]
     fn out_of_bounds_geometry_shows_in_the_editor_in_preview_and_on_a_loopback_realm() {
         let public = Some("https://realm.example.test/main");
@@ -2967,11 +2988,11 @@ mod tests {
         (g.msaa, g.bloom, g.dof) = (AaSetting::FxaaLow, BloomSetting::High, DofSetting::Off);
         (g.shadow_distance, g.light_count, g.shadow_caster_count) = (200.0, 32, 8);
         g.lens_flare = false;
-        (g.ambient_brightness, g.oob, g.cel_shading) = (10, 0.0, false);
+        (g.ambient_brightness, g.oob) = (10, 0.0);
         config.reset_outdated_settings();
 
         let mut medium = GraphicsSettings::default();
-        (medium.ambient_brightness, medium.oob, medium.cel_shading) = (10, 0.0, false);
+        (medium.ambient_brightness, medium.oob) = (10, 0.0);
         assert_eq!(
             serde_json::to_value(&config.graphics).unwrap(),
             serde_json::to_value(&medium).unwrap()
