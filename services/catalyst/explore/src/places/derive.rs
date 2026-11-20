@@ -686,32 +686,36 @@ const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.
      WHERE id = ANY($1) AND raw->>'source' = 'content' ORDER BY id FOR UPDATE";
 
 /// The ratings a new deployment or a new row is held to: its own operator
-/// rating; the rating recorded on each of its parcels by the same place, the
-/// same creator or under the same LAND owner; and the rating of every other
-/// derived place by the same creator its parcels overlap (the rows it
-/// replaces, which `PRUNE` removes; that row's operator rating first),
-/// disabled ones included. A place by another creator on another owner's
-/// LAND starts fresh; an empty creator or owner matches none. `$1` the ids,
-/// `$2` each one's positions, `$3` each one's lowercase creator; `$4` to `$7`
-/// one entry per parcel: the id, the position, the creator and the parcel's
-/// LAND owner.
+/// rating; the rating recorded on each of its parcels by the same place (the
+/// same id or exactly the same parcel set), the same creator or under the same
+/// LAND owner; and the rating of every other derived place by the same creator
+/// its parcels overlap, or with exactly its parcels (the rows it replaces,
+/// which `PRUNE` removes; that row's operator rating first), disabled ones
+/// included. A place by another creator on another owner's LAND and another
+/// parcel set starts fresh; an empty creator or owner matches none. `$1` the
+/// ids, `$2` each one's positions, `$3` each one's lowercase creator; `$4` to
+/// `$8` one entry per parcel: the id, the position, the creator, the parcel's
+/// LAND owner and the place's parcel set ([`parcel_set`]).
 const HELD_RATINGS: &str = r#"
     SELECT f.id, false AS predecessor, m.content_rating AS rating
     FROM unnest($1::text[]) AS f(id)
     JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
     UNION ALL
     SELECT c.id, true, r.content_rating
-    FROM unnest($4::text[], $5::text[], $6::text[], $7::text[]) AS c(id, position, creator, owner)
+    FROM unnest($4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
+         AS c(id, position, creator, owner, parcels)
     JOIN explore.place_parcel_rating r ON r.position = c.position
-     AND (r.place_id = c.id OR (c.creator <> '' AND r.creator_address = c.creator)
+     AND (r.place_id = c.id OR r.parcels = c.parcels
+          OR (c.creator <> '' AND r.creator_address = c.creator)
           OR (c.owner <> '' AND r.owner_address = c.owner))
     UNION ALL
     SELECT f.id, true, COALESCE(m.content_rating, p.content_rating)
     FROM unnest($1::text[], $2::jsonb[], $3::text[]) AS f(id, positions, creator)
     JOIN explore.place p
       ON p.id <> f.id AND p.world IS FALSE AND p.raw->>'source' = 'content'
-     AND f.creator <> '' AND lower(btrim(p.creator_address)) = f.creator
      AND p.raw->'positions' ?| ARRAY(SELECT jsonb_array_elements_text(f.positions))
+     AND ((f.creator <> '' AND lower(btrim(p.creator_address)) = f.creator)
+          OR ((p.raw->'positions') @> f.positions AND f.positions @> (p.raw->'positions')))
     LEFT JOIN explore.place_moderation m ON m.place_id = p.id
 "#;
 
@@ -738,46 +742,49 @@ async fn lock_page_parcels(
 }
 
 /// Records `$2` on each parcel `$1` for the place `$3` by the creator `$4`
-/// under the LAND owner `$6`: `$5` true overwrites a recorded rating, false
-/// only fills a parcel with none. A place with an operator rating records an
-/// operator's rating. An operator's record is replaced only by a place held to
-/// it ([`HELD_RATINGS`], which keeps it an operator's) or under a known owner
-/// other than its known one.
+/// under the LAND owner `$6`, with the place's parcel set `$7`: `$5` true
+/// overwrites a recorded rating, false only fills a parcel with none. A place
+/// with an operator rating records an operator's rating. An operator's record
+/// is replaced only by a place held to it ([`HELD_RATINGS`], which keeps it an
+/// operator's) or under a known owner other than its known one.
 const RECORD_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
-        (position, content_rating, place_id, creator_address, owner_address, operator)
-    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id,
+        (position, content_rating, place_id, parcels, creator_address, owner_address, operator)
+    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id, u.parcels,
            NULLIF(lower(btrim(u.creator)), ''), NULLIF(u.owner, ''),
            EXISTS (SELECT 1 FROM explore.place_moderation m
                    WHERE m.place_id = u.place_id AND m.content_rating IS NOT NULL)
-    FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $6::text[])
-         AS u(position, rating, place_id, creator, owner)
+    FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $6::text[], $7::text[])
+         AS u(position, rating, place_id, creator, owner, parcels)
     ORDER BY u.position
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
+        parcels = EXCLUDED.parcels,
         creator_address = EXCLUDED.creator_address, owner_address = EXCLUDED.owner_address,
         operator = EXCLUDED.operator OR (r.operator AND COALESCE(
-            r.place_id = EXCLUDED.place_id OR r.creator_address = EXCLUDED.creator_address
+            r.place_id = EXCLUDED.place_id OR r.parcels = EXCLUDED.parcels
+            OR r.creator_address = EXCLUDED.creator_address
             OR r.owner_address = EXCLUDED.owner_address, false)),
         updated_at = timezone('UTC', now())
     WHERE $5
-      AND (NOT r.operator OR r.place_id = EXCLUDED.place_id
+      AND (NOT r.operator OR r.place_id = EXCLUDED.place_id OR r.parcels = EXCLUDED.parcels
            OR r.creator_address = EXCLUDED.creator_address
            OR (r.owner_address IS NOT NULL AND EXCLUDED.owner_address IS NOT NULL))
-      AND (r.content_rating, r.place_id, r.creator_address, r.owner_address)
-          IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id,
+      AND (r.content_rating, r.place_id, r.parcels, r.creator_address, r.owner_address)
+          IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id, EXCLUDED.parcels,
                             EXCLUDED.creator_address, EXCLUDED.owner_address)
 "#;
 
 /// Clears the parcels `$1` of a place left with no rating, so a later place
 /// on them is held to none it did not hold. Such a place is held to no
 /// record, so an operator's record stays unless `$2`, the parcel's LAND
-/// owner, is known and so is the record's (the LAND changed owner).
+/// owner, is known and so is the record's (the LAND changed owner) and the
+/// record is of another parcel set than `$3`.
 const CLEAR_PARCEL_RATINGS: &str = "DELETE FROM explore.place_parcel_rating r \
-     USING unnest($1::text[], $2::text[]) AS c(position, owner) \
+     USING unnest($1::text[], $2::text[], $3::text[]) AS c(position, owner, parcels) \
      WHERE r.position = c.position \
        AND (NOT r.operator OR (r.owner_address IS NOT NULL AND c.owner <> '' \
-            AND r.owner_address <> c.owner))";
+            AND r.owner_address <> c.owner AND r.parcels <> c.parcels))";
 
 /// The page's operator rows, locked before its places as an operator's
 /// decision locks them (`moderation::apply_with`).
@@ -1042,10 +1049,11 @@ async fn page_parcels(
 /// The creator rating rule (`places::moderation::CreatorRating`) over a page:
 /// a new deployment of an existing row, or a new row, takes the scene's rating
 /// when it raises the one held, never a laxer one. It is held to its stored
-/// or operator rating, and to the ratings of the same place, the same
-/// creator or the same LAND owner (`owners`) on its parcels: those recorded
-/// there and those of the places it replaces; a place by another creator on
-/// another owner's LAND starts fresh. The rating it takes is recorded on its
+/// or operator rating, and to the ratings of the same place (the same id or
+/// exactly the same parcels, whoever deploys it), the same creator or the
+/// same LAND owner (`owners`) on its parcels: those recorded there and those
+/// of the places it replaces; a place by another creator on another owner's
+/// LAND and other parcels starts fresh. The rating it takes is recorded on its
 /// parcels, and a place left with no rating clears them, an operator's
 /// record only once the LAND changed owner. A pass over the same deployment
 /// leaves the stored rating, an operator's included, and only fills its
@@ -1079,13 +1087,15 @@ async fn settle_ratings(
             .map(|p| Value::from(positions_of(p)))
             .collect();
         let creators: Vec<String> = settled.iter().map(|p| creator_of(p)).collect();
-        let (mut cell_ids, mut cells, mut cell_creators, mut cell_owners) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut cell_ids, mut cells, mut cell_creators, mut cell_owners, mut cell_sets) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for p in &settled {
+            let set = parcel_set(p);
             for position in positions_of(p) {
                 cell_ids.push(p.id.clone());
                 cell_creators.push(creator_of(p));
                 cell_owners.push(owners.get(&position).cloned().unwrap_or_default());
+                cell_sets.push(set.clone());
                 cells.push(position);
             }
         }
@@ -1097,6 +1107,7 @@ async fn settle_ratings(
             .bind(&cells)
             .bind(&cell_creators)
             .bind(&cell_owners)
+            .bind(&cell_sets)
             .fetch_all(&mut **tx)
             .await?
         {
@@ -1111,7 +1122,7 @@ async fn settle_ratings(
     }
     let (mut ids, mut ratings) = (Vec::new(), Vec::new());
     let (mut recorded, mut missing) = (Records::default(), Records::default());
-    let mut cleared: Vec<String> = Vec::new();
+    let (mut cleared, mut cleared_sets): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     for p in rows {
         let fresh = inserted.get(&p.id) == Some(&true);
         if !settled.iter().any(|s| s.id == p.id) {
@@ -1161,7 +1172,11 @@ async fn settle_ratings(
             .and_then(moderation::creator_code)
             .map(str::to_string)
         else {
-            cleared.extend(positions_of(p));
+            let set = parcel_set(p);
+            for position in positions_of(p) {
+                cleared.push(position);
+                cleared_sets.push(set.clone());
+            }
             continue;
         };
         for position in positions_of(p) {
@@ -1189,6 +1204,7 @@ async fn settle_ratings(
         sqlx::query(CLEAR_PARCEL_RATINGS)
             .bind(&cleared)
             .bind(&cleared_owners)
+            .bind(&cleared_sets)
             .execute(&mut **tx)
             .await?;
     }
@@ -1201,6 +1217,7 @@ async fn settle_ratings(
                 .bind(&records.creators)
                 .bind(overwrite)
                 .bind(&records.owners)
+                .bind(&records.sets)
                 .execute(&mut **tx)
                 .await?;
         }
@@ -1217,8 +1234,19 @@ fn creator_of(p: &DerivedPlace) -> String {
         .unwrap_or_default()
 }
 
-/// Parcel records to write: each parcel's rating, place, creator and LAND
-/// owner (empty when unknown).
+/// A place's whole parcel set as its parcel records keep it: its distinct
+/// positions in byte order, joined by `;` (`moderation::OPERATOR_PARCEL_RATINGS`
+/// builds the same key). Two places with equal keys cover exactly the same
+/// parcels.
+fn parcel_set(p: &DerivedPlace) -> String {
+    let mut positions = positions_of(p);
+    positions.sort();
+    positions.dedup();
+    positions.join(";")
+}
+
+/// Parcel records to write: each parcel's rating, place, creator, LAND
+/// owner (empty when unknown) and the place's parcel set.
 #[derive(Default)]
 struct Records {
     positions: Vec<String>,
@@ -1226,6 +1254,7 @@ struct Records {
     places: Vec<String>,
     creators: Vec<String>,
     owners: Vec<String>,
+    sets: Vec<String>,
 }
 
 impl Records {
@@ -1242,6 +1271,7 @@ impl Records {
         self.ratings.push(rating.to_string());
         self.places.push(place.id.clone());
         self.creators.push(creator_of(place));
+        self.sets.push(parcel_set(place));
     }
 }
 
@@ -1737,6 +1767,7 @@ mod tests {
             .bind(vec!["0xauthor".to_string(); 2])
             .bind(true)
             .bind(vec![String::new(); 2])
+            .bind(vec![parcels.join(";"); 2])
             .execute(&mut *page)
             .await
             .expect("the page is not chosen as a deadlock victim");
@@ -2262,9 +2293,11 @@ mod tests {
         assert_eq!(rating(&c).await.as_deref(), Some("A"));
         assert_eq!(kinds(&c).await, ["rating_downgrade_refused"]);
 
-        // Another creator on the same parcels starts fresh, with no notice:
-        // after the row is pruned, while it is still listed, and over an
-        // operator's rating of the former place.
+        // Another creator on exactly the same parcels, under a new base, is
+        // the same place and keeps its rating, with a notice: after the row
+        // is pruned, while it is still listed, and over an operator's rating
+        // of the former place, which stays an operator's on the parcels.
+        let t = Ratings { pool: pool.clone() };
         let (d, e) = (parcel(5), parcel(6));
         upsert_page(&pool, deploy(owner, &d, &[&d, &e], Some("A"), 0), site)
             .await
@@ -2273,16 +2306,16 @@ mod tests {
         upsert_page(&pool, deploy(other, &e, &[&d, &e], Some("T"), 1), site)
             .await
             .unwrap();
-        assert_eq!(rating(&e).await.as_deref(), Some("T"));
-        assert!(kinds(&e).await.is_empty());
+        assert_eq!(rating(&e).await.as_deref(), Some("A"));
+        assert_eq!(kinds(&e).await, ["rating_downgrade_refused"]);
         let (f, g) = (parcel(8), parcel(9));
         upsert_page(&pool, deploy(owner, &f, &[&f, &g], Some("A"), 0), site)
             .await
             .unwrap();
-        upsert_page(&pool, deploy(other, &g, &[&f, &g], Some("T"), 1), site)
+        upsert_page(&pool, deploy(other, &g, &[&g, &f], Some("T"), 1), site)
             .await
             .unwrap();
-        assert_eq!(rating(&g).await.as_deref(), Some("T"));
+        assert_eq!(rating(&g).await.as_deref(), Some("A"));
         let (h, i) = (parcel(11), parcel(12));
         upsert_page(&pool, deploy(owner, &h, &[&h, &i], Some("T"), 0), site)
             .await
@@ -2300,35 +2333,61 @@ mod tests {
         upsert_page(&pool, deploy(other, &i, &[&h, &i], Some("T"), 1), site)
             .await
             .unwrap();
-        assert_eq!(rating(&i).await.as_deref(), Some("T"));
+        assert_eq!(rating(&i).await.as_deref(), Some("R"));
+        assert_eq!(kinds(&i).await, ["rating_downgrade_refused"]);
+        assert_eq!(t.record(&h).await, Some(("R".into(), true)));
+        assert_eq!(t.record(&i).await, Some(("R".into(), true)));
 
-        // A deployment with no known creator matches no other place.
+        // A deployment with no known creator matches no place on other parcels.
         let (j, k) = (parcel(14), parcel(15));
         upsert_page(&pool, deploy("", &j, &[&j, &k], Some("A"), 0), site)
             .await
             .unwrap();
         prune(&j).await;
-        upsert_page(&pool, deploy(" ", &k, &[&j, &k], Some("T"), 1), site)
+        upsert_page(&pool, deploy(" ", &k, &[&k], Some("T"), 1), site)
             .await
             .unwrap();
         assert_eq!(rating(&k).await.as_deref(), Some("T"));
 
-        // A rated place replaced by another creator's unrated one leaves its
-        // creator nothing to be held to on those parcels.
+        // Another creator's place with one parcel more, or one fewer, starts
+        // fresh, with no notice.
         let (l, m, n) = (parcel(17), parcel(18), parcel(19));
         upsert_page(&pool, deploy(owner, &l, &[&l, &m], Some("A"), 0), site)
             .await
             .unwrap();
         prune(&l).await;
-        upsert_page(&pool, deploy(other, &m, &[&l, &m], None, 1), site)
-            .await
-            .unwrap();
-        assert_eq!(rating(&m).await, None);
-        prune(&m).await;
-        upsert_page(&pool, deploy(owner, &n, &[&l, &m, &n], Some("T"), 2), site)
+        upsert_page(&pool, deploy(other, &n, &[&l, &m, &n], Some("T"), 1), site)
             .await
             .unwrap();
         assert_eq!(rating(&n).await.as_deref(), Some("T"));
+        assert!(kinds(&n).await.is_empty());
+        let (o, q, r) = (parcel(21), parcel(22), parcel(23));
+        upsert_page(&pool, deploy(owner, &o, &[&o, &q, &r], Some("A"), 0), site)
+            .await
+            .unwrap();
+        prune(&o).await;
+        upsert_page(&pool, deploy(other, &r, &[&q, &r], Some("T"), 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&r).await.as_deref(), Some("T"));
+        assert!(kinds(&r).await.is_empty());
+
+        // A rated place replaced by another creator's unrated one on other
+        // parcels leaves its creator nothing to be held to on those parcels.
+        let (u, v, w, z) = (parcel(25), parcel(26), parcel(27), parcel(28));
+        upsert_page(&pool, deploy(owner, &u, &[&u, &v], Some("A"), 0), site)
+            .await
+            .unwrap();
+        prune(&u).await;
+        upsert_page(&pool, deploy(other, &v, &[&u, &v, &w], None, 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&v).await, None);
+        prune(&v).await;
+        upsert_page(&pool, deploy(owner, &z, &[&u, &v, &z], Some("T"), 2), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&z).await.as_deref(), Some("T"));
     }
 
     /// The rows, notices and parcel records the operator-rating tests read.
@@ -2422,7 +2481,8 @@ mod tests {
         let site = Some("https://decentraland.org/places");
         let (owner, other) = ("0xowner", "0xother");
 
-        // An unrated place by another creator leaves the operator's records.
+        // An unrated place by another creator on other parcels leaves the
+        // operator's records.
         let (l, m, n) = (parcel(0), parcel(1), parcel(2));
         upsert_page(
             &pool,
@@ -2434,7 +2494,7 @@ mod tests {
         t.rate(&l, "R", None).await;
         assert_eq!(t.record(&m).await, Some(("R".into(), true)));
         t.prune(&l).await;
-        upsert_page(&pool, Ratings::deploy(other, &m, &[&l, &m], None, 1), site)
+        upsert_page(&pool, Ratings::deploy(other, &m, &[&m], None, 1), site)
             .await
             .unwrap();
         assert_eq!(t.rating(&m).await, None);
@@ -2450,7 +2510,7 @@ mod tests {
         assert_eq!(t.rating(&n).await.as_deref(), Some("R"));
         assert_eq!(t.record(&l).await, Some(("R".into(), true)));
 
-        // A rated one starts fresh and leaves them too.
+        // A rated one on other parcels starts fresh and leaves them too.
         let (p, q, r) = (parcel(4), parcel(5), parcel(6));
         upsert_page(
             &pool,
@@ -2461,13 +2521,9 @@ mod tests {
         .unwrap();
         t.rate(&p, "R", None).await;
         t.prune(&p).await;
-        upsert_page(
-            &pool,
-            Ratings::deploy(other, &q, &[&p, &q], Some("E"), 1),
-            site,
-        )
-        .await
-        .unwrap();
+        upsert_page(&pool, Ratings::deploy(other, &q, &[&q], Some("E"), 1), site)
+            .await
+            .unwrap();
         assert_eq!(t.rating(&q).await.as_deref(), Some("E"));
         assert!(t.kinds(&q).await.is_empty());
         assert_eq!(t.record(&p).await, Some(("R".into(), true)));
@@ -2637,15 +2693,116 @@ mod tests {
         page(Ratings::deploy(wallet, &d, &[&c, &d], Some("T"), 1)).await;
         assert_eq!(t.rating(&d).await.as_deref(), Some("A"));
 
-        // Once the LAND changes owner, the new owner's place starts fresh and
-        // replaces the operator's records.
+        // Once the LAND changes owner, the new owner's place on other parcels
+        // starts fresh and replaces the operator's records.
+        let g = parcel(8);
         page(Ratings::deploy(owner, &e, &[&e, &f], Some("T"), 0)).await;
         t.rate(&e, "R", Some(&land)).await;
         t.prune(&e).await;
-        land_index(&pool, &[&e, &f], buyer).await;
-        page(Ratings::deploy(buyer, &f, &[&e, &f], None, 1)).await;
+        land_index(&pool, &[&e, &f, &g], buyer).await;
+        page(Ratings::deploy(buyer, &f, &[&e, &f, &g], None, 1)).await;
         assert_eq!(t.rating(&f).await, None);
         assert_eq!(t.record(&e).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_rating_holds_for_exactly_the_same_parcels_on_another_owners_land() {
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let parcel = |n: i32| format!("20,{n}");
+        let site = Some("https://decentraland.org/places");
+        let (owner, buyer, wallet) = (
+            "0x00000000000000000000000000000000000000a1",
+            "0x00000000000000000000000000000000000000c3",
+            "0x00000000000000000000000000000000000000d4",
+        );
+        let p: Vec<String> = (0..12).map(parcel).collect();
+        let all: Vec<&String> = p.iter().collect();
+        let land = land_index(&pool, &all, owner).await;
+        let page = |rows| {
+            let (pool, land) = (pool.clone(), &land);
+            async move {
+                super::upsert_page(&pool, rows, site, Some(land))
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // The owner's places: a creator's raise, an operator's rating, and
+        // two more raises; then the LAND changes owner and the rows go.
+        page(Ratings::deploy(owner, &p[0], &[&p[0], &p[1]], Some("A"), 0)).await;
+        page(Ratings::deploy(owner, &p[2], &[&p[2], &p[3]], Some("T"), 0)).await;
+        t.rate(&p[2], "R", Some(&land)).await;
+        page(Ratings::deploy(owner, &p[4], &[&p[4], &p[5]], Some("A"), 0)).await;
+        page(Ratings::deploy(
+            owner,
+            &p[7],
+            &[&p[7], &p[8], &p[9]],
+            Some("A"),
+            0,
+        ))
+        .await;
+        for base in [&p[0], &p[2], &p[4], &p[7]] {
+            t.prune(base).await;
+        }
+        land_index(&pool, &all, buyer).await;
+
+        // Another wallet redeploying exactly those parcels under a new base is
+        // held to the creator's and the operator's ratings, and the operator's
+        // record moves to the new place.
+        page(Ratings::deploy(
+            wallet,
+            &p[1],
+            &[&p[1], &p[0]],
+            Some("T"),
+            1,
+        ))
+        .await;
+        assert_eq!(t.rating(&p[1]).await.as_deref(), Some("A"));
+        assert_eq!(t.kinds(&p[1]).await, ["rating_downgrade_refused"]);
+        page(Ratings::deploy(
+            wallet,
+            &p[3],
+            &[&p[2], &p[3]],
+            Some("E"),
+            1,
+        ))
+        .await;
+        assert_eq!(t.rating(&p[3]).await.as_deref(), Some("R"));
+        assert_eq!(t.kinds(&p[3]).await, ["rating_downgrade_refused"]);
+        assert_eq!(t.record(&p[2]).await, Some(("R".into(), true)));
+        let place: String = sqlx::query_scalar(
+            "SELECT place_id FROM explore.place_parcel_rating WHERE position = $1",
+        )
+        .bind(&p[2])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(place, super::super::parcel_place_id(&p[3]));
+
+        // One parcel more, or one fewer, starts fresh with no notice.
+        page(Ratings::deploy(
+            wallet,
+            &p[6],
+            &[&p[4], &p[5], &p[6]],
+            Some("T"),
+            1,
+        ))
+        .await;
+        assert_eq!(t.rating(&p[6]).await.as_deref(), Some("T"));
+        assert!(t.kinds(&p[6]).await.is_empty());
+        page(Ratings::deploy(
+            wallet,
+            &p[9],
+            &[&p[8], &p[9]],
+            Some("T"),
+            1,
+        ))
+        .await;
+        assert_eq!(t.rating(&p[9]).await.as_deref(), Some("T"));
+        assert!(t.kinds(&p[9]).await.is_empty());
     }
 
     #[test]

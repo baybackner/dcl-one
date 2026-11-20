@@ -267,8 +267,9 @@ CREATE TABLE explore.place_moderation (
 );
 
 -- The content rating last held on each parcel by the derived place covering it
--- (src/explore/places/derive.rs, `settle_ratings`), with that place's id, the
--- deployer address that created it and the parcel's LAND owner when the
+-- (src/explore/places/derive.rs, `settle_ratings`), with that place's id and
+-- whole parcel set (`parcels`: its distinct positions in byte order, joined
+-- by `;`), the deployer address that created it and the parcel's LAND owner when the
 -- record was written (the estate's owner for a parcel in one, from the local
 -- land_authz index; NULL while that index is unpublished or the parcel is
 -- unindexed): the derive pass writes the rating it settles for a new
@@ -277,17 +278,19 @@ CREATE TABLE explore.place_moderation (
 -- row's stored rating; an operator's rating of a derived place
 -- (places::moderation) overwrites its parcels and sets `operator`. A new
 -- deployment or a new row is held to the strictest rating of its parcels
--- recorded by the same place, the same creator or the same LAND owner, so the
--- rating outlives the row the pass prunes; another creator on another owner's
--- LAND starts fresh. An `operator` record is replaced or cleared only by a
--- place held to it, or by a place whose known LAND owner differs from the
--- record's known one. Keyed by the parcel (`x,y`), one row per rated parcel
+-- recorded by the same place (the same id, or exactly the same parcel set),
+-- the same creator or the same LAND owner, so the rating outlives the row the
+-- pass prunes; another creator on another owner's LAND and another parcel set
+-- starts fresh. An `operator` record is replaced or cleared only by a place
+-- held to it, or by a place on another parcel set whose known LAND owner
+-- differs from the record's known one. Keyed by the parcel (`x,y`), one row per rated parcel
 -- the catalogue has derived; no FK to explore.place, whose rows come and go.
 -- The PK serves the pass's lookup and upsert by parcel.
 CREATE TABLE explore.place_parcel_rating (
     position        text PRIMARY KEY,
     content_rating  text NOT NULL,
     place_id        text NOT NULL,
+    parcels         text NOT NULL,
     creator_address text,
     owner_address   text,
     operator        boolean NOT NULL DEFAULT false,

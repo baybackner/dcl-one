@@ -342,15 +342,19 @@ const PLACE_PARCELS: &str = r#"
 "#;
 
 /// An operator's rating `$2` of the derived place `$1`, recorded on each of
-/// its parcels as an operator's, with the place, its creator and the parcel's
-/// LAND owner (`$3` positions, `$4` owners; an unknown owner keeps the one
-/// this place recorded) in `explore.place_parcel_rating`, which the derive
-/// pass holds a new deployment of that place, or a new row by that creator or
-/// on that owner's LAND, to.
+/// its parcels as an operator's, with the place, its parcel set (as
+/// `derive::parcel_set` builds it), its creator and the parcel's LAND owner
+/// (`$3` positions, `$4` owners; an unknown owner keeps the one this place
+/// recorded) in `explore.place_parcel_rating`, which the derive pass holds a
+/// new deployment of that place, a new row on exactly its parcels, or a new
+/// row by that creator or on that owner's LAND, to.
 const OPERATOR_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
-        (position, content_rating, place_id, creator_address, owner_address, operator)
-    SELECT DISTINCT pos, $2, p.id, NULLIF(lower(btrim(p.creator_address)), ''),
+        (position, content_rating, place_id, parcels, creator_address, owner_address, operator)
+    SELECT DISTINCT pos, $2, p.id,
+           (SELECT string_agg(e, ';' ORDER BY e COLLATE "C")
+            FROM (SELECT DISTINCT e FROM jsonb_array_elements_text(p.raw->'positions') AS e) AS s),
+           NULLIF(lower(btrim(p.creator_address)), ''),
            NULLIF((SELECT o.owner FROM unnest($3::text[], $4::text[]) AS o(position, owner)
                    WHERE o.position = pos LIMIT 1), ''), true
     FROM explore.place p,
@@ -360,7 +364,7 @@ const OPERATOR_PARCEL_RATINGS: &str = r#"
     ORDER BY pos
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
-        creator_address = EXCLUDED.creator_address,
+        parcels = EXCLUDED.parcels, creator_address = EXCLUDED.creator_address,
         owner_address = COALESCE(EXCLUDED.owner_address,
             CASE WHEN r.place_id = EXCLUDED.place_id THEN r.owner_address END),
         operator = true, updated_at = timezone('UTC', now())

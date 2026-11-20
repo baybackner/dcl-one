@@ -503,14 +503,19 @@ also held to the ratings, on its parcels, of the same place, of places by
 the same creator (the signed deployer address, `explore.place.creator_address`)
 and of places on the same LAND owner's parcels: the derived places by that
 creator its parcels overlap, which the pass then prunes, and
-`explore.place_parcel_rating`. A place by another creator on another owner's
-LAND starts fresh. The owner is the parcel's (or its estate's) owner in the
+`explore.place_parcel_rating`. The same place is the same id (the same base
+parcel) or exactly the same set of parcels under another base, whoever
+deploys it; the new id keeps the place's rating and its operator's record
+(the id stays the UUIDv5 of the base parcel, so links keep resolving and a
+later scene on the old base gets its own id). A place by another creator on
+another owner's LAND and another parcel set starts fresh. The owner is the parcel's (or its estate's) owner in the
 published `land_authz` index, read on the page's connection; while that index
 is unpublished or a parcel is unindexed, the owner is unknown and only the
 place and the creator match.
 
 `explore.place_parcel_rating` keeps the rating last held on each parcel by the
-derived place covering it, with that place's id, creator and LAND owner, and
+derived place covering it, with that place's id, whole parcel set (its
+distinct positions in byte order, joined by `;`), creator and LAND owner, and
 whether an operator's rating set it, so the rating
 outlives a row the pass prunes (an unpublished scene, or one moved to another
 base parcel by the same creator). Workload: one row per rated parcel the
@@ -521,10 +526,11 @@ missing parcels for the others (an existing catalogue fills on its first pass),
 and one row per parcel for an operator's rating of a derived place; read by
 primary key for each settled row's parcels, plus one indexed `land_authz`
 owner lookup per page and per operator place rating. Invariant: a parcel's row
-equals the rating, id, creator and owner of the rated derived place covering
-it, or of the last one; an operator's row is replaced or cleared only by a
-place held to it, or by one whose known LAND owner differs from the row's
-known one; only the derive pass and the operator's place rating write it. Both
+equals the rating, id, parcel set, creator and owner of the rated derived
+place covering it, or of the last one; an operator's row is replaced or
+cleared only by a place held to it (a place with the same parcel set always
+is), or by one on another parcel set whose known LAND owner differs from the
+row's known one; only the derive pass and the operator's place rating write it. Both
 writers first take transaction advisory locks on the hash buckets (at most 128)
 of the parcels they write, in one sorted order, so a page that inserts a missing
 parcel after locking the recorded ones cannot deadlock with an operator's
