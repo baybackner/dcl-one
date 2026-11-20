@@ -1,14 +1,14 @@
-import { ColliderLayer, engine, Entity, Material, MeshRenderer, RaycastQueryType, RaycastShape, raycastSystem, Transform, VisibilityComponent } from '@dcl/sdk/ecs'
-import { Color4, Vector3 } from '@dcl/sdk/math';
-import { playerPosition, prevActualVelocity, prevExternalVelocity, prevPlayerPosition, printvec, tick } from '.';
+import { ColliderLayer, engine, Entity, RaycastQueryType, RaycastShape, raycastSystem, Transform } from '@dcl/sdk/ecs'
+import { Vector3 } from '@dcl/sdk/math';
+import { playerPosition, prevPlayerPosition, tick } from '.';
 import { GROUND_CAST_RANGE, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, PLAYER_COLLIDER_RADIUS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
 
 // updated in raycast update
 export var groundNormal = Vector3.Zero();
-export var groundPosition = Vector3.Zero();
+var groundPosition = Vector3.Zero();
 export var groundDistance = 0;
 // ground straight below the centre (point ray): feet height above it (Infinity: none in range) and its normal
-export var groundRayDistance = Infinity;
+var groundRayDistance = Infinity;
 export var groundRayNormal = Vector3.Zero();
 // updated in recordGroundPosition @ 100000 - 2
 export var grounded = false;
@@ -134,7 +134,7 @@ export function centreSupported(): boolean {
 // Snap follows the ground under the centre down from where the feet stood last tick by at most
 // GROUND_SNAP_STEP_DROP beyond what the slope of the ground (then or now) accounts for over the distance moved since;
 // past a larger drop (a step edge) the avatar falls.
-export function stepDropAllowsSnap(): boolean {
+function stepDropAllowsSnap(): boolean {
     if (Number.isNaN(prevGroundY)) return true;
     if (groundRayDistance === Infinity) return false;
     const slope = Math.max(slopeOf(groundRayNormal), prevGroundSlope);

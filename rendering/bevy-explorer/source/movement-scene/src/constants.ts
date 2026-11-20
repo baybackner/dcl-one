@@ -137,10 +137,10 @@ export const GROUND_SNAP_HEIGHT = 0.40 // drop ahead at which the engine walk st
 // The ground follows a walking avatar down at most GROUND_SNAP_STEP_DROP beyond its slope; past a larger drop the centre
 // is over an edge.
 export const GROUND_SNAP_STEP_DROP = 0.15; // m
-// How far below the capsule's lower sphere the ground casts reach.
+// How far below the capsule's lower sphere the ground casts reach. Within it the scene knows the ground under an
+// avatar in the air: the landing prediction, the glide's minimum height and the landing stun measure from it. Below it
+// the casts find nothing and the world floor (y 0) stands in.
 export const GROUND_CAST_RANGE = 3.6; // m
-// The forward casts reach STEP_UP_LOOKAHEAD past the collider, so a riser the engine steps onto is told from a wall.
-export const STEP_UP_LOOKAHEAD = 1.0; // m
 
 
 // don't edit
@@ -151,6 +151,5 @@ export const VEC3_UP = Vector3.Up();
 export const VEC3_DOWN = Vector3.Down();
 export const VEC3_FORWARD = Vector3.Forward();
 export const VEC3_RIGHT = Vector3.Right();
-export const VEC3_INF = Vector3.fromArray([Infinity, Infinity, Infinity]);
 export const VEC3_NEG_INF = Vector3.fromArray([-Infinity, -Infinity, -Infinity]);
 export const VEC3_HORIZONTAL_MASK = Vector3.create(1, 0, 1);

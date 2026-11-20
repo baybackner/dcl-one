@@ -11,7 +11,7 @@ export var doubleJumpHeight = 0;
 export var glidingSpeed = 0;
 export var glidingFallingSpeed = 0;
 export var landingStunTime = LANDING_STUN_TIME; // s without horizontal movement after a stunning landing
-export var doubleJumpEnabled = false;
+var doubleJumpEnabled = false;
 export var glideEnabled = false;
 // Slots available between two grounded frames. applyJump() tracks usage in
 // separate counters and falls through to a glide once the air slot is spent.
@@ -19,7 +19,7 @@ export var maxGroundJumps = 0; // 1 unless disableJump
 export var maxAirJumps = 0;    // 1 unless disableDoubleJump
 export var disableOrientation = false;
 
-export function initParamters(
+export function initParameters(
     locomotion: DeepReadonlyObject<PBAvatarLocomotionSettings> | undefined,
     modifiers: DeepReadonlyObject<PBInputModifier> | undefined
 ) {

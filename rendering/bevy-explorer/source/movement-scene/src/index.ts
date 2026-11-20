@@ -3,7 +3,7 @@ import { Quaternion, Vector3 } from '@dcl/sdk/math';
 import { grounded, initGroundRaycast, recordGroundForNextTick } from './ground';
 import { movementAxis, orientation, relativeDegrees, updateHorizontalVelocity } from './horizontal';
 import { GlideProp, glideProp, initStepCasts, isDoubleJump, isGliding, jumpStartHeight, landingStuns, stunned, updateVerticalVelocity } from './vertical';
-import { initParamters as initParameters } from './parameters';
+import { initParameters } from './parameters';
 import { initWalkSystem, updateEngineWalk, consumeWalkResult } from './walk';
 import { MAX_SPEED, MAX_TICK_TIME, GLIDE_TILT_DAMP_TIME, GLIDE_TILT_FULL_ANGLE, VEC3_DOWN, VEC3_ZERO } from './constants';
 import { settings } from './settings';
@@ -162,7 +162,7 @@ export var stepTime = 0;
 // frame's scene-loop deadline), so rate-based state integrates over everything applied since
 // the previous tick (previousStepTime) rather than a single stepTime.
 export var tickTime = 0;
-export var prevStepTime = 0;
+var prevStepTime = 0;
 export var playerPosition: Vector3 = Vector3.Zero();
 export var prevPlayerPosition: Vector3 = Vector3.Zero();
 export var playerRotation: Quaternion = Quaternion.Identity();
@@ -173,8 +173,6 @@ export var velocity = Vector3.Zero();
 // grounded state is held, so the lerp neither asserts a fall velocity
 // (which would cancel the engine move) nor arms a landing on arrival.
 export var engineDriven = false;
-export var velocityNorm = Vector3.Zero();
-export var velocityLength = 0;
 export var prevRequestedVelocity = Vector3.Zero();
 export var prevActualVelocity = Vector3.Zero();
 export var prevExternalVelocity = Vector3.Zero();
@@ -191,10 +189,6 @@ const earlierPublished: Vector3.MutableVector3[] = [];
 for (let i = 0; i < PUBLISHED_HISTORY; i++) earlierPublished.push(Vector3.Zero());
 // Frames the last reply was still in flight after the frame before this tick (0: it was applied there).
 var replyLateFrames = 0;
-
-export function printvec(v: Vector3): string {
-  return `(${v.x},${v.y},${v.z})`
-}
 
 function initFrame() {
   tick += 1;
@@ -252,11 +246,7 @@ var maxUngroundedY = -Infinity;
 var wasJumpingOrFalling = false;
 // Mirror of the engine's currently-active scene animation state. Read in
 // initFrame; consulted in selectAnimation to decide when to stop the landing.
-// Exported so the debug HUD can show what the engine is actually playing.
-export var activeAnimationState: AvatarAnimationState | undefined = undefined;
-// Last MovementAnimation we published, exposed for the debug HUD so it can be
-// compared against activeAnimationState (does the engine honor what we send?).
-export var publishedAnimation: MovementAnimation | undefined = undefined;
+var activeAnimationState: AvatarAnimationState | undefined = undefined;
 // Last-observed playback phase of the currently-active scene animation, used to
 // detect when the clip wrapped past a footstep trigger time since the previous
 // frame. Keyed per src so switching clip resets tracking.
@@ -301,11 +291,11 @@ var nextBlend: number | undefined = undefined;
 // Smoothed avatar turn rate (deg/s), used to pick the left/right glide lean.
 // Computed each frame in applyMovement from the change in facing.
 var glidePrevOrientation = 0;
-export var glideTurnRate = 0;
+var glideTurnRate = 0;
 // Smoothed procedural glide bank (roll, degrees), eased toward a target derived from
 // glideTurnRate while gliding and back to 0 otherwise. Published as AvatarMovement.tiltRoll
 // so the engine banks the whole avatar; no separate left/right lean clips are needed.
-export var glideTilt = 0;
+var glideTilt = 0;
 
 // Glide animation phase, from the vertical model's glider prop (glideProp): 'deploy' plays the
 // Start clip (glider opens) while the prop opens, 'glide' is the steady forward/idle loop while
@@ -620,11 +610,10 @@ function selectAnimation(): MovementAnimation {
         ? GLIDE_AVATAR.forward
         : GLIDE_AVATAR.idle;
       // On a forward<->idle swap mid-glide, hand the engine the current playback time so
-      // the new avatar clip and the shared glider prop clip continue in phase instead of
-      // snapping to 0. `activeAnimationState.playbackTime` is the engine's value from its
-      // last report, so add this frame's `stepTime`. Sent only on the swap frame; the
-      // engine carries it across the deferred prop spawn (it isn't lost), so we don't need
-      // to keep resending.
+      // the new clip, glider included, continues in phase instead of snapping to 0.
+      // `activeAnimationState.playbackTime` is the engine's value from its last report, so
+      // add this frame's `stepTime`. Sent only on the swap frame: the clip has no prop to
+      // load, so the engine applies it in that frame.
       const poseSwapped = prevGlideSrc !== undefined && prevGlideSrc !== src;
       prevGlideSrc = src;
       return {
@@ -795,7 +784,6 @@ function writeMovement() {
     animation.transitionSeconds = nextBlend;
     nextBlend = undefined;
   }
-  publishedAnimation = animation;
   AvatarMovement.createOrReplace(engine.PlayerEntity, {
     velocity,
     orientation: -orientation,
@@ -845,8 +833,6 @@ function applyMovement() {
   if (Vector3.length(velocity) < 0.01 || Number.isNaN(Vector3.length(velocity))) {
     Vector3.copyFrom(VEC3_ZERO, velocity);
   }
-  Vector3.normalizeToRef(velocity, velocityNorm);
-  velocityLength = Vector3.length(velocity);
   recordGroundForNextTick();
   writeMovement();
 }

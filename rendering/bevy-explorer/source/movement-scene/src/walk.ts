@@ -151,8 +151,8 @@ export function getWalkAxis(): Vector3 | null {
   const dz = walkTarget.z - playerPosition.z;
   const xzDist = Math.sqrt(dx * dx + dz * dz);
 
-  // Stop: reached target within tolerance
-  if (xzDist < walkTolerance) {
+  // Stop: reached target within tolerance, or exactly on it (a zero tolerance; the axis to it is undefined)
+  if (xzDist < walkTolerance || xzDist < 1e-6) {
     walkResult = true;
     walkTarget = null;
     updateDropCaster(null);

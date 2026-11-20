@@ -7,7 +7,7 @@ import {
   GRAVITY,
   JUMP_GRACE_STEPS, JUMP_HOLD_SCALE, JUMP_HOLD_TIME, JUMP_RISE_DECEL,
   JUMP_TO_GLIDE_TIME, LANDING_STUN_DROP, MAX_FIXED_STEPS, MAX_STEP_HEIGHT, MIN_STEP_HEIGHT,
-  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, STEP_UP_LOOKAHEAD, VEC3_ZERO,
+  GROUNDED_ANGLE, PLAYER_COLLIDER_RADIUS, VEC3_ZERO,
   VERTICAL_DAMP_TIME, VERTICAL_STOP_DECEL, VERTICAL_TRACK_BLOCK, VERTICAL_TRACK_MAX, VERTICAL_TRACK_TIME,
 } from './constants';
 import { engineDriven, horizontalResync, playerPosition, prevActualVelocity, prevExternalVelocity, prevRequestedVelocity, tickTime, velocity } from '.';
@@ -43,7 +43,7 @@ export function updateVerticalVelocity() {
 // the most. A move off the edge that carries the centre past that before the next reply lands leaves the ground at
 // once: it goes on at air speed and falls (a jog released at a ledge carries on past it), where a slower one stays on
 // the edge until then. Standing on an edge, the engine's ground snap settles the capsule onto the corner.
-export var onEdge = false;
+var onEdge = false;
 // The avatar leaves the edge this tick.
 export var leftEdge = false;
 const EDGE_REACH = PLAYER_COLLIDER_RADIUS * Math.sin(GROUNDED_ANGLE * Math.PI / 180);
@@ -63,7 +63,7 @@ function leaveEdge() {
 // Integrated in fixed steps on the same clock as the horizontal model (see clock.ts).
 
 // Height the current (or next) jump was launched for (a tapped jump's apex).
-export var currentJumpHeight = 0;
+var currentJumpHeight = 0;
 // Feet height at launch while the jump is rising; undefined otherwise.
 export var jumpStartHeight: number | undefined = undefined;
 // An air jump is under way (from its press until the landing or a glide), for the animation selector.
@@ -526,15 +526,14 @@ function isLaunched(): boolean {
   return prevExternalVelocity.y > -GRAVITY.y * tickTime;
 }
 
-// The forward cast reaches STEP_UP_LOOKAHEAD past the collider: a riser ahead is found before the capsule reaches it.
-const FWD_CAST_LENGTH = PLAYER_COLLIDER_RADIUS + STEP_UP_LOOKAHEAD;
-// Landing probes: rays down onto the ground ahead, from above MAX_STEP_HEIGHT so a tread at exactly max step height is
-// still hit, every LANDING_CAST_SPACING from just past the collider over the forward cast's reach. They read the
-// height profile ahead in the same tick as the forward cast.
+// The forward cast reads a face the capsule touches (WALL_CONTACT_DISTANCE). It reaches further: the engine casts
+// against the scenes its centre line crosses, so a wall on the next scene's edge is found only once that line reaches
+// the edge, which this length does for a capsule meeting the wall up to about 75 degrees off its normal.
+const FWD_CAST_LENGTH = 1.3; // m
+// Landing probe: a ray down onto the tread just past the face the capsule touches, from above MAX_STEP_HEIGHT so a tread
+// at exactly max step height is still hit. It reads the height ahead in the same tick as the forward cast.
 const LANDING_CAST_HEIGHT = MAX_STEP_HEIGHT + 0.1;
 const LANDING_CAST_INSET = 0.05; // past the riser face, so the probe lands on the tread rather than the riser
-const LANDING_CAST_SPACING = 0.15;
-const LANDING_CAST_COUNT = Math.ceil(STEP_UP_LOOKAHEAD / LANDING_CAST_SPACING) + 1;
 // down to a walkable slope's descent over the forward cast's reach
 const LANDING_CAST_RANGE = LANDING_CAST_HEIGHT + FWD_CAST_LENGTH * Math.tan(GROUNDED_ANGLE * Math.PI / 180);
 
@@ -542,10 +541,10 @@ const LANDING_CAST_RANGE = LANDING_CAST_HEIGHT + FWD_CAST_LENGTH * Math.tan(GROU
 var fwdDistance: number = Infinity; // capsule travel to the hit
 var fwdWalkable: boolean = true;
 var fwdNormal: Vector3 = Vector3.Zero();
-// casts down onto the ground ahead, nearest first: height above the feet (-Infinity: no hit) and walkability (false for
-// a probe that starts inside a collider)
-const landingHeights: number[] = [];
-const landingWalkables: boolean[] = [];
+// cast down onto the tread ahead: height above the feet (-Infinity: no hit) and walkability (false for a probe that
+// starts inside a collider)
+var landingHeight = -Infinity;
+var landingWalkable = false;
 
 export function initStepCasts() {
   function initCast(position: Vector3, local: boolean, opts: { direction: Vector3, maxDistance: number, shape: RaycastShape, queryType?: RaycastQueryType }, cb: RaycastSystemCallback): Entity {
@@ -583,21 +582,17 @@ export function initStepCasts() {
     }
   })
 
-  for (let i = 0; i < LANDING_CAST_COUNT; i++) {
-    landingHeights.push(-Infinity);
-    landingWalkables.push(false);
-    // local forward offset, along the avatar's facing (the parent's yaw turns the position)
-    const forward = PLAYER_COLLIDER_RADIUS + LANDING_CAST_INSET + i * LANDING_CAST_SPACING;
-    initCast({ x: 0, y: LANDING_CAST_HEIGHT, z: forward }, false, { direction: Vector3.Down(), maxDistance: LANDING_CAST_RANGE, shape: RaycastShape.RS_RAY }, (hits) => {
-      landingHeights[i] = -Infinity;
-      landingWalkables[i] = false;
-      for (const hit of hits.hits) {
-        const ny = hit.normalHit?.y ?? 0;
-        landingHeights[i] = LANDING_CAST_HEIGHT - hit.length;
-        landingWalkables[i] = hit.length > 1e-4 && ny >= GROUNDED_ANGLE_Y_LEN;
-      }
-    })
-  }
+  // local forward offset, along the avatar's facing (the parent's yaw turns the position)
+  const forward = PLAYER_COLLIDER_RADIUS + LANDING_CAST_INSET;
+  initCast({ x: 0, y: LANDING_CAST_HEIGHT, z: forward }, false, { direction: Vector3.Down(), maxDistance: LANDING_CAST_RANGE, shape: RaycastShape.RS_RAY }, (hits) => {
+    landingHeight = -Infinity;
+    landingWalkable = false;
+    for (const hit of hits.hits) {
+      const ny = hit.normalHit?.y ?? 0;
+      landingHeight = LANDING_CAST_HEIGHT - hit.length;
+      landingWalkable = hit.length > 1e-4 && ny >= GROUNDED_ANGLE_Y_LEN;
+    }
+  })
 }
 
 // A face too steep to walk that the capsule touches along the facing (a wall, a steep slope, a riser higher than a
@@ -613,11 +608,9 @@ export function wallContact(): { x: number, z: number } | null {
 }
 const WALL_CONTACT_DISTANCE = 0.02; // m of capsule travel to the face
 
-// The face along the facing is a riser the engine steps onto: the landing probe just past the face finds walkable
-// ground no higher than MAX_STEP_HEIGHT above the feet.
+// The face the capsule touches along the facing is a riser the engine steps onto: the landing probe just past the face
+// finds walkable ground no higher than MAX_STEP_HEIGHT above the feet.
 function engineStepAhead(): boolean {
-  const i = Math.max(0, Math.ceil((fwdDistance - LANDING_CAST_INSET) / LANDING_CAST_SPACING - 1e-3));
-  return i < LANDING_CAST_COUNT && landingWalkables[i]
-    && landingHeights[i] + Math.max(0, groundDistance) >= MIN_STEP_HEIGHT
-    && landingHeights[i] + Math.max(0, groundDistance) <= MAX_STEP_HEIGHT + 1e-3;
+  const rise = landingHeight + Math.max(0, groundDistance);
+  return landingWalkable && rise >= MIN_STEP_HEIGHT && rise <= MAX_STEP_HEIGHT + 1e-3;
 }

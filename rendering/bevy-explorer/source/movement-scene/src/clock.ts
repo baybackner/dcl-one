@@ -18,10 +18,10 @@ var meanFrameTime = 0;
 var meanRatio = 1;
 
 // tickTime: engine time since the previous tick (previousStepTime, clamped), which ends at
-// the frame before this one. stepTime: this frame's duration. lateFrames: frames the previous reply was still in flight
+// the frame before this one. stepTime: this frame's duration, clamped the same way. lateFrames: frames the previous reply was still in flight
 // after the frame before this one (the engine applied an earlier reply there, see index.ts).
 export function beginTick(tickTime: number, stepTime: number, previousStepTime: number, lateFrames: number) {
-  frameTime = Math.max(0, stepTime);
+  frameTime = Math.min(Math.max(0, stepTime), MAX_TICK_TIME);
   tickAdvance = Math.max(0, tickTime + frameTime - lastFrameTime);
   lastFrameTime = frameTime;
 

@@ -17,7 +17,7 @@ import { settings } from './settings';
 export var orientation = 0;
 // World-space unit direction of the movement input (zero when there is none).
 export var movementAxis = Vector3.Zero();
-export var horizontalVelocity = Vector3.Zero();
+var horizontalVelocity = Vector3.Zero();
 
 // ---------------------------------------------------------------- input
 
@@ -342,7 +342,7 @@ export function updateHorizontalVelocity() {
 
 // ---------------------------------------------------------------- orientation
 
-export var targetOrientation = 0;
+var targetOrientation = 0;
 var scratch: Vector3.MutableVector3 = Vector3.Zero();
 var targetFacing = Quaternion.Identity();
 // The heading the avatar turns toward, kept when the keys are released so a turn under way finishes; null until the
