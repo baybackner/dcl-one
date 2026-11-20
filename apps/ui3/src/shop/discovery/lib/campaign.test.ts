@@ -17,7 +17,7 @@ describe("fetchCampaignContracts", () => {
   describe("when a campaign names tags", () => {
     it("should read the Shop's campaign collections for every tag", async () => {
       const contracts = await fetchCampaignContracts(["summer", " event "]);
-      const url = new URL(String(fetchMock.mock.calls[0][0]), "http://node.example");
+      const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://node.example");
       expect(url.pathname).toMatch(/\/shop-api\/v1\/campaign-collections$/);
       expect(url.searchParams.getAll("tag")).toEqual(["summer", "event"]);
       expect(contracts).toEqual(["0x" + "a".repeat(40)]);
