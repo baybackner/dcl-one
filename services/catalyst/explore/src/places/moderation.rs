@@ -52,7 +52,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::rows::PlaceRow;
-use crate::moderation_hooks::{Channel, enqueue};
+use crate::moderation_hooks::{Channel, capture_at, enqueue};
 use crate::shared::errors::ApiError;
 
 /// The stored content-rating codes (gatsby `SceneContentRating`): `RP` is pending.
@@ -299,6 +299,20 @@ const OVERLAY: &str = "INSERT INTO explore.place_moderation (place_id, disabled,
          set_by = EXCLUDED.set_by,
          updated_at = EXCLUDED.updated_at";
 
+/// Takes a transaction lock per parcel `$1`, in one order, before a writer of
+/// `explore.place_parcel_rating` touches those rows: the derive pass inserts
+/// missing parcels after locking the others, so row locks alone can deadlock.
+pub(crate) const LOCK_PARCELS: &str = "SELECT pg_advisory_xact_lock(s.k) FROM \
+     (SELECT DISTINCT hashtextextended(pos, 7422) AS k FROM unnest($1::text[]) AS pos ORDER BY k) AS s";
+
+/// The parcels of the derived place `$1`.
+const PLACE_PARCELS: &str = r#"
+    SELECT DISTINCT pos FROM explore.place p,
+         jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.raw->'positions') = 'array'
+                                        THEN p.raw->'positions' ELSE '[]'::jsonb END) AS pos
+    WHERE p.id = $1 AND p.raw->>'source' = 'content' AND p.world IS FALSE
+"#;
+
 /// An operator's rating `$2` of the derived place `$1`, recorded on each of
 /// its parcels (`explore.place_parcel_rating`, which the derive pass holds a
 /// new deployment or a new row to).
@@ -402,6 +416,14 @@ pub async fn apply_with(
         }
         if let (Some(rating), Target::Place(_)) = (rating.as_deref(), &target) {
             // A derived place's parcels hold the operator's rating past the row.
+            let parcels: Vec<String> = sqlx::query_scalar(PLACE_PARCELS)
+                .bind(&id)
+                .fetch_all(&mut *tx)
+                .await?;
+            sqlx::query(LOCK_PARCELS)
+                .bind(&parcels)
+                .execute(&mut *tx)
+                .await?;
             sqlx::query(OPERATOR_PARCEL_RATINGS)
                 .bind(&id)
                 .bind(rating)
@@ -546,8 +568,9 @@ pub enum RatedRow<'a> {
 /// Queues the notice of a creator's [`CreatorRating::Raise`] (`rating_upgraded`,
 /// by Content Creator) or [`CreatorRating::Lower`] (`rating_downgrade_refused`)
 /// in the write's transaction, linking into the places site at `base`; any
-/// other outcome queues nothing. The caller holds the row's lock, and a
-/// downgrade notice not yet sent takes the new message instead of a new row.
+/// other outcome queues nothing. The caller holds the row's lock. A
+/// downgrade notice not yet sent takes the new message instead of a new row,
+/// and once one is sent the row's next waits an hour from it.
 pub async fn capture_creator_rating(
     tx: &mut Transaction<'_, Postgres>,
     base: &str,
@@ -606,6 +629,23 @@ pub async fn capture_creator_rating(
         if pending > 0 {
             return Ok(());
         }
+        // Once one was sent, the row's next waits an hour from it.
+        let at = capture_at(tx).await?;
+        sqlx::query(
+            "INSERT INTO explore.moderation_hooks \
+             (id, channel, subject, kind, payload, created_at, next_attempt_at) \
+             SELECT $1, 'places', $2, $3, $4, $5, $5 WHERE NOT EXISTS ( \
+                 SELECT 1 FROM explore.moderation_hooks WHERE channel = 'places' \
+                 AND subject = $2 AND kind = $3 AND created_at > $5 - interval '1 hour')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&resolved.id)
+        .bind(kind)
+        .bind(&message)
+        .bind(at)
+        .execute(&mut **tx)
+        .await?;
+        return Ok(());
     }
     capture(tx, &resolved.id, kind, &message).await
 }
@@ -1115,6 +1155,98 @@ mod tests {
             .unwrap();
         sqlx::query("DELETE FROM explore.place WHERE id = $1")
             .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// Once a refused downgrade's notice is sent, the row's next one waits an
+    /// hour from it; an upgrade is never held back.
+    #[tokio::test]
+    async fn a_sent_downgrade_notice_holds_the_next_for_the_hour() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let name = format!("rated-{}.dcl.eth", uuid::Uuid::new_v4());
+        let capture = |stored: &'static str, proposed: &'static str| {
+            let (pool, name) = (pool.clone(), name.clone());
+            async move {
+                let mut tx = pool.begin().await.unwrap();
+                capture_creator_rating(
+                    &mut tx,
+                    "https://decentraland.org/places",
+                    RatedRow::World(&name),
+                    stored,
+                    proposed,
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+        };
+        let kinds = || async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT kind FROM explore.moderation_hooks \
+                 WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+            )
+            .bind(&name)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let deliver = || async {
+            sqlx::query(
+                "UPDATE explore.moderation_hooks SET attempts = 1, \
+                 completed_at = timezone('UTC', now()) WHERE subject = $1",
+            )
+            .bind(&name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        };
+
+        capture("A", "T").await;
+        capture("A", "RP").await;
+        assert_eq!(
+            kinds().await,
+            ["rating_downgrade_refused"],
+            "unsent: merged"
+        );
+        deliver().await;
+        capture("A", "T").await;
+        capture("A", "E").await;
+        assert_eq!(
+            kinds().await,
+            ["rating_downgrade_refused"],
+            "sent: held for the hour"
+        );
+        capture("A", "R").await;
+        assert_eq!(
+            kinds().await,
+            ["rating_downgrade_refused", "rating_upgraded"],
+            "an upgrade is not held"
+        );
+        sqlx::query(
+            "UPDATE explore.moderation_hooks SET created_at = created_at - interval '61 minutes' \
+             WHERE subject = $1",
+        )
+        .bind(&name)
+        .execute(&pool)
+        .await
+        .unwrap();
+        deliver().await;
+        capture("A", "T").await;
+        assert_eq!(
+            kinds().await,
+            [
+                "rating_downgrade_refused",
+                "rating_upgraded",
+                "rating_downgrade_refused"
+            ],
+            "the next hour takes one more"
+        );
+        sqlx::query("DELETE FROM explore.moderation_hooks WHERE subject = $1")
+            .bind(&name)
             .execute(&pool)
             .await
             .unwrap();

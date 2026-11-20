@@ -494,7 +494,8 @@ creator's rating change: a stricter rating, which the row takes
 the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade
-notice of the same row takes the newer message instead of a new row. A local
+notice of the same row takes the newer message instead of a new row, and a
+row with a downgrade notice captured in the last hour gets no new row. A local
 world's or a derived place's creator rating is held to the operator's rating in
 `explore.place_moderation` when one is set, and a rating the row takes moves
 that override with it. A new deployment or a newly inserted derived place is
@@ -511,7 +512,10 @@ catalogue fills on its first pass), and one row per parcel for an operator's
 rating of a derived place; read by primary key for each settled row's parcels.
 Invariant: a parcel's row equals the rating of the derived place covering it,
 or of the last one; only the derive pass and the operator's place rating write
-it, and nothing deletes it. The table is a new object: the object pass of
+it, and nothing deletes it. Both writers first take a transaction advisory
+lock per parcel in one sorted order, so a page that inserts a missing parcel
+after locking the recorded ones cannot deadlock with an operator's rating. The
+table is a new object: the object pass of
 `catalyst schema migrate` creates it, so no step exists.
 
 Event notification delivery is owned by Social in

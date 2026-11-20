@@ -716,6 +716,18 @@ const HELD_RATINGS: &str = r#"
 const LOCK_PARCEL_RATINGS: &str = "SELECT 1 FROM explore.place_parcel_rating \
      WHERE position = ANY($1) ORDER BY position FOR UPDATE";
 
+/// Locks the page's parcels, recorded or not, as an operator's rating does
+/// (`moderation::LOCK_PARCELS`), then the recorded rows.
+async fn lock_page_parcels(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parcels: &[String],
+) -> Result<()> {
+    for sql in [moderation::LOCK_PARCELS, LOCK_PARCEL_RATINGS] {
+        sqlx::query(sql).bind(parcels).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 /// Records `$2` on each parcel `$1`: `$3` true overwrites a recorded rating,
 /// false only fills a parcel with none.
 const RECORD_PARCEL_RATINGS: &str = r#"
@@ -786,10 +798,7 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
     let mut parcels: Vec<String> = rows.iter().flat_map(|p| positions_of(p)).collect();
     parcels.sort();
     parcels.dedup();
-    sqlx::query(LOCK_PARCEL_RATINGS)
-        .bind(&parcels)
-        .execute(&mut *tx)
-        .await?;
+    lock_page_parcels(&mut tx, &parcels).await?;
     let inserted: HashMap<String, bool> = sqlx::query(UPSERT)
         .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
         .bind(
@@ -1483,6 +1492,93 @@ mod tests {
             .unwrap();
         assert_eq!(rating(id_c.clone()).await.as_deref(), Some("A"));
         assert!(kinds(id_c).await.is_empty());
+    }
+
+    /// A page that has locked its parcels, one of them unrecorded, and an
+    /// operator rating a place on those parcels wait on each other in turn,
+    /// never in a cycle.
+    #[tokio::test]
+    async fn a_page_and_an_operator_rating_take_parcel_locks_in_one_order() {
+        let Some(pool) = crate::db::scratch::pool(4).await else {
+            return;
+        };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let x = u16::from_str_radix(&token[..4], 16).unwrap() as i32;
+        let y = u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000;
+        let (a, b) = (format!("{x},{y}"), format!("{x},{}", y + 1));
+        let mut meta = wrapped();
+        meta["v"]["scene"]["base"] = json!(a);
+        meta["v"]["scene"]["parcels"] = json!([a, b]);
+        meta["v"]["policy"] = json!({ "contentRating": "T" });
+        let page = vec![derive("0xauthor", &[], None, &meta, None, "/content", true).unwrap()];
+        upsert_page(&pool, page, None).await.unwrap();
+        sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = $1")
+            .bind(&a)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // A page holds `b` (recorded) and will insert `a` (not recorded).
+        let parcels = vec![a.clone(), b.clone()];
+        let mut page = pool.begin().await.unwrap();
+        lock_page_parcels(&mut page, &parcels).await.unwrap();
+        let id = super::super::parcel_place_id(&a);
+        let operator = tokio::spawn({
+            let (pool, id) = (pool.clone(), id.clone());
+            async move {
+                moderation::apply(
+                    &pool,
+                    moderation::Target::Place(&id),
+                    &moderation::Decision::Rating("R".into()),
+                    "0xmoderator",
+                )
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!operator.is_finished(), "the operator waits for the page");
+        sqlx::query(RECORD_PARCEL_RATINGS)
+            .bind(&parcels)
+            .bind(vec!["A".to_string(); 2])
+            .bind(true)
+            .execute(&mut *page)
+            .await
+            .expect("the page is not chosen as a deadlock victim");
+        page.commit().await.unwrap();
+        operator.await.unwrap().unwrap().unwrap();
+        let recorded: Vec<String> = sqlx::query_scalar(
+            "SELECT content_rating FROM explore.place_parcel_rating \
+             WHERE position = ANY($1) ORDER BY position",
+        )
+        .bind(&parcels)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(recorded, ["R", "R"], "the operator's later rating lands");
+        sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = ANY($1)")
+            .bind(&parcels)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for table in ["explore.place_moderation", "explore.place_content_ratings"] {
+            let column = if table.ends_with("ratings") {
+                "entity_id"
+            } else {
+                "place_id"
+            };
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE {column} = $1"
+            )))
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("DELETE FROM explore.place WHERE id = $1")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
