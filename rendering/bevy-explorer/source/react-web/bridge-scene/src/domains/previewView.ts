@@ -40,7 +40,9 @@ export function shiftWithin(f: { range: number }, z: number, shift: number): num
  *  `feetY`, centred across the view. The camera looks north, orthographic and pitched `pitchDeg` down, placed so its
  *  view centre stands at the framing's height at the avatar. So a point shows across at its distance east over the
  *  view's width (its height times the window's `aspect`, width over height), and up at its height above that
- *  centre foreshortened by the pitch, raised by the pitch for its depth beyond the avatar, over the view's height. */
+ *  centre foreshortened by the pitch, raised by the pitch for its depth beyond the avatar, over the view's height.
+ *  The Shop's tag only passes points on the avatar's axis (steadyAnchor), so its east and depth terms are 0 there; the
+ *  projection stays whole so that where the tag stands is decided by the hold alone. */
 export function windowPoint(offset: SceneOffset, f: Framing, z: number, shift: number, pitchDeg: number, aspect: number, feetY = 0): WindowPoint {
   const pitch = (pitchDeg * Math.PI) / 180
   const height = f.range / z

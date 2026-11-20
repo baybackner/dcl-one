@@ -5913,7 +5913,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarPreview.tsx",
-      "sha256": "ab4836992881257ee2d7bc6c114d2da743c9bf92d2059d0579eb6e0c40b7d54f"
+      "sha256": "e797855c514bb838fc8f2efa32cf1ea0123eaa5c4dd73cee2f02ebc050a393c6"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/chat.ts",
@@ -5985,11 +5985,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewNametagFeed.ts",
-      "sha256": "c8f69bc12033e00ee2a7a8c8d6dcf1252043b591f6f3da5f3ee1d28d6b1370f3"
+      "sha256": "f14c2f2924ac9eac5b3cef3210c1da46987ad853b02e258f94a8b2cebe864ec8"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
-      "sha256": "d26aa4d8d4edbb187e32cac4eb678d6b8aa113b4a09c020ad46a2b12c4f06b4d"
+      "sha256": "5dda2413bfb1990699b9a97833199fac0c9262ce1f41f2195febfe0e4c2828e9"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/profile.ts",
@@ -6165,7 +6165,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeAvatarPreviewShop.test.ts",
-      "sha256": "9310ecb0011e305921a64e1b2a7ba884400a1d9e0fc4defaefeedcf274c795eb"
+      "sha256": "48c9c4339b7e03e9d1a04a22eb76c373120e521e4c2e9065c875ff458fa20f95"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeChat.test.ts",
@@ -6229,7 +6229,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewNametagFeed.test.ts",
-      "sha256": "50fbf72d35b2c91f4a645d91a72c6cda9cb86b257e8d74f0dc8006dc0a42daaa"
+      "sha256": "35bbfeb84568bd56c475dd18850e5542aace5e0ca4f209d80067cfab9bf22c3f"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",

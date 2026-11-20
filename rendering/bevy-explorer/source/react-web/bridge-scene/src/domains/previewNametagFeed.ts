@@ -1,7 +1,7 @@
 // The Shop's nametag over its avatar, told to the page (previewNametag): where the engine has the avatar's nametag
-// anchor, read now and then while the Shop's stage is up and told once it moves; or none, for the page to keep the
-// design's place, when the stage comes up again or goes, the avatar goes or changes, or a read fails. A read begun
-// before the stage came up again, or for another avatar, never lands.
+// anchor, read now and then while a Names page is on the Shop's stage and told once it moves; or none, for the page to
+// keep the design's place, when the stage comes up again or goes, the avatar goes or changes, or a read fails. A read
+// begun before the stage came up again, or for another avatar, never lands.
 
 import type { WindowPoint } from './previewView'
 
@@ -9,6 +9,10 @@ import type { WindowPoint } from './previewView'
 export const NAMETAG_STEP = 0.001
 /** How often the anchor is read while the stage is up. */
 export const NAMETAG_READ_SECONDS = 0.25
+/** For this long after the tag is placed afresh (the feed starting, another avatar, an emote begun or stopped), a read
+ *  places it where it reads rather than keeping the place held: the engine blends an animation into the next over up
+ *  to 0.4s, and a place taken mid-blend would otherwise be kept for as long as the page is open. */
+export const NAMETAG_SETTLE_SECONDS = 0.75
 
 export interface NametagFeed<A> {
   /** The Shop's stage came up or went: a page holding a place is told there is none, and reads begun before are
@@ -19,6 +23,9 @@ export interface NametagFeed<A> {
   /** The view moved (the camera easing to another page's framing): the last anchor read is told where it falls
    *  now, without waiting for the next read. */
   reproject(): void
+  /** The avatar's pose is changing (an emote begun or stopped): the tag stays where it is, and the reads begun over
+   *  the next NAMETAG_SETTLE_SECONDS place it afresh before one is held. */
+  release(): void
 }
 
 export function createNametagFeed<A, O>(deps: {
@@ -36,6 +43,8 @@ export function createNametagFeed<A, O>(deps: {
   let generation = 0
   let reading = false
   let wait = 0
+  // How long reads still place the tag afresh rather than holding its place.
+  let settling = NAMETAG_SETTLE_SECONDS
   let lastAvatar: A | null = null
   const publish = (anchor: WindowPoint | null): void => {
     if (anchor == null || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
@@ -54,6 +63,7 @@ export function createNametagFeed<A, O>(deps: {
     reading = false
     wait = 0
     last = null
+    settling = NAMETAG_SETTLE_SECONDS
   }
   return {
     restage(): void {
@@ -75,15 +85,17 @@ export function createNametagFeed<A, O>(deps: {
         publish(null)
       }
       wait -= dt
+      settling = Math.max(0, settling - dt)
       if (reading || wait > 0) return
       wait = NAMETAG_READ_SECONDS
       reading = true
       const asked = generation
+      const afresh = settling > 0
       deps.read(avatar).then(
         (anchor) => {
           if (asked !== generation) return
           reading = false
-          last = anchor == null ? null : deps.settle != null ? deps.settle(last, anchor) : anchor
+          last = anchor == null ? null : deps.settle != null ? deps.settle(afresh ? null : last, anchor) : anchor
           publish(last == null ? null : deps.project(last))
         },
         () => {
@@ -97,6 +109,9 @@ export function createNametagFeed<A, O>(deps: {
     },
     reproject(): void {
       if (last != null) publish(deps.project(last))
+    },
+    release(): void {
+      settling = NAMETAG_SETTLE_SECONDS
     }
   }
 }

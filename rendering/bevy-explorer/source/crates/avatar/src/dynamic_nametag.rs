@@ -8,7 +8,7 @@ use common::{
     structs::{AttachPoints, AvatarDynamicState, MoveKind},
 };
 use dcl_component::transform_and_parent::DclTranslation;
-use scene_runner::renderer_context::RendererSceneContext;
+use scene_runner::{initialize_scene::SuperUserScene, renderer_context::RendererSceneContext};
 
 use crate::ghost::AvatarGhost;
 use bevy_console::ConsoleCommand;
@@ -66,15 +66,19 @@ fn nametags_command(mut cmd: ConsoleCommand<Nametags>, mut visible: ResMut<Namet
     cmd.reply_ok(serde_json::json!({"visible": visible.0}).to_string());
 }
 
-/// Answers `avatarNametagAnchor`: for an avatar of the calling scene (its `AvatarShape` entity),
+/// Answers `avatarNametagAnchor`: for an avatar of the system scene (its `AvatarShape` entity),
 /// where its nametag anchor stands from the avatar's origin, as `dynamic_nametag_position` last
 /// placed it (over the head, clear of what the avatar wears, following the head across too), in
 /// world metres along the scene's axes. None for another scene's entity, an entity that is no such
 /// avatar, or an avatar whose body isn't measured yet (no `NametagHeadOffset`). Read in `Update`: the
 /// transforms as the last frame's `PostUpdate` propagated them.
+///
+/// Only the system scene is answered, and this is where that holds: a call's origin is the scene
+/// the engine stamped on it, so a scene that reaches the op directly (on web, any scene can, from
+/// its own sandbox) gets None whatever it asks.
 fn serve_avatar_nametag_anchor(
     mut requests: EventReader<RpcCallEvent>,
-    scenes: Query<&RendererSceneContext>,
+    scenes: Query<&RendererSceneContext, With<SuperUserScene>>,
     avatars: Query<&AttachPoints, With<NametagHeadOffset>>,
     global_transforms: Query<&GlobalTransform>,
 ) {
@@ -248,10 +252,12 @@ mod tests {
     use common::rpc::{RpcOrigin, RpcResultSender};
     use dcl_component::SceneEntityId;
 
-    /// A scene, and one of its avatars (an `AvatarShape`'s attach points) whose origin and nametag
-    /// anchor stand here in the world (the engine's axes); `measured`: its body has given its offset.
+    /// A scene (the system scene if `system`), and one of its avatars (an `AvatarShape`'s attach
+    /// points) whose origin and nametag anchor stand here in the world (the engine's axes);
+    /// `measured`: its body has given its offset.
     fn scene_with_avatar(
         world: &mut World,
+        system: bool,
         origin: Vec3,
         nametag: Vec3,
         measured: bool,
@@ -292,6 +298,9 @@ mod tests {
         let id = SceneEntityId::new(600, 0);
         context.associate_bevy_entity(id, avatar);
         world.entity_mut(root).insert(context);
+        if system {
+            world.entity_mut(root).insert(SuperUserScene);
+        }
         (root, id)
     }
 
@@ -316,11 +325,12 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_learns_where_its_avatar_has_its_nametag_along_its_own_axes() {
+    fn the_system_scene_learns_where_its_avatar_has_its_nametag_along_its_own_axes() {
         let mut app = nametag_app();
         // the head leans east and toward the engine's -z, which is the scene's north
         let (scene, avatar) = scene_with_avatar(
             app.world_mut(),
+            true,
             Vec3::new(8.0, 0.5, -8.0),
             Vec3::new(8.2, 4.1, -8.3),
             true,
@@ -341,10 +351,29 @@ mod tests {
     }
 
     #[test]
+    fn an_ordinary_scene_learns_no_nametag_anchor() {
+        let mut app = nametag_app();
+        // the same measured avatar as the system scene's above, held by a scene that isn't it
+        let (scene, avatar) = scene_with_avatar(
+            app.world_mut(),
+            false,
+            Vec3::new(8.0, 0.5, -8.0),
+            Vec3::new(8.2, 4.1, -8.3),
+            true,
+        );
+        let from_scene = RpcOrigin::Scene {
+            entity: scene,
+            hash: "scene".into(),
+        };
+        assert_eq!(ask(&mut app, from_scene, avatar), None);
+    }
+
+    #[test]
     fn an_avatar_whose_body_isnt_measured_has_no_nametag_anchor_yet() {
         let mut app = nametag_app();
         let (scene, avatar) = scene_with_avatar(
             app.world_mut(),
+            true,
             Vec3::new(8.0, 0.5, -8.0),
             Vec3::new(8.0, 4.1, -8.0),
             false,

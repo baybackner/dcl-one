@@ -1,6 +1,7 @@
 // The Shop's avatar preview in the bridge (bridge-scene/src/domains/avatarPreview): the camera framed as the Shop's
-// page draws the avatar, eased from one page's framing to another's while the stage stays up, and the nametag
-// following the view from the anchor already read. The engine's ECS is a fake that keeps components as plain records.
+// page draws the avatar, eased from one page's framing to another's while the stage stays up, and, on a Names page
+// only, the nametag following the view from the anchor already read. The engine's ECS is a fake that keeps components
+// as plain records.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Ctx } from '../../bridge-scene/src/bridge'
 import type { PageToScene, SceneToPage } from '@explorer-core/engine/protocol'
@@ -67,6 +68,7 @@ const { api } = vi.hoisted(() => ({ api: {} as Record<string, unknown> }))
 vi.mock('../../bridge-scene/src/bevy-api', () => ({ BevyApi: api }))
 
 const { SHOP_FRAMING, SHOP_NAMES_FRAMING } = await import('../../bridge-scene/src/domains/previewView')
+const { NAMETAG_SETTLE_SECONDS } = await import('../../bridge-scene/src/domains/previewNametagFeed')
 
 /** The engine's nametag anchor for the Shop's avatar: 3.6m over its feet (a 2×-scale head). */
 const ANCHOR = { x: 0, y: 3.6, z: 0 }
@@ -77,10 +79,10 @@ type Anchor = { x: number; y: number } | null
 
 type Offset = { x: number; y: number; z: number }
 
-/** A fresh preview, its Shop stage up on the catalogue, the engine answering `answers` to the first reads, in order
- *  (the anchor, read once, by default): later reads never answer, so whatever the tag does after comes from the
- *  anchors already read. */
-async function openShop(answers: Offset[] = [ANCHOR]) {
+/** A fresh preview, its Shop stage up on a page of `framing` (a Names page by default), the engine answering
+ *  `answers` to the first reads, in order (the anchor, read once, by default): later reads never answer, so whatever
+ *  the tag does after comes from the anchors already read. */
+async function openShop(answers: Offset[] = [ANCHOR], framing: 'names' | 'catalog' = 'names') {
   vi.resetModules()
   ecs.reset()
   let reads = 0
@@ -106,10 +108,10 @@ async function openShop(answers: Offset[] = [ANCHOR]) {
   }
   const tags = (): Anchor[] => sent.filter((m) => m.kind === 'previewNametag').map((m) => (m as { anchor: Anchor }).anchor)
   emit({ kind: 'engineViewport', region: 'avatarPreview', rect: WINDOW, dpr: 1 } as PageToScene)
-  emit({ kind: 'previewStage', rect: STAGE, framing: 'catalog' } as PageToScene)
+  emit({ kind: 'previewStage', rect: STAGE, framing } as PageToScene)
   await frame()
   await frame()
-  return { emit, frame, camera, tags }
+  return { emit, frame, camera, tags, read: api.avatarNametagAnchor as ReturnType<typeof vi.fn> }
 }
 
 beforeEach(() => {
@@ -117,17 +119,28 @@ beforeEach(() => {
 })
 
 describe("the Shop's avatar preview", () => {
+  it('reads no anchor on a catalogue page, and starts once a Names page is on the stage', async () => {
+    const shop = await openShop([ANCHOR], 'catalog')
+    await shop.frame(1)
+    expect(shop.read).not.toHaveBeenCalled()
+    expect(shop.tags()).toEqual([])
+    shop.emit({ kind: 'previewStage', rect: STAGE, framing: 'names' } as PageToScene)
+    await shop.frame(0.05)
+    expect(shop.read).toHaveBeenCalledTimes(1)
+    expect(shop.tags()).toHaveLength(1)
+  })
+
   it("eases to Names' framing, a resize midway neither snapping it nor dropping the tag, and back from midway", async () => {
-    const shop = await openShop()
+    const shop = await openShop([ANCHOR], 'catalog')
     expect(shop.camera()).toBeCloseTo(SHOP_FRAMING.range, 9)
-    const [catalogue] = shop.tags()
-    expect(catalogue).not.toBeNull()
 
     shop.emit({ kind: 'previewStage', rect: STAGE, framing: 'names' } as PageToScene)
-    await shop.frame(0.15) // a quarter of the ease
+    await shop.frame(0.15) // a quarter of the ease, and the Names page's first read
     const quarter = shop.camera()
     expect(quarter).toBeGreaterThan(SHOP_FRAMING.range)
     expect(quarter).toBeLessThan(SHOP_NAMES_FRAMING.range)
+    const [early] = shop.tags()
+    expect(early).not.toBeNull()
     // the window resized: the same page's stage again, elsewhere
     shop.emit({ kind: 'previewStage', rect: { ...STAGE, x: 10 }, framing: 'names' } as PageToScene)
     expect(shop.camera()).toBe(quarter)
@@ -136,12 +149,13 @@ describe("the Shop's avatar preview", () => {
     // the tag followed the view, lower in the window as the avatar is drawn lower, and was never dropped
     const tags = shop.tags()
     expect(tags).not.toContain(null)
-    expect(tags.at(-1)!.y).toBeGreaterThan(catalogue!.y)
+    expect(tags.at(-1)!.y).toBeGreaterThan(early!.y)
 
-    // back to the catalogue from midway: the ease starts where the camera is
+    // back to the catalogue from midway: the ease starts where the camera is, and the tag goes
     shop.emit({ kind: 'previewStage', rect: STAGE, framing: 'catalog' } as PageToScene)
     await shop.frame(0.15)
     expect(shop.camera()).toBeLessThan(SHOP_NAMES_FRAMING.range)
+    expect(shop.tags().at(-1)).toBeNull()
     shop.emit({ kind: 'previewStage', rect: STAGE, framing: 'names' } as PageToScene)
     const turned = shop.camera()
     await shop.frame(0.05)
@@ -170,7 +184,7 @@ describe("the Shop's avatar preview", () => {
     ])
     const [first] = shop.tags()
     expect(first!.x).toBeCloseTo(0.5, 9)
-    await shop.frame(0.25) // the sway's read
+    await shop.frame(NAMETAG_SETTLE_SECONDS) // the sway's read, once the pose has settled
     expect(shop.tags()).toEqual([first])
     await shop.frame(0.25) // the hat's read
     const tags = shop.tags()
@@ -185,5 +199,26 @@ describe("the Shop's avatar preview", () => {
     expect(shop.tags().at(-1)).toBeNull()
     shop.emit({ kind: 'previewStage', rect: STAGE, framing: 'names' } as PageToScene)
     expect(shop.camera()).toBeCloseTo(SHOP_NAMES_FRAMING.range, 9)
+  })
+
+  it('places the tag afresh after an emote, where it would have held through a sway', async () => {
+    // settled at 3.6m, then 3cm higher: held as a sway; then an emote stops and the head comes back 4cm higher
+    const shop = await openShop([ANCHOR, { x: 0, y: 3.63, z: 0 }, { x: 0, y: 3.64, z: 0 }])
+    const [first] = shop.tags()
+    await shop.frame(NAMETAG_SETTLE_SECONDS)
+    expect(shop.tags()).toEqual([first])
+    shop.emit({ kind: 'previewEmote', urn: null } as PageToScene)
+    await shop.frame(0.25)
+    const tags = shop.tags()
+    expect(tags).toHaveLength(2)
+    expect(tags[1]!.y).toBeLessThan(first!.y)
+  })
+
+  it('tells a reloaded page where the tag is, though it has not moved', async () => {
+    const shop = await openShop([ANCHOR, ANCHOR])
+    const [first] = shop.tags()
+    shop.emit({ kind: 'hello' } as PageToScene)
+    await shop.frame()
+    expect(shop.tags()).toEqual([first, null, first])
   })
 })

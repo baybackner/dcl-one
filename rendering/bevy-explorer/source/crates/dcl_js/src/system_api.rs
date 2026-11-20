@@ -740,7 +740,9 @@ pub async fn op_get_user_profile(
 /// Where one of the system scene's avatars (an `AvatarShape` entity, as the scene numbers it) has
 /// its nametag: its anchor's offset from the avatar's origin, in world metres with the avatar's
 /// scale along the scene's axes, or None until the engine has measured the avatar's body. The
-/// system scene's avatar preview places the page's nametag with it. Only the system scene may call it.
+/// system scene's avatar preview places the page's nametag with it. The check below only fails a
+/// call early; the guard is the engine's (`serve_avatar_nametag_anchor`), which answers no scene
+/// but the system scene.
 pub async fn op_avatar_nametag_anchor(
     state: Rc<RefCell<impl State>>,
     entity: u32,
