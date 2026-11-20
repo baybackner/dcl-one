@@ -53,6 +53,8 @@ pub mod colliders;
 #[cfg(feature = "explorer")]
 mod debug_avatars;
 #[cfg(feature = "explorer")]
+mod debug_wear;
+#[cfg(feature = "explorer")]
 pub mod dynamic_nametag;
 #[cfg(feature = "explorer")]
 pub mod emote_report;
@@ -224,6 +226,9 @@ impl Plugin for AvatarPlugin {
         app.add_plugins(HeadIkPlugin);
         app.add_plugins(ik_debug::IkDebugPlugin);
         app.add_plugins(debug_avatars::DebugAvatarsPlugin);
+        if console::DEBUG_TOOLS {
+            app.add_plugins(debug_wear::DebugWearPlugin);
+        }
         app.add_plugins(PointAtIkPlugin);
         app.add_plugins(PointAtMarkerPlugin);
         app.add_plugins(pause_hidden::PauseHiddenAvatarsPlugin);
