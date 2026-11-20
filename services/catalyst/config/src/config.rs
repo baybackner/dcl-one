@@ -12,7 +12,7 @@ pub use crate::{
     presence::PresenceConfig,
     price::PriceConfig,
     shop::{EconomyConfig, MarketUpstreamsConfig, MarketplaceConfig, ShopConfig},
-    social::{RoomAuthorityConfig, SocialConfig, presence_badges},
+    social::{MessageRouterConfig, RoomAuthorityConfig, SocialConfig, presence_badges},
     worlds::{WorldsConfig, WorldsContentConfig, WorldsFedConfig},
 };
 
@@ -91,6 +91,8 @@ pub struct Config {
     pub about_comms: AboutCommsConfig,
     #[command(flatten)]
     pub room_authority: RoomAuthorityConfig,
+    #[command(flatten)]
+    pub message_router: MessageRouterConfig,
     #[command(flatten)]
     pub worlds_fed: WorldsFedConfig,
     #[command(flatten)]
@@ -272,7 +274,7 @@ impl Config {
         Ok(())
     }
 
-    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 83] {
+    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 84] {
         [
             ("SEGMENT_SIGNING_KEY", &mut self.social.segment_signing_key),
             ("ETH_RPC_URL", &mut self.content.eth_rpc_url),
@@ -426,6 +428,10 @@ impl Config {
             (
                 "PULSE_ROOM_AUTHORITY_KEY",
                 &mut self.room_authority.pulse_room_authority_key,
+            ),
+            (
+                "MESSAGE_ROUTER_KEY",
+                &mut self.message_router.message_router_key,
             ),
             (
                 "MARKET_ADMIN_TOKEN",
@@ -803,6 +809,8 @@ mod tests {
         "SCENE_HOST_DELEGATION_MINTER_TOKEN",
         "SCENE_HOST_STORAGE_DELEGATION",
         "PULSE_ROOM_AUTHORITY_KEY",
+        // Its shape is the parser's: 32 base64url bytes (`shared::message_router::parse_key`).
+        "MESSAGE_ROUTER_KEY",
         "RELAYER_PRIVATE_KEY",
         "OZ_RELAYER_API_KEY",
         "RPC_ENDPOINT_POLYGON",
@@ -1213,6 +1221,7 @@ mod tests {
             "--encryption-key",
             "--scene-host-authoritative-key",
             "--pulse-room-authority-key",
+            "--message-router-key",
             "--market-admin-token",
             "--price-admin-token",
             "--relayer-private-key",
@@ -1244,6 +1253,7 @@ mod tests {
             !help.contains("[env: ENCRYPTION_KEY=")
                 && !help.contains("[env: SCENE_HOST_AUTHORITATIVE_KEY=")
                 && !help.contains("[env: PULSE_ROOM_AUTHORITY_KEY=")
+                && !help.contains("[env: MESSAGE_ROUTER_KEY=")
         );
         for var in [
             "SEGMENT_SIGNING_KEY",

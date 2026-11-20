@@ -858,7 +858,7 @@ Rollout, in order:
 
 1. Deploy the binary without the scene routes on every replica and run its
    `catalyst schema migrate`, which records step
-   `0050_builder_scenes_retired`. Confirm no `serve` of the old build is
+   `0053_builder_scenes_retired`. Confirm no `serve` of the old build is
    left. From this point the new binary's collector no longer counts
    `builder.asset_catalog`, so the asset-pack files the catalogue pulled into
    the store become collectable; the other scene blobs stay protected by
@@ -875,7 +875,7 @@ Rollout, in order:
    names, then `catalyst storage gc --delete` to unlink them.
 
 The release refuses, changing nothing, a database without
-`meta.schema_steps`, one where step `0050_builder_scenes_retired` is not
+`meta.schema_steps`, one where step `0053_builder_scenes_retired` is not
 recorded (the new binary has not migrated it), one that holds only some of
 the seven tables, and one whose `builder.projects` or `builder.asset_packs`
 changed in the last ten minutes (an old `serve` still editing). It runs in
@@ -892,7 +892,7 @@ release drops them again. Do not reset a database.
 
 The builder stores no published or approved flag on a collection: it derives
 both on read ("Builder chain state workload" below). Step
-`0052_builder_collection_flags_retired` drops the two checks that tied a
+`0055_builder_collection_flags_retired` drops the two checks that tied a
 contract address to the flag (`collections_contract_published_check`,
 `collections_pending_not_published_check`), so a draft can hold the contract
 address computed before its deployment. A database bootstrapped before the
@@ -926,7 +926,7 @@ Rollout, in order:
    binary, whether or not the release has run.
 2. Deploy the binary that derives collection state on every replica and run
    its `catalyst schema migrate`, which records step
-   `0052_builder_collection_flags_retired`. Confirm no `serve` of the old
+   `0055_builder_collection_flags_retired`. Confirm no `serve` of the old
    build is left, then set `CREATE_WRITES_ENABLED` back.
 3. Take a restore point: back up the database and test the restore. The
    drop is not reversible without that backup.
@@ -937,7 +937,7 @@ Rollout, in order:
    ```
 
 The release refuses, changing nothing, a database without
-`meta.schema_steps`, one where step `0052_builder_collection_flags_retired` is
+`meta.schema_steps`, one where step `0055_builder_collection_flags_retired` is
 not recorded, one that holds only one of the two columns, and one where a
 collection flagged published has no row in the Polygon collections copy, no
 verified publication, no submitted linked publication and no item with an
@@ -978,7 +978,7 @@ Rollout, in order:
 1. Set `CREATE_WRITES_ENABLED=false` on every replica.
 2. Deploy the binary that keeps item curations on every replica and run its
    `catalyst schema migrate`, which records step
-   `0058_builder_collection_forum`. Until the release runs, a third-party
+   `0061_builder_collection_forum`. Until the release runs, a third-party
    item the node submitted itself reads as unpublished.
 3. Take a restore point: back up the database and test the restore.
 4. Run the release once, with the administrative role, then set
@@ -989,7 +989,7 @@ Rollout, in order:
    ```
 
 The release refuses, changing nothing, a database without
-`meta.schema_steps`, one where step `0058_builder_collection_forum` is not
+`meta.schema_steps`, one where step `0061_builder_collection_forum` is not
 recorded, one that holds only one of the two columns, and one with a
 third-party item submitted here, without an item curation, whose
 `local_content_hash` is not 64 lowercase hex digits. It runs in one
@@ -1052,9 +1052,9 @@ The builder's own rows: a `builder.collections` row is a creator's draft.
 - `publication_pending` freezes the draft and its items while either
   publication row is in flight.
 
-The curation console's committee and under-review listings read the
-collections subgraph through the marketplace's subgraph readers and add no
-table. The collection body and the collection listings read the copy
+The curation console's under-review listing reads the collections subgraph
+through the marketplace's subgraph readers and adds no table; its committee
+list reads the committee index ("Curation committee" below). The collection body and the collection listings read the copy
 ("Builder collection listings workload" below), and so do the item bodies and
 listings ("Builder items workload" below).
 
@@ -1199,7 +1199,7 @@ Invariants:
   of a standard draft whose contract the copy doesn't hold, which a
   complete pass of any age serves, as the owner's listing does.
 
-Indexes created with step `0053_builder_collection_listings` (the step adds the
+Indexes created with step `0056_builder_collection_listings` (the step adds the
 columns, checks and the unique constraint; the object pass that follows it
 builds the indexes, the function and the trigger):
 
@@ -1293,12 +1293,12 @@ Invariants:
   `a_standard_publication_takes_only_files_each_names_writer_uploaded` and
   `a_linked_publication_takes_only_files_each_names_writer_uploaded`).
 
-Upgrade: step `0054_builder_item_contents_order` adds `item_contents.position`
+Upgrade: step `0057_builder_item_contents_order` adds `item_contents.position`
 and drops the key from `item_contents.hash` to `uploaded_contents`. A step
 can't retype a column or change a primary key, so the release
 `schemas/releases/builder-item-documents-and-uploaders.sql` turns `data` and
 `metrics` into `json` and keys `uploaded_contents` by hash and uploader. It
-refuses a database without step 0054, one where a table still references
+refuses a database without step 0057, one where a table still references
 `builder.uploaded_contents` by key (run `builder-scenes-retired.sql` first)
 and one where only one of the two documents is `json`; a second run notes
 it's done. Until it runs, item saves and uploads answer 503 naming the
@@ -1310,7 +1310,7 @@ Rollout, in order:
 
 1. Deploy the binary on every replica with creator writes closed
    (`CREATE_WRITES_ENABLED=false`) and run its `catalyst schema migrate`,
-   which records step 0054. Confirm no `serve` of an older build is left.
+   which records step 0057. Confirm no `serve` of an older build is left.
    Once the release has run, an older binary answers 500 to every item file
    upload (its upload record names a key the release replaces) and to a
    collection listing filtered by tag, and its item saves store documents in
@@ -1407,14 +1407,14 @@ Invariants:
   retired scene project) stays readable by its uploader alone and keeps its
   blob from the collector.
 
-Upgrade: step `0056_builder_item_video_named_by` adds `video_named_by`
+Upgrade: step `0059_builder_item_video_named_by` adds `video_named_by`
 (nullable, a check that refuses an empty or uppercase writer) and fills each
 video from the writer of the item's own entry for that hash, one holding an
 upload record first; a video no entry of its item names keeps no writer, so it
 opens nothing until a save writes it again. `schema migrate` builds
 `items_video_idx` from `schemas/50_create.sql`.
 
-Upgrade: step `0055_builder_item_contents_named_by` adds `named_by` (`NOT
+Upgrade: step `0058_builder_item_contents_named_by` adds `named_by` (`NOT
 NULL DEFAULT ''`, a check that refuses an empty or uppercase writer) and fills
 it in place. Each existing name goes to the first wallet that could have
 written it and holds the bytes, else to the item's owner: in order, the
@@ -1520,7 +1520,7 @@ Invariants:
 - The forward is at least once: at most six attempts, the wait doubling from
   a minute; a row the warehouse took is never claimed again.
 
-Upgrade: step `0057_builder_collection_lock` adds `collections.lock`; the
+Upgrade: step `0060_builder_collection_lock` adds `collections.lock`; the
 schema's object pass creates `builder.terms_acceptances` and its index.
 
 ## Builder third parties workload
@@ -1691,12 +1691,12 @@ Invariants code upholds:
   contents name, in the same transaction.
 
 Upgrade: the object pass creates the four tables; step
-`0058_builder_collection_forum` adds the forum columns and their checks. The
+`0061_builder_collection_forum` adds the forum columns and their checks. The
 import's `collection_curation`, `item_curation`, `collection_event` and
 `slot_usage_cheque` steps copy upstream's rows
 (`tooling/migration/sources/builder-server/MAPPING.md`).
 
-Step `0059_builder_collection_forum_claim` adds the claim timestamp and copies
+Step `0062_builder_collection_forum_claim` adds the claim timestamp and copies
 any linked publication's retained forum link into its collection before
 writes resume. It preserves an existing collection link. With writers
 stopped and a verified backup, run
@@ -2030,12 +2030,37 @@ returns only the numeric status. The pinned source's complete response bodies
 are compared for accepted, sent/received requests, absent friendship and empty
 history, with V2 and anonymous controls; no performance change was measured.
 
+## Message router workload
+
+The community chat message router (`catalyst-message-router`, its own process with its own
+pool, `MESSAGE_ROUTER_DB_MAX_CONNECTIONS`, default 4, 5 s statement timeout) reads social's
+community tables by shared SQL and writes nothing. Per routed packet (a community chat message
+or reaction, at most 10 per sender in a burst and 5 per second sustained) it runs one statement
+with two parts:
+
+- membership: `EXISTS` over `social.community_members` on `(community_id, member_address)`,
+  one probe of `community_members_pkey`, whatever the community's state;
+- recipients: `ARRAY(...)` of `social.communities` by `id` (its primary key), `active` and not
+  `suspended`, joined to the community's `social.community_members` rows through the
+  `community_members_pkey` prefix, every member but the sender, `lower(member_address)`. The
+  result is the community's member count, which the router publishes in batches of 100
+  identities.
+
+The router routes at most as many packets at once as the pool has connections, so a packet
+never waits for a connection; one that finds every routing slot taken is dropped and counted
+`overloaded` instead of timing out on the pool.
+
+Inputs are a community uuid from the packet topic and the sender's LiveKit identity, lowercased
+(member addresses are stored lowercase). No table, index or column is added. Changing a column
+either query reads updates this section and the root `AGENTS.md` comms ownership in the same
+change.
+
 ## Native referral login workload
 
 `POST /social-api/v1/client-login` derives the invited wallet from ADR-44 signed
 fetch. Its signed metadata contains `loginId` and `occurredAt`; the timestamp
-limits admission to the preceding 24 hours with five minutes of future tolerance,
-matching the signed-fetch clock window.
+limits admission to the preceding 24 hours with five minutes of future tolerance.
+The request itself still passes the 60-second signed-fetch window.
 The client preserves these values across retries and signs each request afresh.
 The occurrence timestamp bounds replay acceptance, while login-day accounting
 continues to use the database's UTC processing date.
@@ -2106,7 +2131,8 @@ Admitted effects retain the ten-second deadline. Reward requests run in the exis
 leased worker after login recording commits; they do not delay login acknowledgement. One nullable receipt per milestone stores a
 pre-POST `reward_requested_at`, confirmed provider `reward_response` and
 `reward_retry_at`. The expected workload is at most one receipt per milestone,
-with a 64-row due batch every minute; this bound is not a throughput measurement.
+with a 64-row due batch every minute; a tier with an empty supply is asked once
+an hour, plus once per new grant; this bound is not a throughput measurement.
 The partial due index excludes completed and ambiguous requests. A session
 advisory guard serializes attempts without an open transaction across HTTP; its
 connection closes on cancellation.
@@ -2115,7 +2141,18 @@ Configuration failures leave the request unclaimed. After the POST claim commits
 transport errors, non-success statuses, malformed replies and a crash before
 response persistence leave an ambiguous receipt that is never automatically
 reissued. Operators must reconcile the outcome before restoring it to pending or
-supplying a confirmed response. Additive step `0024_social_referral_reward_receipt`
+supplying a confirmed response. A held claim with no stored response stays
+quarantined until an operator clears `reward_requested_at`. A successful reply
+`{"ok": true, "data": []}` means the tier's campaign has no stock left ([greeter-dapp
+reads it as "No Stock"](https://github.com/decentraland/greeter-dapp/blob/30631bd10335f6f89f708829c26c3d679f9a626f/src/api/Rewards.ts)): the claim is cleared and
+the tier's other unclaimed rows without a stored response move one hour ahead
+in their current order, through the partial due index, with the answered row
+placed last. A reply for a new grant moves only rows that are due or new, so a
+row already waiting keeps its time; a reply for a waiting row also moves every
+row due within the hour. One request per hour therefore covers the tier, each
+asking the next row, plus one per new grant on arrival, until its campaign is
+restocked. After restocking, operators may clear
+`reward_retry_at` on those rows to retry sooner. Additive step `0024_social_referral_reward_receipt`
 imports previously confirmed object-valued `reward_paid` responses, including
 receipts with missing or invalid image metadata, and quarantines uncertain pending
 markers. A confirmed receipt with unusable image metadata remains confirmed and
@@ -2888,6 +2925,35 @@ each publication or archive transition appends a row to
 `social.badge_catalog_audit`; `badge_admin_audit` keeps per-wallet grants and
 revokes, whose `address` a catalog write does not have.
 
+## Curation committee
+
+Every builder decision only the committee could grant (`builder::access`:
+the committee's listings, another wallet's collections and items, draft
+reads, curation writes, forum replies) and `GET /v1/committee` read the
+current members of the Polygon curation committee; `BUILDER_ADMIN_ADDRESSES`
+admits only the node's curation console. Shop's `committee` index
+(`MARKETPLACE_COMMITTEE_INDEX_ENABLED`) walks the two Committee contracts'
+`MemberSet` logs from the first one's deployment into `shop.committee_event`
+over the `TRADE_RPC_URLS` 137 entry, else on mainnet `RPC_ENDPOINT_POLYGON`,
+once the endpoint answers chain id 137 (tens of rows, appended with the cursor advance in `shop.chain_cursor`,
+deleted past a reorg rewind). Builder reads, never writes, both tables by
+shared SQL in one statement: `shop.committee_event` (`network`,
+`block_number`, `log_index`, `member`, `is_member`) and `shop.chain_cursor`
+(`indexer`, `network`, `full_history`, `folded_block`, `folded_at`). A
+wallet is a member when its latest event (block, log index) at or below the
+published block (`folded_block`) set it, so rows a pass adds before its
+publish wait for it. Unlike the shop routes' readiness rule, it does not
+require `folded_block = last_block`, so the published membership stays
+readable while a pass runs. Builder reads it afresh for every decision, so a
+removed member loses the role once the index publishes the block that
+removed it. An index that is off, not yet published or published more than
+30 minutes ago (`READY_WINDOW`), or a failed read, can't tell: a decision
+only the committee could grant and `GET /v1/committee` answer 503, a view
+the committee only widens answers as for any signer, and the console lists
+an empty committee until the index is published. Changing a column builder
+reads updates this section and the AGENTS.md "Ownership" entry in the same
+change.
+
 ## Auth API relay state workload
 
 `/auth-api` (`services/catalyst/explore/src/api/auth_api/`) is the sign-in
@@ -2923,9 +2989,16 @@ identities (100 per network). No production rate is measured.
   the backups, which keep it after the row is deleted for as long as they
   are retained. A copy of the key signs for the identity's account until the
   expiration in its auth chain.
-  The pickup consumes it with `DELETE ... RETURNING` in the transaction that
-  writes its tombstone, so exactly one pickup gets it; a concurrent one waits
-  on the row, finds it gone and reads the tombstone.
+  A deep-link create for a client that holds a verifier (Creator Hub) binds
+  it to the client's `authRequestId` (`auth_request_id`, lowercase), which
+  the client derives from the verifier it presents on pickup
+  (`x-identity-verifier`); other identities stay unbound and keep the IP
+  check. The pickup locks the row (`SELECT ... FOR UPDATE`), decides, and
+  deletes it in the transaction that writes its tombstone when it is served,
+  expired or refused for its IP, so exactly one pickup gets it; a concurrent
+  one waits on the row, finds it gone and reads the tombstone. A bound
+  identity is served only to its verifier, from any network; a pickup with a
+  wrong or missing one (401) leaves the row parked.
 - `auth_identity_tombstones`: why an identity is gone (`consumed`, `expired`,
   `ip_mismatch`, or NULL while parked and once evicted by the sweep or an
   operator's revoke), for the 404 bodies, kept 14 days and at most 50,000

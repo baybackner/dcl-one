@@ -30,7 +30,7 @@
 //! item (owner, on-chain manager, current committee member, third-party
 //! manager, as builder-server defines them; 503 when a source it needs can't
 //! tell), and the store functions take the grant it returns. The committee is
-//! [`committee`]'s read of the Polygon collections subgraph, kept an hour.
+//! [`committee`]'s read of the Polygon committee index, by shared SQL.
 //! The curation routes need the admin bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`,
 //! constant-time, fails closed) or a `BUILDER_ADMIN_ADDRESSES` signer; chain
 //! writes are prepared here and signed and submitted by the client, the
@@ -38,7 +38,8 @@
 //! v2 never holds a signing key.
 //!
 //! Deviations from the old crate, all deliberate: the signed-fetch window is
-//! the shared verifier's 5 minutes (the old required path allowed 30); the
+//! the shared verifier's 60 seconds (the old required path allowed 30
+//! minutes); the
 //! subgraph readers replace the squid side pool (empty curation listings
 //! without a collections subgraph, as the old node answered without its
 //! pool); `BUILDER_POLYGON_RPC_URL`
@@ -338,8 +339,6 @@ pub struct State {
     /// withheld (rejected or deleted photo) is a 404 on the storage routes
     /// here too, not only on the content server's routes.
     pub denylist: Arc<crate::content::Denylist>,
-    /// The current curation committee (`committee`), kept an hour.
-    pub committee: committee::Committee,
     /// The rarities and their prices (`rarities`), kept a minute.
     pub rarities: rarities::Rarities,
     /// The third-party registry (`third_parties`), read per decision.
@@ -374,7 +373,6 @@ impl State {
             foundation: linked_publication_review::foundation_client(),
             eip1654,
             denylist,
-            committee: committee::Committee::default(),
             rarities: rarities::Rarities::default(),
             third_parties: third_parties::ThirdParties::default(),
             now: chrono::Utc::now,

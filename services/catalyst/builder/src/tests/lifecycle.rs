@@ -87,7 +87,10 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
     .await
     .unwrap();
     let market = match &options.committee {
-        Some(committee) => Some(committee_index(committee).await),
+        Some(committee) => {
+            committee.publish(&pool).await;
+            Some(committee_index(committee).await)
+        }
         None => Some(super::support::registry_only_index().await),
     };
     let mut state = crate::State::new(

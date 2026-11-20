@@ -409,14 +409,14 @@ pub async fn state_without_db(
     state_over(lazy_pool(), market).await
 }
 
-/// A loopback Polygon collections subgraph that answers the committee
-/// accounts it holds and, to a query of `rarities`, the rarities it holds
-/// (`None` answers a GraphQL error to either), and counts its reads of each.
+/// A committee as the Polygon committee index would publish it: `with`
+/// lists its members, `down` is an index that can't tell (unpublished).
+/// [`FakeCommittee::publish`] writes it into a test's database. Its loopback subgraph ([`committee_index`]) answers,
+/// to a query of `rarities`, the rarities it holds (`None` answers a GraphQL
+/// error) and counts those reads.
 #[derive(Clone, Default)]
 pub struct FakeCommittee {
     members: Arc<std::sync::Mutex<Option<Vec<String>>>>,
-    hits: Arc<std::sync::atomic::AtomicUsize>,
-    delay: Arc<std::sync::Mutex<std::time::Duration>>,
     rarities: Arc<std::sync::Mutex<Option<Vec<serde_json::Value>>>>,
     rarity_hits: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -432,17 +432,38 @@ impl FakeCommittee {
         Self::default()
     }
 
+    /// Changes the committee [`Self::publish`] writes next.
     pub fn set(&self, members: Option<&[&str]>) {
         *self.members.lock().unwrap() = members.map(|m| m.iter().map(|a| a.to_string()).collect());
     }
 
-    /// Answers each read after `delay`.
-    pub fn slow(&self, delay: std::time::Duration) {
-        *self.delay.lock().unwrap() = delay;
-    }
-
-    pub fn hits(&self) -> usize {
-        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    /// Writes this committee into `pool`'s index: its members' MemberSet
+    /// events published now, or, for `down`, no published index. Adding a
+    /// member twice writes one event, so tests sharing the process's scratch
+    /// database may publish the same committee concurrently.
+    pub async fn publish(&self, pool: &sqlx::PgPool) {
+        let members = self.members.lock().unwrap().clone();
+        let Some(members) = members else {
+            sqlx::query("DELETE FROM shop.chain_cursor WHERE indexer = 'committee'")
+                .execute(pool)
+                .await
+                .unwrap();
+            return;
+        };
+        for member in members {
+            let member = member.to_ascii_lowercase();
+            let log_index = i32::from_str_radix(&member[member.len() - 7..], 16).unwrap();
+            sqlx::query(
+                "INSERT INTO shop.committee_event (network, block_number, log_index, block_time, contract_address, member, is_member) \
+                 VALUES ('matic', 1, $1, 1, '0xaeec95a8aa671a6d3fec56594827d7804964fa70', $2, true) ON CONFLICT DO NOTHING",
+            )
+            .bind(log_index)
+            .bind(&member)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        publish_committee_at(pool, 1, "timezone('UTC', now())").await;
     }
 
     /// The `rarities` the subgraph answers, each `(name, usd price, max
@@ -463,40 +484,51 @@ impl FakeCommittee {
 
     async fn answer(
         axum::extract::State(fake): axum::extract::State<Self>,
-        axum::Json(body): axum::Json<serde_json::Value>,
+        axum::Json(_): axum::Json<serde_json::Value>,
     ) -> axum::Json<serde_json::Value> {
-        if body["query"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("rarities")
-        {
-            fake.rarity_hits
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            return axum::Json(match fake.rarities.lock().unwrap().clone() {
-                Some(rarities) => serde_json::json!({ "data": { "rarities": rarities } }),
-                None => serde_json::json!({ "errors": [{ "message": "indexing error" }] }),
-            });
-        }
-        fake.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let delay = *fake.delay.lock().unwrap();
-        tokio::time::sleep(delay).await;
-        let Some(mut members) = fake.members.lock().unwrap().clone() else {
-            return axum::Json(serde_json::json!({ "errors": [{ "message": "indexing error" }] }));
-        };
-        members.sort_by_key(|a| a.to_ascii_lowercase());
-        let from = body["variables"]["idFrom"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let first = body["variables"]["first"].as_u64().unwrap_or(1000) as usize;
-        let accounts: Vec<_> = members
-            .iter()
-            .filter(|a| a.to_ascii_lowercase() > from)
-            .take(first)
-            .map(|a| serde_json::json!({ "id": a.to_ascii_lowercase(), "address": a }))
-            .collect();
-        axum::Json(serde_json::json!({ "data": { "accounts": accounts } }))
+        fake.rarity_hits
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        axum::Json(match fake.rarities.lock().unwrap().clone() {
+            Some(rarities) => serde_json::json!({ "data": { "rarities": rarities } }),
+            None => serde_json::json!({ "errors": [{ "message": "indexing error" }] }),
+        })
     }
+}
+
+/// Appends one MemberSet event to `pool`'s committee index, at log index 0
+/// of `block`.
+pub async fn record_committee_event(
+    pool: &sqlx::PgPool,
+    block: i64,
+    contract: &str,
+    member: &str,
+    is_member: bool,
+) {
+    sqlx::query(
+        "INSERT INTO shop.committee_event (network, block_number, log_index, block_time, contract_address, member, is_member) \
+         VALUES ('matic', $1, 0, $1, $2, $3, $4)",
+    )
+    .bind(block)
+    .bind(contract)
+    .bind(member)
+    .bind(is_member)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Publishes `pool`'s committee index through `block` at the SQL instant
+/// `folded_at`.
+pub async fn publish_committee_at(pool: &sqlx::PgPool, block: i64, folded_at: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history) \
+         VALUES ('committee', 'matic', 0, {block}, {block}, {block}, {folded_at}, true) \
+         ON CONFLICT (indexer, network) DO UPDATE SET last_block = GREATEST(shop.chain_cursor.last_block, EXCLUDED.last_block), \
+           folded_block = EXCLUDED.folded_block, fold_through = EXCLUDED.fold_through, folded_at = EXCLUDED.folded_at, full_history = true"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 /// A chain index whose Polygon collections subgraph is `fake` and whose

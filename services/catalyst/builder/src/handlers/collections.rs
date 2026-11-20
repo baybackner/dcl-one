@@ -88,7 +88,7 @@ async fn list_collections(
     )
     .await;
     let committee = match (&signer, q.is_public_search()) {
-        (Some(signer), true) => access::known_committee_member(state, signer),
+        (Some(signer), true) => access::known_committee_member(state, signer).await,
         (Some(signer), false) => Some(access::committee(state, signer).await?),
         (None, true) => None,
         (None, false) => return Err(unauthorized_for("")),
@@ -158,12 +158,13 @@ pub async fn get_address_items(
 }
 
 /// `GET /v1/committee`: the current committee members, unauthenticated;
-/// 503 while the subgraph can't tell.
+/// 503 while the committee index can't tell.
 pub async fn get_committee(
     State(state): State<SharedState>,
 ) -> Result<Json<ApiData<Vec<Member>>>, ApiError> {
-    let members = state.committee.members(state.market.as_ref()).await?;
-    Ok(Json(ApiData::ok(members.as_ref().clone())))
+    Ok(Json(ApiData::ok(
+        crate::committee::members(state.items.pool()).await?,
+    )))
 }
 
 #[cfg(test)]
@@ -193,7 +194,9 @@ mod tests {
 
     async fn state(committee: &str) -> Option<SharedState> {
         let pool = crate::tests::support::scratch_pool(4).await?;
-        let market = committee_index(&FakeCommittee::with(&[committee])).await;
+        let fake = FakeCommittee::with(&[committee]);
+        fake.publish(&pool).await;
+        let market = committee_index(&fake).await;
         Some(Arc::new(
             crate::State::new(
                 pool,

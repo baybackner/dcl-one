@@ -1459,7 +1459,6 @@ fn approval(method: &str) -> Payload {
 struct Matrix {
     pool: PgPool,
     app: Router,
-    state: crate::SharedState,
     forum: crate::curation::forum::fake::FakeForum,
 }
 
@@ -1483,6 +1482,7 @@ async fn matrix(committee: &FakeCommittee) -> Option<Matrix> {
 async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> Option<Matrix> {
     let pool = crate::db::scratch::isolated_pool(connections).await?;
     fresh_pass(&pool, 0).await;
+    committee.publish(&pool).await;
     committee.set_rarities(Some(&[("common", "10000000000000000000", "100000")]));
     let oracle = FakeOracle::with(&[("common", "4000000000000000000")]);
     let forum = crate::curation::forum::fake::FakeForum::default();
@@ -1507,7 +1507,7 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
-        .nest("/builder-api", crate::router(state.clone()));
+        .nest("/builder-api", crate::router(state));
     sqlx::query(
         "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Matrix:')",
     )
@@ -1523,12 +1523,7 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     .execute(&pool)
     .await
     .unwrap();
-    Some(Matrix {
-        pool,
-        app,
-        state,
-        forum,
-    })
+    Some(Matrix { pool, app, forum })
 }
 
 /// A third-party collection under the matrix's provider that the sibling
@@ -2057,37 +2052,30 @@ async fn an_item_moves_into_or_out_of_a_third_party_collection_never() {
 }
 
 /// A read the committee decides releases its database connection before it
-/// waits on the committee source, so a pool of one still answers the
-/// owner's own read while a stranger's read waits on a slow subgraph.
+/// reads the committee index, so with a pool of one every caller's read
+/// answers instead of waiting on a connection it holds itself.
 #[tokio::test]
 async fn a_committee_read_holds_no_database_connection() {
     for op in [Op::ReadCollection, Op::CollectionItems, Op::ReadItem] {
         let committee = FakeCommittee::with(&[&Committee.address()]);
-        committee.slow(std::time::Duration::from_secs(3));
         let Some(m) = matrix_with(&committee, 1, true).await else {
             return;
         };
         let f = fixture(&m.pool, Draft).await;
         let (method, path, _) = op.request(Draft, &f);
-        let app = m.app.clone();
-        let stranger = {
-            let path = path.clone();
-            tokio::spawn(async move { call(&app, Stranger, method, &path, Payload::None).await })
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let started = std::time::Instant::now();
-        let (status, body) = call(&m.app, Owner, method, &path, Payload::None).await;
-        let waited = started.elapsed();
-        assert_eq!(status, StatusCode::OK, "{op:?}: {body}");
-        assert!(
-            waited < std::time::Duration::from_secs(1),
-            "{op:?}: the owner's read waited {waited:?} behind a committee read"
-        );
-        assert_eq!(
-            stranger.await.unwrap().0,
-            StatusCode::UNAUTHORIZED,
-            "{op:?}"
-        );
+        for (caller, expected) in [
+            (Owner, StatusCode::OK),
+            (Committee, StatusCode::OK),
+            (Stranger, StatusCode::UNAUTHORIZED),
+        ] {
+            let answer = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                call(&m.app, caller, method, &path, Payload::None),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{op:?} as {caller:?} never answered"));
+            assert_eq!(answer.0, expected, "{op:?} as {caller:?}: {}", answer.1);
+        }
     }
 }
 
@@ -2152,16 +2140,14 @@ async fn the_loser_of_a_concurrent_creation_is_refused_as_a_stranger() {
     assert_eq!(name, "First");
 }
 
-/// What any signer sees of published content never waits on the committee
-/// source: a stranger's, the owner's and a committee member's reads of a
-/// published collection's items and of a minted item answer at once while the
-/// source is slow, at cold start, at expiry and while it fails. A committee
-/// member gets the wide view only from a good read, kept while its refresh
-/// runs.
+/// What any signer sees of published content never depends on the
+/// committee index; a committee member gets the wide view of a published
+/// collection's items and of a minted item only while the published index
+/// lists it: not once a published removal holds, nor while the index is
+/// unpublished or stale.
 #[tokio::test]
-async fn published_content_never_waits_on_the_committee_source() {
+async fn the_committee_widens_published_content_only_while_the_index_lists_it() {
     let committee = FakeCommittee::with(&[&Committee.address()]);
-    committee.slow(std::time::Duration::from_secs(2));
     let Some(m) = matrix(&committee).await else {
         return;
     };
@@ -2173,17 +2159,11 @@ async fn published_content_never_waits_on_the_committee_source() {
             format!("/v1/collections/{collection}/items"),
             format!("/v1/items/{minted}"),
         ] {
-            let started = std::time::Instant::now();
             let (status, body) = call(&m.app, caller, "GET", &path, Payload::None).await;
-            let waited = started.elapsed();
             assert_eq!(
                 status,
                 StatusCode::OK,
                 "{moment} {path} as {caller:?}: {body}"
-            );
-            assert!(
-                waited < std::time::Duration::from_millis(500),
-                "{moment} {path} as {caller:?} waited {waited:?}"
             );
             let items: Vec<&Value> = match body["data"].as_array() {
                 Some(list) => list.iter().collect(),
@@ -2198,72 +2178,35 @@ async fn published_content_never_waits_on_the_committee_source() {
             );
         }
     };
-    check(Stranger, false, "cold start").await;
-    check(Owner, true, "cold start").await;
-    check(Committee, false, "cold start, no good read").await;
-    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-    check(Committee, true, "after a good read").await;
-    check(Stranger, false, "after a good read").await;
-    m.state
-        .committee
-        .backdate(crate::committee::MEMBERS_TTL + std::time::Duration::from_secs(1));
-    check(Committee, true, "expired, refresh in flight").await;
-    check(Stranger, false, "expired, refresh in flight").await;
-    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-    committee.set(None);
-    m.state
-        .committee
-        .backdate(crate::committee::MEMBERS_TTL + std::time::Duration::from_secs(1));
-    check(Committee, true, "expired, failing refresh in flight").await;
-    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-    check(Committee, false, "the source failing").await;
-    check(Stranger, false, "the source failing").await;
-    check(Owner, true, "the source failing").await;
-}
-
-/// A committee member removed while the source fails keeps the wide view of
-/// published content only during the one refresh that follows the expiry of
-/// the builder's last good read, never in a later round.
-#[tokio::test]
-async fn an_expired_committee_read_never_widens_after_its_refresh_fails() {
-    let committee = FakeCommittee::with(&[&Committee.address()]);
-    let Some(m) = matrix(&committee).await else {
-        return;
+    check(Committee, true, "listed").await;
+    check(Stranger, false, "listed").await;
+    check(Owner, true, "listed").await;
+    let publish = async |folded_at: &str| {
+        super::support::publish_committee_at(&m.pool, 2, folded_at).await;
     };
-    let f = fixture(&m.pool, Published).await;
-    let path = format!("/v1/collections/{}/items", f.collection.unwrap());
-    let listed = async || {
-        let (status, body) = call(&m.app, Committee, "GET", &path, Payload::None).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        body["data"].as_array().unwrap().len()
-    };
-    assert!(
-        m.state
-            .committee
-            .is_member(m.state.market.as_ref(), &Committee.address())
-            .await
-            .unwrap()
-    );
-    assert_eq!(listed().await, 2, "a fresh read widens the view");
-    committee.set(None);
-    committee.slow(std::time::Duration::from_millis(300));
-    m.state
-        .committee
-        .backdate(std::time::Duration::from_secs(7 * 24 * 60 * 60));
-    listed().await;
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    for round in 1..4 {
-        assert_eq!(listed().await, 1, "round {round}: after a failed refresh");
-        m.state
-            .committee
-            .backdate(crate::committee::FAILURE_TTL + std::time::Duration::from_secs(1));
-        assert_eq!(
-            listed().await,
-            1,
-            "round {round}: while the next refresh runs"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    }
+    publish("timezone('UTC', now()) - interval '31 minutes'").await;
+    check(Committee, false, "stale index").await;
+    check(Owner, true, "stale index").await;
+    sqlx::query("DELETE FROM shop.chain_cursor WHERE indexer = 'committee'")
+        .execute(&m.pool)
+        .await
+        .unwrap();
+    check(Committee, false, "unpublished index").await;
+    check(Stranger, false, "unpublished index").await;
+    publish("timezone('UTC', now())").await;
+    check(Committee, true, "published again").await;
+    super::support::record_committee_event(
+        &m.pool,
+        3,
+        "0xaeec95a8aa671a6d3fec56594827d7804964fa70",
+        &Committee.address(),
+        false,
+    )
+    .await;
+    check(Committee, true, "a removal past the published block").await;
+    super::support::publish_committee_at(&m.pool, 3, "timezone('UTC', now())").await;
+    check(Committee, false, "a published removal").await;
+    check(Owner, true, "a published removal").await;
 }
 
 #[tokio::test]

@@ -68,6 +68,11 @@ describe("Sites paths", () => {
       "/create/create-project",
       "/create/delete-project",
       "/create/drafts/d-1",
+    ])("should serve only the /create redirect for %s", (path) => {
+      expect(served(path)).toBe("routes/create.$.tsx");
+    });
+
+    it.each([
       "/editor-scene/EditorScene/about",
       "/api/creator-hub/asset-catalog",
       "/api/creator-hub/drafts/d-1",
@@ -75,8 +80,8 @@ describe("Sites paths", () => {
       expect(served(path)).toBeNull();
     });
 
-    it("should keep serving the wearable and emote builder at /create/wearables", () => {
-      expect(served("/create/wearables")).toBe("routes/create.wearables._index.tsx");
+    it("should keep serving the wearable and emote collections at /create/collections", () => {
+      expect(served("/create/collections")).toBe("routes/create.collections._index.tsx");
     });
   });
 

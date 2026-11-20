@@ -131,6 +131,7 @@ async fn world() -> Option<World> {
     .await
     .unwrap();
     let committee = FakeCommittee::with(&[&Committee.address()]);
+    committee.publish(&pool).await;
     let registry = FakeRegistry::up();
     registry.put(
         "urn:decentraland:matic:collections-thirdparty:other",

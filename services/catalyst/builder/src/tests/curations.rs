@@ -539,7 +539,7 @@ async fn a_linked_forum_release_preserves_links_and_repeats_without_a_second_sou
     .await;
     let migration = include_str!(concat!(
         env!("DCL_ONE_ROOT"),
-        "/schemas/migrations/0059_builder_collection_forum_claim.sql"
+        "/schemas/migrations/0062_builder_collection_forum_claim.sql"
     ));
     sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     let backfilled: Option<String> =
@@ -608,7 +608,7 @@ async fn linked_forum_retirement_requires_the_additive_migration() {
     .await;
     accepted(
         &pool,
-        "DELETE FROM meta.schema_steps WHERE step = '0059_builder_collection_forum_claim'",
+        "DELETE FROM meta.schema_steps WHERE step = '0062_builder_collection_forum_claim'",
     )
     .await;
     let release = include_str!(concat!(

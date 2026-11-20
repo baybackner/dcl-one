@@ -138,6 +138,7 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
     .execute(&pool)
     .await
     .unwrap();
+    options.committee.publish(&pool).await;
     let mut state = crate::State::new(
         pool.clone(),
         temp_storage().await,

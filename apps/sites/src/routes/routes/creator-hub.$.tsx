@@ -5,22 +5,15 @@ import { track } from "@/core/lib/telemetry/track";
 
 import type { Route } from "./+types/creator-hub.$";
 
-/** `/creator-hub/*` is the retired spelling of `/create/*`: one hub, one prefix. Pages that
-    were renamed along the way map here; everything else keeps its path and query. */
+/** `/creator-hub/*` is the retired spelling of `/create/*`: one prefix. Pages that were renamed
+    along the way map here; everything else keeps its path and query. */
 const RENAMED: Record<string, string> = {
-  manage: "worlds",
-  "world-permissions": "admissions",
-  gate: "admissions",
-  "worlds-storage": "storage",
   "multiplayer-test": "preview",
 };
-
-const DESKTOP_ONLY = new Set(["deploy-world", "deploy-alternative"]);
 
 export function createPathFor(url: URL, splat: string | undefined): string {
   const path = (splat ?? "").replace(/^\/+|\/+$/g, "");
   const [head, ...rest] = path ? path.split("/") : [];
-  if (head && DESKTOP_ONLY.has(head)) return `/download/creator-hub${url.search}`;
   const mapped = head ? [RENAMED[head] ?? head, ...rest].join("/") : "";
   return `/create${mapped ? `/${mapped}` : ""}${url.search}`;
 }

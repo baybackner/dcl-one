@@ -7,7 +7,8 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 const STEP: &str = "0020_social_voice_notifications";
-const PREPARED_PENDING_STEPS: [&str; 38] = [
+/// The steps a prepared version-2 database has not recorded.
+const PREPARED_PENDING_STEPS: [&str; 41] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -36,16 +37,19 @@ const PREPARED_PENDING_STEPS: [&str; 38] = [
     "0047_shop_sale_notification_producers",
     "0048_broker_purchases_write_ahead",
     "0049_land_authz_cursor_block_hash",
-    "0050_builder_scenes_retired",
-    "0051_shop_items_content_hash",
-    "0052_builder_collection_flags_retired",
-    "0053_builder_collection_listings",
-    "0054_builder_item_contents_order",
-    "0055_builder_item_contents_named_by",
-    "0056_builder_item_video_named_by",
-    "0057_builder_collection_lock",
-    "0058_builder_collection_forum",
-    "0059_builder_collection_forum_claim",
+    "0050_explore_poster_avif",
+    "0051_explore_auth_identity_request_id",
+    "0052_shop_committee_index",
+    "0053_builder_scenes_retired",
+    "0054_shop_items_content_hash",
+    "0055_builder_collection_flags_retired",
+    "0056_builder_collection_listings",
+    "0057_builder_item_contents_order",
+    "0058_builder_item_contents_named_by",
+    "0059_builder_item_video_named_by",
+    "0060_builder_collection_lock",
+    "0061_builder_collection_forum",
+    "0062_builder_collection_forum_claim",
 ];
 const PREPARED_V2: &str = include_str!(concat!(
     env!("DCL_ONE_ROOT"),

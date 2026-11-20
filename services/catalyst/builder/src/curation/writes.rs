@@ -528,7 +528,7 @@ pub async fn open_collection(
                 .with_data(json!({ "id": id })),
         );
     }
-    let known_committee = access::known_curator(state, &curator);
+    let known_committee = access::known_curator(state, &curator).await;
     let mut tx = state.items.pool().begin().await?;
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;

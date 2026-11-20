@@ -514,6 +514,7 @@ async fn fresh_pass(pool: &PgPool, minutes_ago: i64) {
 async fn files(committee: &FakeCommittee) -> Option<Files> {
     let pool = crate::db::scratch::isolated_pool(8).await?;
     fresh_pass(&pool, 0).await;
+    committee.publish(&pool).await;
     sqlx::query(
         "INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata) VALUES ($1, $2, 'tp:1:Files:')",
     )
@@ -724,7 +725,6 @@ async fn a_committee_source_that_is_down_changes_no_cell() {
     };
     let failures = table(&f).await;
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert_eq!(committee.hits(), 0, "a file read never asks the committee");
 }
 
 #[tokio::test]

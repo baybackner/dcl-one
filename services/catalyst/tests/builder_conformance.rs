@@ -1867,11 +1867,11 @@ fn roles(seed: &Seed, roles: &[String]) -> Vec<String> {
 }
 
 /// A loopback Polygon collections subgraph that answers `seed.chain`'s
-/// committee as its `accounts` and its `rarities`, and a third-party
+/// `rarities`, and a third-party
 /// registry subgraph beside it (`/graph/third-parties`) that answers the
 /// node's walk with `seed.registry`, each provider as the capture's fake
 /// serves it; returns both URLs.
-async fn committee_subgraph(seed: &Seed) -> (String, String) {
+async fn chain_subgraphs(seed: &Seed) -> (String, String) {
     let mut providers: Vec<Value> = seed
         .registry
         .iter()
@@ -1890,29 +1890,17 @@ async fn committee_subgraph(seed: &Seed) -> (String, String) {
         })
         .collect();
     providers.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    let accounts: Vec<Value> = roles(seed, &seed.chain.committee)
-        .into_iter()
-        .map(|address| serde_json::json!({ "id": address, "address": address }))
-        .collect();
     let rarities: Vec<Value> = seed
         .chain
         .rarities
         .iter()
         .map(|r| serde_json::json!({ "id": r.name, "name": r.name, "price": r.price, "maxSupply": r.max_supply }))
         .collect();
-    let committee = serde_json::json!({ "data": { "accounts": accounts } });
     let listed = serde_json::json!({ "data": { "rarities": rarities } });
     let app = Router::new()
         .route(
             "/graph/collections",
-            axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
-                let query = body["query"].as_str().unwrap_or_default();
-                axum::Json(if query.contains("rarities") {
-                    listed
-                } else {
-                    committee
-                })
-            }),
+            axum::routing::post(move || async move { axum::Json(listed) }),
         )
         .route(
             "/graph/third-parties",
@@ -2226,6 +2214,24 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
     .execute(pool)
     .await
     .unwrap();
+    for (log_index, member) in roles(seed, &seed.chain.committee).iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO shop.committee_event (network, block_number, log_index, block_time, contract_address, member, is_member) \
+             VALUES ('matic', 1, $1, 1, '0xaeec95a8aa671a6d3fec56594827d7804964fa70', $2, true)",
+        )
+        .bind(log_index as i32)
+        .bind(member.to_ascii_lowercase())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json committee member {member}: {e}"));
+    }
+    sqlx::query(
+        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history) \
+         VALUES ('committee', 'matic', 0, 1, 1, 1, timezone('UTC', now()), true)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 struct TempDir(PathBuf);
@@ -2309,7 +2315,7 @@ async fn replay_setup() -> Option<Replay> {
         wallets.insert(address.clone(), wallet);
     }
     seed(&scratch.pool, &seed_data).await;
-    let (collections_subgraph, registry_subgraph) = committee_subgraph(&seed_data).await;
+    let (collections_subgraph, registry_subgraph) = chain_subgraphs(&seed_data).await;
     let index = catalyst::chain_index::ChainIndex::new(
         Outbound::for_tests(),
         catalyst::chain_index::IndexSettings {

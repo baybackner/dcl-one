@@ -248,7 +248,7 @@ impl Rig {
         )
         .bind(corpus.community)
         .bind(&user)
-        .bind(format!("0x{}", &corpus.community.simple().to_string()[..20].repeat(2)))
+        .bind(format!("0x{}", corpus.community.simple().to_string()[..20].repeat(2)))
         .execute(&pool)
         .await
         .unwrap();

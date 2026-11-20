@@ -6,10 +6,10 @@
 //! `dcl_auth::signed_fetch`'s; this module is the node's posture over
 //! them and its wire answers.
 //!
-//! There is no nonce and no replay cache on this path: the +/- 5 minute window
-//! is the only bound on how long a captured request stays usable, so it is a
-//! replay-tolerance budget, not a clock-skew allowance. The payload shapes a
-//! surface accepts are its [`PayloadPolicy`]: the crypto-middleware 6.x one
+//! There is no nonce and no replay cache on this path: the 60-second window
+//! ([`SIGNED_FETCH_WINDOW_SECS`]) is the only bound on how long a captured
+//! request stays usable, so it is a replay-tolerance budget, not a clock-skew
+//! allowance. The payload shapes a surface accepts are its [`PayloadPolicy`]: the crypto-middleware 6.x one
 //! (method and path folded, the metadata bytes bound to the signature) always,
 //! then the legacy one (everything lowercased) only where the old service
 //! declared that fallback and only when the metadata spells its `signer` key
@@ -50,8 +50,8 @@ use crate::auth::signed_fetch::{
 use crate::auth::{AuthChain, AuthError, MAX_AUTH_CHAIN_LINKS};
 
 pub use crate::auth::signed_fetch::{
-    AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, FIVE_MINUTES,
-    ORIGINAL_PATH_HEADER, SCENE_SIGNER, SignedPath, build_legacy_payload, build_payload_v6,
+    AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, ORIGINAL_PATH_HEADER,
+    SCENE_SIGNER, SIGNED_FETCH_WINDOW_SECS, SignedPath, build_legacy_payload, build_payload_v6,
     candidate_paths, field_is_canonical, header_str, is_refused_signer, names_scene_signer,
 };
 
@@ -312,13 +312,15 @@ pub struct VerificationProfile {
 }
 
 impl VerificationProfile {
-    /// @dcl/platform-crypto-middleware as the Node services use it: +/- 5
-    /// minutes, optional object metadata, the scene signer gated, and the
-    /// legacy payload as `policy` declares it behind the canonical-`signer`
-    /// guard. What [`require_signer_at`] runs.
+    /// @dcl/platform-crypto-middleware as the Node services use it: at most
+    /// [`SIGNED_FETCH_WINDOW_SECS`] old and ahead, optional object metadata,
+    /// the scene signer gated, and the legacy payload as `policy` declares it
+    /// behind the canonical-`signer` guard. What [`require_signer_at`] runs.
     pub const fn node(policy: PayloadPolicy) -> Self {
         Self {
-            window: TimestampWindow::AroundNow { secs: FIVE_MINUTES },
+            window: TimestampWindow::AroundNow {
+                secs: SIGNED_FETCH_WINDOW_SECS,
+            },
             metadata: MetadataHeader::OptionalJsonObject,
             scene_signer: SceneSignerRule::Gated,
             legacy: match policy {
@@ -330,13 +332,15 @@ impl VerificationProfile {
 
     /// builder-server's `withAuthentication` as far as its `verify()` goes:
     /// the 6.x payload alone (it passes no `canonicalMetadataKeys`, so the
-    /// folded one is never tried), within the node's five-minute window, a
-    /// duplicated timestamp or metadata header refused, and metadata that is
+    /// folded one is never tried), within [`SIGNED_FETCH_WINDOW_SECS`] old and
+    /// ahead, a duplicated timestamp or metadata header refused, and metadata that is
     /// not an object refused with the scene signer before any signature is
     /// checked. Its timestamp-less `method:path` fallback is not accepted.
     pub const fn builder() -> Self {
         Self {
-            window: TimestampWindow::SingleAroundNow { secs: FIVE_MINUTES },
+            window: TimestampWindow::SingleAroundNow {
+                secs: SIGNED_FETCH_WINDOW_SECS,
+            },
             metadata: MetadataHeader::OptionalSingleJsonObject,
             scene_signer: SceneSignerRule::Gated,
             legacy: LegacyFallback::Refused,
@@ -1006,14 +1010,18 @@ mod tests {
                 require_signer(&headers, "get", PATH, PayloadPolicy::V6ThenLegacy, None).await,
             )
         };
-        let (reel, _) = at(-55_000).await;
+        let (reel, node) = at(-55_000).await;
         assert!(reel.is_ok(), "{reel:?}");
+        assert!(node.is_ok(), "{node:?}");
         let (reel, node) = at(-65_000).await;
         assert!(
             matches!(reel, Err(SignedFetchError::Expired { .. })),
             "{reel:?}"
         );
-        assert!(node.is_ok(), "the node window is still five minutes");
+        assert!(
+            matches!(node, Err(SignedFetchError::Expired { .. })),
+            "the node window is 60 seconds too: {node:?}"
+        );
         let (reel, _) = at(30_000).await;
         assert!(reel.is_ok(), "within the future skew: {reel:?}");
         let (reel, node) = at(3_600_000).await;
@@ -1155,7 +1163,9 @@ mod tests {
             assert_eq!(
                 VerificationProfile::node(policy),
                 VerificationProfile {
-                    window: TimestampWindow::AroundNow { secs: FIVE_MINUTES },
+                    window: TimestampWindow::AroundNow {
+                        secs: SIGNED_FETCH_WINDOW_SECS
+                    },
                     metadata: MetadataHeader::OptionalJsonObject,
                     scene_signer: SceneSignerRule::Gated,
                     legacy,
@@ -1231,12 +1241,22 @@ mod tests {
             duplicated.append(AUTH_METADATA_HEADER, HeaderValue::from_static("{}"));
             let err = builder(&duplicated, "get", &local).await.unwrap_err();
             assert!(err.is_metadata_refusal(), "{err}");
-            let stale = (chrono::Utc::now().timestamp_millis() - 6 * 60 * 1000).to_string();
-            let headers = signed_headers_at("get", ROUTE, "{}", true, &stale).await;
-            assert!(matches!(
-                builder(&headers, "get", &local).await,
-                Err(SignedFetchError::Expired { .. })
-            ));
+            for inside in [-55_000, 55_000] {
+                let at = (chrono::Utc::now().timestamp_millis() + inside).to_string();
+                let headers = signed_headers_at("get", ROUTE, "{}", true, &at).await;
+                assert!(builder(&headers, "get", &local).await.is_ok(), "{inside}");
+            }
+            for outside in [-65_000, 65_000] {
+                let at = (chrono::Utc::now().timestamp_millis() + outside).to_string();
+                let headers = signed_headers_at("get", ROUTE, "{}", true, &at).await;
+                assert!(
+                    matches!(
+                        builder(&headers, "get", &local).await,
+                        Err(SignedFetchError::Expired { .. })
+                    ),
+                    "{outside}"
+                );
+            }
         }
     }
 

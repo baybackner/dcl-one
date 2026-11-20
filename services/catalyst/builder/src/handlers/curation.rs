@@ -62,30 +62,39 @@ fn parse_uuid(raw: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(raw.trim()).map_err(|_| ApiError::not_found("Not found"))
 }
 
-/// The curation queue: the current committee (`committee`, kept an hour;
-/// 503 while it can't tell) and the collections under review from the
-/// collections subgraphs; empty lists without a reader, as the old node
-/// answered without its side pool.
+/// The curation queue: the committee's current members from the Polygon
+/// committee index (empty until it is published, 503 when it can't be read)
+/// and the collections under review from the collections subgraphs (empty
+/// without a reader).
 pub async fn get_curation_collections(
     State(state): State<SharedState>,
     _: Admin,
 ) -> Result<Json<ApiData<CurationCollectionsOut>>, ApiError> {
-    let (committee, collections) = match state
+    let committee = match crate::committee::current_members(state.items.pool()).await {
+        Ok(members) => members
+            .unwrap_or_default()
+            .into_iter()
+            .map(|address| {
+                CommitteeMemberOut::from(&crate::committee::Member {
+                    id: address.clone(),
+                    address,
+                })
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(error = %error, "committee index read failed");
+            return Err(ApiError::service_unavailable(
+                "The curation committee is not available. Try again later.",
+            ));
+        }
+    };
+    let collections = match state
         .market
         .as_ref()
         .filter(|m| onchain::configured(Some(m)))
     {
-        Some(market) => {
-            let (committee, collections) = tokio::try_join!(
-                state.committee.members(Some(market)),
-                onchain::collections_under_review(market)
-            )?;
-            (
-                committee.iter().map(CommitteeMemberOut::from).collect(),
-                collections,
-            )
-        }
-        None => (Vec::new(), Vec::new()),
+        Some(market) => onchain::collections_under_review(market).await?,
+        None => Vec::new(),
     };
 
     Ok(Json(ApiData::ok(CurationCollectionsOut {

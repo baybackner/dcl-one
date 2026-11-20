@@ -23,32 +23,18 @@ function auth(over: Partial<ChromeAuth> = {}): ChromeAuth {
 
 afterEach(() => cleanup());
 
-describe("creator hub navigation", () => {
-  test("offers no scene templates or scene publishing entry", () => {
-    render(
-      <ChromeAuthContext.Provider value={auth()}>
-        <CreatorHubChrome active="home" />
-      </ChromeAuthContext.Provider>,
-    );
-    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href") ?? "");
-    expect(hrefs).toContain("/create/wearables");
-    expect(hrefs.filter((href) => /^\/create\/(templates|publish|scene-editor|create-project)\b/.test(href))).toEqual([]);
-    expect(screen.queryByRole("link", { name: /Templates|Publishing/ })).toBeNull();
-  });
-});
-
 describe("creator hub account entry", () => {
   test("the rail account button opens the menu with Download and Log out", async () => {
     const a = auth();
     render(
       <ChromeAuthContext.Provider value={a}>
-        <CreatorHubChrome active="home" />
+        <CreatorHubChrome active="collections" />
       </ChromeAuthContext.Provider>,
     );
     const triggers = screen.getAllByRole("button", { name: "esteban 0x4d02\u{2026}7bf2" });
     expect(triggers.length).toBeGreaterThan(0);
     await userEvent.click(triggers[triggers.length - 1]!);
-    expect(screen.getByRole("menuitem", { name: "Download" })).toHaveAttribute("href", "/create/settings");
+    expect(screen.getByRole("menuitem", { name: "Download" })).toHaveAttribute("href", "/download/creator-hub");
     expect(screen.getByRole("menuitem", { name: "Switch account" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
     expect(a.onSignOut).toHaveBeenCalledTimes(1);
@@ -58,7 +44,7 @@ describe("creator hub account entry", () => {
     const a = auth({ onSignOut: undefined, onSwitchAccount: vi.fn() });
     render(
       <ChromeAuthContext.Provider value={a}>
-        <CreatorHubChrome active="home" />
+        <CreatorHubChrome active="collections" />
       </ChromeAuthContext.Provider>,
     );
     const triggers = screen.getAllByRole("button", { name: "esteban 0x4d02\u{2026}7bf2" });
@@ -73,7 +59,7 @@ describe("creator hub account entry", () => {
     const onAccount = vi.fn();
     render(
       <ChromeAuthContext.Provider value={auth()}>
-        <CreatorHubChrome active="home" onAccount={onAccount} />
+        <CreatorHubChrome active="collections" onAccount={onAccount} />
       </ChromeAuthContext.Provider>,
     );
     const triggers = screen.getAllByRole("button", { name: "esteban 0x4d02\u{2026}7bf2" });
@@ -85,7 +71,7 @@ describe("creator hub account entry", () => {
     const a = auth({ signedIn: false, account: "", name: "" });
     render(
       <ChromeAuthContext.Provider value={a}>
-        <CreatorHubChrome active="home" />
+        <CreatorHubChrome active="collections" />
       </ChromeAuthContext.Provider>,
     );
     await userEvent.click(screen.getAllByRole("button", { name: "Sign in" })[0]!);
@@ -103,16 +89,14 @@ test("one mobile toggle opens both global and Creator Hub links and closes after
     panel.style.display = "block";
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
     expect(container.querySelector(".ch__brand img")).toBeNull();
-    expect(container.querySelector('a[href="/create/activity"]')).toBeNull();
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const menu = document.getElementById(toggle.getAttribute("aria-controls")!)!;
     const creatorNav = within(menu).getByRole("navigation", { name: "Creator Hub sections" });
-    expect(within(creatorNav).queryByRole("link", { name: /^Activity/ })).toBeNull();
     const collections = within(creatorNav).getByRole("link", { name: "Collections" });
     expect(collections).toHaveAttribute("aria-current", "page");
     await userEvent.click(collections);
-    expect(navigate).toHaveBeenCalledWith("/create/wearables");
+    expect(navigate).toHaveBeenCalledWith("/create/collections");
     expect(onTab).not.toHaveBeenCalled();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);

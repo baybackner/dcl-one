@@ -20,26 +20,9 @@ const HEADLESS_NO_GPU = [
 
 export const ROUTES: Route[] = [
   { path: "/create", auth: "both" },
-  { path: "/create/home", auth: "both" },
-  { path: "/create/scenes", auth: "both" },
-  { path: "/create/wearables", auth: "out", allowConsole: [AUTH_PROBE] },
-  { path: "/create/curate", auth: "out", allowConsole: [AUTH_PROBE] },
-  { path: "/create/learn", auth: "out" },
-
-  { path: "/creator-hub/my-scenes", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/manage", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/world-settings", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/world-permissions", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/worlds-storage", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/metrics", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/settings", auth: "both" },
-  { path: "/creator-hub/map", auth: "out", allowConsole: [AUTH_PROBE] },
+  { path: "/create/collections", auth: "out", allowConsole: [AUTH_PROBE] },
+  { path: "/create/curation", auth: "out", allowConsole: [AUTH_PROBE] },
   { path: "/creator-hub/claim-name", auth: "both", allowConsole: [AUTH_PROBE] },
-  // Activity must render clean signed-out too: it is a scoping surface, not a
-  // gate, and signed-out is the no-address state rather than a wall.
-  { path: "/creator-hub/activity", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/activity/palkia.dcl.eth", auth: "both", allowConsole: [AUTH_PROBE] },
-  { path: "/creator-hub/data-sources", auth: "both", allowConsole: [AUTH_PROBE] },
 
   // The Shop (ui3/src/shop); every old /marketplace page redirects to one of these.
   { path: "/shop/overview", auth: "both", allowConsole: [AUTH_PROBE] },

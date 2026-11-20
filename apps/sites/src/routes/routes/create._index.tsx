@@ -1,40 +1,65 @@
-import { useEffect } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { redirect } from "react-router";
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
 
 import SitesChrome from "@ui/web/frames/SitesChrome";
 
-import { creatorHubHost } from "@ui/creatorhub/explorer-host";
-
-import { isDesktopShell } from "@/data/lib/auth/native-shell";
 import { latestPostsQuery } from "@/data/lib/create-landing/blog-posts";
 import { latestPosts } from "@/data/lib/create-landing/blog-posts.server";
 import { liveScenesQuery } from "@/data/lib/create-landing/live-scenes";
+import { heroDownloads, loadLatestRelease } from "@/data/lib/download/creator-hub.server";
 import { sidLoader } from "@/core/lib/telemetry/page-loader";
 import CreateLanding from "@/features/create-landing/CreateLanding";
+import { CREATOR_HUB_DOWNLOAD } from "@/features/create-landing/HeroDownload";
+import { SubNav } from "@/features/creators/components/SubNav";
 
+import { canonicalLink } from "../lib/canonical";
 import type { Route } from "./+types/create._index";
 
-export const meta = () => [
-  { title: "Create in Decentraland | Decentraland" },
-  {
-    name: "description",
-    content: "Download the Creator Hub to start building immersive scenes and interactive experiences in Decentraland.",
-  },
-];
+export function meta({ matches }: Route.MetaArgs) {
+  return [
+    { title: "Create in Decentraland | Wearables, Emotes, Scenes & Worlds" },
+    {
+      name: "description",
+      content:
+        "Everything you need to create in Decentraland: build Wearables, Emotes, Scenes and Worlds, manage your collections and join the creator community.",
+    },
+    ...canonicalLink(matches[0]?.loaderData?.publicPageBase, "/create"),
+  ];
+}
 
-/** `/create` is the Creator Hub's marketing landing on the web; the desktop shell and the Explorer's
-    framed hub start at the hub home. */
+// The landing never waits long for the release: without it the hero links to the download page, which does.
+const RELEASE_WAIT_MS = 300;
+
+async function latestReleaseInTime() {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      loadLatestRelease().catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), RELEASE_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
-  const { wrap } = sidLoader(request, context);
+  // `dcl-scene-cli start` still links here with `?projectUrl=`; scenes are edited in the desktop app.
+  if (new URL(request.url).searchParams.has("projectUrl")) {
+    throw redirect(CREATOR_HUB_DOWNLOAD, { headers: { "Cache-Control": "private, no-store" } });
+  }
+  const { sid, wrap } = sidLoader(request, context);
   const queryClient = new QueryClient();
-  await Promise.all([
+  const [release] = await Promise.all([
+    latestReleaseInTime(),
     queryClient.prefetchQuery(liveScenesQuery()),
     queryClient.prefetchQuery({ ...latestPostsQuery(), queryFn: () => latestPosts() }),
   ]);
   const dehydratedState = dehydrate(queryClient);
   queryClient.clear();
-  return wrap({ dehydratedState });
+  const downloads = release ? heroDownloads(release, request.headers.get("user-agent")) : null;
+  return wrap({ dehydratedState, downloads, sid });
 }
 
 export async function clientLoader(): Promise<null> {
@@ -42,17 +67,11 @@ export async function clientLoader(): Promise<null> {
 }
 
 export default function CreateRoute({ loaderData }: Route.ComponentProps) {
-  const navigate = useNavigate();
-  const { search, hash } = useLocation();
-
-  useEffect(() => {
-    if (isDesktopShell() || creatorHubHost(window)) navigate(`/create/home${search}${hash}`, { replace: true });
-  }, [navigate, search, hash]);
-
   return (
     <HydrationBoundary state={loaderData?.dehydratedState}>
       <SitesChrome active="create" overlayNav>
-        <CreateLanding />
+        <SubNav landing />
+        <CreateLanding downloads={loaderData?.downloads} sid={loaderData?.sid} />
       </SitesChrome>
     </HydrationBoundary>
   );

@@ -172,8 +172,10 @@ contract answers). The capture serves `chain` from its fake subgraph and its
 fake Polygon JSON-RPC to upstream; the replay writes the same collections and
 items into the node's copy of that subgraph (`shop.collections` and
 `shop.items`), records a fresh complete pass of both mirrors in
-`shop.mirror_state`, and serves the committee and the rarities to the node's
-readers from a loopback fake subgraph and the oracle prices, Polygon's chain id, code at each `chain`
+`shop.mirror_state`, writes the committee into the node's committee index
+(`shop.committee_event` with a freshly published `shop.chain_cursor`), and
+serves the rarities to the node's reader from a loopback fake subgraph and
+the oracle prices, Polygon's chain id, code at each `chain`
 collection's contract and that contract's item count from a loopback fake
 JSON-RPC, so a collection is published, a wallet is on the committee and a
 rarity has its prices on both sides exactly when `chain` says so. The node's

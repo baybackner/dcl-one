@@ -248,6 +248,10 @@
           "kind": "regular"
         },
         {
+          "name": "guestWalletParam.ts",
+          "kind": "regular"
+        },
+        {
           "name": "sso.ts",
           "kind": "regular"
         },
@@ -485,6 +489,10 @@
           "kind": "regular"
         },
         {
+          "name": "mapLayerData.ts",
+          "kind": "regular"
+        },
+        {
           "name": "mapLayersStore.ts",
           "kind": "regular"
         },
@@ -494,6 +502,10 @@
         },
         {
           "name": "mapPeople.ts",
+          "kind": "regular"
+        },
+        {
+          "name": "mapPins.ts",
           "kind": "regular"
         },
         {
@@ -513,6 +525,10 @@
           "kind": "regular"
         },
         {
+          "name": "satelliteTiles.ts",
+          "kind": "regular"
+        },
+        {
           "name": "shareLinks.ts",
           "kind": "regular"
         }
@@ -526,7 +542,7 @@
           "kind": "regular"
         },
         {
-          "name": "minimapPlaces.ts",
+          "name": "minimapLayers.ts",
           "kind": "regular"
         },
         {
@@ -635,6 +651,10 @@
         },
         {
           "name": "color.ts",
+          "kind": "regular"
+        },
+        {
+          "name": "debugPanelLauncher.ts",
           "kind": "regular"
         },
         {
@@ -832,6 +852,10 @@
           "kind": "regular"
         },
         {
+          "name": "holeClip.test.ts",
+          "kind": "regular"
+        },
+        {
           "name": "hudAutomation.test.ts",
           "kind": "regular"
         },
@@ -860,6 +884,10 @@
           "kind": "regular"
         },
         {
+          "name": "mapLayerData.test.ts",
+          "kind": "regular"
+        },
+        {
           "name": "minimap.test.ts",
           "kind": "regular"
         },
@@ -881,6 +909,10 @@
         },
         {
           "name": "pointerKeys.test.ts",
+          "kind": "regular"
+        },
+        {
+          "name": "satelliteTiles.test.ts",
           "kind": "regular"
         },
         {
@@ -1007,6 +1039,10 @@
       "entries": [
         {
           "name": "hud",
+          "kind": "directory"
+        },
+        {
+          "name": "shop",
           "kind": "directory"
         },
         {
@@ -1987,6 +2023,10 @@
           "kind": "directory"
         },
         {
+          "name": "quest",
+          "kind": "directory"
+        },
+        {
           "name": "sea.webp",
           "kind": "regular"
         }
@@ -2289,6 +2329,23 @@
         },
         {
           "name": "sports.png",
+          "kind": "regular"
+        }
+      ]
+    },
+    {
+      "path": "library/ui/apps/hud/assets/map/quest",
+      "entries": [
+        {
+          "name": "LICENSE",
+          "kind": "regular"
+        },
+        {
+          "name": "NOTICE.md",
+          "kind": "regular"
+        },
+        {
+          "name": "quest-pin.png",
           "kind": "regular"
         }
       ]
@@ -2960,6 +3017,10 @@
           "kind": "regular"
         },
         {
+          "name": "ArmedButton.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "Avatar.module.css",
           "kind": "regular"
         },
@@ -3433,6 +3494,10 @@
           "kind": "directory"
         },
         {
+          "name": "itemPurchase",
+          "kind": "directory"
+        },
+        {
           "name": "lobby",
           "kind": "directory"
         },
@@ -3616,6 +3681,14 @@
         },
         {
           "name": "ProfileCardPresentation.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "buttonSounds.test.ts",
+          "kind": "regular"
+        },
+        {
+          "name": "buttonSounds.ts",
           "kind": "regular"
         },
         {
@@ -4125,6 +4198,15 @@
       ]
     },
     {
+      "path": "library/ui/apps/hud/features/itemPurchase",
+      "entries": [
+        {
+          "name": "answer.ts",
+          "kind": "regular"
+        }
+      ]
+    },
+    {
       "path": "library/ui/apps/hud/features/lobby",
       "entries": [
         {
@@ -4254,7 +4336,19 @@
           "kind": "regular"
         },
         {
+          "name": "QuestPinIcon.module.css",
+          "kind": "regular"
+        },
+        {
+          "name": "QuestPinIcon.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "RouteLayer.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "SatelliteDetailLayer.tsx",
           "kind": "regular"
         },
         {
@@ -4604,6 +4698,10 @@
       "path": "library/ui/apps/hud/features/session",
       "entries": [
         {
+          "name": "PlatformBanDialog.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "SceneLoadingOverlay.module.css",
           "kind": "regular"
         },
@@ -4662,6 +4760,10 @@
         },
         {
           "name": "SettingsPanel.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "askBeforeLeaving.ts",
           "kind": "regular"
         }
       ]
@@ -4968,6 +5070,10 @@
       "path": "library/ui/apps/hud/test",
       "entries": [
         {
+          "name": "armedButton.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "arrowKeys.test.ts",
           "kind": "regular"
         },
@@ -5005,6 +5111,10 @@
         },
         {
           "name": "donatePanel.test.ts",
+          "kind": "regular"
+        },
+        {
+          "name": "engineViewport.test.tsx",
           "kind": "regular"
         },
         {
@@ -5057,6 +5167,10 @@
         },
         {
           "name": "mapEventInfo.test.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "mapPins.test.tsx",
           "kind": "regular"
         },
         {
@@ -5189,7 +5303,15 @@
           "kind": "regular"
         },
         {
+          "name": "backpackOutfitErrors.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "backpackOutfitPicture.test.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "backpackOutfitSlots.test.tsx",
           "kind": "regular"
         },
         {
@@ -5285,6 +5407,10 @@
           "kind": "regular"
         },
         {
+          "name": "donateSend.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "editorHostFeatures.test.tsx",
           "kind": "regular"
         },
@@ -5337,6 +5463,10 @@
           "kind": "regular"
         },
         {
+          "name": "giftGuestRecipient.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "giftPicker.test.tsx",
           "kind": "regular"
         },
@@ -5358,6 +5488,10 @@
         },
         {
           "name": "inWorldConversion.test.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "itemPurchase.test.tsx",
           "kind": "regular"
         },
         {
@@ -5478,6 +5612,10 @@
         },
         {
           "name": "placesDiscovery.test.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "platformBan.test.tsx",
           "kind": "regular"
         },
         {
@@ -5772,7 +5910,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/engine.js",
-      "sha256": "644cba943c8a2d70ab17ac525a8455de286398aecd3e117bf976c2ed5b46e7e9"
+      "sha256": "6bacb239b7e9837420c5c92ef8fb37bfee57e5e4e46b1de1c816089a49b7d54e"
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/perf_stream.js",
@@ -5804,7 +5942,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bevy-api.ts",
-      "sha256": "31fc24d9dadebae432a8e1a87d9e519d4002602933d943a3c9ba62f693748a5b"
+      "sha256": "e47a4ccc61da3109524bf3d94f4e83d24b927ccbba78d14c4c1ad862620e55af"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bridge.ts",
+      "sha256": "e4096974a2b2aed1bc2587d866cd451ab0cb7e9aca5a7c8564d7f6a9035422c7"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/destinations.ts",
@@ -5813,6 +5955,10 @@
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarDraft.ts",
       "sha256": "f7bd876f153075954844844d8ba045510c9d77179928430847a6e772a6425ac3"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarPreview.tsx",
+      "sha256": "1aef19308938648fc2a1482e3962b560a9d719c02d0f661fdb04e334e8297af8"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/chat.ts",
@@ -5859,6 +6005,14 @@
       "sha256": "49f3bbf60f79a4233d5df7260c26ad05c1d61ce32d330d3db17bab8eeadd2d5b"
     },
     {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/graphicsPresets.ts",
+      "sha256": "59eb638dafeb0f711b8b5f63ce825e8dbee332f12650849b3af9fe0d73f53e2e"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/itemPurchase.ts",
+      "sha256": "81b0e053bb81d115c1740cdde7ea8e6b93b18ae5e47f4b3abf05674c77cc74b2"
+    },
+    {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/marketplace.ts",
       "sha256": "0f03d1ecb090d06c1c0a1bb5d7939677d22aa9e0f1d4be67ffccbf81818b8807"
     },
@@ -5868,15 +6022,19 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/notifications.ts",
-      "sha256": "2c2d94fc3d80405bc59d582d127325d47dfdb43c9939d558c8794dc3910e8d19"
+      "sha256": "b1046f7d7a2fd9ca7cecd6c7e28b500f2bd0c7fdfc06302d97273c7b616fffac"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/outfits.ts",
+      "sha256": "4940b5f381241e8a35be703bbba78d802623ddda3f2ca74391f508d20fd4095c"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/places.ts",
-      "sha256": "71b0eeaa152a83c36b392bcd527cd3dc73123b174e9d08d3ef2b1616f50e3c48"
+      "sha256": "74d17cd39674e65fa7e3a98708738f3cfd40f8c77a8424ba0eaa145bea182007"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/profile.ts",
-      "sha256": "f78110656ff507376f8b92ee4df20660fcbdc50813dd961fa0327a80f40714e1"
+      "sha256": "638e9603462e60efc67992c8e135c04384e38d24907c10041c3b87d3c3dfb07d"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/randomizer.ts",
@@ -5908,7 +6066,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/http.ts",
-      "sha256": "9da7e47c8d9badfc0015e755c3b45cafb765dbeee95249a97b0a8b119cfd8d88"
+      "sha256": "9b2aeda3925c6839fff753d7983214626d42533f65fd5628e439a44d81a7da2c"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/identity.ts",
@@ -5964,7 +6122,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/host.ts",
-      "sha256": "5a819859a98146654c1caacfaca2ff6bcb06f03c0678f29ccfe5eec0d5a0e51d"
+      "sha256": "7f76388bed735791a78c1ea3bc9a68a075a87bfc4a8b1fda167b14491a696620"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/lib/baseDomain.ts",
@@ -5980,7 +6138,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
-      "sha256": "7791923ac47aae937b11fe83f7c102ac72fd5fff189a9ad6adef0f5b13ff7f9c"
+      "sha256": "4e61c6e08d78b26defbaeba27701b1e5ffe70968a3f0223cac6d717a6bcff3fb"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/lib/hudMainThreadCost.ts",
@@ -6016,7 +6174,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/shell/login.ts",
-      "sha256": "4a2edd10afddab325089c4563026f8e96ed1356acb1cd49848df850f19e3bd43"
+      "sha256": "c581dbac6e181122d47bcbc6e40b0cdf6614311ae74e6d759df367231a728e97"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/shell/main.ts",
@@ -6091,16 +6249,28 @@
       "sha256": "998ff96bef58169bb48e7ac9e6fbbff742a428c2d864488565b66d965696be84"
     },
     {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeItemPurchase.test.ts",
+      "sha256": "3b9c665ddb1f9a2920b2a3ebd0a367af94b98147b18562aa2088ed85e167bdf8"
+    },
+    {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeNearbyMutes.test.ts",
       "sha256": "a9ed65f189907d37250eb611c61332c8b3cdd92fcf452d9889a9862ffb8a88c4"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeNotifications.test.ts",
-      "sha256": "30326d780c236079477b53f50e6f09f33a3c7e8d1f206bdd52ad03847b217cc9"
+      "sha256": "67c35f2ec7a063c94cee44874a49df0288f1f5322d314742e68c85b9437d70f8"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeOutfits.test.ts",
+      "sha256": "b0648f5f93f52685a6d9cc61630644c70850cb5e52ad532fb0cf80d59748f48b"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePlaces.test.ts",
       "sha256": "6445a90de94e25b7801cfabf86bce94022ae27551f7d99b09f80d255b1827040"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeProfileReads.test.ts",
+      "sha256": "870ec86f470b8f0bb9bfd848b24991fd37944438c99b93114f1a85b20c9a0ec9"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",
@@ -6121,6 +6291,10 @@
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeSession.test.ts",
       "sha256": "809082502001ff082e036dea2e02552fceaff138811d99ac8c93ec56f8a0e92e"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeSettings.test.ts",
+      "sha256": "27b3090e53557703543d02cd147a6c9c90ea029ccb699f833193acacc17e9ca8"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeTextureOptimization.test.ts",
@@ -6160,7 +6334,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/entryParams.test.ts",
-      "sha256": "dd6509f375c6d660b6167a250d39e0fb7407986b4a7f2034937ad42ef957a87e"
+      "sha256": "1394235b1267847a7502c7dc940e089152912ce3095797e83c8faa81d430bf64"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/entryUrl.ts",
@@ -6208,7 +6382,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/session.test.tsx",
-      "sha256": "92469cc14300dee9fbfd25156636ab41ac678488737c086e94122cd70956384b"
+      "sha256": "1689b8cb6e2b4a8e9139a6ddd5978813ab1518c9122184cab937f16c5b6e33e4"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/setup.ts",
@@ -6252,7 +6426,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/tsconfig.json",
-      "sha256": "3033c3e09124951dc88427c6bc37ec814845940de43426ba63c05c93d7a05cf8"
+      "sha256": "3bf754deaff86ccc895d025f3b9579d399c09e8243749cb1e7921763b6bcee87"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/vite.config.ts",
@@ -6305,14 +6479,18 @@
     "rendering/bevy-explorer/source/react-web/src/test/bridgeGifting.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeHashing.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeIdentity.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgeItemPurchase.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeNearbyMutes.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeNotifications.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgeOutfits.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgePlaces.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgeProfileReads.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizer.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRandomizerTokens.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeRelay.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeSceneLookup.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeSession.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgeSettings.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeTextureOptimization.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeVoice.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeVoiceChat.test.ts",
@@ -6397,7 +6575,7 @@
     },
     {
       "path": "library/explorer-core/engine/mockBridge.ts",
-      "sha256": "6526a6bec4aa392ccda6c2e20a38dfe02f4dc1db7f57041a1d126b810cafce52"
+      "sha256": "c7de95ab0f1e688ee646a449ba3f27f98e397b07b17611293be447d4065bd812"
     },
     {
       "path": "library/explorer-core/engine/mockEvents.ts",
@@ -6405,7 +6583,7 @@
     },
     {
       "path": "library/explorer-core/engine/mockMap.ts",
-      "sha256": "a3f38f1044e58f526ddca4014e0eb97c466f73d5bfcebb3132040f80d1eb4f80"
+      "sha256": "cd1df709918b5b250275168845cbc86ea45254109f33c239d48ac0ba659eb2a1"
     },
     {
       "path": "library/explorer-core/engine/mockSwitches.ts",
@@ -6437,7 +6615,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "8fdc85baa0eea21ba4e65a30083d36e2d3d0508c401193d3af0faaa35e8f2a86"
+      "sha256": "836f3c7bbbc1af07c531f551f650fc3eb5963292e06f17e8c986c4bd98b2b570"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -6453,15 +6631,19 @@
     },
     {
       "path": "library/explorer-core/features/auth/guest.ts",
-      "sha256": "a765a52604f2036dad0ad92ef6a0684c05de257093f74b3da8e168c1621db096"
+      "sha256": "ad7ec55df2bd39f689f4cdd62f570bf0dc7f0ac930774ccedf2a15e10c9e4776"
     },
     {
       "path": "library/explorer-core/features/auth/guestWalletEvent.ts",
       "sha256": "d721c5beb8889e8979eba32eaae06210d9e10e550970da473c0ff700e57c42af"
     },
     {
+      "path": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "sha256": "02dd9b5314845a375f1cde075a66ff847a4ab6e6c13dd76bf53e4b913be9795c"
+    },
+    {
       "path": "library/explorer-core/features/auth/sso.ts",
-      "sha256": "7edc0bed269a2066d06e37a61b2c7280bcb3814f508d0b207297c3b4849b94ff"
+      "sha256": "33e2085e7fc3a56eff1b5f6650319ce06dc803054ba38c582fa5e4dbcae9e60e"
     },
     {
       "path": "library/explorer-core/features/auth/thirdweb.ts",
@@ -6605,7 +6787,7 @@
     },
     {
       "path": "library/explorer-core/features/map/atlas.ts",
-      "sha256": "6f172107dd598a145dd0d5c1d8a7a0c9c5be3885e4e98ae590f8474d7a9e91ab"
+      "sha256": "a98d9181e4cd7bb217bb5456a806d1189d4be711b1a0c48a78948d72afd2b8fc"
     },
     {
       "path": "library/explorer-core/features/map/cityParcels.ts",
@@ -6617,19 +6799,23 @@
     },
     {
       "path": "library/explorer-core/features/map/home.ts",
-      "sha256": "d670b1117e1bf56139c854bb00509f403a91c22661be783ba714667a57a50932"
+      "sha256": "323550de0c24a4cfa82b6dc586a2b95d8ab6597fd3abcd3276832e3dbb482cea"
     },
     {
       "path": "library/explorer-core/features/map/mapApi.ts",
-      "sha256": "fb855a6872db572d1d45bab9f51e1eb905e165ad17ed798775815bb179864d9d"
+      "sha256": "ba429af5dec910d65365c6db6454be6f5d157231c44a5680c9cae741a85f90ff"
     },
     {
       "path": "library/explorer-core/features/map/mapCoords.ts",
       "sha256": "cabea6f52075d8e1be23d500f35a8a88ea2a831701c23c29fcaec454f6d3022c"
     },
     {
+      "path": "library/explorer-core/features/map/mapLayerData.ts",
+      "sha256": "dec426f6e53b5e88e0675204852fdaf9bbb5e4bc912f31215995a068be8c2a5f"
+    },
+    {
       "path": "library/explorer-core/features/map/mapLayersStore.ts",
-      "sha256": "dc1d201e36a8a966f8fb77a23b2b1e55ed29508bb7d84bd861afcb1bf0cad6d4"
+      "sha256": "0a03fd50bbf67056c3f938aa487d528332510eeff5be3e98f5d185c39b84c7d7"
     },
     {
       "path": "library/explorer-core/features/map/mapMarkers.ts",
@@ -6637,7 +6823,11 @@
     },
     {
       "path": "library/explorer-core/features/map/mapPeople.ts",
-      "sha256": "c108a3fdcfa1632a79391c9c66b8d740d11a67068ad320edf3730ab0831a4a81"
+      "sha256": "3c01e4922142605aead8a0e42a1e68c95898ef0a6a58d3f20b804590343bc9a1"
+    },
+    {
+      "path": "library/explorer-core/features/map/mapPins.ts",
+      "sha256": "9509bafed11fe5b15c348f67933642875dc46c97b3c2229968fa9ab2196cf538"
     },
     {
       "path": "library/explorer-core/features/map/mapZoom.ts",
@@ -6645,7 +6835,7 @@
     },
     {
       "path": "library/explorer-core/features/map/navigation.ts",
-      "sha256": "7d93723ccc10709a251d6411d072dcaa88d72b763673db25f8a9fd0246fbcb21"
+      "sha256": "3378c568107670d9e01cd86c551cdaa2acc576fbca1464328993e784978d591e"
     },
     {
       "path": "library/explorer-core/features/map/navmap.ts",
@@ -6656,6 +6846,10 @@
       "sha256": "63a071cf77f4f124c423c12d31a4dce4580c7bb09a44822c0ed467a6e880850f"
     },
     {
+      "path": "library/explorer-core/features/map/satelliteTiles.ts",
+      "sha256": "89db23c68b7c9c5e1f0995da9dc8c311cda29b5cff0c0157c68cfc9b9eba5a1a"
+    },
+    {
       "path": "library/explorer-core/features/map/shareLinks.ts",
       "sha256": "0d2bf68165e3b346fe2c854b196f697ae163febf8ad3ff5615e4f6ef2dd1c6c4"
     },
@@ -6664,12 +6858,12 @@
       "sha256": "bcc0dff9298b1740491c7d08d2aeba5cece9c399307cb438a8e4e4fb71620936"
     },
     {
-      "path": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "sha256": "557eb8b11800edecf0137b152401b1d1b729cc9e8fcea3a6143a7ce457966887"
+      "path": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "sha256": "2a82f87bb559e0802e433abb0ae11b890ae2c160fb840dec711816186d95d015"
     },
     {
       "path": "library/explorer-core/features/minimap/minimapPrefs.ts",
-      "sha256": "8bfbeb0050082c322fdfaf2e832417654a9739b62d36be0b6c884e37cad26115"
+      "sha256": "99178cdfde1a99fbc1d5ce14212bb7afec652f6a707d0d8d46f46ea255a7053f"
     },
     {
       "path": "library/explorer-core/features/photoMode/frame.ts",
@@ -6709,7 +6903,7 @@
     },
     {
       "path": "library/explorer-core/hostContract.ts",
-      "sha256": "1a66439cb1948b21c27a5678127c042f9d782ad5955d9badb4e5a78fb319e5ec"
+      "sha256": "1e1de5e14478ec202146a2befbee0be4b0497407ea0d49c7ff22f7272f66fc18"
     },
     {
       "path": "library/explorer-core/lib/analytics.ts",
@@ -6740,6 +6934,10 @@
       "sha256": "2d6fdf87314ce3c3bedbdb79d1c659c14f554fb9bfbdd3118dc3ef93be34bdf0"
     },
     {
+      "path": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "sha256": "ee0e0a9c62e867993505d3390bc49b1fdaf4a03bdb2c7942036ba89dfaf37f95"
+    },
+    {
       "path": "library/explorer-core/lib/gpu.test.ts",
       "sha256": "74bd1e89d9adbb69d3161431f008f927aaede96034ecf1935ba0d13f9e22437c"
     },
@@ -6749,11 +6947,11 @@
     },
     {
       "path": "library/explorer-core/lib/holeClip.ts",
-      "sha256": "fef63354a1ea28d390fcc14cf53fad51636122a3753a463fb0de313b87bef94e"
+      "sha256": "e5dba57481aba6e416b819da0b1b0a1f25405d47fcf2bc9952c21f7441e891f3"
     },
     {
       "path": "library/explorer-core/lib/hudAutomation.ts",
-      "sha256": "e8b933805487a1e9b7591d98dcfcc97d0b0570a2e756d4331c4459e22818bd8e"
+      "sha256": "640bc14f946e7eaa02be8ec6fb0eccad8e1e92ec1e4bfd025b4990d5e4319e85"
     },
     {
       "path": "library/explorer-core/lib/hudScale.ts",
@@ -6797,7 +6995,7 @@
     },
     {
       "path": "library/explorer-core/lib/prefs.ts",
-      "sha256": "f9e098fe11a439305fe38b089ef2d2d46d4abe6dff4ee0bacc1f7153c808f969"
+      "sha256": "99a0d74d5f633124edbb7aa5a939fdbcd5cca20ac94430e941653d0979c6cbc6"
     },
     {
       "path": "library/explorer-core/lib/realmCheck.ts",
@@ -6861,7 +7059,7 @@
     },
     {
       "path": "library/explorer-core/test/atlas.test.ts",
-      "sha256": "8b0ad33b14d8288d9e6c1bb30d2bce3aedb7971ba007765825e1ab08acdc8390"
+      "sha256": "1178156b37965075aac9e572df61555214b4fae6e6bc9d11eb1e3a7a5ed43dab"
     },
     {
       "path": "library/explorer-core/test/avatarEquip.test.ts",
@@ -6917,15 +7115,19 @@
     },
     {
       "path": "library/explorer-core/test/guestIdentity.test.ts",
-      "sha256": "00c4c10909337439c1530fe6de9e3af57e7be36dcc0cde5920e6aa4d731b30d8"
+      "sha256": "71df9737628f96ded881dfbafb3e5f676ba2ff3f0bbe9c3e0c1eae1332e28401"
     },
     {
       "path": "library/explorer-core/test/guestWalletEvent.test.ts",
       "sha256": "a2ceb8a45dde0094e91d218dbd03187739c988bdccbcc2d3493ecf97e832bd03"
     },
     {
+      "path": "library/explorer-core/test/holeClip.test.ts",
+      "sha256": "3dbe6a22ec977e35b1b61fbc03736b1b6d7ea6a4f5d69e79911a965f52e790ca"
+    },
+    {
       "path": "library/explorer-core/test/hudAutomation.test.ts",
-      "sha256": "b93bbc6f16817f308e3f5430c62c1fc9ad1cac5e2a43bb20a9bf6dbbc0843770"
+      "sha256": "81e90466c917da2efa66b641786bba4ab66e16896140767fe4d80a85a0f4c43d"
     },
     {
       "path": "library/explorer-core/test/hudScale.test.ts",
@@ -6945,19 +7147,23 @@
     },
     {
       "path": "library/explorer-core/test/mapCore.test.ts",
-      "sha256": "ffad22add6984d50799c5767bef3e8d6c6c3d0fa689948eb4f10617a264b7054"
+      "sha256": "604b9a2bb05df7d5753dd2a433ba5700419c3fd7579de4d6cdb51a7c94d69e40"
     },
     {
       "path": "library/explorer-core/test/mapFixtures.ts",
       "sha256": "226e8547dbc585cb42ed20af48fc9937753ccaf2ab0915c3bccf34ae3dc7ecbf"
     },
     {
+      "path": "library/explorer-core/test/mapLayerData.test.ts",
+      "sha256": "af42996328cc59b527c546edd90f255a52d83811331bd5ef6cb61c2f0c2416b7"
+    },
+    {
       "path": "library/explorer-core/test/minimap.test.ts",
-      "sha256": "1e9081938c5c50cba3729628917d76082ba4a7e4451498a69cd3fc56b73cf74d"
+      "sha256": "d895a0e3138fce1ea568b6a1ff028536dc7771d20a4c1a1a553bccd45ca7a100"
     },
     {
       "path": "library/explorer-core/test/navmap.test.ts",
-      "sha256": "364f3c8e31841856264dd3c6461932d94c0695672d6987323bbac479878811c9"
+      "sha256": "8acfddb3c427f039d4dfdadddd8eff3be6ac0102acd567132ecf8fd91ac6260e"
     },
     {
       "path": "library/explorer-core/test/outfitRandomizer.test.ts",
@@ -6974,6 +7180,10 @@
     {
       "path": "library/explorer-core/test/pointerKeys.test.ts",
       "sha256": "89e9e9a003e5e05216a8b59d21756e4715a460d57765cfdef0914eb41339b2b8"
+    },
+    {
+      "path": "library/explorer-core/test/satelliteTiles.test.ts",
+      "sha256": "70e950795a06bdebd208daf570a581d8ca57386724f0148251b19d6299916a04"
     },
     {
       "path": "library/explorer-core/test/serverReadErrors.test.ts",
@@ -6993,7 +7203,7 @@
     },
     {
       "path": "library/ui/apps/hud/App.tsx",
-      "sha256": "f2004d3fd9cc54f8d9b41a9829dcb3a2df6330eee5c790786c06df3c53643596"
+      "sha256": "7895517f09780dbdd1694d3ba271d91fb2092daa06e4be4abe42a600df0c716c"
     },
     {
       "path": "library/ui/apps/hud/assets/backpack/add-gradient.webp",
@@ -7984,6 +8194,10 @@
       "sha256": "5e319e10d15b3c1ccb57fa0db34ac26fbf283d2fb61740eff4dc286798799e4b"
     },
     {
+      "path": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "sha256": "02b5b2e3e59f73c392bc696527453c20fda62ce069c5d760a21a89a822bbc634"
+    },
+    {
       "path": "library/ui/apps/hud/assets/map/sea.webp",
       "sha256": "d2a732d4e2c3113b1fb32d79e304355b0bf9d76ec0e06d62a9eb49ccaab2089c"
     },
@@ -8576,6 +8790,10 @@
       "sha256": "da01319614a9284cb5abb9a8e7e75074379e46ef3bb1a4cc68eb72971277fb66"
     },
     {
+      "path": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "sha256": "7aeca9a261720e390a7da96dcc5518c444322447eebb7d48a0095cea35b199da"
+    },
+    {
       "path": "library/ui/apps/hud/design/Avatar.module.css",
       "sha256": "3087982b5d172f10fc366f47336964de0e07b6617130abe17281d81cf5426920"
     },
@@ -8593,11 +8811,11 @@
     },
     {
       "path": "library/ui/apps/hud/design/Button.module.css",
-      "sha256": "7ba9f72c7b4e2f32f9f5f115057ee4bef28be65e4c4ae83fac2c11e32982f2f0"
+      "sha256": "eb45c86cd3fe22ad59058c314ff8920aaaa9addc48abb72de9c5f0ed7f43688d"
     },
     {
       "path": "library/ui/apps/hud/design/Button.tsx",
-      "sha256": "1d3fa7f377c016bf6cb04bb3cffca8098c436771214c933a5e68775b61e1ba31"
+      "sha256": "7b9474b5854b9c2f6951b81a7691e45ba12834b6963348fbe1bae36cd7a3432b"
     },
     {
       "path": "library/ui/apps/hud/design/CharCounter.module.css",
@@ -8745,7 +8963,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/IconButton.tsx",
-      "sha256": "464269af19152cccbf6f9e008893688ab971ab83dbbdf6853ae5ef8c190e082a"
+      "sha256": "1513629c4855e0b16bda4e3bdf1146ee8d6329c2c40bfb8758e4a7da9c09bfb2"
     },
     {
       "path": "library/ui/apps/hud/design/KebabMenu.module.css",
@@ -8853,7 +9071,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Showcase.tsx",
-      "sha256": "a0ac3bf7b995b6ba895c642bcfd02ef3599f87ab05fc8519d29bd4975a346b9d"
+      "sha256": "9ddc6f3ff0bf293267e910d4d185a1459f9299465be5f613d14be92c8da275b0"
     },
     {
       "path": "library/ui/apps/hud/design/Skeleton.module.css",
@@ -8945,11 +9163,11 @@
     },
     {
       "path": "library/ui/apps/hud/design/Tooltip.module.css",
-      "sha256": "f5ffc1d7f9e641a1c5b762a39740f23cba58c45b82686f5b6abc853a2a95e255"
+      "sha256": "cfde7a0f39330c7c7862e2597ced5b70e2a3a89058607a1cf36d01f7dcf34533"
     },
     {
       "path": "library/ui/apps/hud/design/Tooltip.tsx",
-      "sha256": "a3ea119426e53b01d0425669a75aef7abd21a6d1372c0ba635d5310abaa660a0"
+      "sha256": "b39585c2844a1dcf4c7f7765bb08724a86a6092faaf63f5e4e4f1eb1cfa434ca"
     },
     {
       "path": "library/ui/apps/hud/design/VoiceBars.module.css",
@@ -8973,7 +9191,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/index.ts",
-      "sha256": "4ca15dfc818d8a47a6c14710b515ae4909a2e2e6027dd0765b2ab6436e19f74f"
+      "sha256": "7c9aff6eb72a781a96975838ff03aa6a978eecb6f2ce9cf057503a2f112b7cd1"
     },
     {
       "path": "library/ui/apps/hud/design/popups.module.css",
@@ -8989,19 +9207,19 @@
     },
     {
       "path": "library/ui/apps/hud/features/backpack/BackpackModal.module.css",
-      "sha256": "f9f8984515ecf86940e90a0c194e7ad8c93d8b438a34fd84df6bc6d85d593b2d"
+      "sha256": "19bff884e4254b99fa2bef23a4aa92de1a25f3fb8be178452b525ea5f87d9c03"
     },
     {
       "path": "library/ui/apps/hud/features/backpack/BackpackModal.tsx",
-      "sha256": "0f6b87a9d9b7b40378ad03a60807cd39db7d849c50d528e99868b21691d829b1"
+      "sha256": "8ddbf27111539d6509386517667423d79be61e8537c028311c19bbd1dff62670"
     },
     {
       "path": "library/ui/apps/hud/features/backpack/BackpackPage.module.css",
-      "sha256": "b83418834ee5e0696d9c77063c8579f87826953595282d5cde0aeb12f868a9b7"
+      "sha256": "4f07411301223b9f7b4ec9d121f84ec524f851c4547074762f2827d54b4ac23d"
     },
     {
       "path": "library/ui/apps/hud/features/backpack/BackpackPage.tsx",
-      "sha256": "f915167e61af4714f3cbbd4ac5f02e76d71b6fc1d02574569408ad526c3da354"
+      "sha256": "d9123c6fcfccdb6bd793681d23d4d12ae15a9408f102e35e00fea9a9f28f78b6"
     },
     {
       "path": "library/ui/apps/hud/features/backpack/categoryIcons.tsx",
@@ -9013,7 +9231,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/Chat.tsx",
-      "sha256": "0251bb18b38712d441168b0b3cccebcd981780050f4d5087d2711feeb0eca41f"
+      "sha256": "9e2a5ba39b5dacc6341bd320342c2a2d01c9589e86c821db44466748e673052a"
     },
     {
       "path": "library/ui/apps/hud/features/chat/ChatIcons.tsx",
@@ -9033,7 +9251,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/ConversationRail.tsx",
-      "sha256": "d07210840e88aeb79750cc666679ac55be41328b789f5f2385c37d8986de4114"
+      "sha256": "0232980fdbd8ddf4f4d6df59f0ca1586c2b56eeb54427cbd63791cdcf422e641"
     },
     {
       "path": "library/ui/apps/hud/features/chat/EmojiButton.module.css",
@@ -9041,7 +9259,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/EmojiButton.tsx",
-      "sha256": "0e69ffa64e5c33445ca8d6221c09a76fa3573d47fc51ecb9c33c20e2fb3275ed"
+      "sha256": "2b16fd9e2de0b8d079ee05a8458270ded4ae25a39f2b3f0dc95cdef5a2cec3e8"
     },
     {
       "path": "library/ui/apps/hud/features/chat/EmojiPicker.module.css",
@@ -9049,7 +9267,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/EmojiPicker.tsx",
-      "sha256": "12014be22fa589d360b338545f939257a7b0726f76328b944c64cc11e168f137"
+      "sha256": "e97f7ec6c5bd6824da56d6a4d2a207d93eebc5a614f2aa34ba930e439df24def"
     },
     {
       "path": "library/ui/apps/hud/features/chat/EmojiSuggestList.module.css",
@@ -9066,6 +9284,14 @@
     {
       "path": "library/ui/apps/hud/features/chat/ProfileCardPresentation.tsx",
       "sha256": "c7b4d3040609c20a8eaa01d7249d8a095f985233b70732adbee183afdd56f5c7"
+    },
+    {
+      "path": "library/ui/apps/hud/features/chat/buttonSounds.test.ts",
+      "sha256": "d2892cbb724df0103e7889200acb59d4295b70ae65d3cc92cad51f994a665f5c"
+    },
+    {
+      "path": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "sha256": "bc54d1cf14353eee328eb9199088a55d215625e249dcb04d804475ce1d69f3a4"
     },
     {
       "path": "library/ui/apps/hud/features/chat/chatIdentity.ts",
@@ -9089,11 +9315,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/chat/ping.test.ts",
-      "sha256": "6332ec4c84f3c9c4c3530fdf36bcfd020f45d40a0e84192d0f6126f02ad5f50d"
+      "sha256": "4b8fceca6721b39c6b16f803db83401fe343805621e3c88f994c7a7c26104fde"
     },
     {
       "path": "library/ui/apps/hud/features/chat/ping.ts",
-      "sha256": "1e3e3d916f61d5200220ec15cba43c263327b98ebbaf69c693581657a69bca1d"
+      "sha256": "b895a3f2021e03e12f6d8b109e661744a900303fd0d34b7554c698649eed4fd9"
     },
     {
       "path": "library/ui/apps/hud/features/chat/useTranslation.ts",
@@ -9149,11 +9375,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/debug/DebugPanel.module.css",
-      "sha256": "2867570f1facce523e0fa574b6523dec95a2d5f0ef60adb5a4cce0c84ad9540c"
+      "sha256": "54467bfff9358eb3e94c9aa6fa1474520b3e0f2d01e30bd606e05459f7515ed1"
     },
     {
       "path": "library/ui/apps/hud/features/debug/DebugPanel.tsx",
-      "sha256": "aa3a4bb2933815ca25b398ca5ff6674de10611b7408bccf50455d3e29691a0be"
+      "sha256": "b4a6a7414d5e568d408b2c565dfad3cadd9a9205b564bec45d6b0826c557d25c"
     },
     {
       "path": "library/ui/apps/hud/features/debug/FpsMeter.module.css",
@@ -9165,7 +9391,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/debug/useDebugPanel.ts",
-      "sha256": "578048ea90c89e982fbecf5972b33581201a0320aeb3e48c2c9b88cb7e4706ac"
+      "sha256": "61fe529fc474330809ec816d90cad07f35c1a0c2d06db1c1a12f69ae62a216b7"
     },
     {
       "path": "library/ui/apps/hud/features/donate/DonatePanel.module.css",
@@ -9173,7 +9399,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/donate/DonatePanel.tsx",
-      "sha256": "6c2ba0c28051a41ec1af448a197ee2be8b6237b5873e5aca2445756c0b5e437e"
+      "sha256": "84d2410f0af131b67078f6d35a9719d36c459703e4074dca77b046891228be1b"
     },
     {
       "path": "library/ui/apps/hud/features/donate/types.ts",
@@ -9241,7 +9467,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/engine/EngineHost.tsx",
-      "sha256": "888762af8c2d314751883b3cf6e6949504ecb016d8284132720929b9ae680b9d"
+      "sha256": "a3fd0f57effb5086c8ce68582d0b6f70dfda26ae715222fce5415cd07b24fb96"
     },
     {
       "path": "library/ui/apps/hud/features/engine/EngineViewport.module.css",
@@ -9249,7 +9475,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/engine/EngineViewport.tsx",
-      "sha256": "98cf5fe8d3efc5540df99ccd857356a8a64a3a8e7e945096dc3c43ba5ad370ab"
+      "sha256": "363b2c745f0bbed1b1f8ae4ea97aabf896069061df8de42c3bba5c2e56e2cae8"
     },
     {
       "path": "library/ui/apps/hud/features/error/ConnectivityFeedback.module.css",
@@ -9505,11 +9731,15 @@
     },
     {
       "path": "library/ui/apps/hud/features/gifting/GiftTransferPanel.tsx",
-      "sha256": "9a0983c372da282edc9deb4551887d3e4f30301be8554567623920279bc1738d"
+      "sha256": "ea0a1360799de27510b9931d4a941fdcc99585cf14c2745303eede6e80e9e133"
     },
     {
       "path": "library/ui/apps/hud/features/gifting/useGifting.ts",
       "sha256": "5aa063c49b4d48dbbdd725359f092bd959e31e74bd7e74521f3f62dd3c799cf1"
+    },
+    {
+      "path": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "sha256": "16991b00b990c521b95b322b6193e6a3afe2fab7682f3a34731cddb598048c70"
     },
     {
       "path": "library/ui/apps/hud/features/lobby/ExploreSectionModal.module.css",
@@ -9537,11 +9767,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyHome.module.css",
-      "sha256": "7f3966cc447bae62629158837430066515c9cc5b66f7bc4edbbf533734955340"
+      "sha256": "885866d44eac6ada7820031a41d1d9c2f8000148f44b1d45a4ea8014b2135e9a"
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
-      "sha256": "b8c6471072e2e1c615b4a226893e472908d79848bbcab62238131a0450946cf2"
+      "sha256": "efc57770e26561393043a4a50179f8247cd1c0fca597763d9e7797490a56b457"
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyProfileMenu.module.css",
@@ -9597,19 +9827,19 @@
     },
     {
       "path": "library/ui/apps/hud/features/map/LayersPanel.tsx",
-      "sha256": "2c89dc0eefdbb1e672fe08d161a256467b18e873d4e03fc5452524aa5af910ad"
+      "sha256": "4915f82ad59f868702019af0db00afe00f81d54d0c75e06a6705eb1f5e276d64"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapCanvas.module.css",
-      "sha256": "77ffdbedb3caf0a9a945aab71aeaba61b836348e75ae82c46053ed8e1042920b"
+      "sha256": "7699d2389c39f22442ad6eb90772ff2316f752b417c2aab2cae88d0b9881b362"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapCanvas.tsx",
-      "sha256": "a2ef9f8766fae28f907cb03c82adc58be94523d73dbf997b9b1e72a321106dba"
+      "sha256": "8d6084c92c4061359990bc9b70ef3b4c72d457db440da254e02c8e608f2206b2"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapChrome.module.css",
-      "sha256": "fc7c9d911edfa838ebe9a15e0f4d6db92a7e09da6d9a94ba9e482c2d15c66f69"
+      "sha256": "b7564921c2b31787b3c796da8c5de6151ff046a22bd864229e4d1faaf4626527"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapNotices.module.css",
@@ -9621,15 +9851,27 @@
     },
     {
       "path": "library/ui/apps/hud/features/map/MapPage.tsx",
-      "sha256": "8b618b9f24f9d74a433914f79b8a492d0d6072ee9227dfd3b73a60a2b8613b5f"
+      "sha256": "e9491584ce93be283cea3076c5cfff088ab741d28c7156d831a02e737f075f71"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapToolbar.tsx",
       "sha256": "1a607389eee71063db4119d76b3855698907a4652fbe5514063fb4ad32d778d4"
     },
     {
+      "path": "library/ui/apps/hud/features/map/QuestPinIcon.module.css",
+      "sha256": "3bb5ebce50e4292989f98fe3d4e2719d6927889cc64f6ce1cdb2ff293ca70cee"
+    },
+    {
+      "path": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "sha256": "35d378f5bdc82bba0e5b7f20b6a5c28db93005e1e9f131c45ccd460132e0c6e5"
+    },
+    {
       "path": "library/ui/apps/hud/features/map/RouteLayer.tsx",
       "sha256": "654aed9836612538e71061e460d9f49a12fed1a213af8a63eb05a2be5ddd0e64"
+    },
+    {
+      "path": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "sha256": "87cb4b856ac28b1549a77b570d7627f48d9f9262c87cf06b13d23db3e8eedd3f"
     },
     {
       "path": "library/ui/apps/hud/features/map/WorldWarning.tsx",
@@ -9637,7 +9879,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/map/mapArt.ts",
-      "sha256": "b90f5bbe3d640484931766b7815223d6b24ba7276df4c2e0031bc78ab6222e87"
+      "sha256": "964707b0763c2b9f2934fdf4bb358c532d52e13b6bc90e9c3fe8e733ae13c2a5"
     },
     {
       "path": "library/ui/apps/hud/features/map/panel/EventInfo.tsx",
@@ -9673,11 +9915,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/map/useMapCamera.ts",
-      "sha256": "833c5228214b2a8b61adf3b13aacdf7034edaebbed62cf1ceb78f12eeaad2bb7"
+      "sha256": "87fc66a010db1fe616084100454d329b22647adf7ddbd01848a60f8469d1d202"
     },
     {
       "path": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "sha256": "bc80c34a7de7280ef5bb0551604351ce9e057fe942b7acf46e051edd6a0e3ee1"
+      "sha256": "73c0a8b078e6a94b072d224e82d6219258590fcd3926c5b1bca613eefbde5e1b"
     },
     {
       "path": "library/ui/apps/hud/features/menu/MainMenuShell.module.css",
@@ -9709,11 +9951,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/minimap/Minimap.module.css",
-      "sha256": "3d6380f432b45f04e7aa077de977a282eab0499855dc5a8be3de2e18a5230866"
+      "sha256": "ef1df51ad3fab930e290a09ea6aefaf1e19132e78d9600b2bbe93d1692e50998"
     },
     {
       "path": "library/ui/apps/hud/features/minimap/Minimap.tsx",
-      "sha256": "2b673de7abc5b1663d75ca80c23219ce429a943b9f365120f23f48f1ceb1dfe8"
+      "sha256": "d81918456d60c5cbe653c8d3aaac4191300da491c94a780b4f3e5681c10c36ca"
     },
     {
       "path": "library/ui/apps/hud/features/minimap/MinimapSettings.module.css",
@@ -9721,7 +9963,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/minimap/MinimapSettings.tsx",
-      "sha256": "f2bfae4f44312a8589aa93a336236cbd42d8e31dad0930e82f52d2a3ab163d9f"
+      "sha256": "6376c079653fb15a836b9ea2bf55cc4082348c087b0d3935a857385e0f54ca3a"
     },
     {
       "path": "library/ui/apps/hud/features/minimap/MinimapTiles.tsx",
@@ -9765,7 +10007,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/permissions/PermissionDialog.tsx",
-      "sha256": "0cb79616b9cf2bafeb4294500f5392ce4510602df365652e30f064047455602e"
+      "sha256": "51d8e8f185d81cc1c9b1ed74d8a1f4d314a7fb76172d3e4fdf8d181c081ee1f7"
     },
     {
       "path": "library/ui/apps/hud/features/permissions/PermissionsPopover.module.css",
@@ -9793,11 +10035,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/places/PlaceDetail.module.css",
-      "sha256": "f61a7282aeb38a98a1440ecc40f1ace6b15ce12b60b32556e311293ef21cec58"
+      "sha256": "46298ccbb2b91ca7b4e6c35b835fccbc506bd0da2b457209be28658eeaf01770"
     },
     {
       "path": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
-      "sha256": "b144d044e673e76fb68f3b34bb12b7a1ccd33c61af7a055349fcbccd1bd5e869"
+      "sha256": "a4eb98487570a34bd3e71d6b0ce2f31c0e7cec3cf2d53496f90728da1d66d565"
     },
     {
       "path": "library/ui/apps/hud/features/places/PlacesBrowser.tsx",
@@ -9865,7 +10107,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/profile/Passport.tsx",
-      "sha256": "dfd274d9199c7a21b74089faca416ce18e5a30261b788a2f5b58847b343f18c0"
+      "sha256": "247b872acc380b3170c3c82231606573e79625e83b5a1231b8eeb09c5ce6deee"
     },
     {
       "path": "library/ui/apps/hud/features/profile/ProfileEditForm.module.css",
@@ -9889,11 +10131,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/profile/ProfilePassport.tsx",
-      "sha256": "b9d648a5dea85963cc4d1f6c44a9c8de082253ff74b189566c427c8baaa3365c"
+      "sha256": "908a76718781a706d6fe7641e2a2f04dbf1dbeea2d80f7d0949e9ca6bd7e0032"
     },
     {
       "path": "library/ui/apps/hud/features/profileCard/ProfileCard.tsx",
-      "sha256": "5bf9945042a5ff8c7f80432e3a090ae900c9faa976272b89cb36510a9ba68009"
+      "sha256": "89f2a300c4f4d65dc70eed5a8651d597c025931152de18200a25c999321d5d4f"
     },
     {
       "path": "library/ui/apps/hud/features/rewards/RewardPopup.module.css",
@@ -9902,6 +10144,10 @@
     {
       "path": "library/ui/apps/hud/features/rewards/RewardPopup.tsx",
       "sha256": "306b2db94b12b8d542ed010a9ece826c15ac0e8a58bf5bdc71654da8a6886f0b"
+    },
+    {
+      "path": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "sha256": "2e2441c7623a79b1702446f8c83c336dbaf3f73571e50421c2a4b6823652b780"
     },
     {
       "path": "library/ui/apps/hud/features/session/SceneLoadingOverlay.module.css",
@@ -9925,7 +10171,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/profileStore.ts",
-      "sha256": "7d323fa38448852b90426840e8afe0e9c7fa89d5cdbc198272ee7ca1dd46680c"
+      "sha256": "6d38368c702b5da86982717763f6b0e4998777c61b053bb9983dfde5ebe356e3"
     },
     {
       "path": "library/ui/apps/hud/features/session/useConnectivity.ts",
@@ -9933,7 +10179,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "fe35194409cd6be3dbb3e533b44ce52b0e5b185650a29f7bdec231663d91a435"
+      "sha256": "83e3a833b0c646117bebbe5171cb2e3711f9f6b93a26da5b49d7c7eec8cd58fe"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -9957,7 +10203,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
-      "sha256": "9a67d8eadd399baad79aa445575509a9fc48225fcd8219e2f930d2ce44584fd6"
+      "sha256": "49f1b7a403f8ee3da95f0c04d934bc2fcd8ad0ff90591789050fd98489d309b6"
+    },
+    {
+      "path": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "sha256": "17b1d9a8faa6390db9698efd5d7fd2d992a231a5af3e0b64708e703ac216eaf0"
     },
     {
       "path": "library/ui/apps/hud/features/shop/ShopPage.module.css",
@@ -9969,15 +10219,15 @@
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/Sidebar.module.css",
-      "sha256": "affb3ac23f65c520cb272d8f4f8e7dc5d07dbff27fe736a256964e52646b971c"
+      "sha256": "f0557bacca14f9e3b95b12f62e7e22aec76082f52ffa397947fdd1c5526b4396"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
-      "sha256": "a74c6c292edffa0d6596b33182eab6ab9fdd7a41ad47d2b5a34579d218685192"
+      "sha256": "607772ceee3294cb0de927b30ed5e9b1a32983cb600670ae44155f7ff53ba2cb"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/inviteLink.ts",
-      "sha256": "503e1f192002b9d25c6272fc94ba1fcdeb8c014b35fc428256ac3f51b37493df"
+      "sha256": "9c7ee94c1acb1af60bb54f50a5146c307f3407fdbf6baffd32e896aea4c3d2c5"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/panels/DiscoverPanel.tsx",
@@ -10005,7 +10255,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/panels/ShopPanel.tsx",
-      "sha256": "6bcb38c22395bfdef5accbcb7f87a6885044ff1c02397c58638b8aa12515512e"
+      "sha256": "31ca06aa1d5bb6c9795d98bf9ed003b12096e1a287aa2772763408a288270bc5"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/panels/SystemPanel.tsx",
@@ -10149,11 +10399,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/voiceChat/VoiceChatPanel.module.css",
-      "sha256": "5f8b7b38707969fd786835edc16c80d00d0ab6d01acf1fbce9d361fb721e474b"
+      "sha256": "ac317d5a12cfbd092e4b80dd2755945e3326c16022f79a4f6832e6ab1e9c2c3e"
     },
     {
       "path": "library/ui/apps/hud/features/voiceChat/VoiceChatPanel.tsx",
-      "sha256": "6c0cf6e1b0b526a7c7caf46be5f3a3a32f5da19cd10833da9042a7eb77844477"
+      "sha256": "dee609b08c6bb0267561da36165e5f2fac843dbaab0aa27807d914c2820cef85"
     },
     {
       "path": "library/ui/apps/hud/features/voiceChat/callGate.ts",
@@ -10204,6 +10454,10 @@
       "sha256": "8590e76474511e9aebd9b32a200136d84800353d00eaac6637cd7b98c459bac9"
     },
     {
+      "path": "library/ui/apps/hud/test/armedButton.test.tsx",
+      "sha256": "aa2a9e52797a7cf5a33ba2b543ea1b84ea1dedf8fdbc3be178fca3089e6d4dc0"
+    },
+    {
       "path": "library/ui/apps/hud/test/arrowKeys.test.ts",
       "sha256": "5c2435d12c5ac453848cdaf88547abf24cad33c9c243a9ab5cfc9b7108529ca2"
     },
@@ -10244,6 +10498,10 @@
       "sha256": "6ff187f0c763b8c51980477fe79611261e17f40836089bf5dd45159778e8c0ea"
     },
     {
+      "path": "library/ui/apps/hud/test/engineViewport.test.tsx",
+      "sha256": "d9cbaf74174df277064400d93749ff7694e82ede32b9d68a01fc6786e49d1f1d"
+    },
+    {
       "path": "library/ui/apps/hud/test/error.test.tsx",
       "sha256": "b0fa53ae546c421b7c4319e8ab5b9db966ec8cd1c1483b4dd351e0416a9d97be"
     },
@@ -10261,11 +10519,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/harness.tsx",
-      "sha256": "408d16a5bf6be85751134740baaae67eb67004ef6a47346a56e839785331b8e5"
+      "sha256": "c5800ac7dfb47e518d96d873fc94970c9f5eab9bf3795473402764457441f950"
     },
     {
       "path": "library/ui/apps/hud/test/host.ts",
-      "sha256": "d6d184c7ce55e33562c75572a8bedc0a45ef53ba74bdb176218f4216d3381656"
+      "sha256": "7d80a20c27fcf830ca51c6944831cb15d89f0089f2bf124fc805d51132d45831"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/analytics.session.test.tsx",
@@ -10273,11 +10531,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/avatarPreview.test.tsx",
-      "sha256": "d331310f236b8a03f5689a8e90c604227f3781be1fe0926647bcd18ad3470726"
+      "sha256": "4369c86053c65684ee82762fde4e598a40228e52f58793c35eaea60ce2f68b83"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/backpack.clicks.test.tsx",
-      "sha256": "72d6bd6ac07fea4790e5854f33d58971c0c9b0c43be0f8f36916d5944d98d42d"
+      "sha256": "e1d0d30c8127f1415b2c9415123badd4e80481b6f05a7f52236ac380a9126536"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/backpackColors.test.tsx",
@@ -10300,8 +10558,16 @@
       "sha256": "530f7b11609660f8146f4ecc2da29765fe8e59c2d9313929328b3bed0857bf68"
     },
     {
+      "path": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "sha256": "f716f87cfc2be768eb91b8e091ae975c75412a1cf9e77800c649e9408caddd12"
+    },
+    {
       "path": "library/ui/apps/hud/test/hosted/backpackOutfitPicture.test.tsx",
-      "sha256": "8febce0576772a064003cc9fac2552b039058d383b9793a60f0d1db6d270cb7b"
+      "sha256": "23857626c770fc146e5a0dfecd0d9eb7afae2fefdf3da6a2c167aed44746e235"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/backpackOutfitSlots.test.tsx",
+      "sha256": "366a04782e717368b93a5050c2e33509ae6885bf3fecdb22deb1843e0f6099ea"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/backpackRandomize.test.tsx",
@@ -10325,7 +10591,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.clicks.test.tsx",
-      "sha256": "f39aaa662da2457c63468d24e84fbda8320b16c9535b58865ec6361b5b1b9321"
+      "sha256": "a4ff55ed7735be86df8416902b141dbbdcc1efa498cf080a649e70b97680f61d"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chat.render.test.tsx",
@@ -10373,7 +10639,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/communityChat.test.tsx",
-      "sha256": "42fdfca5431bd2ada37c5983204bcd6f45ab1e830bdd8ab68b8bc3c3e0fcd582"
+      "sha256": "cefe0b1a89b7a3dee3775f17889f9dcef28985882f43eae784f776903f1cdd2f"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/connectivity.test.tsx",
@@ -10381,7 +10647,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/debugPanel.test.tsx",
-      "sha256": "cb5fd91c7a19bd88e9d7bdec197e45fad563acf717c1ad712696692809e22ae0"
+      "sha256": "d77b08e250b2ba864b1dc0acbc1e1052ecf91eb2445c13f848316fd1a70f7393"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/discoverPanel.test.tsx",
@@ -10394,6 +10660,10 @@
     {
       "path": "library/ui/apps/hud/test/hosted/dm.test.tsx",
       "sha256": "b8ad19fffca205ca2ded9092936c44a3f4cd122b3ccb50ae5d55162fe229b8f5"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "sha256": "367117e3cc3f31a45d6ce585112e660bfd454f59cf3fadf1863366ece66733bc"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/editorHostFeatures.test.tsx",
@@ -10448,6 +10718,10 @@
       "sha256": "73213bf269529ecea4b033e6f12c29584de6fd72fd80c986b84feadf6299085d"
     },
     {
+      "path": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "sha256": "a7e3bc93cb1c17b32fee40ffb5d9994f9c2680c83c0e77f4059a1e4c9b0c6dc5"
+    },
+    {
       "path": "library/ui/apps/hud/test/hosted/giftPicker.test.tsx",
       "sha256": "b9b12df3538dfdb3857a2665d064b08c72d523cdf69082324a10928e769f9c9e"
     },
@@ -10457,11 +10731,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/giftTransferPanel.test.tsx",
-      "sha256": "b89636052962398c9393e5ceb26c250a9236f182f905ef2626beb81fda1d1668"
+      "sha256": "99cd62926147be5b6054512b292ab436ce4c77753d3da2973ddb82c2488a0d83"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/home.session.test.tsx",
-      "sha256": "e3df8952ae4aa9328e45ac8836ed9f72b3e260086acfff593ba534213d70adc5"
+      "sha256": "c597526f04631006eadf015f96f25038dca48866d2d33e83dbae808fc4a8a8b9"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/hudLogin.test.tsx",
@@ -10469,7 +10743,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
-      "sha256": "160151e579fed4d0168e89e6f4145e8515d76e29032dc16d35abbc4b2dd31df3"
+      "sha256": "30d6508eb307569092de1fdf3ad9246d5e14a21caae7c836a80f2825668a74f4"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "sha256": "be649de87a276f2dc11b0f0c3da084a2ce15032e88e6784de9d35feb33abfe23"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/jumpToFriend.test.tsx",
@@ -10513,11 +10791,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
-      "sha256": "9ebc293c907b48a7ed1eea1aa532009a28679d7bbdabccc945ea0788d63902a5"
+      "sha256": "217f5fc674d5ec641c73cc13672b45b45992fc159ac46fea9a0231840e98202d"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/mapPanel.test.tsx",
-      "sha256": "d1234c61564662fa21e10fe72576180b55eda703cf3635f14406d155b1413f89"
+      "sha256": "e1ada2f9e9d0531a7e7be2203cc32a184c85de7f281ecb4abcfa3bf761e8e34f"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/mePanel.test.tsx",
@@ -10525,7 +10803,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
-      "sha256": "fa81c7d1b5668e086f5d441a84107c7c8d145a82120fe48c9740dd06efc13066"
+      "sha256": "f921c6b752db08d5acd3db27c2f8c2ef3eccc895e88f5fb79e4c76e5dfe6ba69"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/nameEdit.test.tsx",
@@ -10569,7 +10847,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
-      "sha256": "f231731a5b7dd6644ed0509d22037821b227d0a5f12bcde69cceb94110993190"
+      "sha256": "74954fd0f3761c120a041ce0bd2bfc1cfd38a3d634c4b20be3bf31dcef274790"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
@@ -10585,11 +10863,15 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/placeDetail.test.tsx",
-      "sha256": "2823292e61c0d770a0ef39a17656333c3a479b1ba625175c6ad646f87e4448e8"
+      "sha256": "435fe901f017daf79fd8b7cf993540c6bda870d82cf498084e07bbb94de3f902"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/placesDiscovery.test.tsx",
       "sha256": "8e70693e38604311fb038eaa3fb29319b479ce73ac94c898ab0d936f559af282"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "sha256": "cd09486ef06301b122dffef3eacdcd0fe0a4a27a1ecc62afe5a12174e910cf8d"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/pointer.test.tsx",
@@ -10605,7 +10887,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/profile.test.tsx",
-      "sha256": "bdb9612830db6dae84b7afefbd62778e2917445bf5ce049c70f9d56ef6d05f4b"
+      "sha256": "5371f1db2b4d164739609f6d7f9053641450ef890082bf0d5d89e16e94ada682"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/profileCardContainer.test.tsx",
@@ -10621,7 +10903,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/settings.clicks.test.tsx",
-      "sha256": "187d50d44dee935ea3da8853be60f093966948841a718171f87f788105155d71"
+      "sha256": "aee6ec81ac2bf8da0ac22c012c1efd025d1eb0b7f484378c614bdff12ec8f9a3"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/settings.test.tsx",
@@ -10633,7 +10915,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebar.test.tsx",
-      "sha256": "e1be29ccdb6302c4208500f18660bea047baf533504add5aba7a2e151886c63e"
+      "sha256": "143e3ac749c222a85f4b766223443b4f8328760cc3c494e4ba2dd5ff179871e9"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebarAutoHide.test.tsx",
@@ -10673,7 +10955,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/welcome.test.tsx",
-      "sha256": "f1080e3c45e649059ac014ce752fa1163fdc614250ecc48a083f4d63b44424de"
+      "sha256": "337b6aef05d280a0613ae532eb833344602873759e3c1207c9129c4abff7892d"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/worldAccess.test.tsx",
@@ -10702,6 +10984,10 @@
     {
       "path": "library/ui/apps/hud/test/mapEventInfo.test.tsx",
       "sha256": "5a0540c05192d6514efc813bdad21337f6dc4859e6ef88eb3addba603eca9b5d"
+    },
+    {
+      "path": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "sha256": "589c2ee53f74423b20086a011f1de47526562be7539cf8f7ced7b9dcd1629b04"
     },
     {
       "path": "library/ui/apps/hud/test/menu.clicks.test.tsx",
@@ -10741,7 +11027,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/profileStore.test.ts",
-      "sha256": "3c06294140f2f875b2a339e28966156aa9615942936b7f95a691c355ab2ffb98"
+      "sha256": "702bb335694208371b1944aa1575db8d9a27bc83312e31033b9d6b3c69af7736"
     },
     {
       "path": "library/ui/apps/hud/test/rail.test.tsx",
@@ -10773,7 +11059,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/shopPanel.test.tsx",
-      "sha256": "905229ccbc3d8431021c92d6d2fadf52c057213eda2bd676a7a1b07d47426cdc"
+      "sha256": "ff22ed4fc17b875a0c819ad1a13a70a94bed5cbfe293c7f3d2a0de6d618b3d25"
     },
     {
       "path": "library/ui/apps/hud/test/signOutOfWorld.test.ts",
@@ -11252,6 +11538,21 @@
     },
     {
       "from": "library/explorer-core/features/auth/guest.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/auth/guest.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/auth/guest.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/auth/guest.ts",
       "to": "library/explorer-core/features/auth/thirdweb.ts",
       "kind": "native:runtime"
     },
@@ -11806,6 +12107,51 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/explorer-core/features/map/mapMarkers.ts",
       "to": "library/explorer-core/features/map/mapApi.ts",
       "kind": "native:runtime"
@@ -11851,6 +12197,36 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/mapPins.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/explorer-core/features/map/mapZoom.ts",
       "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
@@ -11863,6 +12239,21 @@
     {
       "from": "library/explorer-core/features/map/mapZoom.ts",
       "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/navigation.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/navigation.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/navigation.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
       "kind": "test:runtime"
     },
     {
@@ -11941,6 +12332,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/explorer-core/features/map/satelliteTiles.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/satelliteTiles.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/features/map/satelliteTiles.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/explorer-core/features/map/shareLinks.ts",
       "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
@@ -11956,33 +12362,33 @@
       "kind": "test:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
       "kind": "native:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
       "kind": "production:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
       "kind": "test:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/lib/prefs.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/lib/prefs.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "production:runtime"
     },
     {
-      "from": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "to": "library/explorer-core/lib/prefs.ts",
+      "from": "library/explorer-core/features/minimap/minimapLayers.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "test:runtime"
     },
     {
@@ -12811,6 +13217,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/explorer-core/test/holeClip.test.ts",
+      "to": "library/explorer-core/lib/holeClip.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/holeClip.test.ts",
+      "to": "library/explorer-core/lib/holeClip.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/holeClip.test.ts",
+      "to": "library/explorer-core/lib/holeClip.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/explorer-core/test/hudAutomation.test.ts",
       "to": "library/explorer-core/lib/cefNativeBridge.ts",
       "kind": "native:runtime"
@@ -12992,6 +13413,21 @@
     },
     {
       "from": "library/explorer-core/test/mapCore.test.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapCore.test.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapCore.test.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapCore.test.ts",
       "to": "library/explorer-core/features/map/mapZoom.ts",
       "kind": "native:runtime"
     },
@@ -13036,6 +13472,51 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/mapLayerData.test.ts",
+      "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/explorer-core/test/minimap.test.ts",
       "to": "library/explorer-core/features/map/atlas.ts",
       "kind": "native:runtime"
@@ -13063,6 +13544,21 @@
     {
       "from": "library/explorer-core/test/minimap.test.ts",
       "to": "library/explorer-core/features/map/home.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/minimap.test.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/minimap.test.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/minimap.test.ts",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "test:runtime"
     },
     {
@@ -13097,32 +13593,17 @@
     },
     {
       "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "kind": "native:dynamic"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "native:runtime"
     },
     {
       "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "kind": "production:dynamic"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "production:runtime"
     },
     {
       "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
-      "kind": "test:dynamic"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "test:runtime"
     },
     {
@@ -13139,21 +13620,6 @@
       "from": "library/explorer-core/test/minimap.test.ts",
       "to": "library/explorer-core/features/minimap/minimapPrefs.ts",
       "kind": "test:runtime"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
-      "kind": "native:dynamic"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
-      "kind": "production:dynamic"
-    },
-    {
-      "from": "library/explorer-core/test/minimap.test.ts",
-      "to": "library/explorer-core/features/places/placesApi.ts",
-      "kind": "test:dynamic"
     },
     {
       "from": "library/explorer-core/test/navmap.test.ts",
@@ -13303,6 +13769,36 @@
     {
       "from": "library/explorer-core/test/pointerKeys.test.ts",
       "to": "library/explorer-core/engine/pointerKeys.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/satelliteTiles.test.ts",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
       "kind": "test:runtime"
     },
     {
@@ -14147,6 +14643,21 @@
     },
     {
       "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/session/SceneLoadingOverlay.tsx",
       "kind": "native:runtime"
     },
@@ -14503,6 +15014,21 @@
     {
       "from": "library/ui/apps/hud/design/AnchoredMenu.tsx",
       "to": "library/ui/apps/hud/design/ContextMenu.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "to": "library/ui/apps/hud/design/Button.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "to": "library/ui/apps/hud/design/Button.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "to": "library/ui/apps/hud/design/Button.tsx",
       "kind": "test:runtime"
     },
     {
@@ -15598,6 +16124,21 @@
     {
       "from": "library/ui/apps/hud/design/Showcase.tsx",
       "to": "library/ui/apps/hud/design/AnchoredMenu.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/Showcase.tsx",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/Showcase.tsx",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/Showcase.tsx",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
       "kind": "test:runtime"
     },
     {
@@ -16948,6 +17489,21 @@
     {
       "from": "library/ui/apps/hud/design/index.ts",
       "to": "library/ui/apps/hud/design/AnchoredMenu.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/index.ts",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/index.ts",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/design/index.ts",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
       "kind": "test:runtime"
     },
     {
@@ -19412,6 +19968,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/chat/Chat.tsx",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/chat/Chat.tsx",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/chat/Chat.tsx",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/chat/Chat.tsx",
       "to": "library/ui/apps/hud/features/chat/chatIdentity.ts",
       "kind": "native:runtime"
     },
@@ -20401,6 +20972,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/features/chat/buttonSounds.test.ts",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/chat/buttonSounds.test.ts",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/chat/buttonSounds.test.ts",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/features/chat/chatIdentity.ts",
       "to": "library/explorer-core/engine/mention.ts",
       "kind": "native:runtime"
@@ -21313,6 +21899,21 @@
     {
       "from": "library/ui/apps/hud/features/communities/RequestRowActions.tsx",
       "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/debug/DebugPanel.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/debug/DebugPanel.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/debug/DebugPanel.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
       "kind": "test:runtime"
     },
     {
@@ -26987,6 +27588,36 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
+      "to": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapCanvas.tsx",
       "to": "library/ui/apps/hud/features/map/mapArt.ts",
       "kind": "native:runtime"
     },
@@ -27406,6 +28037,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/features/map/MapToolbar.tsx",
       "to": "library/explorer-core/features/map/mapZoom.ts",
       "kind": "native:runtime"
@@ -27466,6 +28112,36 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.module.css",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.module.css",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.module.css",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/features/map/RouteLayer.tsx",
       "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
@@ -27508,6 +28184,51 @@
     {
       "from": "library/ui/apps/hud/features/map/RouteLayer.tsx",
       "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/mapCoords.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/ui/apps/hud/features/map/MapCanvas.module.css",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/ui/apps/hud/features/map/MapCanvas.module.css",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
+      "to": "library/ui/apps/hud/features/map/MapCanvas.module.css",
       "kind": "test:runtime"
     },
     {
@@ -28547,6 +29268,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/mapArt.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/mapArt.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/mapArt.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/mapArt.ts",
       "to": "library/ui/apps/hud/assets/map/sea.webp",
       "kind": "native:runtime"
     },
@@ -29072,6 +29808,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/useMapCamera.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapCamera.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapCamera.ts",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapCamera.ts",
       "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
     },
@@ -29102,21 +29853,6 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapApi.ts",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapApi.ts",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapApi.ts",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
       "to": "library/explorer-core/features/map/mapCoords.ts",
       "kind": "native:runtime"
     },
@@ -29132,17 +29868,17 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
       "kind": "native:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
       "kind": "production:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
-      "to": "library/explorer-core/features/map/mapMarkers.ts",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
       "kind": "test:runtime"
     },
     {
@@ -29158,6 +29894,21 @@
     {
       "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
       "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/useMapLayerData.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
       "kind": "test:runtime"
     },
     {
@@ -29522,6 +30273,36 @@
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
       "to": "library/explorer-core/features/map/shareLinks.ts",
       "kind": "native:runtime"
     },
@@ -29552,17 +30333,17 @@
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "native:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "production:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "test:runtime"
     },
     {
@@ -29612,6 +30393,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/design/MaskIcon.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/design/MaskIcon.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/design/MaskIcon.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
       "to": "library/ui/apps/hud/design/index.ts",
       "kind": "native:runtime"
     },
@@ -29657,6 +30453,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
       "to": "library/ui/apps/hud/features/map/mapArt.ts",
       "kind": "native:runtime"
     },
@@ -29668,6 +30479,21 @@
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
       "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/useMapLayerData.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/useMapLayerData.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
+      "to": "library/ui/apps/hud/features/map/useMapLayerData.ts",
       "kind": "test:runtime"
     },
     {
@@ -29758,21 +30584,6 @@
     {
       "from": "library/ui/apps/hud/features/minimap/Minimap.tsx",
       "to": "library/ui/apps/hud/lib/hudInset.ts",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/minimap/MinimapSettings.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPrefs.ts",
-      "kind": "native:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/minimap/MinimapSettings.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPrefs.ts",
-      "kind": "production:runtime"
-    },
-    {
-      "from": "library/ui/apps/hud/features/minimap/MinimapSettings.tsx",
-      "to": "library/explorer-core/features/minimap/minimapPrefs.ts",
       "kind": "test:runtime"
     },
     {
@@ -30422,6 +31233,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/home.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/home.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/home.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
       "to": "library/explorer-core/features/map/mapApi.ts",
       "kind": "native:runtime"
     },
@@ -30433,6 +31259,21 @@
     {
       "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
       "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
       "kind": "test:runtime"
     },
     {
@@ -30572,6 +31413,36 @@
     },
     {
       "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-outline.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-outline.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-outline.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-solid.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-solid.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/home-solid.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
       "to": "library/ui/apps/hud/assets/map/panel/jump-in.png",
       "kind": "native:runtime"
     },
@@ -30613,6 +31484,21 @@
     {
       "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
       "to": "library/ui/apps/hud/assets/map/panel/like-solid.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/navigation.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/navigation.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/places/PlaceDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/navigation.png",
       "kind": "test:runtime"
     },
     {
@@ -32206,6 +33092,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/features/session/SceneLoadingOverlay.tsx",
       "to": "library/explorer-core/lib/bugReport.ts",
       "kind": "native:runtime"
@@ -32537,6 +33438,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/session/profileStore.ts",
+      "to": "library/explorer-core/engine/requestIds.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/profileStore.ts",
+      "to": "library/explorer-core/engine/requestIds.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/profileStore.ts",
+      "to": "library/explorer-core/engine/requestIds.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/profileStore.ts",
       "to": "library/explorer-core/lib/identity.ts",
       "kind": "native:runtime"
     },
@@ -32642,6 +33558,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
       "to": "library/explorer-core/features/auth/sso.ts",
       "kind": "native:runtime"
     },
@@ -32848,6 +33779,21 @@
     {
       "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
       "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/explorer-core/features/map/mapPins.ts",
       "kind": "test:runtime"
     },
     {
@@ -33137,6 +34083,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
       "to": "library/ui/apps/hud/features/login/useStoredProfile.ts",
       "kind": "native:runtime"
     },
@@ -33253,6 +34214,21 @@
     {
       "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
       "to": "library/ui/apps/hud/features/session/useConnectivity.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
       "kind": "test:runtime"
     },
     {
@@ -33586,6 +34562,36 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "to": "library/explorer-core/lib/prefs.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "to": "library/explorer-core/lib/prefs.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "to": "library/explorer-core/lib/prefs.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/features/shop/ShopPage.tsx",
       "to": "library/explorer-core/features/shop/shopApi.ts",
       "kind": "native:runtime"
@@ -33673,6 +34679,21 @@
     {
       "from": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
       "to": "library/explorer-core/lib/cancelLayers.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
       "kind": "test:runtime"
     },
     {
@@ -37066,6 +38087,21 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/armedButton.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/armedButton.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/armedButton.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/arrowKeys.test.ts",
       "to": "library/ui/apps/hud/lib/arrowKeys.ts",
       "kind": "native:runtime"
@@ -37288,6 +38324,21 @@
     {
       "from": "library/ui/apps/hud/test/donatePanel.test.ts",
       "to": "library/ui/apps/hud/features/donate/DonatePanel.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/engineViewport.test.tsx",
+      "to": "library/ui/apps/hud/features/engine/EngineViewport.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/engineViewport.test.tsx",
+      "to": "library/ui/apps/hud/features/engine/EngineViewport.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/engineViewport.test.tsx",
+      "to": "library/ui/apps/hud/features/engine/EngineViewport.tsx",
       "kind": "test:runtime"
     },
     {
@@ -37741,6 +38792,66 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/explorer-core/test/console.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/explorer-core/test/console.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/explorer-core/test/console.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/backpack/BackpackPage.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/backpack/BackpackPage.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/backpack/BackpackPage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/features/session/useEngineSession.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/hosted/backpackOutfitPicture.test.tsx",
       "to": "library/ui/apps/hud/features/backpack/BackpackPage.tsx",
       "kind": "native:runtime"
@@ -37767,6 +38878,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/backpackOutfitPicture.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitSlots.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitSlots.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/backpackOutfitSlots.test.tsx",
       "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
@@ -39016,6 +40142,36 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/features/donate/DonatePanel.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/features/donate/DonatePanel.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "to": "library/ui/apps/hud/features/donate/DonatePanel.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/hosted/editorHostFeatures.test.tsx",
       "to": "library/ui/apps/hud/features/editorHost/EditorHost.tsx",
       "kind": "native:runtime"
@@ -39556,6 +40712,96 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profileCard/ProfileCard.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profileCard/ProfileCard.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/profileCard/ProfileCard.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/SessionContext.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/hosted/giftPicker.test.tsx",
       "to": "library/ui/apps/hud/design/index.ts",
       "kind": "native:runtime"
@@ -39662,6 +40908,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/giftTransferPanel.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftTransferPanel.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftTransferPanel.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/giftTransferPanel.test.tsx",
       "to": "library/ui/apps/hud/features/gifting/GiftTransferPanel.tsx",
       "kind": "native:runtime"
     },
@@ -39752,6 +41013,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
       "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "native:runtime"
     },
@@ -39762,6 +41038,36 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
       "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
@@ -40577,6 +41883,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
       "to": "library/explorer-core/features/map/navigation.ts",
       "kind": "native:runtime"
     },
@@ -40618,6 +41939,21 @@
     {
       "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
       "to": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/map.page.test.tsx",
+      "to": "library/ui/apps/hud/features/map/mapArt.ts",
       "kind": "test:runtime"
     },
     {
@@ -40708,6 +42044,66 @@
     {
       "from": "library/ui/apps/hud/test/hosted/mePanel.test.tsx",
       "to": "library/ui/apps/hud/features/sidebar/panels/MePanel.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "native:dynamic"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "production:dynamic"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapApi.ts",
+      "kind": "test:dynamic"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapLayersStore.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/minimap.render.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
       "kind": "test:runtime"
     },
     {
@@ -41402,6 +42798,21 @@
     },
     {
       "from": "library/ui/apps/hud/test/hosted/placeDetail.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/placeDetail.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/placeDetail.test.tsx",
+      "to": "library/explorer-core/features/map/navigation.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/placeDetail.test.tsx",
       "to": "library/ui/apps/hud/design/index.ts",
       "kind": "native:runtime"
     },
@@ -41518,6 +42929,66 @@
     {
       "from": "library/ui/apps/hud/test/hosted/placesDiscovery.test.tsx",
       "to": "library/ui/apps/hud/features/places/usePlaces.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
     {
@@ -41863,6 +43334,21 @@
     {
       "from": "library/ui/apps/hud/test/hosted/rewardPopup.test.tsx",
       "to": "library/ui/apps/hud/features/rewards/RewardPopup.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/settings.clicks.test.tsx",
+      "to": "library/explorer-core/lib/prefs.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/settings.clicks.test.tsx",
+      "to": "library/explorer-core/lib/prefs.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/settings.clicks.test.tsx",
+      "to": "library/explorer-core/lib/prefs.ts",
       "kind": "test:runtime"
     },
     {
@@ -42748,6 +44234,36 @@
     {
       "from": "library/ui/apps/hud/test/mapEventInfo.test.tsx",
       "to": "library/ui/apps/hud/features/map/panel/EventInfo.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/explorer-core/features/map/mapPins.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/mapPins.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
       "kind": "test:runtime"
     },
     {
@@ -43773,6 +45289,16 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarDraft.ts",
       "to": "library/explorer-core/engine/bodyShape.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarPreview.tsx",
+      "to": "library/explorer-core/engine/lobbyStage.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/avatarPreview.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
       "kind": "test:runtime"
     },
     {
@@ -43937,6 +45463,21 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
       "to": "library/explorer-core/lib/analytics.ts",
       "kind": "native:runtime"
     },
@@ -43948,6 +45489,21 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
       "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/lib/entryParams.ts",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
       "kind": "test:runtime"
     },
     {
@@ -44228,6 +45784,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/src/test/bridgeConnectivity.test.tsx",
       "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/src/test/bridgeProfileReads.test.ts",
+      "to": "library/explorer-core/test/console.ts",
       "kind": "test:runtime"
     },
     {
@@ -44617,6 +46178,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/features/auth/guestWalletParam.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/features/auth/sso.ts",
       "kind": "type"
     },
@@ -44827,6 +46393,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/features/map/mapLayerData.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/features/map/mapLayersStore.ts",
       "kind": "type"
     },
@@ -44838,6 +46409,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/features/map/mapPeople.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/features/map/mapPins.ts",
       "kind": "type"
     },
     {
@@ -44862,6 +46438,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/features/map/satelliteTiles.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/features/map/shareLinks.ts",
       "kind": "type"
     },
@@ -44872,7 +46453,7 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
-      "to": "library/explorer-core/features/minimap/minimapPlaces.ts",
+      "to": "library/explorer-core/features/minimap/minimapLayers.ts",
       "kind": "type"
     },
     {
@@ -44963,6 +46544,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/lib/color.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/lib/debugPanelLauncher.ts",
       "kind": "type"
     },
     {
@@ -45197,6 +46783,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/test/holeClip.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/test/hudAutomation.test.ts",
       "kind": "type"
     },
@@ -45232,6 +46823,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/test/mapLayerData.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/test/minimap.test.ts",
       "kind": "type"
     },
@@ -45258,6 +46854,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/test/pointerKeys.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/test/satelliteTiles.test.ts",
       "kind": "type"
     },
     {
@@ -45298,6 +46899,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/design/AnchoredMenu.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/design/ArmedButton.tsx",
       "kind": "type"
     },
     {
@@ -45633,6 +47239,16 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/chat/ProfileCardPresentation.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/chat/buttonSounds.ts",
       "kind": "type"
     },
     {
@@ -45997,6 +47613,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/itemPurchase/answer.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
       "kind": "type"
     },
@@ -46087,7 +47708,17 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/map/QuestPinIcon.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/map/RouteLayer.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/map/SatelliteDetailLayer.tsx",
       "kind": "type"
     },
     {
@@ -46317,6 +47948,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/session/PlatformBanDialog.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/session/SceneLoadingOverlay.tsx",
       "kind": "type"
     },
@@ -46363,6 +47999,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/settings/SettingsPanel.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/settings/askBeforeLeaving.ts",
       "kind": "type"
     },
     {
@@ -46572,6 +48213,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/armedButton.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/arrowKeys.test.ts",
       "kind": "type"
     },
@@ -46618,6 +48264,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/donatePanel.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/engineViewport.test.tsx",
       "kind": "type"
     },
     {
@@ -46692,7 +48343,17 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/backpackOutfitErrors.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/backpackOutfitPicture.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/backpackOutfitSlots.test.tsx",
       "kind": "type"
     },
     {
@@ -46812,6 +48473,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/donateSend.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/editorHostFeatures.test.tsx",
       "kind": "type"
     },
@@ -46877,6 +48543,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/giftGuestRecipient.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/giftPicker.test.tsx",
       "kind": "type"
     },
@@ -46903,6 +48574,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/inWorldConversion.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/itemPurchase.test.tsx",
       "kind": "type"
     },
     {
@@ -47057,6 +48733,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/platformBan.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/pointer.test.tsx",
       "kind": "type"
     },
@@ -47193,6 +48874,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/mapEventInfo.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/mapPins.test.tsx",
       "kind": "type"
     },
     {
@@ -51123,6 +52809,21 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
       "to": "library/ui/apps/hud/assets/map/pins/sports.png",
+      "kind": "test:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "kind": "native:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
+      "kind": "production:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/map/quest/quest-pin.png",
       "kind": "test:asset"
     },
     {

@@ -673,17 +673,14 @@ async fn decision(
     Ok((conn, view))
 }
 
-/// Whether a good committee read at hand shows `signer` on it: for a view
-/// only the committee widens, never waiting on the source.
-fn known_committee(state: &SharedState, signer: &str) -> bool {
-    state.committee.known_member(state.market.as_ref(), signer)
+/// Whether the committee index shows `signer` on it, false when it can't
+/// tell: for a view only the committee widens.
+async fn known_committee(state: &SharedState, signer: &str) -> bool {
+    crate::committee::known_member(state.items.pool(), signer).await
 }
 
 async fn on_committee(state: &SharedState, signer: &str) -> Result<bool, ApiError> {
-    state
-        .committee
-        .is_member(state.market.as_ref(), signer)
-        .await
+    crate::committee::is_member(state.items.pool(), signer).await
 }
 
 /// The signer's own wallet, for a listing of the rows it owns itself.
@@ -842,17 +839,19 @@ async fn own_draft_while_stale(
     })
 }
 
-/// The signer is on the committee by the read at hand, without waiting on
-/// the committee source: for a view only the committee widens.
-pub fn known_committee_member(state: &SharedState, signer: &Signer) -> Option<OnCommittee> {
-    known_committee(state, signer.as_str()).then(|| OnCommittee {
-        member: signer.as_str().to_string(),
-    })
+/// The signer is on the committee by the index, None when it isn't or the
+/// index can't tell: for a view only the committee widens.
+pub async fn known_committee_member(state: &SharedState, signer: &Signer) -> Option<OnCommittee> {
+    known_committee(state, signer.as_str())
+        .await
+        .then(|| OnCommittee {
+            member: signer.as_str().to_string(),
+        })
 }
 
 /// `GET /v1/collections/:id`: any signer reads a published collection's
-/// public detail, and its minters and the committee (from the read at hand,
-/// without waiting) its full body; the owner, an on-chain manager, the
+/// public detail, and its minters and the committee (when the index can
+/// tell) its full body; the owner, an on-chain manager, the
 /// provider's manager and the committee read any collection in full.
 pub async fn read_collection(
     state: &SharedState,
@@ -888,7 +887,7 @@ pub async fn read_collection(
         });
     }
     if c.published {
-        let full = c.minter(s) || known_committee(state, s);
+        let full = c.minter(s) || known_committee(state, s).await;
         return Ok(CollectionRead {
             id,
             full,
@@ -908,9 +907,8 @@ pub async fn read_collection(
 /// `GET /v1/collections/:idOrContractAddress/items`: any signer lists a
 /// published collection's published items; a role holder and the committee
 /// list every item. For a published collection the committee only widens the
-/// view, from the read at hand ([`crate::committee::Committee::known_member`]):
-/// the answer never waits on the committee source, and a member gets what any
-/// signer gets while no good read is at hand.
+/// view ([`crate::committee::known_member`]): a member gets what any signer
+/// gets while the index can't tell.
 pub async fn collection_items(
     state: &SharedState,
     signer: &Signer,
@@ -961,7 +959,7 @@ pub async fn collection_items(
         });
     }
     if c.published {
-        let full = c.minter(s) || known_committee(state, s);
+        let full = c.minter(s) || known_committee(state, s).await;
         return Ok(CollectionRead {
             id,
             full,
@@ -1005,7 +1003,7 @@ pub async fn read_item(
         return Ok(ItemRead { id, full: true });
     }
     if let Some(c) = parent.filter(|c| c.published && (c.third_party || i.minted)) {
-        let full = c.owner(s) || c.manager(s) || c.minter(s) || known_committee(state, s);
+        let full = c.owner(s) || c.manager(s) || c.minter(s) || known_committee(state, s).await;
         return Ok(ItemRead { id, full });
     }
     if on_committee(state, s).await? {
@@ -1765,10 +1763,10 @@ pub async fn assignable(state: &SharedState, address: &str) -> Result<bool, ApiE
     on_committee(state, &address.to_ascii_lowercase()).await
 }
 
-/// Whether the signer is on the committee by the read at hand, without
-/// waiting: for a notice, never for a grant.
-pub fn known_curator(state: &SharedState, curator: &Curator) -> bool {
-    curator.committee || known_committee(state, &curator.signer)
+/// Whether the signer is on the committee by the index, false when it
+/// can't tell: for a notice, never for a grant.
+pub async fn known_curator(state: &SharedState, curator: &Curator) -> bool {
+    curator.committee || known_committee(state, &curator.signer).await
 }
 
 /// The facts of the curated collection a write reads, decided again inside

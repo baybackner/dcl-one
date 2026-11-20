@@ -5,9 +5,9 @@
 //!
 //! At most one read runs at a time, in a task of its own: it finishes and
 //! keeps its answer (a failure or a panic included) even when every caller
-//! that waited on it went away. [`Kept::get`] waits for it; [`Kept::known`]
-//! never does; [`Kept::get_since`] accepts only a read that started at or
-//! after a given instant, whatever its lifetime.
+//! that waited on it went away. [`Kept::get`] waits for it; [`Kept::get_since`]
+//! accepts only a read that started at or after a given instant, whatever its
+//! lifetime.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -135,27 +135,6 @@ impl<T: Clone + Send + 'static> Kept<T> {
         }
     }
 
-    /// A good read at hand, without waiting: the one kept while it is fresh,
-    /// and while the one refresh that follows its expiry runs (a failed
-    /// refresh drops an expired read); `None` when no good read is at hand.
-    /// Starts the read that is due.
-    pub fn known<F>(&self, read: impl FnOnce() -> F) -> Option<T>
-    where
-        F: Future<Output = Option<T>> + Send + 'static,
-    {
-        let mut cache = self.shared.cache();
-        if cache.fresh(self.shared.ttl).is_none() && !cache.failing() && !cache.reading {
-            cache.reading = true;
-            cache.reading_started = Some(Instant::now());
-            self.spawn(read());
-        }
-        cache
-            .good
-            .as_ref()
-            .filter(|(at, _)| at.elapsed() < self.shared.ttl || cache.reading)
-            .map(|(_, value)| value.clone())
-    }
-
     /// The value of a read that started at or after `since`, waiting for
     /// one (and starting it when none runs); `None` when the source can't
     /// tell. Concurrent callers share the read in flight when it started in
@@ -197,23 +176,6 @@ impl<T: Clone + Send + 'static> Kept<T> {
                 shared.settle(read);
             }
         });
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn refresh_with(
-        &self,
-        read: impl Future<Output = Option<T>> + Send + 'static,
-    ) {
-        let settled = self.shared.settled.notified();
-        tokio::pin!(settled);
-        settled.as_mut().enable();
-        {
-            let mut cache = self.shared.cache();
-            cache.reading = true;
-            cache.reading_started = Some(Instant::now());
-        }
-        self.spawn(read);
-        settled.await;
     }
 
     #[cfg(test)]

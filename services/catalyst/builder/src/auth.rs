@@ -6,9 +6,9 @@
 //! signed-fetch request from a `BUILDER_ADMIN_ADDRESSES` wallet).
 //!
 //! It accepts only the timestamped payload
-//! (`method:path:timestamp:metadata`) with a timestamp at most five minutes
-//! behind the node's clock and at most one minute ahead; a request signed
-//! over its method and path alone is refused.
+//! (`method:path:timestamp:metadata`) with a timestamp at most 60 seconds
+//! behind or ahead of the node's clock, the window of every signed route; a
+//! request signed over its method and path alone is refused.
 //!
 //! Every verification failure answers upstream's 401
 //! `{"ok":false,"data":{"message":...},"error":"Unauthenticated"}` with a

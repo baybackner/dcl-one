@@ -14,8 +14,8 @@ roles `github.com/decentraland/builder-server` at `98897af` defines:
 - a manager of a third-party collection's provider.
 
 Each role comes from a different source: the builder's own rows, the node's
-copy of the Polygon collections subgraph, the committee as the subgraph
-lists it, and the third-party registry. A route that checks its roles by
+copy of the Polygon collections subgraph, the Polygon committee index, and
+the third-party registry. A route that checks its roles by
 itself can forget one, read one from the request, or grant access when a
 source is down.
 
@@ -38,17 +38,13 @@ source is down.
   answers yes. It refuses only when every source it needs answered no. When
   a source it needs can't tell, it answers 503 and grants nothing. A source
   is consulted only when the answer depends on it. For published content
-  the committee only widens a caller's view, and that question is answered
-  from the read at hand without waiting on the committee source: a good read
-  while it is fresh, and while the one refresh that follows its expiry runs.
-  A failed refresh drops an expired read. With no good read at hand (before
-  the first read succeeds, or once a refresh after the hour has failed), a
-  committee member reads published content as any signer does.
-- **No connection across an outbound read.** A decision reads the builder's
+  the committee only widens a caller's view: while the committee index can't
+  tell, a committee member reads published content as any signer does.
+- **No connection across another read.** A decision reads the builder's
   rows and the chain copy, returns its database connection, and only then
-  waits on the committee. It reads the registry before it takes a
-  connection, and a write decides again inside its transaction from the
-  same registry read.
+  reads the committee. It reads the registry before it takes a connection,
+  and a write decides again inside its transaction from the same registry
+  read.
 - **One owner.** A standard collection's owner is its chain creator once the
   copy holds it, and its stored `eth_address` before. The owner is derived on
   each request, so `POST /v1/collections/{id}/owner/sync` stores nothing and
@@ -60,18 +56,15 @@ source is down.
   admission stands when the publish decides again inside its transaction.
 - **Managers come from the chain.** Only a collection on chain has managers,
   read from the copy. A request body never sets them.
-- **Current committee, read once an hour.** The builder reads the current
-  committee from the Polygon collections subgraph (`accounts` with
-  `isCommitteeMember`) through the chain index's subgraph client: its SSRF
-  guard, response cap and retries, under a 10-second bound. One read answers
-  for an hour. At most one read runs at a time, in a task of its own that
-  keeps its answer, a failure or a panic included, even when every caller
-  waiting on it went away; concurrent requests share it. A failed
-  read, or a node without `MATIC_COLLECTIONS_SUBGRAPH_URL`, can't tell: that
-  answer lasts 30 seconds, and every decision the committee could change
-  answers 503 until a read succeeds. `GET /v1/committee` answers from the
-  same read. Decisions that only the committee can grant use a fresh read
-  only.
+- **Current committee, from the committee index.** The builder reads the
+  current committee from the shop's Polygon committee index by shared SQL
+  (`builder/src/committee.rs`): a wallet is a member when its latest
+  `MemberSet` event across both Committee contracts, at or below the block
+  the index has published, set it. Every committee question reads the index
+  afresh. An index that is off, not yet published or published more than 30
+  minutes ago, or a failed read, can't tell: every decision the committee
+  could change answers 503, and so does `GET /v1/committee`, which answers
+  from the same read.
 - **Third-party managers.** A third-party collection's provider is the
   provider id of its URN. Its managers, in the order
   `github.com/decentraland/builder-server` reads its sources:
@@ -112,10 +105,9 @@ source is down.
   committee member. The collection must exist (404) and be published: a
   standard one on chain, a third-party one with an item curation (409);
   only then are the roles asked, so a stranger gets 401. The committee is
-  asked only when no role answers, and every committee question here waits
-  for a fresh read: while the committee can't be read, the committee's
-  curation listing and every decision only the committee can make answer
-  503, never a narrower view. Which status change each caller may make is
+  asked only when no role answers: while the committee index can't tell,
+  the committee's curation listing and every decision only the committee
+  can make answer 503, never a narrower view. Which status change each caller may make is
   one table (`builder/src/curation/transitions.rs`); a write asks it again
   inside its transaction, with the collection row locked.
 - **Admins.** `BUILDER_ADMIN_ADDRESSES` and the admin bearer open the
@@ -135,21 +127,14 @@ source is down.
   list for the same unapproved provider manages nothing of it, so a wallet
   that claims a provider id before another wallet registers it on chain
   keeps no access once the registry has the record.
-- After the builder's last successful read, a wallet removed from the
-  committee:
-  - can still be granted a decision only the committee can grant for up to
-    one hour;
-  - can still get the committee's wider view of published content (a
-    published collection's unminted items, an item's `local_content_hash`)
-    for that hour, and then only while the one refresh that follows the
-    hour runs, which ends within the read's 10-second bound. That refresh
-    starts at the first request after the hour, which the removed wallet's
-    own request can be.
-- A wallet added to the committee waits up to the same hour.
-- While the subgraph is down, a request that only the committee could grant
-  answers 503 rather than 401, and `GET /v1/committee` answers 503 rather
-  than an empty list. Published content stays readable as any signer reads
-  it, a committee member included.
+- A wallet removed from the committee, or added to it, counts as such once
+  the committee index publishes the block that holds the change: the index's
+  walk and confirmation lag, and never more than the 30 minutes after which
+  an unpublished index answers 503.
+- While the committee index can't tell, a request that only the committee
+  could grant answers 503 rather than 401, and `GET /v1/committee` answers
+  503 rather than an empty list. Published content stays readable as any
+  signer reads it, a committee member included.
 - Every by-id read is a decision, so it answers 503 when the chain copy is
   older than its decision bound, as writes do, with one exception: a
   reader whose answer no chain fact can change beyond what it already holds
@@ -171,11 +156,16 @@ source is down.
 
 - **A check in each route.** Nothing stops a route from skipping a role or
   admitting a caller by a value the request supplied.
-- **A committee read per decision.** Every decision would depend on the
-  subgraph's latency, and an outage would turn each request into an outbound
-  call.
-- **The committee as every wallet that ever curated.** The subgraph keeps
-  past curators, so removed members would keep the role for good.
+- **The committee from the collections subgraph, kept an hour.** A removed
+  member would keep the role for up to the hour, and every decision would
+  depend on an outbound read's latency and outages; the index is a local
+  table of tens of rows.
+- **An unpublished index admitting only the configured admin addresses.**
+  It would refuse every member with a 401 as if nobody were on the committee
+  while the index catches up, and give the admin addresses a role on the
+  upstream routes, which they don't have.
+- **The committee as every wallet that ever curated.** Past curators would
+  keep the role for good.
 - **A registry read kept for a time, or one read per provider.** A kept read
   would let a removed manager keep access for its lifetime, and would break
   the old builder web's wait for a new merkle root. Reads keyed by provider
