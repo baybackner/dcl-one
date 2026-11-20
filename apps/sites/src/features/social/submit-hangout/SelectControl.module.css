@@ -1,0 +1,27 @@
+.frame {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  padding-inline-end: var(--dcl-space-48);
+  cursor: pointer;
+}
+
+.select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.chevron {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: var(--dcl-space-12);
+  margin-block: auto;
+  color: var(--dcl-text-primary);
+  pointer-events: none;
+}

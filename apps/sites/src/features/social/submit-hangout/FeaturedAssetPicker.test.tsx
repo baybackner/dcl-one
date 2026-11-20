@@ -23,7 +23,7 @@ describe("when searching featured assets", () => {
   afterEach(() => { cleanup(); vi.resetAllMocks(); });
 
   it("should debounce the query and select the returned catalogue asset", async () => {
-    await user.type(screen.getByRole("textbox", { name: "Search featured items or collections" }), "music");
+    await user.type(screen.getByRole("textbox", { name: "Item" }), "music");
     expect(searchFeaturedAssets).not.toHaveBeenCalled();
     await user.click(await screen.findByRole("button", { name: /Music wearable\s*Item/ }));
     expect(searchFeaturedAssets).toHaveBeenCalledWith("music", expect.any(AbortSignal));
@@ -38,12 +38,12 @@ describe("when searching featured assets", () => {
         firstSignal = signal!;
         return new Promise((resolve) => { resolveFirst = resolve; });
       });
-      await user.type(screen.getByRole("textbox", { name: "Search featured items or collections" }), "first");
+      await user.type(screen.getByRole("textbox", { name: "Item" }), "first");
       await waitFor(() => expect(searchFeaturedAssets).toHaveBeenCalled());
     });
     it("should abort the previous query and ignore its stale results", async () => {
-      await user.clear(screen.getByRole("textbox", { name: "Search featured items or collections" }));
-      await user.type(screen.getByRole("textbox", { name: "Search featured items or collections" }), "second");
+      await user.clear(screen.getByRole("textbox", { name: "Item" }));
+      await user.type(screen.getByRole("textbox", { name: "Item" }), "second");
       await screen.findByRole("button", { name: /Music wearable\s*Item/ });
       await act(async () => { resolveFirst([{ ...asset, name: "Stale wearable" }]); });
       expect(firstSignal.aborted).toBe(true);
@@ -59,7 +59,7 @@ describe("when searching featured assets", () => {
   describe("and a catalogue request fails", () => {
     beforeEach(async () => {
       vi.mocked(searchFeaturedAssets).mockRejectedValueOnce(new Error("Catalogue unavailable"));
-      await user.type(screen.getByRole("textbox", { name: "Search featured items or collections" }), "music");
+      await user.type(screen.getByRole("textbox", { name: "Item" }), "music");
       await screen.findByRole("alert");
     });
     it("should retry the same query and show the recovered result", async () => {

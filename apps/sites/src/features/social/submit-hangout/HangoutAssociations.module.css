@@ -1,4 +1,8 @@
-.root { display: flex; flex-direction: column; gap: 12px; }
-.communityLabel { flex: initial; }
-.schedules { border: 1px solid var(--ink-45); border-radius: 8px; padding: 12px; min-width: 0; }
-.root :focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.root,
+.community,
+.admin { display: flex; flex-direction: column; gap: var(--dcl-space-12); min-width: 0; }
+.schedules { border: 1px solid var(--dcl-transparencies-white-40); border-radius: var(--dcl-radius-sm); padding: var(--dcl-space-12); min-width: 0; }
+.schedules legend { padding-inline: var(--dcl-space-4); }
+.root :focus-visible,
+.community :focus-visible,
+.admin :focus-visible { outline: 2px solid var(--dcl-text-primary); outline-offset: 3px; }
