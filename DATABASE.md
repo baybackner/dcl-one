@@ -1540,11 +1540,12 @@ operator's unblock
 transaction that clears its block. Readers are the credits claim (`EXISTS` by
 address, folded into the captcha claim and the balance reports as
 `is_blocked_for_claiming`; the spend and the reservation read the operator's
-block alone, so a flag never holds credits a wallet has), every paid-bucket
-credit (its `source` by address in the grant's transaction: a flagged wallet
-receives only its own Stripe or MANA purchase; an operator grant on the bearer
-route or the console, an operator recovery under `mana-topup:<txHash>` and a
-refund answer 409 until the unflag) and the admin list
+block alone, so a flag never holds credits a wallet has), the paid-bucket
+grant (its `source` by address in the grant's transaction: a flagged wallet
+receives only its own Stripe, MANA or mock purchase; an operator grant on the
+bearer route or the console and an operator recovery under
+`mana-topup:<txHash>` answer 409 until the unflag; the refund of a spend is
+booked elsewhere and unaffected) and the admin list
 (`GET /credits/admin/flags`, by address or paged by `flagged_at`). Rows are
 small and few: a flag per wallet reported.
 
