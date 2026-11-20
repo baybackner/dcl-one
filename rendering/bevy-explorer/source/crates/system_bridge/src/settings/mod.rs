@@ -44,7 +44,7 @@ use language_setting::LanguageSetting;
 use load_distance::{LoadDistanceSetting, UnloadDistanceSetting};
 use max_avatars::MaxAvatarsSetting;
 use max_downloads::MaxDownloadsSetting;
-use max_lods::MaxNearLodsSetting;
+use max_lods::{MaxFarLodsSetting, MaxNearLodsSetting};
 use mute_mic_in_background_setting::MuteMicInBackgroundSetting;
 use oob_setting::OobSetting;
 use player_settings::{JumpSetting, RunSpeedSetting, WalkSpeedSetting};
@@ -74,6 +74,7 @@ pub mod fog_settings;
 pub mod frame_rate;
 pub mod imposter_settings;
 pub mod language_setting;
+pub mod lens_flare_setting;
 pub mod load_distance;
 pub mod max_avatars;
 pub mod max_downloads;
@@ -202,6 +203,12 @@ impl Plugin for SettingBridgePlugin {
         #[cfg(not(target_arch = "wasm32"))]
         add_enum_setting::<SsaoSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<SkyReflectionSetting>(app, &mut settings, &mut schedule, &config);
+        add_enum_setting::<lens_flare_setting::LensFlareSetting>(
+            app,
+            &mut settings,
+            &mut schedule,
+            &config,
+        );
         add_enum_setting::<OobSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<CelShadingSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<AvatarOutlineSetting>(app, &mut settings, &mut schedule, &config);
@@ -217,6 +224,7 @@ impl Plugin for SettingBridgePlugin {
             add_int_setting::<LoadDistanceSetting>(app, &mut settings, &mut schedule, &config);
             add_int_setting::<UnloadDistanceSetting>(app, &mut settings, &mut schedule, &config);
             add_int_setting::<MaxNearLodsSetting>(app, &mut settings, &mut schedule, &config);
+            add_int_setting::<MaxFarLodsSetting>(app, &mut settings, &mut schedule, &config);
         }
 
         add_enum_setting::<FpsTargetSetting>(app, &mut settings, &mut schedule, &config);
