@@ -159,7 +159,9 @@ export function PermissionsModal({
           </Button>
           <Button
             disabled={!valid || busy}
-            onClick={() => onSubmit({ address: address.trim(), permissions: submitted, seeded: editing })}
+            onClick={() =>
+              onSubmit({ address: address.trim(), permissions: submitted, seeded: editing })
+            }
           >
             {adminCopy.permissions.save}
           </Button>

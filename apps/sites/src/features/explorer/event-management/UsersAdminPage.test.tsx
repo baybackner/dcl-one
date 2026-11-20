@@ -217,7 +217,7 @@ describe("when opening the Users page", () => {
       const dialog = screen.getByRole("dialog", { name: "Add User" });
       await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), NEW_WALLET);
       await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
-      api.profiles = [...(api.profiles ?? []), api.settings![NEW_WALLET]!];
+      api.profiles = [...(api.profiles as EventProfile[]), api.settings![NEW_WALLET]!];
       await client.invalidateQueries();
       await waitFor(() => expect(readsOf(LIST)).toBe(2));
       await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
