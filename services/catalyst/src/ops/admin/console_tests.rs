@@ -18,6 +18,10 @@ use super::router;
 use super::tests::{admin_state, audit_rows, cleanup, lazy_pool, send, session_cookie, wallet};
 use crate::content::{ContentState, Settings as ContentSettings};
 use crate::http::Outbound;
+use crate::shop::credits::ApiError;
+use crate::shop::credits::escrow::{
+    Broker, BrokerError, BuyRequest, ManaPaymentVerification, NoBroker, TransferBlock,
+};
 use crate::storage::Storage;
 
 const TOKEN: &str = "console-test-bearer";
@@ -415,6 +419,193 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
         ] {
             sqlx::query(sql).bind(address).execute(&pool).await.unwrap();
         }
+    }
+    cleanup(&pool, &actor).await;
+}
+
+/// A broker that confirms one top-up transfer, paid by `payer`; every other call is the unconfigured
+/// broker's answer.
+struct PaidTopup {
+    tx_hash: String,
+    payer: String,
+}
+
+#[async_trait::async_trait]
+impl Broker for PaidTopup {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    fn escrow_address(&self) -> Option<String> {
+        None
+    }
+
+    async fn buy(&self, req: &BuyRequest) -> Result<String, BrokerError> {
+        NoBroker.buy(req).await
+    }
+
+    async fn resume(&self, key: &str) -> Result<String, BrokerError> {
+        NoBroker.resume(key).await
+    }
+
+    async fn released_buy_mined(&self, key: &str) -> Result<bool, ApiError> {
+        NoBroker.released_buy_mined(key).await
+    }
+
+    async fn reclaim(
+        &self,
+        collection: &str,
+        token_id: &str,
+        key: &str,
+    ) -> Result<String, ApiError> {
+        NoBroker.reclaim(collection, token_id, key).await
+    }
+
+    async fn release(
+        &self,
+        collection: &str,
+        token_id: &str,
+        buyer: &str,
+        key: &str,
+    ) -> Result<String, ApiError> {
+        NoBroker.release(collection, token_id, buyer, key).await
+    }
+
+    async fn verify_mana_payment(
+        &self,
+        tx_hash: &str,
+    ) -> Result<ManaPaymentVerification, ApiError> {
+        if !tx_hash.eq_ignore_ascii_case(&self.tx_hash) {
+            return Ok(ManaPaymentVerification::NoPayment);
+        }
+        Ok(ManaPaymentVerification::Confirmed {
+            from: self.payer.clone(),
+            to: "0x1111111111111111111111111111111111111111".into(),
+            value_wei: "100000000000000000000".into(),
+            block: TransferBlock {
+                number: 1_000,
+                timestamp: 978_307_210,
+                confirmations: 64,
+            },
+        })
+    }
+}
+
+/// A console recovery of a top-up the wallet paid is booked as a purchase, so it credits a flagged wallet
+/// the console refuses a plain grant; a key naming no payment is refused and moves nothing.
+#[tokio::test]
+async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wallet() {
+    let Some(pool) = crate::db::scratch::pool(4).await else {
+        return;
+    };
+    let user = random_address();
+    let paid = format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
+    let unpaid = format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
+    let settings = crate::shop::credits::Settings {
+        writes_enabled: true,
+        admin_token: Some("credits-tok".into()),
+        ..crate::shop::credits::Settings::for_tests()
+    };
+    let market = Arc::new(crate::shop::credits::pricing::LocalMarket {
+        pool: pool.clone(),
+        market: None,
+        price: None,
+        max_staleness_secs: settings.mana_price_max_staleness_secs,
+    });
+    let cs = Arc::new(crate::shop::credits::State::with_sources(
+        pool.clone(),
+        Outbound::for_tests(),
+        settings,
+        market,
+        Arc::new(PaidTopup {
+            tx_hash: paid.clone(),
+            payer: user.clone(),
+        }),
+        None,
+    ));
+    cs.credits
+        .admin_flag_wallets(
+            std::slice::from_ref(&user),
+            "explorer_ip_multi_accounting",
+            None,
+            "console-test",
+            &json!({}),
+        )
+        .await
+        .unwrap();
+    let (app, actor, cookie) = console(
+        &pool,
+        true,
+        Domains {
+            credits: Some(cs.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let grant = |key: String| json!({ "address": user, "amount": "5", "idempotencyKey": key });
+
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        grant(format!("console-{}", uuid::Uuid::new_v4().simple())),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a plain grant is refused: {body}"
+    );
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        grant(format!("mana-topup:{unpaid}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        grant(format!("MANA-TOPUP:{paid}")),
+    )
+    .await;
+    assert_eq!(
+        (status, body["body"]["replayed"].as_bool()),
+        (StatusCode::OK, Some(false)),
+        "the paid recovery is booked: {body}"
+    );
+    let booked: (Vec<String>, Vec<String>) = sqlx::query_as(
+        "SELECT ARRAY(SELECT DISTINCT kind FROM credits.ledger WHERE address = $1), \
+                ARRAY(SELECT idempotency_key FROM credits.idempotency WHERE address = $1)",
+    )
+    .bind(&user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        booked,
+        (
+            vec!["purchase".to_string()],
+            vec![format!("mana-topup:{paid}")]
+        ),
+        "only the paid recovery is booked, a purchase under the claim's own key"
+    );
+
+    sqlx::query("DELETE FROM credits.wallet_flags WHERE address = $1")
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for sql in [
+        "DELETE FROM credits.ledger WHERE address = $1",
+        "DELETE FROM credits.purchases WHERE address = $1",
+        "DELETE FROM credits.idempotency WHERE address = $1",
+        "DELETE FROM ops.admin_audit WHERE domain = 'credits' AND target = $1",
+        "DELETE FROM credits.wallets WHERE address = $1",
+    ] {
+        sqlx::query(sql).bind(&user).execute(&pool).await.unwrap();
     }
     cleanup(&pool, &actor).await;
 }
