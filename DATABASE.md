@@ -1623,10 +1623,12 @@ Tables and what they hold:
   link). These columns are the one source of a collection's forum link.
   The node builds a new link under `FORUM_URL`; it never fetches the stored
   link. `forum_claimed_at` is a pending topic attempt, only without a link.
-  Claiming locks the collection, checks access and publication again, and
-  commits before the forum call. A claim holds for 60 seconds; a stale
-  attempt looks up the collection UUID as Discourse's `external_id` before
-  creating another topic. Recording the link clears the claim atomically.
+  Claiming locks the collection, checks access again (and a standard
+  collection's publication), and commits before the forum call. A claim
+  holds for 60 seconds and an attempt ends within 45. A stored link is the
+  only proof of a topic: when the forum made one whose link was not
+  stored, the next attempt after the claim asks the forum again. Recording
+  the link clears the claim and keeps a link already stored.
 
 Deletes: an item's curations and a collection's curations and events go
 with them (`ON DELETE CASCADE`); the node refuses to delete a third-party

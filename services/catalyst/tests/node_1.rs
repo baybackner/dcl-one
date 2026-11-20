@@ -18,6 +18,8 @@ mod gatekeeper_policy;
 mod index_process;
 #[path = "notifier_parity.rs"]
 mod notifier_parity;
+#[path = "serve_routes_startup.rs"]
+mod serve_routes_startup;
 #[path = "social_live.rs"]
 mod social_live;
 #[path = "worlds_mirror.rs"]

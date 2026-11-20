@@ -1304,7 +1304,7 @@ impl Op {
             Op::DeleteCollection | Op::Terms | Op::ForumPost if !owner && !manager => {
                 unauthorized_user(&caller.address(), "collections", &collection)
             }
-            Op::ForumPost if kind.published() => ok(),
+            Op::ForumPost if kind.published() || kind.third_party() => ok(),
             Op::ForumPost => refused(409, "The collection is not published"),
             Op::OwnerSync | Op::Publish if !owner && !manager && !committee => {
                 unauthorized_user(&caller.address(), "collections", &collection)

@@ -457,7 +457,7 @@ impl Op {
             Slots => allowed(manages),
             ForumPost => Expect::Status(match (signed, manages) {
                 (false, _) => 401,
-                (true, true) => 409,
+                (true, true) => 503,
                 (true, false) => 401,
             }),
             ThirdParty => {
@@ -697,6 +697,41 @@ async fn the_first_collection_of_a_new_provider_makes_its_signer_the_providers_o
         status,
         StatusCode::OK,
         "the holder manages every collection of it: {answer}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_registry_record_grants_its_provider_to_nobody() {
+    let Some(w) = world().await else { return };
+    let f = fixture(&w, Unknown).await;
+    w.registry
+        .put(&f.provider, &[&Holder.address()], true, false);
+    w.registry.set(&f.provider, "root", json!("0x12"));
+    for caller in [Holder, Stranger] {
+        let (method, path, body) = CreateCollection.request(&f, caller);
+        let (status, answer) = call(&w.app, caller, method, &path, body).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{caller:?}: {answer}");
+        let (method, path, _) = ReadCollection.request(&f, caller);
+        let (status, answer) = call(&w.app, caller, method, &path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{caller:?}: {answer}");
+    }
+    let claimed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM builder.virtual_third_parties WHERE id = $1)",
+    )
+    .bind(&f.provider)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert!(
+        !claimed,
+        "nobody claimed the provider as a virtual third party"
+    );
+    let (status, answer) = call(&w.app, Other, "GET", "/v1/thirdParties", None).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["data"][0]["id"],
+        json!("urn:decentraland:matic:collections-thirdparty:other"),
+        "{answer}"
     );
 }
 

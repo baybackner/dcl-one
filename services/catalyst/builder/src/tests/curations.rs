@@ -431,18 +431,14 @@ async fn a_forum_link_is_an_https_url_and_a_forum_id_comes_with_one() {
     };
     accepted(
         &pool,
-        &set("'https://forum.decentraland.org/t/hat/41395'", "41395"),
+        &set("'https://forum.example.org/t/hat/41395'", "41395"),
     )
     .await;
-    accepted(
-        &pool,
-        &set("'https://forum.decentraland.org/t/hat'", "NULL"),
-    )
-    .await;
+    accepted(&pool, &set("'https://forum.example.org/t/hat'", "NULL")).await;
     accepted(&pool, &set("'http://forum.localhost/t/hat/1'", "1")).await;
     refused(
         &pool,
-        &set("'https://forum.decentraland.org/t/a b'", "NULL"),
+        &set("'https://forum.example.org/t/a b'", "NULL"),
         "collections_forum_link_check",
     )
     .await;
@@ -455,7 +451,7 @@ async fn a_forum_link_is_an_https_url_and_a_forum_id_comes_with_one() {
     refused(
         &pool,
         &set(
-            &format!("'https://forum.decentraland.org/{}'", "a".repeat(2048)),
+            &format!("'https://forum.example.org/{}'", "a".repeat(2048)),
             "NULL",
         ),
         "collections_forum_link_check",
@@ -464,7 +460,7 @@ async fn a_forum_link_is_an_https_url_and_a_forum_id_comes_with_one() {
     refused(&pool, &set("NULL", "41395"), "collections_forum_id_check").await;
     refused(
         &pool,
-        &set("'https://forum.decentraland.org/t/hat'", "0"),
+        &set("'https://forum.example.org/t/hat'", "0"),
         "collections_forum_id_check",
     )
     .await;
@@ -484,13 +480,13 @@ async fn a_forum_claim_is_held_only_by_a_collection_without_a_link() {
     accepted(&pool, &set("NULL", "timezone('UTC', now())")).await;
     accepted(
         &pool,
-        &set("'https://forum.decentraland.org/t/hat/41395'", "NULL"),
+        &set("'https://forum.example.org/t/hat/41395'", "NULL"),
     )
     .await;
     refused(
         &pool,
         &set(
-            "'https://forum.decentraland.org/t/hat/41395'",
+            "'https://forum.example.org/t/hat/41395'",
             "timezone('UTC', now())",
         ),
         "collections_forum_claim_check",

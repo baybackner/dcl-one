@@ -1,17 +1,20 @@
 //! A collection's one forum topic and the committee's replies in it.
 //!
-//! A topic is made once per collection. A request first claims it: in one
-//! transaction that locks the collection row and decides access again, the
-//! collection must be published and hold no link, and no other claim may be
+//! A collection has a topic once it stores its link. A request first claims
+//! the topic: in one transaction that locks the collection row and decides
+//! access again, a standard collection must be published (a third-party one
+//! need not be), the collection must hold no link, and no other claim may be
 //! younger than [`CLAIM_HOLDS`]; it records `forum_claimed_at` and commits.
 //! Then, holding no connection, it asks the forum, within [`ATTEMPT`], to
-//! create the topic named by the collection's id (`external_id`), and stores
-//! the link and the first post's id in a second transaction, which clears
-//! the claim. A request that finds a claim within [`CLAIM_HOLDS`] is told to
-//! retry; one that finds an older claim takes it over and first asks the
-//! forum for the topic by that id, storing it when the earlier attempt made
-//! it. A failed attempt keeps its claim, so the forum is asked at most once
-//! per collection per [`CLAIM_HOLDS`].
+//! create the topic, and stores the link and the first post's id in a second
+//! transaction, which clears the claim. A request that finds a claim within
+//! [`CLAIM_HOLDS`] is told to retry; one that finds an older claim takes it
+//! over. A failed attempt keeps its claim, so the forum is asked at most once
+//! per collection per [`CLAIM_HOLDS`]. When the forum made a topic but its
+//! link was not stored, the next attempt after the claim asks the forum
+//! again: a standard collection's topic is made again under a title that
+//! names its contract, and a third-party collection's is refused by its taken
+//! title.
 
 use std::time::Duration;
 
@@ -42,7 +45,6 @@ struct Claim {
     collection: PostCollection,
     third_party: Option<String>,
     owner: Option<String>,
-    resumed: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -77,7 +79,7 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
             "collection {id} vanished under its lock"
         )));
     };
-    if !managed.published {
+    if third_party.is_none() && !managed.published {
         return Err(
             ApiError::conflict("The collection is not published").with_data(json!({ "id": id }))
         );
@@ -121,7 +123,6 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
         },
         third_party,
         owner: managed.owner,
-        resumed: fresh.is_some(),
     })
 }
 
@@ -149,25 +150,19 @@ async fn make(
     claim: &Claim,
     title: String,
 ) -> Result<Topic, Failure> {
-    let id = claim.collection.id.to_string();
-    if claim.resumed
-        && let Some(topic) = forum.find(&state.foundation, &id).await?
-    {
-        return Ok(topic);
-    }
     let raw = forum_text::body(
         &claim.collection,
         &state.settings.links,
         &state.settings.builder_server_url,
     );
     let first = forum_text::remove_emojis(&title);
-    match forum.create(&state.foundation, &first, &raw, &id).await? {
+    match forum.create(&state.foundation, &first, &raw).await? {
         Created::Topic(topic) => Ok(topic),
         Created::DuplicateTitle => match (&claim.third_party, &claim.collection.contract) {
             (None, Some(contract)) => {
                 let retried =
                     forum_text::remove_emojis(&forum_text::retried_title(&title, contract));
-                match forum.create(&state.foundation, &retried, &raw, &id).await? {
+                match forum.create(&state.foundation, &retried, &raw).await? {
                     Created::Topic(topic) => Ok(topic),
                     Created::DuplicateTitle => {
                         Err(Failure::Refused(reqwest::StatusCode::UNPROCESSABLE_ENTITY))
@@ -179,12 +174,8 @@ async fn make(
     }
 }
 
-/// `POST /v1/collections/:id/post`: makes the collection's forum topic and
-/// answers its link.
-pub async fn post(state: &State, manage: &CollectionManage) -> Result<String, ApiError> {
-    let claim = claim(state, manage).await?;
-    let forum = state.settings.forum.as_ref().ok_or_else(unavailable)?;
-    let title = match (&claim.third_party, &claim.owner) {
+async fn title(state: &State, claim: &Claim) -> Result<String, ApiError> {
+    Ok(match (&claim.third_party, &claim.owner) {
         (Some(provider), _) => format!(
             "Third Party collection {} with URN: {provider}",
             claim.collection.name
@@ -197,23 +188,44 @@ pub async fn post(state: &State, manage: &CollectionManage) -> Result<String, Ap
             };
             forum_text::title(&claim.collection.name, &creator)
         }
-    };
+    })
+}
+
+/// `POST /v1/collections/:id/post`: makes the collection's forum topic and
+/// answers its link. The whole attempt, the creator's name included, ends
+/// within [`ATTEMPT`], before its claim lapses.
+pub async fn post(state: &State, manage: &CollectionManage) -> Result<String, ApiError> {
+    let claim = claim(state, manage).await?;
+    let forum = state.settings.forum.as_ref().ok_or_else(unavailable)?;
     let id = claim.collection.id;
-    let topic = tokio::time::timeout(ATTEMPT, make(state, forum, &claim, title))
-        .await
-        .unwrap_or(Err(Failure::Unreachable))
-        .map_err(|failure| failure.api_error(id))?;
+    let topic = tokio::time::timeout(ATTEMPT, async {
+        let title = title(state, &claim).await?;
+        make(state, forum, &claim, title)
+            .await
+            .map_err(|failure| failure.api_error(id))
+    })
+    .await
+    .unwrap_or_else(|_| Err(Failure::Unreachable.api_error(id)))?;
     let link = forum.link(&topic);
-    let stored: Option<Option<String>> = sqlx::query_scalar(
-        "WITH kept AS (UPDATE builder.collections SET forum_link = $2, forum_id = $3, forum_claimed_at = NULL \
-           WHERE id = $1 AND forum_link IS NULL RETURNING forum_link) \
-         SELECT COALESCE((SELECT forum_link FROM kept), (SELECT forum_link FROM builder.collections WHERE id = $1))",
+    let kept = sqlx::query(
+        "UPDATE builder.collections SET forum_link = $2, forum_id = $3, forum_claimed_at = NULL \
+         WHERE id = $1 AND forum_link IS NULL",
     )
     .bind(id)
     .bind(&link)
     .bind(topic.post)
-    .fetch_optional(state.items.pool())
-    .await?;
+    .execute(state.items.pool())
+    .await?
+    .rows_affected()
+        == 1;
+    if kept {
+        return Ok(link);
+    }
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT forum_link FROM builder.collections WHERE id = $1")
+            .bind(id)
+            .fetch_optional(state.items.pool())
+            .await?;
     Ok(stored.flatten().unwrap_or(link))
 }
 
@@ -271,6 +283,11 @@ pub async fn reply(state: &State, grant: &ForumReply, raw: Option<&str>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_attempt_ends_before_its_claim_lapses() {
+        assert!(ATTEMPT < CLAIM_HOLDS.to_std().unwrap());
+    }
 
     #[test]
     fn a_reply_is_one_to_ten_thousand_utf16_units_and_mentions_nobody() {

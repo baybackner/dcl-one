@@ -93,9 +93,15 @@ source is down.
   through the chain index's subgraph client, under a 10-second bound, from
   `THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL`. A decision accepts only a read
   that started after the decision began. One read runs at a time and every
-  decision waiting when it started shares it. A read that fails, an answer
-  that breaks the expected shape, or a node without the setting can't tell:
-  that answer lasts 30 seconds, and every decision, listing and view that
+  decision waiting when it started shares it. A record the node can't read
+  (a field outside the shapes the registry answers, such as a manager that
+  is not an address) stays in the registry as a provider nobody manages:
+  no managers, not approved, no item allowance, logged once with its id.
+  It never counts as missing, so no wallet can claim its provider through a
+  virtual third party. A record without an id is left out. A read that
+  fails, an answer that breaks the walk (a provider twice, out of order or
+  past the page bound), or a node without the setting can't tell: that
+  answer lasts 30 seconds, and every decision, listing and view that
   involves a third-party collection answers 503 until a read succeeds.
 - **Access checks never write.** A decision reads its sources and changes no
   row, also when it refuses.

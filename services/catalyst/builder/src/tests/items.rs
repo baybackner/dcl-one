@@ -856,3 +856,149 @@ async fn item_saves_and_uploads_wait_for_the_documents_release_and_reads_do_not(
     assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, bytes)]).await.0, 200);
     assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
 }
+
+#[tokio::test]
+async fn a_collection_save_takes_its_collection_from_the_typed_body_alone() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let owner = address(OWNER_KEY);
+    let id = Uuid::new_v4();
+    let other = Uuid::new_v4();
+    let body =
+        super::support::collection_body(json!({ "id": id, "name": "From the body" }), &owner);
+    let query = format!(
+        "collection%5Bid%5D={other}&collection%5Bname%5D=From%20the%20query&collection%5Beth_address%5D={}&data=0xdead&collection=%7B%7D",
+        address(STRANGER_KEY)
+    );
+    let (got, answer) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/collections/{id}?{query}"),
+        &body,
+    )
+    .await;
+    assert_eq!(got, 200, "{answer}");
+    let stored: (String, String) =
+        sqlx::query_as("SELECT name, eth_address FROM builder.collections WHERE id = $1")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, ("From the body".to_string(), owner.clone()));
+    let none: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = $1)")
+            .bind(other)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!none, "the query's id names nothing");
+
+    let fresh = Uuid::new_v4();
+    let only_query = format!(
+        "collection%5Bid%5D={fresh}&collection%5Bname%5D=Q&collection%5Beth_address%5D={owner}&collection%5Bsalt%5D=&collection%5Bcontract_address%5D=&data=0x"
+    );
+    let (got, answer) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/collections/{fresh}?{only_query}"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(got, 400, "a query never stands in for the body: {answer}");
+
+    let mut extra =
+        super::support::collection_body(json!({ "id": fresh, "name": "Extra" }), &owner);
+    extra["extra"] = json!(1);
+    let (got, answer) = put(&app, OWNER_KEY, &format!("/v1/collections/{fresh}"), &extra).await;
+    assert_eq!(got, 400, "an unknown key beside the collection: {answer}");
+    let mut inner =
+        super::support::collection_body(json!({ "id": fresh, "name": "Extra" }), &owner);
+    inner["collection"]["is_approved_by"] = json!(owner);
+    let (got, answer) = put(&app, OWNER_KEY, &format!("/v1/collections/{fresh}"), &inner).await;
+    assert_eq!(got, 400, "an unknown key in the collection: {answer}");
+    let saved: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = $1)")
+            .bind(fresh)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!saved);
+}
+
+#[tokio::test]
+async fn an_item_save_takes_its_item_from_the_typed_body_alone() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    let other = Uuid::new_v4();
+    let hash = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy";
+    let body = item(id, OWNER_KEY, None, &[("model.glb", hash)], None);
+    let query = format!(
+        "item%5Bid%5D={other}&item%5Bname%5D=From%20the%20query&item%5Beth_address%5D={}&item=%7B%7D",
+        address(STRANGER_KEY)
+    );
+    let (got, answer) = put(&app, OWNER_KEY, &format!("/v1/items/{id}?{query}"), &body).await;
+    assert_eq!(got, 200, "{answer}");
+    let stored: (String, String) =
+        sqlx::query_as("SELECT name, eth_address FROM builder.items WHERE id = $1")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, ("Items test".to_string(), address(OWNER_KEY)));
+    let none: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.items WHERE id = $1)")
+            .bind(other)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!none, "the query's id names nothing");
+
+    let fresh = Uuid::new_v4();
+    let only_query = format!(
+        "item%5Bid%5D={fresh}&item%5Bname%5D=Q&item%5Btype%5D=wearable&item%5Beth_address%5D={}",
+        address(OWNER_KEY)
+    );
+    let (got, answer) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{fresh}?{only_query}"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(got, 400, "a query never stands in for the body: {answer}");
+
+    let chosen = "ab".repeat(32);
+    let mut extra = item(fresh, OWNER_KEY, None, &[("model.glb", hash)], None);
+    extra["local_content_hash"] = json!(chosen);
+    extra["item"]["local_content_hash"] = json!(chosen);
+    extra["item"]["catalyst_content_hash"] = json!(chosen);
+    let (got, answer) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{fresh}?item%5Blocal_content_hash%5D={chosen}"),
+        &extra,
+    )
+    .await;
+    assert_eq!(
+        got, 200,
+        "unknown keys are dropped as builder-server drops them: {answer}"
+    );
+    assert!(
+        answer["data"]
+            .get("local_content_hash")
+            .is_none_or(|h| h != &json!(chosen)),
+        "{answer}"
+    );
+    let columns: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT local_content_hash, catalyst_content_hash FROM builder.items WHERE id = $1",
+    )
+    .bind(fresh)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_ne!(columns.0.as_deref(), Some(chosen.as_str()));
+    assert_ne!(columns.1.as_deref(), Some(chosen.as_str()));
+}

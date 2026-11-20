@@ -240,13 +240,12 @@ impl Forum {
         answered
     }
 
-    /// Creates a topic in the forum's category, named by `external_id`.
+    /// Creates a topic in the forum's category.
     pub async fn create(
         &self,
         client: &dcl_http::Outbound,
         title: &str,
         raw: &str,
-        external_id: &str,
     ) -> Result<Created, Failure> {
         let request = self
             .request(client, reqwest::Method::POST, "/posts.json", false)
@@ -254,7 +253,6 @@ impl Forum {
                 "title": title,
                 "raw": raw,
                 "category": self.category,
-                "external_id": external_id,
             }));
         let (status, body) = self.send(request, "create topic").await?;
         if errors(&body).is_some_and(|errors| {
@@ -275,65 +273,6 @@ impl Forum {
                 .as_str()
                 .ok_or(Failure::Invalid)?
                 .to_string(),
-        }))
-    }
-
-    /// The topic named `external_id`, when the forum has one.
-    pub async fn find(
-        &self,
-        client: &dcl_http::Outbound,
-        external_id: &str,
-    ) -> Result<Option<Topic>, Failure> {
-        let request = self.request(
-            client,
-            reqwest::Method::GET,
-            &format!("/t/external_id/{external_id}.json"),
-            true,
-        );
-        let response = request.send().await.map_err(|_| Failure::Unreachable)?;
-        let status = response.status();
-        if status == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !status.is_redirection() {
-            tracing::warn!(%status, "the forum refused a topic lookup");
-            return Err(Failure::Refused(status));
-        }
-        let location = response
-            .headers()
-            .get(reqwest::header::LOCATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or(Failure::Invalid)?;
-        let path = location.split(['?', '#']).next().unwrap_or_default();
-        let topic: i64 = path
-            .trim_end_matches(".json")
-            .rsplit('/')
-            .next()
-            .and_then(|id| id.parse().ok())
-            .filter(|id| *id > 0)
-            .ok_or(Failure::Invalid)?;
-        let request = self.request(
-            client,
-            reqwest::Method::GET,
-            &format!("/t/{topic}.json"),
-            true,
-        );
-        let (status, body) = self.send(request, "read topic").await?;
-        if !status.is_success() {
-            return Err(Failure::Refused(status));
-        }
-        let body = body.ok_or(Failure::Invalid)?;
-        let first = body["post_stream"]["posts"]
-            .as_array()
-            .and_then(|posts| posts.iter().find(|p| p["post_number"] == 1))
-            .ok_or(Failure::Invalid)?;
-        if positive(&body["id"]) != Some(topic) {
-            return Err(Failure::Invalid);
-        }
-        Ok(Some(Topic {
-            post: post_id(&first["id"]).ok_or(Failure::Invalid)?,
-            id: topic,
-            slug: body["slug"].as_str().ok_or(Failure::Invalid)?.to_string(),
         }))
     }
 
@@ -521,13 +460,13 @@ mod tests {
             )
             .await;
             assert_eq!(
-                f.create(&client, "hats", "body", "uuid").await,
+                f.create(&client, "hats", "body").await,
                 Err(Failure::Invalid)
             );
         }
         let f = serving(" ".repeat(1024 * 1024 + 1), StatusCode::OK).await;
         assert_eq!(
-            f.create(&client, "hats", "body", "uuid").await,
+            f.create(&client, "hats", "body").await,
             Err(Failure::Invalid)
         );
         let f = serving(
@@ -537,7 +476,7 @@ mod tests {
         )
         .await;
         assert_eq!(
-            f.create(&client, "hats", "body", "uuid").await,
+            f.create(&client, "hats", "body").await,
             Err(Failure::Invalid)
         );
         let f = serving(
@@ -546,7 +485,7 @@ mod tests {
         )
         .await;
         assert_eq!(
-            f.create(&client, "hats", "body", "uuid").await,
+            f.create(&client, "hats", "body").await,
             Err(Failure::Refused(StatusCode::FORBIDDEN))
         );
     }
@@ -578,7 +517,6 @@ pub mod fake {
         id: i64,
         slug: String,
         title: String,
-        external_id: Option<String>,
         posts: Vec<i64>,
     }
 
@@ -639,8 +577,6 @@ pub mod fake {
             let app = Router::new()
                 .route("/posts.json", post(Self::create))
                 .route("/posts/{file}", get(Self::read_post))
-                .route("/t/external_id/{file}", get(Self::by_external_id))
-                .route("/t/{file}", get(Self::read_topic))
                 .with_state(self.clone());
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -762,22 +698,12 @@ pub mod fake {
                         "Title has already been used",
                     );
                 }
-                let external_id = parsed["external_id"].as_str().map(str::to_string);
-                if external_id.is_some()
-                    && inner.topics.iter().any(|t| t.external_id == external_id)
-                {
-                    return refused(
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        "External ID has already been taken",
-                    );
-                }
                 let topic = 1001 + inner.made_topics;
                 let slug = slug(title);
                 inner.topics.push(Topic {
                     id: topic,
                     slug: slug.clone(),
                     title: title.to_string(),
-                    external_id,
                     posts: vec![next_post],
                 });
                 inner.posts.push((next_post, topic));
@@ -812,65 +738,6 @@ pub mod fake {
                 Some((post, topic)) => {
                     Json(json!({ "id": post, "topic_id": topic, "raw": "" })).into_response()
                 }
-                None => not_found(),
-            }
-        }
-
-        async fn by_external_id(
-            State(fake): State<Self>,
-            headers: HeaderMap,
-            Path(file): Path<String>,
-        ) -> Response {
-            if !fake.record(
-                "GET",
-                &format!("/t/external_id/{file}"),
-                &headers,
-                Value::Null,
-            ) {
-                return refused(
-                    StatusCode::FORBIDDEN,
-                    "You are not permitted to view the requested resource.",
-                );
-            }
-            let inner = fake.0.lock().unwrap();
-            let wanted = file.strip_suffix(".json").map(str::to_string);
-            match inner
-                .topics
-                .iter()
-                .find(|t| t.external_id.is_some() && t.external_id == wanted)
-            {
-                Some(t) => (
-                    StatusCode::FOUND,
-                    [(
-                        header::LOCATION,
-                        format!("{}/t/{}/{}.json", inner.origin, t.slug, t.id),
-                    )],
-                )
-                    .into_response(),
-                None => not_found(),
-            }
-        }
-
-        async fn read_topic(
-            State(fake): State<Self>,
-            headers: HeaderMap,
-            Path(file): Path<String>,
-        ) -> Response {
-            if !fake.record("GET", &format!("/t/{file}"), &headers, Value::Null) {
-                return refused(
-                    StatusCode::FORBIDDEN,
-                    "You are not permitted to view the requested resource.",
-                );
-            }
-            let inner = fake.0.lock().unwrap();
-            let id: Option<i64> = file.strip_suffix(".json").and_then(|id| id.parse().ok());
-            match inner.topics.iter().find(|t| Some(t.id) == id) {
-                Some(t) => Json(json!({
-                    "id": t.id, "slug": t.slug, "title": t.title,
-                    "post_stream": { "posts": t.posts.iter().enumerate()
-                        .map(|(n, id)| json!({ "id": id, "post_number": n + 1 })).collect::<Vec<_>>() },
-                }))
-                .into_response(),
                 None => not_found(),
             }
         }

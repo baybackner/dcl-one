@@ -489,7 +489,8 @@ const FORUM_CASES = [
   { name: '447-curation-post-assigned', description: 'POST /collections/{id}/curation/post signed by a committee member, the assignment notice the old builder web sends with the topic it reads from the link', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { topic_id: 401, raw: ASSIGNED } } },
   { name: '448-curation-post-unassigned-new-topic', description: 'POST /collections/{id}/curation/post signed by a committee member in a topic posted during the run, with another topic id in the body', method: 'POST', path: forumReply('302'), signer: 'committee', body: { forumPost: { topic_id: 401, raw: 'The collection has been unassigned.' } } },
   { name: '449-curation-post-mention', description: 'POST /collections/{id}/curation/post signed by a committee member with a raw that mentions a group', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { raw: 'The collection has been assigned to @admins' } } },
-  { name: '450-collection-post-third-party-draft', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection none of whose items was submitted', method: 'POST', path: forumPost('008'), signer: 'owner' }
+  { name: '450-collection-post-third-party-draft', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection none of whose items was submitted', method: 'POST', path: forumPost('008'), signer: 'owner' },
+  { name: '451-collection-post-third-party-again', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection that has its forum post', method: 'POST', path: forumPost('402'), signer: 'provider' }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2847,7 +2848,7 @@ function forumState(collections) {
   for (const { forum_link: link, forum_id: post } of collections) {
     if (!link || !post) continue
     const [, slug, topic] = new URL(link).pathname.match(/^\/t\/([^/]+)\/(\d+)$/)
-    forum.topics.push({ id: Number(topic), slug, title: null, externalId: null, posts: [post] })
+    forum.topics.push({ id: Number(topic), slug, title: null, posts: [post] })
     forum.posts.push([post, Number(topic)])
   }
   return forum
@@ -2887,9 +2888,7 @@ function forumAnswer(method, url, headers, bytes, forum) {
   }
   if (typeof body.title !== 'string' || typeof body.raw !== 'string') return refused(422, 'Title can\'t be blank')
   if (forum.topics.some(t => t.title !== null && t.title.toLowerCase() === body.title.toLowerCase())) return refused(422, 'Title has already been used')
-  const externalId = typeof body.external_id === 'string' ? body.external_id : null
-  if (externalId && forum.topics.some(t => t.externalId === externalId)) return refused(422, 'External ID has already been taken')
-  const topic = { id: 1001 + forum.madeTopics, slug: forumSlug(body.title), title: body.title, externalId, posts: [postId] }
+  const topic = { id: 1001 + forum.madeTopics, slug: forumSlug(body.title), title: body.title, posts: [postId] }
   forum.topics.push(topic)
   forum.posts.push([postId, topic.id])
   forum.madeTopics += 1

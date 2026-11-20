@@ -3,9 +3,14 @@
 //! programmatic flag and metadata, as builder-server's `thirdPartyFragment`
 //! reads them. The walk pages by id under [`MAX_PAGES`] through
 //! [`crate::graph::graph_query`] (the SSRF guard, the body cap and the retry
-//! ladder), and every record is validated before use: a record that breaks
-//! the shape fails the whole read, so no decision is made on part of the
-//! registry.
+//! ladder), and every record is validated before use. A record whose id is
+//! a string but whose other fields break the shape stands for a provider
+//! nobody manages, reported once; one without a string id is left out. An
+//! answer that breaks the walk fails the whole read, so no decision is made
+//! on part of the registry.
+
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::{Value, json};
 
@@ -15,8 +20,6 @@ use crate::shared::identity::is_valid_eth_address;
 
 /// Pages of [`THE_GRAPH_PAGE_SIZE`] providers walked before the read fails.
 pub const MAX_PAGES: usize = 10;
-
-const NETWORKS: [&str; 6] = ["mainnet", "goerli", "sepolia", "matic", "mumbai", "amoy"];
 
 const QUERY: &str = "query registry($idFrom: ID!, $first: Int!) {\
   thirdParties(first: $first, where: { id_gt: $idFrom }, orderBy: id, orderDirection: asc) {\
@@ -58,7 +61,7 @@ impl Provider {
 }
 
 /// Whether `id` is a provider id: `urn:decentraland:<network>:collections-thirdparty:<name>`,
-/// the network one of builder-server's six and the name free of `:`, `|`
+/// the network lowercase letters and digits and the name free of `:`, `|`
 /// and whitespace.
 pub fn is_provider_id(id: &str) -> bool {
     let parts: Vec<&str> = id.split(':').collect();
@@ -72,7 +75,10 @@ pub fn is_provider_id(id: &str) -> bool {
     else {
         return false;
     };
-    NETWORKS.contains(network)
+    !network.is_empty()
+        && network
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         && !name.is_empty()
         && !name
             .chars()
@@ -80,7 +86,7 @@ pub fn is_provider_id(id: &str) -> bool {
 }
 
 /// Every provider of the registry, sorted by id; `Err` when the node has no
-/// registry subgraph, the subgraph fails, or an answer breaks the shape.
+/// registry subgraph, the subgraph fails, or an answer breaks the walk.
 pub async fn registry(index: &ChainIndex) -> Result<Vec<Provider>, String> {
     let url = index
         .settings
@@ -108,7 +114,20 @@ pub async fn registry(index: &ChainIndex) -> Result<Vec<Provider>, String> {
             .ok_or("registry answered no thirdParties")?;
         let id_from_count = providers.len();
         for record in page {
-            providers.push(parse(record)?);
+            match (parse(record), record.get("id").and_then(Value::as_str)) {
+                (Ok(provider), _) => providers.push(provider),
+                (Err(error), Some(id)) => {
+                    if first_report(id) {
+                        tracing::warn!(%error, "third-party registry record unreadable; nobody manages it");
+                    }
+                    providers.push(nobody_manages(id));
+                }
+                (Err(error), None) => {
+                    if first_report("") {
+                        tracing::warn!(%error, "third-party registry record without an id left out");
+                    }
+                }
+            }
         }
         if providers[id_from_count..].iter().any(|p| p.id <= id_from) {
             return Err("registry answered a provider before the page's start".into());
@@ -122,6 +141,28 @@ pub async fn registry(index: &ChainIndex) -> Result<Vec<Provider>, String> {
         }
     }
     Err(format!("registry longer than {MAX_PAGES} pages"))
+}
+
+fn first_report(id: &str) -> bool {
+    static REPORTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+    REPORTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(id.to_string())
+}
+
+fn nobody_manages(id: &str) -> Provider {
+    Provider {
+        id: id.to_string(),
+        root: None,
+        managers: Vec::new(),
+        max_items: "0".into(),
+        is_approved: false,
+        is_programmatic: false,
+        name: String::new(),
+        description: String::new(),
+        contracts: Vec::new(),
+    }
 }
 
 fn text(v: Option<&Value>) -> Result<String, String> {
@@ -140,6 +181,7 @@ fn parse(record: &Value) -> Result<Provider, String> {
         .ok_or("registry answered a provider without a valid id")?;
     let root = match record.get("root") {
         None | Some(Value::Null) => None,
+        Some(Value::String(root)) if root.is_empty() => None,
         Some(Value::String(root))
             if root.len() == 66
                 && root.starts_with("0x")
@@ -408,38 +450,101 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_record_that_breaks_the_shape_fails_the_whole_read() {
+    async fn the_registry_states_the_live_subgraph_answers_are_read() {
+        let fake = Fake::default();
+        let mut rootless = record(P1);
+        rootless["root"] = json!("");
+        rootless["isApproved"] = json!(false);
+        rootless["metadata"]["type"] = json!("third_party_v1");
+        let polygon = record("urn:decentraland:polygon:collections-thirdparty:gamma");
+        set(&fake, Some(vec![rootless, polygon, record(P2)]));
+        let providers = registry(&index(&fake).await).await.unwrap();
+        let ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                P2,
+                P1,
+                "urn:decentraland:polygon:collections-thirdparty:gamma"
+            ]
+        );
+        assert_eq!(providers[1].root, None);
+        assert_eq!(providers[1].managers, vec![M1.to_string()]);
+        assert!(!providers[1].is_approved);
+        assert_eq!(providers[2].managers, vec![M1.to_string()]);
+    }
+
+    fn nobody_manages(id: &str) -> Provider {
+        Provider {
+            id: id.into(),
+            root: None,
+            managers: vec![],
+            max_items: "0".into(),
+            is_approved: false,
+            is_programmatic: false,
+            name: String::new(),
+            description: String::new(),
+            contracts: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_record_that_breaks_the_shape_stands_for_a_provider_nobody_manages() {
+        let mut bad_contract = record(P1);
+        bad_contract["metadata"]["thirdParty"]["contracts"] =
+            json!([{ "address": "0x1", "network": "amoy" }]);
         let broken: Vec<(&str, Value)> = vec![
-            (
-                "id",
-                json!("urn:decentraland:polygon:collections-thirdparty:alpha"),
-            ),
-            (
-                "id",
-                json!("urn:decentraland:matic:collections-thirdparty:al pha"),
-            ),
-            (
-                "id",
-                json!("urn:decentraland:matic:collections-thirdparty:a:b"),
-            ),
-            ("id", json!(7)),
             ("root", json!("0x12")),
             ("root", json!(format!("0x{}", "zz".repeat(32)))),
-            ("managers", json!(["not-an-address"])),
+            ("root", json!(7)),
+            ("managers", json!(["not-an-address", M1])),
             ("managers", Value::Null),
             ("maxItems", json!("-1")),
             ("maxItems", json!(100)),
             ("isApproved", Value::Null),
             ("isProgrammatic", json!("yes")),
+            ("metadata", bad_contract["metadata"].clone()),
         ];
         for (field, value) in broken {
             let fake = Fake::default();
             let mut bad = record(P1);
             bad[field] = value.clone();
             set(&fake, Some(vec![record(P2), bad]));
-            let index = index(&fake).await;
-            assert!(registry(&index).await.is_err(), "{field} = {value}");
+            let providers = registry(&index(&fake).await).await.unwrap();
+            assert_eq!(providers.len(), 2, "{field} = {value}");
+            assert_eq!(providers[0].id, P2, "{field} = {value}");
+            assert_eq!(providers[0].managers, vec![M1.to_string()]);
+            assert_eq!(providers[1], nobody_manages(P1), "{field} = {value}");
         }
+        for id in [
+            "urn:decentraland:matic:collections-thirdparty:al pha",
+            "urn:decentraland:matic:collections-thirdparty:a:b",
+            "urn:decentraland:matic:collections-thirdparty:a\u{FEFF}",
+            "not a provider",
+        ] {
+            let fake = Fake::default();
+            set(&fake, Some(vec![record(P2), record(id)]));
+            let providers = registry(&index(&fake).await).await.unwrap();
+            assert_eq!(providers.len(), 2, "{id:?}");
+            assert!(providers.contains(&nobody_manages(id)), "{id:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_record_without_a_string_id_is_left_out() {
+        for id in [json!(7), Value::Null, json!(["x"])] {
+            let fake = Fake::default();
+            let mut bad = record(P1);
+            bad["id"] = id.clone();
+            set(&fake, Some(vec![record(P2), bad]));
+            let providers = registry(&index(&fake).await).await.unwrap();
+            assert_eq!(providers.len(), 1, "{id}");
+            assert_eq!(providers[0].id, P2);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_breaks_the_walk_fails_the_whole_read() {
         let fake = Fake::default();
         set(&fake, Some(vec![record(P1), record(P1)]));
         assert!(
@@ -448,24 +553,35 @@ mod tests {
                 .unwrap_err()
                 .contains("twice")
         );
-        let fake = Fake::default();
-        let mut bad = record(P1);
-        bad["metadata"]["thirdParty"]["contracts"] =
-            json!([{ "address": "0x1", "network": "amoy" }]);
-        set(&fake, Some(vec![bad]));
-        assert!(registry(&index(&fake).await).await.is_err());
+    }
+
+    #[test]
+    fn an_unreadable_record_is_reported_once() {
+        let id = "urn:decentraland:matic:collections-thirdparty:reported-once";
+        assert!(first_report(id));
+        assert!(!first_report(id));
+        assert!(first_report(
+            "urn:decentraland:matic:collections-thirdparty:another"
+        ));
     }
 
     #[test]
     fn a_provider_id_has_builder_servers_shape() {
-        for id in [P1, P2, "urn:decentraland:mainnet:collections-thirdparty:x"] {
+        for id in [
+            P1,
+            P2,
+            "urn:decentraland:mainnet:collections-thirdparty:x",
+            "urn:decentraland:polygon:collections-thirdparty:x",
+        ] {
             assert!(is_provider_id(id), "{id}");
         }
         for id in [
             "",
             "urn:decentraland:matic:collections-thirdparty:",
             "urn:decentraland:matic:collections-thirdparty:a:b",
-            "urn:decentraland:polygon:collections-thirdparty:a",
+            "urn:decentraland::collections-thirdparty:a",
+            "urn:decentraland:Matic:collections-thirdparty:a",
+            "urn:decentraland:ma tic:collections-thirdparty:a",
             "urn:decentraland:matic:collections-v2:a",
             "URN:decentraland:matic:collections-thirdparty:a",
             "urn:decentraland:matic:collections-thirdparty:a|b",

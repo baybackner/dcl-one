@@ -76,8 +76,11 @@ answer as it does upstream.
   answer. Text that comes from a creator is put on one line, cut and escaped
   so it can't mention, link or format.
 - **Forum topics.** `builder.collections.forum_link` and `forum_id` are the
-  one source of a collection's topic link and first post id. An owner or
-  manager requests a topic only for a published collection; a current
+  one source of a collection's topic link and first post id; a collection
+  with a stored link has its topic. An owner or manager requests a topic for
+  a published standard collection, and a provider's manager for a
+  third-party collection whether or not any of its items was submitted; a
+  current
   committee member can reply in its topic. The node writes the topic title
   and body from the saved collection and its first 20 items, and resolves a
   reply's topic from the saved post id. The configured forum origin owns
@@ -85,13 +88,18 @@ answer as it does upstream.
 
   Topic creation commits a claim under the collection lock before calling
   Discourse, and releases the database connection for that call. A claim
-  holds for 60 seconds; an uncertain attempt keeps it. A retry after that
-  interval looks up the collection UUID as Discourse's `external_id` before
-  creating a topic, so an accepted post survives a lost response or a node
-  restart. Discourse must enforce uniqueness of that external id and expose
-  the lookup, including the first post id. This capability and the account's
-  permissions must be verified before forum writes are enabled on a
-  deployment. Without the four forum settings, admitted writes answer 503.
+  holds for 60 seconds and a whole attempt ends within 45, so two requests
+  never call Discourse for one collection at once; an uncertain attempt
+  keeps its claim. When Discourse made a topic but the node did not store
+  its link (a lost response, a node restart), a request after the claim
+  lapses asks Discourse again: a standard collection gets a second topic,
+  under the title that adds its shortened contract address, and a
+  third-party collection is refused by Discourse because its title is
+  taken, so it has no stored topic until an operator stores the link. Of two
+  attempts that both reach Discourse, the first link stored stays and both
+  answer it. The account's permissions must be verified before forum writes
+  are enabled on a deployment. Without the four forum settings, admitted
+  writes answer 503.
 
 ## Consequences
 

@@ -304,7 +304,6 @@ async fn a_published_collection_gets_one_topic_in_the_nodes_words() {
                     item(1, "Blue hat")
                 ),
                 "category": "12",
-                "external_id": id.to_string(),
             }
         })
     );
@@ -410,35 +409,46 @@ async fn a_title_names_the_creators_claimed_name_and_a_taken_title_gets_the_cont
 }
 
 #[tokio::test]
-async fn a_third_party_collection_is_posted_once_submitted_under_its_provider() {
+async fn a_third_party_collection_is_posted_under_its_provider_before_any_item_is_submitted() {
     let Some(e) = env().await else {
         return;
     };
+    for submitted in [false, true] {
+        let id = third_party(&e.pool, submitted).await;
+        sqlx::query("UPDATE builder.collections SET name = $2 WHERE id = $1")
+            .bind(id)
+            .bind(format!("Linked hats {submitted}"))
+            .execute(&e.pool)
+            .await
+            .unwrap();
+        let (status, body) = send(
+            &e.app,
+            Some(OWNER_KEY),
+            &format!("/v1/collections/{id}/post"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "submitted {submitted}: {body}");
+        let calls = e.forum.take();
+        assert_eq!(calls.len(), 1, "{calls:#?}");
+        assert_eq!(
+            calls[0]["body"]["title"],
+            format!("Third Party collection Linked hats {submitted} with URN: {PROVIDER}")
+        );
+        let (link, post, claimed) = stored(&e.pool, id).await;
+        assert_eq!(link.as_deref(), body["data"].as_str());
+        assert!(post.is_some() && !claimed);
+    }
     let draft = third_party(&e.pool, false).await;
     let (status, body) = send(
         &e.app,
-        Some(OWNER_KEY),
+        Some(STRANGER_KEY),
         &format!("/v1/collections/{draft}/post"),
         json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"], "The collection is not published");
-    let submitted = third_party(&e.pool, true).await;
-    let (status, body) = send(
-        &e.app,
-        Some(OWNER_KEY),
-        &format!("/v1/collections/{submitted}/post"),
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let calls = e.forum.take();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(
-        calls[0]["body"]["title"],
-        format!("Third Party collection Linked hats with URN: {PROVIDER}")
-    );
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert!(e.forum.calls().is_empty());
 }
 
 #[tokio::test]
@@ -578,11 +588,12 @@ async fn a_forum_claim_rechecks_the_managers_current_access() {
 }
 
 #[tokio::test]
-async fn a_lost_answer_is_found_by_a_later_request_not_posted_again() {
+async fn a_post_the_forum_accepted_but_the_node_never_stored_is_made_again_once_its_claim_expires()
+{
     let Some(e) = env().await else {
         return;
     };
-    let (id, _) = standard(&e.pool, "Lost", true).await;
+    let (id, contract) = standard(&e.pool, "Lost", true).await;
     let path = format!("/v1/collections/{id}/post");
     e.forum.lose(1);
     let (status, body) = send(&e.app, Some(OWNER_KEY), &path, json!({})).await;
@@ -600,24 +611,39 @@ async fn a_lost_answer_is_found_by_a_later_request_not_posted_again() {
     let (status, body) = send(&e.app, Some(OWNER_KEY), &path, json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let link = body["data"].as_str().unwrap().to_string();
-    assert!(link.ends_with("/1001"), "{link}");
-    assert_eq!(stored(&e.pool, id).await, (Some(link), Some(5001), false));
-    let paths: Vec<Value> = e.forum.calls().iter().map(|c| c["path"].clone()).collect();
-    assert_eq!(
-        paths,
-        vec![
-            json!("/posts.json"),
-            json!(format!("/t/external_id/{id}.json")),
-            json!("/t/1001.json")
-        ]
-    );
+    assert!(link.ends_with("/1002"), "{link}");
+    assert_eq!(stored(&e.pool, id).await, (Some(link), Some(5002), false));
+    let calls = e.forum.calls();
+    let paths: Vec<&Value> = calls.iter().map(|c| &c["path"]).collect();
+    assert_eq!(paths, vec!["/posts.json"; 3], "{calls:#?}");
+    let shortened = crate::curation::slack::shorten(&contract.unwrap());
     assert!(
-        e.forum.calls()[1..]
-            .iter()
-            .all(|c| c["username"] == API_USERNAME),
-        "a read is made as the forum account"
+        calls[2]["body"]["title"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!(" {shortened}")),
+        "the second topic takes the contract in its title: {calls:#?}"
     );
-    assert_eq!(e.forum.topics(), 1);
+    assert!(calls.iter().all(|c| c["body"].get("external_id").is_none()));
+    assert_eq!(e.forum.topics(), 2, "the forum holds two topics");
+}
+
+#[tokio::test]
+async fn a_third_party_post_the_node_never_stored_is_refused_again_by_its_taken_title() {
+    let Some(e) = env().await else {
+        return;
+    };
+    let id = third_party(&e.pool, false).await;
+    let path = format!("/v1/collections/{id}/post");
+    e.forum.lose(1);
+    let (status, _) = send(&e.app, Some(OWNER_KEY), &path, json!({})).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    age_claim(&e.pool, id).await;
+    let (status, body) = send(&e.app, Some(OWNER_KEY), &path, json!({})).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body["error"], "Error creating forum post");
+    assert_eq!((e.forum.topics(), creates(&e.forum)), (1, 2));
+    assert_eq!(stored(&e.pool, id).await, (None, None, true));
 }
 
 #[tokio::test]
@@ -641,7 +667,7 @@ async fn a_refused_post_is_made_once_its_claim_expires_and_the_forums_words_stay
 }
 
 #[tokio::test]
-async fn a_slow_attempt_overtaken_by_a_later_one_still_makes_one_topic() {
+async fn an_attempt_overtaken_after_its_claim_lapsed_keeps_the_first_stored_link() {
     let Some(e) = env().await else {
         return;
     };
@@ -658,7 +684,7 @@ async fn a_slow_attempt_overtaken_by_a_later_one_still_makes_one_topic() {
         let (app, path) = (e.app.clone(), path.clone());
         async move { send(&app, Some(OWNER_KEY), &path, json!({})).await }
     });
-    at_forum(&e.forum, 3).await;
+    at_forum(&e.forum, 2).await;
     e.forum.release();
     let answers = [first.await.unwrap(), second.await.unwrap()];
     let made: Vec<&Value> = answers
@@ -666,13 +692,58 @@ async fn a_slow_attempt_overtaken_by_a_later_one_still_makes_one_topic() {
         .filter(|(status, _)| *status == StatusCode::OK)
         .map(|(_, body)| &body["data"])
         .collect();
-    assert_eq!(e.forum.topics(), 1, "{answers:?}");
+    assert_eq!(e.forum.topics(), 2, "{answers:?}");
     let (link, _, claimed) = stored(&e.pool, id).await;
     assert!(!claimed);
     assert!(
         !made.is_empty() && made.iter().all(|m| m.as_str() == link.as_deref()),
         "{answers:?}"
     );
+}
+
+#[tokio::test]
+async fn an_attempt_whose_store_waits_on_another_stored_link_answers_the_stored_one() {
+    let Some(e) = env().await else {
+        return;
+    };
+    let (id, _) = standard(&e.pool, "Raced", true).await;
+    e.forum.hold();
+    let attempt = tokio::spawn({
+        let (app, path) = (e.app.clone(), format!("/v1/collections/{id}/post"));
+        async move { send(&app, Some(OWNER_KEY), &path, json!({})).await }
+    });
+    at_forum(&e.forum, 1).await;
+    let other = format!("{}/t/other/9", e.origin);
+    let mut competing = e.pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE builder.collections SET forum_link = $2, forum_id = 9, forum_claimed_at = NULL WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&other)
+    .execute(&mut *competing)
+    .await
+    .unwrap();
+    e.forum.release();
+    let mut waiting = false;
+    for _ in 0..500 {
+        waiting = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() \
+             AND wait_event_type = 'Lock' AND query LIKE '%UPDATE builder.collections SET forum_link%')",
+        )
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(waiting, "the attempt's store never waited on the row");
+    competing.commit().await.unwrap();
+    let (status, body) = attempt.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"], json!(other));
+    assert_eq!(stored(&e.pool, id).await, (Some(other), Some(9), false));
 }
 
 #[tokio::test]
@@ -928,7 +999,7 @@ async fn a_forum_redirect_is_not_followed_with_its_credentials() {
     let client = dcl_http::Outbound::new(dcl_http::HttpClientCfg::default().following_redirects(2))
         .unwrap()
         .allowing_private_hosts();
-    let result = forum.create(&client, "Hats", "body", "uuid").await;
+    let result = forum.create(&client, "Hats", "body").await;
     server.abort();
     assert_eq!(
         result,
@@ -956,7 +1027,7 @@ async fn a_forum_call_times_out_before_twelve_seconds() {
     let client = dcl_http::Outbound::for_tests();
     let result = tokio::time::timeout(
         Duration::from_secs(12),
-        forum.create(&client, "Hats", "body", "uuid"),
+        forum.create(&client, "Hats", "body"),
     )
     .await;
     server.abort();
@@ -1002,7 +1073,7 @@ async fn a_chunked_forum_answer_is_bounded_without_a_content_length() {
         let _ = stream.write_all(b"0\r\n\r\n").await;
     });
     let result = forum
-        .create(&dcl_http::Outbound::for_tests(), "Hats", "body", "uuid")
+        .create(&dcl_http::Outbound::for_tests(), "Hats", "body")
         .await;
     server.abort();
     assert_eq!(result, Err(crate::curation::forum::Failure::Invalid));

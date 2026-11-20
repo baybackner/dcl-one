@@ -343,16 +343,6 @@
         "status: fixture=404 candidate=400"
       ]
     },
-    "forum-topic-identity": {
-      "text": "POST /v1/collections/:id/post: the node includes the collection UUID as the forum topic's external_id, so a retry can recover an accepted post after a lost answer. Upstream sends no external_id.",
-      "captures": [
-        "source/436-collection-post-owner.json",
-        "source/438-collection-post-manager.json",
-        "source/439-collection-post-transferred-creator.json",
-        "source/440-collection-post-curated-third-party.json"
-      ],
-      "anchors": []
-    },
     "forum-reply-mentions": {
       "text": "POST /v1/collections/:id/curation/post: the node follows each @ with a zero-width space in the forum reply, so the text mentions no account or group. Upstream forwards the raw text unchanged. The old builder's assignment and unassignment notices contain no mention.",
       "captures": [
@@ -364,15 +354,6 @@
       "text": "POST /v1/collections/:id/curation/post: the node refuses unknown outer fields and unknown forumPost fields; raw and an ignored topic_id are accepted. At github.com/decentraland/builder-server 98897af, src/Curation/Curation.router.ts createCurationNewAssigneePost extracts only forumPost.raw and ignores other fields. The node test a_reply_is_refused_in_builder_servers_order_before_the_forum_is_asked covers outer and nested category fields, including mutation proofs of both parser rules. This difference is source-verified and node-tested, not recorded in an upstream capture.",
       "captures": [],
       "anchors": []
-    },
-    "forum-third-party-publication": {
-      "text": "POST /v1/collections/:id/post: the node refuses a third-party collection with no item submitted for curation with 409 The collection is not published, before calling the forum. Upstream allows its provider's manager to post the collection without a submitted item.",
-      "captures": [
-        "source/450-collection-post-third-party-draft.json"
-      ],
-      "anchors": [
-        "status: fixture=200 candidate=409"
-      ]
     }
   },
   "operations": [
@@ -3933,7 +3914,7 @@
       "id": "api_http:POST:/v1/collections/:id/post",
       "owner": "forum",
       "status": "reviewed",
-      "result": "The collection's owner, on-chain manager, chain creator and third-party provider manager create its forum topic; a second post returns its existing link. Anonymous, unrelated, committee-only, missing-collection and unpublished-standard requests were compared, including the generated title, body, category and API account. An unsubmitted third-party collection is refused with the stated deliberate difference.",
+      "result": "The collection's owner, on-chain manager, chain creator and third-party provider manager create its forum topic, a third-party collection also before any of its items was submitted; a second post returns its existing link. Anonymous, unrelated, committee-only, missing-collection and unpublished-standard requests were compared, including the generated title, body, category and API account.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/431-collection-post-unsigned.json",
@@ -3968,12 +3949,7 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/436-collection-post-owner.json",
           "scope": "POST /collections/{id}/post signed by the owner of a collection on chain, with the title and body the old builder web sends.",
-          "replay": [
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000302\""
-          ],
-          "explained_by": {
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000302\"": "deliberate:forum-topic-identity"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/437-collection-post-again.json",
@@ -3983,58 +3959,33 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/438-collection-post-manager.json",
           "scope": "POST /collections/{id}/post signed by an on-chain manager of a collection on chain.",
-          "replay": [
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000006\""
-          ],
-          "explained_by": {
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000006\"": "deliberate:forum-topic-identity"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/439-collection-post-transferred-creator.json",
           "scope": "POST /collections/{id}/post signed by the chain creator of a collection whose stored owner is another wallet.",
-          "replay": [
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000106\""
-          ],
-          "explained_by": {
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000106\"": "deliberate:forum-topic-identity"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/440-collection-post-curated-third-party.json",
           "scope": "POST /collections/{id}/post signed by the provider's manager of a third-party collection with curated items.",
-          "replay": [
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000402\""
-          ],
-          "explained_by": {
-            "forum[0].body.external_id: baseline=missing candidate=\"c011ec71-0000-4000-8000-000000000402\"": "deliberate:forum-topic-identity"
-          }
+          "replay": []
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/450-collection-post-third-party-draft.json",
           "scope": "POST /collections/{id}/post signed by the provider's manager of a third-party collection none of whose items was submitted.",
-          "replay": [
-            "status: fixture=200 candidate=409",
-            "data value",
-            "error extra",
-            "ok value",
-            "forum.length: baseline=1 candidate=0"
-          ],
-          "explained_by": {
-            "status: fixture=200 candidate=409": "deliberate:forum-third-party-publication",
-            "data value": "deliberate:forum-third-party-publication",
-            "error extra": "deliberate:forum-third-party-publication",
-            "ok value": "deliberate:forum-third-party-publication",
-            "forum.length: baseline=1 candidate=0": "deliberate:forum-third-party-publication"
-          }
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/451-collection-post-third-party-again.json",
+          "scope": "POST /collections/{id}/post signed by the provider's manager of a third-party collection that has its forum post.",
+          "replay": []
         }
       ],
       "gaps": [
-        "deliberate:forum-third-party-publication",
-        "deliberate:forum-topic-identity",
         "deliberate:unauthenticated-message"
       ],
-      "remaining_verification": "Production forum capability and API credentials remain unverified. Concurrent claims, accepted-but-lost responses, bounded replies, and upstream failures are covered by node tests rather than captures."
+      "remaining_verification": "Production forum capability and API credentials remain unverified. Concurrent claims, a topic the forum made whose link was not stored (made again after the claim lapses: a standard collection's under a title naming its contract, a third-party collection's refused by its taken title), bounded replies, and upstream failures are covered by node tests rather than captures."
     },
     {
       "id": "api_http:GET:/v1/storage/contents/:filename",
