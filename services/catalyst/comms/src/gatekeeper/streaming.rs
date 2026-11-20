@@ -146,7 +146,7 @@ pub async fn scene_stream_access(
         state.eip1654(),
     )
     .await?;
-    realm_name_from_metadata(&sf.metadata)
+    realm_name_from_metadata(&sf.metadata, &state.settings.realm_name)
         .ok_or_else(|| ApiError::bad_request("invalid signed-fetch request, no realmName"))?;
     let device_id = device_identifier(&sf.metadata);
     if method != Method::DELETE {
@@ -156,7 +156,7 @@ pub async fn scene_stream_access(
     let (place_id, place, room, scene) = if method == Method::DELETE {
         // Revocation needs no current deployment: the place is found by the
         // signed realm and parcel alone, and the authority on that same realm.
-        let realm = Context::signed_realm(&sf.metadata)?;
+        let realm = Context::signed_realm(&sf.metadata, &state.settings.realm_name)?;
         let world = realm.world();
         let parcel = meta_str(&sf.metadata, "parcel");
         if world.is_none() && parcel.is_none() {

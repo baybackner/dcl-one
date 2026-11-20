@@ -43,6 +43,8 @@ struct FakeBot {
     on_first_data: Mutex<Option<OnFirstData>>,
     /// The process ended: a command fails.
     exited: AtomicBool,
+    /// While set, `shutdown` waits for it.
+    shutdown_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 #[async_trait::async_trait]
@@ -73,6 +75,10 @@ impl BotLink for FakeBot {
         Ok(())
     }
     async fn shutdown(&self) {
+        let gate = self.shutdown_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         self.sent.lock().unwrap().push(Sent::Shutdown);
     }
 }
@@ -1259,6 +1265,35 @@ async fn a_room_holds_several_presentations() {
     };
     assert!(shut(0) && !shut(1));
     assert_eq!(route("access:1").await.0, StatusCode::CREATED);
+}
+
+/// A stopping session keeps its token until its bot has shut down: a retry
+/// with that token inside the stop gets a 409, never a bot the old
+/// session's cleanup would remove by the same identity.
+#[tokio::test]
+async fn a_token_stays_taken_until_its_stopped_bot_shut_down() {
+    let launcher = FakeLauncher::new(json!({}));
+    let presenter = Presenter::new(launcher.clone(), target(), 3, None);
+    let info = presenter
+        .create(test_pdf(1), &GOOD, "a.pdf", None)
+        .await
+        .unwrap();
+    let (bot, _room) = launcher.last();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *bot.shutdown_gate.lock().unwrap() = Some(gate.clone());
+    let stopping = tokio::spawn({
+        let presenter = presenter.clone();
+        async move { presenter.stop(&info.id).await }
+    });
+    settle_until(|| presenter.active_sessions() == 0).await;
+    assert!(matches!(
+        presenter.reserve(&GOOD),
+        Err(super::session::CreateError::TokenInUse)
+    ));
+    gate.notify_one();
+    stopping.await.unwrap();
+    assert!(bot.sent.lock().unwrap().contains(&Sent::Shutdown));
+    assert!(presenter.reserve(&GOOD).is_ok());
 }
 
 /// Two presentations in one room: each bot names its own slide. A command

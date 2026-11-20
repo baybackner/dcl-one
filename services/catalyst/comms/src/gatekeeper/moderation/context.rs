@@ -49,8 +49,8 @@ pub(in crate::gatekeeper) struct Context<'a> {
 impl<'a> Context<'a> {
     /// The realm the signed metadata names ([`signed_realm_name`]): a world by
     /// its realm name or by the realm URL or worlds host signed beside it, else
-    /// a shared realm.
-    pub fn signed_realm(metadata: &Value) -> Result<RealmId, ApiError> {
+    /// a shared realm. `node_realm` is this node's `REALM_NAME`.
+    pub fn signed_realm(metadata: &Value, node_realm: &str) -> Result<RealmId, ApiError> {
         let nested = match metadata.get("realm") {
             Some(realm) if realm.is_object() => Some(required(realm, "serverName")?),
             Some(_) => return Err(invalid()),
@@ -95,11 +95,11 @@ impl<'a> Context<'a> {
             Some(_) => return Err(invalid()),
             None => None,
         };
-        RealmId::parse(&signed_realm_name(realm_name, hostname)).map_err(|_| invalid())
+        RealmId::parse(&signed_realm_name(realm_name, hostname, node_realm)).map_err(|_| invalid())
     }
 
     pub async fn resolve(state: &'a CommsState, metadata: &Value) -> Result<Self, ApiError> {
-        let realm = Self::signed_realm(metadata)?;
+        let realm = Self::signed_realm(metadata, &state.settings.realm_name)?;
         let raw_scene = required(metadata, "sceneId")?;
         let scene = SceneId::parse(raw_scene).map_err(|_| invalid())?;
         if scene.as_str() != raw_scene || (!realm.is_world() && raw_scene.contains(':')) {

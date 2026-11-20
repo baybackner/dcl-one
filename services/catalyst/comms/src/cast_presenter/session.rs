@@ -311,6 +311,18 @@ impl Drop for Slot {
     }
 }
 
+/// Frees a stopped session's token when dropped: after its bot shut down.
+struct SeatRelease<'a> {
+    seats: &'a Mutex<HashSet<String>>,
+    identity: &'a str,
+}
+
+impl Drop for SeatRelease<'_> {
+    fn drop(&mut self) {
+        self.seats.lock().unwrap().remove(self.identity);
+    }
+}
+
 /// Why a render did not give a slide.
 pub(super) enum RenderError {
     Failed(String),
@@ -771,14 +783,20 @@ impl Presenter {
     }
 
     /// Stops a session: removed first, then `presentation:stopped`, then the
-    /// bot disconnects. Stopping a stopped session does nothing. Its token is
-    /// free at once, and a bot that cannot send `presentation:stopped` is
-    /// evicted.
+    /// bot disconnects. Stopping a stopped session does nothing. A bot that
+    /// cannot send `presentation:stopped` is evicted. Its token stays taken
+    /// (409) until the bot has shut down, and is free once this returns: a
+    /// retry with the same token gets a bot this cleanup no longer touches,
+    /// as the eviction removes the participant by that token's identity.
     pub async fn stop(&self, id: &str) {
         let Some(session) = self.sessions.lock().unwrap().remove(id) else {
             return;
         };
-        self.seats.lock().unwrap().remove(&session.seat.identity);
+        // Released on drop, so a cancelled stop never keeps the token.
+        let _seat = SeatRelease {
+            seats: &self.seats,
+            identity: &session.seat.identity,
+        };
         let scene_id = session.state.lock().await.scene_id.clone();
         let packet = wire::encode_packet(&wire::stopped_message(id), &scene_id);
         if let Err(e) = session.bot.publish_data(packet.clone()).await {
