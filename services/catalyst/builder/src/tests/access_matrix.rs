@@ -83,12 +83,18 @@ enum Kind {
     Locked,
     ThirdParty,
     ThirdPartySubmitted,
+    CuratedPending,
+    CuratedApproved,
+    CuratedRejected,
+    ReviewPending,
+    ReviewApproved,
+    ReviewRejected,
     Transferred,
     Orphan,
 }
 use Kind::*;
 
-const KINDS: [Kind; 12] = [
+const KINDS: [Kind; 18] = [
     Missing,
     Malformed,
     Draft,
@@ -99,21 +105,47 @@ const KINDS: [Kind; 12] = [
     Locked,
     ThirdParty,
     ThirdPartySubmitted,
+    CuratedPending,
+    CuratedApproved,
+    CuratedRejected,
+    ReviewPending,
+    ReviewApproved,
+    ReviewRejected,
     Transferred,
     Orphan,
 ];
 
 impl Kind {
+    /// The kind whose answers a curated kind shares: an item curation of any
+    /// status publishes a third-party item, and a collection curation
+    /// changes no access to a published collection.
+    fn base(self) -> Kind {
+        match self {
+            CuratedPending | CuratedApproved | CuratedRejected => ThirdPartySubmitted,
+            ReviewPending | ReviewApproved | ReviewRejected => Published,
+            kind => kind,
+        }
+    }
+
+    fn curation(self) -> Option<&'static str> {
+        match self {
+            ThirdPartySubmitted | CuratedPending | ReviewPending => Some("pending"),
+            CuratedApproved | ReviewApproved => Some("approved"),
+            CuratedRejected | ReviewRejected => Some("rejected"),
+            _ => None,
+        }
+    }
+
     fn on_chain(self) -> bool {
-        matches!(self, Published | Approved | Unminted | Transferred)
+        matches!(self.base(), Published | Approved | Unminted | Transferred)
     }
 
     fn published(self) -> bool {
-        self.on_chain() || self == ThirdPartySubmitted
+        self.on_chain() || self.base() == ThirdPartySubmitted
     }
 
     fn third_party(self) -> bool {
-        matches!(self, ThirdParty | ThirdPartySubmitted)
+        matches!(self.base(), ThirdParty | ThirdPartySubmitted)
     }
 
     fn owner(self, caller: Caller) -> bool {
@@ -382,7 +414,8 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
             item: Some(insert_item(pool, None, false, None).await),
             ..Fixture::default()
         },
-        Draft | Publishing | Locked | ThirdParty | ThirdPartySubmitted => {
+        Draft | Publishing | Locked | ThirdParty | ThirdPartySubmitted | CuratedPending
+        | CuratedApproved | CuratedRejected => {
             let urn =
                 insert_collection(pool, id, kind.third_party(), None, kind == Publishing).await;
             if kind == Locked {
@@ -406,17 +439,44 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
                 .unwrap();
             }
             let third_party = urn.as_deref().map(|urn| (urn, kind == ThirdPartySubmitted));
+            let item = insert_item(pool, Some(id), false, third_party).await;
+            if let Some(status) = kind.curation() {
+                sqlx::query(
+                    "INSERT INTO builder.item_curations (id, item_id, status, content_hash) VALUES ($1, $2, $3, $4)",
+                )
+                .bind(Uuid::new_v4())
+                .bind(item)
+                .bind(status)
+                .bind(format!("{}{}", id.simple(), item.simple()))
+                .execute(pool)
+                .await
+                .unwrap();
+            }
             Fixture {
                 collection: Some(id),
-                item: Some(insert_item(pool, Some(id), false, third_party).await),
+                item: Some(item),
                 minted: None,
                 urn,
                 contract: None,
             }
         }
-        Published | Approved | Unminted | Transferred => {
+        Published | Approved | Unminted | Transferred | ReviewPending | ReviewApproved
+        | ReviewRejected => {
             let contract = contract();
             insert_collection(pool, id, false, Some(&contract), false).await;
+            if let Some(status) = kind.curation() {
+                sqlx::query(
+                    "INSERT INTO builder.collection_curations (id, collection_id, status, assignee, reviewed_by) \
+                     VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'pending' THEN NULL ELSE $4 END)",
+                )
+                .bind(Uuid::new_v4())
+                .bind(id)
+                .bind(status)
+                .bind(Committee.address())
+                .execute(pool)
+                .await
+                .unwrap();
+            }
             let creator = if kind == Transferred { Creator } else { Owner };
             copy_row(pool, &contract, creator, kind == Approved).await;
             let minted = insert_item(pool, Some(id), true, None).await;
@@ -440,7 +500,9 @@ async fn snapshot(pool: &PgPool) -> Value {
            'contents', (SELECT count(*) FROM builder.item_contents), \
            'uploads', (SELECT count(*) FROM builder.uploaded_contents), \
            'publications', (SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.collection_id), '[]') FROM builder.collection_publications p), \
-           'linked', (SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.collection_id), '[]') FROM builder.linked_collection_publications l))",
+           'linked', (SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.collection_id), '[]') FROM builder.linked_collection_publications l), \
+           'curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.collection_curations k), \
+           'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k))",
     )
     .fetch_one(pool)
     .await
@@ -1008,6 +1070,7 @@ impl Op {
 
     /// The decision table; `None` where the cell doesn't apply.
     fn expect(self, kind: Kind, caller: Caller, f: &Fixture) -> Option<Expect> {
+        let kind = kind.base();
         let signed = caller != Anonymous;
         if self == Op::Ping {
             return ok();
@@ -1163,7 +1226,7 @@ impl Op {
             Op::ReadItem => match kind {
                 Missing => not_found(&item, "items"),
                 Malformed => invalid_uuid(&item),
-                Published | Approved | Transferred => ok(),
+                Published | Approved | Transferred | ThirdPartySubmitted => ok(),
                 _ if kind.item_owner(caller) || committee => ok(),
                 _ => unauthorized(),
             },
@@ -1341,6 +1404,8 @@ async fn cell(
     let f = fixture(&m.pool, kind).await;
     let expected = expect(&f)?;
     let (method, path, payload) = op.request(kind, &f);
+    let label = kind;
+    let kind = kind.base();
     let before = snapshot(&m.pool).await;
     let (status, body) = call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
     let error = body["error"].as_str().unwrap_or_default().to_string();
@@ -1455,7 +1520,7 @@ async fn cell(
     }
     (!problems.is_empty()).then(|| {
         format!(
-            "{mount}{method} {path} {kind:?} as {caller:?}: {}",
+            "{mount}{method} {path} {label:?} as {caller:?}: {}",
             problems.join("; ")
         )
     })
@@ -1498,7 +1563,12 @@ async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
 fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     match caller {
         Anonymous => unauthenticated(),
-        _ if op.by_id() && matches!(kind, Draft | ThirdParty | Published) => {
+        _ if op.by_id()
+            && matches!(
+                kind.base(),
+                Draft | ThirdParty | ThirdPartySubmitted | Published
+            ) =>
+        {
             Some(Expect(503, String::new()))
         }
         _ => None,
@@ -1514,12 +1584,26 @@ async fn assert_cannot_tell(m: &Matrix, stale: bool) {
     for op in ops().into_iter().filter(|op| op.by_id()) {
         for caller in CALLERS {
             for mount in MOUNTS {
-                for kind in [Draft, ThirdParty, Published] {
+                for kind in [
+                    Draft,
+                    ThirdParty,
+                    Published,
+                    CuratedPending,
+                    CuratedApproved,
+                    CuratedRejected,
+                    ReviewPending,
+                    ReviewApproved,
+                    ReviewRejected,
+                ] {
                     let f = fixture(&m.pool, kind).await;
                     let Some(Expect(mut expected, _)) = unavailable(op, kind, caller) else {
                         continue;
                     };
-                    if stale && op == Op::ReadCollection && caller == Owner && kind != Published {
+                    if stale
+                        && op == Op::ReadCollection
+                        && caller == Owner
+                        && kind.base() != Published
+                    {
                         expected = 200;
                     }
                     let (method, path, payload) = op.request(kind, &f);
@@ -1605,8 +1689,13 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                     }
                     Op::ReadItem => {
                         !matches!(
-                            kind,
-                            Missing | Malformed | Published | Approved | Transferred
+                            kind.base(),
+                            Missing
+                                | Malformed
+                                | Published
+                                | Approved
+                                | Transferred
+                                | ThirdPartySubmitted
                         ) && !kind.item_owner(caller)
                     }
                     Op::OwnerSync | Op::Publish => {

@@ -14,5 +14,7 @@ SELECT c.id,
        c.updated_at AT TIME ZONE 'UTC' AS updated_at,
        lower(c.linked_contract_address) AS linked_contract_address,
        c.linked_contract_network,
-       c.lock
+       c.lock,
+       c.forum_link,
+       c.forum_id
 FROM collections c

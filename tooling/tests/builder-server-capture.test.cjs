@@ -532,3 +532,22 @@ test('the fake warehouse records an event sent with its token and refuses anythi
   assert.equal(warehouseAnswer('POST', '/elsewhere', { 'x-token': WAREHOUSE_TOKEN }, sent, received), undefined)
   assert.equal(received.length, 1)
 })
+
+test('the seed\'s curations and forum fields reach upstream\'s tables', async () => {
+  const { seedDatabase, readSeed } = require(script)
+  assert.deepEqual(Object.keys(readSeed()).filter(key => key.endsWith('curations')), ['collection_curations', 'item_curations'])
+  const queries = []
+  const client = { async query(sql, values) { queries.push([sql.split(' ').slice(0, 3).join(' '), values]) } }
+  const collection = { id: 'c1', name: 'C', owner: 'owner', salt: '0x00', contract_address: null, forum_link: 'https://forum.example.org/t/1', forum_id: 1, created_at: 'a', updated_at: 'b' }
+  await seedDatabase(client, {
+    third_parties: [],
+    collections: [collection],
+    items: [],
+    collection_curations: [{ id: 'cc', collection_id: 'c1', status: 'pending', assignee: 'committee', created_at: 'c', updated_at: 'd' }],
+    item_curations: [{ id: 'ic', item_id: 'i1', status: 'approved', content_hash: 'ab', is_mapping_complete: true, created_at: 'e', updated_at: 'f' }]
+  }, { owner: { address: '0xowner' }, committee: { address: '0xcommittee' } })
+  assert.deepEqual(queries.map(([into]) => into), ['INSERT INTO collections', 'INSERT INTO collection_curations', 'INSERT INTO item_curations'])
+  assert.deepEqual(queries[0][1].slice(-4), ['https://forum.example.org/t/1', 1, 'a', 'b'])
+  assert.deepEqual(queries[1][1], ['cc', 'c1', 'pending', '0xcommittee', 'c', 'd'])
+  assert.deepEqual(queries[2][1], ['ic', 'i1', 'approved', 'ab', true, 'e', 'f'])
+})

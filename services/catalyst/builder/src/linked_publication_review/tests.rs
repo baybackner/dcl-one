@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 const OWNER: &str = "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a";
 const URN: &str = "urn:decentraland:matic:collections-thirdparty:provider:hats";
+const ENTITY_HASH: &str = "5c0b6a2a7d1e4f3a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a";
 
 fn fixture(id: &str, item: &str) -> (Value, Value, Value, Value) {
     let collection =
@@ -22,13 +23,13 @@ fn fixture(id: &str, item: &str) -> (Value, Value, Value, Value) {
     let mut remote_item = item_doc;
     remote_item["urn"] = json!(format!("{URN}:{item}"));
     remote_item["is_published"] = json!(true);
-    remote_item["local_content_hash"] = json!("entity-hash");
+    remote_item["local_content_hash"] = json!(ENTITY_HASH);
     remote_item["is_approved"] = json!(false);
     (
         snapshot,
         remote_collection,
         json!([remote_item]),
-        json!([{"item_id":item,"content_hash":"entity-hash","status":"pending"}]),
+        json!([{"item_id":item,"content_hash":ENTITY_HASH,"status":"pending"}]),
     )
 }
 
@@ -47,7 +48,7 @@ fn only_matching_authoritative_content_curations_prove_submission() {
     let review = verify_review(&snapshot, &collection, &items, &curations)
         .unwrap()
         .unwrap();
-    assert_eq!(review.items[0].content_hash, "entity-hash");
+    assert_eq!(review.items[0].content_hash, ENTITY_HASH);
     assert_eq!(review.items[0].status, "pending");
     assert_eq!(
         review.forum_url.as_deref(),
@@ -75,6 +76,20 @@ fn only_matching_authoritative_content_curations_prove_submission() {
             .is_none()
     );
     assert!(verify_review(&snapshot, &collection, &items, &json!([])).is_err());
+    for hash in [
+        "entity-hash",
+        &ENTITY_HASH.to_uppercase(),
+        &format!("0x{ENTITY_HASH}"),
+    ] {
+        let mut odd_items = items.clone();
+        odd_items[0]["local_content_hash"] = json!(hash);
+        let mut odd_curations = curations.clone();
+        odd_curations[0]["content_hash"] = json!(hash);
+        assert!(
+            verify_review(&snapshot, &collection, &odd_items, &odd_curations).is_err(),
+            "a content hash that is not a lowercase keccak digest is no submission: {hash}"
+        );
+    }
 }
 
 #[test]
@@ -295,8 +310,10 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         result.forum_url.as_deref(),
         Some("https://forum.decentraland.org/t/hats/123")
     );
-    let saved: (bool, String, String, bool) = sqlx::query_as(
-        "SELECT is_published,urn_suffix,curation_status,is_approved FROM builder.items WHERE id=$1",
+    let saved: (bool, String, String, String, i64) = sqlx::query_as(
+        "SELECT i.is_published, i.urn_suffix, k.status, k.content_hash, \
+           (SELECT count(*) FROM builder.item_curations a WHERE a.item_id = i.id) \
+         FROM builder.items i JOIN builder.item_curations k ON k.item_id = i.id WHERE i.id=$1",
     )
     .bind(item)
     .fetch_one(store.pool())
@@ -304,7 +321,14 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     .unwrap();
     assert_eq!(
         saved,
-        (true, format!("{URN}:{item}"), "pending".into(), false)
+        (
+            true,
+            format!("{URN}:{item}"),
+            "pending".into(),
+            ENTITY_HASH.into(),
+            1
+        ),
+        "the Foundation's curation is the item's one curation row"
     );
     let saved = store
         .collection_by_id(&granted::read(id))

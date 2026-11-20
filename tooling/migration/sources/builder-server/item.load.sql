@@ -8,7 +8,7 @@ DO $release$ BEGIN
 INSERT INTO builder.items AS i
     (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
      price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,
-     is_published, curation_status, is_approved, total_supply, local_content_hash, content_hash,
+     is_published, total_supply, local_content_hash, content_hash,
      created_at, updated_at, video_named_by)
 SELECT s.id,
        c.id,
@@ -28,8 +28,6 @@ SELECT s.id,
        s.urn_suffix,
        s.blockchain_item_id,
        s.is_published,
-       s.curation_status,
-       s.curation_status = 'approved',
        s.total_supply,
        s.local_content_hash,
        s.content_hash,
@@ -58,8 +56,6 @@ ON CONFLICT (id) DO UPDATE SET
     urn_suffix = EXCLUDED.urn_suffix,
     blockchain_item_id = EXCLUDED.blockchain_item_id,
     is_published = EXCLUDED.is_published,
-    curation_status = EXCLUDED.curation_status,
-    is_approved = EXCLUDED.is_approved,
     total_supply = EXCLUDED.total_supply,
     local_content_hash = EXCLUDED.local_content_hash,
     content_hash = EXCLUDED.content_hash,
@@ -67,13 +63,13 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = EXCLUDED.updated_at
 WHERE (i.collection_id, i.eth_address, i.name, i.description, i.thumbnail, i.video, i.type, i.rarity,
        i.price, i.beneficiary, i.data::text, i.metrics::text, i.utility, i.mappings, i.urn_suffix,
-       i.blockchain_item_id, i.is_published, i.curation_status, i.total_supply,
+       i.blockchain_item_id, i.is_published, i.total_supply,
        i.local_content_hash, i.content_hash, i.created_at, i.updated_at)
       IS DISTINCT FROM
       (EXCLUDED.collection_id, EXCLUDED.eth_address, EXCLUDED.name, EXCLUDED.description,
        EXCLUDED.thumbnail, EXCLUDED.video, EXCLUDED.type, EXCLUDED.rarity, EXCLUDED.price,
        EXCLUDED.beneficiary, EXCLUDED.data::text, EXCLUDED.metrics::text, EXCLUDED.utility, EXCLUDED.mappings,
        EXCLUDED.urn_suffix, EXCLUDED.blockchain_item_id, EXCLUDED.is_published,
-       EXCLUDED.curation_status, EXCLUDED.total_supply, EXCLUDED.local_content_hash,
+       EXCLUDED.total_supply, EXCLUDED.local_content_hash,
        EXCLUDED.content_hash, EXCLUDED.created_at, EXCLUDED.updated_at)
   AND i.updated_at <= EXCLUDED.updated_at;

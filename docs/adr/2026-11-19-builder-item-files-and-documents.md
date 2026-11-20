@@ -29,7 +29,8 @@ The builder answers items as `github.com/decentraland/builder-server` at
   minted and the copy of the Polygon collections subgraph holds it (or the
   node published it itself); its body then takes the chain's URN, price,
   beneficiary, rarity, supply and content hash. A third-party item is
-  published once the node submitted it. On a published collection, the
+  published once it has an item curation, whatever its status: a
+  submission for review, recorded by the node or imported. On a published collection, the
   owner and the on-chain managers save an existing item's metadata and
   contents; a new item, a move in or out and a rarity change are refused.
 - **Uploads are named and verified.** Each uploaded part is sent under the
@@ -80,7 +81,7 @@ The builder answers items as `github.com/decentraland/builder-server` at
   the `exists` probe, and never redirects to a bucket. A request without a
   signature reads a file only while a published item names it in a name
   that counts. A standard item is published once its collection is; a
-  third-party item once the node submitted it. A signed request also reads a
+  third-party item once it has an item curation. A signed request also reads a
   file its signer holds an upload record for, and a file that an item the
   signer owns, or a third-party item whose collection the signer manages,
   names in a name that counts. On-chain roles, the committee and other

@@ -43,7 +43,9 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
   - the copy holds a row for the collection's contract address;
   - the node holds its own verified publication receipt;
   - the node holds a submitted linked publication;
-  - an item of the collection has an on-chain id.
+  - an item of the collection has an on-chain id;
+  - an item of the collection has an item curation, a third-party item
+    submitted for review.
 
   The node's own records make a collection published as soon as the node
   publishes it, without waiting for the copy. A deployment the client sends

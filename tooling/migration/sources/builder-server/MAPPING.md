@@ -6,9 +6,13 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 | Step | Upstream | Target |
 | --- | --- | --- |
 | `collection` | `collections` | `builder.collections` |
-| `item` | `items` + newest `item_curations` + parent `collections` | `builder.items` |
+| `item` | `items` + newest `item_curations` (content hash) + parent `collections` | `builder.items` |
 | `item_content` | `items.contents` (file -> hash) | `builder.uploaded_contents`, `builder.item_contents` |
 | `virtual_third_party` | `virtual_third_parties` | `builder.virtual_third_parties` |
+| `collection_curation` | `collection_curations` | `builder.collection_curations` |
+| `item_curation` | `item_curations` | `builder.item_curations` |
+| `collection_event` | `collection_events` | `builder.collection_events` |
+| `slot_usage_cheque` | `slot_usage_cheques` | `builder.slot_usage_cheques` |
 
 ## Derived columns
 
@@ -31,13 +35,12 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   `blockchain_item_id`.
 - `items.is_published`: a blockchain item id in a published standard
   collection. Third-party items stay `false` (they have no blockchain id; the
-  node's CHECK requires one) and carry their state in `curation_status`.
+  node's CHECK requires one): a third-party item is published once it has an
+  item curation, which the `item_curation` step copies.
 - `items.urn_suffix`: `urn:decentraland:matic:collections-v2:<contract>:<id>`
   for a published standard item, `third_party_id:collection:item` for a
   third-party item.
-- `items.curation_status`: newest `item_curations.status`; else `approved` for
-  a published item in an approved collection; else `pending`. `is_approved` is
-  its projection. `content_hash` is the newest curation's content hash.
+- `items.content_hash`: the newest item curation's content hash.
 - `items.data` and `items.metrics` are copied as the JSON text upstream
   stores, keys in the order a save wrote them: the content hash of a
   published or third-party item serializes them in that order. `item`
@@ -61,6 +64,38 @@ upstream's last save (its `updated_at` is newer) is kept on re-runs. Whether
 a virtual third party's managers manage the provider is decided on read,
 with the registry: see the builder's access rules.
 
+## Curations, events, cheques and forum columns
+
+The four curation steps run after `item` and copy only rows whose collection
+or item the earlier steps imported; the others are skipped. Counts are from
+the reference dump of May 2025 (migrations through `1727096280687`).
+
+| Rows | Rule | Count |
+| --- | --- | --- |
+| Collection curations | Import; assignee and reviewer lowercased, an assignee that is not an address and a reviewer that is neither an address nor `validator` become NULL, an empty reason list and a blank message become NULL | 4,755 of 4,755 |
+| Collection curations of a collection the node lacks, or with a status outside builder-server's | Skip | 0 |
+| Rejection reasons outside builder-server's twelve, or a message over 3,000 characters after trimming | Import the curation; clear the reasons or the message | 0 (the dump predates both columns; builder-server bounds both) |
+| Item curations | Import; content hash lowercased | 38,211 of 38,337 |
+| Item curations of one item created at the same instant | Keep the one updated last, then the highest id | 126 skipped (122 instants; 19 an untouched pending twin of an approved row) |
+| Item curations of an item the node lacks, or whose content hash is not 64 hex digits | Skip | 0 |
+| Collection events | Import; actor address lowercased, NULL when not an address | 0 (the dump predates the table) |
+| Events of a collection the node lacks, or with a type, actor or payload outside builder-server's | Skip | 0 |
+| Slot cheques | Import; salt and signature lowercased | 34 of 34 |
+| Cheques whose provider is not their collection's, whose salt or signature is malformed, whose quantity is not positive, or whose salt the provider already used | Skip | 0 |
+| Forum links that are not an `http(s)` URL without spaces of at most 2,048 characters under the forum origin (`FORUM_URL`) | Clear, with the forum id | 5 (scripts, plain text and one foreign host; no forum id) |
+
+Set `FORUM_URL` to the forum origin builder-server is deployed with (scheme
+and host, no path or trailing slash, as its deployment sets it): the
+`collection` step refuses to run without it and keeps a forum link only when
+it starts with that origin and `/`.
+
+A source older than builder-server's last two migrations has no review
+columns on `collection_curations` and no `collection_events` table: the
+extracts read the review columns when present and no events when the table
+is absent. `updated_at` is never older than `created_at`. A curation the
+node changed after upstream's last change (its `updated_at` is newer) is
+kept on re-runs; events and cheques are never updated.
+
 ## Blobs
 
 `builder.item_contents` keeps each file of an item's `contents` at its
@@ -83,13 +118,11 @@ object_key, hash, size)` with `source = 'builder-server'` and
 
 ## Not migrated
 
-- `projects`, `asset_packs`, `assets`, `collection_curations`,
-  `collection_events`, `slot_usage_cheques`, `deployments`, `pools`,
+- `projects`, `asset_packs`, `assets`, `deployments`, `pools`,
   `pool_groups`, `pool_likes`: no target. The node
   keeps no scenes.
 - `collections.is_published`, `is_approved`: derived on the node, not stored.
-- `collections.managers`, `minters`, `reviewed_at`, `forum_link`, `forum_id`:
-  no target column.
+- `collections.managers`, `minters`, `reviewed_at`: no target column.
 - Terms of service: upstream forwards each acceptance to its warehouse and
   stores none, so there is nothing to import into `builder.terms_acceptances`.
 - Left to the node: `collection_publications`, `linked_collection_publications`,

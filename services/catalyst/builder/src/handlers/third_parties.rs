@@ -74,7 +74,7 @@ pub async fn get(
 
 /// `GET /v1/thirdParties/:id/slots` (`getThirdPartyAvailableSlots`): the
 /// provider's `maxItems` (the registry's, or `0` for a virtual third party)
-/// less its items the node submitted; 0 when that can't be read.
+/// less its items submitted for curation; 0 when that can't be read.
 pub async fn slots(
     State(state): State<SharedState>,
     Signed(signer): Signed,
@@ -91,10 +91,11 @@ pub async fn slots(
         .map_or("0", |p| p.max_items.as_str())
         .parse::<i128>()
         .ok();
-    let submitted: Option<i64> = sqlx::query_scalar(
+    let submitted: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(DISTINCT i.id) FROM builder.collections c JOIN builder.items i ON i.collection_id = c.id \
-         WHERE c.third_party_id = $1 AND i.is_published",
-    )
+         WHERE c.third_party_id = $1 AND {}",
+        crate::curation::ITEM_CURATED
+    )))
     .bind(grant.id())
     .fetch_one(state.items.pool())
     .await

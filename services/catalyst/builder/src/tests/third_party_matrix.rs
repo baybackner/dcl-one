@@ -769,7 +769,9 @@ async fn the_free_slots_are_the_registry_allowance_less_the_submitted_items() {
     let Some(w) = world().await else { return };
     let f = fixture(&w, Approved).await;
     sqlx::query(
-        "UPDATE builder.items SET is_published = true, blockchain_item_id = 'hat' WHERE id = $1",
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash, created_at) \
+         SELECT gen_random_uuid(), $1, s.status, repeat('ab', 32), s.at \
+         FROM (VALUES ('approved', '2025-01-01'::timestamp), ('pending', '2025-02-01'::timestamp)) s (status, at)",
     )
     .bind(f.item)
     .execute(&w.pool)

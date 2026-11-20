@@ -120,6 +120,31 @@ struct Seed {
     collections: Vec<SeedCollection>,
     items: Vec<SeedItem>,
     chain: SeedChain,
+    collection_curations: Vec<SeedCollectionCuration>,
+    item_curations: Vec<SeedItemCuration>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedCollectionCuration {
+    id: uuid::Uuid,
+    collection_id: uuid::Uuid,
+    status: String,
+    assignee: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedItemCuration {
+    id: uuid::Uuid,
+    item_id: uuid::Uuid,
+    status: String,
+    content_hash: String,
+    is_mapping_complete: Option<bool>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Deserialize)]
@@ -215,6 +240,10 @@ struct SeedCollection {
     linked_contract_address: Option<String>,
     #[serde(default)]
     linked_contract_network: Option<String>,
+    #[serde(default)]
+    forum_link: Option<String>,
+    #[serde(default)]
+    forum_id: Option<i32>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -957,13 +986,13 @@ fn a_gap_explains_nothing_on_a_capture_it_does_not_list() {
         evidence["replay"] = serde_json::json!(notes);
         evidence["explained_by"] = notes
             .iter()
-            .map(|n| (n.to_string(), Value::from("open:item-curation-publicity")))
+            .map(|n| (n.to_string(), Value::from("open:item-catalyst-state")))
             .collect::<serde_json::Map<_, _>>()
             .into();
     });
     refused(
         &errors,
-        "source/190-item-save-draft-owner.json: open:item-curation-publicity does not list this capture",
+        "source/190-item-save-draft-owner.json: open:item-catalyst-state does not list this capture",
     );
 }
 
@@ -2034,8 +2063,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         sqlx::query(
             "INSERT INTO builder.collections \
          (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, \
-          linked_contract_address, linked_contract_network, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+          linked_contract_address, linked_contract_network, forum_link, forum_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(c.id)
         .bind(&c.name)
@@ -2046,6 +2075,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .bind(urn)
         .bind(&c.linked_contract_address)
         .bind(&c.linked_contract_network)
+        .bind(&c.forum_link)
+        .bind(c.forum_id)
         .bind(c.created_at.naive_utc())
         .bind(c.updated_at.naive_utc())
         .execute(pool)
@@ -2095,6 +2126,37 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
                 .await
                 .unwrap_or_else(|e| panic!("seed.json item {} contents: {e}", i.id));
         }
+    }
+    for k in &seed.collection_curations {
+        sqlx::query(
+            "INSERT INTO builder.collection_curations (id, collection_id, status, assignee, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(k.id)
+        .bind(k.collection_id)
+        .bind(&k.status)
+        .bind(k.assignee.as_ref().map(|role| &seed.wallets[role]))
+        .bind(k.created_at.naive_utc())
+        .bind(k.updated_at.naive_utc())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json collection curation {}: {e}", k.id));
+    }
+    for k in &seed.item_curations {
+        sqlx::query(
+            "INSERT INTO builder.item_curations (id, item_id, status, content_hash, is_mapping_complete, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(k.id)
+        .bind(k.item_id)
+        .bind(&k.status)
+        .bind(&k.content_hash)
+        .bind(k.is_mapping_complete)
+        .bind(k.created_at.naive_utc())
+        .bind(k.updated_at.naive_utc())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("seed.json item curation {}: {e}", k.id));
     }
     for c in &seed.chain.collections {
         sqlx::query(

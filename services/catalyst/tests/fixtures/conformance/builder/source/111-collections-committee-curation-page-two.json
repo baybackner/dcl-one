@@ -26,11 +26,37 @@
     "body_json": {
       "ok": true,
       "data": {
-        "total": 5,
+        "total": 6,
         "limit": 2,
         "pages": 3,
         "page": 2,
         "results": [
+          {
+            "id": "c011ec71-0000-4000-8000-000000000103",
+            "name": "Listing approved",
+            "eth_address": "0x05bb381a642d932037707c4a626f93fb009696b2",
+            "salt": "0x1031031031031031031031031031031031031031031031031031031031031031",
+            "contract_address": "0x5eed000000000000000000000000000000000103",
+            "is_published": true,
+            "created_at": "2025-12-10T00:00:00.000Z",
+            "updated_at": "2025-12-11T00:00:00.000Z",
+            "managers": [],
+            "minters": [
+              "0xc1eba15006e9d7f629bcad7a7dd41285f012b949"
+            ],
+            "is_approved": true,
+            "reviewed_at": "2025-12-11T00:00:00.000Z",
+            "forum_link": null,
+            "lock": null,
+            "forum_id": null,
+            "linked_contract_address": null,
+            "linked_contract_network": null,
+            "curation_status": null,
+            "last_activity_at": "2025-12-11T00:00:00.000Z",
+            "item_count": "1",
+            "is_mapping_complete": false,
+            "urn": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000103"
+          },
           {
             "id": "c011ec71-0000-4000-8000-000000000302",
             "name": "Items on chain",
@@ -58,30 +84,6 @@
             "item_count": "2",
             "is_mapping_complete": false,
             "urn": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000302"
-          },
-          {
-            "id": "c011ec71-0000-4000-8000-000000000303",
-            "name": "Items approved",
-            "eth_address": "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e",
-            "salt": "0x3033033033033033033033033033033033033033033033030000000000000000",
-            "contract_address": "0x5eed000000000000000000000000000000000303",
-            "is_published": true,
-            "created_at": "2025-12-11T00:00:00.000Z",
-            "updated_at": "2025-12-12T00:00:00.000Z",
-            "managers": [],
-            "minters": [],
-            "is_approved": true,
-            "reviewed_at": "2025-12-12T00:00:00.000Z",
-            "forum_link": null,
-            "lock": null,
-            "forum_id": null,
-            "linked_contract_address": null,
-            "linked_contract_network": null,
-            "curation_status": null,
-            "last_activity_at": "2025-12-16T00:00:00.000Z",
-            "item_count": "1",
-            "is_mapping_complete": false,
-            "urn": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000303"
           }
         ]
       }

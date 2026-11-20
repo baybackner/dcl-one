@@ -24,7 +24,7 @@ use crate::collections::listing::{ListQuery, Page, page};
 use crate::http::ApiError;
 
 use super::ItemsComponent;
-use super::body::{COLUMNS, FullItemOut, ItemRow, Reached, from};
+use super::body::{FullItemOut, ItemRow, Reached, by_id_columns, columns, from};
 
 /// The rows a collection's or an address's items answer per response: above
 /// the largest collection (12,665 items) and the largest owner (12,669) in
@@ -68,7 +68,8 @@ pub(crate) async fn item(
     let mut conn = pool.acquire().await?;
     let view = chain_state::for_read(&mut conn).await?;
     let row = sqlx::query_as::<_, ItemRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM {} WHERE i.id = $1",
+        "SELECT {} FROM {} WHERE i.id = $1",
+        by_id_columns(),
         from(&view)
     )))
     .bind(id)
@@ -76,6 +77,15 @@ pub(crate) async fn item(
     .await?
     .ok_or_else(|| ApiError::not_found("Item not found"))?;
     row.out(reached, full)
+}
+
+/// The statement that reads the rows of a list's bodies, the ids as `$1`.
+pub(crate) fn list_statement(view: &chain_state::ReadView) -> String {
+    format!(
+        "SELECT {} FROM {} WHERE i.id = ANY($1)",
+        columns(),
+        from(view)
+    )
 }
 
 /// The bodies of `ids`, in that order, read in one read-only transaction
@@ -95,13 +105,10 @@ async fn bodies(
         .await?;
     sqlx::query("SET LOCAL jit = off").execute(&mut *tx).await?;
     let view = chain_state::for_read(&mut tx).await?;
-    let rows = sqlx::query_as::<_, ItemRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM {} WHERE i.id = ANY($1)",
-        from(&view)
-    )))
-    .bind(ids)
-    .fetch_all(&mut *tx)
-    .await?;
+    let rows = sqlx::query_as::<_, ItemRow>(sqlx::AssertSqlSafe(list_statement(&view)))
+        .bind(ids)
+        .fetch_all(&mut *tx)
+        .await?;
     tx.commit().await?;
     let mut rows: HashMap<Uuid, ItemRow> = rows.into_iter().map(|row| (row.id, row)).collect();
     ids.iter()
@@ -240,7 +247,10 @@ impl ItemsComponent {
             });
         }
         if !read.full() {
-            scope.push(" AND (i.blockchain_item_id IS NOT NULL OR i.is_published)");
+            scope
+                .push(" AND (i.blockchain_item_id IS NOT NULL OR ")
+                .push(crate::curation::ITEM_CURATED)
+                .push(")");
         }
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
         let ids: Vec<Uuid> = ids.into_iter().map(|(id, _)| id).collect();

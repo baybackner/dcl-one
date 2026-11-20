@@ -45,7 +45,8 @@
         "source/209-item-save-unsigned.json",
         "source/231-item-files-unsigned.json",
         "source/282-collection-lock-unsigned.json",
-        "source/304-third-parties-unsigned.json"
+        "source/304-third-parties-unsigned.json",
+        "source/339-item-curated-unsigned.json"
       ],
       "anchors": []
     },
@@ -200,7 +201,7 @@
       ]
     },
     "item-files-private-until-published": {
-      "text": "The node serves an unpublished item's file only to its readers. Each name in an item is attributed to the wallet whose save wrote it, and a name counts only while that wallet holds an upload record for the hash. An unsigned request gets a file only while a published item (a standard item once its collection is on chain, a third-party item once the node submitted it) names it in a name that counts; a signed request also gets a file its signer uploaded, or one that an item it owns, or a third-party item whose collection it manages, names in a name that counts. Any other request gets the 404 a hash with no file gets. Upstream redirects every request to its public bucket, so a client that loads a draft's file without a signature must sign that request.",
+      "text": "The node serves an unpublished item's file only to its readers. Each name in an item is attributed to the wallet whose save wrote it, and a name counts only while that wallet holds an upload record for the hash. An unsigned request gets a file only while a published item (a standard item once its collection is on chain, a third-party item once it has an item curation) names it in a name that counts; a signed request also gets a file its signer uploaded, or one that an item it owns, or a third-party item whose collection it manages, names in a name that counts. Any other request gets the 404 a hash with no file gets. Upstream redirects every request to its public bucket, so a client that loads a draft's file without a signature must sign that request.",
       "captures": [
         "source/250-storage-draft-unsigned.json",
         "source/252-storage-draft-stranger.json"
@@ -299,7 +300,7 @@
       "id": "api_http:GET:/v1/items",
       "owner": "items",
       "status": "known_gap",
-      "result": "The committee's list and a stranger's refusal were compared and match.",
+      "result": "The committee's list, curated third-party items included, and a stranger's refusal were compared and match.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/188-items-committee.json",
@@ -313,7 +314,6 @@
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:item-list-bounds",
         "deliberate:committee-unavailable",
@@ -325,7 +325,7 @@
       "id": "api_http:GET:/v1/:address/items",
       "owner": "items",
       "status": "known_gap",
-      "result": "An address's own items, paged, unpaginated, its orphans and one collection's, and another wallet's refused read, were compared and match.",
+      "result": "An address's own items, paged, unpaginated, its orphans and one collection's, and another wallet's refused read, and an address's curated third-party items, were compared and match.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/182-address-items-owner-page.json",
@@ -356,10 +356,14 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/187-address-items-stranger-own.json",
           "scope": "GET /{address}/items signed by a wallet holding one item with no collection.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/350-address-items-curated.json",
+          "scope": "GET /{address}/items signed by that address, the owner of curated third-party items.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:item-list-bounds",
         "deliberate:chain-copy-lag"
@@ -370,7 +374,7 @@
       "id": "api_http:GET:/v1/items/:id",
       "owner": "items",
       "status": "known_gap",
-      "result": "Reads by the owner, a stranger, the committee, an on-chain manager and minter, and an admin wallet of draft, unminted, minted, approved, third-party and orphan items, and an unknown and a malformed id, were compared. Each caller is admitted or refused as upstream decides and gets upstream's body for it, the chain's values merged into a minted item and a third-party item's URN and values; the admin wallet gets the public body.",
+      "result": "Reads by the owner, a stranger, the committee, an on-chain manager and minter, and an admin wallet of draft, unminted, minted, approved, third-party and orphan items, and an unknown and a malformed id, were compared. Each caller is admitted or refused as upstream decides and gets upstream's body for it, the chain's values merged into a minted item and a third-party item's URN and values; the admin wallet gets the public body. The provider's manager reading a curated third-party item gets upstream's body: published, with the mapping flag of the newest curation of the collection's first curated item by id. A signer with no role reading a third-party item of a collection with item curations, curated or not, gets upstream's public body.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/36-item-published-stranger.json",
@@ -481,17 +485,42 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/245-item-after-folder-and-empty-entries.json",
           "scope": "GET /items/{id} signed by the owner of the item saved with a folder entry and an empty file.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/337-item-curated-manager.json",
+          "scope": "GET /items/{id} signed by the provider's manager, a third-party item with an older approved and a newer pending curation whose collection has a curated item of a lower id.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/338-item-curated-stranger.json",
+          "scope": "GET /items/{id} signed by a wallet with no role, a third-party item with curations.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/339-item-curated-unsigned.json",
+          "scope": "GET /items/{id} without a signature, a third-party item with curations.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/340-item-uncurated-in-curated-collection-stranger.json",
+          "scope": "GET /items/{id} signed by a wallet with no role, a never-curated third-party item of a collection with curated items.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:admin-addresses-not-admitted",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:committee-unavailable",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:unauthenticated-message"
       ],
-      "remaining_verification": "Item curations and the catalyst's entities, when the node reads them."
+      "remaining_verification": "The catalyst's entities, when the node reads them."
     },
     {
       "id": "api_http:GET:/v1/published-collections/:address/items/:id/utility",
@@ -522,7 +551,7 @@
       "id": "api_http:GET:/v1/collections/:id/items",
       "owner": "items",
       "status": "known_gap",
-      "result": "Lists of a draft, a collection on chain and a third-party collection, by id and by contract address, paged, filtered by name, synced, status and mappingStatus, by the owner, a stranger, an on-chain manager and minter, the committee and an admin wallet, and an unknown collection with an invalid status, were compared and match except the admin wallet's refusal.",
+      "result": "Lists of a draft, a collection on chain and a third-party collection, by id and by contract address, paged, filtered by name, synced, status and mappingStatus, by the owner, a stranger, an on-chain manager and minter, the committee and an admin wallet, and an unknown collection with an invalid status, were compared and match except the admin wallet's refusal. A third-party collection with curated items, for the provider's manager and for a signer with no role, matches: each item published and with the mapping flag of its own newest curation, a never-curated one unpublished and left out of the public list. Its status filter differs: an open gap.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/28-collection-items-unsigned.json",
@@ -644,10 +673,30 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/241-collection-items-after-saves-owner.json",
           "scope": "GET /collections/{id}/items signed by the owner after its items were saved, created and deleted.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/341-collection-items-curated-manager.json",
+          "scope": "GET /collections/{id}/items signed by the provider's manager, a third-party collection with curated and never-curated items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/342-collection-items-curated-stranger.json",
+          "scope": "GET /collections/{id}/items signed by a wallet with no role, a third-party collection with curated items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/349-collection-items-curated-status.json",
+          "scope": "GET /collections/{id}/items signed by the provider's manager, filtered by curation status.",
+          "replay": [
+            "data.length value"
+          ],
+          "explained_by": {
+            "data.length value": "open:item-curation-filters"
+          }
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
+        "open:item-curation-filters",
         "open:item-catalyst-state",
         "deliberate:admin-addresses-not-admitted",
         "deliberate:owner-is-the-chain-creator",
@@ -656,13 +705,13 @@
         "deliberate:unauthenticated-message",
         "deliberate:item-list-bounds"
       ],
-      "remaining_verification": "Curation filters against item curations."
+      "remaining_verification": "The synced and mappingStatus filters over items with curations."
     },
     {
       "id": "api_http:PUT:/v1/items/:idOrURN",
       "owner": "items",
       "status": "known_gap",
-      "result": "Saves of draft, unminted and minted items by the owner, an on-chain manager, a stranger and the committee; creations into a draft, a published collection and no collection; moves and removals around a published collection; a rarity change; third-party saves by URN and by id, creations, URN conflicts, a URN in another case and mappings; and each schema and path refusal were compared and match, except the schema refusal's detail and the unsigned message.",
+      "result": "Saves of draft, unminted and minted items by the owner, an on-chain manager, a stranger and the committee; creations into a draft, a published collection and no collection; moves and removals around a published collection; a rarity change; third-party saves by URN and by id, creations, URN conflicts, a curated item's refused URN change, a URN in another case and mappings; and each schema and path refusal were compared and match, except the schema refusal's detail and the unsigned message.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/33-item-orphan-into-third-party.json",
@@ -853,10 +902,14 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/246-item-create-private-draft.json",
           "scope": "PUT /items/{id} signed by the owner, creating an item with no collection whose model no other item names.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/351-item-save-curated-urn-change.json",
+          "scope": "PUT /items/{id} signed by the provider's manager, changing the URN of a curated third-party item.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
         "open:item-catalyst-state",
         "deliberate:invalid-body-detail",
         "deliberate:unauthenticated-message",
@@ -866,13 +919,13 @@
         "deliberate:managers-from-chain-only",
         "deliberate:chain-copy-lag"
       ],
-      "remaining_verification": "The lock, a registry manager's saves, item curations and the catalyst's entities."
+      "remaining_verification": "The lock, a registry manager's accepted saves and the catalyst's entities."
     },
     {
       "id": "api_http:DELETE:/v1/items/:id",
       "owner": "items",
-      "status": "known_gap",
-      "result": "Deletes of a draft, minted, unminted, third-party and orphan item by their owner, an on-chain manager and a stranger, and of an unknown item,, and in a locked collection, were compared and match.",
+      "status": "reviewed",
+      "result": "Deletes of a draft, minted, unminted, third-party and orphan item by their owner, an on-chain manager and a stranger, of an unknown item, in a locked collection, and the refused delete of a curated third-party item by its provider's registry manager, were compared and match.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/219-item-delete-stranger.json",
@@ -913,16 +966,20 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/238-item-delete-locked.json",
           "scope": "DELETE /items/{id} signed by the owner on an item of a locked collection.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/352-item-delete-curated.json",
+          "scope": "DELETE /items/{id} signed by the provider's manager, a curated third-party item.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-curation-publicity",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only"
       ],
-      "remaining_verification": "A registry manager's deletes and item curations."
+      "remaining_verification": "A registry manager's delete of a never-curated item."
     },
     {
       "id": "api_http:POST:/v1/items/:id/files",
@@ -1084,7 +1141,7 @@
       "id": "api_http:GET:/v1/collections",
       "owner": "collections",
       "status": "reviewed",
-      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches, a registered provider's collection and a programmatic provider's collection on the committee's listing included.",
+      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches, a registered provider's collection and a programmatic provider's collection on the committee's listing included. The curation page shows a third-party collection with curated items with its newest collection curation's status and activity, as upstream does.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/01-collections-public-search.json",
@@ -1304,13 +1361,13 @@
         "deliberate:managers-from-chain-only",
         "deliberate:polygon-mainnet-collections"
       ],
-      "remaining_verification": "The review filters, relevance and curation_status read every collection as uncurated until the curation changes."
+      "remaining_verification": "The review filters and the relevance and request sorts over collections with curations."
     },
     {
       "id": "api_http:GET:/v1/:address/collections",
       "owner": "collections",
       "status": "reviewed",
-      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names. Also compared: a registry manager's and a programmatic provider's manager's listings of their providers' third-party collections, and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap).",
+      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names. Also compared: a registry manager's and a programmatic provider's manager's listings of their providers' third-party collections, and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap). Also compared: an address's listing whose rows carry their newest collection curation's status and count its last change as activity.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/62-address-collections-creator.json",
@@ -1534,6 +1591,11 @@
             "error extra": "deliberate:query-never-overrides",
             "ok value": "deliberate:query-never-overrides"
           }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/347-address-collections-curated.json",
+          "scope": "GET /{address}/collections signed by that address, owner of a collection with a pending curation and manager of a provider whose collection has an approved one.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -1548,13 +1610,13 @@
         "deliberate:signature-window",
         "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "The status filter reads every collection as uncurated until the curation changes."
+      "remaining_verification": "The status filter over collections with curations."
     },
     {
       "id": "api_http:GET:/v1/collections/:id",
       "owner": "collections",
       "status": "reviewed",
-      "result": "The full body for the owner of a draft, of a published unapproved and of a published approved collection, for a committee member of a draft and of a published collection, for an on-chain manager and an on-chain minter, and for the provider's manager of a third-party collection; the public detail for a signer without a role on a published unapproved and approved collection; the refusals of a stranger on a draft and on a third-party collection, an unsigned request, each signature defect, a missing id and a malformed id were compared. Every one matches but the signature cases. Also compared: the chain creator and the stored owner of a transferred collection, a committee member on a third-party draft, an ADMIN_ADDRESSES wallet on a collection on chain, a wallet named as manager only in a draft's body, and a second registry manager of a provider. Also compared: the manager of a programmatic provider reading its collection, and an id query parameter naming another collection (upstream answers that one; the node the path's: a deliberate gap). Also compared: a collection of an unapproved provider read by a wallet both the registry and the virtual third party list, and by a registry manager the virtual third party doesn't list.",
+      "result": "The full body for the owner of a draft, of a published unapproved and of a published approved collection, for a committee member of a draft and of a published collection, for an on-chain manager and an on-chain minter, and for the provider's manager of a third-party collection; the public detail for a signer without a role on a published unapproved and approved collection; the refusals of a stranger on a draft and on a third-party collection, an unsigned request, each signature defect, a missing id and a malformed id were compared. Every one matches but the signature cases. Also compared: the chain creator and the stored owner of a transferred collection, a committee member on a third-party draft, an ADMIN_ADDRESSES wallet on a collection on chain, a wallet named as manager only in a draft's body, and a second registry manager of a provider. Also compared: the manager of a programmatic provider reading its collection, and an id query parameter naming another collection (upstream answers that one; the node the path's: a deliberate gap). Also compared: a collection of an unapproved provider read by a wallet both the registry and the virtual third party list, and by a registry manager the virtual third party doesn't list. Also compared: a third-party collection with curated items, published with the dates of its first curated item's newest curation, for the provider's manager and as the public detail for a signer with no role; a collection on chain with a forum post, the forum fields in its owner's body and left out of the public detail.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/02-collection-owner.json",
@@ -1930,6 +1992,26 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/319-collection-unapproved-both.json",
           "scope": "GET /collections/{id} signed by a wallet the registry lists unapproved and the virtual third party lists too. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/343-collection-curated-third-party-manager.json",
+          "scope": "GET /collections/{id} signed by the provider's manager, a third-party collection with curated items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/344-collection-curated-third-party-stranger.json",
+          "scope": "GET /collections/{id} signed by a wallet with no role, a third-party collection with curated items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/345-collection-forum-owner.json",
+          "scope": "GET /collections/{id} signed by the owner of a collection on chain with a forum post and a pending curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/346-collection-forum-stranger.json",
+          "scope": "GET /collections/{id} signed by a wallet with no role, a collection on chain with a forum post.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -1944,7 +2026,7 @@
         "deliberate:unauthenticated-message",
         "deliberate:query-never-overrides"
       ],
-      "remaining_verification": "Fields whose sources arrive later answer upstream's empty value: forum fields, a third-party collection's dates and published state from item curations."
+      "remaining_verification": "A collection whose first curated item by id is not the one curated last."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
@@ -2946,7 +3028,7 @@
       "id": "api_http:GET:/v1/thirdParties/:id/slots",
       "owner": "third-parties",
       "status": "reviewed",
-      "result": "The slots of an approved provider for its second registry manager and a stranger, of a virtual third party for its manager, of unapproved providers for the manager of their virtual third party, for a registry manager the virtual third party doesn't list, and for a wallet both list, and after the virtual third party was removed, were compared; every one matches but the manager of the virtual third party of a provider the registry lists unapproved for another wallet, whom the node refuses.",
+      "result": "The slots of an approved provider for its second registry manager and a stranger, of a virtual third party for its manager, of unapproved providers for the manager of their virtual third party, for a registry manager the virtual third party doesn't list, and for a wallet both list, and after the virtual third party was removed, were compared; every one matches but the manager of the virtual third party of a provider the registry lists unapproved for another wallet, whom the node refuses. Also compared: a registry provider's slots less its items with an item curation.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/311-third-party-slots-registry-manager.json",
@@ -2993,12 +3075,17 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/334-third-party-slots-after-delete.json",
           "scope": "GET /thirdParties/{id}/slots signed by the second manager the registry lists unapproved, once the virtual third party is gone. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/348-third-party-slots-curated.json",
+          "scope": "GET /thirdParties/{id}/slots signed by the manager the registry lists, a provider with curated items.",
+          "replay": []
         }
       ],
       "gaps": [
         "deliberate:third-party-claims"
       ],
-      "remaining_verification": "Slots counted against submitted items: the node counts the items it submitted until it keeps item curations."
+      "remaining_verification": "Slots after a third-party publication the node records."
     },
     {
       "id": "api_http:GET:/v1/thirdParties/:id",
@@ -3168,8 +3255,8 @@
     {
       "id": "api_http:GET:/v1/storage/contents/:filename",
       "owner": "item-files",
-      "status": "known_gap",
-      "result": "Unsigned reads of a file a minted item names and of a hash nobody uploaded, and an unsigned, the owner's and a stranger's read of a file only an item with no collection names, were compared; the node answers the file's bytes from its disk to whoever may read it and 404 to anyone else, where upstream redirects every request to its bucket. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "status": "reviewed",
+      "result": "Unsigned reads of a file a minted item names and of a hash nobody uploaded, and an unsigned, the owner's and a stranger's read of a file only an item with no collection names, were compared; the node answers the file's bytes from its disk to whoever may read it and 404 to anyone else, where upstream redirects every request to its bucket. A third-party item with an item curation in any status is published to these routes; the storage matrix test holds it, since upstream answers every hash with the same redirect.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/248-storage-published-unsigned.json",
@@ -3258,21 +3345,25 @@
             "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=<missing>": "deliberate:item-files-absent",
             "body bytes differ: fixture=\"Moved Permanently. Redirecting to https://conformance.s3.amazonaws.com/contents/bafkreievhgfj53hbqd5f4dgteqoeoovwkos2zkxzyjrtartamlmuyo44ay\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Not Found\\\",\\\"ok\\\":false}\"": "deliberate:item-files-absent"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
+          "scope": "The node's answer to GET for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
         }
       ],
       "gaps": [
         "deliberate:item-files-absent",
         "deliberate:item-files-from-disk",
-        "deliberate:item-files-private-until-published",
-        "open:item-curation-publicity"
+        "deliberate:item-files-private-until-published"
       ],
-      "remaining_verification": "Compare a third-party item's file before and after its submission, and a Range request. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
+      "remaining_verification": "A Range request. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
     {
       "id": "api_http:HEAD:/v1/storage/contents/:filename",
       "owner": "item-files",
-      "status": "known_gap",
-      "result": "The unsigned HEAD of a file a minted item names was compared; the node answers the file's headers from its disk where upstream redirects to its bucket. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "status": "reviewed",
+      "result": "The unsigned HEAD of a file a minted item names was compared; the node answers the file's headers from its disk where upstream redirects to its bucket. A third-party item with an item curation in any status is published to these routes; the storage matrix test holds it, since upstream answers every hash with the same redirect.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/249-storage-published-head.json",
@@ -3287,19 +3378,23 @@
             "header content-type: fixture=\"text/plain; charset=utf-8\" candidate=\"application/octet-stream\"": "deliberate:item-files-from-disk",
             "header location: fixture=\"https://conformance.s3.amazonaws.com/contents/bafkreigl2ikuvlnqi45jrzwowmv4uqdjd6oopfwal3usjqi5fiiwm4yqei\" candidate=<missing>": "deliberate:item-files-from-disk"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
+          "scope": "The node's answer to HEAD for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
         }
       ],
       "gaps": [
-        "deliberate:item-files-from-disk",
-        "open:item-curation-publicity"
+        "deliberate:item-files-from-disk"
       ],
       "remaining_verification": "Compare a HEAD of a draft's file signed and unsigned. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
     {
       "id": "api_http:GET:/v1/storage/contents/:filename/exists",
       "owner": "item-files",
-      "status": "known_gap",
-      "result": "The unsigned probe of a file a minted item names and of a hash nobody uploaded, and the unsigned and the owner's probe of a file only an item with no collection names, were compared; they match but for the unsigned probe of the draft's file, which the node answers 404 {ok:true} as for an absent file. A third-party item curated outside the node, such as an imported one, is not yet published to these routes (open gap item-curation-publicity).",
+      "status": "reviewed",
+      "result": "The unsigned probe of a file a minted item names and of a hash nobody uploaded, and the unsigned and the owner's probe of a file only an item with no collection names, were compared; they match but for the unsigned probe of the draft's file, which the node answers 404 {ok:true} as for an absent file. A third-party item with an item curation in any status is published to these routes; the storage matrix test holds it, since upstream answers every hash with the same redirect.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/254-storage-exists-published-unsigned.json",
@@ -3325,13 +3420,17 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/257-storage-exists-unknown-unsigned.json",
           "scope": "GET /storage/contents/{hash}/exists unsigned, a hash nobody uploaded.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
+          "scope": "The node's answer to the exists probe for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
         }
       ],
       "gaps": [
-        "deliberate:item-files-exists-private",
-        "open:item-curation-publicity"
+        "deliberate:item-files-exists-private"
       ],
-      "remaining_verification": "Compare the probe of a third-party item's file before and after its submission."
+      "remaining_verification": "The signed probe of a draft's file by a wallet with no role."
     },
     {
       "id": "api_http:POST:/v1/newsletter",
@@ -3344,10 +3443,12 @@
     }
   ],
   "open_gaps": {
-    "item-curation-publicity": {
-      "text": "The node keeps no item curations: a third-party item's is_published is the node's record of its submission, its isMappingComplete is whether it has mappings, a third-party item's URN change and delete are refused once it is submitted, the synced and third-party status filters match nothing, and the file routes (GET and HEAD /v1/storage/contents/:hash, its exists probe) treat a third-party item as published only once the node holds its own linked submission of it, so the file of a third-party item curated elsewhere, such as an imported one, answers 404 to an unsigned request and to anyone but its readers. Upstream reads item curations: a by-id read of a third-party item answers is_published from its collection's latest item curation, so a never-submitted item of a collection with any curated item is public to any signer, while lists answer each item's own; isMappingComplete is the latest curation's flag; its file routes redirect every hash to its public bucket; the URN change and delete refusals follow the item's own curations; synced and status match items by their latest curation.",
-      "captures": [],
-      "closes": "The node keeps item curations and answers each item's published state, mapping flag and curation filters from them, a by-id read from the item's own curation, and the file routes take a third-party item with an item curation as published.",
+    "item-curation-filters": {
+      "text": "GET /v1/collections/:id/items: upstream filters by each item's newest item curation. A status filter on a third-party collection, whatever status it names, lists the items whose newest curation is pending; synced, on any collection, lists the items whose newest curation is approved and whose local content hash equals (true) or differs from (false) its content hash; mappingStatus=unpublished_mapping on a third-party collection lists the items with mappings whose newest curation is not marked complete. The node lists nothing for status and synced, and every item with mappings for unpublished_mapping.",
+      "captures": [
+        "source/349-collection-items-curated-status.json"
+      ],
+      "closes": "The node filters a collection's items by their newest item curation as upstream does.",
       "anchors": []
     },
     "item-catalyst-state": {

@@ -43,8 +43,7 @@
 //! without a collections subgraph, as the old node answered without its
 //! pool); `BUILDER_POLYGON_RPC_URL`
 //! must be https to a public host (a plaintext verifier could be fed a fake
-//! receipt); `is_approved` is the declared projection of `curation_status`
-//! (`linked_publication_review::finish_linked_publication`).
+//! receipt).
 //!
 //! Not carried, by the plan: `dcl-scene-cli` and what only it consumes
 //! (`dcl-scene-authoring`, `dcl-preview-tunnel`,
@@ -70,6 +69,7 @@ pub mod auth;
 pub mod chain_state;
 pub mod collections;
 pub mod committee;
+pub mod curation;
 pub mod drafts;
 pub mod handlers;
 pub mod http;

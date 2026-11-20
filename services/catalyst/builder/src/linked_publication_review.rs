@@ -5,8 +5,8 @@
 //! signed chain to a third party), checks that each set was signed by the
 //! collection owner over exactly that path, and verifies what the
 //! Foundation serves against the frozen `snapshot` before marking the
-//! attempt `submitted` and the items published with the Foundation's urn,
-//! content hash and curation status.
+//! attempt `submitted` and the items published with the Foundation's urn and
+//! content hash, each with the Foundation's curation as its item curation.
 //!
 //! The Foundation host is `BUILDER_FOUNDATION_URL` (the mirror posture's:
 //! Decentraland's builder API); unset, verification answers 503 and nothing
@@ -31,6 +31,7 @@ use dcl_auth::MAX_AUTH_CHAIN_LINKS;
 use dcl_http::HttpClientCfg;
 
 use super::auth::{SignedPath, require_signer};
+use super::curation;
 use super::http::ApiError;
 use super::items::ItemsComponent;
 use super::linked_publication_store::{
@@ -284,7 +285,7 @@ fn verify_review(
         let curation = matching[0];
         let hash = item["local_content_hash"]
             .as_str()
-            .filter(|h| !h.is_empty())
+            .filter(|h| curation::content_hash(h))
             .ok_or_else(mismatch)?;
         let status = curation["status"]
             .as_str()
@@ -337,10 +338,9 @@ fn verify_review(
 }
 
 impl ItemsComponent {
-    /// Marks the items published with the Foundation's urn, content hash and
-    /// curation status (`is_approved` is the declared projection of the
-    /// status), unfreezes the collection and records the attempt
-    /// `submitted`, which with the items' on-chain ids makes the collection
+    /// Marks the items published with the Foundation's urn and content hash,
+    /// records the Foundation's curation of each as its item curation,
+    /// unfreezes the collection and records the attempt `submitted`, which with the items' on-chain ids makes the collection
     /// published ([`crate::chain_state`]). Idempotent once submitted.
     async fn finish_linked_publication(
         &self,
@@ -367,16 +367,24 @@ impl ItemsComponent {
             return Err(ApiError::http(409, "Linked publication is not authorized"));
         }
         for item in review.items {
-            let changed = sqlx::query("UPDATE builder.items SET is_published=true,urn_suffix=$2,blockchain_item_id=$3,local_content_hash=$4,curation_status=$5,is_approved=($5='approved'),price='0',beneficiary='0x0000000000000000000000000000000000000000',rarity=NULL,total_supply=0,updated_at=timezone('UTC', now()) \
-                WHERE id=$1 AND collection_id=$6 AND eth_address=$7 AND NOT is_published")
-                .bind(item.id).bind(item.urn).bind(item.id.to_string()).bind(item.content_hash).bind(item.status).bind(id).bind(owner)
-                .execute(&mut *tx).await?.rows_affected();
-            if changed != 1 {
+            let mapped: Option<bool> = sqlx::query_scalar("UPDATE builder.items SET is_published=true,urn_suffix=$2,blockchain_item_id=$3,local_content_hash=$4,price='0',beneficiary='0x0000000000000000000000000000000000000000',rarity=NULL,total_supply=0,updated_at=timezone('UTC', now()) \
+                WHERE id=$1 AND collection_id=$5 AND eth_address=$6 AND NOT is_published RETURNING mappings IS NOT NULL")
+                .bind(item.id).bind(item.urn).bind(item.id.to_string()).bind(&item.content_hash).bind(id).bind(owner)
+                .fetch_optional(&mut *tx).await?;
+            let Some(mapped) = mapped else {
                 return Err(ApiError::http(
                     409,
                     "Linked items changed during publication",
                 ));
-            }
+            };
+            curation::record_item_curation(
+                &mut tx,
+                item.id,
+                &item.status,
+                &item.content_hash,
+                mapped,
+            )
+            .await?;
         }
         sqlx::query("UPDATE builder.collections SET publication_pending=false,updated_at=timezone('UTC', now()) WHERE id=$1").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE builder.linked_collection_publications SET status='submitted',forum_url=$2,updated_at=timezone('UTC', now()) WHERE collection_id=$1")

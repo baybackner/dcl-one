@@ -75,6 +75,7 @@ use tokio::time::Instant;
 use crate::SharedState;
 use crate::chain_index::third_parties::Provider;
 use crate::chain_state::{self, DecisionView};
+use crate::curation::ITEM_CURATED;
 use crate::http::{ApiError, Subject};
 use crate::items::urn::ThirdPartyItemUrn;
 use crate::shared::signed_fetch::Signer;
@@ -247,6 +248,26 @@ mod sealed {
     impl Sealed for super::CollectionRead {}
     impl Sealed for super::CollectionEdit {}
     impl Sealed for super::CollectionSync {}
+    impl Sealed for super::CollectionManage {}
+    impl Sealed for super::Publisher {}
+}
+
+/// A grant to record a review of one collection: a curation of it or of its
+/// items ([`crate::curation`]); only this module's write grants implement it.
+pub trait CurationGrant: sealed::Sealed {
+    fn curated(&self) -> Uuid;
+}
+
+impl CurationGrant for CollectionManage {
+    fn curated(&self) -> Uuid {
+        self.id
+    }
+}
+
+impl CurationGrant for Publisher {
+    fn curated(&self) -> Uuid {
+        self.id
+    }
 }
 
 /// A grant over one collection, for the reads that answer its row; only
@@ -568,13 +589,14 @@ struct Item {
 }
 
 async fn item(conn: &mut PgConnection, id: Uuid) -> Result<Option<Item>, ApiError> {
-    let row: Option<(String, Option<Uuid>, bool, bool)> = sqlx::query_as(
-        "SELECT eth_address, collection_id, blockchain_item_id IS NOT NULL, is_published \
-         FROM builder.items WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(conn)
-    .await?;
+    let row: Option<(String, Option<Uuid>, bool, bool)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT eth_address, collection_id, blockchain_item_id IS NOT NULL, {ITEM_CURATED} \
+         FROM builder.items i WHERE id = $1"
+        )))
+        .bind(id)
+        .fetch_optional(conn)
+        .await?;
     Ok(row.map(|(owner, collection, minted, published)| Item {
         owner,
         collection,
@@ -908,10 +930,11 @@ pub async fn collection_items(
 }
 
 /// `GET /v1/items/:id`: any signer reads a minted item of a published
-/// standard collection; the item's owner, the provider's manager and the
-/// committee read any. `full` is false for a caller who reads only what any
-/// signer may; for a minted item the committee only widens the view, without
-/// waiting, as in [`collection_items`].
+/// standard collection and any item of a published third-party collection
+/// (one with an item curation); the item's owner, the provider's manager and
+/// the committee read any. `full` is false for a caller who reads only what
+/// any signer may; for a published item the committee only widens the view,
+/// without waiting, as in [`collection_items`].
 pub async fn read_item(
     state: &SharedState,
     signer: &Signer,
@@ -932,7 +955,7 @@ pub async fn read_item(
     if i.owner == s || parent.as_ref().is_some_and(|c| c.provider_manager(s)) {
         return Ok(ItemRead { id, full: true });
     }
-    if let Some(c) = parent.filter(|c| !c.third_party && c.published && i.minted) {
+    if let Some(c) = parent.filter(|c| c.published && (c.third_party || i.minted)) {
         let full = c.owner(s) || c.manager(s) || c.minter(s) || known_committee(state, s);
         return Ok(ItemRead { id, full });
     }
@@ -1107,13 +1130,13 @@ struct StoredItem {
 }
 
 async fn stored_item(conn: &mut PgConnection, id: Uuid) -> Result<Option<StoredItem>, ApiError> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT eth_address AS owner, collection_id AS collection, blockchain_item_id, \
-         urn_suffix AS urn, rarity, is_published AS submitted, \
+         urn_suffix AS urn, rarity, {ITEM_CURATED} AS submitted, \
          type = 'wearable' AND EXISTS (SELECT 1 FROM builder.item_contents f \
            WHERE f.item_id = i.id AND f.file LIKE '%.js') AS smart \
-         FROM builder.items i WHERE id = $1",
-    )
+         FROM builder.items i WHERE id = $1"
+    )))
     .bind(id)
     .fetch_optional(conn)
     .await?)
@@ -1585,12 +1608,12 @@ const PUBLIC_FILE: &str = "EXISTS (SELECT 1 FROM (SELECT u.uploaded_by FROM buil
        JOIN builder.collections c ON c.id = i.collection_id \
        {chain_join} \
        WHERE ic.hash = {hash} AND ic.named_by = w.uploaded_by \
-         AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
+         AND CASE WHEN c.third_party_id IS NOT NULL THEN {curated} ELSE {published} END \
        UNION ALL SELECT 1 FROM builder.items i \
        JOIN builder.collections c ON c.id = i.collection_id \
        {chain_join} \
        WHERE i.video = {hash} AND i.video_named_by = w.uploaded_by \
-         AND CASE WHEN c.third_party_id IS NOT NULL THEN i.is_published ELSE {published} END \
+         AND CASE WHEN c.third_party_id IS NOT NULL THEN {curated} ELSE {published} END \
        LIMIT 1) named)";
 
 /// [`FILE_READ`]'s answer: public, the signer's own, and the providers
@@ -1634,6 +1657,7 @@ fn public_file_sql(hash: &str) -> String {
     PUBLIC_FILE
         .replace("{chain_join}", chain_join)
         .replace("{published}", published)
+        .replace("{curated}", ITEM_CURATED)
         .replace("{hash}", hash)
 }
 
@@ -1645,8 +1669,8 @@ pub(crate) fn file_read_sql() -> String {
 /// `GET /v1/storage/contents/:hash` and its `exists` probe: who may read an
 /// item file. Anyone, signed or not, while a published item names the hash
 /// in an entry, or as its video, whose writer holds an upload record for it (a standard item is
-/// published once its collection is; a third-party item once the node
-/// submitted it). A signer also reads a file it uploaded itself, and a file
+/// published once its collection is; a third-party item once it has an item
+/// curation, [`ITEM_CURATED`]). A signer also reads a file it uploaded itself, and a file
 /// that an item it owns, or a third-party item whose collection it manages,
 /// names in such an entry. A name opens a file only for the wallet that
 /// wrote it holding the bytes; the committee and on-chain managers read what

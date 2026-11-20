@@ -255,15 +255,14 @@ async fn builder_collection(
     }
 }
 
-async fn item(conn: &mut PgConnection, collection: Uuid, minted: bool, status: &str) {
+async fn item(conn: &mut PgConnection, collection: Uuid, minted: bool) {
     sqlx::query(
-        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, curation_status, is_approved) \
-         VALUES ($1, $2, '0x00000000000000000000000000000000000000d0', 'Hat', 'wearable', $3, $4, $4 = 'approved')",
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id) \
+         VALUES ($1, $2, '0x00000000000000000000000000000000000000d0', 'Hat', 'wearable', $3)",
     )
     .bind(Uuid::new_v4())
     .bind(collection)
     .bind(minted.then_some("0"))
-    .bind(status)
     .execute(conn)
     .await
     .unwrap();
@@ -327,7 +326,7 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
     fresh_pass(&mut tx).await;
 
     let draft = builder_collection(&mut tx, false, Some(&random_address())).await;
-    item(&mut tx, draft.id, false, "pending").await;
+    item(&mut tx, draft.id, false).await;
     assert_eq!(
         derived(&mut tx, draft.id).await,
         (false, false),
@@ -369,8 +368,8 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
     );
 
     let minted = builder_collection(&mut tx, false, None).await;
-    item(&mut tx, minted.id, false, "pending").await;
-    item(&mut tx, minted.id, true, "pending").await;
+    item(&mut tx, minted.id, false).await;
+    item(&mut tx, minted.id, true).await;
     assert_eq!(
         derived(&mut tx, minted.id).await,
         (true, false),
@@ -381,7 +380,7 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
     let every_signal = builder_collection(&mut tx, false, Some(&every_signal_contract)).await;
     copy_row(&mut tx, "matic", &every_signal_contract, true, &[]).await;
     standard_receipt(&mut tx, &every_signal).await;
-    item(&mut tx, every_signal.id, true, "approved").await;
+    item(&mut tx, every_signal.id, true).await;
     assert_eq!(derived(&mut tx, every_signal.id).await, (true, true));
 
     let pending = builder_collection(&mut tx, false, None).await;
@@ -406,7 +405,7 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
     );
 
     let linked = builder_collection(&mut tx, true, None).await;
-    item(&mut tx, linked.id, false, "approved").await;
+    item(&mut tx, linked.id, false).await;
     linked_receipt(&mut tx, &linked, "authorized").await;
     assert_eq!(
         derived(&mut tx, linked.id).await,
@@ -425,7 +424,7 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
         (true, false),
         "a submitted linked publication is published; a linked collection is never approved, as upstream's"
     );
-    item(&mut tx, linked.id, false, "pending").await;
+    item(&mut tx, linked.id, false).await;
     assert_eq!(
         derived(&mut tx, linked.id).await,
         (true, false),

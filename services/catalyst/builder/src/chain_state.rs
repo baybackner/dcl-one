@@ -129,7 +129,10 @@ macro_rules! own_records {
          OR EXISTS (SELECT 1 FROM builder.linked_collection_publications linked \
          WHERE linked.collection_id = c.id AND linked.status = 'submitted') \
          OR EXISTS (SELECT 1 FROM builder.items minted \
-         WHERE minted.collection_id = c.id AND minted.blockchain_item_id IS NOT NULL)"
+         WHERE minted.collection_id = c.id AND minted.blockchain_item_id IS NOT NULL) \
+         OR EXISTS (SELECT 1 FROM builder.items curated_item \
+         JOIN builder.item_curations curated ON curated.item_id = curated_item.id \
+         WHERE curated_item.collection_id = c.id)"
     };
 }
 
@@ -176,7 +179,8 @@ impl ReadView {
 
     /// A boolean over [`Self::collections`]: the collection is published (the
     /// copy holds its contract, or the node holds its verified receipt, its
-    /// submitted linked publication or an item's on-chain id).
+    /// submitted linked publication, an item's on-chain id or an item
+    /// curation, [`crate::curation::COLLECTION_ITEMS_CURATED`]).
     pub fn published(&self) -> &'static str {
         PUBLISHED
     }

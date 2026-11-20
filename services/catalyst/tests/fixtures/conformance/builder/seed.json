@@ -6,7 +6,8 @@
     "manager": "0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0",
     "creator": "0x05bb381a642d932037707c4a626f93fb009696b2",
     "minter": "0xc1eba15006e9d7f629bcad7a7dd41285f012b949",
-    "admin": "0x88ae2a86476409cadaac10a4af1cbd5f5d7f858e"
+    "admin": "0x88ae2a86476409cadaac10a4af1cbd5f5d7f858e",
+    "provider": "0x043b83d2010ee75cc3c0419348327eb9c6da7268"
   },
   "third_parties": [
     {
@@ -192,6 +193,28 @@
       "contract_address": "0x5eed000000000000000000000000000000000305",
       "created_at": "2025-12-10T00:00:00.000Z",
       "updated_at": "2025-12-10T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000401",
+      "name": "Forum hats",
+      "owner": "provider",
+      "salt": "0x4014014014014014014014014014014014014014014014010000000000000000",
+      "contract_address": "0x5eed000000000000000000000000000000000401",
+      "forum_link": "https://forum.example.org/t/forum-hats/401",
+      "forum_id": 401,
+      "created_at": "2025-12-20T00:00:00.000Z",
+      "updated_at": "2025-12-20T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000402",
+      "name": "Curated wearables",
+      "owner": "provider",
+      "salt": "0x4024024024024024024024024024024024024024024024020000000000000000",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:curated",
+      "urn_suffix": "curated-wearables",
+      "created_at": "2025-12-20T00:00:00.000Z",
+      "updated_at": "2025-12-20T00:00:00.000Z"
     }
   ],
   "items": [
@@ -747,6 +770,66 @@
         "textures": 1,
         "triangles": 100
       }
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004a1",
+      "name": "Curated cap",
+      "owner": "provider",
+      "collection_id": "c011ec71-0000-4000-8000-000000000402",
+      "blockchain_item_id": null,
+      "created_at": "2025-12-20T00:00:00.000Z",
+      "updated_at": "2025-12-20T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "cap-1"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004a2",
+      "name": "Curated helmet",
+      "owner": "provider",
+      "collection_id": "c011ec71-0000-4000-8000-000000000402",
+      "blockchain_item_id": null,
+      "created_at": "2025-12-20T00:00:00.000Z",
+      "updated_at": "2025-12-20T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "helmet-2"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004a3",
+      "name": "Uncurated mask",
+      "owner": "provider",
+      "collection_id": "c011ec71-0000-4000-8000-000000000402",
+      "blockchain_item_id": null,
+      "created_at": "2025-12-20T00:00:00.000Z",
+      "updated_at": "2025-12-20T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "mask-3"
     }
   ],
   "chain": {
@@ -859,6 +942,18 @@
         "created_at": 1765411200,
         "updated_at": 1765497600,
         "reviewed_at": 1765497600
+      },
+      {
+        "contract_address": "0x5eed000000000000000000000000000000000401",
+        "name": "Forum hats",
+        "creator": "provider",
+        "owner": "provider",
+        "is_approved": false,
+        "managers": [],
+        "minters": [],
+        "created_at": 1766188800,
+        "updated_at": 1766188800,
+        "reviewed_at": 0
       }
     ],
     "items": [
@@ -966,6 +1061,60 @@
         "minter"
       ],
       "approved": false
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:curated",
+      "name": "Curated provider",
+      "managers": [
+        "provider"
+      ]
+    }
+  ],
+  "collection_curations": [
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004c1",
+      "collection_id": "c011ec71-0000-4000-8000-000000000401",
+      "status": "pending",
+      "assignee": "committee",
+      "created_at": "2025-12-24T00:00:00.000Z",
+      "updated_at": "2025-12-24T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004c2",
+      "collection_id": "c011ec71-0000-4000-8000-000000000402",
+      "status": "approved",
+      "assignee": null,
+      "created_at": "2025-12-24T01:00:00.000Z",
+      "updated_at": "2025-12-24T02:00:00.000Z"
+    }
+  ],
+  "item_curations": [
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004d1",
+      "item_id": "c011ec71-0000-4000-8000-0000000004a1",
+      "status": "approved",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "is_mapping_complete": true,
+      "created_at": "2025-12-21T00:00:00.000Z",
+      "updated_at": "2025-12-21T06:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004d2",
+      "item_id": "c011ec71-0000-4000-8000-0000000004a2",
+      "status": "approved",
+      "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "is_mapping_complete": true,
+      "created_at": "2025-12-22T00:00:00.000Z",
+      "updated_at": "2025-12-22T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000004d3",
+      "item_id": "c011ec71-0000-4000-8000-0000000004a2",
+      "status": "pending",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": false,
+      "created_at": "2025-12-23T00:00:00.000Z",
+      "updated_at": "2025-12-23T00:00:00.000Z"
     }
   ]
 }

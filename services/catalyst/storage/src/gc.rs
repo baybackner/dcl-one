@@ -218,6 +218,10 @@ pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
         "an envelope digest",
     ),
     ("worlds.worlds.access_secret_hash", "a bcrypt hash"),
+    (
+        "builder.item_curations.content_hash",
+        "the keccak-256 digest of a reviewed third-party item",
+    ),
     ("shop.items.image", "a URL"),
     (
         "shop.items.content_hash",

@@ -17,7 +17,8 @@ class ContentMigrationCases:
                     if s.name == step_name)
         defs = ', '.join(f'"{n}" {t}' for n, t in step.columns)
         values = ', '.join(f'({row})' for row in rows)
-        variables = "\\set camera_api_url 'https://camera.example.test'\n" if source == 'camera-reel-service' else ''
+        variables = {'camera-reel-service': "\\set camera_api_url 'https://camera.example.test'\n",
+                     'builder-server': "\\set forum_url 'https://forum.example.test'\n"}.get(source, '')
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.sql(db, variables + f'BEGIN;\nCREATE TEMP TABLE stage ({defs}) ON COMMIT DROP;\n'
@@ -32,9 +33,9 @@ class ContentMigrationCases:
     @staticmethod
     def builder_rows(name, updated, contract='NULL', lock='NULL'):
         collection = (f"'{COLLECTION}', '{name}', '{OWNER}', NULL, {contract}, NULL, NULL, "
-                      f"'2026-01-01Z', '{updated}', NULL, NULL, {lock}")
+                      f"'2026-01-01Z', '{updated}', NULL, NULL, {lock}, NULL, NULL")
         item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', '{name}', 'd', NULL, NULL, 'wearable', 'Common', '', '', "
-                f"'{{}}', NULL, NULL, NULL, NULL, NULL, false, 'pending', 0, NULL, NULL, '2026-01-01Z', '{updated}'")
+                f"'{{}}', NULL, NULL, NULL, NULL, NULL, false, 0, NULL, NULL, '2026-01-01Z', '{updated}'")
         return collection, item
 
     def import_builder(self, db, name, updated, contract='NULL'):
@@ -48,7 +49,9 @@ class ContentMigrationCases:
 
     def test_when_planning_the_builder_import_it_should_carry_no_scene_step(self):
         source = harness.migrate.load_source(harness.migrate.SOURCES / 'builder-server')
-        self.assertEqual([s.name for s in source.steps], ['collection', 'item', 'item_content', 'virtual_third_party'])
+        self.assertEqual([s.name for s in source.steps], ['collection', 'item', 'item_content', 'virtual_third_party',
+                                                          'collection_curation', 'item_curation', 'collection_event',
+                                                          'slot_usage_cheque'])
         self.assertFalse(any(t.startswith('builder.project') or t.startswith('builder.asset')
                              for s in source.steps for t in s.targets))
 
@@ -56,8 +59,8 @@ class ContentMigrationCases:
         db = self.content_db('content_builder_import')
         self.import_builder(db, 'Upstream', '2026-02-01Z')
         self.assertEqual(self.builder_names(db), 'Upstream\tUpstream')
-        self.assertEqual(self.sql(db, f"SELECT rarity, price IS NULL, beneficiary IS NULL, is_approved "
-                                      f"FROM builder.items WHERE id = '{ITEM}';\n").strip(), 'common\tt\tt\tf')
+        self.assertEqual(self.sql(db, f"SELECT rarity, price IS NULL, beneficiary IS NULL "
+                                      f"FROM builder.items WHERE id = '{ITEM}';\n").strip(), 'common\tt\tt')
 
     def test_when_importing_a_standard_collection_it_should_keep_its_contract_and_store_no_published_state(self):
         db = self.content_db('content_builder_contract')
@@ -120,7 +123,7 @@ class ContentMigrationCases:
         provider = 'urn:decentraland:matic:collections-thirdparty:tp'
         self.content_load(db, 'builder-server', 'collection', [
             f"'{COLLECTION}', 'Linked', '', NULL, NULL, '{provider}:hats', '{provider}', "
-            f"'2026-01-01Z', '2026-02-01Z', '0x{'AB' * 20}', 'mainnet', NULL"])
+            f"'2026-01-01Z', '2026-02-01Z', '0x{'AB' * 20}', 'mainnet', NULL, NULL, NULL"])
         self.assertEqual(self.sql(db, f"SELECT linked_contract_address, linked_contract_network FROM builder.collections "
                                       f"WHERE id = '{COLLECTION}';\n").strip(), f"0x{'ab' * 20}\tmainnet")
 
@@ -130,7 +133,7 @@ class ContentMigrationCases:
         self.content_load(db, 'builder-server', 'collection', [collection])
         item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', 'Ordered', 'd', NULL, NULL, 'wearable', 'common', NULL, NULL, "
                 f"'{{\"tags\": [], \"category\": \"hat\"}}', '{{\"triangles\": 1, \"bodies\": 1}}', NULL, NULL, NULL, NULL, "
-                f"false, 'pending', 0, NULL, NULL, '2026-01-01Z', '2026-02-01Z'")
+                f"false, 0, NULL, NULL, '2026-01-01Z', '2026-02-01Z'")
         self.content_load(db, 'builder-server', 'item', [item])
         self.assertEqual(self.sql(db, f"SELECT data::text, metrics::text FROM builder.items WHERE id = '{ITEM}';\n").strip(),
                          '{"tags": [], "category": "hat"}\t{"triangles": 1, "bodies": 1}')
@@ -175,7 +178,7 @@ class ContentMigrationCases:
 
         def item(video, updated):
             return (f"'{ITEM}', '{COLLECTION}', '{OWNER.upper().replace('0X', '0x')}', 'Video', 'd', NULL, {video}, "
-                    f"'wearable', 'common', NULL, NULL, '{{}}', NULL, NULL, NULL, NULL, NULL, false, 'pending', 0, "
+                    f"'wearable', 'common', NULL, NULL, '{{}}', NULL, NULL, NULL, NULL, NULL, false, 0, "
                     f"NULL, NULL, '2026-01-01Z', '{updated}'")
         self.content_load(db, 'builder-server', 'item', [item("'bafkvideo'", '2026-02-01Z')])
         writer = f"SELECT video || ' ' || video_named_by FROM builder.items WHERE id = '{ITEM}';\n"
@@ -217,6 +220,187 @@ class ContentMigrationCases:
         self.assertEqual(self.builder_names(db), 'Node\tNode')
         self.import_builder(db, 'Upstream later', '2026-04-01Z')
         self.assertEqual(self.builder_names(db), 'Upstream later\tUpstream later')
+
+    PROVIDER = 'urn:decentraland:matic:collections-thirdparty:curated'
+    LINKED = '33333333-3333-4333-8333-333333333333'
+    MISSING = '44444444-4444-4444-8444-444444444444'
+    HASH = 'ab' * 32
+
+    def curated_world(self, name):
+        """A standard collection with an item and a third-party collection with an item, imported."""
+        db = self.content_db(name)
+        self.import_builder(db, 'Curated', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [
+            f"'{self.LINKED}', 'Linked', '', NULL, NULL, '{self.PROVIDER}:hats', '{self.PROVIDER}', "
+            f"'2026-01-01Z', '2026-02-01Z', NULL, NULL, NULL, NULL, NULL"])
+        return db
+
+    @staticmethod
+    def collection_curation(id, collection, status, assignee='NULL', reviewed_by='NULL', reasons='NULL',
+                            message='NULL', created='2026-01-01Z', updated='2026-01-02Z'):
+        return (f"'{id}', '{collection}', '{status}', {assignee}, {reviewed_by}, {reasons}, {message}, "
+                f"'{created}', '{updated}'")
+
+    def test_when_importing_collection_curations_it_should_keep_upstreams_review_and_skip_what_the_node_lacks(self):
+        db = self.curated_world('content_builder_collection_curations')
+        upper = '0x' + 'AB' * 20
+        self.content_load(db, 'builder-server', 'collection_curation', [
+            self.collection_curation('c0000000-0000-4000-8000-000000000001', COLLECTION, 'rejected', f"'{upper}'",
+                                     f"'{upper}'", "'{clipping,other}'", "'  Fix the hat  '"),
+            self.collection_curation('c0000000-0000-4000-8000-000000000002', COLLECTION, 'pending', "'not an address'",
+                                     "'validator'", "'{}'", "'   '", '2026-01-03Z', '2026-01-03Z'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000003', self.MISSING, 'approved'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000004', COLLECTION, 'approved',
+                                     created='2026-01-04Z', updated='2026-01-05Z'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000005', COLLECTION, 'pending',
+                                     created='2026-01-04Z', updated='2026-01-04Z'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000006', COLLECTION, 'withdrawn',
+                                     created='2026-01-06Z', updated='2026-01-06Z'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000007', COLLECTION, 'rejected',
+                                     reasons="'{rigging}'", message=f"'{'x' * 3001}'",
+                                     created='2026-01-07Z', updated='2026-01-07Z'),
+            self.collection_curation('c0000000-0000-4000-8000-000000000008', COLLECTION, 'rejected',
+                                     reasons="'{rigging,too_ugly}'", message="'Fix it'",
+                                     created='2026-01-08Z', updated='2026-01-08Z')])
+        self.assertEqual(self.sql(db, "SELECT id, status, assignee, reviewed_by, rejection_reasons, rejection_message "
+                                      "FROM builder.collection_curations ORDER BY created_at;\n").strip('\n').split('\n'), [
+            f"c0000000-0000-4000-8000-000000000001\trejected\t{upper.lower()}\t{upper.lower()}\t{{clipping,other}}\tFix the hat",
+            "c0000000-0000-4000-8000-000000000002\tpending\t\tvalidator\t\t",
+            "c0000000-0000-4000-8000-000000000004\tapproved\t\t\t\t",
+            "c0000000-0000-4000-8000-000000000007\trejected\t\t\t{rigging}\t",
+            "c0000000-0000-4000-8000-000000000008\trejected\t\t\t\tFix it"])
+
+    def test_when_reimporting_a_collection_curation_it_should_keep_what_the_node_decided_later(self):
+        db = self.curated_world('content_builder_collection_curation_rerun')
+        row = 'c0000000-0000-4000-8000-000000000001'
+        self.content_load(db, 'builder-server', 'collection_curation', [
+            self.collection_curation(row, COLLECTION, 'pending')])
+        self.sql(db, f"UPDATE builder.collection_curations SET status = 'approved', updated_at = '2026-03-01' "
+                     f"WHERE id = '{row}';\n")
+        self.content_load(db, 'builder-server', 'collection_curation', [
+            self.collection_curation(row, COLLECTION, 'rejected', updated='2026-02-01Z')])
+        self.assertEqual(self.sql(db, f"SELECT status FROM builder.collection_curations WHERE id = '{row}';\n").strip(),
+                         'approved')
+
+    def linked_item(self, db, item):
+        self.content_load(db, 'builder-server', 'item', [
+            f"'{item}', '{self.LINKED}', '{OWNER}', 'Linked hat', 'd', NULL, NULL, 'wearable', NULL, NULL, NULL, "
+            f"'{{}}', NULL, NULL, NULL, '{self.PROVIDER}:hats:{item[:8]}', NULL, false, 0, NULL, NULL, "
+            f"'2026-01-01Z', '2026-02-01Z'"])
+
+    def test_when_importing_item_curations_it_should_keep_one_per_instant_and_skip_what_the_node_lacks(self):
+        db = self.curated_world('content_builder_item_curations')
+        item = '55555555-5555-4555-8555-555555555551'
+        self.linked_item(db, item)
+        self.content_load(db, 'builder-server', 'item_curation', [
+            f"'d0000000-0000-4000-8000-000000000001', '{item}', 'approved', '{self.HASH}', true, '2026-01-01Z', '2026-01-02Z'",
+            f"'d0000000-0000-4000-8000-000000000002', '{item}', 'pending', '{self.HASH.upper()}', NULL, '2026-01-03Z', '2026-01-03Z'",
+            f"'d0000000-0000-4000-8000-000000000003', '{item}', 'approved', '{self.HASH}', NULL, '2026-01-03Z', '2026-01-09Z'",
+            f"'d0000000-0000-4000-8000-000000000004', '{self.MISSING}', 'approved', '{self.HASH}', NULL, '2026-01-01Z', '2026-01-01Z'",
+            f"'d0000000-0000-4000-8000-000000000005', '{item}', 'pending', 'bafkreinotahexdigest', NULL, '2026-01-05Z', '2026-01-05Z'",
+            f"'d0000000-0000-4000-8000-000000000006', '{item}', 'approved', '{self.HASH}', NULL, '2026-01-06Z', '2026-01-05Z'"])
+        self.assertEqual(self.sql(db, "SELECT id, status, content_hash, is_mapping_complete, updated_at "
+                                      "FROM builder.item_curations ORDER BY created_at;\n").strip('\n').split('\n'), [
+            f"d0000000-0000-4000-8000-000000000001\tapproved\t{self.HASH}\tt\t2026-01-02 00:00:00",
+            f"d0000000-0000-4000-8000-000000000003\tapproved\t{self.HASH}\t\t2026-01-09 00:00:00",
+            f"d0000000-0000-4000-8000-000000000006\tapproved\t{self.HASH}\t\t2026-01-06 00:00:00"])
+
+    def test_when_importing_collection_events_it_should_keep_upstreams_and_skip_unknown_ones(self):
+        db = self.curated_world('content_builder_collection_events')
+        upper = '0x' + 'CD' * 20
+        self.content_load(db, 'builder-server', 'collection_event', [
+            f"'e0000000-0000-4000-8000-000000000001', '{COLLECTION}', 'review.rejected', 'curator', '{upper}', "
+            f"'{{\"rejectionReasons\": [\"clipping\"]}}', '2026-01-01Z'",
+            f"'e0000000-0000-4000-8000-000000000002', '{COLLECTION}', 'review.withdrawn', 'curator', NULL, '{{}}', '2026-01-02Z'",
+            f"'e0000000-0000-4000-8000-000000000003', '{COLLECTION}', 'review.comment', 'operator', NULL, '{{}}', '2026-01-03Z'",
+            f"'e0000000-0000-4000-8000-000000000004', '{self.MISSING}', 'review.comment', 'curator', NULL, '{{}}', '2026-01-04Z'",
+            f"'e0000000-0000-4000-8000-000000000005', '{COLLECTION}', 'review.comment', 'curator', 'nobody', '[]', '2026-01-05Z'",
+            f"'e0000000-0000-4000-8000-000000000006', '{COLLECTION}', 'collection.published', 'creator', 'nobody', '{{}}', '2026-01-06Z'"])
+        self.assertEqual(self.sql(db, "SELECT id, type, actor, actor_address, payload FROM builder.collection_events "
+                                      "ORDER BY created_at;\n").strip('\n').split('\n'), [
+            f"e0000000-0000-4000-8000-000000000001\treview.rejected\tcurator\t{upper.lower()}\t"
+            '{"rejectionReasons": ["clipping"]}',
+            "e0000000-0000-4000-8000-000000000006\tcollection.published\tcreator\t\t{}"])
+
+    def test_when_importing_slot_cheques_it_should_keep_each_salt_once_for_its_collections_provider(self):
+        db = self.curated_world('content_builder_slot_cheques')
+        salt, other = '0x' + '12' * 32, '0x' + '34' * 32
+        signature = '0x' + 'ef' * 65
+
+        def cheque(n, collection, provider, salt, qty, created):
+            return (f"'f0000000-0000-4000-8000-00000000000{n}', '{collection}', '{provider}', '{signature}', "
+                    f"'{salt}', {qty}, '{created}', '{created}'")
+        self.content_load(db, 'builder-server', 'slot_usage_cheque', [
+            cheque(1, self.LINKED, self.PROVIDER, salt.upper().replace('0X', '0x'), 3, '2026-01-01Z'),
+            cheque(2, self.LINKED, self.PROVIDER, salt, 3, '2026-01-02Z'),
+            cheque(3, self.LINKED, self.PROVIDER + 'x', other, 1, '2026-01-03Z'),
+            cheque(4, self.MISSING, self.PROVIDER, other, 1, '2026-01-04Z'),
+            cheque(5, self.LINKED, self.PROVIDER, '0x1234', 1, '2026-01-05Z'),
+            cheque(6, self.LINKED, self.PROVIDER, other, 0, '2026-01-06Z')])
+        self.assertEqual(self.sql(db, "SELECT id, salt, qty FROM builder.slot_usage_cheques;\n").strip(),
+                         f"f0000000-0000-4000-8000-000000000001\t{salt}\t3")
+
+    def test_when_importing_forum_columns_it_should_keep_a_link_only_when_it_is_a_web_url(self):
+        db = self.content_db('content_builder_forum')
+
+        def with_forum(updated, link, forum_id):
+            collection, _ = self.builder_rows('Forum', updated)
+            return collection.rsplit('NULL, NULL', 1)[0] + f"{link}, {forum_id}"
+        forum = f"SELECT forum_link, forum_id FROM builder.collections WHERE id = '{COLLECTION}';\n"
+        self.content_load(db, 'builder-server', 'collection', [
+            with_forum('2026-02-01Z', "'https://forum.example.test/t/hat/41395'", 41395)])
+        self.assertEqual(self.sql(db, forum).strip(), 'https://forum.example.test/t/hat/41395\t41395')
+        self.content_load(db, 'builder-server', 'collection', [
+            with_forum('2026-03-01Z', "'javascript:alert(1)'", 7)])
+        self.assertEqual(self.sql(db, forum).strip(), '')
+        for elsewhere in ('https://elsewhere.example.test/t/hat/1', 'https://forum.example.test.elsewhere.test/t/1',
+                          'http://forum.example.test/t/hat/1', 'https://forum.example.test'):
+            self.content_load(db, 'builder-server', 'collection', [
+                with_forum('2026-03-01Z', "'https://forum.example.test/t/hat/41395'", 41395)
+                .replace("'2026-03-01Z'", "'2026-03-02Z'")])
+            self.content_load(db, 'builder-server', 'collection', [
+                with_forum('2026-03-03Z', f"'{elsewhere}'", 8).replace("'2026-03-03Z'", "'2026-03-04Z'")])
+            self.assertEqual(self.sql(db, forum).strip(), '', elsewhere)
+            self.sql(db, f"UPDATE builder.collections SET updated_at = '2026-01-01' WHERE id = '{COLLECTION}';\n")
+
+    def test_when_the_source_predates_the_review_columns_and_events_it_should_extract_without_them(self):
+        db = self.fresh_db('content_builder_old_source')
+        self.sql(db, """CREATE TYPE curation_status AS ENUM ('pending', 'approved', 'rejected');
+            CREATE TABLE collection_curations (id uuid PRIMARY KEY, collection_id uuid NOT NULL, status curation_status NOT NULL,
+                created_at timestamp NOT NULL, updated_at timestamp NOT NULL, assignee text);
+            INSERT INTO collection_curations VALUES ('c0000000-0000-4000-8000-000000000001',
+                '11111111-1111-4111-8111-111111111111', 'approved', '2026-01-01', '2026-01-02', NULL);\n""")
+        source = harness.migrate.load_source(harness.migrate.SOURCES / 'builder-server')
+        steps = {s.name: s for s in source.steps}
+        self.assertEqual(self.sql(db, steps['collection_curation'].extract.read_text() + ';\n').strip(),
+                         'c0000000-0000-4000-8000-000000000001\t11111111-1111-4111-8111-111111111111\tapproved'
+                         '\t\t\t\t\t2026-01-01 00:00:00+00\t2026-01-02 00:00:00+00')
+        events = steps['collection_event']
+        self.assertEqual(events.requires, 'collection_events')
+        absent = harness.migrate.without_missing_source(events, self.url(db))
+        self.assertIsNone(absent.extract)
+        self.assertEqual(self.sql(db, harness.migrate.extract_text(absent) + ';\n').strip(), '')
+        self.sql(db, """ALTER TABLE collection_curations ADD COLUMN reviewed_by text, ADD COLUMN rejection_reasons text[],
+                ADD COLUMN rejection_message text;
+            INSERT INTO collection_curations VALUES ('c0000000-0000-4000-8000-000000000002',
+                '11111111-1111-4111-8111-111111111111', 'rejected', '2026-01-03', '2026-01-04', NULL, 'validator',
+                '{rigging,other}', 'Fix it');\n""")
+        self.assertEqual(self.sql(db, steps['collection_curation'].extract.read_text() + ' ORDER BY 8;\n')
+                         .strip('\n').split('\n'), [
+            'c0000000-0000-4000-8000-000000000001\t11111111-1111-4111-8111-111111111111\tapproved'
+            '\t\t\t\t\t2026-01-01 00:00:00+00\t2026-01-02 00:00:00+00',
+            'c0000000-0000-4000-8000-000000000002\t11111111-1111-4111-8111-111111111111\trejected'
+            '\t\tvalidator\t{rigging,other}\tFix it\t2026-01-03 00:00:00+00\t2026-01-04 00:00:00+00'])
+        self.sql(db, """CREATE TABLE collection_events (id uuid PRIMARY KEY, collection_id uuid NOT NULL, type text NOT NULL,
+                actor text NOT NULL, actor_address text, payload jsonb NOT NULL DEFAULT '{}', created_at timestamp NOT NULL);
+            INSERT INTO collection_events VALUES ('e0000000-0000-4000-8000-000000000001',
+                '11111111-1111-4111-8111-111111111111', 'review.comment', 'curator', NULL,
+                '{"message": "a <b>&amp; \\"quote\\""}', '2026-01-03');\n""")
+        present = harness.migrate.without_missing_source(events, self.url(db))
+        self.assertEqual(present, events)
+        self.assertEqual(self.sql(db, harness.migrate.extract_text(present) + ';\n').strip(),
+                         'e0000000-0000-4000-8000-000000000001\t11111111-1111-4111-8111-111111111111\treview.comment'
+                         '\tcurator\t\t{"message": "a <b>&amp; \\"quote\\""}\t2026-01-03 00:00:00+00')
 
     def camera_rows(self, is_public):
         return [f"'{PHOTO}', '{OWNER}', 'https://camera.example.test/api/images/{PHOTO}-photo.png', "

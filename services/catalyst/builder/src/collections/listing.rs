@@ -4,10 +4,10 @@
 //!
 //! Every filter and sort becomes SQL by matching its value against a fixed
 //! list and pushing a constant fragment; values reach the statement only as
-//! bound parameters. No curation rows exist on the node yet, so the review
-//! filters, the relevance sort and the status of a collection read every
-//! collection as builder-server reads one without a curation: no assignee, no
-//! curation status, review state from the chain copy alone.
+//! bound parameters. A row carries the status of the collection's newest
+//! curation, and its last activity counts that curation's last change; the
+//! review filters and the relevance and request sorts read the chain copy
+//! alone, as builder-server reads a collection without a curation.
 //!
 //! A listing is a value only its constructor builds from a grant or from a
 //! request that is a public search, and each store function takes its own
@@ -88,7 +88,9 @@ const STATUS: &str = "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
     WHEN chain.reviewed_at <> chain.created_at THEN 'disabled' \
     ELSE 'under_review' END)";
 const PUBLISHED_IDS: &str = "(SELECT m.collection_id AS id FROM builder.items m WHERE m.blockchain_item_id IS NOT NULL \
-    UNION SELECT l.collection_id FROM builder.linked_collection_publications l WHERE l.status = 'submitted') pub \
+    UNION SELECT l.collection_id FROM builder.linked_collection_publications l WHERE l.status = 'submitted' \
+    UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id IS NOT NULL AND EXISTS (SELECT 1 \
+    FROM builder.items ci JOIN builder.item_curations k ON k.item_id = ci.id WHERE ci.collection_id = t.id)) pub \
     CROSS JOIN LATERAL (SELECT * FROM builder.collections c0 WHERE c0.id = pub.id";
 const ADDRESS_IDS: &str = "SELECT o.id FROM builder.collections o WHERE o.eth_address = $1 AND o.third_party_id IS NULL \
     UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id = ANY($2) \
@@ -97,11 +99,22 @@ const ADDRESS_IDS: &str = "SELECT o.id FROM builder.collections o WHERE o.eth_ad
     WHERE lower(r) = $1))";
 const PUBLISHED: &str = "(EXISTS (SELECT 1 FROM builder.items m WHERE m.collection_id = c.id \
     AND m.blockchain_item_id IS NOT NULL) OR EXISTS (SELECT 1 FROM builder.linked_collection_publications l \
-    WHERE l.collection_id = c.id AND l.status = 'submitted'))";
+    WHERE l.collection_id = c.id AND l.status = 'submitted') OR EXISTS (SELECT 1 FROM builder.items m \
+    JOIN builder.item_curations k ON k.item_id = m.id WHERE m.collection_id = c.id))";
 const UNPUBLISHED: &str = "NOT EXISTS (SELECT 1 FROM builder.items m WHERE m.collection_id = c.id \
     AND m.blockchain_item_id IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM builder.linked_collection_publications l \
-    WHERE l.collection_id = c.id AND l.status = 'submitted')";
-const LAST_ACTIVITY: &str = "GREATEST(c.updated_at, (SELECT max(i.updated_at) FROM builder.items i WHERE i.collection_id = c.id))";
+    WHERE l.collection_id = c.id AND l.status = 'submitted') AND NOT EXISTS (SELECT 1 FROM builder.items m \
+    JOIN builder.item_curations k ON k.item_id = m.id WHERE m.collection_id = c.id)";
+macro_rules! last_activity {
+    () => {
+        "GREATEST(c.updated_at, (SELECT max(i.updated_at) FROM builder.items i WHERE i.collection_id = c.id), \
+         (SELECT cc.updated_at FROM builder.collection_curations cc WHERE cc.collection_id = c.id \
+           ORDER BY cc.created_at DESC LIMIT 1))"
+    };
+}
+const LAST_ACTIVITY: &str = last_activity!();
+const CURATION_STATUS: &str = "(SELECT cc.status FROM builder.collection_curations cc \
+    WHERE cc.collection_id = c.id ORDER BY cc.created_at DESC LIMIT 1)";
 
 /// The request's query string as its key and value pairs.
 pub struct ListQuery(Vec<(String, String)>);
@@ -250,14 +263,8 @@ impl Sort {
             Self::NameAsc => " ORDER BY c.name ASC, c.id",
             Self::UpdatedAtDesc => " ORDER BY c.updated_at DESC, c.id",
             Self::UpdatedAtAsc => " ORDER BY c.updated_at ASC, c.id",
-            Self::LastActivityDesc => {
-                " ORDER BY GREATEST(c.updated_at, (SELECT max(i.updated_at) FROM builder.items i \
-                 WHERE i.collection_id = c.id)) DESC, c.id"
-            }
-            Self::LastActivityAsc => {
-                " ORDER BY GREATEST(c.updated_at, (SELECT max(i.updated_at) FROM builder.items i \
-                 WHERE i.collection_id = c.id)) ASC, c.id"
-            }
+            Self::LastActivityDesc => concat!(" ORDER BY ", last_activity!(), " DESC, c.id"),
+            Self::LastActivityAsc => concat!(" ORDER BY ", last_activity!(), " ASC, c.id"),
             Self::Unordered => " ORDER BY c.id",
         }
     }
@@ -572,6 +579,7 @@ impl Listing {
 struct ListedRow {
     #[sqlx(flatten)]
     collection: CollectionRow,
+    curation_status: Option<String>,
     last_activity_at: chrono::NaiveDateTime,
 }
 
@@ -653,7 +661,7 @@ impl OwnListing {
 fn listing_row(r: ListedRow, programmatic: Option<bool>) -> CollectionListingRowOut {
     CollectionListingRowOut {
         collection: r.collection.out(programmatic),
-        curation_status: None,
+        curation_status: r.curation_status,
         last_activity_at: crate::http::iso(&r.last_activity_at.and_utc()),
     }
 }
@@ -691,6 +699,8 @@ impl ItemsComponent {
         let mut sql = QueryBuilder::new("SELECT ");
         sql.push(body_columns(&view))
             .push(", ")
+            .push(CURATION_STATUS)
+            .push(" AS curation_status, ")
             .push(LAST_ACTIVITY)
             .push(" AS last_activity_at FROM ")
             .push(view.collections())

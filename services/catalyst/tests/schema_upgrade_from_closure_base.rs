@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 36] = [
+const PREPARED_PENDING_STEPS: [&str; 37] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -48,6 +48,7 @@ const PREPARED_PENDING_STEPS: [&str; 36] = [
     "0055_builder_item_contents_named_by",
     "0056_builder_item_video_named_by",
     "0057_builder_collection_lock",
+    "0058_builder_collection_forum",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -2099,11 +2100,11 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
          INSERT INTO builder.collections (id, name, eth_address, urn_suffix, third_party_id, is_published, is_approved) VALUES \
            ('11111111-1111-4111-8111-000000000003', 'Linked', '0x' || repeat('a', 40), \
             'urn:decentraland:matic:collections-thirdparty:p:c', 'urn:decentraland:matic:collections-thirdparty:p', true, false); \
-         INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix, blockchain_item_id, is_published, curation_status, is_approved) VALUES \
+         INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix, blockchain_item_id, is_published, curation_status, is_approved, local_content_hash) VALUES \
            ('22222222-2222-4222-8222-000000000001', '11111111-1111-4111-8111-000000000001', '0x' || repeat('a', 40), 'Hat', 'wearable', \
-            'urn:decentraland:matic:collections-v2:0x' || repeat('c', 40) || ':0', '0', true, 'approved', true), \
+            'urn:decentraland:matic:collections-v2:0x' || repeat('c', 40) || ':0', '0', true, 'approved', true, NULL), \
            ('22222222-2222-4222-8222-000000000002', '11111111-1111-4111-8111-000000000003', '0x' || repeat('a', 40), 'Cap', 'wearable', \
-            'urn:decentraland:matic:collections-thirdparty:p:c:cap', 'cap', true, 'pending', false);",
+            'urn:decentraland:matic:collections-thirdparty:p:c:cap', 'cap', true, 'pending', false, repeat('ab', 32));",
     )
     .execute(pool)
     .await
@@ -2177,6 +2178,9 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
         .expect("a second run notes the flags are gone");
     release_result(pool, &scenes_release()).await.unwrap();
     release_result(pool, &item_documents_release())
+        .await
+        .unwrap();
+    release_result(pool, &item_curation_release())
         .await
         .unwrap();
 
@@ -2329,6 +2333,9 @@ async fn the_builder_item_documents_release_waits_for_its_step_then_retypes_them
     release_result(pool, &release)
         .await
         .expect("a second run notes the documents are json");
+    release_result(pool, &item_curation_release())
+        .await
+        .unwrap();
 
     let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
         return;
@@ -2488,4 +2495,182 @@ async fn the_builder_video_named_by_step_attributes_each_kept_video_to_its_entry
             .await
             .unwrap();
     assert_eq!(steps, [BUILDER_VIDEO_NAMED_BY_STEP]);
+}
+
+const BUILDER_ITEM_CURATION_RETIRED: &str = include_str!(concat!(
+    env!("DCL_ONE_ROOT"),
+    "/schemas/releases/builder-item-curation-retired.sql"
+));
+
+const BUILDER_COLLECTION_FORUM_STEP: &str = "0058_builder_collection_forum";
+
+fn item_curation_release() -> String {
+    let stop_on_error = "\\set ON_ERROR_STOP on\n";
+    assert_eq!(
+        BUILDER_ITEM_CURATION_RETIRED.matches(stop_on_error).count(),
+        1
+    );
+    BUILDER_ITEM_CURATION_RETIRED.replace(stop_on_error, "")
+}
+
+async fn item_curation_columns(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'builder' \
+         AND table_name = 'items' AND column_name IN ('curation_status', 'is_approved')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn item_curation_rows(pool: &PgPool) -> serde_json::Value {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object( \
+           'items', (SELECT jsonb_agg(to_jsonb(i) - 'curation_status' - 'is_approved' ORDER BY id) FROM builder.items i), \
+           'curations', (SELECT COALESCE(jsonb_agg(jsonb_build_array(item_id, status, content_hash, created_at) \
+                          ORDER BY item_id, created_at), '[]') FROM builder.item_curations))",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_builder_item_curation_release_records_the_items_submitted_here_then_drops_the_stored_status()
+ {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    catalyst::db::bootstrap(pool)
+        .await
+        .expect("the binary that keeps item curations serves beside the stored status");
+    let hash = "ab".repeat(32);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO builder.collections (id, name, eth_address, urn_suffix, third_party_id) VALUES \
+           ('11111111-1111-4111-8111-000000000011', 'Linked', '0x' || repeat('a', 40), \
+            'urn:decentraland:matic:collections-thirdparty:p:c', 'urn:decentraland:matic:collections-thirdparty:p'); \
+         INSERT INTO builder.collections (id, name, eth_address) VALUES \
+           ('11111111-1111-4111-8111-000000000012', 'Standard', '0x' || repeat('a', 40)); \
+         INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix, blockchain_item_id, \
+             is_published, curation_status, is_approved, local_content_hash, updated_at) VALUES \
+           ('22222222-2222-4222-8222-000000000011', '11111111-1111-4111-8111-000000000011', '0x' || repeat('a', 40), \
+            'Submitted here', 'wearable', 'urn:decentraland:matic:collections-thirdparty:p:c:one', 'one', true, 'approved', true, \
+            '{hash}', '2025-03-01 10:00:00'), \
+           ('22222222-2222-4222-8222-000000000012', '11111111-1111-4111-8111-000000000011', '0x' || repeat('a', 40), \
+            'Imported', 'wearable', 'urn:decentraland:matic:collections-thirdparty:p:c:two', NULL, false, 'approved', true, \
+            '{hash}', '2025-03-02 10:00:00'), \
+           ('22222222-2222-4222-8222-000000000013', '11111111-1111-4111-8111-000000000012', '0x' || repeat('a', 40), \
+            'Standard draft', 'wearable', NULL, NULL, false, 'rejected', false, NULL, '2025-03-03 10:00:00'); \
+         INSERT INTO builder.item_curations (id, item_id, status, content_hash, created_at, updated_at) VALUES \
+           (gen_random_uuid(), '22222222-2222-4222-8222-000000000012', 'approved', '{hash}', '2025-01-01', '2025-01-01');"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    let release = item_curation_release();
+
+    sqlx::query("DELETE FROM meta.schema_steps WHERE step = $1")
+        .bind(BUILDER_COLLECTION_FORUM_STEP)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "the new binary's schema migrate has not recorded its step"
+    );
+    assert_eq!(item_curation_columns(pool).await, 2);
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "UPDATE builder.items SET local_content_hash = 'bafkreinotakeccakdigest' \
+         WHERE id = '22222222-2222-4222-8222-000000000011'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(
+        release_result(pool, &release).await.is_err(),
+        "an item submitted here whose hash is no curation content hash"
+    );
+    assert_eq!(item_curation_columns(pool).await, 2);
+    sqlx::query("UPDATE builder.items SET local_content_hash = $1 WHERE id = '22222222-2222-4222-8222-000000000011'")
+        .bind(&hash)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let before = item_curation_rows(pool).await;
+    release_result(pool, &release).await.unwrap();
+    assert_eq!(item_curation_columns(pool).await, 0);
+    let after = item_curation_rows(pool).await;
+    assert_eq!(
+        after["items"], before["items"],
+        "every other column of every item is kept"
+    );
+    assert_eq!(
+        after["curations"],
+        serde_json::json!([
+            [
+                "22222222-2222-4222-8222-000000000011",
+                "approved",
+                hash,
+                "2025-03-01T10:00:00"
+            ],
+            [
+                "22222222-2222-4222-8222-000000000012",
+                "approved",
+                hash,
+                "2025-01-01T00:00:00"
+            ]
+        ]),
+        "an item submitted here gets the curation it recorded; an item with a curation and a draft keep what they have"
+    );
+    catalyst::db::bootstrap(pool).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    assert_eq!(
+        item_curation_columns(pool).await,
+        0,
+        "a later migrate does not bring them back"
+    );
+    release_result(pool, &release)
+        .await
+        .expect("a second run notes the columns are gone");
+    release_result(
+        pool,
+        &BUILDER_COLLECTION_FLAGS_RETIRED.replace("\\set ON_ERROR_STOP on\n", ""),
+    )
+    .await
+    .unwrap();
+    release_result(pool, &scenes_release()).await.unwrap();
+    release_result(pool, &item_documents_release())
+        .await
+        .unwrap();
+
+    let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
+        return;
+    };
+    let tables = [
+        "builder.collections",
+        "builder.items",
+        "builder.collection_curations",
+        "builder.item_curations",
+        "builder.collection_events",
+        "builder.slot_usage_cheques",
+    ];
+    assert_eq!(
+        layout(pool, &tables).await,
+        layout(&fresh.pool, &tables).await,
+        "an upgraded database matches a fresh one"
+    );
+    fresh.drop().await;
+    old.drop().await;
 }

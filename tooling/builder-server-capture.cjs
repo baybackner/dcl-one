@@ -24,7 +24,7 @@ const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
 const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'rarities', 'thirdParties'])
 const RARITIES_WITH_ORACLE = '0xa9158e22f89bb3f69c5600338895cb5fb81e5090'
 const GET_RARITY_BY_NAME = 'b5262333'
-const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain']
+const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain', 'collection_curations', 'item_curations']
 const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'id_gt', 'creator', 'managers_contains', 'minters_contains', 'managers_contains_nocase', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
 const MOVED_ITEM_FILE = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy'
@@ -295,7 +295,8 @@ const WALLETS = {
   owner: '0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e',
   stranger: '0xcd6884d4258edc833f31ac773e24affe6a7d3154',
   manager: '0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0',
-  creator: '0x05bb381a642d932037707c4a626f93fb009696b2'
+  creator: '0x05bb381a642d932037707c4a626f93fb009696b2',
+  provider: '0x043b83d2010ee75cc3c0419348327eb9c6da7268'
 }
 const linkedSave = (suffix, signer, name, urn) => ({
   method: 'PUT',
@@ -355,6 +356,25 @@ const THIRD_PARTY_CASES = [
   { name: '334-third-party-slots-after-delete', description: 'GET /thirdParties/{id}/slots signed by the second manager the registry lists unapproved, once the virtual third party is gone', method: 'GET', path: `/v1/thirdParties/${PROVIDER('claimed')}/slots`, signer: 'minter' },
   { name: '335-collection-delete-last-of-provider', description: 'DELETE /collections/{id} signed by the manager of a virtual third party, its provider\'s only collection', method: 'DELETE', path: `/v1/collections/${id('309')}`, signer: 'stranger' },
   { name: '336-third-party-after-last-collection', description: 'GET /thirdParties/{id} signed by the former manager once the provider\'s last collection is gone', method: 'GET', path: `/v1/thirdParties/${PROVIDER('fresh')}`, signer: 'stranger' }
+]
+
+const CURATION_CASES = [
+  { name: '337-item-curated-manager', description: 'GET /items/{id} signed by the provider\'s manager, a third-party item with an older approved and a newer pending curation, whose collection has a curated item of a lower id', method: 'GET', path: `/v1/items/${id('4a2')}`, signer: 'provider' },
+  { name: '338-item-curated-stranger', description: 'GET /items/{id} signed by a wallet with no role, a third-party item with curations', method: 'GET', path: `/v1/items/${id('4a2')}`, signer: 'stranger' },
+  { name: '339-item-curated-unsigned', description: 'GET /items/{id} without a signature, a third-party item with curations', method: 'GET', path: `/v1/items/${id('4a2')}` },
+  { name: '340-item-uncurated-in-curated-collection-stranger', description: 'GET /items/{id} signed by a wallet with no role, a never-curated third-party item of a collection with curated items', method: 'GET', path: `/v1/items/${id('4a3')}`, signer: 'stranger' },
+  { name: '341-collection-items-curated-manager', description: 'GET /collections/{id}/items signed by the provider\'s manager, a third-party collection with curated and never-curated items', method: 'GET', path: `/v1/collections/${id('402')}/items`, signer: 'provider' },
+  { name: '342-collection-items-curated-stranger', description: 'GET /collections/{id}/items signed by a wallet with no role, a third-party collection with curated items', method: 'GET', path: `/v1/collections/${id('402')}/items`, signer: 'stranger' },
+  { name: '343-collection-curated-third-party-manager', description: 'GET /collections/{id} signed by the provider\'s manager, a third-party collection with curated items', method: 'GET', path: `/v1/collections/${id('402')}`, signer: 'provider' },
+  { name: '344-collection-curated-third-party-stranger', description: 'GET /collections/{id} signed by a wallet with no role, a third-party collection with curated items', method: 'GET', path: `/v1/collections/${id('402')}`, signer: 'stranger' },
+  { name: '345-collection-forum-owner', description: 'GET /collections/{id} signed by the owner of a collection on chain with a forum post and a pending curation', method: 'GET', path: `/v1/collections/${id('401')}`, signer: 'provider' },
+  { name: '346-collection-forum-stranger', description: 'GET /collections/{id} signed by a wallet with no role, a collection on chain with a forum post', method: 'GET', path: `/v1/collections/${id('401')}`, signer: 'stranger' },
+  { name: '347-address-collections-curated', description: 'GET /{address}/collections signed by that address, owner of a curated collection and manager of a provider with a curated collection', method: 'GET', path: `/v1/${WALLETS.provider}/collections`, signer: 'provider' },
+  { name: '348-third-party-slots-curated', description: 'GET /thirdParties/{id}/slots signed by the manager the registry lists, a provider with curated items', method: 'GET', path: `/v1/thirdParties/${PROVIDER('curated')}/slots`, signer: 'provider' },
+  { name: '349-collection-items-curated-status', description: 'GET /collections/{id}/items signed by the provider\'s manager, filtering a third-party collection\'s items by curation status', method: 'GET', path: `/v1/collections/${id('402')}/items`, query: { status: 'approved' }, signer: 'provider' },
+  { name: '350-address-items-curated', description: 'GET /{address}/items signed by that address, the owner of curated third-party items', method: 'GET', path: `/v1/${WALLETS.provider}/items`, signer: 'provider' },
+  { name: '351-item-save-curated-urn-change', description: 'PUT /items/{id} signed by the provider\'s manager, changing the URN of a curated third-party item', method: 'PUT', path: `/v1/items/${id('4a1')}`, signer: 'provider', body: itemBody({ id: id('4a1'), collection_id: id('402'), eth_address: WALLETS.provider, name: 'Curated cap', rarity: null, urn: `${PROVIDER('curated')}:curated-wearables:cap-9` }) },
+  { name: '352-item-delete-curated', description: 'DELETE /items/{id} signed by the provider\'s manager, a curated third-party item', method: 'DELETE', path: `/v1/items/${id('4a1')}`, signer: 'provider' }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2258,7 +2278,8 @@ const CASES = [
   ...ITEM_CASES,
   ...SMALL_READ_CASES,
   ...LIFECYCLE_CASES,
-  ...THIRD_PARTY_CASES
+  ...THIRD_PARTY_CASES,
+  ...CURATION_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2754,14 +2775,26 @@ async function seedDatabase(client, seed, signers) {
   }
   for (const collection of seed.collections) {
     await client.query(
-      'INSERT INTO collections (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, linked_contract_address, linked_contract_network, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
-      [collection.id, collection.name, collection.third_party_id ? '' : signers[collection.owner].address, collection.salt, collection.contract_address, collection.third_party_id ?? null, collection.urn_suffix ?? null, collection.linked_contract_address ?? null, collection.linked_contract_network ?? null, collection.created_at, collection.updated_at]
+      'INSERT INTO collections (id, name, eth_address, salt, contract_address, third_party_id, urn_suffix, linked_contract_address, linked_contract_network, forum_link, forum_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+      [collection.id, collection.name, collection.third_party_id ? '' : signers[collection.owner].address, collection.salt, collection.contract_address, collection.third_party_id ?? null, collection.urn_suffix ?? null, collection.linked_contract_address ?? null, collection.linked_contract_network ?? null, collection.forum_link ?? null, collection.forum_id ?? null, collection.created_at, collection.updated_at]
     )
   }
   for (const item of seed.items) {
     await client.query(
       'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, rarity, urn_suffix, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
       [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, JSON.stringify(item.contents || {}), item.rarity ?? null, item.urn_suffix ?? null, item.created_at, item.updated_at]
+    )
+  }
+  for (const curation of seed.collection_curations) {
+    await client.query(
+      'INSERT INTO collection_curations (id, collection_id, status, assignee, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)',
+      [curation.id, curation.collection_id, curation.status, curation.assignee ? signers[curation.assignee].address : null, curation.created_at, curation.updated_at]
+    )
+  }
+  for (const curation of seed.item_curations) {
+    await client.query(
+      'INSERT INTO item_curations (id, item_id, status, content_hash, is_mapping_complete, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [curation.id, curation.item_id, curation.status, curation.content_hash, curation.is_mapping_complete, curation.created_at, curation.updated_at]
     )
   }
 }
@@ -2987,4 +3020,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

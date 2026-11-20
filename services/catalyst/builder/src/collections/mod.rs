@@ -5,9 +5,11 @@
 //! The body is builder-server's `FullCollection`: the stored row, with a
 //! standard collection the chain copy holds merged as its `Bridge` merges the
 //! subgraph (name, creator, roles, approval and dates from the copy), and
-//! `lock` the owner's last lock. Fields whose source the node doesn't hold
-//! yet answer what builder-server answers when that source is empty:
-//! `forum_link` and `forum_id` are null and `curation_status` is null. A caller who may read only the public detail
+//! `lock` the owner's last lock, and a third-party collection with an item
+//! curation merged as its `Bridge.mergeTPCollection` merges the curation of
+//! its first curated item (by item id): `created_at`, `updated_at` and
+//! `reviewed_at` from that curation. A listing row adds the status of the
+//! collection's newest curation. A caller who may read only the public detail
 //! gets the keys [`PUBLIC_DETAIL`] names; the public listing, those
 //! [`PUBLIC_LISTING`] names. A key not named there is never answered to them.
 
@@ -123,10 +125,14 @@ pub(crate) fn body_columns(view: &ReadView) -> String {
          {} AS is_approved, c.linked_contract_address, c.linked_contract_network, \
          c.third_party_id, c.urn_suffix, \
          (SELECT count(*) FROM builder.items i WHERE i.collection_id = c.id) AS item_count, \
-         (SELECT count(*) = 0 FROM builder.items i WHERE i.collection_id = c.id AND i.mappings IS NULL) \
-           AS is_mapping_complete",
+         NOT EXISTS (SELECT 1 FROM builder.items i WHERE i.collection_id = c.id \
+           AND (i.mappings IS NULL OR {} = false)) AS is_mapping_complete, \
+         c.forum_link, c.forum_id, \
+         CASE WHEN c.third_party_id IS NOT NULL THEN {} END AS curation_dates",
         view.published(),
-        view.approved()
+        view.approved(),
+        crate::curation::newest_item_curation("i.id", "COALESCE(k.is_mapping_complete, false)"),
+        crate::curation::first_curated_item_curation("c.id", "ARRAY[k.created_at, k.updated_at]")
     )
 }
 
@@ -153,6 +159,9 @@ pub(crate) struct CollectionRow {
     urn_suffix: Option<String>,
     item_count: i64,
     is_mapping_complete: bool,
+    forum_link: Option<String>,
+    forum_id: Option<i32>,
+    curation_dates: Option<Vec<NaiveDateTime>>,
 }
 
 fn unix(seconds: i64) -> String {
@@ -180,6 +189,10 @@ impl CollectionRow {
                 self.contract_address.as_deref().unwrap_or("null")
             ),
         };
+        let curated = match self.curation_dates.as_deref() {
+            Some(&[created, updated]) => Some((created, updated)),
+            _ => None,
+        };
         CollectionOut {
             id: self.id.to_string(),
             name: self.name,
@@ -187,21 +200,30 @@ impl CollectionRow {
             salt: self.salt,
             contract_address: self.contract_address,
             is_published: self.is_published,
-            created_at: self
-                .chain_created_at
-                .map(unix)
-                .unwrap_or_else(|| iso(&self.created_at.and_utc())),
-            updated_at: self
-                .chain_updated_at
-                .map(unix)
-                .unwrap_or_else(|| iso(&self.updated_at.and_utc())),
+            created_at: match curated {
+                Some((at, _)) => iso(&at.and_utc()),
+                None => self
+                    .chain_created_at
+                    .map(unix)
+                    .unwrap_or_else(|| iso(&self.created_at.and_utc())),
+            },
+            updated_at: match curated {
+                Some((_, at)) => iso(&at.and_utc()),
+                None => self
+                    .chain_updated_at
+                    .map(unix)
+                    .unwrap_or_else(|| iso(&self.updated_at.and_utc())),
+            },
             managers: self.managers,
             minters: self.minters,
             is_approved: self.is_approved,
-            reviewed_at: self.chain_reviewed_at.map(unix),
-            forum_link: None,
+            reviewed_at: match curated {
+                Some((_, at)) => Some(iso(&at.and_utc())),
+                None => self.chain_reviewed_at.map(unix),
+            },
+            forum_link: self.forum_link,
             lock: self.lock.map(|lock| iso(&lock.and_utc())),
-            forum_id: None,
+            forum_id: self.forum_id.map(i64::from),
             linked_contract_address: self.linked_contract_address,
             linked_contract_network: self.linked_contract_network,
             is_mapping_complete: self.is_mapping_complete,

@@ -948,6 +948,73 @@ The standard publication's review revision is the content hash of the draft
 row, so a publication prepared before the drop and reverted after it is
 reviewed again. Do not reset a database.
 
+### Retired builder item curation status
+
+The builder stores no curation status on an item: it reads the item's
+newest item curation ("Builder curations workload" below). A database
+bootstrapped before keeps `builder.items.curation_status` and `is_approved`
+until the release script `schemas/releases/builder-item-curation-retired.sql`
+drops them. The binary neither reads nor writes them.
+
+What the release keeps: for each third-party item the node submitted itself
+(`is_published`) that has no item curation, it records one with the stored
+status, the item's `local_content_hash` and the item's `updated_at`, so
+the item stays published. A stored status with no curation behind it, on a
+standard item or an unsubmitted one, is dropped with the column; the release
+reports how many.
+
+A node that imported builder-server before it kept item curations holds its
+imported third-party items with no curation and `is_published` false: the
+release drops their stored statuses, its notice counts them, and they read
+as unpublished until the import's `collection_curation`, `item_curation` and
+`slot_usage_cheque` steps copy their curations from builder-server. Run those
+steps (`migrate.py run builder-server`, which also needs `FORUM_URL`) after
+step 3 of the rollout, before or after the release: the curation rows don't
+depend on the dropped columns, and the release records nothing for an item
+that already has a curation.
+
+Rollout, in order:
+
+1. Set `CREATE_WRITES_ENABLED=false` on every replica.
+2. Deploy the binary that keeps item curations on every replica and run its
+   `catalyst schema migrate`, which records step
+   `0058_builder_collection_forum`. Until the release runs, a third-party
+   item the node submitted itself reads as unpublished.
+3. Take a restore point: back up the database and test the restore.
+4. Run the release once, with the administrative role, then set
+   `CREATE_WRITES_ENABLED` back:
+
+   ```sh
+   psql "$DATABASE_URL" -X -f schemas/releases/builder-item-curation-retired.sql
+   ```
+
+The release refuses, changing nothing, a database without
+`meta.schema_steps`, one where step `0058_builder_collection_forum` is not
+recorded, one that holds only one of the two columns, and one with a
+third-party item submitted here, without an item curation, whose
+`local_content_hash` is not 64 lowercase hex digits. It runs in one
+transaction and waits at most 10 s for its locks.
+
+That last refusal means the node recorded a submission whose content hash is
+not the keccak-256 digest an item curation holds: the Foundation answered the
+linked publication with another value. The release names how many such
+items there are and changes nothing. List them with:
+
+```sql
+SELECT i.id, i.collection_id, i.local_content_hash
+FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id
+WHERE c.third_party_id IS NOT NULL AND i.is_published
+  AND NOT EXISTS (SELECT 1 FROM builder.item_curations k WHERE k.item_id = i.id)
+  AND (i.local_content_hash IS NULL OR i.local_content_hash !~ '^[0-9a-f]{64}$');
+```
+
+Then import those items' curations from builder-server (the `item_curation`
+step), which records the hash builder-server holds; an item with a curation
+needs none from the release. Run the release again. Don't edit
+`local_content_hash` to make the check pass: it is the hash the clients
+compare with the catalyst. A second run notes the
+columns are gone. Do not reset a database.
+
 Peer sync is not a backup of local state: a node taking local writes holds the only copy of that data. Before turning a write switch on, the operator backs up the database, the blob store (`STORAGE_ROOT_FOLDER`) and the credentials (`ENCRYPTION_KEY` among them) and tests a restore; the application does not enforce this. Development and commit builds sharing a database must agree on its schema; do not reset or silently migrate shared state to fit a working tree.
 
 
@@ -1031,7 +1098,8 @@ Invariants:
   lower(builder.collections.contract_address))`; a `published`
   `builder.collection_publications` row; a `submitted`
   `builder.linked_collection_publications` row; an item of the collection
-  with a `blockchain_item_id`. The node's own records close the window
+  with a `blockchain_item_id`; an item of the collection with an item
+  curation (`builder.item_curations`). The node's own records close the window
   between a deployment and the copy's next pass. `publication_pending` stays
   a stored state of the node's flow, not a published flag.
 - Approved is the copy's `is_approved` for a standard collection. A linked
@@ -1105,8 +1173,9 @@ Invariants:
 - A page selects its ids first (narrow sort, `LIMIT`, `OFFSET`) and builds
   bodies only for them (`c.id = ANY(ARRAY(...))`).
 - The public search resolves the published collections whose name matches
-  first, probing only the published ids (`items_minted_collection_idx` and
-  the submitted linked publications, then `collections_pkey` with the name
+  first, probing only the published ids (`items_minted_collection_idx`, the
+  submitted linked publications and the third-party collections with a
+  curated item, then `collections_pkey` with the name
   filter), and binds them; no statement reachable without a signature reads
   every collection.
 - An address listing resolves the address's collection ids first (its
@@ -1177,8 +1246,8 @@ Tables and what they hold:
   item's content hash (`local_content_hash`) serializes them in that order.
   `mappings` is `jsonb`. `urn_suffix` holds a third-party item's full URN and
   the URN the node recorded when it published a standard item.
-  `is_published` is the node's record of its own publication (standard) or
-  submission (third-party).
+  `is_published` is the node's record of its own publication; a
+  third-party item is published once it has an item curation.
 - `builder.item_contents`: one row per file an item names, with its
   `position` in the item's `contents` (array-index names first, then the
   order saved). An item may name any content hash; nothing references
@@ -1285,8 +1354,8 @@ It reads, never writes:
 - `builder.item_contents` by `(hash, named_by)` and `builder.items` by
   `(video, video_named_by)` (`items_video_idx`) for each of those wallets,
   then `builder.items` and `builder.collections` by primary key: whether a
-  name that counts sits in a published item (a third-party item's
-  `is_published`), or, for an entry, in an item the signer owns or whose
+  name that counts sits in a published item (a third-party item with an item
+  curation, `item_curations_item_created_key`), or, for an entry, in an item the signer owns or whose
   third-party collection it manages.
 - The chain copy row of each standard collection (`shop.collections` by
   network and contract, any age) and the node's own publication records, for
@@ -1485,7 +1554,7 @@ Statements:
 | an address's own listings and drafts | the provider ids the wallet manages: the rows naming them or listing the wallet; then `third_party_id = ANY($ids)` | `collections_linked_contract_key` (leading `third_party_id`), `items_collection_created_idx` |
 | item URN in use | the provider's items holding the item part | `collections_linked_contract_key`, `items_collection_created_idx` |
 | a signed read of a private file | the providers of the third-party items naming the hash, at most 20 | `item_contents_hash_idx`, `uploaded_contents` primary key |
-| `GET /v1/thirdParties/{id}/slots` | the provider's submitted items | `collections_linked_contract_key`, `items_collection_created_idx` |
+| `GET /v1/thirdParties/{id}/slots` | the provider's items with an item curation | `collections_linked_contract_key`, `items_collection_created_idx`, `item_curations_item_created_key` |
 | create, update, delete of a row | an advisory transaction lock on the provider id, the row, one write | `virtual_third_parties_pkey` |
 | collection delete | the provider's lock, then the row if no collection of the provider is left | `collections_linked_contract_key` |
 
@@ -1504,6 +1573,107 @@ Invariants:
 Upgrade: the schema's object pass creates `builder.virtual_third_parties`
 and its constraints; no step. The import's `virtual_third_party` step
 copies upstream's rows (`tooling/migration/sources/builder-server/MAPPING.md`).
+
+## Builder curations workload
+
+The builder keeps builder-server's review records
+(`services/catalyst/builder/src/curation/mod.rs`): a collection's reviews,
+an item's submissions for review, a collection's review events and the slot
+cheques of a third-party publication. Each row is its own state: an item's
+curation status is the status of its newest item curation, read where it is
+needed, and no flag on `builder.items` or `builder.collections` copies it.
+A third-party item is published once it has an item curation, whatever its
+status, and a collection is published once an item of it has one
+(`curation::ITEM_CURATED`, `curation::COLLECTION_ITEMS_CURATED`, part of
+`chain_state`'s published rule).
+
+Sizes at the reference data (May 2025): 4,755 collection curations over 3,502
+collections (at most 11 per collection), 38,211 item curations over 34,974
+third-party items (at most 13 per item), 34 cheques over 23 collections, no
+events. Every review adds about five events.
+
+Tables and what they hold:
+
+- `builder.collection_curations`: one row per review request of a
+  collection: `status` (`pending`, `approved`, `rejected`), `assignee` (a
+  committee member's lowercased address), `reviewed_by` (a lowercased
+  address or `validator`), `rejection_reasons` (one or more of the twelve
+  reasons builder-server accepts), `rejection_message` (1 to 3,000
+  characters). A decision updates the newest row in place; a resubmission,
+  a retry or an appeal inserts a new one. `(collection_id, created_at)` is
+  unique, so the newest row is one row.
+- `builder.item_curations`: one row per submission of a third-party item:
+  `status`, `content_hash` (the keccak-256 digest of the reviewed item, 64
+  lowercase hex digits, not a blob key) and `is_mapping_complete`.
+  `(item_id, created_at)` is unique. Every insert goes through
+  `curation::record_item_curation`, which stamps the row after the item's
+  newest one, so the newest row is the last written.
+- `builder.collection_events`: append-only, one row per review step:
+  `type` (twelve values), `actor` (`creator`, `curator`, `validator`,
+  `system`), `actor_address`, `payload` (a JSON object). Read newest first
+  by `(created_at, id)`. One verdict per validation: the partial unique
+  index on `(collection_id, type, payload->>'validationId',
+  COALESCE(payload->>'reason', ''))` over the four verdict types.
+- `builder.slot_usage_cheques`: one row per signed slot cheque of a
+  third-party publication: `third_party_id`, `signature` (0x and 130 hex
+  digits), `salt` (0x and 64 hex digits, unique per provider), `qty`
+  (positive). Never updated.
+- `builder.collections.forum_link` (an `http(s)` URL without spaces, at
+  most 2,048 characters) and `forum_id` (the forum post, only with a
+  link). Both are data: the node returns them and never fetches the link.
+
+Deletes: an item's curations and a collection's curations and events go
+with them (`ON DELETE CASCADE`); the node refuses to delete a third-party
+collection or item once curated. A cheque keeps its collection
+(`ON DELETE NO ACTION`): a delete that reaches a collection with a cheque
+fails.
+
+Statements:
+
+| Request | Statement | Index |
+| --- | --- | --- |
+| a collection's newest curation, a decision, a listing row's `curation_status` and last activity | `collection_id = $1 ORDER BY created_at DESC LIMIT 1` | `collection_curations_collection_created_key` |
+| the committee's listing by assignee and status | the newest curation per collection (`DISTINCT ON (collection_id) ... ORDER BY collection_id, created_at DESC`), filtered | sequential read of the table (4,755 rows) |
+| an item's newest curation (`curation::newest_item_curation`, the one definition: the last created), once per listed item | `item_id = $1 ORDER BY created_at DESC LIMIT 1` | `item_curations_item_created_key`, backward |
+| the newest curation of each item of a collection | items by `collection_id`, each item's newest curation | `items_collection_created_idx`, `item_curations_item_created_key` |
+| an item is curated: the file rule, by-id reads, saves, deletes, slots | `EXISTS (... WHERE item_id = i.id)` | `item_curations_item_created_key` |
+| a collection has a curated item or a pending one | items by `collection_id` joined to their curations | `items_collection_created_idx`, `item_curations_item_created_key` |
+| a third-party collection's body: its first curated item's newest curation, `is_mapping_complete` | items by `collection_id` in id order, their newest curation | `items_collection_created_idx`, `item_curations_item_created_key` |
+| the public search's published collections | third-party collections with a curated item | `collections_third_party_urn_idx`, `items_collection_created_idx`, `item_curations_item_created_key` |
+| a collection's events page and its newest event | `collection_id = $1 ORDER BY created_at DESC, id DESC` | `collection_events_collection_created_idx` |
+| the validator sweep's started runs in a window | `type = 'review.automated_started' AND created_at` in range | `collection_events_automated_started_idx` |
+| a verdict recorded once | `INSERT ... ON CONFLICT DO NOTHING` | `collection_events_verdict_validation_idx` |
+| a collection's newest cheque | `collection_id = $1 ORDER BY created_at DESC LIMIT 1` | `slot_usage_cheques_collection_created_idx` |
+
+Measured at the reference size, events synthesized at five per review: the
+newest curation of each of the 12,665 items of the largest collection in
+20 ms; that collection's body in 10 ms; the bodies of a 1,000-row
+collection listing page in 82 ms; the slot count of its provider in 9 ms;
+the committee listing's newest curations in 3 ms; every other statement
+under 1 ms. An item list reads each listed item's newest curation with one
+index probe (about 6 µs a row) and never the collection's other items: the
+unpaged bodies of the largest collection's 12,665 items take 742 ms, most of
+it the `id = ANY(...)` lookup of the rows, and the largest owner's 12,669
+items 99 ms. Only an item read by itself reads the collection's first
+curated item (7 ms in the largest collection).
+
+Invariants code upholds:
+
+- Every insert of a curation goes through `curation::record_item_curation`
+  or `curation::record_collection_curation` (which takes a
+  `CurationGrant`): each locks the collection row until the transaction
+  ends and stamps the row 1 µs after the newest of its item or collection
+  when that is later than now. A writer that changes a row sets
+  `updated_at` to `GREATEST(updated_at, now)`.
+- A writer of events stamps `created_at` after the collection's newest
+  event, under the collection lock.
+- A cheque's `third_party_id` is its collection's provider.
+
+Upgrade: the object pass creates the four tables; step
+`0058_builder_collection_forum` adds the forum columns and their checks. The
+import's `collection_curation`, `item_curation`, `collection_event` and
+`slot_usage_cheque` steps copy upstream's rows
+(`tooling/migration/sources/builder-server/MAPPING.md`).
 
 ## Notification writer
 

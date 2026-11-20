@@ -95,28 +95,19 @@ impl ItemsComponent {
         collection_meta(&mut conn, &view, read).await
     }
 
+    /// The operator's decision on a submitted item: [`crate::curation::decide_newest_item_curations`].
     pub async fn set_item_curation_status(
         &self,
-        _admin: &Admin,
+        admin: &Admin,
         collection_id: &Uuid,
         item_id: &Uuid,
         status: &str,
     ) -> Result<u64, ApiError> {
-        let res = sqlx::query(
-            "UPDATE builder.items \
-               SET curation_status = $3, \
-                   is_approved = ($3 = 'approved'), \
-                   updated_at = timezone('UTC', now()) \
-             WHERE id = $1 AND collection_id = $2",
-        )
-        .bind(item_id)
-        .bind(collection_id)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected())
+        self.set_items_curation_status(admin, collection_id, std::slice::from_ref(item_id), status)
+            .await
     }
 
+    /// The operator's decision on submitted items: [`crate::curation::decide_newest_item_curations`].
     pub async fn set_items_curation_status(
         &self,
         _admin: &Admin,
@@ -124,19 +115,9 @@ impl ItemsComponent {
         item_ids: &[Uuid],
         status: &str,
     ) -> Result<u64, ApiError> {
-        let res = sqlx::query(
-            "UPDATE builder.items \
-               SET curation_status = $3, \
-                   is_approved = ($3 = 'approved'), \
-                   updated_at = timezone('UTC', now()) \
-             WHERE collection_id = $1 AND id = ANY($2)",
-        )
-        .bind(collection_id)
-        .bind(item_ids)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected())
+        let mut conn = self.pool.acquire().await?;
+        crate::curation::decide_newest_item_curations(&mut conn, *collection_id, item_ids, status)
+            .await
     }
 }
 

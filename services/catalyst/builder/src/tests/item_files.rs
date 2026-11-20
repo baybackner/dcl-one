@@ -71,6 +71,10 @@ enum File {
     ManagerRecordOnly,
     ThirdParty,
     ThirdPartySubmitted,
+    CuratedPending,
+    CuratedApproved,
+    CuratedRejected,
+    UncuratedInCurated,
     Unnamed,
     PublishedUnuploaded,
     NobodyUploaded,
@@ -83,7 +87,7 @@ enum File {
 }
 use File::*;
 
-const FILES: [File; 16] = [
+const FILES: [File; 20] = [
     Draft,
     OnChain,
     Minted,
@@ -91,6 +95,10 @@ const FILES: [File; 16] = [
     ManagerRecordOnly,
     ThirdParty,
     ThirdPartySubmitted,
+    CuratedPending,
+    CuratedApproved,
+    CuratedRejected,
+    UncuratedInCurated,
     Unnamed,
     PublishedUnuploaded,
     NobodyUploaded,
@@ -106,7 +114,14 @@ impl File {
     fn public(self) -> bool {
         matches!(
             self,
-            OnChain | Minted | ManagerUploaded | ThirdPartySubmitted | KeptVideo
+            OnChain
+                | Minted
+                | ManagerUploaded
+                | ThirdPartySubmitted
+                | CuratedPending
+                | CuratedApproved
+                | CuratedRejected
+                | KeptVideo
         )
     }
 
@@ -118,6 +133,7 @@ impl File {
                     self,
                     Draft
                         | ThirdParty
+                        | UncuratedInCurated
                         | Unnamed
                         | VictimManager
                         | VictimCreator
@@ -125,7 +141,7 @@ impl File {
                         | ImportedThirdParty
                         | VideoNamedByOther
                 ),
-                Provider => self == ThirdParty,
+                Provider => matches!(self, ThirdParty | UncuratedInCurated),
                 Manager => self == ManagerRecordOnly,
                 Uploader => self != NobodyUploaded,
                 _ => false,
@@ -200,6 +216,9 @@ async fn item(
     .execute(pool)
     .await
     .unwrap();
+    if submitted {
+        curate(pool, id, "pending").await;
+    }
     sqlx::query(
         "INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
     )
@@ -210,6 +229,20 @@ async fn item(
     .await
     .unwrap();
     id
+}
+
+/// Submits `item` for curation with `status`, as an imported item curation.
+async fn curate(pool: &PgPool, item: Uuid, status: &str) {
+    sqlx::query(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(item)
+    .bind(status)
+    .bind(format!("{}{}", item.simple(), item.simple()))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 /// A minted item of `owner` that keeps `hash` as its video, the name written
@@ -308,6 +341,40 @@ async fn file(pool: &PgPool, store: &Storage, state: File) -> (String, Vec<u8>) 
                 Owner,
             )
             .await;
+            true
+        }
+        CuratedPending | CuratedApproved | CuratedRejected => {
+            let c = collection(pool, Provider, true, None).await;
+            let id = item(pool, Owner, Some(c), false, false, &hash, Owner).await;
+            sqlx::query("UPDATE builder.items SET urn_suffix = $2 WHERE id = $1")
+                .bind(id)
+                .bind(format!("{PROVIDER_ID}:{}:files-item", c.simple()))
+                .execute(pool)
+                .await
+                .unwrap();
+            let status = match state {
+                CuratedPending => "pending",
+                CuratedApproved => "approved",
+                _ => "rejected",
+            };
+            curate(pool, id, status).await;
+            true
+        }
+        UncuratedInCurated => {
+            let c = collection(pool, Provider, true, None).await;
+            let other = unique("curated-sibling");
+            let sibling = item(
+                pool,
+                Owner,
+                Some(c),
+                false,
+                false,
+                &dcl_auth::hash_bytes_v1(&other),
+                Owner,
+            )
+            .await;
+            curate(pool, sibling, "approved").await;
+            item(pool, Owner, Some(c), false, false, &hash, Owner).await;
             true
         }
         Unnamed => true,

@@ -23,9 +23,6 @@ SELECT i.id,
        i.blockchain_item_id,
        (c.third_party_id IS NULL AND c.is_published IS TRUE AND c.contract_address IS NOT NULL
         AND i.blockchain_item_id IS NOT NULL) AS is_published,
-       COALESCE(ic.status::text,
-                CASE WHEN c.is_published AND c.is_approved AND i.blockchain_item_id IS NOT NULL
-                     THEN 'approved' ELSE 'pending' END) AS curation_status,
        i.total_supply,
        i.local_content_hash,
        ic.content_hash,
@@ -34,7 +31,7 @@ SELECT i.id,
 FROM items i
 LEFT JOIN collections c ON c.id = i.collection_id
 LEFT JOIN LATERAL (
-    SELECT status, content_hash
+    SELECT content_hash
     FROM item_curations
     WHERE item_id = i.id
     ORDER BY created_at DESC, id DESC

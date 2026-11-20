@@ -377,7 +377,7 @@ async fn state_over(
     state_over_with(pool, market, crate::Settings::default()).await
 }
 
-async fn state_over_with(
+pub(crate) async fn state_over_with(
     pool: sqlx::PgPool,
     market: Option<Arc<crate::chain_index::ChainIndex>>,
     settings: crate::Settings,

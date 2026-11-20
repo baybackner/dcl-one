@@ -12,7 +12,10 @@
 //! (the collection's) and `is_published` (true); an item the node published
 //! itself reads as published, with the URN it recorded, until the copy holds
 //! it. A third-party item's `urn`
-//! is its own, `is_published` is the node's record of its submission, and
+//! is its own; it is published once curated (`is_published`), read by
+//! itself when an item of its collection has a curation, in a list when it
+//! has one, and that curation's `is_mapping_complete` answers
+//! `isMappingComplete`; and
 //! `price`, `beneficiary`, `total_supply` and `blockchain_item_id` are what a
 //! third-party item has on no chain. The catalyst sources (`in_catalyst`,
 //! `catalyst_content_hash`) answer what builder-server answers when the
@@ -39,19 +42,39 @@ pub(crate) fn from(_view: &ReadView) -> &'static str {
        AND ci.item_id = CASE WHEN i.blockchain_item_id ~ '^[0-9]{1,78}$' THEN i.blockchain_item_id::numeric END"
 }
 
-/// The columns of [`ItemRow`] over [`from`].
-pub(crate) const COLUMNS: &str = "i.id, i.name, i.description, i.eth_address, i.collection_id, \
+/// The columns of [`ItemRow`] over [`from`] for a list: one probe of each
+/// item's curations, nothing read per collection.
+pub(crate) fn columns() -> String {
+    format!(
+        "i.id, i.name, i.description, i.eth_address, i.collection_id, \
     i.blockchain_item_id, i.price, i.beneficiary, i.rarity, i.type AS item_type, i.data::text AS data, \
     i.created_at, i.updated_at, i.metrics::text AS metrics, i.thumbnail, \
-    (SELECT COALESCE(json_object_agg(f.file, f.hash ORDER BY f.position, f.file), '{}'::json)::text \
+    (SELECT COALESCE(json_object_agg(f.file, f.hash ORDER BY f.position, f.file), '{{}}'::json)::text \
        FROM builder.item_contents f WHERE f.item_id = i.id) AS contents, \
     i.local_content_hash, i.video, i.utility, i.mappings::text AS mappings, i.urn_suffix, \
-    i.is_published AS submitted, c.third_party_id, c.urn_suffix AS collection_urn, c.contract_address, \
+    i.is_published AS submitted, \
+    {} AS own_curation_mapped, \
+    c.third_party_id, c.urn_suffix AS collection_urn, c.contract_address, \
     chain.creator AS chain_creator, \
     chain.is_approved AS chain_approved, ci.urn AS chain_urn, ci.item_id::text AS chain_item_id, \
     ci.price::text AS chain_price, ci.beneficiary AS chain_beneficiary, ci.rarity AS chain_rarity, \
     ci.item_type AS chain_item_type, ci.total_supply::text AS chain_supply, \
-    ci.content_hash AS chain_content_hash";
+    ci.content_hash AS chain_content_hash",
+        crate::curation::newest_item_curation("i.id", MAPPED)
+    )
+}
+
+const MAPPED: &str = "COALESCE(k.is_mapping_complete, false)";
+
+/// The columns of [`ItemRow`] for an item read by itself: [`columns`] and
+/// the curation of its collection's first curated item.
+pub(crate) fn by_id_columns() -> String {
+    format!(
+        "{}, {} AS collection_curation_mapped",
+        columns(),
+        crate::curation::first_curated_item_curation("i.collection_id", MAPPED)
+    )
+}
 
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct ItemRow {
@@ -77,6 +100,9 @@ pub(crate) struct ItemRow {
     pub mappings: Option<String>,
     pub urn_suffix: Option<String>,
     pub submitted: bool,
+    pub own_curation_mapped: Option<bool>,
+    #[sqlx(default)]
+    pub collection_curation_mapped: Option<bool>,
     pub third_party_id: Option<String>,
     pub collection_urn: Option<String>,
     pub contract_address: Option<String>,
@@ -231,8 +257,12 @@ impl ItemRow {
             out.price = Some("0".to_string());
             out.beneficiary = Some(ZERO_ADDRESS.to_string());
             out.blockchain_item_id = item_suffix;
-            out.is_published = self.submitted;
-            out.is_mapping_complete = Some(self.mappings.is_some());
+            let curation = match reached {
+                Reached::ById => self.collection_curation_mapped,
+                Reached::InList => self.own_curation_mapped,
+            };
+            out.is_published = curation.is_some();
+            out.is_mapping_complete = Some(curation.unwrap_or(self.mappings.is_some()));
         } else if merged {
             if self.chain_item_type.as_deref() != Some("emote_v1") {
                 out.rarity = self.chain_rarity.filter(|r| !r.is_empty()).or(out.rarity);
@@ -285,6 +315,8 @@ mod tests {
             mappings: None,
             urn_suffix: None,
             submitted: false,
+            own_curation_mapped: None,
+            collection_curation_mapped: None,
             third_party_id: None,
             collection_urn: None,
             contract_address: Some("0xc0".into()),

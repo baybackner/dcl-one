@@ -136,12 +136,16 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
 fails the replay test with its name. `collections` are the builder's rows,
 each with the contract address its draft computed, and a third-party one with
 its provider id, URN suffix and, optionally, its linked contract address and
-network. The capture stores a third-party row with an empty `eth_address`, as
+network; a collection may carry its `forum_link` and `forum_id`. The capture stores a third-party row with an empty `eth_address`, as
 upstream stores one; the replay stores the owner the seed names, which
 decides nothing on the node. `items` are the builder's item rows,
 with their `contents` (file to hash), `rarity` and, for a third-party item, the
 item part of its URN (`urn_suffix`; the replay stores the full URN the node
 keeps).
+`collection_curations` are a collection's curation rows (status, the
+assignee's wallet role or null, and their dates) and `item_curations` an
+item's (status, a 64-digit lowercase hex content hash, the mapping flag or
+null, and their dates); both sides insert them as they are.
 `third_parties` are virtual third parties, each with its name and managers:
 both sides insert them as virtual third party rows (`tp:1:<name>:`).
 `registry` names the providers the third-party registry lists, each with its

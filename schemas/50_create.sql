@@ -64,6 +64,8 @@ CREATE TABLE builder.collections (
     linked_contract_address text,
     linked_contract_network text,
     lock timestamp without time zone,
+    forum_link text,
+    forum_id integer,
     CONSTRAINT collections_pkey PRIMARY KEY (id),
     CONSTRAINT collections_contract_address_key UNIQUE (contract_address),
     CONSTRAINT collections_eth_address_lowercase_check CHECK (eth_address = lower(eth_address)),
@@ -77,7 +79,10 @@ CREATE TABLE builder.collections (
     CONSTRAINT collections_linked_network_check
         CHECK (linked_contract_network IS NULL OR linked_contract_network IN ('mainnet', 'sepolia', 'matic', 'amoy',
                'base_mainnet', 'base_sepolia', 'monad_mainnet', 'monad_testnet', 'ape_mainnet', 'ape_caldera')),
-    CONSTRAINT collections_linked_contract_key UNIQUE (third_party_id, linked_contract_address, linked_contract_network)
+    CONSTRAINT collections_linked_contract_key UNIQUE (third_party_id, linked_contract_address, linked_contract_network),
+    CONSTRAINT collections_forum_link_check
+        CHECK (forum_link IS NULL OR (char_length(forum_link) <= 2048 AND forum_link ~ '^https?://[^[:space:]]+$')),
+    CONSTRAINT collections_forum_id_check CHECK (forum_id IS NULL OR (forum_id > 0 AND forum_link IS NOT NULL))
 );
 
 CREATE FUNCTION builder.collections_linked_contract_kept() RETURNS trigger
@@ -136,8 +141,6 @@ CREATE TABLE builder.items (
     urn_suffix text,
     blockchain_item_id text,
     is_published boolean NOT NULL DEFAULT false,
-    curation_status text NOT NULL DEFAULT 'pending',
-    is_approved boolean NOT NULL DEFAULT false,
     in_catalyst boolean NOT NULL DEFAULT false,
     total_supply bigint NOT NULL DEFAULT 0,
     local_content_hash text,
@@ -158,8 +161,6 @@ CREATE TABLE builder.items (
     CONSTRAINT items_beneficiary_check CHECK (beneficiary IS NULL OR beneficiary ~ '^0x[0-9a-fA-F]{40}$'),
     CONSTRAINT items_data_object_check CHECK (json_typeof(data) = 'object'),
     CONSTRAINT items_metrics_object_check CHECK (metrics IS NULL OR json_typeof(metrics) = 'object'),
-    CONSTRAINT items_curation_status_check CHECK (curation_status IN ('pending', 'approved', 'rejected')),
-    CONSTRAINT items_approved_projection_check CHECK (is_approved = (curation_status = 'approved')),
     CONSTRAINT items_published_identity_check
         CHECK (NOT is_published OR (urn_suffix IS NOT NULL AND blockchain_item_id IS NOT NULL)),
     CONSTRAINT items_total_supply_check CHECK (total_supply >= 0),
@@ -390,6 +391,105 @@ CREATE TABLE builder.terms_acceptances (
 -- due first.
 CREATE INDEX terms_acceptances_due_idx ON builder.terms_acceptances (next_attempt_at)
     WHERE forwarded_at IS NULL AND attempts < 6;
+
+CREATE TABLE builder.collection_curations (
+    id uuid NOT NULL,
+    collection_id uuid NOT NULL,
+    status text NOT NULL,
+    assignee text,
+    reviewed_by text,
+    rejection_reasons text[],
+    rejection_message text,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT collection_curations_pkey PRIMARY KEY (id),
+    CONSTRAINT collection_curations_collection_id_fkey FOREIGN KEY (collection_id)
+        REFERENCES builder.collections (id) ON DELETE CASCADE,
+    CONSTRAINT collection_curations_collection_created_key UNIQUE (collection_id, created_at),
+    CONSTRAINT collection_curations_status_check CHECK (status IN ('pending', 'approved', 'rejected')),
+    CONSTRAINT collection_curations_assignee_check CHECK (assignee IS NULL OR assignee ~ '^0x[0-9a-f]{40}$'),
+    CONSTRAINT collection_curations_reviewed_by_check
+        CHECK (reviewed_by IS NULL OR reviewed_by = 'validator' OR reviewed_by ~ '^0x[0-9a-f]{40}$'),
+    CONSTRAINT collection_curations_rejection_reasons_check
+        CHECK (rejection_reasons IS NULL OR (cardinality(rejection_reasons) >= 1
+               AND rejection_reasons <@ ARRAY['clipping', 'thumbnail', 'category_hides', 'rigging', 'triangle_count',
+                   'emote', 'file_size', 'textures_materials', 'reversed_faces', 'smart_wearable_files',
+                   'content_policy_ip', 'other']::text[])),
+    CONSTRAINT collection_curations_rejection_message_check
+        CHECK (rejection_message IS NULL OR char_length(rejection_message) BETWEEN 1 AND 3000),
+    CONSTRAINT collection_curations_updated_check CHECK (updated_at >= created_at)
+);
+
+CREATE TABLE builder.item_curations (
+    id uuid NOT NULL,
+    item_id uuid NOT NULL,
+    status text NOT NULL,
+    content_hash text NOT NULL,
+    is_mapping_complete boolean,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT item_curations_pkey PRIMARY KEY (id),
+    CONSTRAINT item_curations_item_id_fkey FOREIGN KEY (item_id)
+        REFERENCES builder.items (id) ON DELETE CASCADE,
+    CONSTRAINT item_curations_item_created_key UNIQUE (item_id, created_at),
+    CONSTRAINT item_curations_status_check CHECK (status IN ('pending', 'approved', 'rejected')),
+    CONSTRAINT item_curations_content_hash_check CHECK (content_hash ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT item_curations_updated_check CHECK (updated_at >= created_at)
+);
+
+CREATE TABLE builder.collection_events (
+    id uuid NOT NULL,
+    collection_id uuid NOT NULL,
+    type text NOT NULL,
+    actor text NOT NULL,
+    actor_address text,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT collection_events_pkey PRIMARY KEY (id),
+    CONSTRAINT collection_events_collection_id_fkey FOREIGN KEY (collection_id)
+        REFERENCES builder.collections (id) ON DELETE CASCADE,
+    CONSTRAINT collection_events_type_check
+        CHECK (type IN ('collection.published', 'review.human_required', 'review.automated_started',
+               'review.automated_passed', 'review.automated_rejected', 'review.automated_error',
+               'review.appeal_requested', 'review.assigned', 'review.approved', 'review.rejected',
+               'changes.submitted', 'review.comment')),
+    CONSTRAINT collection_events_actor_check CHECK (actor IN ('creator', 'curator', 'validator', 'system')),
+    CONSTRAINT collection_events_actor_address_check
+        CHECK (actor_address IS NULL OR actor_address ~ '^0x[0-9a-f]{40}$'),
+    CONSTRAINT collection_events_payload_object_check CHECK (jsonb_typeof(payload) = 'object')
+);
+
+CREATE INDEX collection_events_collection_created_idx
+    ON builder.collection_events (collection_id, created_at DESC, id DESC);
+
+CREATE INDEX collection_events_automated_started_idx ON builder.collection_events (created_at)
+    WHERE type = 'review.automated_started';
+
+CREATE UNIQUE INDEX collection_events_verdict_validation_idx
+    ON builder.collection_events (collection_id, type, (payload->>'validationId'), (COALESCE(payload->>'reason', '')))
+    WHERE type IN ('review.automated_passed', 'review.automated_rejected', 'review.automated_error',
+                   'review.human_required');
+
+CREATE TABLE builder.slot_usage_cheques (
+    id uuid NOT NULL,
+    collection_id uuid NOT NULL,
+    third_party_id text NOT NULL,
+    signature text NOT NULL,
+    salt text NOT NULL,
+    qty integer NOT NULL,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT slot_usage_cheques_pkey PRIMARY KEY (id),
+    CONSTRAINT slot_usage_cheques_collection_id_fkey FOREIGN KEY (collection_id)
+        REFERENCES builder.collections (id),
+    CONSTRAINT slot_usage_cheques_third_party_salt_key UNIQUE (third_party_id, salt),
+    CONSTRAINT slot_usage_cheques_third_party_id_check CHECK (char_length(third_party_id) <= 512),
+    CONSTRAINT slot_usage_cheques_salt_check CHECK (salt ~ '^0x[0-9a-f]{64}$'),
+    CONSTRAINT slot_usage_cheques_signature_check CHECK (signature ~ '^0x[0-9a-f]{130}$'),
+    CONSTRAINT slot_usage_cheques_qty_check CHECK (qty > 0)
+);
+
+CREATE INDEX slot_usage_cheques_collection_created_idx ON builder.slot_usage_cheques (collection_id, created_at);
 -- ==== end section: builder ====
 
 -- ==== section: camera_reel ====
