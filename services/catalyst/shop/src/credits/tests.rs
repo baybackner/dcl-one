@@ -5601,7 +5601,7 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
         FakeMarket::default(),
         broker,
     );
-    let app = app(state);
+    let app = app(state.clone());
     let mut bearer = HeaderMap::new();
     bearer.insert(header::AUTHORIZATION, "Bearer s3cret".parse().unwrap());
     for (tx, why) in [
@@ -5618,6 +5618,39 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {v}");
     }
+    // A recovery booked under an earlier policy replays without verifying again.
+    let earlier = scratch_wallet().address;
+    let earlier_key = format!("mana-topup:{foreign}");
+    state
+        .credits
+        .admin_grant_credits(super::admin_store::GrantRequest {
+            address: &earlier,
+            amount: "40",
+            kind: "purchase",
+            reason: None,
+            actor: None,
+            idempotency_key: Some(&earlier_key),
+            detail: &json!({}),
+            studio_name: None,
+        })
+        .await
+        .unwrap();
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(json!({ "address": earlier, "amount": "40", "idempotencyKey": earlier_key })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a booked recovery replays: {v}");
+    assert_eq!(v["replayed"], true, "{v}");
+    assert_eq!(
+        available(&pool, &earlier).await,
+        "40",
+        "nothing moved again"
+    );
+    cleanup(&pool, &earlier).await;
     let (status, _, v) = send(
         &app,
         "POST",

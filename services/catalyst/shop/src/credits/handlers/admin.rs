@@ -116,7 +116,15 @@ async fn grant_credits(
     {
         Some(key) => {
             let key = key?;
-            super::topup::verify_recovered_topup(&state, &key, &address).await?;
+            // A booked key replays its first outcome without verifying again.
+            if state
+                .credits
+                .find_grant_by_idempotency_key(&key)
+                .await?
+                .is_none()
+            {
+                super::topup::verify_recovered_topup(&state, &key, &address).await?;
+            }
             idempotency_key = Some(key);
             true
         }
