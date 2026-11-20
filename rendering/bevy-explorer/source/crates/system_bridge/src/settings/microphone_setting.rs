@@ -61,8 +61,6 @@ fn set_choices(setting: &mut Setting, devices: &MicrophoneDevices, config: &AppC
 
 /// Adds the setting; its choices follow [`MicrophoneDevices`], which the comms plugin creates,
 /// seeds with the saved choice and fills.
-// Only the web host reports devices.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn add(app: &mut App, settings: &mut Settings, config: &AppConfig) {
     let mut setting = Setting {
         info: info(Vec::new(), &[], config),

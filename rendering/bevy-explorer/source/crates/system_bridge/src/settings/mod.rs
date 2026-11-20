@@ -78,6 +78,8 @@ pub mod load_distance;
 pub mod max_avatars;
 pub mod max_downloads;
 pub mod max_lods;
+// only the web host reports microphones
+#[cfg(any(target_arch = "wasm32", test))]
 mod microphone_setting;
 pub mod oob_setting;
 pub mod parcel_grass_settings;
