@@ -81,9 +81,12 @@ naming no category 291 ms (most of it the LAND source, which reads every
 parcel's mint before sorting) and the wearables on sale, among 4,450 legacy
 orders and 4,600 v3 listings, 767 ms. A window of 10,000 rows takes 0.9 to
 1.6 s and the largest, 100,000 rows, 2.6 to 3.9 s; a sort by last sale reads
-every held token (1.6 to 3.3 s); and a sort by price or listing time
-without an on-sale filter prices every candidate and ends at the 60 s
-statement timeout (DATABASE.md, "Wearable and emote ownership workload").
+every held token (1.6 to 3.3 s). A sort by price or listing time reads
+each source's listed rows and then its rows without an order in key order:
+0.7 to 0.8 s for the first page, and 2.5 to 8 s for the 100,000-row window
+(DATABASE.md, "Wearable and emote ownership workload"). An owner's page
+under that sort still looks up the listing of each of its tokens, 7 to 8 s
+for a 32,000-token owner.
 Production data is unmeasured.
 
 Revisit when the walk covers the testnets, or when a reader needs ownership

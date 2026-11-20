@@ -2489,6 +2489,19 @@ own rows, so its per-token lookups run for the listed parcels only. The
 capped total reads the order legs only when a filter needs them: they are
 left joins of at most one row, so a sort on them changes no count.
 
+A sort by price or listing time (`cheapest`, `recently_listed`) puts the
+rows with no order last, by contract and token. Without an owner and
+without a filter that keeps only listed rows, the page reads each source as
+two parts: its rows with an order, drawn from `on_sale` under the sort, and
+its rows without one, read in the source's key order (`shop.nft`'s and
+`land_authz.token_right`'s primary keys), each part giving its first `first
++ skip` rows. The two parts hold every candidate of the source, so their
+union holds the window of the whole set, and no read prices every
+candidate. With `isOnSale=false` only the second part is read. An owner's
+page keeps one part: a typical owner's price-sorted page takes 10 ms that
+way and 240 ms split (the cost of reading every listed token first), a
+32,000-token owner's 7 to 8 s and 0.6 s.
+
 Each candidate row's v3 listing is a lateral lookup in `unified_trades`,
 which these statements declare `NOT MATERIALIZED`: the lookup reads the
 listings of that token through `trade_assets_erc721_token_idx` on
@@ -2531,22 +2544,29 @@ windows below are a lower bound for a table folded in another order.
 | name, no category | 0.7 to 1.2 s | 96 ms | the same, and 300,000 names sorted |
 | recently sold, `category=wearable` | 1.6 to 3.3 s | 80 ms | every held token read and sorted: no index orders `sold_at` |
 | recently sold, no category | 2.1 to 2.9 s | 94 ms | the same |
-| cheapest or recently listed, without an on-sale filter | over 60 s | 75 to 103 ms | every candidate (2.8M wearables) takes its listing lookup before the sort |
+| cheapest or recently listed, `category=wearable` | 736 to 740 ms | 65 ms | the listed part (8,200 listed tokens with their lookups); the unlisted part reads 24 rows |
+| the same, no category | 791 ms | 82 ms | the same, with names and LAND |
+| the same, `category=wearable`, `skip=1,000` | 749 to 755 ms | 65 ms | 1,024 unlisted rows of each source added |
+| the same, no category, `skip=1,000` | 918 to 985 ms | 83 ms | the same over four sources |
+| the same, `category=wearable`, `skip=99,976` | 2.4 to 2.5 s | 67 to 75 ms | 100,000 unlisted rows of each source with their lookups |
+| the same, no category, `skip=99,976` | 8.1 s | 83 ms | the LAND source's 91,600 unlisted rows with their per-token lookups (4.4 s), 400,000 rows sorted on disk |
+| cheapest or recently listed, `category=wearable&isOnSale=false` | 19 to 21 ms | 458 to 509 ms | 24 rows in key order |
 
-The last row ends at the pool's statement timeout (`PoolSettings`, 60 s by
-default) and answers 500: rows with no order sort last, so the page needs
-the price of every candidate. Reading the listed rows first and the rest in
-key order would bound it; that is not built. With `unified_trades`
-materialized, no token index and the LAND source unrestricted, the same
-seed took 2.9 s for the wearables on sale (page and total), 30 s for the
-on-sale page naming no category, 59 s for `isOnSale=false`, and 30 s for the
-capped total of a sort by price. No read here has a bound of its own.
+A page sorted by price or listing time that read every candidate before
+the sort ran past the pool's statement timeout (`PoolSettings`, 60 s by
+default) on this seed. With `unified_trades` materialized, no token index
+and the LAND source unrestricted, the same seed took 2.9 s for the
+wearables on sale (page and total), 30 s for the on-sale page naming no
+category, 59 s for `isOnSale=false`, and 30 s for the capped total of a
+sort by price. No read here has a bound of its own. Planning a split page
+takes 15 to 23 ms.
 
 With an owner: a 32,000-token owner's `category=wearable` page 78 ms and
 total 167 ms, its `isOnSale=true` page 277 ms, and its page sorted by price
-8.4 s (16 s before), the listing lookup of each of its tokens. A statement
+7 to 8 s, the listing lookup of each of its tokens, and its capped total
+with no category 7 to 8 s. A statement
 repeated on one connection is planned generically from its sixth run: that
-plan took 1.0 s for the 78 ms page and 1.6 s for the 8.4 s one.
+plan took 1.0 s for the 78 ms page and 1.3 to 1.6 s for the price-sorted one.
 
 The earlier seed (3.0M Polygon tokens, 3,500 legacy orders, no v3 listing)
 gave, before and after the per-source windows: newest wearables 1,605 ms to

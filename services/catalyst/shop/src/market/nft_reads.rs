@@ -685,6 +685,27 @@ const ON_SALE_CTE: &str = "on_sale AS MATERIALIZED ( \
     SELECT lower(u.network), u.contract_address_sent, u.token_id::numeric FROM unified_trades u \
     WHERE u.type = 'public_nft_order' AND u.token_id ~ '^[0-9]{1,78}$'), ";
 
+/// Which tokens a source's candidates are read from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Candidates {
+    /// Every held token.
+    Every,
+    /// The listed tokens ([`ON_SALE_CTE`]) when the filters keep only rows
+    /// with an order ([`on_sale_only`]), else every held token.
+    ListedWhenFiltered,
+    /// The listed tokens.
+    Listed,
+}
+
+/// Whether the page sorts by an order column, which is NULL on a row with
+/// no order (`sort_sql` puts those last, by contract and token).
+fn sorts_on_orders(f: &NftFilters) -> bool {
+    matches!(
+        f.sort_by,
+        Some(NftSortBy::RecentlyListed) | Some(NftSortBy::CheapestParcel)
+    )
+}
+
 /// The candidate legs, one per source, each with its order legs (the
 /// `listed` shape), and the CTE prefix they read (`unified_trades`, and
 /// `on_sale` for [`on_sale_only`], when the filters read orders): empty, or
@@ -702,10 +723,15 @@ fn candidate_legs(
     land: Option<LandNetwork>,
     now_ms: i64,
     since: Option<chrono::NaiveDateTime>,
-    restrict_on_sale: bool,
+    from: Candidates,
     orders: bool,
 ) -> (String, Vec<String>) {
-    let restricted = orders && restrict_on_sale && on_sale_only(f);
+    let restricted = orders
+        && match from {
+            Candidates::Every => false,
+            Candidates::ListedWhenFiltered => on_sale_only(f),
+            Candidates::Listed => true,
+        };
     // Each source, and whether it already keeps only the listed tokens.
     let mut parts: Vec<(String, bool)> = Vec::new();
     if sources.collections {
@@ -812,7 +838,8 @@ fn candidates_with(
     since: Option<chrono::NaiveDateTime>,
     orders: bool,
 ) -> String {
-    let (prefix, legs) = candidate_legs(b, f, sources, land, now_ms, since, true, orders);
+    let from = Candidates::ListedWhenFiltered;
+    let (prefix, legs) = candidate_legs(b, f, sources, land, now_ms, since, from, orders);
     format!("WITH {prefix}listed AS ({})", legs.join(" UNION ALL "))
 }
 
@@ -822,11 +849,12 @@ fn candidates_with(
 /// filters and the sort, then sorts and pages their union: the window of
 /// the whole set is always among them, and a source read alone walks an
 /// index in the sort's order (`nft_mint_order_idx` for the newest first)
-/// instead of sorting every candidate. The capped total reads the order
-/// legs only when a filter needs them. Measured times, and the reads that
-/// stay slow (a sort by price or listing time without an on-sale filter
-/// sorts every candidate), are in DATABASE.md, "Wearable and emote
-/// ownership workload".
+/// instead of sorting every candidate. A sort by price or listing time
+/// without an owner reads each source as its listed rows and its rows
+/// without an order, which that sort puts last by contract and token.
+/// The capped total reads the order legs only when a filter needs them.
+/// Measured times are in DATABASE.md, "Wearable and emote ownership
+/// workload".
 pub fn build_nfts_query(
     f: &NftFilters,
     sources: Sources,
@@ -841,30 +869,68 @@ pub fn build_nfts_query(
 ) {
     let page = {
         let mut b = Builder::new();
-        let (prefix, legs) = candidate_legs(
-            &mut b,
-            f,
-            sources,
-            land,
-            now_ms,
-            since,
-            true,
-            needs_orders(f),
-        );
+        let orders = needs_orders(f);
+        // A sort on an order column without a filter that keeps only the
+        // listed rows: each source is read in two parts, so that no read
+        // prices every candidate (below). An owner's page keeps one part:
+        // its candidates are that owner's tokens, and reading every listed
+        // token first costs a typical owner more than it saves.
+        let split = sorts_on_orders(f) && !on_sale_only(f) && f.owner.is_none();
+        let (prefix, mut legs) = if split && f.is_on_sale != Some(false) {
+            let from = Candidates::Listed;
+            candidate_legs(&mut b, f, sources, land, now_ms, since, from, orders)
+        } else {
+            let from = Candidates::ListedWhenFiltered;
+            candidate_legs(&mut b, f, sources, land, now_ms, since, from, orders)
+        };
+        let unlisted = if split {
+            let from = Candidates::Every;
+            let (_, every) = candidate_legs(&mut b, f, sources, land, now_ms, since, from, orders);
+            if f.is_on_sale == Some(false) {
+                // No listed row passes the filter.
+                legs.clear();
+            }
+            every
+        } else {
+            Vec::new()
+        };
         let mut wheres = Vec::new();
         push_filters(&mut b, f, &mut wheres);
         let window = b.bind_i64(first + skip);
         let lim = b.bind_i64(first);
         let off = b.bind_i64(skip);
-        let where_sql = if wheres.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", wheres.join(" AND "))
+        let where_of = |extra: &str| {
+            let all: Vec<&str> = wheres
+                .iter()
+                .map(String::as_str)
+                .chain((!extra.is_empty()).then_some(extra))
+                .collect();
+            if all.is_empty() {
+                String::new()
+            } else {
+                format!("WHERE {}", all.join(" AND "))
+            }
         };
         let sort = sort_sql(f.sort_by);
+        // The rows with an order come from the listed tokens, under the
+        // sort; the rows without one have NULL in both order columns, so
+        // the sort orders them by contract and token, which their source
+        // reads from its key. Each part gives its first `first + skip`
+        // rows, and the two parts hold every candidate of the source.
+        let listed_where = where_of(if split {
+            "c.order_price IS NOT NULL"
+        } else {
+            ""
+        });
+        let unlisted_where = where_of("c.order_price IS NULL");
         let tops: Vec<String> = legs
             .iter()
-            .map(|leg| format!("(SELECT c.* FROM ({leg}) c {where_sql} {sort} LIMIT {window})"))
+            .map(|leg| format!("(SELECT c.* FROM ({leg}) c {listed_where} {sort} LIMIT {window})"))
+            .chain(unlisted.iter().map(|leg| {
+                format!(
+                    "(SELECT c.* FROM ({leg}) c {unlisted_where} ORDER BY c.contract_address, c.token_id LIMIT {window})"
+                )
+            }))
             .collect();
         b.push(&format!(
             "WITH {prefix}listed AS ({}) SELECT c.*, c.token_id::text AS token_text, c.issued_id::text AS issued_text, \
@@ -1639,7 +1705,11 @@ mod tests {
     /// read from the listed tokens answer what every token filtered on its
     /// order answers: over collections, names and LAND with tied mint
     /// times, for every sort, the on-sale and category filters, and pages
-    /// that start inside and past the first source's rows.
+    /// that start inside and past the first source's rows. Under the sorts
+    /// by price and listing time the listed rows (legacy orders, v3
+    /// listings, tied prices and times across sources, a listing by an
+    /// address that does not hold the token) come before the rows without
+    /// an order, and the pages cross that boundary and start past it.
     #[tokio::test]
     async fn the_per_source_window_pages_like_the_whole_set() {
         let Some(own) = crate::market::tests::support::OwnDb::create("nftpage").await else {
@@ -1664,8 +1734,8 @@ mod tests {
              VALUES ('matic', '{c}', 2, 'o1', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 30, 4000000000000, 10, 10, 1, 0), \
                     ('matic', '{c}', 3, 'o2', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 10, 4000000000000, 11, 11, 1, 0), \
                     ('matic', '{c}', 4, 'o3', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 20, 4000000000000, 12, 12, 1, 0), \
-                    ('ethereum', '{DCL_REGISTRAR}', 1002, 'o4', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 15, 4000000000000, 13, 13, 1, 0), \
-                    ('ethereum', '{LAND_REGISTRY_MAINNET}', 2, 'o5', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 25, 4000000000000, 14, 14, 1, 0); \
+                    ('ethereum', '{DCL_REGISTRAR}', 1002, 'o4', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 20, 4000000000000, 13, 13, 1, 0), \
+                    ('ethereum', '{LAND_REGISTRY_MAINNET}', 2, 'o5', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 25, 4000000000000, 13, 13, 1, 0); \
              INSERT INTO shop.trades (id, network, chain_id, signature, hashed_signature, checks, signer, type, expires_at, effective_since, contract, created_at) \
              SELECT md5('t' || v.n)::uuid, 'MATIC', 137, 's' || v.n, 'h' || v.n, '{{}}', v.signer, 'public_nft_order', '2100-01-01', '2000-01-01', '0xmarket', \
                     timestamp '2023-01-01' + make_interval(days => v.n) \
@@ -1680,6 +1750,9 @@ mod tests {
              SELECT md5('received' || v.n)::uuid, v.price FROM (VALUES (1, 7), (2, 9), (3, 3), (4, 5)) v(n, price); \
              INSERT INTO land_authz.token_right (token_address, token_id, x, y, owner, updated_block, updated_log) \
              SELECT '{LAND_REGISTRY_MAINNET}', g, g, 0, '{a}', g, 0 FROM generate_series(1, 5) g; \
+             INSERT INTO land_authz.token_right (token_address, token_id, owner, updated_block, updated_log) \
+             SELECT '{ESTATE_REGISTRY_MAINNET}', g, '{b}', g, 1 FROM generate_series(3, 4) g; \
+             INSERT INTO land_authz.estate_land (land_token_id, estate_token_id, updated_block, updated_log) VALUES (4, 3, 9, 0), (5, 4, 9, 1); \
              INSERT INTO land_authz.authz_event (block_number, log_index, block_time, token_address, kind, token_id, account) \
              SELECT g, 0, 102 + g / 2, '{LAND_REGISTRY_MAINNET}', 'transfer', g, '{a}' FROM generate_series(1, 4) g; \
              UPDATE shop.items SET emote_outcome_type = 'so' WHERE contract_address = '{c}' AND item_id = 1"
@@ -1702,6 +1775,8 @@ mod tests {
             vec![("minPrice", "12")],
             vec![("owner", a)],
             vec![("emoteOutcomeType", "so")],
+            vec![("isOnSale", "false")],
+            vec![("isLand", "true")],
         ] {
             for sort in [
                 "newest",
@@ -1718,15 +1793,27 @@ mod tests {
                     s.names = true;
                     s.land = true;
                 }
-                for (first, skip) in [(2, 0), (3, 2), (4, 7), (50, 0), (5, 30)] {
+                for (first, skip) in [
+                    (2, 0),
+                    (3, 2),
+                    (2, 1),
+                    (1, 4),
+                    (2, 4),
+                    (3, 5),
+                    (6, 0),
+                    (4, 7),
+                    (50, 0),
+                    (5, 30),
+                ] {
                     let ((page, args), _) = build_nfts_query(&f, s, land, first, skip, now, None);
                     let got = sqlx::query_with(sqlx::AssertSqlSafe(page), args)
                         .fetch_all(&pool)
                         .await
                         .unwrap();
                     let mut bld = Builder::new();
+                    let every = Candidates::Every;
                     let (prefix, legs) =
-                        candidate_legs(&mut bld, &f, s, land, now, None, false, needs_orders(&f));
+                        candidate_legs(&mut bld, &f, s, land, now, None, every, needs_orders(&f));
                     let mut wheres = Vec::new();
                     push_filters(&mut bld, &f, &mut wheres);
                     let lim = bld.bind_i64(first);
@@ -1750,7 +1837,7 @@ mod tests {
                 }
             }
         }
-        assert!(compared > 50, "the cases read rows: {compared}");
+        assert!(compared > 200, "the cases read rows: {compared}");
         // The listed rows, cheapest first: a v3 listing by the token's owner
         // (its latest one, 9), the legacy orders (one over a v3 listing of
         // the same token) and the parcel's. Token 6 is listed, and token 3
@@ -1768,8 +1855,8 @@ mod tests {
             .unwrap();
         let on_sale: Vec<(String, String)> = [
             (c, "5"),
-            (DCL_REGISTRAR, "1002"),
             (c, "4"),
+            (DCL_REGISTRAR, "1002"),
             (LAND_REGISTRY_MAINNET, "2"),
             (c, "2"),
         ]
@@ -1802,12 +1889,12 @@ mod tests {
                 (count, reads_trades)
             }
         };
-        assert_eq!(totals(&[]).await, (23, false));
-        assert_eq!(totals(&[("sortBy", "cheapest")]).await, (23, false));
-        assert_eq!(totals(&[("sortBy", "recently_listed")]).await, (23, false));
+        assert_eq!(totals(&[]).await, (25, false));
+        assert_eq!(totals(&[("sortBy", "cheapest")]).await, (25, false));
+        assert_eq!(totals(&[("sortBy", "recently_listed")]).await, (25, false));
         assert_eq!(
             totals(&[("isOnSale", "false"), ("sortBy", "cheapest")]).await,
-            (18, true)
+            (20, true)
         );
         // `emoteOutcomeType` narrows the collections to the emotes with an
         // outcome and leaves the names and LAND of the same read alone.
@@ -1841,7 +1928,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(total, 17);
+        assert_eq!(total, 19);
         own.drop().await;
     }
 }
