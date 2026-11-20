@@ -2423,7 +2423,9 @@ commits in between is never half-seen:
 - fresh: complete and `folded_at` within 30 minutes. Every other reader needs
   it on the networks it reads (wearables both, emotes Polygon), and the lists
   also need the items mirror's complete pass (`shop.mirror_state`); otherwise
-  they answer the `nft-index` envelope.
+  they answer the `nft-index` envelope. The `/v1/orders` routes instead
+  answer 200 with an empty v3 listings leg (the legacy orders only) until the
+  index is fresh on the networks the read names.
 
 Queries, all bounded by one owner or one batch:
 
@@ -2437,7 +2439,9 @@ Queries, all bounded by one owner or one batch:
   `owner`, v1 pairs through `shop.collections.urn` and `wearable_id`, newest
   transfer first (`transferred_block`, `transferred_log` descending);
 - the orders guard: `NOT EXISTS` a `shop.nft` row of the listing's exact token
-  held by another address or burned, by primary key.
+  held by another address or burned, by primary key. A node that does not
+  walk the index runs the listings statement without it and without the
+  snapshot.
 
 Measured on a seeded database (3.0M Polygon tokens over 100,000 items with a
 skewed popularity, 300,000 owners of whom 20 hold about 30,000 tokens each,

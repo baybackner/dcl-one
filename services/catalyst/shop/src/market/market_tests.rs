@@ -3308,7 +3308,9 @@ async fn deep_merged_pages_read_the_graph_in_pages_it_accepts() {
 /// another address holds (even while the signer holds another copy of the
 /// item) or nobody holds (burned) drops out, and a token the index does not
 /// hold (LAND, an estate, a collection outside the mirror) passes. Until the
-/// index is published the leg answers its envelope.
+/// index is published the leg is empty, never unguarded; a node that does
+/// not walk the index has no guard and serves every open listing, whatever
+/// rows its `shop.nft` holds.
 #[tokio::test]
 async fn an_open_listing_stays_only_while_its_signer_holds_that_token() {
     let up = FakeGraph::new();
@@ -3373,10 +3375,35 @@ async fn an_open_listing_stays_only_while_its_signer_holds_that_token() {
         owner: Some(WALLET_A.into()),
         ..Default::default()
     };
-    let Err(resp) = super::orders::trades_leg(&state, &open).await else {
-        panic!("an unpublished index answers its envelope")
-    };
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let unpublished = super::orders::trades_leg(&state, &open).await.unwrap();
+    assert!(
+        unpublished.is_empty(),
+        "an unpublished index serves no listing, guarded or not"
+    );
+    let not_walking = std::sync::Arc::new(super::MarketplaceState::new(
+        pool.clone(),
+        crate::http::Outbound::for_tests(),
+        market_settings(&url, &url, true),
+    ));
+    assert!(!super::owned_items::walks_here(&not_walking));
+    let mut ids: Vec<String> = super::orders::trades_leg(&not_walking, &open)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|k| k.order.id)
+        .collect();
+    ids.sort();
+    let mut want = vec![
+        held.clone(),
+        sold.clone(),
+        burned.clone(),
+        elsewhere.clone(),
+    ];
+    want.sort();
+    assert_eq!(
+        ids, want,
+        "a node that does not walk the index serves the leg without the guard"
+    );
     super::owned_items::test_support::publish(
         &pool,
         &super::chain_walk::ChainNet::ALL,
