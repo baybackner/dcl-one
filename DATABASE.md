@@ -2415,9 +2415,18 @@ commits in between is never half-seen:
 - complete: `full_history` and `folded_block` set. A reorg rewind and an
   unpublishable fold clear `folded_block`; only a pass that reaches the head,
   folds and publishes sets it, and a rewind deletes the fold's rows in the
-  transaction that clears it. Between two folds `shop.nft` does not change,
-  so a complete cursor names a whole, published fold even while the next
-  pass has advanced `last_block` past `folded_block`. Profiles need complete
+  transaction that clears it. `shop.nft` changes only in a fold's commit
+  (one transaction per network) and in a rewind, so a reader never sees half
+  a fold, and a complete cursor holds while the next pass has advanced
+  `last_block` past `folded_block`. The pass publishes or clears the marker
+  in a later statement, after it reads the chain head again: until then, and
+  until the next pass folds when that read fails, the new fold's rows are
+  read under the previous marker and its `folded_at`. They are later
+  transfers of the same walk. A fold that still owes a late collection's
+  backfill is unpublishable, and under the previous marker it shows that
+  collection's tokens transferred since the walk took it in and not its
+  earlier ones, which read as not held, as the whole collection did before
+  that fold. Profiles need complete
   on the networks their items name; an incomplete one fails the read (503,
   or a Registry batch left out and counted).
 - fresh: complete and `folded_at` within 30 minutes. Every other reader needs
@@ -2490,8 +2499,27 @@ both shapes over every sort, filters and pages inside and past a source's
 rows. The index on `(network, minted_at DESC, contract_address, token_id)`
 answered within 6 ms of these at 396 MB.
 
-`nft_mint_order_idx` is a new object: `catalyst schema migrate` creates it
-(no step under `schemas/migrations/`) with a plain `CREATE INDEX` in its
-transaction, so it holds `shop.nft` against writes for the build (about 2 s
-on 3.5M rows), with every writer stopped as the migration requires. Each nft
-fold maintains it beside `nft_owner_idx` and `nft_item_idx`.
+Only `first=24, skip=0` under the newest sort is measured. Unmeasured: a
+deep window (`first + skip` up to the 100,000 cap, read from every source),
+a selective filter under the newest sort (one creator, a rare rarity: the
+walk of `nft_mint_order_idx` passes every non-matching token before it
+fills the window, most of the table when few tokens match) and the other
+sorts, which sort each source's candidates. These reads run under the
+pool's statement timeout (`PoolSettings`, 60 s by default) with no bound of their own.
+
+`catalyst schema migrate`'s object pass builds `nft_mint_order_idx` on
+`shop.nft` (no step under `schemas/migrations/`) in the migrate transaction,
+not concurrently, so writes to that table wait for the build: about 2 s on
+the 3.5M seeded rows, unmeasured on production. Writers are stopped for a
+release anyway. To build it outside that window, run beforehand, with the
+same definition as `schemas/30_shop.sql`:
+
+```sql
+CREATE INDEX CONCURRENTLY nft_mint_order_idx
+    ON shop.nft (network, minted_at DESC) WHERE owner IS NOT NULL;
+```
+
+The object pass creates only objects the database lacks, so it then skips the
+index. A failed concurrent build leaves an invalid index of that name: drop it
+before retrying. Each nft fold maintains the index beside `nft_owner_idx` and
+`nft_item_idx`.

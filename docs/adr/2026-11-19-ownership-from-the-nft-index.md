@@ -73,7 +73,9 @@ walking `nft_mint_order_idx` and the on-sale reads starting from the listed
 tokens. On a 3.5M-token index the newest wearables take 15 ms, the page
 naming no category 282 ms (most of it the LAND source, which reads every
 parcel's mint before sorting) and the wearables on sale 121 ms
-(DATABASE.md, "Wearable and emote ownership workload").
+(DATABASE.md, "Wearable and emote ownership workload"). Deeper windows,
+selective filters and the other sorts of a page without an owner are
+unmeasured.
 
 Revisit when the walk covers the testnets, or when a reader needs ownership
 fresher than the confirmation depth.
