@@ -102,6 +102,40 @@ the page said, and `boot-<n>.jpg`, how it looked; it is booted once more for the
 and after a second failure every later scenario fails at once with that error, which the run logs
 as it happens.
 
+### Drive a scene by hand or by agent
+
+`pnpm run drive` boots one client on a loopback realm holding scenes from any folder (an SDK7
+scene with its bundle built), then runs console lines from stdin, so a person or an agent can
+drive a scene without writing a spec:
+
+```sh
+pnpm run drive --scene <scene dir> [--scene <dir> ...] [--position x,y] [--report <dir>] [--web-app <dir>] < commands.txt > replies.jsonl
+```
+
+It builds each scene folder with `buildScene` (`scene.json`, the `main` bundle, `main.crdt`,
+`assets/`), serves them with `serveRealm` on `DCL_E2E_REALM_PORT` and the web app (`--web-app`,
+else `DCL_E2E_WEB_APP`), signs in a guest and arrives at `--position` (the first scene's base
+parcel by default). The paths of `--scene`, `--report` and `--web-app` are read from the folder
+the command was started in, as the shell reads `< commands.txt`. Each stdin line is one console
+line; blank lines and `#` lines are skipped, and the lines run one after the other. stdout gets
+one JSON line per command, `{"line", "ok", "reply", "ms"}` (`ok:false` carries the command's
+error, and the run goes on); stderr gets the boot and a one-line summary of each reply. A
+`/login_identity` or `/hud_login` payload is redacted in all of them, as in the suite's reports.
+When stdin closes, `final.png` (the engine's frame) and `replies.jsonl` go to the report folder
+(`report/drive` by default), and the client and both servers close. An interrupt (SIGINT or
+SIGTERM) or a reader that closes stdout closes them too, a boot in progress included, and keeps
+no report.
+
+Of the variables above, these apply: `DCL_E2E_WEB_APP`, `DCL_E2E_WEB_PORT` and
+`DCL_E2E_REALM_PORT`, `DCL_E2E_BASE_DOMAIN`, `CHROME_PATH` and `CHROME_EXTRA_ARGS`,
+`DCL_E2E_HEADLESS`, `DCL_E2E_WINDOW`, and `DCL_E2E_TRANSPORT` with the `DCL_E2E_NATIVE_*` ones.
+`DCL_E2E_WEB_URL` opens an already served app, and the tool refuses `--web-app` beside it. The
+realm and the parcel are the tool's own, and it uses no account key.
+
+The tool takes no wait or sleep lines. To pace a longer script, pipe in a feed script that writes
+each line when it is due and reads stdout to decide the next one, for example counting the reply
+lines before going on. Because lines run one at a time, a feed cannot make two commands overlap.
+
 ## Avatar sweep
 
 `scripts/avatar-sweep.ts` measures how frame time grows with the number of avatars, to choose the
@@ -449,6 +483,7 @@ change on the left updates what is on the right in the same change, then runs th
 | The smart-wearable fixture (`scenes/smart-wearable`: its title, name, log line or label), `/preview-wearables` or `buildScene` in `driver/realm.ts`, the `/smart_wearable*`, `/portables` or `/stop_portable` commands, or the HUD's `Portable experiences` button, popover or its `Stop`/`Restart` rows | `specs/smart-wearables.test.ts`, `test/realm.test.ts`, `scenes/README.md` | `pnpm test`; the scenario in CI |
 | The web media backend's reopen schedule, the states it reports or `/media_state`'s retry fields (`crates/media/src/retry.rs`, `crates/media/src/source_state.rs`, `crates/media/src/html`), `/media_retry_delay`, the `video` scene or `contentFailures` in `driver/realm.ts` | `specs/media-retry.test.ts`, `driver/explorer.ts` and `test/explorer.test.ts`, `test/realm.test.ts`, `scenes/README.md`, `decisions.md` "Media reopens on the web" | `cargo test -p media`; `pnpm test`; the scenarios in CI |
 | A scene under `scenes/`, its parcels or spawn, `specs/visual/scenes.ts`, the 960x540 window or the tolerance | The references, re-recorded in CI (`record`) and committed in a PR; `scenes/README.md` | the visual scenarios in CI |
+| `scripts/drive.ts`: its flags, its stdin lines or its JSON lines | "Drive a scene by hand or by agent" above, the Explorer readme's "Agents and tests", `test/drive.test.ts` | `pnpm test` |
 | A path moved under `apps/bevy-explorer/e2e`, `local-harness/web-driver`, `tooling/bevy-e2e-*.py` or the workflow, or a new read outside this folder | The workflow's `paths` filters and the scenarios job's `sparse-checkout`, `tooling/bevy-ci.py` and `tooling/tests/test_bevy_ci.py`, the LFS patterns in `.gitattributes`, the links in this README | the tooling tests |
 | The CI workflow's file, its job names, the `bevy-explorer-web-<sha>` artifact or the status comment's sections | `tooling/bevy-e2e-inputs.py`, `tooling/bevy-e2e-report.py` and their tests | the tooling tests |
 | A scenario the HUD can no longer run, or a Gap whose feature landed | A `todo` with the reason, or the todo back into a scenario; its header row and the scenario map | the scenarios in CI |
