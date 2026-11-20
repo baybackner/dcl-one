@@ -69,6 +69,12 @@ impl ImplApp for BrowserProcessAppBuilder {
         // that helper failed to launch outright on some setups (error_code=1002 ×3 →
         // FATAL "GPU process isn't usable. Goodbye." kills the app).
         command_line.append_switch(Some(&"in-process-gpu".into()));
+        // Ozone defaults to X11 and exits without a server.
+        #[cfg(target_os = "linux")]
+        command_line.append_switch_with_value(
+            Some(&"ozone-platform".into()),
+            Some(&ozone_platform(std::env::var_os("WAYLAND_DISPLAY").as_deref()).into()),
+        );
     }
 
     fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -90,5 +96,30 @@ impl ImplApp for BrowserProcessAppBuilder {
 impl WrapApp for BrowserProcessAppBuilder {
     fn wrap_rc(&mut self, object: *mut RcImpl<_cef_app_t, Self>) {
         self.object = object;
+    }
+}
+
+/// The Ozone platform for the value of `WAYLAND_DISPLAY`: Wayland when it names a display, as
+/// winit chooses for the engine window, so a session without an X server works. An empty value
+/// counts as unset, as in winit. A session that offers only `WAYLAND_SOCKET` stays on X11: that
+/// socket serves one connection, and the engine window takes it.
+#[cfg(target_os = "linux")]
+fn ozone_platform(wayland_display: Option<&std::ffi::OsStr>) -> &'static str {
+    match wayland_display {
+        Some(display) if !display.is_empty() => "wayland",
+        _ => "x11",
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::ozone_platform;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn ozone_platform_follows_wayland_display() {
+        assert_eq!(ozone_platform(Some(OsStr::new("wayland-1"))), "wayland");
+        assert_eq!(ozone_platform(Some(OsStr::new(""))), "x11");
+        assert_eq!(ozone_platform(None), "x11");
     }
 }
