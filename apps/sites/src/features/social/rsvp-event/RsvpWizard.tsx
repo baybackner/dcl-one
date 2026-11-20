@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMachine } from "@xstate/react";
 import { useSearchParams } from "react-router";
 
@@ -50,6 +50,8 @@ export default function RsvpWizard({
 
   const urlStep = (searchParams.get("step")?.trim() || initialStep) ?? undefined;
   const stateId = slugToState(urlStep);
+  // Held above the step's remount, so a dismissed event detail stays dismissed as the RSVP advances.
+  const [detailOpen, setDetailOpen] = useState(true);
 
   return (
     <RsvpWizardInner
@@ -62,6 +64,8 @@ export default function RsvpWizard({
       signedIn={signedIn}
       onSignIn={onSignIn}
       track={track}
+      detailOpen={detailOpen}
+      onDetailOpenChange={setDetailOpen}
     />
   );
 }
@@ -75,6 +79,8 @@ type InnerProps = {
   onSignIn?: () => void;
   commit?: CommitFn;
   track?: TrackFn;
+  detailOpen: boolean;
+  onDetailOpenChange: (open: boolean) => void;
 };
 
 function RsvpWizardInner({
@@ -86,6 +92,8 @@ function RsvpWizardInner({
   signedIn,
   onSignIn,
   track,
+  detailOpen,
+  onDetailOpenChange,
 }: InnerProps) {
   const [, setSearchParams] = useSearchParams();
 
@@ -146,6 +154,8 @@ function RsvpWizardInner({
       onCancelRsvp={() => send({ type: "CANCEL_RSVP" })}
       onDismiss={() => send({ type: "DISMISS" })}
       onRetry={() => send({ type: "RETRY" })}
+      detailOpen={detailOpen}
+      onDetailOpenChange={onDetailOpenChange}
     />
   );
 }

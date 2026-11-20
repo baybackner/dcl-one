@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import Button from "../../atoms/Button";
 import EventDetail from "../../explorer/pages/EventDetail";
 import "./ldrsvpwizardview.css";
@@ -36,6 +37,9 @@ type LdRsvpWizardViewProps = {
   onCancelRsvp?: () => void;
   onDismiss?: () => void;
   onRetry?: () => void;
+  /** Whether the event detail covers the panel; uncontrolled (open at first) when omitted. */
+  detailOpen?: boolean;
+  onDetailOpenChange?: (open: boolean) => void;
 };
 
 export default function LdRsvpWizardView({
@@ -52,22 +56,58 @@ export default function LdRsvpWizardView({
   onCancelRsvp = undefined,
   onDismiss = undefined,
   onRetry = undefined,
+  detailOpen: controlledOpen = undefined,
+  onDetailOpenChange = undefined,
 }: LdRsvpWizardViewProps) {
+  // The event detail opens over the RSVP panel; Close, the backdrop or Escape dismisses it so the
+  // panel's actions can be reached, and "Event details" brings it back.
+  const [ownOpen, setOwnOpen] = useState(true);
+  const detailOpen = controlledOpen ?? ownOpen;
+  const panel = useRef<HTMLDivElement>(null);
+  const setDetailOpen = (open: boolean) => {
+    setOwnOpen(open);
+    onDetailOpenChange?.(open);
+  };
+  const closeDetail = () => {
+    setDetailOpen(false);
+    panel.current?.focus();
+  };
+  useEffect(() => {
+    if (!detailOpen) return undefined;
+    const onKeyDown = (key: KeyboardEvent) => {
+      if (key.key !== "Escape" || key.defaultPrevented) return;
+      setOwnOpen(false);
+      onDetailOpenChange?.(false);
+      panel.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [detailOpen, onDetailOpenChange]);
+
   return (
     <div className="rsvp-wizard" data-step={step}>
-      <EventDetail
-        event={{
-          title: event.title,
-          when: event.when,
-          host: event.host,
-          description: event.description,
-          schedule: event.schedule,
-          location: event.location,
-        }}
-        jumpHref={event.jumpHref}
-      />
+      {detailOpen ? (
+        <EventDetail
+          event={{
+            title: event.title,
+            when: event.when,
+            host: event.host,
+            description: event.description,
+            schedule: event.schedule,
+            location: event.location,
+          }}
+          jumpHref={event.jumpHref}
+          onClose={closeDetail}
+        />
+      ) : null}
 
-      <div className="rsvp-wizard__panel" role="group" aria-label="RSVP to this event">
+      <div
+        ref={panel}
+        tabIndex={-1}
+        className="rsvp-wizard__panel"
+        role="group"
+        aria-label="RSVP to this event"
+      >
         <div className="rsvp-wizard__count" aria-live="polite">
           <strong>{count}</strong> going
         </div>
@@ -147,6 +187,12 @@ export default function LdRsvpWizardView({
               <Button onClick={onRetry}>Retry</Button>
             </div>
           </>
+        )}
+
+        {!detailOpen && (
+          <Button variant="ghost" onClick={() => setDetailOpen(true)}>
+            Event details
+          </Button>
         )}
       </div>
     </div>
