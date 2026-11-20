@@ -119,6 +119,8 @@ pub struct Settings {
     /// The places site base a creator's rating change is reported under, while
     /// the places moderation webhook is on (`explore::Settings::places_notices`).
     pub places_notices: Option<String>,
+    /// `REALM_NAME`: this node's Genesis City realm (default `main`).
+    pub realm_name: String,
 }
 
 impl std::fmt::Debug for Settings {
@@ -148,6 +150,7 @@ impl Settings {
             owner_reconcile_interval: DEFAULT_OWNER_RECONCILE_INTERVAL,
             access_caps: store::AccessCaps::default(),
             places_notices: None,
+            realm_name: crate::comms::world_identity::GENESIS_CITY_REALM.to_string(),
         })
     }
 
@@ -185,6 +188,11 @@ impl Settings {
         self
     }
 
+    pub fn with_realm_name(mut self, realm_name: String) -> Self {
+        self.realm_name = realm_name;
+        self
+    }
+
     pub fn with_max_file_count(mut self, max_file_count: u32) -> Self {
         self.max_file_count = max_file_count as usize;
         self
@@ -209,6 +217,7 @@ impl Settings {
             owner_reconcile_interval: DEFAULT_OWNER_RECONCILE_INTERVAL,
             access_caps: store::AccessCaps::default(),
             places_notices: None,
+            realm_name: crate::comms::world_identity::GENESIS_CITY_REALM.to_string(),
         }
     }
 }
