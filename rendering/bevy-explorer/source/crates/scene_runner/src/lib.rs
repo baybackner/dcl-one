@@ -119,8 +119,8 @@ pub struct SceneUpdates {
     /// Scene-frames lost because the scene had already been dispatched this frame.
     pub skipped_already_sent: u64,
     /// Named scene entities that must be scheduled every frame (e.g. the
-    /// movement controller). These scenes bypass the `scene_threads` limit
-    /// but still occupy slots, preventing non-priority scenes from running.
+    /// movement controller, [`MOVEMENT_CONTROLLER`]). These scenes bypass the `scene_threads`
+    /// limit but still occupy slots, preventing non-priority scenes from running.
     pub priority_scenes: HashMap<&'static str, Entity>,
     /// The movement controller's recent tick times, for its re-dispatch on a late reply.
     pub(crate) movement_ticks: movement_redispatch::MovementTickTimes,
@@ -129,6 +129,9 @@ pub struct SceneUpdates {
     /// Replies have been polled in this frame's scene loop.
     loop_polled: bool,
 }
+
+/// The [`SceneUpdates::priority_scenes`] name of the scene that drives the player's movement.
+pub const MOVEMENT_CONTROLLER: &str = "movement_controller";
 
 impl SceneUpdates {
     pub fn receiver(&mut self) -> &mut SceneResponseReceiver {
@@ -1263,6 +1266,7 @@ fn send_scene_updates(
         Entity,
         &mut RendererSceneContext,
         &mut renderer_context::SceneTickTiming,
+        Option<&renderer_context::RedispatchRotation>,
         &GlobalTransform,
         Has<SuperUserScene>,
         Option<&mut scene_traffic::SceneTraffic>,
@@ -1364,7 +1368,7 @@ fn send_scene_updates(
 
     updates.scene_queue.pop_front();
 
-    let (_, mut context, mut tick_timing, scene_transform, is_super, traffic) =
+    let (_, mut context, mut tick_timing, redispatch_rotation, scene_transform, is_super, traffic) =
         scenes.get_mut(ent).unwrap();
 
     // only live scenes are queued, so this only fails if the scene broke this frame. Its queue
@@ -1378,7 +1382,7 @@ fn send_scene_updates(
 
     // generate updates for camera and player
     let mut player_transform = player.single().copied().unwrap_or_default();
-    let staged_rotation = tick_timing.staged_rotation(engine_info.frame.0);
+    let staged_rotation = tick_timing.staged_rotation(redispatch_rotation, engine_info.frame.0);
     if let Some(staged) = staged_rotation {
         player_transform.rotation = staged;
     }
@@ -1582,7 +1586,7 @@ fn receive_scene_updates(
     time: Res<Time>,
 ) {
     let first_poll = !std::mem::replace(&mut updates.loop_polled, true);
-    let movement_scene = updates.priority_scenes.get("movement_controller").copied();
+    let movement_scene = updates.priority_scenes.get(MOVEMENT_CONTROLLER).copied();
     loop {
         // the movement scene, to dispatch again on its late reply
         let mut redispatch = None;

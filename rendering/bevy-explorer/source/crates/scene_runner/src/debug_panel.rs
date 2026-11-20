@@ -216,7 +216,7 @@ fn movement_redispatch_state(
     let ticks = &updates.movement_ticks;
     let scene = updates
         .priority_scenes
-        .get("movement_controller")
+        .get(crate::MOVEMENT_CONTROLLER)
         .and_then(|&scene| scenes.get(scene).ok())
         .map(|context| context.title.clone());
     input.reply_ok(
@@ -798,7 +798,9 @@ mod tests {
             ..default()
         };
         let mut updates = app.world_mut().resource_mut::<SceneUpdates>();
-        updates.priority_scenes.insert("movement_controller", scene);
+        updates
+            .priority_scenes
+            .insert(crate::MOVEMENT_CONTROLLER, scene);
         updates.loop_end_time = at + std::time::Duration::from_secs(1);
         let previous_loop_end = updates.previous_loop_end;
         let loop_end = updates.loop_end_time;

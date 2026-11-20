@@ -7,7 +7,7 @@
 //! before the deadline covers the 90th percentile of the scene's recent ticks.
 //!
 //! The re-dispatch is sent the player's rotation as the late reply sets it
-//! (`SceneTickTiming::redispatch_rotation`): the engine applies that reply's orientation
+//! (`RedispatchRotation`): the engine applies that reply's orientation
 //! only after the scene loop, and the scene turns from the rotation it is sent, so from the
 //! player's current rotation it would turn again from the one before that reply. Every other
 //! frame would then continue a different chain of replies, and the avatar would alternate
@@ -139,7 +139,7 @@ fn tick_time(
 mod tests {
     use super::*;
 
-    use crate::renderer_context::{ReplyTiming, SceneTickTiming, SentTiming};
+    use crate::renderer_context::{RedispatchRotation, ReplyTiming, SceneTickTiming, SentTiming};
 
     fn ms(v: u64) -> Duration {
         Duration::from_millis(v)
@@ -214,7 +214,6 @@ mod tests {
                 at,
                 frame,
             }),
-            redispatch_rotation: None,
         };
         // the reply of frame 6's tick landed in frame 7
         assert!(replied(6, 7).late_reply_in(7));
@@ -223,14 +222,11 @@ mod tests {
         // a reply two frames late makes its frame's dispatch one too: that dispatch alone is sent
         // the staged rotation
         assert!(replied(5, 7).late_reply_in(7));
-        let staged = bevy::math::Quat::from_rotation_y(1.0);
-        let player = bevy::math::Quat::from_rotation_y(2.0);
-        let two_late = SceneTickTiming {
-            redispatch_rotation: Some(staged),
-            ..replied(5, 7)
-        };
-        assert_eq!(two_late.player_rotation_to_send(7, player), staged);
-        assert_eq!(two_late.player_rotation_to_send(8, player), player);
+        let staged = RedispatchRotation(bevy::math::Quat::from_rotation_y(1.0));
+        let two_late = replied(5, 7);
+        assert_eq!(two_late.staged_rotation(Some(&staged), 7), Some(staged.0));
+        assert_eq!(two_late.staged_rotation(Some(&staged), 8), None);
+        assert_eq!(two_late.staged_rotation(None, 7), None);
         // a reply in its own frame is not late
         assert!(!replied(7, 7).late_reply_in(7));
         assert!(!SceneTickTiming::default().late_reply_in(7));

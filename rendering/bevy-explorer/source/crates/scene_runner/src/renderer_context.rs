@@ -178,11 +178,6 @@ impl ReplyTiming {
 pub struct SceneTickTiming {
     pub sent: Option<SentTiming>,
     pub reply: Option<ReplyTiming>,
-    /// For the movement scene, the player's rotation once its late reply that landed in this
-    /// frame is applied, which happens only after the scene loop. Its re-dispatch is sent this
-    /// rotation instead of the player's. Set before each dispatch by the crate that applies the
-    /// reply; None when the engine will not apply it.
-    pub redispatch_rotation: Option<Quat>,
 }
 
 impl SceneTickTiming {
@@ -194,18 +189,25 @@ impl SceneTickTiming {
             .is_some_and(|reply| reply.frame == frame && reply.frames() > 0)
     }
 
-    /// The player's rotation a dispatch in `frame` sends the scene, given the player's current
-    /// `rotation`: the movement scene's re-dispatch is sent its `redispatch_rotation`.
-    pub fn player_rotation_to_send(&self, frame: u32, rotation: Quat) -> Quat {
-        self.staged_rotation(frame).unwrap_or(rotation)
-    }
-
-    /// The `redispatch_rotation` a dispatch in `frame` sends in place of the player's rotation.
-    pub fn staged_rotation(&self, frame: u32) -> Option<Quat> {
-        self.redispatch_rotation
+    /// The `staged` rotation a dispatch in `frame` sends in place of the player's: only the
+    /// re-dispatch answering a late reply that landed in `frame` is sent one.
+    pub(crate) fn staged_rotation(
+        &self,
+        staged: Option<&RedispatchRotation>,
+        frame: u32,
+    ) -> Option<Quat> {
+        staged
             .filter(|_| self.late_reply_in(frame))
+            .map(|staged| staged.0)
     }
 }
+
+/// On the movement scene whose late reply landed in this frame: the player's rotation once that
+/// reply is applied, which happens only after the scene loop. The scene's re-dispatch is sent
+/// this rotation instead of the player's. Staged after each loop pass by the crate that applies
+/// the reply; absent when the engine will not apply it, and on every other scene.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RedispatchRotation(pub Quat);
 
 /// Block reason used by /freeze_scene and /tick_scene.
 pub const FROZEN_BLOCK: &str = "frozen";
