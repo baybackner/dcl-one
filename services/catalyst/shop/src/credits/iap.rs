@@ -30,9 +30,10 @@
 //! covering what they pledge beyond the balance, are queued for
 //! `revokeCredits` on chain (`credits.revocations`). A purchase imported
 //! from credits-server is charged back the same way; it keeps its
-//! `imported` status and `refunded_at` marks the refund. A refund of a
-//! transaction never credited, or held, leaves a `refunded` row that keeps
-//! it from being credited later; an operator refund of an unknown id
+//! `imported` status and `refunded_at` marks the refund. A refund reference
+//! (Apple's notification uuid, an operator's refund id) applies once, even
+//! after a reversal. A refund of a transaction never credited, or held,
+//! leaves a `refunded` row that keeps it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
 //! what was charged back, withdraws its revocations not sent yet while the
 //! balance covers the credits left unqueued, lifts a block it raised once
@@ -563,18 +564,19 @@ impl Credits {
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
         let row = sqlx::query(
-            "SELECT status, address, refunded_at IS NOT NULL AS refunded FROM credits.iap_transactions \
-             WHERE transaction_id = $1 FOR UPDATE",
+            "SELECT status, address, refunded_at IS NOT NULL AS refunded, $2 = ANY(refund_refs) AS applied \
+             FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
+        .bind(refund_ref)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
             if let Some(product_id) = product_id {
                 sqlx::query(
                     "INSERT INTO credits.iap_transactions \
-                         (transaction_id, product_id, status, refund_ref, refund_reason, refunded_at) \
-                     VALUES ($1, $2, 'refunded', $3, $4, timezone('UTC', now()))",
+                         (transaction_id, product_id, status, refund_ref, refund_reason, refunded_at, refund_refs) \
+                     VALUES ($1, $2, 'refunded', $3, $4, timezone('UTC', now()), ARRAY[$3])",
                 )
                 .bind(transaction_id)
                 .bind(product_id)
@@ -589,11 +591,16 @@ impl Credits {
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
         let refunded: bool = row.get("refunded");
+        // A redelivered refund, even after its reversal, applies once.
+        if row.get::<bool, _>("applied") {
+            return Ok(RefundOutcome::AlreadyRefunded);
+        }
         match (status.as_str(), address) {
             ("held", _) => {
                 sqlx::query(
                     "UPDATE credits.iap_transactions \
                      SET status = 'refunded', held_reason = NULL, refund_ref = $2, refund_reason = $3, \
+                         refund_refs = array_append(refund_refs, $2), \
                          refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
                      WHERE transaction_id = $1",
                 )
@@ -614,7 +621,7 @@ impl Credits {
                                                 ELSE trim_scale(round(credits * $4::bigint / 100000, 2)) END, \
                          refunded_cents = CASE WHEN $4::bigint IS NULL THEN amount_cents \
                                                ELSE round(amount_cents * $4::bigint / 100000.0)::bigint END, \
-                         refund_ref = $2, refund_reason = $3, \
+                         refund_ref = $2, refund_reason = $3, refund_refs = array_append(refund_refs, $2), \
                          refunded_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
                      WHERE transaction_id = $1 RETURNING revoked_credits::text",
                 )

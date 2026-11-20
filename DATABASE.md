@@ -1569,6 +1569,8 @@ the transaction's row (the order of an operator block and a card reversal),
 flips the row to `refunded` (an `imported` row keeps its status and
 `refunded_at` marks the refund),
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
+records its reference (notification uuid or operator refund id) in
+`refund_refs`, which a reversal keeps, so a redelivered refund applies once,
 records what was removed in `revoked_credits` and the refunded USD in
 `refunded_cents` and, when the balance net of
 live pledges cannot cover it, queues the wallet's newest unexpired signed

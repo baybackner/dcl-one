@@ -1461,6 +1461,57 @@ async fn a_reversed_refund_of_an_uncredited_purchase_survives_a_failed_credit() 
     let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
     assert_eq!(out["action"], "minted", "{out}");
     assert_eq!(available(&pool, &w.address).await, "200");
+
+    // A purchase held for a cap keeps its wallet through the refund and its reversal.
+    let capped = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1,
+            ..open_limits()
+        },
+    );
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(
+        &capped,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["held"], true, "{out}");
+    notify(&capped, c.notification("REFUND", Some(signed))).await;
+    state.credits.reinstate_iap(&id, "capped").await.unwrap();
+    let (status, address, _) = row(&pool, &id).await.unwrap();
+    assert_eq!(
+        (status.as_str(), address.as_deref()),
+        ("held", Some(w.address.as_str()))
+    );
+}
+
+#[tokio::test]
+async fn a_refund_redelivered_after_its_reversal_applies_once() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let refund = c.notification("REFUND", Some(bought[0].clone()));
+    let (_, out) = notify(&app, refund.clone()).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    let (_, out) = notify(&app, refund).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+
+    // A new refund of the same purchase still applies.
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
 }
 
 async fn held_reason(pool: &PgPool, id: &str) -> Option<String> {

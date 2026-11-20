@@ -272,6 +272,8 @@ CREATE TABLE credits.iap_transactions (
     refund_reason text,
     -- A refund of an `imported` row keeps its status; `refunded_at` marks it.
     refunded_at timestamp without time zone,
+    -- Every refund reference applied (notification uuid or operator refund id), kept across reversals.
+    refund_refs text[] NOT NULL DEFAULT '{}',
     -- The refund blocked the wallet; its reversal lifts that block once the balance covers the live pledges.
     -- An operator's block or unblock, or a later uncovered reversal, clears it.
     raised_block boolean NOT NULL DEFAULT false,
