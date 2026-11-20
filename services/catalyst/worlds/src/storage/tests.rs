@@ -2568,7 +2568,7 @@ async fn seed_genesis_scene(pool: &PgPool) -> (String, String, String, i32) {
 }
 
 async fn remove_genesis_scene(pool: &PgPool, id: &str, dep_id: i32) {
-    sqlx::query("DELETE FROM social.scene_admins WHERE place_id = (SELECT entity_metadata #>> '{scene,base}' FROM content.deployments WHERE id = $1)")
+    sqlx::query("DELETE FROM social.scene_admins WHERE place_id = (SELECT entity_metadata #>> '{v,scene,base}' FROM content.deployments WHERE id = $1)")
         .bind(dep_id)
         .execute(pool)
         .await

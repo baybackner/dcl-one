@@ -2283,8 +2283,9 @@ Neither table has an FK: queue rows outlive catalogue deletion.
 scene, one row for each `(place_id, admin_address)`. `place_id` is the place of
 the scene, read from the active deployment by the room resolver
 (`ActiveDeployment::place_key`): the `explore.world_scene_place` identity of a
-world scene, the canonical base parcel of a Genesis scene. These are the keys
-that scene storage uses.
+world scene, the canonical base parcel of a Genesis scene (its declared base,
+read at `entity_metadata -> 'v'`, when the scene holds that parcel; otherwise
+its first parcel). These are the keys that scene storage uses.
 
 Workload: one primary-key read for each scene-signed gatekeeper request of a
 wallet that is not the owner (`Policy::is_admin`: `/scene-admin`, `/scene-bans`,
@@ -2320,7 +2321,9 @@ Invariants:
   the grant. For one place and wallet the script keeps an active grant before
   a revoked one, then the row with the newest change
   (`COALESCE(removed_at, added_at)`), also against a row the place already
-  has. It removes each entity row that it moved.
+  has. It removes each entity row that it moved. It can run again: it moves
+  only rows that have an entity key, and never changes the key of a row that
+  is on a parcel or a world-scene identity.
 - A row keeps the entity key when its entity is not deployed, or has no
   parcel that parses. A world scene with no active identity reads its grants
   by entity id, so a retired world scene still reads such a row inside its
@@ -2330,7 +2333,9 @@ Invariants:
   the effective base parcel that the room resolver computes
   (`ParcelSet::effective_base`). The release script and the import loads of
   scene admins and scene bans call it; `the_sql_base_parcel_is_the_resolvers`
-  compares the two.
+  compares the two. Its callers pass the declared base from where it is
+  stored: `entity_metadata #>> '{v,scene,base}'` for a Genesis scene,
+  `entity #>> '{metadata,scene,base}'` for a world scene.
 
 ## Stream key notifications
 

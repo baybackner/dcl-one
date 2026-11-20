@@ -102,7 +102,7 @@ pub async fn ensure_scene_admin_place_release(pool: &PgPool) -> anyhow::Result<(
            OR EXISTS (SELECT 1 FROM content.deployments d \
                       WHERE d.entity_id = a.place_id AND d.entity_type = 'scene' AND d.deleter_deployment IS NULL \
                         AND EXISTS (SELECT 1 FROM content.active_pointers ap WHERE ap.entity_id = d.entity_id) \
-                        AND social.scene_base_parcel(d.entity_pointers, d.entity_metadata #>> '{scene,base}') IS NOT NULL))",
+                        AND social.scene_base_parcel(d.entity_pointers, d.entity_metadata #>> '{v,scene,base}') IS NOT NULL))",
     )
     .fetch_one(pool)
     .await?;
@@ -1006,7 +1006,7 @@ mod tests {
              WHERE old.entity_id IN (SELECT entity_id FROM content.active_pointers WHERE pointer = ANY($3))",
         )
         .bind(&id)
-        .bind(serde_json::json!({ "scene": { "base": base } }))
+        .bind(serde_json::json!({ "v": { "scene": { "base": base } } }))
         .bind(parcels.iter().map(|p| p.to_string()).collect::<Vec<_>>())
         .execute(pool)
         .await
