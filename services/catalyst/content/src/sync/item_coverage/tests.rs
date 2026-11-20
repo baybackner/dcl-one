@@ -25,7 +25,6 @@ struct FakePeer {
     file_hits: Mutex<Vec<String>>,
     pages: Mutex<Vec<String>>,
     page_times: Mutex<Vec<(String, std::time::Instant)>>,
-    page_delay_ms: std::sync::atomic::AtomicU64,
     failing: AtomicBool,
 }
 
@@ -91,8 +90,6 @@ impl FakePeer {
             .route(
                 "/pointer-changes",
                 axum::routing::get(move |RawQuery(q): RawQuery| async move {
-                    let delay = pages.page_delay_ms.load(Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
                     let q = q.unwrap_or_default();
                     pages
                         .page_times
@@ -950,15 +947,18 @@ async fn an_operator_who_turns_the_item_replay_off_gets_no_pass_and_no_coverage(
     f.finish().await;
 }
 
-/// A leader whose replay walks a two-page history slowly starts its next
-/// pass only after the last one ended, one interval later.
+/// A leader whose replay walks a two-page history reads its pages the page
+/// pause apart and starts its next pass only after the last one ended, one
+/// interval later.
 #[tokio::test]
 async fn a_leader_starts_its_next_item_pass_one_interval_after_the_last_ends() {
     let Some(mut f) = fixture().await else {
         return;
     };
     for n in 0..3 {
-        f.peer.offer("wearable", n, 1_000 + i64::from(n), true).await;
+        f.peer
+            .offer("wearable", n, 1_000 + i64::from(n), true)
+            .await;
     }
     let jobs = start_leader(&mut f, Some(Duration::from_secs(1))).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
@@ -980,14 +980,26 @@ async fn a_leader_starts_its_next_item_pass_one_interval_after_the_last_ends() {
         if starts.len() >= 3 {
             break (replay, starts);
         }
-        assert!(std::time::Instant::now() < deadline, "fewer than three passes");
-        f.peer.page_delay_ms.store(300, Ordering::SeqCst);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fewer than three passes"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     let (replay, starts) = passes;
     for pair in starts.windows(2) {
         let pass = &replay[pair[0]..pair[1]];
-        assert!(pass.len() >= 2, "a pass of two pages read in full: {pass:?}");
+        assert!(
+            pass.len() >= 2,
+            "a pass of two pages read in full: {pass:?}"
+        );
+        for page in pass.windows(2) {
+            assert!(
+                page[1].1.duration_since(page[0].1) >= Duration::from_millis(350),
+                "pages of a pass the page pause apart: {:?}",
+                page[1].1.duration_since(page[0].1)
+            );
+        }
         let (_, ended) = pass.last().unwrap();
         let (_, next) = &replay[pair[1]];
         assert!(
@@ -1013,7 +1025,7 @@ async fn start_leader(f: &mut Fixture, interval: Option<Duration>) -> Arc<crate:
     worker::start(
         &SyncSettings {
             item_replay_interval: interval,
-            item_replay_page_pause: Duration::from_millis(50),
+            item_replay_page_pause: Duration::from_millis(400),
             peers: vec![f.base.clone()],
             dao: None,
             entity_types: None,

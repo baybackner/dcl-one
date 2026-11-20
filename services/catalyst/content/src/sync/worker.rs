@@ -148,6 +148,19 @@ impl SyncSettings {
                 anyhow::bail!("{name} must be at least 1 (0 would stall the worker forever)");
             }
         }
+        let interval = config.content.sync_item_replay_interval_secs;
+        if interval != 0 && !(600..=1440).contains(&interval) {
+            anyhow::bail!(
+                "SYNC_ITEM_REPLAY_INTERVAL_SECS must be 0 (off) or 600 to 1440: a pass starts at \
+                 most that long after the last one ends and its coverage lasts 30 minutes from its start"
+            );
+        }
+        let pause = config.content.sync_item_replay_page_pause_ms;
+        if !(50..=1000).contains(&pause) {
+            anyhow::bail!(
+                "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS must be 50 to 1000, so a pass of the item history ends well inside 30 minutes"
+            );
+        }
         *MEMORY_LIMITS.lock() = memory_limits_from_config(config)?;
         Ok(Some(Self {
             peers,
@@ -601,6 +614,7 @@ impl Leader {
             control: self.control.clone(),
             pacing: Pacing {
                 pass_interval,
+                page_pause: self.settings.item_replay_page_pause,
                 ..Pacing::default()
             },
         };
@@ -891,9 +905,14 @@ mod tests {
             SyncSettings::from_config(&config(&args))
         };
         let defaults = with(&[]).unwrap().unwrap();
-        assert_eq!(defaults.item_replay_interval, Some(Duration::from_secs(1200)));
+        assert_eq!(
+            defaults.item_replay_interval,
+            Some(Duration::from_secs(1200))
+        );
         assert_eq!(defaults.item_replay_page_pause, Duration::from_millis(200));
-        let off = with(&["--sync-item-replay-interval-secs", "0"]).unwrap().unwrap();
+        let off = with(&["--sync-item-replay-interval-secs", "0"])
+            .unwrap()
+            .unwrap();
         assert_eq!(off.item_replay_interval, None);
         for (flag, value) in [
             ("--sync-item-replay-interval-secs", "600"),
@@ -904,10 +923,26 @@ mod tests {
             assert!(with(&[flag, value]).is_ok(), "{flag} {value}");
         }
         for (flag, value, name) in [
-            ("--sync-item-replay-interval-secs", "599", "SYNC_ITEM_REPLAY_INTERVAL_SECS"),
-            ("--sync-item-replay-interval-secs", "1441", "SYNC_ITEM_REPLAY_INTERVAL_SECS"),
-            ("--sync-item-replay-page-pause-ms", "49", "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS"),
-            ("--sync-item-replay-page-pause-ms", "1001", "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS"),
+            (
+                "--sync-item-replay-interval-secs",
+                "599",
+                "SYNC_ITEM_REPLAY_INTERVAL_SECS",
+            ),
+            (
+                "--sync-item-replay-interval-secs",
+                "1441",
+                "SYNC_ITEM_REPLAY_INTERVAL_SECS",
+            ),
+            (
+                "--sync-item-replay-page-pause-ms",
+                "49",
+                "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS",
+            ),
+            (
+                "--sync-item-replay-page-pause-ms",
+                "1001",
+                "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS",
+            ),
         ] {
             let err = with(&[flag, value]).unwrap_err().to_string();
             assert!(err.contains(name), "{flag} {value}: {err}");

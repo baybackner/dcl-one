@@ -3501,7 +3501,8 @@ Workload and invariants:
 - Each pass reads every peer's `/pointer-changes` filtered to
   `entityType=emote&entityType=wearable`, ascending by `local_timestamp`, from
   `SYNC_FROM_TIMESTAMP_MS`. It pages by the `from`/`lastId` keyset, one request
-  at a time, 200 ms apart. Peers are read in sorted order.
+  at a time, `SYNC_ITEM_REPLAY_PAGE_PAUSE_MS` apart (default 200, 50 to
+  1000). Peers are read in sorted order.
 - For each page, one batched probe of `content.deployments`
   (`deployments_entity_id_key`) finds the entities the node doesn't hold. Only
   those go to the leader's deployer, which applies its download and flush
@@ -3514,13 +3515,23 @@ Workload and invariants:
   `content.processed_snapshots` or the sync properties in
   `content.system_properties`. Existing deployment rows are never rewritten.
 - A completed pass starts reading the next one `SYNC_ITEM_REPLAY_INTERVAL_SECS`
-  later (default 1200, 20 minutes; 0 turns the replay off and item coverage
-  then stays unknown). Every pass starts from the floor again, so a
-  deployment a peer commits after a pass read past it is recovered by the
-  next pass. Coverage stays continuous while a pass plus the interval fits in
-  the 30-minute staleness window: with a pass of about 2 minutes the default
-  leaves about 8 minutes for a slow pass, and an interval of about 1,650
-  seconds or more leaves gaps.
+  later (default 1200, 20 minutes). The setting takes 0, which turns the
+  replay off and leaves item coverage unknown, or 600 to 1440; the node
+  refuses to start with any other value. A pass never starts while another
+  runs: the job runs one pass at a time and waits the interval after it ends.
+- Every pass starts from the floor again, so a deployment a peer commits
+  after a pass read past it is recovered by the next pass. Coverage stays
+  continuous while a pass plus the interval fits in the 30-minute staleness
+  window. At the default pause a pass takes about 2 minutes, so the default
+  interval leaves about 8 minutes for a slow pass. At the largest interval and
+  page pause a pass takes about 4.5 minutes and the two leave about 1.5
+  minutes.
+- Passes stay full. A pass that read only past the previous pass's newest
+  `localTimestamp` would be cheaper, but it would date its proof from a start
+  it didn't reread: a deployment a peer commits late, with a timestamp below
+  where the previous pass stopped, would stay hidden under a fresh proof.
+  Coverage measures freshness from the start of a pass that read the whole
+  history, so the replay rereads it.
 
 `content.item_history_replay` holds one row: the pass in progress. It holds
 the pass scope (algorithm, sorted peer set, sorted item types, history floor),
@@ -3590,10 +3601,17 @@ Cost, measured on November 20, 2026 against the public
 the slowest 16.9 s. Every pass fetches every page again: the probe before
 download skips only the entities the node holds, not the pages. A pass on a
 node that holds everything adds about 32 seconds of page pauses, so it takes
-about 2 minutes and downloads no entity. At the default 20-minute interval
-that is a pass about every 22 minutes, about 65 passes and 5.3 GB of
-`/pointer-changes` a day pulled from each source catalyst (estimated from the
-measurement; at 10 minutes it would be about 9.7 GB). A node that syncs from
-several catalysts reads each of them in every pass, so its total is that
-times the number of sources. Entity downloads on a node that lacks items
+about 2 minutes and downloads no entity. Estimated from the measurement, the
+daily `/pointer-changes` traffic pulled from each source catalyst is:
+
+| `SYNC_ITEM_REPLAY_INTERVAL_SECS` | Passes a day | Traffic a day | Requests a day |
+| --- | --- | --- | --- |
+| 600 (smallest) | about 118 | about 9.5 GB | about 18,900 |
+| 1200 (default) | about 65 | about 5.3 GB | about 10,400 |
+| 1440 (largest) | about 55 | about 4.4 GB | about 8,800 |
+| 0 (off) | 0 | 0 | 0 |
+
+A node that syncs from several catalysts reads each of them in every pass, so
+its total is that times the number of sources. The page pause changes the
+pass length, not the traffic. Entity downloads on a node that lacks items
 aren't measured here.
