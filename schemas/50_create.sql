@@ -66,6 +66,7 @@ CREATE TABLE builder.collections (
     lock timestamp without time zone,
     forum_link text,
     forum_id integer,
+    forum_claimed_at timestamp without time zone,
     CONSTRAINT collections_pkey PRIMARY KEY (id),
     CONSTRAINT collections_contract_address_key UNIQUE (contract_address),
     CONSTRAINT collections_eth_address_lowercase_check CHECK (eth_address = lower(eth_address)),
@@ -82,7 +83,8 @@ CREATE TABLE builder.collections (
     CONSTRAINT collections_linked_contract_key UNIQUE (third_party_id, linked_contract_address, linked_contract_network),
     CONSTRAINT collections_forum_link_check
         CHECK (forum_link IS NULL OR (char_length(forum_link) <= 2048 AND forum_link ~ '^https?://[^[:space:]]+$')),
-    CONSTRAINT collections_forum_id_check CHECK (forum_id IS NULL OR (forum_id > 0 AND forum_link IS NOT NULL))
+    CONSTRAINT collections_forum_id_check CHECK (forum_id IS NULL OR (forum_id > 0 AND forum_link IS NOT NULL)),
+    CONSTRAINT collections_forum_claim_check CHECK (forum_claimed_at IS NULL OR forum_link IS NULL)
 );
 
 CREATE FUNCTION builder.collections_linked_contract_kept() RETURNS trigger
@@ -248,13 +250,6 @@ CREATE TABLE builder.collection_publications (
         CHECK (jsonb_typeof(preparation) = 'object' AND preparation ? 'revision')
 );
 
--- One linked (third-party) publication attempt per collection: the frozen
--- draft `snapshot` and its `preparation`, the stable nonce (`salt`) the
--- provider-slot cheque is signed over, the owner-signed `cheque`, and the
--- Foundation submission receipt (`forum_url`).
--- prepared -> signing -> authorized -> submitted; cancel only while
--- prepared. The CHECKs: a cheque exists exactly from `authorized` on, a forum
--- url only once submitted.
 CREATE TABLE builder.linked_collection_publications (
     collection_id uuid NOT NULL,
     preparation jsonb NOT NULL,
@@ -262,7 +257,6 @@ CREATE TABLE builder.linked_collection_publications (
     salt text NOT NULL,
     status text NOT NULL,
     cheque jsonb,
-    forum_url text,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     CONSTRAINT linked_collection_publications_pkey PRIMARY KEY (collection_id),
@@ -274,8 +268,6 @@ CREATE TABLE builder.linked_collection_publications (
         CHECK (status IN ('prepared', 'signing', 'authorized', 'submitted')),
     CONSTRAINT linked_collection_publications_cheque_state_check
         CHECK ((status IN ('prepared', 'signing')) = (cheque IS NULL)),
-    CONSTRAINT linked_collection_publications_forum_state_check
-        CHECK (forum_url IS NULL OR status = 'submitted'),
     CONSTRAINT linked_collection_publications_preparation_check
         CHECK (jsonb_typeof(preparation) = 'object' AND preparation ? 'revision')
 );

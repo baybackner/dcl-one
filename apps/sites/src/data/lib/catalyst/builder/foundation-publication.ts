@@ -59,7 +59,6 @@ function forumURL(raw: string): string {
   if (url.protocol !== "https:" || url.hostname !== "forum.decentraland.org" || !url.pathname.startsWith("/t/")) throw new Error("Foundation returned an invalid review topic URL.");
   return url.href;
 }
-function markdown(text: string) { return text.replace(/[\\`*_{}\[\]()#+.!<>]/g,"\\$&"); }
 
 export function foundationPublication(options: () => DraftOptions, settings: {base?:string; measure?:typeof measureItemModels} = {}) {
   const local = (signal?:AbortSignal) => ({...options(),signal});
@@ -204,10 +203,8 @@ export function foundationPublication(options: () => DraftOptions, settings: {ba
         published.items.find(remote=>remote.id===item.id)?.blockchain_item_id!==String(index))) throw new Error("Foundation is still indexing the collection. Retry submission; you won't pay again.");
       const forumLink=published.collection.forum_link??collection.forum_link;
       if (forumLink) return {forumUrl:forumURL(forumLink),curationSubmitted:true as const};
-      const topic={title:`Collection '${p.name}' created by ${p.creator.slice(0,8)} is ready for review!`,raw:`# ${markdown(p.name)}\n\n[Review collection](https://decentraland.org/builder/item-editor?collection=${encodeURIComponent(p.id)})\n\n`+
-        published.items.map(item=>`## ${markdown(item.name)}\n\n${markdown(item.description)}\n\n- Rarity: ${item.rarity}\n- Category: ${markdown(String(item.data.category))}\n\n![${markdown(item.name)}](${FOUNDATION_BUILDER}/storage/contents/${encodeURIComponent(item.contents[item.thumbnail??""]??"")})`).join("\n\n")};
       try {
-        return {forumUrl:forumURL(z.string().parse(await request(`/collections/${p.id}/post`,remote(signal),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({forumPost:topic})}))),curationSubmitted:true as const};
+        return {forumUrl:forumURL(z.string().parse(await request(`/collections/${p.id}/post`,remote(signal),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({})}))),curationSubmitted:true as const};
       } catch(error) {
         collection=await remoteCollection(p.id,signal);
         if (collection.forum_link) return {forumUrl:forumURL(collection.forum_link),curationSubmitted:true as const};

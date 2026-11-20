@@ -347,6 +347,8 @@ class ContentMigrationCases:
             collection, _ = self.builder_rows('Forum', updated)
             return collection.rsplit('NULL, NULL', 1)[0] + f"{link}, {forum_id}"
         forum = f"SELECT forum_link, forum_id FROM builder.collections WHERE id = '{COLLECTION}';\n"
+        self.import_builder(db, 'Forum', '2026-01-01Z')
+        self.sql(db, f"UPDATE builder.collections SET forum_claimed_at = now() WHERE id = '{COLLECTION}';\n")
         self.content_load(db, 'builder-server', 'collection', [
             with_forum('2026-02-01Z', "'https://forum.example.test/t/hat/41395'", 41395)])
         self.assertEqual(self.sql(db, forum).strip(), 'https://forum.example.test/t/hat/41395\t41395')

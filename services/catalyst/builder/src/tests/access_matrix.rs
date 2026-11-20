@@ -652,6 +652,8 @@ enum Op {
     ItemCuration,
     ItemCurationUpdate,
     ItemCurationRequest,
+    ForumPost,
+    ForumReply,
 }
 
 const NOT_PUBLISHED: &str = "The collection is not published.";
@@ -784,6 +786,8 @@ impl Op {
             ("GET", "/v1/items/{id}/curation") => Op::ItemCuration,
             ("PATCH", "/v1/items/{id}/curation") => Op::ItemCurationUpdate,
             ("POST", "/v1/items/{id}/curation") => Op::ItemCurationRequest,
+            ("POST", "/v1/collections/{id}/post") => Op::ForumPost,
+            ("POST", "/v1/collections/{id}/curation/post") => Op::ForumReply,
             _ => return None,
         })
     }
@@ -869,6 +873,8 @@ impl Op {
                 | Op::ItemCuration
                 | Op::ItemCurationUpdate
                 | Op::ItemCurationRequest
+                | Op::ForumPost
+                | Op::ForumReply
         )
     }
 
@@ -915,6 +921,8 @@ impl Op {
                 | Op::CollectionCurationRequest
                 | Op::ItemCurationUpdate
                 | Op::ItemCurationRequest
+                | Op::ForumPost
+                | Op::ForumReply
         )
     }
 
@@ -988,6 +996,18 @@ impl Op {
                 "DELETE",
                 format!("/v1/collections/{}", f.collection_id(kind)),
                 Payload::None,
+            ),
+            Op::ForumPost => (
+                "POST",
+                format!("/v1/collections/{}/post", f.collection_id(kind)),
+                Payload::Json(json!({ "forumPost": { "title": "t", "raw": "r" } })),
+            ),
+            Op::ForumReply => (
+                "POST",
+                format!("/v1/collections/{}/curation/post", f.collection_id(kind)),
+                Payload::Json(
+                    json!({ "forumPost": { "raw": "The collection has been unassigned." } }),
+                ),
             ),
             Op::ReadItem => (
                 "GET",
@@ -1242,6 +1262,14 @@ impl Op {
         let committee = caller == Committee;
         let owner = kind.owner(caller);
         let manager = kind.manager(caller);
+        if self == Op::ForumReply {
+            return match kind {
+                _ if !committee => unauthorized(),
+                Missing => refused(404, "Collection not found"),
+                Malformed => invalid_uuid(&collection),
+                _ => refused(409, "The collection does not have a forum post yet"),
+            };
+        }
         match self {
             Op::ReadCollection => match kind {
                 Missing => not_found(&collection, "collections"),
@@ -1258,7 +1286,12 @@ impl Op {
                 Publishing | Locked => collection_locked("updated"),
                 _ => ok(),
             },
-            Op::Lock | Op::DeleteCollection | Op::OwnerSync | Op::Terms | Op::Publish
+            Op::Lock
+            | Op::DeleteCollection
+            | Op::OwnerSync
+            | Op::Terms
+            | Op::Publish
+            | Op::ForumPost
                 if matches!(kind, Missing | Malformed) =>
             {
                 match kind {
@@ -1268,9 +1301,11 @@ impl Op {
             }
             Op::Lock if owner && !kind.third_party() => ok(),
             Op::Lock => unauthorized_user(&caller.address(), "collections", &collection),
-            Op::DeleteCollection | Op::Terms if !owner && !manager => {
+            Op::DeleteCollection | Op::Terms | Op::ForumPost if !owner && !manager => {
                 unauthorized_user(&caller.address(), "collections", &collection)
             }
+            Op::ForumPost if kind.published() => ok(),
+            Op::ForumPost => refused(409, "The collection is not published"),
             Op::OwnerSync | Op::Publish if !owner && !manager && !committee => {
                 unauthorized_user(&caller.address(), "collections", &collection)
             }
@@ -1425,6 +1460,7 @@ struct Matrix {
     pool: PgPool,
     app: Router,
     state: crate::SharedState,
+    forum: crate::curation::forum::fake::FakeForum,
 }
 
 async fn fresh_pass(pool: &PgPool, minutes_ago: i64) {
@@ -1449,22 +1485,26 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     fresh_pass(&pool, 0).await;
     committee.set_rarities(Some(&[("common", "10000000000000000000", "100000")]));
     let oracle = FakeOracle::with(&[("common", "4000000000000000000")]);
-    let state = Arc::new(
-        crate::State::new(
-            pool.clone(),
-            temp_storage().await,
-            Arc::default(),
-            dcl_http::Outbound::for_tests(),
-            Some(committee_index(committee).await),
-            None,
-            crate::Settings {
-                writes_enabled: true,
-                polygon_rpc_url: if rpc { Some(oracle.url().await) } else { None },
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap(),
-    );
+    let forum = crate::curation::forum::fake::FakeForum::default();
+    let mut state = crate::State::new(
+        pool.clone(),
+        temp_storage().await,
+        Arc::default(),
+        dcl_http::Outbound::for_tests(),
+        Some(committee_index(committee).await),
+        None,
+        crate::Settings {
+            writes_enabled: true,
+            polygon_rpc_url: if rpc { Some(oracle.url().await) } else { None },
+            forum: Some(crate::curation::forum::fake::FakeForum::forum(
+                &forum.start().await,
+            )),
+            ..crate::Settings::default()
+        },
+    )
+    .unwrap();
+    state.foundation = dcl_http::Outbound::for_tests();
+    let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
         .nest("/builder-api", crate::router(state.clone()));
@@ -1483,7 +1523,12 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     .execute(&pool)
     .await
     .unwrap();
-    Some(Matrix { pool, app, state })
+    Some(Matrix {
+        pool,
+        app,
+        state,
+        forum,
+    })
 }
 
 /// A third-party collection under the matrix's provider that the sibling
@@ -1558,6 +1603,16 @@ async fn cell(
     }
     let f = fixture(&m.pool, kind).await;
     let expected = expect(&f)?;
+    if op == Op::ForumPost
+        && let Some(id) = f.collection
+    {
+        sqlx::query("UPDATE builder.collections SET name = $2 WHERE id = $1")
+            .bind(id)
+            .bind(id.simple().to_string())
+            .execute(&m.pool)
+            .await
+            .unwrap();
+    }
     let (method, path, payload) = op.request(kind, &f);
     let label = kind;
     let kind = kind.base();
@@ -1718,6 +1773,7 @@ async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
 fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     match caller {
         Anonymous => unauthenticated(),
+        _ if op == Op::ForumReply => None,
         _ if op.by_id()
             && matches!(
                 kind.base(),
@@ -1858,7 +1914,11 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                             && !kind.owner(caller)
                             && !kind.manager(caller)
                     }
-                    Op::ListCollections | Op::ListItems | Op::Committee | Op::Curations => true,
+                    Op::ListCollections
+                    | Op::ListItems
+                    | Op::Committee
+                    | Op::Curations
+                    | Op::ForumReply => true,
                     Op::CollectionCurationUpdate | Op::ItemCurationUpdate => kind.published(),
                     Op::CollectionCuration
                     | Op::CollectionItemCurations
@@ -2348,4 +2408,108 @@ async fn without_a_polygon_verifier_publication_answers_503_after_the_refusals()
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A collection with its topic: who may post gets the link back and the
+/// forum is not asked again; only the committee replies in it.
+#[tokio::test]
+async fn a_posted_collection_answers_its_link_to_its_posters_and_takes_replies_from_the_committee()
+{
+    let committee = FakeCommittee::with(&[&Committee.address()]);
+    let Some(m) = matrix(&committee).await else {
+        return;
+    };
+    let f = fixture(&m.pool, Published).await;
+    let id = f.collection_id(Published);
+    let (status, posted) = call(
+        &m.app,
+        Owner,
+        "POST",
+        &format!("/v1/collections/{id}/post"),
+        Payload::None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    m.forum.take();
+    let mut failures = Vec::new();
+    for caller in CALLERS {
+        for mount in MOUNTS {
+            let (status, body) = call(
+                &m.app,
+                caller,
+                "POST",
+                &format!("{mount}/v1/collections/{id}/post"),
+                Payload::None,
+            )
+            .await;
+            let expected = match caller {
+                Anonymous => (401, json!("Unauthenticated")),
+                Owner | Manager => (409, json!("Forum post already exists")),
+                _ => (
+                    401,
+                    json!(format!(
+                        "Unauthorized user {} for collections {id}",
+                        caller.address()
+                    )),
+                ),
+            };
+            if (status.as_u16(), body["error"].clone()) != expected
+                || (status == StatusCode::CONFLICT && body["data"]["forum_link"] != posted["data"])
+            {
+                failures.push(format!("{mount} post as {caller:?}: {status} {body}"));
+            }
+            let (status, body) = call(
+                &m.app,
+                caller,
+                "POST",
+                &format!("{mount}/v1/collections/{id}/curation/post"),
+                Payload::Json(
+                    json!({ "forumPost": { "raw": "The collection has been unassigned." } }),
+                ),
+            )
+            .await;
+            let expected = match caller {
+                Anonymous => (401, json!("Unauthenticated")),
+                Committee => (200, Value::Null),
+                _ => (401, json!("Unauthorized")),
+            };
+            if (status.as_u16(), body["error"].clone()) != expected {
+                failures.push(format!("{mount} reply as {caller:?}: {status} {body}"));
+            }
+        }
+    }
+    let replies = m
+        .forum
+        .take()
+        .iter()
+        .filter(|c| c["method"] == "POST")
+        .count();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(
+        replies,
+        MOUNTS.len(),
+        "one reply per committee request, no other call out"
+    );
+}
+
+#[tokio::test]
+async fn independent_forum_cells_can_post_each_third_party_collection() {
+    let committee = FakeCommittee::with(&[&Committee.address()]);
+    let Some(m) = matrix(&committee).await else {
+        return;
+    };
+    for kind in [
+        ThirdPartySubmitted,
+        CuratedPending,
+        CuratedApproved,
+        CuratedRejected,
+    ] {
+        for mount in MOUNTS {
+            let failure = cell(&m, Op::ForumPost, kind, Owner, mount, true, |_| {
+                Some(Expect(200, String::new()))
+            })
+            .await;
+            assert!(failure.is_none(), "{failure:?}");
+        }
+    }
 }

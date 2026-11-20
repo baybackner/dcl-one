@@ -5,11 +5,6 @@ use clap::Args;
 /// The creator plane: builder and camera_reel.
 #[derive(Args, Clone, Debug)]
 pub struct CreateConfig {
-    // create: the creator plane (builder and camera_reel, the old
-    // catalyrst-create bundle). Like the social writes, drafts, uploads,
-    // curation, publication state and photos are local authority peer sync
-    // does not back up, so every creator write answers 503 until the operator
-    // opens it (DATABASE.md, "Bootstrap, schema versions and local writes").
     #[arg(long, env = "CREATE_WRITES_ENABLED", default_value_t = false, action = clap::ArgAction::Set)]
     pub create_writes_enabled: bool,
 
@@ -67,6 +62,26 @@ pub struct CreateConfig {
     #[arg(long, env = "CREATORS_URL")]
     pub creators_url: Option<String>,
 
+    /// The public origin of the curators' Discourse forum.
+    #[arg(long, env = "FORUM_URL")]
+    pub forum_url: Option<String>,
+
+    /// The forum API key; all four forum settings are required to post.
+    #[arg(long, env = "FORUM_API_KEY", hide_env_values = true)]
+    pub forum_api_key: Option<String>,
+
+    /// The forum account used for reads.
+    #[arg(long, env = "FORUM_API_USERNAME")]
+    pub forum_api_username: Option<String>,
+
+    /// The numeric category id for collection topics.
+    #[arg(long, env = "FORUM_CATEGORY")]
+    pub forum_category: Option<String>,
+
+    /// The public builder API base for forum item thumbnails.
+    #[arg(long, env = "BUILDER_SERVER_URL")]
+    pub builder_server_url: Option<String>,
+
     /// Bearer of the moderator routes; unset refuses them.
     #[arg(
         long,
@@ -119,6 +134,45 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Config, clap::Error> {
         Config::parse_for_tests(args)
+    }
+
+    #[test]
+    fn forum_settings_are_optional_and_accept_the_deployed_names() {
+        let defaults = parse(&["x", "--database-url", "postgres:///catalyst"]).unwrap();
+        assert!(defaults.create.forum_url.is_none());
+        let configured = parse(&[
+            "x",
+            "--database-url",
+            "postgres:///catalyst",
+            "--forum-url",
+            "https://forum.example.org",
+            "--forum-api-key",
+            "sk-example123",
+            "--forum-api-username",
+            "builder-example",
+            "--forum-category",
+            "12",
+            "--builder-server-url",
+            "https://builder-api.example.org",
+        ])
+        .unwrap();
+        assert_eq!(
+            configured.create.forum_url.as_deref(),
+            Some("https://forum.example.org")
+        );
+        assert_eq!(
+            configured.create.forum_api_key.as_deref(),
+            Some("sk-example123")
+        );
+        assert_eq!(
+            configured.create.forum_api_username.as_deref(),
+            Some("builder-example")
+        );
+        assert_eq!(configured.create.forum_category.as_deref(), Some("12"));
+        assert_eq!(
+            configured.create.builder_server_url.as_deref(),
+            Some("https://builder-api.example.org")
+        );
     }
 
     #[test]

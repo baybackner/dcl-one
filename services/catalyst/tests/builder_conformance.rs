@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use catalyst::auth::{AuthLink, AuthLinkType};
+use catalyst::builder::curation::forum::fake::FakeForum;
 use catalyst::builder::{Settings, State, root_router, router};
 use catalyst::http::Outbound;
 use catalyst::shared::signed_fetch::{
@@ -2246,6 +2247,7 @@ struct Replay {
     app: Router,
     state: Arc<State>,
     slack: FakeSlack,
+    forum: FakeForum,
     wallets: BTreeMap<String, Wallet>,
     _dir: TempDir,
 }
@@ -2324,6 +2326,17 @@ async fn replay_setup() -> Option<Replay> {
     let storage = Arc::new(Storage::from_config(&dir.0).await.unwrap());
     let slack = FakeSlack::default();
     let slack_api = slack.start().await;
+    let forum = FakeForum::default();
+    for collection in &seed_data.collections {
+        if let (Some(link), Some(post)) = (&collection.forum_link, collection.forum_id) {
+            let url = url::Url::parse(link).unwrap();
+            let parts: Vec<_> = url.path_segments().unwrap().collect();
+            forum.seed(i64::from(post), parts[2].parse().unwrap(), parts[1]);
+        }
+    }
+    let forum_api = forum.start().await;
+    let mut forum_settings = FakeForum::forum(&forum_api);
+    forum_settings.url = "https://forum.example.org".into();
     let mut state = State::new(
         scratch.pool.clone(),
         storage.clone(),
@@ -2343,6 +2356,8 @@ async fn replay_setup() -> Option<Replay> {
                 creators_url: Some("https://creators.example.org".into()),
                 builder_url: None,
             },
+            forum: Some(forum_settings),
+            builder_server_url: "https://builder-api.example.org".into(),
             ..Settings::default()
         },
     )
@@ -2355,6 +2370,7 @@ async fn replay_setup() -> Option<Replay> {
         app: mounted(state.clone()),
         state,
         slack,
+        forum,
         wallets,
         _dir: dir,
     })
@@ -2385,6 +2401,18 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
     if sent != recorded {
         notes.push(format!("slack: fixture={recorded} candidate={sent}"));
     }
+    let sent = Value::Array(replay.forum.take());
+    let recorded = raw
+        .get("forum")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    notes.extend(
+        catalyst_testing::conformance::diff::compare_json(
+            "forum", "forum", &recorded, &sent, &every_key,
+        )
+        .into_iter()
+        .map(|difference| difference.to_string()),
+    );
     notes
 }
 
@@ -2399,6 +2427,22 @@ async fn a_changed_id_fails_the_replay() {
     let notes = replayed(&replay, &path, &raw, "").await;
     replay.scratch.teardown().await;
     assert!(notes.contains(&"data.id value".to_string()), "{notes:#?}");
+}
+
+#[tokio::test]
+async fn a_forum_call_missing_from_its_capture_fails_the_replay() {
+    let path = fixture("source/447-curation-post-assigned.json");
+    let mut raw = checked_capture(&path, &ledger().volatile_fields);
+    raw.as_object_mut().unwrap().remove("forum");
+    let Some(replay) = replay_setup().await else {
+        return;
+    };
+    let notes = replayed(&replay, &path, &raw, "").await;
+    replay.scratch.teardown().await;
+    assert!(
+        notes.contains(&"forum.length: baseline=0 candidate=2".to_string()),
+        "{notes:#?}"
+    );
 }
 
 #[tokio::test]

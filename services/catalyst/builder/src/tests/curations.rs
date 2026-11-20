@@ -470,6 +470,167 @@ async fn a_forum_link_is_an_https_url_and_a_forum_id_comes_with_one() {
     .await;
 }
 
+#[tokio::test]
+async fn a_forum_claim_is_held_only_by_a_collection_without_a_link() {
+    let Some(pool) = scratch_pool(2).await else {
+        return;
+    };
+    let c = collection(&pool, false).await;
+    let set = |link: &str, claim: &str| {
+        format!(
+            "UPDATE builder.collections SET forum_link = {link}, forum_claimed_at = {claim} WHERE id = '{c}'"
+        )
+    };
+    accepted(&pool, &set("NULL", "timezone('UTC', now())")).await;
+    accepted(
+        &pool,
+        &set("'https://forum.decentraland.org/t/hat/41395'", "NULL"),
+    )
+    .await;
+    refused(
+        &pool,
+        &set(
+            "'https://forum.decentraland.org/t/hat/41395'",
+            "timezone('UTC', now())",
+        ),
+        "collections_forum_claim_check",
+    )
+    .await;
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name::text FROM information_schema.columns \
+         WHERE table_schema = 'builder' AND table_name = 'linked_collection_publications'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !columns.iter().any(|c| c == "forum_url"),
+        "a linked publication keeps no forum link of its own: {columns:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_linked_forum_release_preserves_links_and_repeats_without_a_second_source() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    let copied = collection(&pool, true).await;
+    let kept = collection(&pool, true).await;
+    accepted(
+        &pool,
+        "ALTER TABLE builder.linked_collection_publications ADD COLUMN forum_url text",
+    )
+    .await;
+    for id in [copied, kept] {
+        sqlx::query("INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, forum_url) VALUES ($1, '{\"revision\":\"revision\"}', '{}', '0x' || replace($1::text, '-', '') || replace($1::text, '-', ''), 'prepared', 'https://forum.example.org/t/linked/7')")
+            .bind(id).execute(&pool).await.unwrap();
+    }
+    sqlx::query("UPDATE builder.collections SET forum_link = 'https://forum.example.org/t/current/8', forum_id = 9 WHERE id = $1")
+        .bind(kept).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE builder.collections SET forum_claimed_at = now() WHERE id = $1")
+        .bind(copied)
+        .execute(&pool)
+        .await
+        .unwrap();
+    accepted(
+        &pool,
+        "ALTER TABLE builder.collections DROP CONSTRAINT collections_forum_claim_check",
+    )
+    .await;
+    let migration = include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/migrations/0059_builder_collection_forum_claim.sql"
+    ));
+    sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    let backfilled: Option<String> =
+        sqlx::query_scalar("SELECT forum_link FROM builder.collections WHERE id = $1")
+            .bind(copied)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        backfilled.as_deref(),
+        Some("https://forum.example.org/t/linked/7")
+    );
+    sqlx::query(
+        "UPDATE builder.collections SET forum_link = NULL, forum_claimed_at = now() WHERE id = $1",
+    )
+    .bind(copied)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let release = include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/releases/builder-linked-forum-retired.sql"
+    ))
+    .replace("\\set ON_ERROR_STOP on", "");
+    for _ in 0..2 {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(release.clone()))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let links: Vec<(Uuid, Option<String>, Option<i32>)> =
+        sqlx::query_as("SELECT id, forum_link, forum_id FROM builder.collections ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(links.contains(&(
+        copied,
+        Some("https://forum.example.org/t/linked/7".into()),
+        None
+    )));
+    assert!(links.contains(&(
+        kept,
+        Some("https://forum.example.org/t/current/8".into()),
+        Some(9)
+    )));
+    let legacy: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='builder' AND table_name='linked_collection_publications' AND column_name='forum_url'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(legacy, 0);
+    accepted(
+        &pool,
+        "ALTER TABLE builder.collections DROP CONSTRAINT collections_forum_claim_check",
+    )
+    .await;
+    sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn linked_forum_retirement_requires_the_additive_migration() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    accepted(
+        &pool,
+        "ALTER TABLE builder.linked_collection_publications ADD COLUMN forum_url text",
+    )
+    .await;
+    accepted(
+        &pool,
+        "DELETE FROM meta.schema_steps WHERE step = '0059_builder_collection_forum_claim'",
+    )
+    .await;
+    let release = include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/releases/builder-linked-forum-retired.sql"
+    ))
+    .replace("\\set ON_ERROR_STOP on", "");
+    let mut conn = pool.acquire().await.unwrap();
+    let error = sqlx::raw_sql(sqlx::AssertSqlSafe(release))
+        .execute(&mut *conn)
+        .await
+        .unwrap_err();
+    sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+    assert!(
+        error.to_string().contains("run catalyst schema migrate"),
+        "{error}"
+    );
+    let legacy: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='builder' AND table_name='linked_collection_publications' AND column_name='forum_url'")
+        .fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(legacy, 1);
+}
+
 async fn curate(pool: &PgPool, item: Uuid, status: &str, at: &str) {
     sqlx::query(
         "INSERT INTO builder.item_curations (id, item_id, status, content_hash, created_at, updated_at) \

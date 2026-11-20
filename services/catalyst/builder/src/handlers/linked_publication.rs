@@ -103,6 +103,7 @@ pub async fn verify(
     let Some(verifier) = FoundationLinkedReview::new(
         state.foundation.clone(),
         state.settings.foundation_url.as_deref(),
+        state.settings.forum.as_ref().map(|f| f.url.as_str()),
     ) else {
         return Err(ApiError::service_unavailable(
             "Foundation review is off on this node: BUILDER_FOUNDATION_URL names no Foundation",

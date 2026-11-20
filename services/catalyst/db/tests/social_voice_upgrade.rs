@@ -7,8 +7,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 const STEP: &str = "0020_social_voice_notifications";
-/// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 37] = [
+const PREPARED_PENDING_STEPS: [&str; 38] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -46,6 +45,7 @@ const PREPARED_PENDING_STEPS: [&str; 37] = [
     "0056_builder_item_video_named_by",
     "0057_builder_collection_lock",
     "0058_builder_collection_forum",
+    "0059_builder_collection_forum_claim",
 ];
 const PREPARED_V2: &str = include_str!(concat!(
     env!("DCL_ONE_ROOT"),

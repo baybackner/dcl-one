@@ -1542,6 +1542,8 @@ pub struct ManageState {
     pub pending: bool,
     pub locked: bool,
     pub contract: Option<String>,
+    /// A standard collection's owner; none for a third-party one.
+    pub owner: Option<String>,
 }
 
 /// [`manage_collection`]'s decision again, inside the write's transaction.
@@ -1556,12 +1558,60 @@ pub(crate) async fn confirm_collection_manage(
     if !c.role(&manage.signer) {
         return Err(unauthorized_user(&manage.signer, COLLECTIONS, manage.id));
     }
+    let owner = (!c.third_party).then(|| c.creator.clone().unwrap_or(c.stored_owner.clone()));
     Ok(ManageState {
         third_party: c.third_party,
         published: c.published,
         pending: c.pending,
         locked: c.locked(manage.at),
         contract: c.contract,
+        owner,
+    })
+}
+
+/// May reply in the forum topic of a collection: a current committee
+/// member.
+#[derive(Debug)]
+pub struct ForumReply {
+    collection: Uuid,
+    member: String,
+}
+
+impl ForumReply {
+    pub fn collection(&self) -> Uuid {
+        self.collection
+    }
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+}
+
+/// `POST /v1/collections/:id/curation/post`: a current committee member
+/// (401, or 503 while the committee can't be read), then the collection
+/// must exist (404).
+pub async fn reply_on_forum(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<ForumReply, ApiError> {
+    let s = signer.as_str();
+    if !on_committee(state, s).await? {
+        return Err(
+            ApiError::unauthorized("Unauthorized").with_data(json!({ "id": raw, "ethAddress": s }))
+        );
+    }
+    let id = parse(raw)?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = $1)")
+            .bind(id)
+            .fetch_one(state.items.pool())
+            .await?;
+    if !exists {
+        return Err(ApiError::not_found("Collection not found").with_data(json!({ "id": id })));
+    }
+    Ok(ForumReply {
+        collection: id,
+        member: s.to_string(),
     })
 }
 

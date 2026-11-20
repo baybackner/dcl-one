@@ -57,14 +57,21 @@ pub fn foundation_client() -> dcl_http::Outbound {
 pub struct FoundationLinkedReview {
     pub client: dcl_http::Outbound,
     pub base: String,
+    /// The node's forum origin: the Foundation's topic is kept only under it.
+    pub forum: Option<String>,
 }
 
 impl FoundationLinkedReview {
     /// `None` when this node names no Foundation (`BUILDER_FOUNDATION_URL`).
-    pub fn new(client: dcl_http::Outbound, base: Option<&str>) -> Option<Self> {
+    pub fn new(
+        client: dcl_http::Outbound,
+        base: Option<&str>,
+        forum: Option<&str>,
+    ) -> Option<Self> {
         Some(Self {
             client,
             base: base?.to_string(),
+            forum: forum.map(str::to_string),
         })
     }
 
@@ -159,7 +166,12 @@ impl FoundationLinkedReview {
             return Ok(state);
         };
         store
-            .finish_linked_publication(publisher, &state.preparation.revision, review)
+            .finish_linked_publication(
+                publisher,
+                &state.preparation.revision,
+                review,
+                self.forum.as_deref(),
+            )
             .await
     }
 }
@@ -217,6 +229,18 @@ struct ReviewedItem {
 struct VerifiedReview {
     items: Vec<ReviewedItem>,
     forum_url: Option<String>,
+    forum_id: Option<i32>,
+}
+
+impl VerifiedReview {
+    fn forum(&self, origin: Option<&str>) -> (Option<String>, Option<i32>) {
+        match (&self.forum_url, origin) {
+            (Some(link), Some(origin)) if curation::forum::under(origin, link) => {
+                (Some(link.clone()), self.forum_id)
+            }
+            _ => (None, None),
+        }
+    }
 }
 
 fn verify_review(
@@ -331,22 +355,24 @@ fn verify_review(
             Some(url.to_string())
         }
     };
+    let forum_id = collection["forum_id"]
+        .as_i64()
+        .filter(|id| *id > 0)
+        .and_then(|id| i32::try_from(id).ok());
     Ok(Some(VerifiedReview {
         items: reviewed,
         forum_url,
+        forum_id,
     }))
 }
 
 impl ItemsComponent {
-    /// Marks the items published with the Foundation's urn and content hash,
-    /// records the Foundation's curation of each as its item curation,
-    /// unfreezes the collection and records the attempt `submitted`, which with the items' on-chain ids makes the collection
-    /// published ([`crate::chain_state`]). Idempotent once submitted.
     async fn finish_linked_publication(
         &self,
         publisher: &Publisher,
         revision: &str,
         review: VerifiedReview,
+        forum: Option<&str>,
     ) -> Result<LinkedPublicationState, ApiError> {
         let (owner, id) = (publisher.signer(), publisher.id());
         let mut tx = self.pool.begin().await?;
@@ -366,6 +392,7 @@ impl ItemsComponent {
         if state.status != "authorized" || state.cheque.is_none() {
             return Err(ApiError::http(409, "Linked publication is not authorized"));
         }
+        let (link, post) = review.forum(forum);
         for item in review.items {
             let mapped: Option<bool> = sqlx::query_scalar("UPDATE builder.items SET is_published=true,urn_suffix=$2,blockchain_item_id=$3,local_content_hash=$4,price='0',beneficiary='0x0000000000000000000000000000000000000000',rarity=NULL,total_supply=0,updated_at=timezone('UTC', now()) \
                 WHERE id=$1 AND collection_id=$5 AND eth_address=$6 AND NOT is_published RETURNING mappings IS NOT NULL")
@@ -386,11 +413,22 @@ impl ItemsComponent {
             )
             .await?;
         }
-        sqlx::query("UPDATE builder.collections SET publication_pending=false,updated_at=timezone('UTC', now()) WHERE id=$1").bind(id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE builder.linked_collection_publications SET status='submitted',forum_url=$2,updated_at=timezone('UTC', now()) WHERE collection_id=$1")
-            .bind(id).bind(&review.forum_url).execute(&mut *tx).await?;
+        let stored: Option<String> = sqlx::query_scalar(
+            "UPDATE builder.collections SET publication_pending=false, \
+               forum_link=COALESCE(forum_link, $2), \
+               forum_id=CASE WHEN forum_link IS NULL THEN $3 ELSE forum_id END, \
+               forum_claimed_at=CASE WHEN forum_link IS NULL AND $2 IS NOT NULL THEN NULL ELSE forum_claimed_at END, \
+               updated_at=timezone('UTC', now()) WHERE id=$1 RETURNING forum_link",
+        )
+        .bind(id)
+        .bind(&link)
+        .bind(post)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE builder.linked_collection_publications SET status='submitted',updated_at=timezone('UTC', now()) WHERE collection_id=$1")
+            .bind(id).execute(&mut *tx).await?;
         state.status = "submitted".into();
-        state.forum_url = review.forum_url;
+        state.forum_url = stored;
         tx.commit().await?;
         Ok(state)
     }

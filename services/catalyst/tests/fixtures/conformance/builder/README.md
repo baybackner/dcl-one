@@ -26,7 +26,10 @@ sends as form data; `response` with `status`,
 the kept headers and `body_json` or `body_bytes_b64`; `captured_from`,
 `captured_at` and `volatile_paths`. A capture whose request made upstream
 post to Slack carries `slack`: the JSON bodies upstream posted to Slack's
-`chat.postMessage`, in the order they arrived. A volatile leaf is recorded as
+`chat.postMessage`, in the order they arrived. A capture that calls the forum
+carries `forum`: each call's `method`, `path`, `username`, and JSON `body`
+(null for a GET), in arrival order. The replay compares every forum field,
+including topic and post identifiers. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a
@@ -185,10 +188,10 @@ CATALYST_TEST_JOBS=4 cargo test --test node_1 -- builder_conformance::
 ## Capturing the pinned upstream
 
 `tooling/builder-server-capture.cjs` runs upstream's own Express app and
-records the cases listed in its `CASES` table. It needs Node 24; the
-committed captures were written with Node 24.22.3, the version upstream's
-`Dockerfile` pins. It shares its checkout and database-URL checks with the
-social captures (`tooling/social-capture-common.cjs`).
+records the cases listed in its `CASES` table. It needs Node 24, matching
+the major version upstream's `Dockerfile` pins. It shares its checkout and
+database-URL checks with the social captures
+(`tooling/social-capture-common.cjs`).
 
 The script refuses a checkout that isn't the Git working tree root, isn't
 at the pinned revision, has staged, unstaged or untracked changes, or whose
@@ -225,9 +228,13 @@ Then it:
    its shortened address, and answers Slack's `chat.postMessage` as Slack
    does: a message with the configured bot token, a channel and a text is
    recorded and answered `ok: true`, and anything else is a refusal that
-   fails the capture. It points the peer, RPC, forum, warehouse, S3, SNS and
-   OpenSea settings at the fake, and sends upstream's requests to
-   `slack.com`, which upstream addresses directly, to it over loopback. The
+   fails the capture. The forum fake starts with the seeded collections'
+   topics, reads a post's topic with `GET /posts/{id}.json`, and creates
+   topics or replies with `POST /posts.json`. It checks the API key and
+   records the path, account, and body of every call. The configured forum
+   origin is `https://forum.example.org`; requests to that host and
+   `slack.com` reach their fakes over loopback. The other peer, RPC,
+   warehouse, S3, SNS, and OpenSea settings point at the fake directly. The
    bot token is `xoxb-example123`, the channel `curation-example`, and the
    feature flags are set off through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
@@ -237,7 +244,7 @@ Then it:
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
    apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC, the
-   active-entities read, the profile read, the warehouse, Slack and the S3
+   active-entities read, the profile read, the warehouse, Slack, forum, and S3
    object writes. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture

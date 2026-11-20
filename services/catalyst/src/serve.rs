@@ -785,6 +785,11 @@ pub async fn serve(
                 slack_curation_channel: config.create.slack_curation_channel.clone(),
                 creators_url: config.create.creators_url.clone(),
                 builder_url: Some(config.worlds.builder_url.clone()),
+                forum_url: config.create.forum_url.clone(),
+                forum_api_key: config.create.forum_api_key.clone(),
+                forum_api_username: config.create.forum_api_username.clone(),
+                forum_category: config.create.forum_category.clone(),
+                builder_server_url: config.create.builder_server_url.clone(),
             })
             .context("BUILDER_* / NEWSLETTER_* configuration")?,
         )

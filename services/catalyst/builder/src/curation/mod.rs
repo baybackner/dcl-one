@@ -16,6 +16,9 @@ use uuid::Uuid;
 use crate::access::CurationGrant;
 use crate::http::ApiError;
 
+pub mod forum;
+pub mod forum_posts;
+pub mod forum_text;
 pub mod rows;
 pub mod slack;
 pub mod transitions;

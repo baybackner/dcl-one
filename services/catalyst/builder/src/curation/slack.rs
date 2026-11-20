@@ -99,6 +99,19 @@ impl Links {
         }
     }
 
+    /// The review page of `item` in `collection`.
+    pub fn item_editor(&self, collection: Uuid, item: Uuid) -> String {
+        match base(&self.creators_url) {
+            Some(creators) => format!(
+                "{creators}/collections/editor?collection={collection}&item={item}&reviewing=true"
+            ),
+            None => format!(
+                "{}/item-editor?collection={collection}&item={item}",
+                base(&self.builder_url).unwrap_or_default()
+            ),
+        }
+    }
+
     /// The origin of the creators site, which also serves the shop and the
     /// profiles; none when it isn't an http(s) URL.
     fn origin(&self) -> Option<String> {
@@ -179,7 +192,7 @@ impl Links {
 }
 
 /// Builder-server's `shortenAddress`.
-fn shorten(address: &str) -> String {
+pub fn shorten(address: &str) -> String {
     let chars: Vec<char> = address.chars().collect();
     if chars.len() < 10 {
         return address.to_string();

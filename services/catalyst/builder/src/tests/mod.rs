@@ -11,6 +11,7 @@ mod curation_auth_fuzz;
 mod curation_routes;
 mod curations;
 mod draft_persistence;
+mod forum;
 mod item_files;
 mod items;
 mod lifecycle;

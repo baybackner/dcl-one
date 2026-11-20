@@ -170,6 +170,17 @@ pub struct RawSettings {
     /// `BUILDER_URL`: the legacy builder a notice links to without
     /// `CREATORS_URL`.
     pub builder_url: Option<String>,
+    /// `FORUM_URL`: the forum's origin a collection's topic is posted to.
+    pub forum_url: Option<String>,
+    /// `FORUM_API_KEY`: the forum API key; the forum needs all four.
+    pub forum_api_key: Option<String>,
+    /// `FORUM_API_USERNAME`: the forum account the node posts as.
+    pub forum_api_username: Option<String>,
+    /// `FORUM_CATEGORY`: the id of the category a topic is created in.
+    pub forum_category: Option<String>,
+    /// `BUILDER_SERVER_URL`: the public origin of these routes, which a
+    /// forum post's thumbnails link into.
+    pub builder_server_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -184,6 +195,10 @@ pub struct Settings {
     /// The curators' Slack channel; none sends no notice.
     pub slack: Option<curation::slack::Slack>,
     pub links: curation::slack::Links,
+    /// The curators' forum; none posts nothing and answers 503.
+    pub forum: Option<curation::forum::Forum>,
+    /// Where a forum post's thumbnails link to.
+    pub builder_server_url: String,
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -273,9 +288,17 @@ impl Settings {
             creators_url: non_empty(&raw.creators_url),
             builder_url: non_empty(&raw.builder_url),
         };
+        let forum = curation::forum::Forum::parse(
+            non_empty(&raw.forum_url),
+            non_empty(&raw.forum_api_key),
+            non_empty(&raw.forum_api_username),
+            non_empty(&raw.forum_category),
+        )?;
+        let builder_server_url = non_empty(&raw.builder_server_url);
         for (name, url) in [
             ("CREATORS_URL", &links.creators_url),
             ("BUILDER_URL", &links.builder_url),
+            ("BUILDER_SERVER_URL", &builder_server_url),
         ] {
             if let Some(url) = url
                 && !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
@@ -286,6 +309,8 @@ impl Settings {
         Ok(Self {
             slack,
             links,
+            forum,
+            builder_server_url: builder_server_url.unwrap_or_default(),
             writes_enabled: raw.writes_enabled,
             polygon_rpc_url,
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
@@ -361,13 +386,14 @@ impl State {
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={}",
+            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={} forum={}",
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),
             self.settings.newsletter.is_some(),
             self.settings.warehouse.is_some(),
             self.settings.slack.is_some(),
+            self.settings.forum.is_some(),
         )
     }
 }
@@ -449,6 +475,11 @@ fn api_routes() -> Router<SharedState> {
                 .patch(handlers::curation::update_collection_curation)
                 .post(handlers::curation::request_collection_curation),
         )
+        .route(
+            "/v1/collections/{id}/curation/post",
+            post(handlers::forum::reply),
+        )
+        .route("/v1/collections/{id}/post", post(handlers::forum::post))
         .route(
             "/v1/collections/{id}/itemCurations",
             get(handlers::curation::collection_item_curations),

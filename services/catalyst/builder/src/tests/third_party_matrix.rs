@@ -325,10 +325,11 @@ enum Op {
     ThirdParties,
     LinkedPublication,
     DraftCollections,
+    ForumPost,
 }
 use Op::*;
 
-const OPS: [Op; 16] = [
+const OPS: [Op; 17] = [
     ReadCollection,
     CollectionItems,
     ReadItem,
@@ -345,13 +346,14 @@ const OPS: [Op; 16] = [
     ThirdParties,
     LinkedPublication,
     DraftCollections,
+    ForumPost,
 ];
 
 impl Op {
     fn writes(self) -> bool {
         matches!(
             self,
-            SaveCollection | CreateCollection | DeleteItem | DeleteCollection | Terms
+            SaveCollection | CreateCollection | DeleteItem | DeleteCollection | Terms | ForumPost
         )
     }
 
@@ -397,6 +399,11 @@ impl Op {
                 ),
             ),
             ReadFile => ("GET", format!("/v1/storage/contents/{}", f.hash), None),
+            ForumPost => (
+                "POST",
+                format!("/v1/collections/{}/post", f.collection),
+                Some(json!({})),
+            ),
             AddressCollections => ("GET", format!("/v1/{me}/collections"), None),
             AddressItems => ("GET", format!("/v1/{me}/items"), None),
             DraftCollections => ("GET", "/v1/drafts/collections".to_string(), None),
@@ -447,6 +454,11 @@ impl Op {
                 }
             }
             Slots => allowed(manages),
+            ForumPost => Expect::Status(match (signed, manages) {
+                (false, _) => 401,
+                (true, true) => 409,
+                (true, false) => 401,
+            }),
             ThirdParty => {
                 if !signed {
                     Expect::Status(401)

@@ -272,7 +272,7 @@ impl Config {
         Ok(())
     }
 
-    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 82] {
+    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 83] {
         [
             ("SEGMENT_SIGNING_KEY", &mut self.social.segment_signing_key),
             ("ETH_RPC_URL", &mut self.content.eth_rpc_url),
@@ -385,6 +385,7 @@ impl Config {
             ),
             ("WAREHOUSE_URL", &mut self.create.warehouse_url),
             ("WAREHOUSE_TOKEN", &mut self.create.warehouse_token),
+            ("FORUM_API_KEY", &mut self.create.forum_api_key),
             (
                 "BUILDER_POLYGON_RPC_URL",
                 &mut self.create.builder_polygon_rpc_url,
@@ -776,6 +777,7 @@ mod tests {
         "ETH_RPC_URL",
         "WAREHOUSE_URL",
         "WAREHOUSE_TOKEN",
+        "FORUM_API_KEY",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "SLACK_BOT_TOKEN",

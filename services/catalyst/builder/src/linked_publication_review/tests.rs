@@ -20,6 +20,7 @@ fn fixture(id: &str, item: &str) -> (Value, Value, Value, Value) {
     remote_collection["urn"] = json!(URN);
     remote_collection["is_published"] = json!(true);
     remote_collection["forum_link"] = json!("https://forum.decentraland.org/t/hats/123");
+    remote_collection["forum_id"] = json!(456);
     let mut remote_item = item_doc;
     remote_item["urn"] = json!(format!("{URN}:{item}"));
     remote_item["is_published"] = json!(true);
@@ -245,6 +246,7 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     let verifier = FoundationLinkedReview {
         base,
         client: foundation_client().allowing_private_hosts(),
+        forum: Some("https://forum.decentraland.org".into()),
     };
     let signed = FoundationReviewSignatures {
         collection: signed(&path).await,
@@ -309,6 +311,20 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
     assert_eq!(
         result.forum_url.as_deref(),
         Some("https://forum.decentraland.org/t/hats/123")
+    );
+    let forum: (Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT forum_link, forum_id FROM builder.collections WHERE id=$1")
+            .bind(id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        forum,
+        (
+            Some("https://forum.decentraland.org/t/hats/123".into()),
+            Some(456)
+        ),
+        "the Foundation's topic is the collection's one forum link"
     );
     let saved: (bool, String, String, String, i64) = sqlx::query_as(
         "SELECT i.is_published, i.urn_suffix, k.status, k.content_hash, \
@@ -387,4 +403,43 @@ async fn verifies_over_http_before_marking_the_frozen_collection_published_and_r
         "submitted"
     );
     cleanup(&store, &[id], &[]).await;
+}
+
+#[test]
+fn a_foundation_topic_is_kept_only_under_the_nodes_forum() {
+    let (snapshot, collection, items, curations) = fixture(ID, ITEM);
+    let review = verify_review(&snapshot, &collection, &items, &curations)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        review.forum(Some("https://forum.decentraland.org")),
+        (
+            Some("https://forum.decentraland.org/t/hats/123".into()),
+            Some(456)
+        )
+    );
+    for other in [None, Some("https://forum.example.test")] {
+        assert_eq!(review.forum(other), (None, None), "{other:?}");
+    }
+    let mut without_id = collection.clone();
+    for id in [
+        json!(0),
+        json!(-1),
+        json!("456"),
+        json!(4_294_967_296_i64),
+        json!(null),
+    ] {
+        without_id["forum_id"] = id.clone();
+        let review = verify_review(&snapshot, &without_id, &items, &curations)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            review.forum(Some("https://forum.decentraland.org")),
+            (
+                Some("https://forum.decentraland.org/t/hats/123".into()),
+                None
+            ),
+            "{id}"
+        );
+    }
 }

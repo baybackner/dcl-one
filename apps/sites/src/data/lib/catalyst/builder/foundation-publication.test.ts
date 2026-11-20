@@ -99,9 +99,7 @@ describe("Foundation collection publication",()=>{
     const f=fixture();f.state.indexed=false;
     await expect(f.api.submit(f.preparation,contract)).rejects.toThrow("still indexing");expect(f.state.posts).toBe(0);
     f.state.indexed=true;expect(await f.api.submit(f.preparation,contract)).toEqual({forumUrl:"https://forum.decentraland.org/t/collection/123",curationSubmitted:true});
-    const post=f.requests.find(r=>r.url.endsWith("/post"))!.body as {forumPost:{raw:string}};
-    expect(post.forumPost.raw).toContain(`item-editor?collection=${id}`);
-    expect(post.forumPost.raw).toContain(`${FOUNDATION_BUILDER}/storage/contents/image-hash`);
+    expect(f.requests.find(r=>r.url.endsWith("/post"))!.body).toEqual({});
     await f.api.submit(f.preparation,contract);expect(f.state.posts).toBe(1);
     expect(f.requests.some(r=>r.method==="PUT"||r.url.endsWith("/tos"))).toBe(false);
   });

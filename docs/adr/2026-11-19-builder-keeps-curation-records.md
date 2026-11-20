@@ -75,6 +75,23 @@ answer as it does upstream.
   effort, so a Slack failure is logged without the token and changes no
   answer. Text that comes from a creator is put on one line, cut and escaped
   so it can't mention, link or format.
+- **Forum topics.** `builder.collections.forum_link` and `forum_id` are the
+  one source of a collection's topic link and first post id. An owner or
+  manager requests a topic only for a published collection; a current
+  committee member can reply in its topic. The node writes the topic title
+  and body from the saved collection and its first 20 items, and resolves a
+  reply's topic from the saved post id. The configured forum origin owns
+  every newly recorded link.
+
+  Topic creation commits a claim under the collection lock before calling
+  Discourse, and releases the database connection for that call. A claim
+  holds for 60 seconds; an uncertain attempt keeps it. A retry after that
+  interval looks up the collection UUID as Discourse's `external_id` before
+  creating a topic, so an accepted post survives a lost response or a node
+  restart. Discourse must enforce uniqueness of that external id and expose
+  the lookup, including the first post id. This capability and the account's
+  permissions must be verified before forum writes are enabled on a
+  deployment. Without the four forum settings, admitted writes answer 503.
 
 ## Consequences
 
@@ -87,6 +104,11 @@ answer as it does upstream.
   recording a curation for each third-party item the node submitted itself.
 - A writer of curations or events holds the collection locked, which the
   code upholds; the schema can't.
+- The additive forum migration copies retained linked-publication links
+  into collections before writes resume. The explicit linked-forum release
+  removes the extra column with writers stopped and a verified backup.
+  An upgraded deployment verifies retained links against its configured
+  forum origin before enabling writes.
 - A notice lost to a Slack outage isn't sent again; the timeline and the
   audit rows keep the decision.
 - The curation lists answer at most 20,000 rows, above the reference data's

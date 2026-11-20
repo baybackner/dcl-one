@@ -45,7 +45,8 @@ pub struct LinkedPublicationState {
 }
 
 pub(super) const STATE_QUERY: &str = "SELECT jsonb_build_object('preparation', p.preparation, \
-    'salt', p.salt, 'status', p.status, 'cheque', p.cheque, 'forum_url', p.forum_url) FROM builder.linked_collection_publications p \
+    'salt', p.salt, 'status', p.status, 'cheque', p.cheque, \
+    'forum_url', CASE WHEN p.status = 'submitted' THEN c.forum_link END) FROM builder.linked_collection_publications p \
     JOIN builder.collections c ON c.id=p.collection_id WHERE c.id=$1 AND c.eth_address=$2";
 
 pub(super) fn decode(value: Value) -> Result<LinkedPublicationState, ApiError> {

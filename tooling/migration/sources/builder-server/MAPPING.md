@@ -89,6 +89,10 @@ and host, no path or trailing slash, as its deployment sets it): the
 `collection` step refuses to run without it and keeps a forum link only when
 it starts with that origin and `/`.
 
+An imported forum link clears any local pending forum claim in the same
+update. The import never imports a claim timestamp; an existing claim is
+preserved when the imported row has no forum link.
+
 A source older than builder-server's last two migrations has no review
 columns on `collection_curations` and no `collection_events` table: the
 extracts read the review columns when present and no events when the table

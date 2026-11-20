@@ -602,3 +602,61 @@ test('a seeded item\'s local content hash reaches upstream\'s items table', asyn
   assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3'])
   assert.ok(seeded.every(row => /^[0-9a-f]{64}$/.test(row.local_content_hash)))
 })
+
+test('the fake forum answers the calls upstream makes as Discourse does and records each one', () => {
+  const { forumAnswer, forumState, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY } = require(script)
+  const forum = forumState([{ forum_link: 'https://forum.example.org/t/forum-hats/401', forum_id: 401 }, { forum_link: null, forum_id: null }])
+  const body = value => Buffer.from(JSON.stringify(value))
+  const key = { 'api-key': FORUM_KEY }
+  const user = { ...key, 'api-username': FORUM_USERNAME }
+  const created = forumAnswer('POST', '/posts.json', key, body({ title: 'Collection \'Red Hats\' is ready!', raw: '# Red', category: FORUM_CATEGORY }), forum)
+  assert.deepEqual(created, { status: 200, body: { id: 5001, topic_id: 1001, topic_slug: 'collection-red-hats-is-ready', post_number: 1 } })
+  assert.deepEqual(forumAnswer('POST', '/posts.json', key, body({ title: 'collection \'red hats\' is ready!', raw: 'x', category: FORUM_CATEGORY }), forum),
+    { status: 422, body: { action: 'create_post', errors: ['Title has already been used'] } })
+  assert.deepEqual(forumAnswer('GET', '/posts/401.json', user, Buffer.alloc(0), forum), { status: 200, body: { id: 401, topic_id: 401, raw: '' } })
+  assert.deepEqual(forumAnswer('GET', '/posts/5001.json', user, Buffer.alloc(0), forum), { status: 200, body: { id: 5001, topic_id: 1001, raw: '' } })
+  assert.deepEqual(forumAnswer('POST', '/posts.json', key, body({ topic_id: 401, raw: 'assigned' }), forum),
+    { status: 200, body: { id: 5002, topic_id: 401, topic_slug: 'forum-hats', post_number: 2 } })
+  const notFound = { status: 404, body: { errors: ['The requested URL or resource could not be found.'], error_type: 'not_found' } }
+  assert.deepEqual(forumAnswer('POST', '/posts.json', key, body({ topic_id: 9, raw: 'x' }), forum), notFound)
+  assert.deepEqual(forumAnswer('GET', '/posts/9.json', user, Buffer.alloc(0), forum), notFound)
+  assert.equal(forumAnswer('POST', '/posts.json', {}, body({ topic_id: 401, raw: 'x' }), forum).status, 403)
+  assert.equal(forumAnswer('POST', '/posts.json', { 'api-key': 'sk-other' }, body({ topic_id: 401, raw: 'x' }), forum).status, 403)
+  assert.equal(forumAnswer('POST', '/posts.json', key, body({ raw: 'x' }), forum).status, 422)
+  assert.equal(forumAnswer('POST', '/posts.json', key, Buffer.from('{'), forum).status, 422)
+  assert.equal(forumAnswer('PUT', '/posts/401.json', user, body({ raw: 'x' }), forum), undefined)
+  assert.equal(forumAnswer('GET', '/t/401.json', user, Buffer.alloc(0), forum), undefined)
+  assert.deepEqual(forum.calls.map(call => [call.method, call.path, call.username]), [
+    ['POST', '/posts.json', null], ['POST', '/posts.json', null], ['GET', '/posts/401.json', FORUM_USERNAME], ['GET', '/posts/5001.json', FORUM_USERNAME],
+    ['POST', '/posts.json', null], ['POST', '/posts.json', null], ['GET', '/posts/9.json', FORUM_USERNAME], ['POST', '/posts.json', null],
+    ['POST', '/posts.json', null], ['POST', '/posts.json', null], ['POST', '/posts.json', null]
+  ])
+  assert.deepEqual(forum.calls[0].body, { title: 'Collection \'Red Hats\' is ready!', raw: '# Red', category: FORUM_CATEGORY })
+  assert.equal(forum.calls.at(-1).body, null)
+})
+
+test('only a request to the forum\'s host is sent to the fake forum, over loopback http under /forum', () => {
+  const { forumRoute } = require(script)
+  const headers = { 'Api-Key': 'k' }
+  assert.deepEqual(forumRoute({ protocol: 'https:', hostname: 'forum.example.org', path: '/posts.json', method: 'POST', headers }, 4321),
+    { protocol: 'http:', hostname: '127.0.0.1', port: 4321, path: '/forum/posts.json', method: 'POST', headers })
+  assert.equal(forumRoute({ protocol: 'https:', hostname: 'forum.example.org.evil.example', path: '/' }, 4321), undefined)
+  assert.equal(forumRoute({ protocol: 'https:', hostname: 'slack.com', path: '/' }, 4321), undefined)
+  assert.equal(forumRoute('https://forum.example.org/posts.json', 4321), undefined)
+})
+
+test('a capture records the forum calls of its case in order, and nothing when there are none', () => {
+  const { forumRecord } = require(script)
+  assert.deepEqual(forumRecord([]), {})
+  const calls = [{ method: 'GET', path: '/posts/1.json', username: 'u', body: null }]
+  assert.deepEqual(forumRecord(calls), { forum: calls })
+})
+
+test('forum draft and no-topic cases address collections not deleted earlier in the capture', () => {
+  const { CASES } = require(script)
+  for (const prefix of ['435-', '444-', '450-']) {
+    const index = CASES.findIndex(item => item.name.startsWith(prefix))
+    const collection = CASES[index].path.split('/').slice(0, 4).join('/')
+    assert.ok(!CASES.slice(0, index).some(item => item.method === 'DELETE' && item.path === collection), CASES[index].name)
+  }
+})

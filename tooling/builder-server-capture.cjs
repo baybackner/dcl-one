@@ -465,6 +465,33 @@ const CURATION_ROUTE_CASES = [
   { name: '430-collection-curation-after', description: 'GET /collections/{id}/curation signed by a committee member after the collection was approved, rejected and requested again', method: 'GET', path: collectionCuration('401'), signer: 'committee', volatile: CREATED_ROW }
 ]
 
+const forumPost = suffix => `/v1/collections/${id(suffix)}/post`
+const forumReply = suffix => `/v1/collections/${id(suffix)}/curation/post`
+const ASSIGNED = `The collection has been assigned to <a target="_blank" href="https://market.example.org/accounts/${COMMITTEE}">Curator</a>`
+
+const FORUM_CASES = [
+  { name: '431-collection-post-unsigned', description: 'POST /collections/{id}/post without a signature', method: 'POST', path: forumPost('302') },
+  { name: '432-collection-post-stranger', description: 'POST /collections/{id}/post signed by a wallet with no role on a collection on chain', method: 'POST', path: forumPost('302'), signer: 'stranger' },
+  { name: '433-collection-post-committee', description: 'POST /collections/{id}/post signed by a committee member, who has no role on the collection', method: 'POST', path: forumPost('302'), signer: 'committee' },
+  { name: '434-collection-post-unknown', description: 'POST /collections/{id}/post of an id no collection has', method: 'POST', path: forumPost('3ff'), signer: 'owner' },
+  { name: '435-collection-post-draft-owner', description: 'POST /collections/{id}/post signed by the owner of a collection the chain doesn\'t hold', method: 'POST', path: forumPost('101'), signer: 'creator' },
+  { name: '436-collection-post-owner', description: 'POST /collections/{id}/post signed by the owner of a collection on chain, with the title and body the old builder web sends', method: 'POST', path: forumPost('302'), signer: 'owner', body: { forumPost: { title: 'Collection \'Items on chain\' created by Owner is ready for review!', raw: '# Items on chain' } } },
+  { name: '437-collection-post-again', description: 'POST /collections/{id}/post signed by the owner of a collection that has its forum post', method: 'POST', path: forumPost('302'), signer: 'owner', body: { forumPost: { title: 'Again', raw: 'Again' } } },
+  { name: '438-collection-post-manager', description: 'POST /collections/{id}/post signed by an on-chain manager of a collection on chain', method: 'POST', path: forumPost('006'), signer: 'manager' },
+  { name: '439-collection-post-transferred-creator', description: 'POST /collections/{id}/post signed by the chain creator of a collection whose stored owner is another wallet', method: 'POST', path: forumPost('106'), signer: 'stranger' },
+  { name: '440-collection-post-curated-third-party', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection with curated items', method: 'POST', path: forumPost('402'), signer: 'provider' },
+  { name: '441-curation-post-unsigned', description: 'POST /collections/{id}/curation/post without a signature', method: 'POST', path: forumReply('401'), body: { forumPost: { raw: ASSIGNED } } },
+  { name: '442-curation-post-owner', description: 'POST /collections/{id}/curation/post signed by the owner, who is not on the committee', method: 'POST', path: forumReply('401'), signer: 'provider', body: { forumPost: { raw: ASSIGNED } } },
+  { name: '443-curation-post-unknown', description: 'POST /collections/{id}/curation/post signed by a committee member, an id no collection has', method: 'POST', path: forumReply('3ff'), signer: 'committee', body: { forumPost: { raw: ASSIGNED } } },
+  { name: '444-curation-post-no-topic', description: 'POST /collections/{id}/curation/post signed by a committee member, a collection without a forum post', method: 'POST', path: forumReply('101'), signer: 'committee', body: { forumPost: { raw: ASSIGNED } } },
+  { name: '445-curation-post-empty', description: 'POST /collections/{id}/curation/post signed by a committee member with an empty raw', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { raw: '' } } },
+  { name: '446-curation-post-too-long', description: 'POST /collections/{id}/curation/post signed by a committee member with a raw of 10,001 characters', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { raw: 'r'.repeat(10001) } } },
+  { name: '447-curation-post-assigned', description: 'POST /collections/{id}/curation/post signed by a committee member, the assignment notice the old builder web sends with the topic it reads from the link', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { topic_id: 401, raw: ASSIGNED } } },
+  { name: '448-curation-post-unassigned-new-topic', description: 'POST /collections/{id}/curation/post signed by a committee member in a topic posted during the run, with another topic id in the body', method: 'POST', path: forumReply('302'), signer: 'committee', body: { forumPost: { topic_id: 401, raw: 'The collection has been unassigned.' } } },
+  { name: '449-curation-post-mention', description: 'POST /collections/{id}/curation/post signed by a committee member with a raw that mentions a group', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { raw: 'The collection has been assigned to @admins' } } },
+  { name: '450-collection-post-third-party-draft', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection none of whose items was submitted', method: 'POST', path: forumPost('008'), signer: 'owner' }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2368,7 +2395,8 @@ const CASES = [
   ...LIFECYCLE_CASES,
   ...THIRD_PARTY_CASES,
   ...CURATION_CASES,
-  ...CURATION_ROUTE_CASES
+  ...CURATION_ROUTE_CASES,
+  ...FORUM_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2794,11 +2822,100 @@ function slackRecord(messages) {
   return messages.length ? { slack: messages } : {}
 }
 
-/** Sends this process's `https` requests to `slack.com` to the fake Slack on `port`; answers the undo. */
+/** The forum upstream posts to; the seed's forum links are under it. */
+const FORUM_ORIGIN = 'https://forum.example.org'
+const FORUM_HOST = 'forum.example.org'
+/** The API key upstream sends the fake forum. */
+const FORUM_KEY = 'sk-example-forum'
+/** The account upstream reads posts as. */
+const FORUM_USERNAME = 'builder-example'
+/** The category upstream files topics in. */
+const FORUM_CATEGORY = '12'
+
+/** Discourse's slug of `title`: lowercase letters and digits, every other run a hyphen, `topic` when empty. */
+function forumSlug(title) {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || 'topic'
+}
+
+/**
+ * The fake forum's state: the seed collections' topics (a topic's id and slug from its link, its first post
+ * the collection's `forum_id`), the topics and posts it makes from 1001 and 5001 on, and every call.
+ */
+function forumState(collections) {
+  const forum = { calls: [], topics: [], posts: [], madeTopics: 0, madePosts: 0 }
+  for (const { forum_link: link, forum_id: post } of collections) {
+    if (!link || !post) continue
+    const [, slug, topic] = new URL(link).pathname.match(/^\/t\/([^/]+)\/(\d+)$/)
+    forum.topics.push({ id: Number(topic), slug, title: null, externalId: null, posts: [post] })
+    forum.posts.push([post, Number(topic)])
+  }
+  return forum
+}
+
+/**
+ * The fake forum's answer to one request under the forum's origin, as Discourse answers the calls upstream
+ * makes: `POST /posts.json` creates a topic (title, raw, category; a title another topic has, ignoring case,
+ * is refused 422) or, with a topic_id, replies in it; `GET /posts/{id}.json` reads a post. Each call is
+ * recorded with its path, its `Api-Username` and its JSON body; a missing or wrong `Api-Key` is refused 403;
+ * undefined for any other method or path.
+ */
+function forumAnswer(method, url, headers, bytes, forum) {
+  const read = method === 'GET' && url.match(/^\/posts\/(\d+)\.json$/)
+  if (!(method === 'POST' && url === '/posts.json') && !read) return undefined
+  let body = null
+  if (method === 'POST') {
+    try { body = JSON.parse(bytes.toString('utf8')) } catch {}
+  }
+  forum.calls.push({ method, path: url, username: headers['api-username'] ?? null, body })
+  const refused = (status, error) => ({ status, body: { action: 'create_post', errors: [error] } })
+  const notFound = { status: 404, body: { errors: ['The requested URL or resource could not be found.'], error_type: 'not_found' } }
+  if (headers['api-key'] !== FORUM_KEY) return refused(403, 'You are not permitted to view the requested resource.')
+  if (read) {
+    const post = forum.posts.find(([id]) => id === Number(read[1]))
+    return post ? { status: 200, body: { id: post[0], topic_id: post[1], raw: '' } } : notFound
+  }
+  if (!body || typeof body !== 'object') return refused(422, 'Title can\'t be blank')
+  const postId = 5001 + forum.madePosts
+  if (body.topic_id !== undefined) {
+    const topic = forum.topics.find(t => t.id === body.topic_id)
+    if (!topic) return notFound
+    topic.posts.push(postId)
+    forum.posts.push([postId, topic.id])
+    forum.madePosts += 1
+    return { status: 200, body: { id: postId, topic_id: topic.id, topic_slug: topic.slug, post_number: topic.posts.length } }
+  }
+  if (typeof body.title !== 'string' || typeof body.raw !== 'string') return refused(422, 'Title can\'t be blank')
+  if (forum.topics.some(t => t.title !== null && t.title.toLowerCase() === body.title.toLowerCase())) return refused(422, 'Title has already been used')
+  const externalId = typeof body.external_id === 'string' ? body.external_id : null
+  if (externalId && forum.topics.some(t => t.externalId === externalId)) return refused(422, 'External ID has already been taken')
+  const topic = { id: 1001 + forum.madeTopics, slug: forumSlug(body.title), title: body.title, externalId, posts: [postId] }
+  forum.topics.push(topic)
+  forum.posts.push([postId, topic.id])
+  forum.madeTopics += 1
+  forum.madePosts += 1
+  return { status: 200, body: { id: postId, topic_id: topic.id, topic_slug: topic.slug, post_number: 1 } }
+}
+
+/**
+ * The loopback `http.request` options that send a request upstream addresses to the forum's host to the fake
+ * forum on `port`, under `/forum`; undefined for any other request.
+ */
+function forumRoute(options, port) {
+  if (!options || typeof options !== 'object' || options.hostname !== FORUM_HOST) return undefined
+  return { protocol: 'http:', hostname: '127.0.0.1', port, path: `/forum${options.path}`, method: options.method, headers: options.headers }
+}
+
+/** What a capture records of the forum calls its case made: nothing, or `forum` in arrival order. */
+function forumRecord(calls) {
+  return calls.length ? { forum: calls } : {}
+}
+
+/** Sends this process's `https` requests to `slack.com` and the forum's host to the fakes on `port`; answers the undo. */
 function routeSlack(port) {
   const request = https.request
   https.request = (options, ...rest) => {
-    const routed = slackRoute(options, port)
+    const routed = slackRoute(options, port) ?? forumRoute(options, port)
     return routed ? http.request(routed, ...rest) : request(options, ...rest)
   }
   return () => { https.request = request }
@@ -2824,7 +2941,7 @@ function trackNotices(notifications) {
   }
 }
 
-function startFakes(req, unfaked, chain) {
+function startFakes(req, unfaked, chain, forum) {
   const { parse } = req('graphql')
   const s3Objects = new Map()
   const warehoused = []
@@ -2839,6 +2956,11 @@ function startFakes(req, unfaked, chain) {
       }
       if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
       if (request.method === 'GET' && /^\/peer\/lambdas\/profiles\/0x[0-9a-f]{40}$/.test(request.url)) return send(200, [])
+      if (request.url.startsWith('/forum/')) {
+        const answer = forumAnswer(request.method, request.url.slice('/forum'.length), request.headers, Buffer.concat(chunks), forum)
+        if (!answer) unfaked.push(`forum ${request.method} ${request.url}`)
+        return send(answer?.status ?? 404, answer?.body ?? { errors: ['not faked'] })
+      }
       if (request.url.startsWith('/slack/')) {
         const answer = slackAnswer(request.method, request.url.slice('/slack'.length), request.headers, Buffer.concat(chunks), slacked)
         if (!answer) unfaked.push(`slack ${request.method} ${request.url}`)
@@ -2889,6 +3011,7 @@ function startFakes(req, unfaked, chain) {
     })
   })
   server.slacked = slacked
+  server.forum = forum
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)))
 }
 
@@ -2903,7 +3026,10 @@ function upstreamEnvironment(fakeBase, url, admins) {
     THIRD_PARTY_GRAPH_URL: `${fakeBase}/graph/third-parties`,
     PEER_URL: `${fakeBase}/peer`,
     RPC_URL: `${fakeBase}/rpc`,
-    FORUM_URL: `${fakeBase}/forum`,
+    FORUM_URL: FORUM_ORIGIN,
+    FORUM_API_KEY: FORUM_KEY,
+    FORUM_API_USERNAME: FORUM_USERNAME,
+    FORUM_CATEGORY,
     OPEN_SEA_URL: `${fakeBase}/opensea`,
     OPEN_SEA_API_KEY: 'example-opensea-key',
     AWS_SNS_ARN: 'arn:aws:sns:us-east-1:000000000000:conformance',
@@ -3118,7 +3244,7 @@ async function closeServer(server) {
 
 async function runUpstream(capture, url, seed, signers, unfaked) {
   const { upstream, req, load } = capture
-  const fakes = await startFakes(req, unfaked, chainRows(seed, signers))
+  const fakes = await startFakes(req, unfaked, chainRows(seed, signers), forumState(seed.collections))
   let listener, db, unrouteSlack
   try {
     const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url, signers.admin.address)
@@ -3144,11 +3270,14 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     const bucket = `${environment.AWS_STORAGE_URL}/${environment.AWS_BUCKET_NAME}`
     for (const item of CASES) {
       const sent = fakes.slacked.length
+      const called = fakes.forum.calls.length
       const fixture = await capture.record(base, item, bucket)
       await noticesSettled()
       const slack = slackRecord(fakes.slacked.slice(sent))
+      const forum = forumRecord(fakes.forum.calls.slice(called))
       refuseMarkers(item.name, slack)
-      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack })])
+      refuseMarkers(item.name, forum)
+      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack, ...forum })])
     }
     return fixtures
   } finally {
@@ -3205,4 +3334,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

@@ -24,7 +24,8 @@ ON CONFLICT (id) DO UPDATE SET
     linked_contract_network = EXCLUDED.linked_contract_network,
     lock = EXCLUDED.lock,
     forum_link = EXCLUDED.forum_link,
-    forum_id = EXCLUDED.forum_id
+    forum_id = EXCLUDED.forum_id,
+    forum_claimed_at = CASE WHEN EXCLUDED.forum_link IS NOT NULL THEN NULL ELSE c.forum_claimed_at END
 WHERE (c.name, c.eth_address, c.salt, c.contract_address, c.urn_suffix, c.third_party_id,
        c.created_at, c.updated_at, c.linked_contract_address, c.linked_contract_network, c.lock,
        c.forum_link, c.forum_id)

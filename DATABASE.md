@@ -1620,7 +1620,13 @@ Tables and what they hold:
   (positive). Never updated.
 - `builder.collections.forum_link` (an `http(s)` URL without spaces, at
   most 2,048 characters) and `forum_id` (the forum post, only with a
-  link). Both are data: the node returns them and never fetches the link.
+  link). These columns are the one source of a collection's forum link.
+  The node builds a new link under `FORUM_URL`; it never fetches the stored
+  link. `forum_claimed_at` is a pending topic attempt, only without a link.
+  Claiming locks the collection, checks access and publication again, and
+  commits before the forum call. A claim holds for 60 seconds; a stale
+  attempt looks up the collection UUID as Discourse's `external_id` before
+  creating another topic. Recording the link clears the claim atomically.
 
 Deletes: an item's curations and a collection's curations and events go
 with them (`ON DELETE CASCADE`); the node refuses to delete a third-party
@@ -1689,6 +1695,29 @@ Upgrade: the object pass creates the four tables; step
 import's `collection_curation`, `item_curation`, `collection_event` and
 `slot_usage_cheque` steps copy upstream's rows
 (`tooling/migration/sources/builder-server/MAPPING.md`).
+
+Step `0059_builder_collection_forum_claim` adds the claim timestamp and copies
+any linked publication's retained forum link into its collection before
+writes resume. It preserves an existing collection link. With writers
+stopped and a verified backup, run
+`schemas/releases/builder-linked-forum-retired.sql` to remove the linked
+publication's extra column; this release repeats safely and never replaces
+a collection link. Fresh databases have only the collection's columns.
+
+## Builder forum workload
+
+Each collection can create one forum topic, whose body describes at most
+20 items in creation order. Claims and link writes use the collection's
+primary key; item descriptions use `items_collection_created_idx`. No
+additional index or table is needed. A committee reply reads only its
+collection's forum post id and resolves the topic through the configured
+forum API. Calls hold no database connection.
+
+For a standard collection's creator name, builder reads, never writes,
+`content.active_pointers` (`pointer`, `entity_id`) and `content.deployments`
+(`entity_id`, `entity_type`, `entity_metadata`): the active profile's first
+avatar supplies a nonempty claimed name; otherwise the address is shortened.
+The pointer key and deployment entity index serve this bounded lookup.
 
 ## Notification writer
 
