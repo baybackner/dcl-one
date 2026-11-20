@@ -4,6 +4,9 @@
 //! hierarchy propagation carries to the avatar's meshes, a rebuilt avatar's new ones included. A
 //! mesh that never glows carries `PropagateOver<Highlight>`; the nametag and the ghost stop the
 //! glow with `PropagateStop<Highlight>`.
+//!
+//! Only the explorer (`colliders`) drives the glow; a build without it still marks the meshes.
+#![cfg_attr(not(feature = "explorer"), allow(dead_code))]
 
 use bevy::{
     app::{Inherited, Propagate, PropagateOver},
