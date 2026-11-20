@@ -28,7 +28,12 @@ export type PermissionsModalProps = {
   busy: boolean
   feedback?: ReactNode
   onClose: () => void
-  onSubmit: (payload: { address: string; permissions: string[] }) => void
+  /**
+   * `seeded` is true when the switches started from the account's current grants (Edit User, or a typed
+   * address that named a listed account); false means a fresh Add draft, whose save must not replace grants
+   * the account already holds.
+   */
+  onSubmit: (payload: { address: string; permissions: string[]; seeded: boolean }) => void
 }
 
 /**
@@ -154,7 +159,7 @@ export function PermissionsModal({
           </Button>
           <Button
             disabled={!valid || busy}
-            onClick={() => onSubmit({ address: address.trim(), permissions: submitted })}
+            onClick={() => onSubmit({ address: address.trim(), permissions: submitted, seeded: editing })}
           >
             {adminCopy.permissions.save}
           </Button>

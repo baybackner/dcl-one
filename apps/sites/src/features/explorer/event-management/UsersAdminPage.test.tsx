@@ -210,6 +210,20 @@ describe("when opening the Users page", () => {
       await screen.findByText("Permissions updated");
       expect(postJSON).toHaveBeenCalledWith(...saving(NEW_WALLET, ["approve_own_event", "edit_any_schedule", "approve_any_event"]));
     });
+
+    it("should still keep them when the list starts naming the wallet after it was typed", async () => {
+      const { client } = renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), NEW_WALLET);
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      api.profiles = [...(api.profiles ?? []), api.settings![NEW_WALLET]!];
+      await client.invalidateQueries();
+      await waitFor(() => expect(readsOf(LIST)).toBe(2));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      await screen.findByText("Permissions updated");
+      expect(postJSON).toHaveBeenCalledWith(...saving(NEW_WALLET, ["approve_own_event", "edit_any_schedule", "approve_any_event"]));
+    });
   });
 
   describe("and reading the typed wallet's grants fails", () => {

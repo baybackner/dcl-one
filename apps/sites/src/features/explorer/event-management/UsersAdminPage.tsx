@@ -59,7 +59,7 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
     setEditing(next);
   }
 
-  async function save({ address, permissions }: { address: string; permissions: string[] }) {
+  async function save({ address, permissions, seeded }: { address: string; permissions: string[]; seeded: boolean }) {
     const signer = getIdentity();
     if (!signer || signer.signer.toLowerCase() !== access.identity?.signer.toLowerCase()) {
       openSignIn();
@@ -70,9 +70,10 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
     setError(null);
     let sent = permissions;
     try {
-      // A save replaces the wallet's whole set. A wallet the loaded list does not name (it is capped) may
-      // still hold grants, so Add keeps them: it reads the wallet's settings first and adds to them.
-      if (!editing?.user && !listed(address)) {
+      // A save replaces the wallet's whole set. Unless the switches started from the account's current grants,
+      // the draft knows nothing of what the wallet holds (it may be missing from the capped list, or have
+      // appeared in it after the address was typed), so its grants are read now and the choices added to them.
+      if (!seeded) {
         let held: EventProfile | null;
         try {
           held = await loadEventProfileSettings(signer, address);
