@@ -679,13 +679,6 @@ const messages = {
     '{date}까지 반복',
     '{date}まで繰り返す'
   ],
-  'Featured wearable, emote or collection': [
-    'Wearable, emote o colección destacada',
-    'Wearable, emote ou collection à la une',
-    '精选穿戴道具、表情或系列',
-    '추천 웨어러블, 이모트 또는 컬렉션',
-    '注目のウェアラブル、エモート、コレクション'
-  ],
   'Selected: {asset}': [
     'Seleccionado: {asset}',
     'Sélection : {asset}',
@@ -699,20 +692,6 @@ const messages = {
     '移除精选道具',
     '추천 아이템 제거',
     '注目アイテムを削除'
-  ],
-  'Search featured items or collections': [
-    'Buscar elementos o colecciones para destacar',
-    'Rechercher des objets ou collections à mettre en avant',
-    '搜索精选道具或系列',
-    '추천 아이템 또는 컬렉션 검색',
-    '注目アイテムやコレクションを検索'
-  ],
-  'Search the catalogue or paste an asset URN': [
-    'Buscá en el catálogo o pegá el URN de un elemento',
-    'Recherchez dans le catalogue ou collez l’URN d’un objet',
-    '搜索目录或粘贴道具 URN',
-    '카탈로그를 검색하거나 아이템 URN을 붙여넣으세요',
-    'カタログを検索するかアイテムのURNを貼り付けてください'
   ],
   'Enter at least three characters.': [
     'Ingresá al menos tres caracteres.',
@@ -1159,40 +1138,12 @@ const messages = {
     '이미지를 여기로 끌어오거나 500 KiB 이하의 파일을 선택하세요.',
     '画像をここにドロップするか、500 KiB 以下のファイルを選択してください。'
   ],
-  'Submit an Event': [
-    'Enviar un evento',
-    'Soumettre un événement',
-    '提交活动',
-    '이벤트 제출',
-    'イベントを申請'
-  ],
   'Edit Event': [
     'Editar evento',
     'Modifier l’événement',
     '编辑活动',
     '이벤트 편집',
     'イベントを編集'
-  ],
-  'Event Name': [
-    'Nombre del evento',
-    'Nom de l’événement',
-    '活动名称',
-    '이벤트 이름',
-    'イベント名'
-  ],
-  'Event Description': [
-    'Descripción del evento',
-    'Description de l’événement',
-    '活动说明',
-    '이벤트 설명',
-    'イベントの説明'
-  ],
-  "The event submission will be reviewed by our team, you'll be notified by email": [
-    'Nuestro equipo revisará tu evento y te avisará por correo electrónico',
-    'Notre équipe examinera votre événement et vous en informera par e-mail',
-    '我们的团队将审核活动，并通过电子邮件通知你',
-    '팀이 이벤트를 검토한 후 이메일로 알려 드려요',
-    'チームがイベントを審査し、メールで結果をお知らせします'
   ],
   'Submit Event': [
     'Enviar evento',
@@ -1238,7 +1189,103 @@ const messages = {
     '(최근 24시간)',
     '（過去24時間）'
   ],
-  Reject: ['Rechazar', 'Refuser', '拒绝', '거부', '却下する']
+  Reject: ['Rechazar', 'Refuser', '拒绝', '거부', '却下する'],
+  'Submit a hangout': [
+    'Enviar un evento',
+    'Soumettre un événement',
+    '提交活动',
+    '이벤트 제출',
+    'イベントを申請'
+  ],
+  'Hangout Details': [
+    'Detalles del evento',
+    'Détails de l’événement',
+    '活动详情',
+    '이벤트 세부 정보',
+    'イベントの詳細'
+  ],
+  'Hangout name': [
+    'Nombre del evento',
+    'Nom de l’événement',
+    '活动名称',
+    '이벤트 이름',
+    'イベント名'
+  ],
+  "Describe what you'll be doing": [
+    'Describe lo que van a hacer',
+    'Décrivez ce que vous allez faire',
+    '描述你们将要做什么',
+    '무엇을 할지 설명해 주세요',
+    '何をするのか説明してください'
+  ],
+  'Repeat hangout': [
+    'Repetir evento',
+    'Répéter l’événement',
+    '重复活动',
+    '이벤트 반복',
+    'イベントを繰り返す'
+  ],
+  'Does not repeat': ['No se repite', 'Ne se répète pas', '不重复', '반복 안 함', '繰り返さない'],
+  'Latitude (X)': ['Latitud (X)', 'Latitude (X)', '纬度 (X)', '위도 (X)', '緯度 (X)'],
+  'Longitude (Y)': ['Longitud (Y)', 'Longitude (Y)', '经度 (Y)', '경도 (Y)', '経度 (Y)'],
+  'Featured item': [
+    'Elemento destacado',
+    'Objet mis en avant',
+    '精选道具',
+    '추천 아이템',
+    '注目のアイテム'
+  ],
+  'Search items or paste URN': [
+    'Busca elementos o pega un URN',
+    'Recherchez des objets ou collez un URN',
+    '搜索道具或粘贴 URN',
+    '아이템을 검색하거나 URN을 붙여넣으세요',
+    'アイテムを検索するか URN を貼り付け'
+  ],
+  'Select an event cover': [
+    'Selecciona una portada para el evento',
+    'Sélectionnez une couverture pour l’événement',
+    '选择活动封面',
+    '이벤트 커버를 선택하세요',
+    'イベントのカバーを選択'
+  ],
+  'Choose a picture from your gallery or drop it here': [
+    'Elige una imagen de tu galería o suéltala aquí',
+    'Choisissez une image dans votre galerie ou déposez-la ici',
+    '从图库中选择图片，或将图片拖到这里',
+    '갤러리에서 사진을 선택하거나 여기에 끌어다 놓으세요',
+    'ギャラリーから画像を選ぶか、ここにドロップしてください'
+  ],
+  '(recommended size: 1340 × 670)': [
+    '(tamaño recomendado: 1340 × 670)',
+    '(taille recommandée : 1340 × 670)',
+    '（建议尺寸：1340 × 670）',
+    '(권장 크기: 1340 × 670)',
+    '（推奨サイズ：1340 × 670）'
+  ],
+  'Upload a PNG, JPG, or GIF (1340×670px, max 500kb). Center visuals and text to fit all screen resolutions.':
+    [
+      'Sube un PNG, JPG o GIF (1340×670 px, máx. 500 KB). Centra las imágenes y el texto para que se vean en todas las resoluciones de pantalla.',
+      'Importez un PNG, JPG ou GIF (1340×670 px, 500 Ko max.). Centrez visuels et texte pour qu’ils s’adaptent à toutes les résolutions d’écran.',
+      '上传 PNG、JPG 或 GIF（1340×670 像素，最大 500 KB）。请将图像和文字居中，以适配所有屏幕分辨率。',
+      'PNG, JPG 또는 GIF를 업로드하세요(1340×670px, 최대 500KB). 모든 화면 해상도에 맞도록 이미지와 텍스트를 가운데에 배치하세요.',
+      'PNG、JPG、GIF をアップロードしてください（1340×670px、最大 500KB）。すべての画面解像度に収まるよう、画像とテキストは中央に配置してください。'
+    ],
+  "The hangout submission will be reviewed and approved by our team, you'll be notified by email.":
+    [
+      'Nuestro equipo revisará y aprobará tu evento, y te avisará por correo electrónico.',
+      'Notre équipe examinera et approuvera votre événement, et vous en informera par e-mail.',
+      '我们的团队将审核并批准活动，并通过电子邮件通知你。',
+      '팀이 이벤트를 검토하고 승인한 후 이메일로 알려 드려요.',
+      'チームがイベントを審査・承認し、メールでお知らせします。'
+    ],
+  'Admin area': [
+    'Área de administración',
+    'Espace d’administration',
+    '管理区域',
+    '관리자 영역',
+    '管理エリア'
+  ]
 } as const
 
 export { messages }
