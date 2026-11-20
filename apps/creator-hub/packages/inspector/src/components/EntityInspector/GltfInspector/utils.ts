@@ -90,3 +90,58 @@ export const COLLISION_LAYERS = [
     label: 'Custom 8',
   },
 ];
+
+/** Above this many triangles, colliding against a model's visible geometry gets a warning. */
+export const VISIBLE_COLLIDER_TRIANGLE_LIMIT = 10000;
+
+const GLB_MAGIC = 0x46546c67;
+const GLB_JSON_CHUNK = 0x4e4f534a;
+const COLLIDER_NAME = /_collider/i;
+
+type GltfJson = {
+  nodes?: { name?: string; mesh?: number }[];
+  meshes?: {
+    name?: string;
+    primitives?: { mode?: number; indices?: number; attributes?: { POSITION?: number } }[];
+  }[];
+  accessors?: { count?: number }[];
+};
+
+function readGltfJson(content: Uint8Array): GltfJson | null {
+  try {
+    const view = new DataView(content.buffer, content.byteOffset, content.byteLength);
+    const isGlb = content.byteLength >= 20 && view.getUint32(0, true) === GLB_MAGIC;
+    if (!isGlb) return JSON.parse(new TextDecoder().decode(content));
+    if (view.getUint32(16, true) !== GLB_JSON_CHUNK) return null;
+    const length = view.getUint32(12, true);
+    return JSON.parse(new TextDecoder().decode(content.subarray(20, 20 + length)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Triangles in the visible meshes of a .glb or .gltf file, counted once per node that uses a mesh.
+ * Meshes named `*_collider` are the invisible layer and are left out. Returns null when the file
+ * can't be read as glTF.
+ */
+export function countVisibleTriangles(content: Uint8Array): number | null {
+  const gltf = readGltfJson(content);
+  if (!gltf || typeof gltf !== 'object') return null;
+  const { nodes = [], meshes = [], accessors = [] } = gltf;
+
+  let triangles = 0;
+  for (const node of nodes) {
+    const mesh = node.mesh === undefined ? undefined : meshes[node.mesh];
+    if (!mesh) continue;
+    if (COLLIDER_NAME.test(node.name ?? '') || COLLIDER_NAME.test(mesh.name ?? '')) continue;
+    for (const primitive of mesh.primitives ?? []) {
+      const accessor = primitive.indices ?? primitive.attributes?.POSITION;
+      const count = (accessor === undefined ? undefined : accessors[accessor]?.count) ?? 0;
+      const mode = primitive.mode ?? 4;
+      if (mode === 4) triangles += Math.floor(count / 3);
+      else if (mode === 5 || mode === 6) triangles += Math.max(count - 2, 0);
+    }
+  }
+  return triangles;
+}

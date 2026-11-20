@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SdkContextValue } from '../../lib/sdk/context';
-import { collectUsedAssets } from './utils';
+import { collectUsedAssets, findAssetsNamedInCode } from './utils';
 
 // The engine is reduced to what the scan reads: the component definitions and, for each one, the
 // entities that carry it.
@@ -47,5 +47,38 @@ describe('collectUsedAssets', () => {
     it('should skip a layout that does not parse', () => {
       expect(() => collect('{not json')).not.toThrow();
     });
+  });
+});
+
+describe('findAssetsNamedInCode', () => {
+  const paths = [
+    'assets/scene/ui/Overlay.png',
+    'assets/scene/ui/button.png',
+    'assets/scene/ui/red-button.png',
+    'assets/scene/models/monster3.glb',
+  ];
+
+  it('should find a file named by its full path, whatever the case', () => {
+    const code = "uiBackground: { texture: { src: 'assets/scene/ui/overlay.png' } }";
+    expect(findAssetsNamedInCode([code], paths)).toEqual(['assets/scene/ui/Overlay.png']);
+  });
+
+  it('should find a file whose folder and name are joined in the code', () => {
+    const code = "const UI = 'assets/scene/ui/'\nconst src = UI + 'button.png'";
+    expect(findAssetsNamedInCode([code], paths)).toEqual(['assets/scene/ui/button.png']);
+  });
+
+  it('should not match a name inside a longer file name', () => {
+    const code = "const src = 'assets/scene/ui/red-button.png'";
+    expect(findAssetsNamedInCode([code], paths)).toEqual(['assets/scene/ui/red-button.png']);
+  });
+
+  it('should not find a name built while the code runs', () => {
+    const code = "const src = 'assets/scene/models/monster' + level + '.glb'";
+    expect(findAssetsNamedInCode([code], paths)).toEqual([]);
+  });
+
+  it('should find nothing when there is no code', () => {
+    expect(findAssetsNamedInCode([], paths)).toEqual([]);
   });
 });

@@ -7,6 +7,8 @@ export type AssetFile = {
   path: string;
   size: number; // in bytes
   unused: boolean;
+  /** The scene's code names this file. */
+  usedByCode?: boolean;
 };
 
 export type Props = {

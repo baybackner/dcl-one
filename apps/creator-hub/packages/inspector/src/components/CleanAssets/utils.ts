@@ -258,6 +258,68 @@ async function processModelAssets(
   );
 }
 
+const CODE_DIRECTORY = 'src';
+const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
+const FILE_NAME_CHAR = /[a-z0-9_-]/;
+
+/**
+ * Finds the files that some source text names. A file counts as named when its file name appears
+ * in the text as a whole name, so `'assets/ui/' + 'button.png'` and a path relative to another
+ * folder both count, and `button.png` does not match inside `red-button.png`. A name assembled at
+ * runtime (`'monster' + i + '.glb'`) or fetched from a server is not found.
+ * @param sources The text of each code file
+ * @param paths The file paths to look for
+ * @returns The paths whose file name appears in the sources
+ */
+export function findAssetsNamedInCode(sources: string[], paths: string[]): string[] {
+  const text = sources.join('\n').toLowerCase();
+  if (!text) return [];
+
+  return paths.filter(path => {
+    const [, fileName] = getDirectoryAndFileName(path.toLowerCase());
+    if (!fileName) return false;
+    for (
+      let at = text.indexOf(fileName);
+      at !== -1;
+      at = text.indexOf(fileName, at + fileName.length)
+    ) {
+      const before = text[at - 1] ?? '';
+      const after = text[at + fileName.length] ?? '';
+      if (!FILE_NAME_CHAR.test(before) && !FILE_NAME_CHAR.test(after)) return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Marks as used the files that the scene's code names: `src/` and the scripts under `assets/`.
+ * @returns The lowercased paths of the files the code names
+ */
+async function processCodeAssets(
+  usedAssets: Set<string>,
+  allFiles: FileSize[],
+  dataLayer: DataLayerRpcClient,
+): Promise<Set<string>> {
+  const usedByCode = new Set<string>();
+  const isCode = (path: string) => CODE_EXTENSIONS.some(ext => path.toLowerCase().endsWith(ext));
+  const listed = await Promise.all(
+    [CODE_DIRECTORY, DIRECTORY.ASSETS].map(path => dataLayer.getFilesSizes({ path, ignore: [] })),
+  );
+  const codePaths = listed.flatMap(({ files }) => files.map(file => file.path)).filter(isCode);
+  if (codePaths.length === 0) return usedByCode;
+
+  const { files } = await dataLayer.getFilesList({ paths: codePaths });
+  const decoder = new TextDecoder();
+  const sources = files.filter(file => file.success).map(file => decoder.decode(file.content));
+  const candidates = allFiles.map(file => file.path).filter(path => !isCode(path));
+
+  for (const path of findAssetsNamedInCode(sources, candidates)) {
+    usedByCode.add(path.toLowerCase());
+    usedAssets.add(path.toLowerCase());
+  }
+  return usedByCode;
+}
+
 /**
  * Scans the project and identifies unused assets
  * @param sdk The SDK context
@@ -271,7 +333,14 @@ export async function scanForUnusedAssets(
 ): Promise<AssetFile[]> {
   const usedAssets = collectUsedAssets(sdk); // Get all assets referenced in the scene
 
+  let usedByCode = new Set<string>();
   if (dataLayer) {
+    // Code goes first: a model it names brings its own textures and buffers along below.
+    try {
+      usedByCode = await processCodeAssets(usedAssets, allFiles, dataLayer);
+    } catch (error) {
+      console.error('[CleanAssets] Error scanning the scene code for asset names', error);
+    }
     await Promise.all([
       processModelAssets(usedAssets, dataLayer),
       processCompositeAssets(usedAssets, allFiles, dataLayer),
@@ -282,6 +351,7 @@ export async function scanForUnusedAssets(
     path: file.path,
     size: file.size,
     unused: !usedAssets.has(file.path.toLowerCase()),
+    usedByCode: usedByCode.has(file.path.toLowerCase()),
   }));
 
   // Sort by type (unused files first) and size descending (largest files first)
