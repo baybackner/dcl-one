@@ -153,6 +153,11 @@ def settings(env, resolv_conf="/etc/resolv.conf"):
     if storage and not re.fullmatch(r"/[a-zA-Z0-9_./-]+", storage):
         raise ValueError("GATEWAY_STORAGE_ROOT must be an absolute path without whitespace")
     trusted = networks(env.get("GATEWAY_TRUSTED_PROXY_CIDRS", ""))
+    # CF-Connecting-IP is one address Cloudflare overwrites; X-Forwarded-For is walked back past trusted hops.
+    client_header = {"x-forwarded-for": "X-Forwarded-For", "cf-connecting-ip": "CF-Connecting-IP"}.get(
+        env.get("GATEWAY_CLIENT_IP_HEADER", "X-Forwarded-For").lower())
+    if not client_header:
+        raise ValueError("GATEWAY_CLIENT_IP_HEADER must be X-Forwarded-For or CF-Connecting-IP")
     storage_trusted = networks(env.get("GATEWAY_STORAGE_TRUSTED_CIDRS", ""))
     if any(ipaddress.ip_network(proxy).overlaps(ipaddress.ip_network(caller))
            for proxy in trusted for caller in storage_trusted
@@ -171,6 +176,7 @@ def settings(env, resolv_conf="/etc/resolv.conf"):
         "sites": [upstream(value) for value in words(env.get("GATEWAY_SITES_UPSTREAMS", "sites:5212"))],
         "admins": networks(env.get("GATEWAY_ADMIN_CIDRS", "")),
         "trusted": trusted,
+        "client_header": client_header,
         "storage_trusted": storage_trusted,
         "sync_peers": networks(env.get("GATEWAY_TRUSTED_SYNC_PEER_IPS", "")),
         "storage": storage.rstrip("/"),
@@ -444,8 +450,8 @@ http {{
     resolver_timeout 5s;
     {upstreams}
     {real_ip}
-    real_ip_header X-Forwarded-For;
-    real_ip_recursive on;
+    real_ip_header {cfg["client_header"]};
+    real_ip_recursive {"on" if cfg["client_header"] == "X-Forwarded-For" else "off"};
     geo $realip_remote_addr $trusted_peer {{ default 0; {trusted_geo} }}
     map "$trusted_peer:$http_x_forwarded_proto" $forwarded_scheme {{
         default $scheme;

@@ -9,6 +9,7 @@ import { Link, useNavigate } from "react-router";
 import Button from "../../../atoms/Button";
 import { shopPath } from "../../routes";
 import { useShopWallet } from "../../wallet/context";
+import { isRequestLimited } from "../../checkout/lib/errors";
 import { markListingCancelled } from "../../market/lib/dead-listings";
 import { fetchLegacyOrders } from "../../market/lib/api";
 import { cancelTrade, fetchTrade, GaslessCancelFailedError, type CancelMode } from "../../market/lib/trades";
@@ -37,8 +38,11 @@ export function RemoveListing({ token }: { token: TokenRecord }) {
         try {
           hash = await cancelTrade({ provider: provider!, trade, mode });
         } catch (e) {
-          // Offer the gas path only for the latest gasless refusal, not a request limit.
-          if (mode !== "direct") setGaslessFailed(e instanceof GaslessCancelFailedError);
+          // Offer the gas path after a gasless refusal; a request limit withdraws it, other errors keep it.
+          if (mode !== "direct") {
+            if (e instanceof GaslessCancelFailedError) setGaslessFailed(true);
+            else if (isRequestLimited(e)) setGaslessFailed(false);
+          }
           throw e;
         }
         markListingCancelled(qc, tradeId);

@@ -35,7 +35,9 @@ import { reviewCart, resolveLine, partitionReservations, couponForTrade, classif
 import { AFTER_PENDING, resumeCheckout, runGroup, runGroups, watchGroup, type CheckoutDeps } from "./executor";
 import { computePaymentOptions, distributeCreditsAcrossUnits, findOption, hasPayableOption } from "./payment-options";
 import type { RailContext } from "./rail";
-import { setAuthorization, type ShopAuthorization } from "../lib/authorizations";
+import { AuthorizationKind, setAuthorization, type ShopAuthorization } from "../lib/authorizations";
+import { isRequestLimited } from "../lib/errors";
+import { requireContracts } from "../chain/contracts";
 import { createSpendGuard } from "@shop/checkout/purchase/spend-guard";
 
 function memoryStorage(): CartStorage & { data: Map<string, string> } {
@@ -567,16 +569,25 @@ describe("a credits group the relay refuses for its limits", () => {
     expect(h.wallet.sent).toHaveLength(0);
   });
 
-  it("a web3 wallet over the relay's request limit on the MANA approval is told to wait, never sent to approve with gas", async () => {
+  it("a web3 wallet over the relay's request limit on the MANA approval gets the limit back, never sent to approve with gas", async () => {
     const h = await harness({ method: "mana", relay: "refuse", refuseStatus: 429, refuseBody: { error: "api_limit_reached", message: "Too many requests. Retry in 2 seconds.", retryAt: 1 } });
     const { ctx } = h.deps;
-    // The approval step grants as the checkout screens do: setAuthorization with the buyer's wallet.
-    const requestApproval = async ({ auth }: { auth: ShopAuthorization }) => {
-      await setAuthorization({ auth, active: true, provider: ctx.provider, account: ctx.buyer, walletKind: ctx.walletKind, reader: ctx.reader, relayerUrl: ctx.relayerUrl, fetchImpl: ctx.fetchImpl });
-      return true;
-    };
-    const result = await runGroup({ ...h.deps, requestApproval }, h.group, h.resolved);
-    expect(result).toMatchObject({ status: "failed", failure: { message: "Too many requests from your connection. Wait a few seconds and try again." } });
+    const auth: ShopAuthorization = { kind: AuthorizationKind.Allowance, contractAddress: requireContracts(137).mana.address, spenderAddress: BOOK.marketplace.contract, chainId: 137 };
+    // The grant AuthorizeStep runs (useCheckout's requestApproval); the step shows the error it throws.
+    const refused = await setAuthorization({
+      auth,
+      active: true,
+      provider: ctx.provider,
+      account: ctx.buyer,
+      walletKind: ctx.walletKind,
+      reader: ctx.reader,
+      relayerUrl: ctx.relayerUrl,
+      fetchImpl: ctx.fetchImpl,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(isRequestLimited(refused)).toBe(true);
     expect(h.wallet.sent).toHaveLength(0);
   });
 });

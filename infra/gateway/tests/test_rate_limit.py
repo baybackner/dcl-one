@@ -199,6 +199,22 @@ def eval_product(term):
         product *= int(factor.strip().replace("_", ""))
     return product
 
+
+class ClientAddressHeaderTest(unittest.TestCase):
+    def test_default_walks_x_forwarded_for_back_past_trusted_hops(self):
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="203.0.113.0/24")
+        self.assertIn("real_ip_header X-Forwarded-For;\n    real_ip_recursive on;", text)
+
+    def test_cf_connecting_ip_is_read_alone_without_walking_hops(self):
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="203.0.113.0/24", GATEWAY_CLIENT_IP_HEADER="cf-connecting-ip")
+        self.assertIn("real_ip_header CF-Connecting-IP;\n    real_ip_recursive off;", text)
+        self.assertIn("set_real_ip_from 203.0.113.0/24;", text)
+
+    def test_other_headers_are_rejected(self):
+        for value in ["X-Real-IP", "True-Client-IP", "CF-Connecting-IP;", ""]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                render(GATEWAY_CLIENT_IP_HEADER=value)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -38,7 +38,14 @@ Every per-client limit here needs both halves of the trust chain:
 `GATEWAY_TRUSTED_PROXY_CIDRS` on the gateway, naming the CDN's ranges (for
 Cloudflare, its published IP ranges). Without the gateway's setting the client
 address is a CDN edge address, which is public, so every client behind one edge
-shares that edge's limits.
+shares that edge's limits. By default the gateway walks `X-Forwarded-For` back
+past those ranges. Behind Cloudflare, set `GATEWAY_CLIENT_IP_HEADER` to
+`CF-Connecting-IP` so the gateway reads only the address Cloudflare writes; the
+header is then trusted from every network in `GATEWAY_TRUSTED_PROXY_CIDRS`, so
+list only Cloudflare's ranges there. An internal address in a trusted proxy's
+`X-Real-IP` is used as the client address as is, so a private load balancer in
+front of the gateway must be listed in `GATEWAY_TRUSTED_PROXY_CIDRS`, or every
+client behind it shares one bucket.
 
 Place reports count against the reporter's wallet and, when its address names
 one client (a trusted proxy's `X-Real-IP` or a public peer), its network. Behind
@@ -64,6 +71,7 @@ docker run --rm --network dcl-one --read-only --cap-drop ALL --security-opt no-n
 | `GATEWAY_SITES_UPSTREAMS` | `sites:5212` | Sites destinations |
 | `GATEWAY_ADMIN_CIDRS` | empty | Operator networks; empty denies all |
 | `GATEWAY_TRUSTED_PROXY_CIDRS` | empty | Proxies trusted for client IP and scheme |
+| `GATEWAY_CLIENT_IP_HEADER` | `X-Forwarded-For` | Header a trusted proxy names the client in: `X-Forwarded-For` or `CF-Connecting-IP` |
 | `GATEWAY_READ_RATE` | `100` | Requests per second per client outside the content, storage, worlds and deploy zones |
 | `GATEWAY_READ_BURST` | `300` | Burst allowed above `GATEWAY_READ_RATE` (a web explorer boot is ~150 requests in its first second) |
 | `GATEWAY_TRUSTED_SYNC_PEER_IPS` | empty | Sync peers exempt from the `read` and `content` request limits; list the API's `TRUSTED_SYNC_PEER_IPS` |

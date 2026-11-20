@@ -188,8 +188,7 @@ export function writeFailureText(error: unknown): string {
   if (isTxPending(error)) return "The transaction is still pending. It may still complete; check again before trying anything else.";
   if (isTxReverted(error)) return "The transaction was reverted on chain. Nothing changed.";
   if (isWrongNetworkError(error)) return (error as Error).message;
-  const limited = isRequestLimited(error) ? relayLimitText(error) : null;
-  if (limited) return limited;
+  if (isRequestLimited(error)) return relayLimitText(error) ?? (error as Error).message;
   return (error as Error)?.message || "Something went wrong.";
 }
 
