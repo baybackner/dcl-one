@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{app::PropagateSet, platform::collections::HashMap, prelude::*};
 use common::{
     dynamics::{PLAYER_COLLIDER_HEIGHT, PLAYER_COLLIDER_RADIUS},
     inputs::CommonInputAction,
@@ -13,6 +13,7 @@ use rapier3d_f64::{
     na::Isometry,
     prelude::{ColliderBuilder, Group, InteractionGroups, SharedShape},
 };
+use scene_material::highlight::Highlight;
 use scene_runner::{
     update_scene::pointer_results::{AvatarColliders, PointerTarget},
     update_world::mesh_collider::ColliderId,
@@ -40,7 +41,9 @@ impl Plugin for AvatarColliderPlugin {
                     send_message_to_scene.run_if(in_state(AvatarHighlighted(true))),
                 )
                     .chain(),
-                apply_hover_glow.in_set(SceneSets::PostLoop),
+                apply_hover_glow
+                    .in_set(SceneSets::PostLoop)
+                    .before(PropagateSet::<Highlight>::default()),
                 handle_avatar_modifier_requests,
             ),
         );

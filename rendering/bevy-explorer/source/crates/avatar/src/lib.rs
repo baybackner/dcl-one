@@ -34,7 +34,7 @@ use collectibles::{
 };
 #[cfg(feature = "explorer")]
 use console::DoAddConsoleCommand;
-use hover_glow::set_hover_glows;
+use hover_glow::{can_glow, set_hover_glows};
 use scene_material::{
     SceneBound, SceneBounds, SceneMaterial, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
     SCENE_MATERIAL_FACIAL_FEATURE_MESH_TAG, SCENE_MATERIAL_NO_DITHERING_MESH_TAG,
@@ -1619,7 +1619,10 @@ fn process_avatar(
                         MeshMaterial3d(instance_mat.clone()),
                         MeshTag(def.body_tag()),
                     ));
-                    set_hover_glows(&mut mesh, hover_glows(def.body.model.as_ref()));
+                    set_hover_glows(
+                        &mut mesh,
+                        hover_glows(def.body.model.as_ref()) && can_glow(mat.alpha_mode),
+                    );
                 }
             }
 
@@ -1710,6 +1713,8 @@ fn process_avatar(
                                 .entity(scene_ent)
                                 .try_insert((MeshMaterial3d(material), MeshTag(def.mask_tag())));
                         };
+                        // blended either way
+                        set_hover_glows(&mut commands.entity(scene_ent), false);
                         *vis = Visibility::Inherited;
                     }
                 }
@@ -1978,7 +1983,10 @@ fn process_avatar(
                             MeshMaterial3d(instance_mat.clone()),
                             MeshTag(def.model_tag(Some(model))),
                         ));
-                        set_hover_glows(&mut mesh, hover_glows(Some(model)));
+                        set_hover_glows(
+                            &mut mesh,
+                            hover_glows(Some(model)) && can_glow(mat.alpha_mode),
+                        );
                     }
                 }
             }

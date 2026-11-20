@@ -1,8 +1,15 @@
 //! The hover glow: a hovered avatar's opaque and alpha-tested meshes glow cyan-green through the
 //! shared highlight pass (`scene_material::highlight`), fading in and out over a tenth of a second.
+//! The glow is a `Propagate<Highlight>` on the player container, which the highlight plugin's
+//! hierarchy propagation carries to the avatar's meshes, a rebuilt avatar's new ones included. A
+//! mesh that never glows carries `PropagateOver<Highlight>`; the nametag and the ghost stop the
+//! glow with `PropagateStop<Highlight>`.
 
-use bevy::prelude::*;
-use scene_material::{highlight::Highlight, SceneMaterial};
+use bevy::{
+    app::{Inherited, Propagate, PropagateOver},
+    prelude::*,
+};
+use scene_material::highlight::Highlight;
 
 const AVATAR_GLOW_COLOR: Color = Color::srgb(0.0, 1.0, 0.52395105);
 /// the glow's opacity once it has faded in
@@ -45,17 +52,29 @@ fn glow_highlight(alpha: f32) -> Highlight {
     }
 }
 
-/// On a mesh of a wearable that opts out of outlines (`outlineCompatible: false`): it never glows.
-#[derive(Component, Debug, Clone, Copy)]
-pub(crate) struct NoHoverGlow;
+/// The glow follows the opaque draw: opaque and alpha-tested meshes take it, blended ones never.
+pub(crate) fn can_glow(alpha_mode: AlphaMode) -> bool {
+    matches!(
+        alpha_mode,
+        AlphaMode::Opaque | AlphaMode::Mask(_) | AlphaMode::AlphaToCoverage
+    )
+}
 
 /// Marks whether `mesh` takes part in its avatar's glow. The avatar build calls it for every mesh
 /// it dresses, both ways, so a mesh entity kept across a rebuild follows the wearable it now shows.
+/// Propagation reads `PropagateOver` only when the glow changes, so under a steady glow the mesh's
+/// `Highlight` is put on or taken off here.
 pub(crate) fn set_hover_glows(mesh: &mut EntityCommands, glows: bool) {
     if glows {
-        mesh.try_remove::<NoHoverGlow>();
+        mesh.try_remove::<PropagateOver<Highlight>>();
+        mesh.queue_silenced(|mut mesh: EntityWorldMut| {
+            if let Some(glow) = mesh.get::<Inherited<Highlight>>().map(|glow| glow.0) {
+                mesh.insert(glow);
+            }
+        });
     } else {
-        mesh.try_insert(NoHoverGlow);
+        mesh.try_insert(PropagateOver::<Highlight>::default());
+        mesh.try_remove::<Highlight>();
     }
 }
 
@@ -77,57 +96,24 @@ pub(crate) fn set_glow_target(
     }
 }
 
-/// The glow follows the opaque draw: opaque and alpha-tested meshes take it, blended ones never.
-fn can_glow(alpha_mode: AlphaMode) -> bool {
-    matches!(
-        alpha_mode,
-        AlphaMode::Opaque | AlphaMode::Mask(_) | AlphaMode::AlphaToCoverage
-    )
-}
-
-/// steps each glow and writes its `Highlight` on the container's glowing meshes, walking them
-/// every frame so a rebuilt avatar's new meshes pick it up; a finished glow takes its
-/// `Highlight`s and itself away
+/// steps each glow and puts its highlight on the container for propagation to carry to the
+/// meshes; a finished glow takes the highlight and itself away
 pub(crate) fn apply_hover_glow(
     mut commands: Commands,
     time: Res<Time>,
-    mut glows: Query<(Entity, &mut HoverGlow)>,
-    children: Query<&Children>,
-    mut meshes: Query<(
-        &MeshMaterial3d<SceneMaterial>,
-        Has<NoHoverGlow>,
-        Option<&mut Highlight>,
-    )>,
-    materials: Res<Assets<SceneMaterial>>,
+    mut glows: Query<(Entity, &mut HoverGlow, Option<&Propagate<Highlight>>)>,
 ) {
-    for (container, mut glow) in &mut glows {
+    for (container, mut glow, current) in &mut glows {
         glow.set_if_neq(step_glow(*glow, time.delta_secs()));
-        let faded = glow.alpha == 0.0 && glow.target == 0.0;
-        if faded {
-            commands.entity(container).try_remove::<HoverGlow>();
+        if glow.alpha == 0.0 && glow.target == 0.0 {
+            commands
+                .entity(container)
+                .try_remove::<(HoverGlow, Propagate<Highlight>)>();
+            continue;
         }
-        let highlight = glow_highlight(glow.alpha);
-        for entity in children.iter_descendants(container) {
-            let Ok((material, opted_out, current)) = meshes.get_mut(entity) else {
-                continue;
-            };
-            let lit = !faded
-                && !opted_out
-                && materials
-                    .get(material)
-                    .is_some_and(|material| can_glow(material.base.alpha_mode));
-            match (lit, current) {
-                (true, Some(mut current)) => {
-                    current.set_if_neq(highlight);
-                }
-                (true, None) => {
-                    commands.entity(entity).try_insert(highlight);
-                }
-                (false, Some(_)) => {
-                    commands.entity(entity).try_remove::<Highlight>();
-                }
-                (false, None) => (),
-            }
+        let source = Propagate(glow_highlight(glow.alpha));
+        if current != Some(&source) {
+            commands.entity(container).try_insert(source);
         }
     }
 }
@@ -136,8 +122,12 @@ pub(crate) fn apply_hover_glow(
 mod tests {
     use std::time::Duration;
 
-    use bevy::{asset::AssetPlugin, time::TimeUpdateStrategy};
-    use scene_material::SceneMaterialExt;
+    use bevy::{
+        app::{PropagateSet, PropagateStop},
+        ecs::system::RunSystemOnce,
+        time::TimeUpdateStrategy,
+    };
+    use scene_material::highlight::HighlightPlugin;
 
     use super::*;
 
@@ -197,36 +187,23 @@ mod tests {
         assert_eq!(glow_highlight(0.0).color, LinearRgba::NONE);
     }
 
-    /// the pointer target, as `update_avatar_collider_actions` sees it
-    #[derive(Resource, Default)]
-    struct Hovered(Option<Entity>);
-
-    /// `update_avatar_collider_actions`' glow handling, without the `ForeignPlayer` and
-    /// `PointerTarget` it reads them from
-    fn hover(
-        mut commands: Commands,
-        hovered: Res<Hovered>,
-        mut previous: Local<Option<Entity>>,
-        mut glows: Query<&mut HoverGlow>,
-    ) {
-        if *previous == hovered.0 {
-            return;
-        }
-        if let Some(old) = previous.take() {
-            set_glow_target(&mut commands, &mut glows, old, 0.0);
-        }
-        if let Some(new) = hovered.0 {
-            set_glow_target(&mut commands, &mut glows, new, 1.0);
-        }
-        *previous = hovered.0;
+    #[test]
+    fn only_opaque_and_alpha_tested_materials_glow() {
+        assert!(can_glow(AlphaMode::Opaque));
+        assert!(can_glow(AlphaMode::Mask(0.5)));
+        assert!(can_glow(AlphaMode::AlphaToCoverage));
+        assert!(!can_glow(AlphaMode::Blend));
+        assert!(!can_glow(AlphaMode::Premultiplied));
+        assert!(!can_glow(AlphaMode::Add));
     }
 
     fn app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<SceneMaterial>()
-            .init_resource::<Hovered>()
-            .add_systems(Update, (hover, apply_hover_glow).chain());
+        app.add_plugins((MinimalPlugins, HighlightPlugin))
+            .add_systems(
+                Update,
+                apply_hover_glow.before(PropagateSet::<Highlight>::default()),
+            );
         // the first update starts the clock
         app.update();
         app
@@ -239,24 +216,38 @@ mod tests {
         app.update();
     }
 
-    fn material(app: &mut App, alpha_mode: AlphaMode) -> MeshMaterial3d<SceneMaterial> {
-        MeshMaterial3d(app.world_mut().resource_mut::<Assets<SceneMaterial>>().add(
-            SceneMaterial::new_unbounded(StandardMaterial {
-                alpha_mode,
-                ..default()
-            }),
-        ))
+    /// moves the glow from the avatar hovered before to `to`, as `update_avatar_collider_actions`
+    /// does when the pointer target changes
+    fn hover(app: &mut App, from: Option<Entity>, to: Option<Entity>) {
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut glows: Query<&mut HoverGlow>| {
+                    if let Some(old) = from {
+                        set_glow_target(&mut commands, &mut glows, old, 0.0);
+                    }
+                    if let Some(new) = to {
+                        set_glow_target(&mut commands, &mut glows, new, 1.0);
+                    }
+                },
+            )
+            .unwrap();
     }
 
-    /// a built avatar under `container`: an opaque body, an alpha-tested and a blended wearable
+    fn mark(app: &mut App, mesh: Entity, glows: bool) {
+        let mut commands = app.world_mut().commands();
+        set_hover_glows(&mut commands.entity(mesh), glows);
+        app.world_mut().flush();
+    }
+
+    /// a built avatar under `container`, its meshes marked as the avatar build marks them: an
+    /// opaque body, an alpha-tested wearable and a blended one
     fn build_avatar(app: &mut App, container: Entity) -> (Entity, [Entity; 3]) {
-        let opaque = material(app, AlphaMode::Opaque);
-        let mask = material(app, AlphaMode::Mask(0.5));
-        let blend = material(app, AlphaMode::Blend);
-        let world = app.world_mut();
-        let avatar = world.spawn(ChildOf(container)).id();
-        let meshes =
-            [opaque, mask, blend].map(|material| world.spawn((ChildOf(avatar), material)).id());
+        let avatar = app.world_mut().spawn(ChildOf(container)).id();
+        let meshes = [AlphaMode::Opaque, AlphaMode::Mask(0.5), AlphaMode::Blend].map(|mode| {
+            let mesh = app.world_mut().spawn(ChildOf(avatar)).id();
+            mark(app, mesh, can_glow(mode));
+            mesh
+        });
         (avatar, meshes)
     }
 
@@ -281,20 +272,13 @@ mod tests {
             .count()
     }
 
-    /// as the avatar build marks a mesh
-    fn mark(app: &mut App, mesh: Entity, glows: bool) {
-        let mut commands = app.world_mut().commands();
-        set_hover_glows(&mut commands.entity(mesh), glows);
-        app.world_mut().flush();
-    }
-
     #[test]
     fn hovering_another_avatar_fades_the_first_out_and_the_second_in() {
         let mut app = app();
         let (a, _, a_meshes) = player(&mut app);
         let (b, _, b_meshes) = player(&mut app);
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(a);
+        hover(&mut app, None, Some(a));
         tick(&mut app, 0.05);
         let a_glow = glow(&app, a).unwrap();
         assert!((a_glow.alpha - 0.5).abs() < 1e-6);
@@ -303,7 +287,7 @@ mod tests {
             Some(glow_highlight(a_glow.alpha))
         );
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(b);
+        hover(&mut app, Some(a), Some(b));
         tick(&mut app, 0.001);
         let a_glow = glow(&app, a).unwrap();
         let b_glow = glow(&app, b).unwrap();
@@ -331,15 +315,20 @@ mod tests {
     #[test]
     fn despawning_a_glowing_avatar_leaves_no_highlight() {
         let mut app = app();
-        let (a, _, _) = player(&mut app);
+        let (a, avatar, meshes) = player(&mut app);
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(a);
+        hover(&mut app, None, Some(a));
         tick(&mut app, 0.05);
-        assert_eq!(highlights(&mut app), 2);
+        // the container, the avatar and its two glowing meshes
+        assert!(meshes[..2]
+            .iter()
+            .all(|mesh| highlight(&app, *mesh).is_some()));
+        assert!(highlight(&app, avatar).is_some());
+        assert_eq!(highlights(&mut app), 4);
 
-        app.world_mut().resource_mut::<Hovered>().0 = None;
+        hover(&mut app, Some(a), None);
         tick(&mut app, 0.01);
-        assert_eq!(highlights(&mut app), 2);
+        assert_eq!(highlights(&mut app), 4);
         app.world_mut().entity_mut(a).despawn();
         tick(&mut app, 0.01);
         assert_eq!(highlights(&mut app), 0);
@@ -350,7 +339,7 @@ mod tests {
         let mut app = app();
         let (b, avatar, _) = player(&mut app);
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(b);
+        hover(&mut app, None, Some(b));
         tick(&mut app, 0.03);
 
         // as a rebuild does: the old avatar goes, a new one is built in its place
@@ -363,32 +352,49 @@ mod tests {
         assert!((alpha - 0.6).abs() < 1e-6, "{alpha}");
         assert_eq!(highlight(&app, meshes[0]), Some(glow_highlight(alpha)));
         assert_eq!(highlight(&app, meshes[1]), Some(glow_highlight(alpha)));
+        assert_eq!(highlight(&app, meshes[2]), None);
+    }
+
+    #[test]
+    fn a_rebuilt_avatar_glows_under_a_steady_glow() {
+        let mut app = app();
+        let (b, avatar, _) = player(&mut app);
+
+        hover(&mut app, None, Some(b));
+        tick(&mut app, 0.2);
+
+        app.world_mut().entity_mut(avatar).despawn();
+        let (_, meshes) = build_avatar(&mut app, b);
+        tick(&mut app, 0.01);
+        assert_eq!(highlight(&app, meshes[0]), Some(glow_highlight(1.0)));
+        assert_eq!(highlight(&app, meshes[1]), Some(glow_highlight(1.0)));
+        assert_eq!(highlight(&app, meshes[2]), None);
     }
 
     #[test]
     fn a_wearable_that_is_not_outline_compatible_never_glows() {
         let mut app = app();
-        let (a, _, [opaque, mask, _]) = player(&mut app);
-        mark(&mut app, opaque, true);
+        let (a, _, [opaque, mask, blend]) = player(&mut app);
         mark(&mut app, mask, false);
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(a);
+        hover(&mut app, None, Some(a));
         for _ in 0..4 {
             tick(&mut app, 0.05);
             assert!(highlight(&app, opaque).is_some());
             assert_eq!(highlight(&app, mask), None);
+            assert_eq!(highlight(&app, blend), None);
         }
     }
 
-    /// a mesh entity kept across a rebuild follows the wearable it now shows, both ways, and
-    /// mid-glow
+    /// a mesh entity kept across a rebuild follows the wearable it now shows, both ways, under a
+    /// steady glow and mid-fade
     #[test]
     fn a_reused_mesh_follows_its_current_wearable() {
         let mut app = app();
         let (a, _, [opaque, mask, _]) = player(&mut app);
         mark(&mut app, mask, false);
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(a);
+        hover(&mut app, None, Some(a));
         tick(&mut app, 0.2);
         assert_eq!(highlight(&app, opaque), Some(glow_highlight(1.0)));
         assert_eq!(highlight(&app, mask), None);
@@ -398,19 +404,31 @@ mod tests {
         tick(&mut app, 0.01);
         assert_eq!(highlight(&app, opaque), None);
         assert_eq!(highlight(&app, mask), Some(glow_highlight(1.0)));
+
+        hover(&mut app, Some(a), None);
+        tick(&mut app, 0.05);
+        mark(&mut app, opaque, true);
+        mark(&mut app, mask, false);
+        tick(&mut app, 0.01);
+        let alpha = glow(&app, a).unwrap().alpha;
+        assert_eq!(highlight(&app, opaque), Some(glow_highlight(alpha)));
+        assert_eq!(highlight(&app, mask), None);
     }
 
+    /// the nametag and the ghost hang under the player container and never glow
     #[test]
-    fn a_blended_wearable_never_glows() {
+    fn a_stopped_child_never_glows() {
         let mut app = app();
-        let (a, _, [opaque, mask, blend]) = player(&mut app);
+        let (a, _, _) = player(&mut app);
+        let tag = app
+            .world_mut()
+            .spawn((ChildOf(a), PropagateStop::<Highlight>::default()))
+            .id();
+        let tag_mesh = app.world_mut().spawn(ChildOf(tag)).id();
 
-        app.world_mut().resource_mut::<Hovered>().0 = Some(a);
-        for _ in 0..4 {
-            tick(&mut app, 0.05);
-            assert!(highlight(&app, opaque).is_some());
-            assert!(highlight(&app, mask).is_some());
-            assert_eq!(highlight(&app, blend), None);
-        }
+        hover(&mut app, None, Some(a));
+        tick(&mut app, 0.05);
+        assert_eq!(highlight(&app, tag), None);
+        assert_eq!(highlight(&app, tag_mesh), None);
     }
 }

@@ -10,6 +10,7 @@ use std::{collections::VecDeque, f32::consts::PI};
 
 use bevy::{
     animation::{AnimationTarget, AnimationTargetId},
+    app::PropagateStop,
     gltf::{Gltf, GltfAssetLabel},
     pbr::NotShadowCaster,
     prelude::*,
@@ -22,7 +23,7 @@ use bevy::{
 use common::structs::{AppConfig, PrimaryUser};
 use comms::{global_crdt::ForeignPlayer, profile::UserProfile};
 use scene_material::{
-    reveal_mesh_tag, unrevealed_mesh_tag, SceneMaterial,
+    highlight::Highlight, reveal_mesh_tag, unrevealed_mesh_tag, SceneMaterial,
     SCENE_MATERIAL_REVEAL_FULL_HEIGHT as REVEAL_HEIGHT,
     SCENE_MATERIAL_REVEAL_HIDE_HEIGHT as HIDE_HEIGHT,
 };
@@ -283,6 +284,8 @@ fn spawn_ghosts(
                     material: material.clone(),
                     scene: None,
                 },
+                // the hover glow is the avatar's
+                PropagateStop::<Highlight>::default(),
                 ChildOf(player),
             ))
             .id();
