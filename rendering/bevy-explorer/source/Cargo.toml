@@ -208,6 +208,7 @@ bevy_platform = { version = "0.16.1", default-features = false, features = [
 ] }
 disqualified = "1.0"
 nonmax = "0.5"
+winit = { version = "0.30", default-features = false }
 wgpu = "24"
 # Match wgpu-hal's ash/windows versions: the GPU memory queries use its native handles.
 ash = { version = "0.38", default-features = false }
@@ -503,6 +504,13 @@ cef_offscreen = { workspace = true, optional = true }
 # `apple-app-store`, which removes the process memory reading `src/memory.rs` samples.
 bevy = { workspace = true, features = ["sysinfo_plugin"] }
 ash = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The window's Wayland backend, in this package only: the dcl_deno_ipc sidecar is built alone and
+# holds none of it. bevy's `wayland` by itself links libwayland-client; winit's `wayland-dlopen`
+# loads it at run time instead, so each binary of this package starts where the library is absent.
+bevy = { workspace = true, features = ["wayland"] }
+winit = { workspace = true, features = ["wayland-dlopen"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
