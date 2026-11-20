@@ -578,6 +578,13 @@ impl FakeRegistry {
             );
     }
 
+    /// Drops provider `id`.
+    pub fn remove(&self, id: &str) {
+        if let Some(providers) = self.providers.lock().unwrap().as_mut() {
+            providers.remove(id);
+        }
+    }
+
     /// Changes one field of provider `id`.
     pub fn set(&self, id: &str, field: &str, value: serde_json::Value) {
         if let Some(provider) = self

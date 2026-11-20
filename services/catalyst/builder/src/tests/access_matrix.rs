@@ -10,6 +10,10 @@
 //! source that is down answer 503 and write nothing; the small public reads
 //! answer alike in each, and only the rarities answer 503 while their
 //! source is down.
+//!
+//! A matrix test lists its cells ([`Cell`]) and runs them with
+//! [`failures_in`] on worlds in one [`Condition`] ([`super::cells`]): each
+//! cell gets a fresh fixture, and its world is reset to its seed after it.
 
 use std::sync::Arc;
 
@@ -292,6 +296,22 @@ impl Fixture {
     }
 }
 
+/// `text` with the fixture's generated ids and contract named by their role.
+fn anonymized(text: String, f: &Fixture) -> String {
+    let mut text = text;
+    for (value, role) in [
+        (f.collection.map(|c| c.to_string()), "{collection}"),
+        (f.item.map(|i| i.to_string()), "{item}"),
+        (f.minted.map(|i| i.to_string()), "{minted}"),
+        (f.contract.clone(), "{contract}"),
+    ] {
+        if let Some(value) = value {
+            text = text.replace(&value, role);
+        }
+    }
+    text
+}
+
 fn contract() -> String {
     format!("0x{}", Uuid::new_v4().simple().to_string()[..20].repeat(2))
 }
@@ -484,9 +504,10 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
     }
 }
 
-async fn snapshot(pool: &PgPool) -> Value {
+/// A digest of every row a refused write must leave as it was.
+async fn snapshot(pool: &PgPool) -> String {
     sqlx::query_scalar(
-        "SELECT jsonb_build_object( \
+        "SELECT md5(jsonb_build_object( \
            'collections', (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.id), '[]') FROM builder.collections c), \
            'items', (SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.id), '[]') FROM builder.items i), \
            'contents', (SELECT count(*) FROM builder.item_contents), \
@@ -494,7 +515,7 @@ async fn snapshot(pool: &PgPool) -> Value {
            'publications', (SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.collection_id), '[]') FROM builder.collection_publications p), \
            'cheques', (SELECT COALESCE(jsonb_agg(to_jsonb(q) ORDER BY q.id), '[]') FROM builder.slot_usage_cheques q), \
            'curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.collection_curations k), \
-           'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k))",
+           'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k))::text)",
     )
     .fetch_one(pool)
     .await
@@ -1411,6 +1432,23 @@ struct Matrix {
     pool: PgPool,
     app: Router,
     forum: crate::curation::forum::fake::FakeForum,
+    sibling: Uuid,
+}
+
+/// Brings `m`'s database back to the rows [`matrix_with`] seeded: the
+/// sibling collection and its item. Rows outside [`snapshot`]'s tables stay.
+async fn reset(m: &Matrix) {
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM builder.slot_usage_cheques; \
+         DELETE FROM builder.items WHERE collection_id IS NULL; \
+         DELETE FROM builder.collections WHERE id <> '{}'; \
+         DELETE FROM builder.uploaded_contents; \
+         DELETE FROM shop.collections",
+        m.sibling
+    )))
+    .execute(&m.pool)
+    .await
+    .unwrap();
 }
 
 async fn fresh_pass(pool: &PgPool, minutes_ago: i64) {
@@ -1431,7 +1469,7 @@ async fn matrix(committee: &FakeCommittee) -> Option<Matrix> {
 }
 
 async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> Option<Matrix> {
-    let pool = crate::db::scratch::isolated_pool(connections).await?;
+    let pool = super::cells::world_pool(connections).await?;
     fresh_pass(&pool, 0).await;
     committee.publish(&pool).await;
     committee.set_rarities(Some(&[("common", "10000000000000000000", "100000")]));
@@ -1467,14 +1505,19 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     .execute(&pool)
     .await
     .unwrap();
-    sibling_collection(&pool).await;
+    let sibling = sibling_collection(&pool).await;
     sqlx::query(
         "UPDATE builder.items SET data = '{\"tags\":[\"matrix\"]}'::json WHERE blockchain_item_id IS NOT NULL",
     )
     .execute(&pool)
     .await
     .unwrap();
-    Some(Matrix { pool, app, forum })
+    Some(Matrix {
+        pool,
+        app,
+        forum,
+        sibling,
+    })
 }
 
 /// A third-party collection under the matrix's provider that the sibling
@@ -1535,16 +1578,16 @@ fn ops() -> Vec<Op> {
         .collect()
 }
 
-async fn cell(
-    m: &Matrix,
-    op: Op,
-    kind: Kind,
-    caller: Caller,
-    mount: &str,
-    committee_up: bool,
-    expect: impl Fn(&Fixture) -> Option<Expect>,
-) -> Option<String> {
-    if op == Op::Ping && mount.is_empty() {
+/// Runs `c` on `m` ([`Cell`]), audited under `condition`; its failure.
+async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Option<String> {
+    let Cell {
+        op,
+        kind,
+        caller,
+        mount,
+        expect,
+    } = c;
+    if op == Op::Ping && mount.is_empty() || expect(&Fixture::default()).is_none() {
         return None;
     }
     let f = fixture(&m.pool, kind).await;
@@ -1562,7 +1605,11 @@ async fn cell(
     let (method, path, payload) = op.request(kind, &f);
     let label = kind;
     let kind = kind.base();
-    let before = snapshot(&m.pool).await;
+    let write_checked = op.writes() && !matches!(expected.0, 0 | 200);
+    let before = match write_checked {
+        true => Some(snapshot(&m.pool).await),
+        false => None,
+    };
     let (status, body) = call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
     let error = body["error"].as_str().unwrap_or_default().to_string();
     let got = Expect(
@@ -1578,7 +1625,7 @@ async fn cell(
     if (expected.0 == 0 && refusal) || (expected.0 != 0 && got != expected) {
         problems.push(format!("answered {got:?}, expected {expected:?}"));
     }
-    if op.writes() && !matches!(expected.0, 0 | 200) && snapshot(&m.pool).await != before {
+    if write_checked && Some(snapshot(&m.pool).await) != before {
         problems.push("a refused write changed rows".to_string());
     }
     let sees_all = (op == Op::ReadItem && kind.item_owner(caller))
@@ -1609,6 +1656,8 @@ async fn cell(
         Op::ReadCollection if status.is_success() => vec![&body["data"]],
         _ => items.clone(),
     };
+    let bodies_checked = bodies.len();
+    let items_checked = items.len();
     for answered in bodies {
         let extra: Vec<&String> = answered
             .as_object()
@@ -1638,7 +1687,8 @@ async fn cell(
             ));
         }
     }
-    if op == Op::CollectionItems && status.is_success() {
+    let listing_checked = op == Op::CollectionItems && status.is_success();
+    if listing_checked {
         let listed: Vec<String> = body["data"]
             .as_array()
             .map(|items| {
@@ -1674,6 +1724,15 @@ async fn cell(
             problems.push(format!("listed {listed:?}, expected {expected:?}"));
         }
     }
+    super::cells::record(|| {
+        anonymized(
+            format!(
+                "{condition}\t{op:?}\t{label:?}\t{caller:?}\t{mount}\t{expected:?}\t{got:?}\twrite={write_checked} bodies={bodies_checked} items={items_checked} listing={listing_checked} problems={}",
+                problems.len()
+            ),
+            &f,
+        )
+    });
     (!problems.is_empty()).then(|| {
         format!(
             "{mount}{method} {path} {label:?} as {caller:?}: {}",
@@ -1682,32 +1741,112 @@ async fn cell(
     })
 }
 
-#[tokio::test]
-async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
-    let committee = FakeCommittee::with(&[&Committee.address()]);
-    let Some(m) = matrix(&committee).await else {
-        eprintln!("skipping: CATALYST_TEST_DATABASE_URL not set");
-        return;
+/// The state every world of a matrix test starts in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Condition {
+    Normal,
+    Stale,
+    NoPass,
+    CommitteeDown,
+    RaritiesDown,
+    NoVerifier,
+}
+
+/// A matrix world in `condition`.
+async fn matrix_in(condition: Condition) -> Option<Matrix> {
+    let committee = match condition {
+        Condition::CommitteeDown => FakeCommittee::down(),
+        _ => FakeCommittee::with(&[&Committee.address()]),
     };
-    let mut failures = Vec::new();
-    let mut cells = 0;
+    let m = matrix_with(&committee, 4, condition != Condition::NoVerifier).await?;
+    match condition {
+        Condition::Stale => fresh_pass(&m.pool, 31).await,
+        Condition::NoPass => {
+            sqlx::query("DELETE FROM shop.mirror_state")
+                .execute(&m.pool)
+                .await
+                .unwrap();
+        }
+        Condition::RaritiesDown => committee.set_rarities(None),
+        _ => {}
+    }
+    Some(m)
+}
+
+/// What a cell answers on its fixture; `None` where the cell doesn't apply.
+type Expectation = Box<dyn Fn(&Fixture) -> Option<Expect> + Send + Sync>;
+
+/// One cell of a matrix test: `op` on a resource in `kind`, called by
+/// `caller` under `mount`, answering what `expect` says.
+struct Cell {
+    op: Op,
+    kind: Kind,
+    caller: Caller,
+    mount: &'static str,
+    expect: Expectation,
+}
+
+impl Cell {
+    fn new(
+        op: Op,
+        kind: Kind,
+        caller: Caller,
+        mount: &'static str,
+        expect: impl Fn(&Fixture) -> Option<Expect> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            op,
+            kind,
+            caller,
+            mount,
+            expect: Box::new(expect),
+        }
+    }
+}
+
+/// Runs `cells` on matrix worlds in `condition` ([`cell`], audited under
+/// `label`) and returns their failures, sorted; `None` (skip) without a
+/// database.
+async fn failures_in(
+    condition: Condition,
+    label: &'static str,
+    committee_up: bool,
+    cells: Vec<Cell>,
+) -> Option<Vec<String>> {
+    let mut failures = super::cells::in_worlds(
+        cells,
+        move || matrix_in(condition),
+        move |m: Arc<Matrix>, c: Cell| async move {
+            let failure = cell(&m, label, c, committee_up).await;
+            reset(&m).await;
+            failure
+        },
+    )
+    .await?;
+    failures.sort();
+    Some(failures)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
+    let mut cells = Vec::new();
     for op in ops() {
         for &kind in op.kinds() {
             for caller in CALLERS {
                 for mount in MOUNTS {
-                    if let Some(failure) = cell(&m, op, kind, caller, mount, true, |f| {
+                    cells.push(Cell::new(op, kind, caller, mount, move |f| {
                         op.expect(kind, caller, f)
-                    })
-                    .await
-                    {
-                        failures.push(failure);
-                    }
-                    cells += 1;
+                    }));
                 }
             }
         }
     }
-    assert!(cells > 1000, "{cells} cells");
+    let count = cells.len();
+    let Some(failures) = failures_in(Condition::Normal, "every", true, cells).await else {
+        eprintln!("skipping: CATALYST_TEST_DATABASE_URL not set");
+        return;
+    };
+    assert!(count > 1000, "{count} cells");
     assert!(
         failures.is_empty(),
         "{} failing cells:\n{}",
@@ -1732,12 +1871,52 @@ fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     }
 }
 
+/// One cell of [`assert_cannot_tell`]: `op` on a fresh `kind` as `caller`
+/// under `mount` answers `expected` (503 with the chain-state error) and
+/// writes nothing.
+async fn cannot_tell_cell(
+    m: &Matrix,
+    condition: &str,
+    (op, kind, caller, mount, expected): (Op, Kind, Caller, &str, u16),
+) -> Vec<String> {
+    let f = fixture(&m.pool, kind).await;
+    let (method, path, payload) = op.request(kind, &f);
+    let before = snapshot(&m.pool).await;
+    let (status, body) = call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
+    let changed = snapshot(&m.pool).await != before;
+    super::cells::record(|| {
+        anonymized(
+            format!(
+                "{condition}\t{op:?}\t{kind:?}\t{caller:?}\t{mount}\t{expected}\t{} {}\twrite=true",
+                status.as_u16(),
+                body["error"]
+            ),
+            &f,
+        )
+    });
+    let mut failures = Vec::new();
+    if status.as_u16() != expected
+        || (expected == 503
+            && body["error"] != "Chain state is not available yet. Try again later.")
+    {
+        failures.push(format!(
+            "{mount}{method} {path} as {caller:?}: {status} {body}"
+        ));
+    }
+    if changed {
+        failures.push(format!(
+            "{mount}{method} {path} as {caller:?}: wrote while the copy can't tell"
+        ));
+    }
+    failures
+}
+
 /// With the copy stale (`stale`) or without a complete pass, every by-id
 /// decision answers 503, but a stored owner's read of their own draft
 /// (standard, not on chain, or third-party) while the copy is only stale:
 /// no chain fact can change that answer. `approvalData` reads no chain fact.
-async fn assert_cannot_tell(m: &Matrix, stale: bool) {
-    let mut failures = Vec::new();
+async fn assert_cannot_tell(stale: bool) {
+    let mut cells = Vec::new();
     for op in ops().into_iter().filter(|op| op.by_id()) {
         for caller in CALLERS {
             for mount in MOUNTS {
@@ -1752,7 +1931,6 @@ async fn assert_cannot_tell(m: &Matrix, stale: bool) {
                     ReviewApproved,
                     ReviewRejected,
                 ] {
-                    let f = fixture(&m.pool, kind).await;
                     let Some(Expect(mut expected, _)) = unavailable(op, kind, caller) else {
                         continue;
                     };
@@ -1763,69 +1941,53 @@ async fn assert_cannot_tell(m: &Matrix, stale: bool) {
                     {
                         expected = 200;
                     }
-                    let (method, path, payload) = op.request(kind, &f);
-                    let before = snapshot(&m.pool).await;
-                    let (status, body) =
-                        call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
-                    if status.as_u16() != expected
-                        || (expected == 503
-                            && body["error"]
-                                != "Chain state is not available yet. Try again later.")
-                    {
-                        failures.push(format!(
-                            "{mount}{method} {path} as {caller:?}: {status} {body}"
-                        ));
-                    }
-                    if snapshot(&m.pool).await != before {
-                        failures.push(format!(
-                            "{mount}{method} {path} as {caller:?}: wrote while the copy can't tell"
-                        ));
-                    }
+                    cells.push((op, kind, caller, mount, expected));
                 }
             }
         }
     }
+    let (condition, label) = match stale {
+        true => (Condition::Stale, "stale"),
+        false => (Condition::NoPass, "no pass"),
+    };
+    let Some(mut failures) = super::cells::in_worlds(
+        cells,
+        move || matrix_in(condition),
+        move |m: Arc<Matrix>, c| async move {
+            let failures = cannot_tell_cell(&m, label, c).await;
+            reset(&m).await;
+            (!failures.is_empty()).then(|| failures.join("\n"))
+        },
+    )
+    .await
+    else {
+        return;
+    };
+    failures.sort();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_stale_copy_grants_nothing_and_writes_nothing() {
-    let committee = FakeCommittee::with(&[&Committee.address()]);
-    let Some(m) = matrix(&committee).await else {
-        return;
-    };
-    fresh_pass(&m.pool, 31).await;
-    assert_cannot_tell(&m, true).await;
+    assert_cannot_tell(true).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_copy_without_a_complete_pass_grants_nothing_and_writes_nothing() {
-    let committee = FakeCommittee::with(&[&Committee.address()]);
-    let Some(m) = matrix(&committee).await else {
-        return;
-    };
-    sqlx::query("DELETE FROM shop.mirror_state")
-        .execute(&m.pool)
-        .await
-        .unwrap();
-    assert_cannot_tell(&m, false).await;
+    assert_cannot_tell(false).await;
 }
 
 /// With the committee source down, a decision the committee could change
 /// answers 503; one it can't change (an owner's, any write, and what any
 /// signer may see of published content) answers as before, a committee
 /// member seeing a published collection as any signer does.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides() {
-    let committee = FakeCommittee::down();
-    let Some(m) = matrix(&committee).await else {
-        return;
-    };
     let committee_unavailable = Expect(
         503,
         "The curation committee is not available. Try again later.".to_string(),
     );
-    let mut failures = Vec::new();
+    let mut cells = Vec::new();
     for op in ops()
         .into_iter()
         .filter(|op| !matches!(op, Op::AddressCollections | Op::AddressItems))
@@ -1878,20 +2040,23 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                     }
                     _ => false,
                 };
-                let expect = |f: &Fixture| {
+                let committee_unavailable = committee_unavailable.clone();
+                cells.push(Cell::new(op, kind, caller, "", move |f: &Fixture| {
                     let normal = op.expect(kind, caller, f)?;
                     if (decides && caller != Anonymous) || op == Op::Committee {
                         Some(committee_unavailable.clone())
                     } else {
                         Some(normal)
                     }
-                };
-                if let Some(failure) = cell(&m, op, kind, caller, "", false, expect).await {
-                    failures.push(failure);
-                }
+                }));
             }
         }
     }
+    let Some(failures) =
+        failures_in(Condition::CommitteeDown, "committee down", false, cells).await
+    else {
+        return;
+    };
     assert!(
         failures.is_empty(),
         "{} failing cells:\n{}",
@@ -2009,11 +2174,11 @@ async fn an_item_moves_into_or_out_of_a_third_party_collection_never() {
 /// answers instead of waiting on a connection it holds itself.
 #[tokio::test]
 async fn a_committee_read_holds_no_database_connection() {
+    let committee = FakeCommittee::with(&[&Committee.address()]);
+    let Some(m) = matrix_with(&committee, 1, true).await else {
+        return;
+    };
     for op in [Op::ReadCollection, Op::CollectionItems, Op::ReadItem] {
-        let committee = FakeCommittee::with(&[&Committee.address()]);
-        let Some(m) = matrix_with(&committee, 1, true).await else {
-            return;
-        };
         let f = fixture(&m.pool, Draft).await;
         let (method, path, _) = op.request(Draft, &f);
         for (caller, expected) in [
@@ -2211,76 +2376,74 @@ async fn a_sibling_collection_of_the_provider_grants_nothing_over_the_others() {
 /// stale and with the committee source down; without a complete pass only
 /// `addresses` answers 503, and with the rarities source down only the
 /// rarities do.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_small_reads_cannot_tell_only_without_their_own_source() {
     let small_reads: Vec<Op> = ops().into_iter().filter(|op| op.small_read()).collect();
     assert_eq!(small_reads.len(), 6);
-    for condition in ["stale", "no pass", "committee down", "rarities down"] {
-        let committee = if condition == "committee down" {
-            FakeCommittee::down()
-        } else {
-            FakeCommittee::with(&[&Committee.address()])
-        };
-        let Some(m) = matrix(&committee).await else {
-            return;
-        };
-        match condition {
-            "stale" => fresh_pass(&m.pool, 31).await,
-            "no pass" => {
-                sqlx::query("DELETE FROM shop.mirror_state")
-                    .execute(&m.pool)
-                    .await
-                    .unwrap();
-            }
-            "rarities down" => committee.set_rarities(None),
-            _ => {}
-        }
-        let mut failures = Vec::new();
+    let cells = |label: &'static str| {
+        let mut cells = Vec::new();
         for &op in &small_reads {
             for &kind in op.kinds() {
                 for caller in CALLERS {
-                    let expect = |f: &Fixture| match (condition, op) {
-                        ("no pass", Op::Addresses) => Some(Expect(
-                            503,
-                            "Chain state is not available yet. Try again later.".to_string(),
-                        )),
-                        ("rarities down", Op::Rarities | Op::Rarity) => {
-                            refused(503, RARITIES_UNAVAILABLE)
-                        }
-                        _ => op.expect(kind, caller, f),
-                    };
                     for mount in MOUNTS {
-                        if let Some(failure) = cell(
-                            &m,
+                        cells.push(Cell::new(
                             op,
                             kind,
                             caller,
                             mount,
-                            condition != "committee down",
-                            expect,
-                        )
-                        .await
-                        {
-                            failures.push(format!("{condition}: {failure}"));
-                        }
+                            move |f: &Fixture| match (label, op) {
+                                ("no pass", Op::Addresses) => Some(Expect(
+                                    503,
+                                    "Chain state is not available yet. Try again later."
+                                        .to_string(),
+                                )),
+                                ("rarities down", Op::Rarities | Op::Rarity) => {
+                                    refused(503, RARITIES_UNAVAILABLE)
+                                }
+                                _ => op.expect(kind, caller, f),
+                            },
+                        ));
                     }
                 }
             }
         }
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        cells
+    };
+    let conditions = tokio::join!(
+        failures_in(Condition::Stale, "stale", true, cells("stale")),
+        failures_in(Condition::NoPass, "no pass", true, cells("no pass")),
+        failures_in(
+            Condition::CommitteeDown,
+            "committee down",
+            false,
+            cells("committee down")
+        ),
+        failures_in(
+            Condition::RaritiesDown,
+            "rarities down",
+            true,
+            cells("rarities down")
+        ),
+    );
+    let mut failures = Vec::new();
+    for (label, found) in [
+        ("stale", conditions.0),
+        ("no pass", conditions.1),
+        ("committee down", conditions.2),
+        ("rarities down", conditions.3),
+    ] {
+        let Some(found) = found else { return };
+        failures.extend(found.into_iter().map(|f| format!("{label}: {f}")));
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Without a Polygon verifier, the publication routes that need one answer
 /// 503 to the collection's owner, and every other caller gets the refusal
 /// the matrix gives it, ahead of the 503.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn without_a_polygon_verifier_publication_answers_503_after_the_refusals() {
-    let committee = FakeCommittee::with(&[&Committee.address()]);
-    let Some(m) = matrix_with(&committee, 8, false).await else {
-        return;
-    };
-    let mut failures = Vec::new();
+    let mut cells = Vec::new();
     for op in [
         Op::PublicationBegin,
         Op::PublicationTransaction,
@@ -2288,21 +2451,24 @@ async fn without_a_polygon_verifier_publication_answers_503_after_the_refusals()
     ] {
         for kind in [Missing, Draft] {
             for caller in CALLERS {
-                let expect = |f: &Fixture| match (kind, caller) {
-                    (Draft, Owner) => refused(
-                        503,
-                        "Collection publication is unavailable until the Polygon verifier is configured",
-                    ),
-                    _ => op.expect(kind, caller, f),
-                };
                 for mount in MOUNTS {
-                    if let Some(failure) = cell(&m, op, kind, caller, mount, true, expect).await {
-                        failures.push(failure);
-                    }
+                    cells.push(Cell::new(op, kind, caller, mount, move |f: &Fixture| {
+                        match (kind, caller) {
+                            (Draft, Owner) => refused(
+                                503,
+                                "Collection publication is unavailable until the Polygon verifier is configured",
+                            ),
+                            _ => op.expect(kind, caller, f),
+                        }
+                    }));
                 }
             }
         }
     }
+    let Some(failures) = failures_in(Condition::NoVerifier, "no verifier", true, cells).await
+    else {
+        return;
+    };
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -2401,10 +2567,10 @@ async fn independent_forum_cells_can_post_each_third_party_collection() {
         CuratedRejected,
     ] {
         for mount in MOUNTS {
-            let failure = cell(&m, Op::ForumPost, kind, Owner, mount, true, |_| {
+            let only_posts = Cell::new(Op::ForumPost, kind, Owner, mount, |_| {
                 Some(Expect(200, String::new()))
-            })
-            .await;
+            });
+            let failure = cell(&m, "forum", only_posts, true).await;
             assert!(failure.is_none(), "{failure:?}");
         }
     }

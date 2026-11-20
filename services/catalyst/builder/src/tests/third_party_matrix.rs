@@ -6,6 +6,9 @@
 //! against each state of the provider in the registry and among the virtual
 //! third parties. The registry-down column answers 503 and writes nothing; a
 //! manager the registry stops listing is refused on the next request.
+//!
+//! The matrix tests run their cells on worlds ([`super::cells`]): each cell
+//! gets a fresh fixture, and its world is reset after it.
 
 use std::sync::Arc;
 
@@ -113,6 +116,7 @@ struct World {
     registry: FakeRegistry,
     storage: Arc<Storage>,
     state: crate::SharedState,
+    hash: String,
 }
 
 struct Fixture {
@@ -124,7 +128,7 @@ struct Fixture {
 }
 
 async fn world() -> Option<World> {
-    let pool = crate::db::scratch::isolated_pool(8).await?;
+    let pool = super::cells::world_pool(8).await?;
     sqlx::query(
         "INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at, pass_started_at) \
          VALUES ('collections', 'matic', 'https://subgraph.example', timezone('UTC', now()), timezone('UTC', now()))",
@@ -142,6 +146,9 @@ async fn world() -> Option<World> {
         false,
     );
     let storage = temp_storage().await;
+    let bytes = unique("third-party-file");
+    let hash = dcl_auth::hash_bytes_v1(&bytes);
+    storage.store(&hash, bytes.into()).await.unwrap();
     let state = Arc::new(
         crate::State::new(
             pool.clone(),
@@ -164,7 +171,24 @@ async fn world() -> Option<World> {
         registry,
         storage,
         state,
+        hash,
     })
+}
+
+/// Brings `w` back to the world [`world`] made: no builder rows and only
+/// the other provider in the registry.
+async fn reset(w: &World, f: &Fixture) {
+    sqlx::raw_sql(
+        "DELETE FROM builder.slot_usage_cheques; \
+         DELETE FROM builder.items; \
+         DELETE FROM builder.collections; \
+         DELETE FROM builder.virtual_third_parties; \
+         DELETE FROM builder.uploaded_contents",
+    )
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    w.registry.remove(&f.provider);
 }
 
 async fn fixture(w: &World, provider: Provider) -> Fixture {
@@ -222,11 +246,9 @@ async fn fixture(w: &World, provider: Provider) -> Fixture {
     .execute(&w.pool)
     .await
     .unwrap();
-    let bytes = unique("third-party-file");
-    let hash = dcl_auth::hash_bytes_v1(&bytes);
-    w.storage.store(&hash, bytes.into()).await.unwrap();
+    let hash = w.hash.clone();
     sqlx::query(
-        "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 16, $2)",
+        "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 16, $2) ON CONFLICT DO NOTHING",
     )
     .bind(&hash)
     .bind(Creator.address())
@@ -297,15 +319,16 @@ async fn call(
     )
 }
 
-async fn snapshot(pool: &PgPool) -> Value {
+/// A digest of every row a refused write must leave as it was.
+async fn snapshot(pool: &PgPool) -> String {
     sqlx::query_scalar(
-        "SELECT jsonb_build_object( \
+        "SELECT md5(jsonb_build_object( \
            'collections', (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.id), '[]') FROM builder.collections c), \
            'items', (SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.id), '[]') FROM builder.items i), \
            'contents', (SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY e.item_id, e.file), '[]') FROM builder.item_contents e), \
            'virtual', (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v.id), '[]') FROM builder.virtual_third_parties v), \
            'cheques', (SELECT count(*) FROM builder.slot_usage_cheques), \
-           'curations', (SELECT count(*) FROM builder.item_curations) + (SELECT count(*) FROM builder.collection_curations))",
+           'curations', (SELECT count(*) FROM builder.item_curations) + (SELECT count(*) FROM builder.collection_curations))::text)",
     )
     .fetch_one(pool)
     .await
@@ -541,7 +564,10 @@ async fn cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> 
     let f = fixture(w, p).await;
     let expected = op.expect(p, caller);
     let (method, path, body) = op.request(&f, caller);
-    let before = snapshot(&w.pool).await;
+    let before = match op.writes() {
+        true => Some(snapshot(&w.pool).await),
+        false => None,
+    };
     let (status, answer) = call(&w.app, caller, method, &path, body).await;
     let got = match expected {
         Expect::Lists(_) if status.is_success() => Expect::Lists(holds(&answer, &f, op)),
@@ -553,23 +579,39 @@ async fn cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> 
             "answered {got:?} ({answer}), expected {expected:?}"
         ));
     }
-    if op.writes() && !status.is_success() && snapshot(&w.pool).await != before {
+    let write_checked = op.writes() && !status.is_success();
+    if write_checked && Some(snapshot(&w.pool).await) != before {
         problems.push("a refused write changed rows".into());
     }
+    super::cells::record(|| {
+        format!(
+            "every\t{op:?}\t{p:?}\t{caller:?}\t\t{expected:?}\t{got:?}\twrite={write_checked} problems={}",
+            problems.len()
+        )
+    });
+    reset(w, &f).await;
     (!problems.is_empty()).then(|| format!("{op:?} {p:?} {caller:?}: {}", problems.join("; ")))
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn each_caller_gets_its_providers_answer_on_every_third_party_operation() {
-    let Some(w) = world().await else { return };
-    let mut failures = Vec::new();
+    let mut cells = Vec::new();
     for op in OPS {
         for p in PROVIDERS {
             for caller in CALLERS {
-                failures.extend(cell(&w, op, p, caller).await);
+                cells.push((op, p, caller));
             }
         }
     }
+    let Some(mut failures) =
+        super::cells::in_worlds(cells, world, |w: Arc<World>, (op, p, caller)| async move {
+            cell(&w, op, p, caller).await
+        })
+        .await
+    else {
+        return;
+    };
+    failures.sort();
     assert!(
         failures.is_empty(),
         "{} cells:\n{}",
@@ -639,35 +681,59 @@ async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
     assert_eq!(snapshot(&w.pool).await, before);
 }
 
+/// One cell of the registry-down column: `op` on a fresh fixture of `p`
+/// as `caller` while the registry answers an error.
+async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> {
+    let mut failures = Vec::new();
+    let f = fixture(w, p).await;
+    w.registry.fail(true);
+    let (method, path, body) = op.request(&f, caller);
+    let before = snapshot(&w.pool).await;
+    let (status, answer) = call(&w.app, caller, method, &path, body).await;
+    w.registry.fail(false);
+    w.registry.put(
+        "urn:decentraland:matic:collections-thirdparty:other",
+        &[&Other.address()],
+        true,
+        false,
+    );
+    let readable_anyway = matches!(op, ReadItem | ReadFile) && caller == Creator;
+    let changed = snapshot(&w.pool).await != before;
+    super::cells::record(|| {
+        format!(
+            "registry down\t{op:?}\t{p:?}\t{caller:?}\t\t503 unless readable_anyway={readable_anyway}\t{}\twrite=true",
+            status.as_u16()
+        )
+    });
+    if status != StatusCode::SERVICE_UNAVAILABLE && !readable_anyway {
+        failures.push(format!("{op:?} {p:?} {caller:?}: {status} {answer}"));
+    }
+    if changed {
+        failures.push(format!("{op:?} {p:?} {caller:?}: rows changed"));
+    }
+    reset(w, &f).await;
+    (!failures.is_empty()).then(|| failures.join("\n"))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn while_the_registry_cant_tell_every_third_party_decision_is_503_and_writes_nothing() {
-    let Some(w) = world().await else { return };
-    let mut failures = Vec::new();
+    let mut cells = Vec::new();
     for p in [Approved, Virtual, Unknown] {
         for op in OPS {
             for caller in [Manager, Holder, Creator, Committee] {
-                let f = fixture(&w, p).await;
-                w.registry.fail(true);
-                let (method, path, body) = op.request(&f, caller);
-                let before = snapshot(&w.pool).await;
-                let (status, answer) = call(&w.app, caller, method, &path, body).await;
-                w.registry.fail(false);
-                w.registry.put(
-                    "urn:decentraland:matic:collections-thirdparty:other",
-                    &[&Other.address()],
-                    true,
-                    false,
-                );
-                let readable_anyway = matches!(op, ReadItem | ReadFile) && caller == Creator;
-                if status != StatusCode::SERVICE_UNAVAILABLE && !readable_anyway {
-                    failures.push(format!("{op:?} {p:?} {caller:?}: {status} {answer}"));
-                }
-                if snapshot(&w.pool).await != before {
-                    failures.push(format!("{op:?} {p:?} {caller:?}: rows changed"));
-                }
+                cells.push((op, p, caller));
             }
         }
     }
+    let Some(mut failures) =
+        super::cells::in_worlds(cells, world, |w: Arc<World>, (op, p, caller)| async move {
+            registry_down_cell(&w, op, p, caller).await
+        })
+        .await
+    else {
+        return;
+    };
+    failures.sort();
     assert!(
         failures.is_empty(),
         "{} cells:\n{}",
