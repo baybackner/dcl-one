@@ -408,6 +408,7 @@ pub async fn put_place_rating(
     let ctx = moderation::Context {
         comment: comment.as_deref(),
         notify: notify(&state),
+        land: state.places.land_authz().map(|l| &**l),
     };
     moderation::apply_with(
         &state.pool,
@@ -444,6 +445,7 @@ pub async fn put_world_rating(
     let ctx = moderation::Context {
         comment: comment.as_deref(),
         notify: notify(&state),
+        land: state.places.land_authz().map(|l| &**l),
     };
     moderation::apply_with(
         &state.pool,
@@ -545,6 +547,7 @@ pub async fn put_place_disable(
     let ctx = moderation::Context {
         comment: None,
         notify: notify(&state),
+        land: state.places.land_authz().map(|l| &**l),
     };
     let applied = moderation::apply_with(
         &state.pool,
@@ -588,6 +591,7 @@ pub async fn patch_place_disable(
     let ctx = moderation::Context {
         comment: None,
         notify: notify(&state),
+        land: state.places.land_authz().map(|l| &**l),
     };
     moderation::apply_with(
         &state.pool,
@@ -2821,6 +2825,7 @@ mod tests {
             let ctx = moderation::Context {
                 comment: None,
                 notify: Some("https://places.example.org"),
+                land: None,
             };
             moderation::apply_with(&pool, Target::Place(id), &disable, ADMIN_TOKEN_ACTOR, ctx)
                 .await

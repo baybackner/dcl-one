@@ -41,6 +41,7 @@ use sqlx::{PgPool, Row};
 use super::moderation::{self, CreatorRating, RatedRow};
 use super::query::{EXCLUDE_FROM_RANKING_SQL, raw_float8_sql};
 use crate::jobs::{Jobs, PeriodicCfg};
+use crate::land_authz::LandAuthzState;
 
 pub const JOB_NAME: &str = "places-derive";
 pub const PAGE: i64 = 1000;
@@ -485,7 +486,7 @@ pub async fn run_once(
     scope: DeriveScope,
     content_public_url: &str,
 ) -> Result<PassSummary> {
-    run_once_with_storage(pool, scope, content_public_url, None, None).await
+    run_once_with_storage(pool, scope, content_public_url, None, None, None).await
 }
 
 /// The stored, hash-addressed scene.json supplies creator/runtimeVersion.
@@ -544,6 +545,7 @@ async fn run_once_with_storage(
     content_public_url: &str,
     storage: Option<&crate::storage::Storage>,
     notify: Option<&str>,
+    land: Option<&LandAuthzState>,
 ) -> Result<PassSummary> {
     let started: NaiveDateTime = sqlx::query_scalar("SELECT timezone('UTC', clock_timestamp())")
         .fetch_one(pool)
@@ -638,7 +640,7 @@ async fn run_once_with_storage(
             sqlx::query("UPDATE explore.place SET fetched_at = timezone('UTC', clock_timestamp()) WHERE id = ANY($1) AND raw->>'source' = 'content'")
                 .bind(&failed).execute(pool).await?;
         }
-        upsert_page(pool, page, notify).await?;
+        upsert_page(pool, page, notify, land).await?;
         if fetched < PAGE {
             break;
         }
@@ -684,29 +686,31 @@ const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.
      WHERE id = ANY($1) AND raw->>'source' = 'content' ORDER BY id FOR UPDATE";
 
 /// The ratings a new deployment or a new row is held to: its own operator
-/// rating; the rating recorded on each of its parcels by the same place or by
-/// the same creator; and the rating of every other derived place by the same
-/// creator its parcels overlap (the rows it replaces, which `PRUNE` removes;
-/// that row's operator rating first), disabled ones included. Another
-/// creator's place on those parcels starts fresh, and an empty creator
-/// matches none. `$1` the ids, `$2` each one's positions, `$3` each one's
-/// lowercase creator; `$4`, `$5`, `$6` one entry per parcel: the id, the
-/// position and the creator.
+/// rating; the rating recorded on each of its parcels by the same place, the
+/// same creator or under the same LAND owner; and the rating of every other
+/// derived place by the same creator its parcels overlap (the rows it
+/// replaces, which `PRUNE` removes; that row's operator rating first),
+/// disabled ones included. A place by another creator on another owner's
+/// LAND starts fresh; an empty creator or owner matches none. `$1` the ids,
+/// `$2` each one's positions, `$3` each one's lowercase creator; `$4` to `$7`
+/// one entry per parcel: the id, the position, the creator and the parcel's
+/// LAND owner.
 const HELD_RATINGS: &str = r#"
     SELECT f.id, false AS predecessor, m.content_rating AS rating
     FROM unnest($1::text[]) AS f(id)
     JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
     UNION ALL
     SELECT c.id, true, r.content_rating
-    FROM unnest($4::text[], $5::text[], $6::text[]) AS c(id, position, creator)
+    FROM unnest($4::text[], $5::text[], $6::text[], $7::text[]) AS c(id, position, creator, owner)
     JOIN explore.place_parcel_rating r ON r.position = c.position
-     AND (r.place_id = c.id OR (c.creator <> '' AND r.creator_address = c.creator))
+     AND (r.place_id = c.id OR (c.creator <> '' AND r.creator_address = c.creator)
+          OR (c.owner <> '' AND r.owner_address = c.owner))
     UNION ALL
     SELECT f.id, true, COALESCE(m.content_rating, p.content_rating)
     FROM unnest($1::text[], $2::jsonb[], $3::text[]) AS f(id, positions, creator)
     JOIN explore.place p
       ON p.id <> f.id AND p.world IS FALSE AND p.raw->>'source' = 'content'
-     AND f.creator <> '' AND lower(p.creator_address) = f.creator
+     AND f.creator <> '' AND lower(btrim(p.creator_address)) = f.creator
      AND p.raw->'positions' ?| ARRAY(SELECT jsonb_array_elements_text(f.positions))
     LEFT JOIN explore.place_moderation m ON m.place_id = p.id
 "#;
@@ -733,25 +737,46 @@ async fn lock_page_parcels(
     Ok(())
 }
 
-/// Records `$2` on each parcel `$1` for the place `$3` by the creator `$4`:
-/// `$5` true overwrites a recorded rating, false only fills a parcel with
-/// none.
+/// Records `$2` on each parcel `$1` for the place `$3` by the creator `$4`
+/// under the LAND owner `$6`: `$5` true overwrites a recorded rating, false
+/// only fills a parcel with none. A place with an operator rating records an
+/// operator's rating. An operator's record is replaced only by a place held to
+/// it ([`HELD_RATINGS`], which keeps it an operator's) or under a known owner
+/// other than its known one.
 const RECORD_PARCEL_RATINGS: &str = r#"
-    INSERT INTO explore.place_parcel_rating AS r (position, content_rating, place_id, creator_address)
-    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id, NULLIF(lower(btrim(u.creator)), '')
-    FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS u(position, rating, place_id, creator)
+    INSERT INTO explore.place_parcel_rating AS r
+        (position, content_rating, place_id, creator_address, owner_address, operator)
+    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id,
+           NULLIF(lower(btrim(u.creator)), ''), NULLIF(u.owner, ''),
+           EXISTS (SELECT 1 FROM explore.place_moderation m
+                   WHERE m.place_id = u.place_id AND m.content_rating IS NOT NULL)
+    FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $6::text[])
+         AS u(position, rating, place_id, creator, owner)
     ORDER BY u.position
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
-        creator_address = EXCLUDED.creator_address, updated_at = timezone('UTC', now())
-    WHERE $5 AND (r.content_rating, r.place_id, r.creator_address)
-          IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id, EXCLUDED.creator_address)
+        creator_address = EXCLUDED.creator_address, owner_address = EXCLUDED.owner_address,
+        operator = EXCLUDED.operator OR (r.operator AND COALESCE(
+            r.place_id = EXCLUDED.place_id OR r.creator_address = EXCLUDED.creator_address
+            OR r.owner_address = EXCLUDED.owner_address, false)),
+        updated_at = timezone('UTC', now())
+    WHERE $5
+      AND (NOT r.operator OR r.place_id = EXCLUDED.place_id
+           OR r.creator_address = EXCLUDED.creator_address
+           OR (r.owner_address IS NOT NULL AND EXCLUDED.owner_address IS NOT NULL))
+      AND (r.content_rating, r.place_id, r.creator_address, r.owner_address)
+          IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id,
+                            EXCLUDED.creator_address, EXCLUDED.owner_address)
 "#;
 
 /// Clears the parcels `$1` of a place left with no rating, so a later place
-/// on them is held to none it did not hold.
-const CLEAR_PARCEL_RATINGS: &str =
-    "DELETE FROM explore.place_parcel_rating WHERE position = ANY($1)";
+/// on them is held to none it did not hold. Such a place is held to no
+/// record, so an operator's record stays unless `$2`, the parcel's LAND
+/// owner, is known and so is the record's (the LAND changed owner).
+const CLEAR_PARCEL_RATINGS: &str = "DELETE FROM explore.place_parcel_rating r \
+     USING unnest($1::text[], $2::text[]) AS c(position, owner) \
+     WHERE r.position = c.position \
+       AND (NOT r.operator OR (r.owner_address IS NOT NULL AND c.owner <> ''))";
 
 /// The page's operator rows, locked before its places as an operator's
 /// decision locks them (`moderation::apply_with`).
@@ -771,7 +796,12 @@ const FOLLOW_RATINGS: &str = "UPDATE explore.place_moderation m SET content_rati
 /// One transaction per page: a multi-row upsert, the creator rating rule
 /// ([`settle_ratings`]), one overlap query for the fresh rows, and one batched
 /// curation update. Later duplicates of an id win, as they did row by row.
-async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str>) -> Result<()> {
+async fn upsert_page(
+    pool: &PgPool,
+    page: Vec<DerivedPlace>,
+    notify: Option<&str>,
+    land: Option<&LandAuthzState>,
+) -> Result<()> {
     let mut slot_of: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<usize> = Vec::with_capacity(page.len());
     for (i, p) in page.iter().enumerate() {
@@ -810,6 +840,7 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
             .collect();
     let parcels = page_parcels(&mut tx, &rows, &before).await?;
     lock_page_parcels(&mut tx, &parcels).await?;
+    let owners = parcel_owners(&mut tx, land, &parcels).await?;
     let inserted: HashMap<String, bool> = sqlx::query(UPSERT)
         .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
         .bind(
@@ -850,7 +881,10 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
             )
         })
         .collect();
-    settle_ratings(&mut tx, &rows, &before, &inserted, &parcels, notify).await?;
+    settle_ratings(
+        &mut tx, &rows, &before, &inserted, &parcels, &owners, notify,
+    )
+    .await?;
     let fresh: Vec<(&DerivedPlace, Vec<String>)> = rows
         .iter()
         .filter(|p| inserted.get(&p.id).copied().unwrap_or(false))
@@ -941,6 +975,29 @@ async fn upsert_page(pool: &PgPool, page: Vec<DerivedPlace>, notify: Option<&str
     Ok(())
 }
 
+/// The LAND owner of each of `parcels` the land index knows, on the page's
+/// connection ([`LandAuthzState::owners_at`]); none without the index.
+async fn parcel_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    land: Option<&LandAuthzState>,
+    parcels: &[String],
+) -> Result<HashMap<String, String>> {
+    let Some(land) = land else {
+        return Ok(HashMap::new());
+    };
+    let coords: Vec<(String, (i32, i32))> = parcels
+        .iter()
+        .filter_map(|p| Some((p.clone(), super::parse_parcel(p)?)))
+        .collect();
+    let xy: Vec<(i32, i32)> = coords.iter().map(|(_, c)| *c).collect();
+    let owners = land.owners_at(tx, &xy).await?;
+    Ok(coords
+        .into_iter()
+        .zip(owners)
+        .filter_map(|((p, _), o)| Some((p, o?)))
+        .collect())
+}
+
 /// The parcels a page may write, sorted: those of a new row or a new
 /// deployment, and the unrecorded ones of a rated row it may fill. Only these
 /// are locked, so a page of unchanged rows does not hold an operator's rating
@@ -984,19 +1041,22 @@ async fn page_parcels(
 /// The creator rating rule (`places::moderation::CreatorRating`) over a page:
 /// a new deployment of an existing row, or a new row, takes the scene's rating
 /// when it raises the one held, never a laxer one. It is held to its stored
-/// or operator rating, and to the ratings of the same place or the same
-/// creator on its parcels: those recorded there and those of the places it
-/// replaces; another creator's place starts fresh. The rating it takes is
-/// recorded on its parcels, and a place left with no rating clears them. A
-/// pass over the same deployment leaves the stored rating, an operator's
-/// included, and only fills its parcels' missing records among `locked`. A
-/// scene that declares no rating keeps the held one, with no notice.
+/// or operator rating, and to the ratings of the same place, the same
+/// creator or the same LAND owner (`owners`) on its parcels: those recorded
+/// there and those of the places it replaces; a place by another creator on
+/// another owner's LAND starts fresh. The rating it takes is recorded on its
+/// parcels, and a place left with no rating clears them, an operator's
+/// record only once the LAND changed owner. A pass over the same deployment
+/// leaves the stored rating, an operator's included, and only fills its
+/// parcels' missing records among `locked`. A scene that declares no rating
+/// keeps the held one, with no notice.
 async fn settle_ratings(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rows: &[&DerivedPlace],
     before: &HashMap<String, (Option<String>, Option<NaiveDateTime>)>,
     inserted: &HashMap<String, bool>,
     locked: &[String],
+    owners: &HashMap<String, String>,
     notify: Option<&str>,
 ) -> Result<()> {
     let settled: Vec<&DerivedPlace> = rows
@@ -1018,11 +1078,13 @@ async fn settle_ratings(
             .map(|p| Value::from(positions_of(p)))
             .collect();
         let creators: Vec<String> = settled.iter().map(|p| creator_of(p)).collect();
-        let (mut cell_ids, mut cells, mut cell_creators) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut cell_ids, mut cells, mut cell_creators, mut cell_owners) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for p in &settled {
             for position in positions_of(p) {
                 cell_ids.push(p.id.clone());
                 cell_creators.push(creator_of(p));
+                cell_owners.push(owners.get(&position).cloned().unwrap_or_default());
                 cells.push(position);
             }
         }
@@ -1033,6 +1095,7 @@ async fn settle_ratings(
             .bind(&cell_ids)
             .bind(&cells)
             .bind(&cell_creators)
+            .bind(&cell_owners)
             .fetch_all(&mut **tx)
             .await?
         {
@@ -1061,7 +1124,7 @@ async fn settle_ratings(
             {
                 for position in positions_of(p) {
                     if locked.binary_search(&position).is_ok() {
-                        missing.push(position, rating, p);
+                        missing.push(position, rating, p, owners);
                     }
                 }
             }
@@ -1101,7 +1164,7 @@ async fn settle_ratings(
             continue;
         };
         for position in positions_of(p) {
-            recorded.push(position, &rating, p);
+            recorded.push(position, &rating, p, owners);
         }
         if fresh || Some(&rating) != own.as_ref() {
             ids.push(p.id.clone());
@@ -1118,8 +1181,13 @@ async fn settle_ratings(
         }
     }
     if !cleared.is_empty() {
+        let cleared_owners: Vec<String> = cleared
+            .iter()
+            .map(|p| owners.get(p).cloned().unwrap_or_default())
+            .collect();
         sqlx::query(CLEAR_PARCEL_RATINGS)
             .bind(&cleared)
+            .bind(&cleared_owners)
             .execute(&mut **tx)
             .await?;
     }
@@ -1131,6 +1199,7 @@ async fn settle_ratings(
                 .bind(&records.places)
                 .bind(&records.creators)
                 .bind(overwrite)
+                .bind(&records.owners)
                 .execute(&mut **tx)
                 .await?;
         }
@@ -1147,17 +1216,27 @@ fn creator_of(p: &DerivedPlace) -> String {
         .unwrap_or_default()
 }
 
-/// Parcel records to write: each parcel's rating, place and creator.
+/// Parcel records to write: each parcel's rating, place, creator and LAND
+/// owner (empty when unknown).
 #[derive(Default)]
 struct Records {
     positions: Vec<String>,
     ratings: Vec<String>,
     places: Vec<String>,
     creators: Vec<String>,
+    owners: Vec<String>,
 }
 
 impl Records {
-    fn push(&mut self, position: String, rating: &str, place: &DerivedPlace) {
+    fn push(
+        &mut self,
+        position: String,
+        rating: &str,
+        place: &DerivedPlace,
+        owners: &HashMap<String, String>,
+    ) {
+        self.owners
+            .push(owners.get(&position).cloned().unwrap_or_default());
         self.positions.push(position);
         self.ratings.push(rating.to_string());
         self.places.push(place.id.clone());
@@ -1165,7 +1244,9 @@ impl Records {
     }
 }
 
-/// Registers the periodic derive job (`places-derive`).
+/// Registers the periodic derive job (`places-derive`). `land` answers the
+/// LAND index attached by the time each pass runs.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_job(
     jobs: &Jobs,
     pool: PgPool,
@@ -1174,17 +1255,19 @@ pub fn spawn_job(
     content_public_url: String,
     storage: Option<Arc<crate::storage::Storage>>,
     notify: Option<String>,
+    land: impl Fn() -> Option<Arc<LandAuthzState>> + Send + Sync + 'static,
 ) {
     tracing::info!(scope = ?scope, interval_secs = interval.as_secs(), "place catalogue: deriving from content deployments");
     jobs.spawn_periodic_leased(
         JOB_NAME,
         PeriodicCfg::every(interval).with_error_backoff(Duration::from_secs(3600)),
         move |ctx| {
-            let (pool, url, storage, notify) = (
+            let (pool, url, storage, notify, land) = (
                 pool.clone(),
                 content_public_url.clone(),
                 storage.clone(),
                 notify.clone(),
+                land(),
             );
             async move {
                 let out = run_once_with_storage(
@@ -1193,6 +1276,7 @@ pub fn spawn_job(
                     &url,
                     storage.as_deref(),
                     notify.as_deref(),
+                    land.as_deref(),
                 )
                 .await?;
                 ctx.progress(format!(
@@ -1208,6 +1292,25 @@ pub fn spawn_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page with no LAND index attached.
+    async fn upsert_page(
+        pool: &PgPool,
+        page: Vec<DerivedPlace>,
+        notify: Option<&str>,
+    ) -> Result<()> {
+        super::upsert_page(pool, page, notify, None).await
+    }
+
+    async fn run_once_with_storage(
+        pool: &PgPool,
+        scope: DeriveScope,
+        content_public_url: &str,
+        storage: Option<&crate::storage::Storage>,
+        notify: Option<&str>,
+    ) -> Result<PassSummary> {
+        super::run_once_with_storage(pool, scope, content_public_url, storage, notify, None).await
+    }
 
     fn wrapped() -> Value {
         json!({ "v": {
@@ -1632,6 +1735,7 @@ mod tests {
             .bind(vec![id.clone(); 2])
             .bind(vec!["0xauthor".to_string(); 2])
             .bind(true)
+            .bind(vec![String::new(); 2])
             .execute(&mut *page)
             .await
             .expect("the page is not chosen as a deadlock victim");
@@ -1691,7 +1795,19 @@ mod tests {
                 .and_hms_opt(0, minute, 0);
             derive("0xauthor", &[], at, &meta, None, "/content", true).unwrap()
         };
-        let (a, b, c, d, e) = (parcel(0), parcel(1), parcel(3), parcel(5), parcel(7));
+        let (a, b, c, d) = (parcel(0), parcel(1), parcel(3), parcel(5));
+        // Another place on a parcel in `a`'s lock bucket, so a page that
+        // locked its unchanged rows' parcels would hold the operator.
+        let e: String = sqlx::query_scalar(
+            "SELECT $1 || ',' || ($2 + n) FROM generate_series(7, 5000) AS n \
+             WHERE hashtext($1 || ',' || ($2 + n)) & 127 = hashtext($3) & 127 LIMIT 1",
+        )
+        .bind(x.to_string())
+        .bind(y0)
+        .bind(&a)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let rated = deploy(&[&a, &b], Some("A"), 0);
         let unrated = deploy(&[&c], None, 0);
         let other = deploy(&[&e], Some("T"), 0);
@@ -1730,7 +1846,10 @@ mod tests {
         // operator's rating of another place does not wait for the page.
         assert!(locked(&pool, &[&rated, &unrated], &before).await.is_empty());
         let mut page = pool.begin().await.unwrap();
-        lock_page_parcels(&mut page, &[]).await.unwrap();
+        let parcels = page_parcels(&mut page, &[&rated, &unrated], &before)
+            .await
+            .unwrap();
+        lock_page_parcels(&mut page, &parcels).await.unwrap();
         tokio::time::timeout(
             Duration::from_secs(5),
             moderation::apply(
@@ -2209,6 +2328,254 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rating(&n).await.as_deref(), Some("T"));
+    }
+
+    /// The rows, notices and parcel records the operator-rating tests read.
+    struct Ratings {
+        pool: PgPool,
+    }
+
+    impl Ratings {
+        fn deploy(
+            by: &str,
+            base: &str,
+            parcels: &[&String],
+            rating: Option<&str>,
+            minute: u32,
+        ) -> Vec<DerivedPlace> {
+            let mut meta = wrapped();
+            meta["v"]["scene"]["base"] = json!(base);
+            meta["v"]["scene"]["parcels"] = json!(parcels);
+            meta["v"]["policy"] = json!({ "contentRating": rating });
+            let at = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, minute, 0);
+            vec![derive(by, &[], at, &meta, None, "/content", true).unwrap()]
+        }
+
+        async fn rating(&self, position: &str) -> Option<String> {
+            sqlx::query_scalar("SELECT content_rating FROM explore.place WHERE id = $1")
+                .bind(super::super::parcel_place_id(position))
+                .fetch_one(&self.pool)
+                .await
+                .unwrap()
+        }
+
+        async fn kinds(&self, position: &str) -> Vec<String> {
+            sqlx::query_scalar(
+                "SELECT kind FROM explore.moderation_hooks \
+                 WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+            )
+            .bind(super::super::parcel_place_id(position))
+            .fetch_all(&self.pool)
+            .await
+            .unwrap()
+        }
+
+        /// `(rating, operator)` recorded on a parcel.
+        async fn record(&self, position: &str) -> Option<(String, bool)> {
+            sqlx::query_as(
+                "SELECT content_rating, operator FROM explore.place_parcel_rating WHERE position = $1",
+            )
+            .bind(position)
+            .fetch_optional(&self.pool)
+            .await
+            .unwrap()
+        }
+
+        async fn prune(&self, position: &str) {
+            sqlx::query("DELETE FROM explore.place WHERE id = $1")
+                .bind(super::super::parcel_place_id(position))
+                .execute(&self.pool)
+                .await
+                .unwrap();
+        }
+
+        async fn rate(&self, position: &str, rating: &str, land: Option<&LandAuthzState>) {
+            moderation::apply_with(
+                &self.pool,
+                moderation::Target::Place(&super::super::parcel_place_id(position)),
+                &moderation::Decision::Rating(rating.into()),
+                "0xmoderator",
+                moderation::Context {
+                    land,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn another_creator_never_clears_or_replaces_an_operators_parcel_rating() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let x = u16::from_str_radix(&token[..4], 16).unwrap() as i32;
+        let y0 = u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000;
+        let parcel = |n: i32| format!("{x},{}", y0 + n);
+        let site = Some("https://decentraland.org/places");
+        let (owner, other) = ("0xowner", "0xother");
+
+        // An unrated place by another creator leaves the operator's records.
+        let (l, m, n) = (parcel(0), parcel(1), parcel(2));
+        upsert_page(
+            &pool,
+            Ratings::deploy(owner, &l, &[&l, &m], Some("A"), 0),
+            site,
+        )
+        .await
+        .unwrap();
+        t.rate(&l, "R", None).await;
+        assert_eq!(t.record(&m).await, Some(("R".into(), true)));
+        t.prune(&l).await;
+        upsert_page(&pool, Ratings::deploy(other, &m, &[&l, &m], None, 1), site)
+            .await
+            .unwrap();
+        assert_eq!(t.rating(&m).await, None);
+        assert_eq!(t.record(&l).await, Some(("R".into(), true)));
+        t.prune(&m).await;
+        upsert_page(
+            &pool,
+            Ratings::deploy(owner, &n, &[&l, &m, &n], Some("T"), 2),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&n).await.as_deref(), Some("R"));
+        assert_eq!(t.record(&l).await, Some(("R".into(), true)));
+
+        // A rated one starts fresh and leaves them too.
+        let (p, q, r) = (parcel(4), parcel(5), parcel(6));
+        upsert_page(
+            &pool,
+            Ratings::deploy(owner, &p, &[&p, &q], Some("T"), 0),
+            site,
+        )
+        .await
+        .unwrap();
+        t.rate(&p, "R", None).await;
+        t.prune(&p).await;
+        upsert_page(
+            &pool,
+            Ratings::deploy(other, &q, &[&p, &q], Some("E"), 1),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&q).await.as_deref(), Some("E"));
+        assert!(t.kinds(&q).await.is_empty());
+        assert_eq!(t.record(&p).await, Some(("R".into(), true)));
+        t.prune(&q).await;
+        upsert_page(
+            &pool,
+            Ratings::deploy(owner, &r, &[&p, &q, &r], Some("T"), 2),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&r).await.as_deref(), Some("R"));
+    }
+
+    /// Publishes a ready LAND index on an isolated database, with `owner` on
+    /// each parcel.
+    async fn land_index(pool: &PgPool, parcels: &[&String], owner: &str) -> LandAuthzState {
+        let settings = crate::land_authz::Settings::for_tests();
+        sqlx::query(
+            "INSERT INTO land_authz.index_cursor \
+             (network, land_registry, estate_registry, last_block, folded_block, folded_at, full_replay_started) \
+             VALUES ($1, $2, $3, 100, 100, timezone('UTC', now()), true) \
+             ON CONFLICT (network) DO UPDATE SET folded_at = EXCLUDED.folded_at, folded_block = 100, \
+             last_block = 100, full_replay_started = true",
+        )
+        .bind(&settings.network)
+        .bind(&settings.land_registry)
+        .bind(&settings.estate_registry)
+        .execute(pool)
+        .await
+        .unwrap();
+        for position in parcels {
+            let (x, y) = super::super::parse_parcel(position).unwrap();
+            sqlx::query(
+                "INSERT INTO land_authz.token_right (token_address, token_id, x, y, owner, updated_block, updated_log) \
+                 VALUES ($1, $2::numeric * 340282366920938463463374607431768211456 + $3, $2, $3, $4, 100, 0) \
+                 ON CONFLICT (token_address, token_id) DO UPDATE SET owner = EXCLUDED.owner",
+            )
+            .bind(&settings.land_registry)
+            .bind(x)
+            .bind(y)
+            .bind(owner)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        LandAuthzState::new(
+            pool.clone(),
+            crate::http::Outbound::new(Default::default()).unwrap(),
+            settings,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_rating_holds_for_the_same_land_owner_from_another_wallet() {
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let parcel = |n: i32| format!("10,{n}");
+        let site = Some("https://decentraland.org/places");
+        let (owner, wallet, buyer) = (
+            "0x00000000000000000000000000000000000000a1",
+            "0x00000000000000000000000000000000000000b2",
+            "0x00000000000000000000000000000000000000c3",
+        );
+        let (a, b, c, d, e, f) = (
+            parcel(0),
+            parcel(1),
+            parcel(3),
+            parcel(4),
+            parcel(6),
+            parcel(7),
+        );
+        let land = land_index(&pool, &[&a, &b, &c, &d, &e, &f], owner).await;
+        let page = |rows| {
+            let (pool, land) = (pool.clone(), &land);
+            async move {
+                super::upsert_page(&pool, rows, site, Some(land))
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // An operator's rating of an unrated place holds a moved base
+        // deployed from a wallet the owner authorized.
+        page(Ratings::deploy(owner, &a, &[&a, &b], None, 0)).await;
+        t.rate(&a, "R", Some(&land)).await;
+        t.prune(&a).await;
+        page(Ratings::deploy(wallet, &b, &[&a, &b], Some("T"), 1)).await;
+        assert_eq!(t.rating(&b).await.as_deref(), Some("R"));
+        assert_eq!(t.kinds(&b).await, ["rating_downgrade_refused"]);
+
+        // So does a creator's raise.
+        page(Ratings::deploy(owner, &c, &[&c, &d], Some("A"), 0)).await;
+        t.prune(&c).await;
+        page(Ratings::deploy(wallet, &d, &[&c, &d], Some("T"), 1)).await;
+        assert_eq!(t.rating(&d).await.as_deref(), Some("A"));
+
+        // Once the LAND changes owner, the new owner's place starts fresh and
+        // replaces the operator's records.
+        page(Ratings::deploy(owner, &e, &[&e, &f], Some("T"), 0)).await;
+        t.rate(&e, "R", Some(&land)).await;
+        t.prune(&e).await;
+        land_index(&pool, &[&e, &f], buyer).await;
+        page(Ratings::deploy(buyer, &f, &[&e, &f], None, 1)).await;
+        assert_eq!(t.rating(&f).await, None);
+        assert_eq!(t.record(&e).await, None);
     }
 
     #[test]

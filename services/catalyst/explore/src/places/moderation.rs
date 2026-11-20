@@ -218,13 +218,16 @@ impl Target<'_> {
 }
 
 /// What goes with a decision beyond the row.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct Context<'a> {
     /// The rating's audit comment (`comment` of the old rating body).
     pub comment: Option<&'a str>,
     /// `Some(places site base URL)`: capture a webhook notice for a disable
     /// or a rating upgrade, linking into that site; `None` captures none.
     pub notify: Option<&'a str>,
+    /// The LAND index a place rating reads its parcels' owners from; `None`
+    /// records them unknown.
+    pub land: Option<&'a crate::land_authz::LandAuthzState>,
 }
 
 /// What [`apply_with`] did.
@@ -339,20 +342,47 @@ const PLACE_PARCELS: &str = r#"
 "#;
 
 /// An operator's rating `$2` of the derived place `$1`, recorded on each of
-/// its parcels with the place and its creator (`explore.place_parcel_rating`,
-/// which the derive pass holds a new deployment of that place, or a new row
-/// by that creator, to).
+/// its parcels as an operator's, with the place, its creator and the parcel's
+/// LAND owner (`$3` positions, `$4` owners; an unknown owner keeps the one
+/// this place recorded) in `explore.place_parcel_rating`, which the derive
+/// pass holds a new deployment of that place, or a new row by that creator or
+/// on that owner's LAND, to.
 const OPERATOR_PARCEL_RATINGS: &str = r#"
-    INSERT INTO explore.place_parcel_rating AS r (position, content_rating, place_id, creator_address)
-    SELECT DISTINCT pos, $2, p.id, NULLIF(lower(btrim(p.creator_address)), '') FROM explore.place p,
+    INSERT INTO explore.place_parcel_rating AS r
+        (position, content_rating, place_id, creator_address, owner_address, operator)
+    SELECT DISTINCT pos, $2, p.id, NULLIF(lower(btrim(p.creator_address)), ''),
+           NULLIF((SELECT o.owner FROM unnest($3::text[], $4::text[]) AS o(position, owner)
+                   WHERE o.position = pos LIMIT 1), ''), true
+    FROM explore.place p,
          jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.raw->'positions') = 'array'
                                         THEN p.raw->'positions' ELSE '[]'::jsonb END) AS pos
     WHERE p.id = $1 AND p.raw->>'source' = 'content' AND p.world IS FALSE
     ORDER BY pos
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
-        creator_address = EXCLUDED.creator_address, updated_at = timezone('UTC', now())
+        creator_address = EXCLUDED.creator_address,
+        owner_address = COALESCE(EXCLUDED.owner_address,
+            CASE WHEN r.place_id = EXCLUDED.place_id THEN r.owner_address END),
+        operator = true, updated_at = timezone('UTC', now())
 "#;
+
+/// The LAND owner of each of `parcels`, positional and empty when unknown.
+async fn parcel_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    land: Option<&crate::land_authz::LandAuthzState>,
+    parcels: &[String],
+) -> Result<Vec<String>, ApiError> {
+    let Some(land) = land else {
+        return Ok(vec![String::new(); parcels.len()]);
+    };
+    let xy: Vec<Option<(i32, i32)>> = parcels.iter().map(|p| super::parse_parcel(p)).collect();
+    let known: Vec<(i32, i32)> = xy.iter().flatten().copied().collect();
+    let mut owners = land.owners_at(tx, &known).await?.into_iter();
+    Ok(xy
+        .iter()
+        .map(|c| c.and_then(|_| owners.next().flatten()).unwrap_or_default())
+        .collect())
+}
 
 /// The `raw` keys a disable decision writes, as `updateDisabled` did
 /// (`Place/model.ts:727-742`): `disabled_at` and `disabled_reason` set or
@@ -452,9 +482,12 @@ pub async fn apply_with(
                 .bind(&parcels)
                 .execute(&mut *tx)
                 .await?;
+            let owners = parcel_owners(&mut tx, ctx.land, &parcels).await?;
             sqlx::query(OPERATOR_PARCEL_RATINGS)
                 .bind(&id)
                 .bind(rating)
+                .bind(&parcels)
+                .bind(&owners)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1016,6 +1049,7 @@ mod tests {
             Context {
                 comment: Some(" reviewed "),
                 notify: None,
+                land: None,
             },
         )
         .await
@@ -1338,6 +1372,7 @@ mod tests {
         let notify = Context {
             comment: None,
             notify: Some("https://decentraland.org/places"),
+            land: None,
         };
         // No notice without the webhook, none for a highlight, a re-enable or
         // a rating that is not an upgrade.

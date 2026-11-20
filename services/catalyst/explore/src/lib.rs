@@ -559,6 +559,10 @@ impl ExploreState {
                 self.settings.content_public_url.clone(),
                 self.storage.clone(),
                 self.settings.places_notices().map(str::to_string),
+                {
+                    let state = self.clone();
+                    move || state.places.land_authz().cloned()
+                },
             );
         }
         if let Some(source) = self.settings.places_upstream.clone() {

@@ -53,6 +53,12 @@ const PARCEL_ALIAS_SQL: &str = "SELECT id, base_position FROM explore.place \
      WHERE world IS FALSE AND disabled IS FALSE \
      ORDER BY deployed_at DESC NULLS LAST, id";
 
+/// A parcel position `x,y` as coordinates.
+pub(crate) fn parse_parcel(position: &str) -> Option<(i32, i32)> {
+    let (x, y) = position.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 /// The id a content-derived place carried: UUIDv5 of its base parcel. Links
 /// minted under that scheme outlive the derived rows, so the read side resolves
 /// the same id back to the parcel.
@@ -139,6 +145,11 @@ impl PlacesComponent {
     /// Attaches the shared LAND authority after its chain readers are initialized.
     pub fn set_land_authz(&self, land: Arc<crate::land_authz::LandAuthzState>) {
         let _ = self.land_authz.set(land);
+    }
+
+    /// The shared LAND authority, once attached.
+    pub fn land_authz(&self) -> Option<&Arc<crate::land_authz::LandAuthzState>> {
+        self.land_authz.get()
     }
 
     /// Current native estate membership for event authoring. An unattached or

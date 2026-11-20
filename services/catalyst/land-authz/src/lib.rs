@@ -410,6 +410,50 @@ impl LandAuthzState {
         Ok(answer.map(|(estate_id,)| EstateMembership { estate_id }))
     }
 
+    /// The indexed owner of each parcel (its estate's owner when it sits in
+    /// one), lowercase and positional, on the caller's connection with the
+    /// publication check of [`Self::estate_at`]. An unpublished index, an
+    /// unindexed parcel or the zero address answer `None`.
+    pub async fn owners_at(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        parcels: &[(i32, i32)],
+    ) -> Result<Vec<Option<String>>, sqlx::Error> {
+        let mut out = vec![None; parcels.len()];
+        if parcels.is_empty() {
+            return Ok(out);
+        }
+        let xs: Vec<i32> = parcels.iter().map(|p| p.0).collect();
+        let ys: Vec<i32> = parcels.iter().map(|p| p.1).collect();
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT t.i, o.owner FROM land_authz.index_cursor c \
+             CROSS JOIN unnest($4::int[], $5::int[]) WITH ORDINALITY AS t(x, y, i) \
+             JOIN land_authz.token_right p ON p.token_address=c.land_registry AND p.x=t.x AND p.y=t.y \
+             LEFT JOIN land_authz.estate_land el ON el.land_token_id=p.token_id \
+             LEFT JOIN land_authz.token_right et ON et.token_address=c.estate_registry AND et.token_id=el.estate_token_id \
+             CROSS JOIN LATERAL (SELECT lower(COALESCE(CASE WHEN el.estate_token_id IS NOT NULL THEN et.owner END, p.owner)) AS owner) o \
+             WHERE c.network=$1 AND c.land_registry=$2 AND c.estate_registry=$3 \
+               AND c.full_replay_started AND c.folded_block=c.last_block \
+               AND c.folded_at <= timezone('UTC', now()) \
+               AND c.folded_at >= timezone('UTC', now()) - make_interval(secs => $6) \
+               AND o.owner <> '' AND o.owner <> '0x0000000000000000000000000000000000000000'",
+        )
+        .bind(&self.settings.network)
+        .bind(&self.settings.land_registry)
+        .bind(&self.settings.estate_registry)
+        .bind(&xs)
+        .bind(&ys)
+        .bind(indexer::READY_WINDOW.num_seconds() as f64)
+        .fetch_all(conn)
+        .await?;
+        for (i, owner) in rows {
+            if let Some(slot) = usize::try_from(i - 1).ok().and_then(|i| out.get_mut(i)) {
+                *slot = Some(owner);
+            }
+        }
+        Ok(out)
+    }
+
     /// The marketplace reader, when one with a subgraph URL is attached.
     fn fallback_reader(&self) -> Option<&Arc<ChainIndex>> {
         self.market
