@@ -167,7 +167,7 @@ Event poster upgrade: run `catalyst schema migrate` before deploying the API. St
 
 Sign-in identity upgrade: run `catalyst schema migrate` before deploying the API. Step `0051_explore_auth_identity_request_id` adds the nullable `auth_request_id` that binds a parked identity to its deep-link request; parked identities stay unbound. Sites binds only Creator Hub sign-ins, whose pickup must then send `x-identity-verifier`.
 
-Content rating notices: run `catalyst schema migrate` before deploying the API. Step `0051_explore_rating_downgrade_notice` widens the places moderation notice kinds and preserves existing notices.
+Content rating notices: run `catalyst schema migrate` before deploying the API. Step `0053_explore_rating_downgrade_notice` widens the places moderation notice kinds and preserves existing notices.
 
 World-admission upgrade: the release script
 `schemas/releases/world-scene-ban-keys.sql` requires a maintenance window. Stop old API and

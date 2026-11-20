@@ -490,7 +490,7 @@ intents, and the object pass recreates the changed due/creator indexes.
 The places channel carries operator disables and rating upgrades, and a
 creator's rating change: a stricter rating, which the row takes
 (`rating_upgraded`), or a laxer one, which it keeps out
-(`rating_downgrade_refused`; step `0051_explore_rating_downgrade_notice` admits
+(`rating_downgrade_refused`; step `0053_explore_rating_downgrade_notice` admits
 the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade

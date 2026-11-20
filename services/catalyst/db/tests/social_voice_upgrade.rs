@@ -39,7 +39,7 @@ const PREPARED_PENDING_STEPS: [&str; 31] = [
     "0049_land_authz_cursor_block_hash",
     "0050_explore_poster_avif",
     "0051_explore_auth_identity_request_id",
-    "0051_explore_rating_downgrade_notice",
+    "0053_explore_rating_downgrade_notice",
 ];
 const PREPARED_V2: &str = include_str!(concat!(
     env!("DCL_ONE_ROOT"),

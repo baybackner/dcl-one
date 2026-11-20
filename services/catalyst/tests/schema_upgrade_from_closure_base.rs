@@ -42,7 +42,7 @@ const PREPARED_PENDING_STEPS: [&str; 31] = [
     "0049_land_authz_cursor_block_hash",
     "0050_explore_poster_avif",
     "0051_explore_auth_identity_request_id",
-    "0051_explore_rating_downgrade_notice",
+    "0053_explore_rating_downgrade_notice",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
