@@ -154,17 +154,19 @@ export function RemoteFlagsProvider({ answer, children }: { answer: RemoteFlagsA
   return createElement(RequestFlagsContext.Provider, { value: answer }, children);
 }
 
-export function useRemoteFlagsAnswer(): RemoteFlagsAnswer | null {
+const skipSubscription = () => () => {};
+
+export function useRemoteFlagsAnswer(enabled = true): RemoteFlagsAnswer | null {
   const requestAnswer = useContext(RequestFlagsContext);
-  const browserAnswer = useSyncExternalStore(subscribe, getAnswer, getServerAnswer);
+  const browserAnswer = useSyncExternalStore(enabled ? subscribe : skipSubscription, getAnswer, getServerAnswer);
   useEffect(() => {
-    if (requestAnswer) return;
+    if (!enabled || requestAnswer) return;
     void refreshRemoteFlags();
     const onFocus = () => void refreshRemoteFlags();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [requestAnswer]);
-  return requestAnswer ?? browserAnswer;
+  }, [enabled, requestAnswer]);
+  return enabled ? requestAnswer ?? browserAnswer : null;
 }
 
 /** One rollout flag; false until the service answers yes. */
@@ -181,7 +183,7 @@ export function remoteFlagState(flag: RemoteFlag): boolean | null {
   return answer ? remoteFlagOn(answer, flag) : null;
 }
 
-export function useRemoteFlagState(flag: RemoteFlag): boolean | null {
-  const answer = useRemoteFlagsAnswer();
+export function useRemoteFlagState(flag: RemoteFlag, enabled = true): boolean | null {
+  const answer = useRemoteFlagsAnswer(enabled);
   return answer ? remoteFlagOn(answer, flag) : null;
 }

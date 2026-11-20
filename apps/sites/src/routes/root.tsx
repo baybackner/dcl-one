@@ -15,6 +15,7 @@ import {
 import "@dcl/one-ui/foundations/colors/colors.css";
 import "@dcl/one-ui/foundations/spacing/spacing.css";
 import "@dcl/one-ui/foundations/layout/layout.css";
+import "@dcl/one-ui/apps/sites/profile-tokens.css";
 import "@ui/atoms/primitives.css";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
@@ -24,7 +25,6 @@ import ChromeNavBridge from "@/features/components/chrome/ChromeNavBridge";
 import RoutePending, { NAV_PENDING_SCRIPT } from "@/features/components/chrome/RoutePending";
 import EmbedBridge from "@/features/components/chrome/EmbedBridge";
 import { reloadingForAccount } from "@/features/components/chrome/explorer-host";
-import SyncEngineBridge from "@/features/components/creator-hub/SyncEngineBridge";
 import NotFoundPage from "@/features/not-found/NotFoundPage";
 import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
@@ -321,7 +321,6 @@ export default function App() {
           <RoutePending />
           <Outlet />
           <EmbedBridge />
-          <SyncEngineBridge />
         </ChromeNavBridge>
       </ChromeAuthBridge>
     </QueryClientProvider>

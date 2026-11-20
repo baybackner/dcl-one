@@ -8,8 +8,8 @@ afterEach(cleanup);
 it("routes creator navigation through the existing app navigator", () => {
   const navigate = vi.fn(() => true);
   render(<ChromeNavContext value={{ navigate }}>
-    <CreatorHubChrome active="home" />
+    <CreatorHubChrome active="collections" />
   </ChromeNavContext>);
-  expect(fireEvent.click(screen.getByRole("link", { name: "Scenes" }))).toBe(false);
-  expect(navigate).toHaveBeenLastCalledWith("/create/scenes");
+  expect(fireEvent.click(screen.getByRole("link", { name: "Collections" }))).toBe(false);
+  expect(navigate).toHaveBeenLastCalledWith("/create/collections");
 });
