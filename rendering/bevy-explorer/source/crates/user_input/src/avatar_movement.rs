@@ -1121,27 +1121,45 @@ fn cast_down(
 /// Ground snap: the end `position` of a walking step from `start`, moved down onto the ground
 /// when the ground falls away by at most [`GROUND_SNAP_DROP`] beyond the slope of that ground, of
 /// the steepest ground the step `followed`, or of the ground it started on (the foot of a slope
-/// the step ran down), over the distance moved.
+/// the step ran down), over the distance moved. Down onto an edge too steep to stand on, the
+/// capsule slides off it along its surface onto the ground below.
 fn snap_to_ground(
     scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     start: DVec3,
-    mut position: DVec3,
+    position: DVec3,
     followed: f64,
 ) -> DVec3 {
+    let overlap = f64::from(PLAYER_COLLIDER_OVERLAP);
     let moved = (position - start).with_y(0.0).length();
     let reach = f64::from(GROUND_SNAP_DROP) + moved * f64::from(MAX_GROUND_INCLINE.tan());
     let within = |drop: f64, slope: f64| drop <= f64::from(GROUND_SNAP_DROP) + moved * slope;
-    if let Some((drop, normal)) = cast_down(scenes, disabled, position, reach) {
-        if walkable(normal)
-            && drop > f64::from(PLAYER_COLLIDER_OVERLAP)
-            && (within(drop, slope(normal).max(followed))
-                || within(drop, start_slope(scenes, disabled, start)))
-        {
-            position.y -= drop - f64::from(PLAYER_COLLIDER_OVERLAP);
-        }
+    let Some((drop, mut normal)) = cast_down(scenes, disabled, position, reach) else {
+        return position;
+    };
+    let mut landed = position - DVec3::Y * (drop - overlap);
+    if !walkable(normal) && drop > overlap {
+        // the lower sphere meets an edge where it is too steep to stand on, as a step down's
+        // edge is from just past it, the ground beyond hidden a few millimetres lower: slide off
+        // it, down along its surface, for the rest of the reach
+        let along = (DVec3::NEG_Y + normal * normal.y).normalize_or_zero();
+        let left = (reach - drop) / -along.y;
+        let Some((slid, ground)) = cast_avatar(scenes, disabled, landed, along, left, false) else {
+            return position;
+        };
+        landed += along * (slid - overlap);
+        normal = ground;
     }
-    position
+    let drop = position.y - landed.y + overlap;
+    if walkable(normal)
+        && drop > overlap
+        && (within(drop, slope(normal).max(followed))
+            || within(drop, start_slope(scenes, disabled, start)))
+    {
+        landed
+    } else {
+        position
+    }
 }
 
 /// Rise over run of ground with this `normal`.
@@ -1991,6 +2009,42 @@ mod tests {
                 "{speed} m/s: {end}"
             );
         }
+    }
+
+    #[test]
+    fn a_jog_and_a_run_off_a_low_platform_keep_to_the_ground_of_the_next_parcels_scene() {
+        // a platform 0.1 m high held by the scene of parcel 0,0, its edge 0.2 m short of the
+        // parcels' edge (x 16); beyond it the floor of the scene of parcel 1,0. Started anywhere
+        // over one frame, so that some frame ends with the capsule's lower sphere on the edge
+        // where it is too steep to stand on, just above the ground beyond.
+        let platform = (Vec3::new(12.0, 0.05, -8.0), Vec3::new(3.8, 0.05, 8.0));
+        const STARTS: usize = 64;
+        let mut flew = Vec::new();
+        for fps in [30.0, 60.0, 144.0] {
+            let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+            for speed in [8.0_f32, 10.0] {
+                for k in 0..STARTS {
+                    let x = 14.0 - speed / fps as f32 * k as f32 / STARTS as f32;
+                    let (mut app, player) = movement_app_at(&[], Vec3::new(x, 0.1, -8.0), frame);
+                    add_wall_scene(&mut app, "platform", IVec2::ZERO, platform.0, platform.1);
+                    app.update();
+                    set_velocity(&mut app, player, Vec3::new(speed, 0.0, 0.0));
+                    let mut air = 0;
+                    while app.world().get::<Transform>(player).unwrap().translation.x < 17.0 {
+                        app.update();
+                        let state = app.world().get::<AvatarDynamicState>(player).unwrap();
+                        air += usize::from(!grounded(state.ground_height));
+                    }
+                    if air > 0 {
+                        flew.push((fps, speed, x, air));
+                    }
+                }
+            }
+        }
+        assert!(
+            flew.is_empty(),
+            "(fps, m/s, from x, frames in the air): {flew:?}"
+        );
     }
 
     #[test]
