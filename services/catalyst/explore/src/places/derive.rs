@@ -776,7 +776,8 @@ const RECORD_PARCEL_RATINGS: &str = r#"
 const CLEAR_PARCEL_RATINGS: &str = "DELETE FROM explore.place_parcel_rating r \
      USING unnest($1::text[], $2::text[]) AS c(position, owner) \
      WHERE r.position = c.position \
-       AND (NOT r.operator OR (r.owner_address IS NOT NULL AND c.owner <> ''))";
+       AND (NOT r.operator OR (r.owner_address IS NOT NULL AND c.owner <> '' \
+            AND r.owner_address <> c.owner))";
 
 /// The page's operator rows, locked before its places as an operator's
 /// decision locks them (`moderation::apply_with`).
