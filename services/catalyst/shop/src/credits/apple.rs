@@ -89,10 +89,16 @@ pub enum VerifyError {
     Environment,
     /// Signed more than [`NOTIFICATION_MAX_AGE_SECS`] ago: a retry carries the same date.
     #[error("signedDate is older than the accepted window")]
-    Expired { signed_date_ms: i64 },
+    Expired {
+        notification_uuid: String,
+        signed_date_ms: i64,
+    },
     /// Signed more than [`NOTIFICATION_MAX_FUTURE_SECS`] ahead of this node's clock.
     #[error("signedDate is ahead of this node's clock")]
-    Ahead { signed_date_ms: i64 },
+    Ahead {
+        notification_uuid: String,
+        signed_date_ms: i64,
+    },
 }
 
 /// The fields of a verified transaction the credits flow reads.
@@ -188,10 +194,16 @@ impl Verifier {
         }
         let now_ms = now.saturating_mul(1000);
         if signed_date_ms < now_ms - NOTIFICATION_MAX_AGE_SECS * 1000 {
-            return Err(VerifyError::Expired { signed_date_ms });
+            return Err(VerifyError::Expired {
+                notification_uuid,
+                signed_date_ms,
+            });
         }
         if signed_date_ms > now_ms + NOTIFICATION_MAX_FUTURE_SECS * 1000 {
-            return Err(VerifyError::Ahead { signed_date_ms });
+            return Err(VerifyError::Ahead {
+                notification_uuid,
+                signed_date_ms,
+            });
         }
         let transaction = match payload
             .get("data")
@@ -838,7 +850,24 @@ mod tests {
         let now = now();
         let at = |secs: i64| {
             let signed = c.notification_signed_at("TEST", None, Chain::app_data(), secs * 1000);
-            v.notification(&signed, now)
+            // The uuid is random: only its presence is compared.
+            v.notification(&signed, now).map_err(|e| match e {
+                VerifyError::Expired {
+                    notification_uuid,
+                    signed_date_ms,
+                } if notification_uuid.starts_with("uuid-") => VerifyError::Expired {
+                    notification_uuid: "uuid".into(),
+                    signed_date_ms,
+                },
+                VerifyError::Ahead {
+                    notification_uuid,
+                    signed_date_ms,
+                } if notification_uuid.starts_with("uuid-") => VerifyError::Ahead {
+                    notification_uuid: "uuid".into(),
+                    signed_date_ms,
+                },
+                other => other,
+            })
         };
         // The oldest retry Apple sends and a small clock skew pass.
         assert_eq!(
@@ -851,6 +880,7 @@ mod tests {
         assert_eq!(
             at(old).unwrap_err(),
             VerifyError::Expired {
+                notification_uuid: "uuid".into(),
                 signed_date_ms: old * 1000
             }
         );
@@ -858,6 +888,7 @@ mod tests {
         assert_eq!(
             at(ahead).unwrap_err(),
             VerifyError::Ahead {
+                notification_uuid: "uuid".into(),
                 signed_date_ms: ahead * 1000
             }
         );

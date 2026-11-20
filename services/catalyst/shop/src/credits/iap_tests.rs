@@ -1740,6 +1740,10 @@ async fn a_concurrent_delivery_of_the_same_notification_answers_409() {
     );
     // Another delivery holds the uuid's record, not committed yet.
     let mut other = pool.begin().await.unwrap();
+    let other_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *other)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) \
          VALUES ($1, timezone('UTC', now()))",
@@ -1753,19 +1757,24 @@ async fn a_concurrent_delivery_of_the_same_notification_answers_409() {
         async move { notify(&app, charge).await }
     });
     // Wait until this delivery's claim waits on the other's record.
-    loop {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
-               AND query LIKE 'INSERT INTO credits.iap_notifications%')",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        if waiting {
-            break;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                 WHERE $1 = ANY (pg_blocking_pids(pid)))",
+            )
+            .bind(other_pid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    })
+    .await
+    .expect("the delivery waits on the other record");
     other.commit().await.unwrap();
     let (status, out) = delivery.await.unwrap();
     assert_eq!(status, StatusCode::CONFLICT, "{out}");
@@ -1885,7 +1894,7 @@ async fn a_second_refund_of_a_refunded_purchase_charges_nothing_back() {
     assert_eq!(out["action"], "refunded", "{out}");
     assert_eq!(available(&pool, &w.address).await, "150");
 
-    // Apple refunds a transaction once: another reference is recorded, not charged again.
+    // This node refunds a transaction once, as credits-server does: another reference is recorded, not charged again.
     p["revocationPercentage"] = json!(100_000);
     let second = c.notification("REFUND", Some(c.sign(&p)));
     let (_, out) = notify(&app, second.clone()).await;
@@ -1945,11 +1954,11 @@ async fn crediting_a_held_purchase_keeps_its_row_and_counts_toward_the_caps() {
     assert_eq!(status, "paid");
     assert_eq!(token_kept, Some(token.clone()));
     assert_eq!(original, Some(format!("{id}0")));
-    assert!(recent, "the credit's time is what the daily caps count");
     let next = c.transaction(&tx_id(), PRODUCT, Some(&token));
     let (_, out) = notify(&ceiling, c.notification("ONE_TIME_CHARGE", Some(next))).await;
-    assert_eq!(out["held"], true, "{out}");
+    assert_eq!(out["held"], true, "the daily cap counts the credit: {out}");
     assert_eq!(available(&pool, &w.address).await, "100");
+    assert!(recent, "the credit's time is what the daily caps count");
 }
 
 /// Credits `n` signed purchases of `PRODUCT` to `w`; returns their signed transactions.
@@ -2004,6 +2013,23 @@ async fn an_operator_credits_a_held_purchase_as_apple_signed_it() {
     assert_eq!(status, StatusCode::OK, "{out}");
     assert_eq!(out["credits"], 1000);
     assert_eq!(available(&pool, &w.address).await, "1000");
+    // The request names no original id or token: the held row's stay.
+    let kept: (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT status, original_transaction_id, app_account_token \
+         FROM credits.iap_transactions WHERE transaction_id = $1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        kept,
+        (
+            "paid".to_string(),
+            Some(id.clone()),
+            Some(w.address.to_ascii_lowercase())
+        )
+    );
 }
 
 #[tokio::test]

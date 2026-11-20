@@ -76,8 +76,12 @@ pub async fn webhook(
     let notification = match iap.verifier.notification(&signed, now()) {
         Ok(n) => n,
         // Signed by Apple but too old: a retry carries the same signedDate.
-        Err(VerifyError::Expired { signed_date_ms }) => {
+        Err(VerifyError::Expired {
+            notification_uuid,
+            signed_date_ms,
+        }) => {
             tracing::warn!(
+                notification_uuid = %notification_uuid,
                 signed_date_ms,
                 "app store notification refused: signedDate older than the accepted window; credit or refund it through /admin/iap/credits or /admin/iap/refunds"
             );
@@ -86,8 +90,12 @@ pub async fn webhook(
             ));
         }
         // Ahead of this node's clock: answered for a retry, which a node with a correct clock accepts.
-        Err(VerifyError::Ahead { signed_date_ms }) => {
+        Err(VerifyError::Ahead {
+            notification_uuid,
+            signed_date_ms,
+        }) => {
             tracing::warn!(
+                notification_uuid = %notification_uuid,
                 signed_date_ms,
                 "app store notification refused: signedDate ahead of this node's clock; answered for a retry"
             );

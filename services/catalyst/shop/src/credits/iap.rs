@@ -32,10 +32,9 @@
 //! from credits-server is charged back the same way; it keeps its
 //! `imported` status and `refunded_at` marks the refund. A refund reference
 //! (Apple's notification uuid, an operator's refund id) applies once, even
-//! after a reversal. A transaction is refunded once (Apple's
-//! `revocationPercentage` is its refunded share): a refund with another
-//! reference of a transaction already refunded is recorded, not charged
-//! back again. A refund of a transaction never credited, or held,
+//! after a reversal. A transaction is charged back once, as credits-server
+//! does: a refund with another reference of a transaction already refunded
+//! is recorded and logged, not charged back again. A refund of a transaction never credited, or held,
 //! leaves a `refunded` row that keeps it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
 //! what was charged back, withdraws its revocations not sent yet while the
@@ -657,7 +656,8 @@ impl Credits {
         lock_wallet_of(&mut tx, transaction_id).await?;
         claim(&mut tx, notice).await?;
         let row = sqlx::query(
-            "SELECT status, address, refunded_at IS NOT NULL AS refunded, $2 = ANY(refund_refs) AS applied \
+            "SELECT status, address, refunded_at IS NOT NULL AS refunded, $2 = ANY(refund_refs) AS applied, \
+                    credited_by IS NOT NULL OR status = 'imported' AS credited \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
@@ -684,6 +684,7 @@ impl Credits {
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
         let refunded: bool = row.get("refunded");
+        let credited: bool = row.get("credited");
         // A redelivered refund, even after its reversal, applies once.
         if row.get::<bool, _>("applied") {
             tx.commit().await?;
@@ -728,10 +729,12 @@ impl Credits {
                 self.charge_back_iap(tx, transaction_id, address, &charged, refund_ref, reason)
                     .await
             }
-            // A transaction carries one refund (`revocationPercentage` is its
-            // refunded share), so another reference is recorded, not charged again.
+            // One refund per transaction, as credits-server: another reference
+            // of a refunded credit is recorded, not charged back again.
             _ => {
-                tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund of a transaction already refunded under another reference: recorded, nothing charged back");
+                if credited {
+                    tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund of a transaction already refunded under another reference: recorded, nothing charged back");
+                }
                 tx.commit().await?;
                 Ok(RefundOutcome::AlreadyRefunded)
             }

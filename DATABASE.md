@@ -1585,9 +1585,9 @@ flips the row to `refunded` (an `imported` row keeps its status and
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
 records its reference (notification uuid or operator refund id) in
 `refund_refs`, which a reversal keeps, so a redelivered refund applies once
-(a transaction is refunded once: Apple's `revocationPercentage` is its
-refunded share, so a refund under another reference of a row already
-refunded is recorded and logged, not charged back again),
+(a transaction is charged back once, as credits-server does: a refund under
+another reference of a row already refunded is recorded and logged, not
+charged back again),
 records what was removed in `revoked_credits` and the refunded USD in
 `refunded_cents` and, when the balance net of
 live pledges cannot cover it, queues the wallet's newest unexpired signed
