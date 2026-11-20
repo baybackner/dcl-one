@@ -42,7 +42,7 @@ use ipfs::{
     ipfs_path::IpfsPath, ActiveEntityTask, EntityDefinition, IpfsAssetServer, RealmInitialLocation,
     SceneIpfsLocation,
 };
-use scene_material::{BoundRegion, SceneBounds};
+use scene_material::{BoundRegion, SceneBounds, FIXED_SCENE_HEIGHT};
 use system_bridge::{LiveSceneInfo, SystemApi, SystemBridge};
 
 use super::{update_world::CrdtExtractors, LoadSceneEvent, PrimaryUser, SceneSets, SceneUpdates};
@@ -54,6 +54,7 @@ use crate::{
         SCENE_JS_SPAWN_TICK,
     },
     ring_parcels,
+    scene_lod::SceneLod,
     scene_partition::camera_facing,
     update_world::{visibility::VisibilityComponent, ComponentTracker},
     vec3_to_parcel, ContainerEntity, DeletedSceneEntities, MobileUiEmulation, OutOfWorld,
@@ -373,10 +374,7 @@ pub(crate) fn load_scene_javascript(
         let bounds = if portable.is_some() {
             Vec::default()
         } else {
-            scene_regions(parcels.clone().into_iter())
-                .into_iter()
-                .map(|region| BoundRegion::new(region.min, region.max, region.count))
-                .collect::<Vec<_>>()
+            scene_bound_regions(&parcels, &realm)
         };
 
         // get main.crdt
@@ -625,6 +623,24 @@ pub(crate) fn load_scene_javascript(
             },
         ));
     }
+}
+
+/// The regions a scene is clipped and collided to. A city scene has neighbours it must not build
+/// over, so its limit grows with each connected region's parcel count; every other realm (a
+/// World, a preview, an editor) gives its scenes one fixed height limit.
+fn scene_bound_regions(parcels: &HashSet<IVec2>, realm: &CurrentRealm) -> Vec<BoundRegion> {
+    let city = !realm.config.lists_scenes() && !realm.is_local();
+    scene_regions(parcels.iter().copied())
+        .into_iter()
+        .map(|region| {
+            let bound = BoundRegion::new(region.min, region.max, region.count);
+            if city {
+                bound
+            } else {
+                bound.with_height(FIXED_SCENE_HEIGHT)
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -1325,13 +1341,7 @@ fn load_active_entities(
             }
         }
         pointers.set_realm(bounds_min, bounds_max);
-        pointers.reset_terrain(
-            current_realm
-                .config
-                .scenes_urn
-                .as_ref()
-                .is_some_and(|urns| !urns.is_empty()),
-        );
+        pointers.reset_terrain(current_realm.config.lists_scenes());
         for mut context in global_crdt.iter_mut() {
             context.set_bounds(bounds_min, bounds_max);
         }
@@ -1351,11 +1361,7 @@ fn load_active_entities(
         }
 
         if !current_realm.about_url.is_empty() && *teleport_target == RealmInitialLocation::Base {
-            let has_scene_urns = !current_realm
-                .config
-                .scenes_urn
-                .as_ref()
-                .is_none_or(Vec::is_empty);
+            let has_scene_urns = current_realm.config.lists_scenes();
 
             if !has_scene_urns {
                 // we want to go to base but there are no specific parcels
@@ -1423,11 +1429,7 @@ fn load_active_entities(
         }
     };
 
-    let has_scene_urns = !current_realm
-        .config
-        .scenes_urn
-        .as_ref()
-        .is_none_or(Vec::is_empty);
+    let has_scene_urns = current_realm.config.lists_scenes();
 
     if pointer_request.is_none()
         && !current_realm.address.is_empty()
@@ -2153,6 +2155,8 @@ fn animate_ready_scene(
 #[derive(Component)]
 pub struct LoadingMaterialHandle(pub Handle<LoadingMaterial>);
 
+/// Keeps each loading wall at the player's height and lights it near the player. A scene whose
+/// near LOD is shown raises no walls: the stand-in already stands on its parcels.
 fn update_loading_quads(
     mut q: Query<
         (
@@ -2160,10 +2164,14 @@ fn update_loading_quads(
             &mut Transform,
             &MeshMaterial3d<LoadingMaterial>,
             &LoadingQuad,
+            &ChildOf,
+            &mut Visibility,
         ),
         Without<PrimaryUser>,
     >,
     player: Query<&Transform, With<PrimaryUser>>,
+    scenes: Query<&RendererSceneContext>,
+    lods: Query<&SceneLod>,
     mut mats: ResMut<Assets<LoadingMaterial>>,
     mut local_prev_active: Local<HashSet<AssetId<LoadingMaterial>>>,
 ) {
@@ -2172,8 +2180,25 @@ fn update_loading_quads(
     };
 
     let prev_active = std::mem::take(&mut *local_prev_active);
+    let stood_in = lods
+        .iter()
+        .filter(|lod| lod.shown())
+        .map(|lod| lod.hash.as_str())
+        .collect::<HashSet<_>>();
 
-    for (gt, mut trans, h_mat, loading) in q.iter_mut() {
+    for (gt, mut trans, h_mat, loading, child_of, mut visibility) in q.iter_mut() {
+        let hidden = scenes
+            .get(child_of.parent())
+            .is_ok_and(|ctx| stood_in.contains(&*ctx.hash));
+        visibility.set_if_neq(if hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+        if hidden {
+            continue;
+        }
+
         let nearest_point = player_translation.xz().clamp(
             gt.translation().xz()
                 - if loading.0 {
