@@ -619,6 +619,7 @@ pub async fn capture_creator_rating(
             base_position: base_position.to_string(),
             world_name: None,
             content_rating: Some(stored.to_string()),
+            active: true,
         },
         RatedRow::World(name) => Resolved {
             id: name.to_string(),
@@ -629,6 +630,7 @@ pub async fn capture_creator_rating(
             base_position: String::new(),
             world_name: Some(name.to_string()),
             content_rating: Some(stored.to_string()),
+            active: true,
         },
     };
     let (kind, message) = match CreatorRating::of(Some(stored), proposed) {
