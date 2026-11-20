@@ -98,7 +98,6 @@ impl Plugin for MicDebugPlugin {
 #[command(name = "/microphone_info")]
 struct MicrophoneInfo;
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn microphone_info(
     mut input: ConsoleCommand<MicrophoneInfo>,
     mic: Res<MicState>,
@@ -177,7 +176,6 @@ fn microphone_info(
 #[command(name = "/nearby_voice")]
 struct NearbyVoice;
 
-#[allow(clippy::type_complexity)]
 fn nearby_voice(
     mut input: ConsoleCommand<NearbyVoice>,
     mic: Res<MicState>,

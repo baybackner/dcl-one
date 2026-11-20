@@ -115,8 +115,10 @@ pub async fn op_set_avatar(state: &WorkerContext, avatar: JsValue) -> Result<u32
 }
 
 #[wasm_bindgen]
-pub async fn op_native_input(state: &WorkerContext) -> String {
-    dcl_js::system_api::op_native_input(state.rc()).await
+pub async fn op_native_input(state: &WorkerContext) -> Result<String, WasmError> {
+    dcl_js::system_api::op_native_input(state.rc())
+        .await
+        .map_err(WasmError::from)
 }
 
 #[wasm_bindgen]
@@ -905,6 +907,19 @@ pub async fn op_read_block_update_stream(
     rid: u32,
 ) -> Result<JsValue, WasmError> {
     serde_result!(dcl_js::system_api::op_read_block_update_stream(state.rc(), rid).await)
+}
+
+#[wasm_bindgen]
+pub async fn op_deploy_outfits(
+    state: &WorkerContext,
+    address: String,
+    outfits: JsValue,
+) -> Result<(), WasmError> {
+    let outfits = serde_wasm_bindgen::from_value(outfits)
+        .map_err(|e| WasmError::from(anyhow::anyhow!("deployOutfits: {e}")))?;
+    dcl_js::system_api::op_deploy_outfits(state.rc(), address, outfits)
+        .await
+        .map_err(WasmError::from)
 }
 
 #[wasm_bindgen]
