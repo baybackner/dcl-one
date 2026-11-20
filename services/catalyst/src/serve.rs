@@ -149,6 +149,9 @@ pub async fn serve(
     config.node.init_tracing();
     let metrics_handle = install_metrics(&config.node.serve_metrics_bind)?;
     tracing::info!("{}", catalyst_config::posture::startup_line(&config));
+    if let Ok(Some(warning)) = catalyst_config::posture::worlds_names_reader(&config) {
+        tracing::warn!("{warning}");
+    }
     config.resolve_secret_files()?;
     config.content.eth_rpc_url()?;
     let sync_settings = SyncSettings::from_config(&config)?;
