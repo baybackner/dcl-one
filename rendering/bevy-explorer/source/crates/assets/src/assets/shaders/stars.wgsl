@@ -2,8 +2,9 @@
 // field where the view has it, else before the transparent pass (see stars.rs). Each pixel of
 // clear sky looks up the star cells around its view direction on a cube grid, so a star keeps
 // one angular size everywhere. Unity draws the stars inside its sky shader, under the clouds;
-// here the sky cube's alpha, its cloud cover, fades them. The output is blended additively, so
-// pixels with no star are discarded.
+// here the sky cube's alpha, its cloud cover, fades them. Unity adds them before its sky's last
+// step decodes sRGB to linear, so each adds what that decode makes of it over the sky behind
+// it. The output is blended additively, so pixels with no star are discarded.
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import bevy_render::view::View
@@ -58,6 +59,21 @@ const PI: f32 = 3.14159265;
 const SHOOTING_GRID: vec2<f32> = vec2<f32>(12.0, 6.0);
 const SHOOTING_PERIOD: f32 = 25.0;
 const STREAK_LIFE: f32 = 1.2 / SHOOTING_PERIOD;
+
+// Shader Graph's Colorspace Conversion node, RGB to Linear, which ends Unity's sky: the sRGB
+// curve, continued past 1 on its power branch. As in stylized_sky.wgsl
+fn rgb_to_linear(colour: vec3<f32>) -> vec3<f32> {
+    let low = colour / 12.92;
+    let high = pow(max(abs((colour + 0.055) / 1.055), vec3<f32>(1.192092896e-07)), vec3<f32>(2.4));
+    return select(high, low, colour <= vec3<f32>(0.04045));
+}
+
+// Its inverse, for the sky cube, which holds the decoded sky
+fn linear_to_rgb(colour: vec3<f32>) -> vec3<f32> {
+    let low = colour * 12.92;
+    let high = 1.055 * pow(colour, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, colour <= vec3<f32>(0.0031308));
+}
 
 fn hash(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
@@ -200,7 +216,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
 
     // behind clouds and transparent geometry, and towards the horizon
-    var visible = 1.0 - clamp(textureSampleLevel(sky_texture, sky_sampler, direction, 0.0).a, 0.0, 1.0);
+    let sky = textureSampleLevel(sky_texture, sky_sampler, direction, 0.0);
+    var visible = 1.0 - clamp(sky.a, 0.0, 1.0);
 #ifdef FOCUS
     visible *= 1.0 - clamp(textureLoad(focus_texture, coord, 0).g, 0.0, 1.0);
 #endif
@@ -235,5 +252,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if light <= 0.0 {
         discard;
     }
-    return vec4<f32>(vec3<f32>(light), 0.0);
+    let behind = max(sky.rgb, vec3<f32>(0.0));
+    return vec4<f32>(rgb_to_linear(linear_to_rgb(behind) + light) - behind, 0.0);
 }

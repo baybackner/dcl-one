@@ -4,8 +4,11 @@
 //! blend over it. The sun or the moon is a disc in a halo on that sky, and three cloud strips
 //! wrap the dome over them; the cube's alpha is how much the clouds hide.
 //!
-//! The authored colours go to the shader as they are, and the skybox material writes the cube
-//! to the view unscaled, so the cube is in the units of Unity's sky output.
+//! The authored colours go to the shader as Unity's sky shader receives them: the lookup and the
+//! cloud colours as authored, the disc colour linearised as `Material.SetColor` does. The shader
+//! decodes its result from sRGB to linear, as GenesisSky's last step does, and the skybox
+//! material writes the cube to the view unscaled, so the cube is in the units of Unity's sky
+//! output.
 
 use bevy::{
     image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
@@ -281,18 +284,51 @@ pub fn disc_params(day_fraction: f32, scene_direction: bool) -> DiscParams {
     }
 }
 
+/// Unity's `Mathf.GammaToLinearSpace` (exact form), which `Material.SetColor` applies to a colour
+/// in a linear project: the sRGB curve below 1, a 2.2 power from 1 up.
+pub fn unity_gamma_to_linear(colour: Vec3) -> Vec3 {
+    let channel = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else if value < 1.0 {
+            ((value + 0.055) / 1.055).powf(2.4)
+        } else {
+            value.powf(2.2)
+        }
+    };
+    Vec3::new(channel(colour.x), channel(colour.y), channel(colour.z))
+}
+
+/// Shader Graph's Colorspace Conversion node, RGB to Linear, the sky shader's last step: the
+/// sRGB curve, continued past 1 on its power branch.
+#[cfg(test)]
+pub fn shader_graph_rgb_to_linear(colour: Vec3) -> Vec3 {
+    let channel = |value: f32| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055)
+                .abs()
+                .max(1.192_092_9e-7)
+                .powf(2.4)
+        }
+    };
+    Vec3::new(channel(colour.x), channel(colour.y), channel(colour.z))
+}
+
 /// The colour of the disc and its halo at `day_fraction`: the moon's ramp along its rise to set
-/// while it is the body, or the sun's ramp at the phase (Unity's `DiscColor`). A scene's sun
+/// while it is the body, or the sun's ramp at the phase (Unity's `DiscColor`), linearised as
+/// Unity's `Material.SetColor` does before the sky shader decodes it again. A scene's sun
 /// colour tints it: its hue at that preset's brightness, times its own brightness above 1.
 pub fn disc_color(disc: &DiscParams, day_fraction: f32, scene: Option<Vec3>) -> Vec3 {
-    let preset = if disc.moon_active {
+    let preset = unity_gamma_to_linear(if disc.moon_active {
         sample_ramp(
             &MOON_COLOR_RAMP,
             moon_progress(day_fraction).clamp(0.0, 1.0),
         )
     } else {
         sample_ramp(&SUN_COLOR_RAMP, time_to_phase(day_fraction))
-    };
+    });
     match scene {
         None => preset,
         Some(authored) => {
@@ -694,6 +730,30 @@ mod tests {
     const CENTRE: usize = SIZE / 2;
 
     #[test]
+    fn unity_colour_conversions() {
+        let close = |a: Vec3, b: Vec3| a.abs_diff_eq(b, 1e-5);
+        // Shader Graph's Colorspace Conversion node, RGB to Linear: the sRGB curve, continued
+        // past 1 on its power branch
+        assert!(close(
+            shader_graph_rgb_to_linear(Vec3::new(0.02, 0.5, 2.0)),
+            Vec3::new(
+                0.02 / 12.92,
+                ((0.5f32 + 0.055) / 1.055).powf(2.4),
+                ((2.0f32 + 0.055) / 1.055).powf(2.4)
+            )
+        ));
+        // Mathf.GammaToLinearSpace, which Material.SetColor applies: a 2.2 power from 1 up
+        assert!(close(
+            unity_gamma_to_linear(Vec3::new(0.02, 0.5, 2.0)),
+            Vec3::new(
+                0.02 / 12.92,
+                ((0.5f32 + 0.055) / 1.055).powf(2.4),
+                2.0f32.powf(2.2)
+            )
+        ));
+    }
+
+    #[test]
     fn the_uniform_carries_the_preset_horizon_noise() {
         let uniform = StylizedSkyUniform::from(&StylizedSky::default());
         assert_eq!(uniform.horizon_noise, Vec4::new(0.1, 5.0, 10.0, 0.002));
@@ -859,16 +919,17 @@ mod tests {
 
     #[test]
     fn disc_colour_is_the_active_body_or_the_scene() {
+        // the ramp as Unity's Material.SetColor hands it to the sky shader
         let midnight = day_fraction(0.0);
         let moon = disc_params(midnight, false);
         assert_eq!(
             disc_color(&moon, midnight, None),
-            sample_ramp(&MOON_COLOR_RAMP, moon_progress(midnight))
+            unity_gamma_to_linear(sample_ramp(&MOON_COLOR_RAMP, moon_progress(midnight)))
         );
         let sun = disc_params(0.5, false);
         assert_eq!(
             disc_color(&sun, 0.5, None),
-            sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5))
+            unity_gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5)))
         );
         // a scene's sun colour tints the disc: its hue at the active body's preset brightness,
         // times the authored brightness above 1
@@ -935,6 +996,11 @@ mod tests {
         };
         let luminance =
             |colour: [f32; 4]| 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
+        // the lookup holds sRGB-encoded values, which the sky decodes as its last step
+        let decode = |colour: [f32; 4]| {
+            let linear = shader_graph_rgb_to_linear(Vec3::new(colour[0], colour[1], colour[2]));
+            [linear.x, linear.y, linear.z, colour[3]]
+        };
         let mut app = sky_test_app(SIZE as u32);
         let cube = start_sky(&mut app);
 
@@ -946,9 +1012,9 @@ mod tests {
         // straight up is the end of the day row
         let zenith = texel(&texels, SIZE, UP, CENTRE, CENTRE);
         assert!(
-            distance(zenith, day[SKY_LUT_WIDTH - 1]) < 1e-2,
+            distance(zenith, decode(day[SKY_LUT_WIDTH - 1])) < 1e-2,
             "noon zenith {zenith:?}, lookup {:?}",
-            day[SKY_LUT_WIDTH - 1]
+            decode(day[SKY_LUT_WIDTH - 1])
         );
         // the horizon is the start of the row, lifted by the noise: at most its strength
         // times the 0.64 it weighs at the horizon
@@ -960,7 +1026,7 @@ mod tests {
                 let (from, to) = (day[x.floor() as usize], day[x.ceil() as usize]);
                 let between: [f32; 4] =
                     std::array::from_fn(|c| from[c] + (to[c] - from[c]) * x.fract());
-                distance(horizon, between)
+                distance(horizon, decode(between))
             })
             .fold(f32::MAX, f32::min);
         assert!(
@@ -968,9 +1034,9 @@ mod tests {
             "noon horizon {horizon:?} is {nearest} from the lookup's first {reach} texels"
         );
         assert!(
-            luminance(horizon) >= luminance(day[0]) - 0.05,
+            luminance(horizon) >= luminance(decode(day[0])) - 0.05,
             "noon horizon {horizon:?}, lookup {:?}",
-            day[0]
+            decode(day[0])
         );
         // the noise is the texture, not its one-colour stand-in: the lift varies with azimuth
         let (low, high) = (0..SIZE)
@@ -1022,7 +1088,7 @@ mod tests {
         draw_sky(&mut app, |sky| sky.phase = 0.25);
         let texels = read_cube(&mut app, &cube, SIZE, "sunrise");
         let zenith = texel(&texels, SIZE, UP, CENTRE, CENTRE);
-        let sunrise = row(1)[SKY_LUT_WIDTH - 1];
+        let sunrise = decode(row(1)[SKY_LUT_WIDTH - 1]);
         assert!(
             distance(zenith, sunrise) < 1e-2,
             "sunrise zenith {zenith:?}, lookup {sunrise:?}"

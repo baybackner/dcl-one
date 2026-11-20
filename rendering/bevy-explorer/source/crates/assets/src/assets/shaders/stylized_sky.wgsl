@@ -1,8 +1,9 @@
 // The stylized sky, drawn into the atmosphere cube: the sky colour from a lookup by day phase
 // and elevation, with a scene's own sky colours blended over it, then the sun or the moon as a
 // disc in a halo, under three strips of cloud. The lookup follows Unity's SkyLut.hlsl, the disc
-// its SunDisc.hlsl, the halo its SunRadiance sub-graph and the clouds its CloudsV2.hlsl; colours
-// are used as authored, with no conversion.
+// its SunDisc.hlsl, the halo its SunRadiance sub-graph and the clouds its CloudsV2.hlsl. Like
+// Unity's GenesisSky graph, everything is composited on the authored values and the result is
+// decoded from sRGB to linear as the last step.
 
 struct StylizedSky {
     tick: u32,
@@ -162,6 +163,14 @@ fn disc(dir: vec3<f32>) -> vec3<f32> {
     return body * sky.disc_color * sky.disc_opacity * sky.disc_opacity * mask;
 }
 
+// Shader Graph's Colorspace Conversion node, RGB to Linear: the sRGB curve, continued past 1 on
+// its power branch.
+fn rgb_to_linear(colour: vec3<f32>) -> vec3<f32> {
+    let low = colour / 12.92;
+    let high = pow(max(abs((colour + 0.055) / 1.055), vec3<f32>(1.192092896e-07)), vec3<f32>(2.4));
+    return select(high, low, colour <= vec3<f32>(0.04045));
+}
+
 // The glow around the body toward `dir`: Unity's SunRadiance sub-graph. Its strength is the
 // intensity times (1 + radius - angle), kept to 0 to 1: it falls off linearly with the angle from
 // the body and is gone at 1 + radius radians. The graph's colour is a vec4, so its length counts
@@ -267,6 +276,10 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
 
     // the clouds over the sky and the body, so a soft cloud edge dims the sun behind it
     color = color * (1.0 - cloud.a) + cloud.rgb;
+
+    // GenesisSky then decodes the whole sky from sRGB to linear (Colorspace Conversion, RGB to
+    // Linear). The rim it screens on before is off with the lookup
+    color = rgb_to_linear(color);
 
     textureStore(
         image,
