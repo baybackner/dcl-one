@@ -499,23 +499,30 @@ row with a downgrade notice captured in the last hour gets no new row. A local
 world's or a derived place's creator rating is held to the operator's rating in
 `explore.place_moderation` when one is set, and a rating the row takes moves
 that override with it. A new deployment or a newly inserted derived place is
-also held to the ratings of the derived places its parcels overlap, which the
-pass then prunes, and to `explore.place_parcel_rating`.
+also held to the ratings, on its parcels, of the same place or of places by
+the same creator (the signed deployer address, `explore.place.creator_address`):
+the derived places its parcels overlap, which the pass then prunes, and
+`explore.place_parcel_rating`. Another creator's place on those parcels starts
+fresh.
 
 `explore.place_parcel_rating` keeps the rating last held on each parcel by the
-derived place covering it, so the rating outlives a row the pass prunes (an
-unpublished scene, or one moved to another base parcel). Workload: one row per
-rated parcel the catalogue derives (at most the deployed parcels); written in
-the derive page's transaction, one batched upsert for the rows whose rating the
-page settles and one insert of missing parcels for the others (an existing
-catalogue fills on its first pass), and one row per parcel for an operator's
-rating of a derived place; read by primary key for each settled row's parcels.
-Invariant: a parcel's row equals the rating of the derived place covering it,
-or of the last one; only the derive pass and the operator's place rating write
-it, and nothing deletes it. Both writers first take transaction advisory
-locks on the parcels' hash buckets (at most 128) in one sorted order, so a page that inserts a missing parcel
-after locking the recorded ones cannot deadlock with an operator's rating. The
-table is a new object: the object pass of
+derived place covering it, with that place's id and creator, so the rating
+outlives a row the pass prunes (an unpublished scene, or one moved to another
+base parcel by the same creator). Workload: one row per rated parcel the
+catalogue derives (at most the deployed parcels); written in the derive page's
+transaction, one batched upsert for the rows whose rating the page settles, one
+delete for the parcels of settled rows left with no rating, and one insert of
+missing parcels for the others (an existing catalogue fills on its first pass),
+and one row per parcel for an operator's rating of a derived place; read by
+primary key for each settled row's parcels. Invariant: a parcel's row equals
+the rating, id and creator of the rated derived place covering it, or of the
+last one; only the derive pass and the operator's place rating write it. Both
+writers first take transaction advisory locks on the hash buckets (at most 128)
+of the parcels they write, in one sorted order, so a page that inserts a missing
+parcel after locking the recorded ones cannot deadlock with an operator's
+rating; a page locks only the parcels of its new rows and new deployments and
+the unrecorded parcels it fills, so a page of unchanged rows does not delay an
+operator's rating. The table is a new object: the object pass of
 `catalyst schema migrate` creates it, so no step exists.
 
 Event notification delivery is owned by Social in

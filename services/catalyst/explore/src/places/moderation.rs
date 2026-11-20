@@ -37,7 +37,7 @@
 //! lower is reported on the same channel ([`capture_creator_rating`]). An
 //! operator's rating of a derived place is also recorded on its parcels
 //! (`explore.place_parcel_rating`), which the derive pass holds the next
-//! place on them to.
+//! deployment of that place, or a new place by its creator, to.
 //!
 //! The pending rating has two spellings upstream: the route schema's `PR`
 //! (`Place/schemas.ts:343`) and the code enum's `RP`
@@ -316,17 +316,19 @@ const PLACE_PARCELS: &str = r#"
 "#;
 
 /// An operator's rating `$2` of the derived place `$1`, recorded on each of
-/// its parcels (`explore.place_parcel_rating`, which the derive pass holds a
-/// new deployment or a new row to).
+/// its parcels with the place and its creator (`explore.place_parcel_rating`,
+/// which the derive pass holds a new deployment of that place, or a new row
+/// by that creator, to).
 const OPERATOR_PARCEL_RATINGS: &str = r#"
-    INSERT INTO explore.place_parcel_rating AS r (position, content_rating)
-    SELECT DISTINCT pos, $2 FROM explore.place p,
+    INSERT INTO explore.place_parcel_rating AS r (position, content_rating, place_id, creator_address)
+    SELECT DISTINCT pos, $2, p.id, NULLIF(lower(btrim(p.creator_address)), '') FROM explore.place p,
          jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.raw->'positions') = 'array'
                                         THEN p.raw->'positions' ELSE '[]'::jsonb END) AS pos
     WHERE p.id = $1 AND p.raw->>'source' = 'content' AND p.world IS FALSE
     ORDER BY pos
     ON CONFLICT (position) DO UPDATE
-    SET content_rating = EXCLUDED.content_rating, updated_at = timezone('UTC', now())
+    SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
+        creator_address = EXCLUDED.creator_address, updated_at = timezone('UTC', now())
 "#;
 
 /// The `raw` keys a disable decision writes, as `updateDisabled` did

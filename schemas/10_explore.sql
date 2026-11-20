@@ -267,19 +267,24 @@ CREATE TABLE explore.place_moderation (
 );
 
 -- The content rating last held on each parcel by the derived place covering it
--- (src/explore/places/derive.rs, `settle_ratings`): the derive pass writes the
--- rating it settles for a new deployment or a new row over every parcel of
--- that row, and fills a missing parcel from the row's stored rating; an
--- operator's rating of a derived place (places::moderation) overwrites its
--- parcels. A new deployment or a new row is held to the strictest rating of
--- its parcels, so the rating outlives the row the pass prunes. Keyed by the
--- parcel (`x,y`), one row per rated parcel the catalogue has derived; no FK
--- to explore.place, whose rows come and go. The PK serves the pass's lookup
--- and upsert by parcel.
+-- (src/explore/places/derive.rs, `settle_ratings`), with that place's id and
+-- the deployer address that created it: the derive pass writes the rating it
+-- settles for a new deployment or a new row over every parcel of that row
+-- (and clears the parcels of one left with no rating), and fills a missing
+-- parcel from the row's stored rating; an operator's rating of a derived
+-- place (places::moderation) overwrites its parcels. A new deployment or a
+-- new row is held to the strictest rating of its parcels recorded by the same
+-- place or by the same creator, so the rating outlives the row the pass
+-- prunes, and another creator's place starts fresh. Keyed by the parcel
+-- (`x,y`), one row per rated parcel the catalogue has derived; no FK to
+-- explore.place, whose rows come and go. The PK serves the pass's lookup and
+-- upsert by parcel.
 CREATE TABLE explore.place_parcel_rating (
-    position       text PRIMARY KEY,
-    content_rating text NOT NULL,
-    updated_at     timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    position        text PRIMARY KEY,
+    content_rating  text NOT NULL,
+    place_id        text NOT NULL,
+    creator_address text,
+    updated_at      timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     CONSTRAINT place_parcel_rating_known
         CHECK (content_rating IN ('RP', 'E', 'T', 'A', 'R'))
 );
