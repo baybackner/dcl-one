@@ -32,22 +32,28 @@ def prune(deps, messages):
 
     # Cargo publishes debug/catalyst as a hard link or a copy of the hashed executable.
     obsolete = set()
+    binaries = {p for p in deps.glob("catalyst-*") if executable.fullmatch(p.name)
+                and not p.is_symlink() and p.is_file()}
+    retained = set()
     if app in reported and app.is_file():
-        binaries = {p for p in deps.glob("catalyst-*") if executable.fullmatch(p.name)
-                    and not p.is_symlink() and p.is_file()}
         retained = {p for p in binaries if p.samefile(app)}
         if not retained:
             retained = {p for p in binaries if filecmp.cmp(app, p, shallow=False)}
-        if retained:
-            obsolete.update(binaries - retained - reported)
+    if retained:
+        obsolete.update(binaries - retained - reported)
+    elif binaries:
+        print(f"Kept all {len(binaries)} hashed Catalyst binaries because the current executable "
+              "could not be verified against Cargo's reported files.")
     for path in deps.iterdir():
         match = library.fullmatch(path.name)
         if match and (stems := active.get(family(match))) and path.stem not in stems:
             obsolete.add(path)
     removed = 0
     for path in obsolete:
-        removed += path.stat().st_size
+        info = path.lstat()
         path.unlink()
+        if info.st_nlink == 1:
+            removed += info.st_size
     return removed
 
 

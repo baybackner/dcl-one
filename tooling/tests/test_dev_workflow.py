@@ -244,21 +244,53 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             old.write_bytes(b'old')
             other = deps / ('other-' + 'b' * 16)
             other.touch()
+            libraries = []
             for suffix in ('.so', '.dylib'):
                 active = deps / ('libmacro-' + 'a' * 16 + suffix)
                 stale = deps / ('libmacro-' + 'b' * 16 + suffix)
                 active.touch()
+                libraries.append(str(active))
                 stale.write_bytes(b'old')
-                receipts = json.dumps({'reason': 'compiler-artifact', 'filenames': [str(app), str(active)]})
-                self.assertEqual(prune(deps, receipts), 3)
-                self.assertTrue(old.exists())
-                self.assertTrue(active.exists())
+            library_receipts = json.dumps({'reason': 'compiler-artifact', 'filenames': libraries})
+            os.link(app, current)
+            with patch('builtins.print') as diagnostic:
+                self.assertEqual(prune(deps, library_receipts), 6)
+                diagnostic.assert_called_once()
+                self.assertIn('Kept all 2 hashed Catalyst binaries', diagnostic.call_args.args[0])
+            self.assertTrue(old.exists())
+            self.assertTrue(all(Path(lib).exists() for lib in libraries))
+            # Cargo emits the published executable as the bin target's sole filename.
+            bin_receipt = json.dumps({'reason': 'compiler-artifact', 'target': {'kind': ['bin']},
+                                      'filenames': [str(app)], 'executable': str(app)})
+            receipts = library_receipts + '\n' + bin_receipt
+            current.unlink()
+            with patch('builtins.print') as diagnostic:
+                self.assertEqual(prune(deps, receipts), 0)
+                diagnostic.assert_called_once()
+            self.assertTrue(old.exists())
             os.link(app, current)
             self.assertEqual(prune(deps, receipts), 3)
             self.assertFalse(old.exists())
             self.assertTrue(current.samefile(app))
             self.assertTrue(other.exists())
             self.assertEqual(prune(deps, receipts), 0)
+
+    def test_smoke_counts_only_the_last_unlinked_name(self):
+        prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
+        with tempfile.TemporaryDirectory() as temporary:
+            deps = Path(temporary) / 'deps'
+            deps.mkdir()
+            active, obsolete, linked = [deps / ('libcrate-' + c * 16 + '.rlib') for c in 'abc']
+            active.touch()
+            obsolete.write_bytes(b'old')
+            os.link(obsolete, obsolete.with_suffix('.rmeta'))
+            linked.write_bytes(b'shared')
+            survivor = deps.parent / 'retained'
+            os.link(linked, survivor)
+            receipt = json.dumps({'reason': 'compiler-artifact', 'filenames': [str(active)]})
+            self.assertEqual(prune(deps, receipt), 3)
+            self.assertEqual(set(deps.iterdir()), {active})
+            self.assertEqual(survivor.read_bytes(), b'shared')
 
     def test_smoke_recognizes_copied_binaries_by_contents(self):
         prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
