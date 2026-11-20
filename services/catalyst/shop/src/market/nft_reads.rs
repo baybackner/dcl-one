@@ -17,7 +17,10 @@
 //! seller still the owner) and the open v3 listing (`unified_trades`, the
 //! trade-events verdict applied), a row in both belonging to the legacy one,
 //! as the old query did. An index a route needs that is not published
-//! answers the unavailable envelope naming it.
+//! answers the unavailable envelope naming it: the nft index under
+//! `owned_items::Rule::Fresh` (and, for the collections, the items
+//! mirror's first complete pass), checked again on the read's own
+//! snapshot.
 
 use std::collections::HashMap;
 
@@ -28,13 +31,14 @@ use sqlx::{PgConnection, PgPool, Row};
 use super::catalog::{
     ACCESSORY_CATEGORIES, Builder, HEAD_CATEGORIES, escape_like, unified_trades_cte,
 };
-use super::chain_walk::{ChainNet, INDEXER_NFT, ready_cursor};
+use super::chain_walk::ChainNet;
 use super::nft_index::DCL_REGISTRAR;
 use super::nfts::{
     EmoteData, EnsData, EstateData, EstateParcel, Nft, NftData, NftFilters, NftResult, NftSortBy,
     ParcelData, ParcelEstate, WearableData,
 };
 use super::orders::Order;
+use super::owned_items::{self, Rule};
 use super::wire::{ApiError, Histogram, Network, NftCategory, consolidate, fix_urn};
 use super::{MarketplaceState, Source, unavailable};
 use crate::land_authz::indexer::ReadySnapshot;
@@ -149,10 +153,11 @@ pub(crate) fn land_unavailable() -> Response {
 }
 
 /// Where a read of [`Sources`] runs: on the land snapshot when it reads
-/// LAND ([`land_snapshot`]), else on a pool connection.
+/// LAND ([`land_snapshot`]), else on a read-only snapshot of its own; the
+/// nft index is checked again on either.
 enum ReadConn {
     Land(ReadySnapshot),
-    Pool(sqlx::pool::PoolConnection<sqlx::Postgres>),
+    Pool(sqlx::Transaction<'static, sqlx::Postgres>),
 }
 
 impl std::ops::Deref for ReadConn {
@@ -178,45 +183,90 @@ impl std::ops::DerefMut for ReadConn {
 enum ReadConnError {
     /// It reads LAND, and the land-authz index is not ready.
     LandUnavailable,
+    /// The nft index (or the items mirror) stopped meeting its rule.
+    NftUnavailable(Source, String),
     Pool(sqlx::Error),
 }
 
-/// The connection a read of `sources` runs on: the snapshot of `land`'s
-/// index when it reads LAND (unavailable on a network without LAND),
-/// else a pool connection.
+/// The connection a read of `sources` for `f` runs on: the snapshot of
+/// `land`'s index when it reads LAND (unavailable on a network without
+/// LAND), else a read-only snapshot; on either the nft index is checked
+/// again ([`check_nft`]).
 async fn open_read_conn(
     pool: &PgPool,
     land: Option<LandNetwork>,
+    f: &NftFilters,
     sources: Sources,
 ) -> Result<ReadConn, ReadConnError> {
-    if sources.land {
+    let mut conn = if sources.land {
         let Some(net) = land else {
             return Err(ReadConnError::LandUnavailable);
         };
-        return land_snapshot(pool, net)
+        land_snapshot(pool, net)
             .await
             .map(ReadConn::Land)
-            .ok_or(ReadConnError::LandUnavailable);
-    }
-    pool.acquire()
+            .ok_or(ReadConnError::LandUnavailable)?
+    } else {
+        let mut tx = pool.begin().await.map_err(ReadConnError::Pool)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(ReadConnError::Pool)?;
+        ReadConn::Pool(tx)
+    };
+    check_nft(&mut conn, f, sources)
         .await
-        .map(ReadConn::Pool)
-        .map_err(ReadConnError::Pool)
+        .map_err(|e| match e {
+            owned_items::ReadError::NotReady(source, m) => ReadConnError::NftUnavailable(source, m),
+            owned_items::ReadError::Db(e) => ReadConnError::Pool(e),
+        })?;
+    Ok(conn)
 }
 
-/// [`open_read_conn`] for a route: a LAND read whose index is not ready
-/// answers its unavailable envelope.
+/// [`open_read_conn`] for a route: an index that is not ready answers its
+/// unavailable envelope.
 async fn read_conn(
     pool: &PgPool,
     land: Option<LandNetwork>,
+    f: &NftFilters,
     sources: Sources,
 ) -> Result<ReadConn, Response> {
-    open_read_conn(pool, land, sources)
+    open_read_conn(pool, land, f, sources)
         .await
         .map_err(|e| match e {
             ReadConnError::LandUnavailable => land_unavailable(),
+            ReadConnError::NftUnavailable(source, m) => unavailable(source, &m),
             ReadConnError::Pool(e) => ApiError::internal(e.to_string()).into_response(),
         })
+}
+
+/// The networks whose nft index a read of `sources` for `f` needs: the
+/// collections' (the items mirror too), and Ethereum for names and LAND
+/// (the names, the LAND data and the legacy orders).
+fn nft_networks(f: &NftFilters, sources: Sources) -> (Vec<ChainNet>, Vec<ChainNet>) {
+    let collections = if sources.collections {
+        collection_networks(f)
+    } else {
+        Vec::new()
+    };
+    let others = if (sources.names || sources.land) && !collections.contains(&ChainNet::Ethereum) {
+        vec![ChainNet::Ethereum]
+    } else {
+        Vec::new()
+    };
+    (collections, others)
+}
+
+/// The nft index rule of a read of `sources` for `f`, on `conn`.
+async fn check_nft(
+    conn: &mut PgConnection,
+    f: &NftFilters,
+    sources: Sources,
+) -> Result<(), owned_items::ReadError> {
+    let (collections, others) = nft_networks(f, sources);
+    let now = Utc::now();
+    owned_items::check(conn, &collections, Rule::Fresh, true, now).await?;
+    owned_items::check(conn, &others, Rule::Fresh, false, now).await
 }
 
 /// [`nft_prices`]'s error when the LAND index stopped being ready after
@@ -234,27 +284,18 @@ pub async fn require_ready(
     f: &NftFilters,
     sources: Sources,
 ) -> Result<(), Response> {
-    let now = Utc::now();
-    let mut nets: Vec<ChainNet> = Vec::new();
-    if sources.collections {
-        nets.extend(collection_networks(f));
-    }
-    if sources.names || sources.land {
-        nets.push(ChainNet::Ethereum);
-    }
-    nets.sort();
-    nets.dedup();
-    for net in nets {
-        if ready_cursor(pool, INDEXER_NFT, net, now).await.is_none() {
-            return Err(unavailable(
-                Source::NftIndex,
-                &format!(
-                    "the {} nft index is not published yet (catching up, or MARKETPLACE_NFT_INDEX_ENABLED off)",
-                    net.db_name()
-                ),
-            ));
+    let checked = async {
+        let mut conn = pool.acquire().await?;
+        check_nft(&mut conn, f, sources).await
+    };
+    // A database error reads as not ready: the envelope, never a guess.
+    checked.await.map_err(|e| match e {
+        owned_items::ReadError::NotReady(source, m) => unavailable(source, &m),
+        owned_items::ReadError::Db(e) => {
+            tracing::warn!(error = %e, "cannot read shop.chain_cursor; treating the nft index as not ready");
+            owned_items::not_ready("the nft index state cannot be read")
         }
-    }
+    })?;
     let land_ready = match land {
         Some(net) => land_ready(pool, net).await,
         None => false,
@@ -347,7 +388,9 @@ fn land_source(net: Option<LandNetwork>, geography: bool) -> String {
                 CASE WHEN tr.token_address = '{land}' THEN 'parcel' ELSE 'estate' END AS category, tr.owner, ld.name, \
                 CASE WHEN tr.token_address = '{land}' THEN '/v1/parcels/' || tr.x || '/' || tr.y || '/map.png' \
                      ELSE '/v1/estates/' || tr.token_id || '/map.png' END AS image, \
-                COALESCE(minted.block_time, 0) AS created_at, COALESCE(touched.block_time, 0) AS updated_at, sold.sold_at, \
+                COALESCE(minted.block_time, 0) AS created_at, COALESCE(touched.block_time, 0) AS updated_at, \
+                (SELECT max(s.block_time) FROM shop.nft_event s WHERE s.network = 'ethereum' AND s.contract_address = tr.token_address \
+                   AND s.token_id = tr.token_id AND s.kind = 'order_successful') AS sold_at, \
                 NULL::numeric AS issued_id, NULL::numeric AS item_blockchain_id, NULL::text AS urn, NULL::text AS item_type, NULL::text AS rarity, \
                 NULL::text AS item_category, NULL::text[] AS body_shapes, ld.description, NULL::boolean AS is_smart, NULL::boolean AS emote_loop, \
                 NULL::boolean AS emote_has_sound, NULL::boolean AS emote_has_geometry, NULL::text AS emote_outcome_type, NULL::text AS creator, \
@@ -361,8 +404,6 @@ fn land_source(net: Option<LandNetwork>, geography: bool) -> String {
          LEFT JOIN LATERAL (SELECT e.block_time FROM land_authz.authz_event e WHERE e.token_address = tr.token_address AND e.token_id = tr.token_id \
                             AND e.kind = 'transfer' ORDER BY e.block_number, e.log_index LIMIT 1) minted ON true \
          LEFT JOIN LATERAL (SELECT e.block_time FROM land_authz.authz_event e WHERE e.block_number = tr.updated_block AND e.log_index = tr.updated_log) touched ON true \
-         LEFT JOIN LATERAL (SELECT max(s.block_time) AS sold_at FROM shop.nft_event s WHERE s.network = 'ethereum' AND s.contract_address = tr.token_address \
-                            AND s.token_id = tr.token_id AND s.kind = 'order_successful') sold ON true \
          WHERE tr.token_address IN ('{land}', '{estate}') AND tr.owner IS NOT NULL"
     )
 }
@@ -399,9 +440,19 @@ fn push_filters(b: &mut Builder, f: &NftFilters, wheres: &mut Vec<String>) {
         let p = b.bind_string(o.to_ascii_lowercase());
         wheres.push(format!("c.owner = {p}"));
     }
-    if let Some(cat) = f.category {
-        let p = b.bind_string(cat.as_str().to_string());
-        wheres.push(format!("c.category = {p}"));
+    match f.category {
+        // The item's type, a plain column the planner has statistics for:
+        // the `category` CASE over it was estimated at a fraction of a
+        // percent, and an owner's page drove from the items into every
+        // copy of each (2.8 s for a 30,000-token owner on 3.5M tokens,
+        // 92 ms with this predicate).
+        Some(NftCategory::Wearable) => wheres.push("c.item_type <> 'emote_v1'".into()),
+        Some(NftCategory::Emote) => wheres.push("c.item_type = 'emote_v1'".into()),
+        Some(cat) => {
+            let p = b.bind_string(cat.as_str().to_string());
+            wheres.push(format!("c.category = {p}"));
+        }
+        None => {}
     }
     if f.is_land {
         wheres.push("c.category IN ('parcel', 'estate')".into());
@@ -600,18 +651,39 @@ async fn require_sources(
     Ok(())
 }
 
-/// The candidate set with its order legs as `c` (a CTE chain), for the
-/// page, the total and the histograms. LAND reads `land`'s registries,
-/// `now_ms` is the bound clock, `since` the trades floor
-/// (`trades::mirrored_since`).
-pub fn build_candidates(
+/// Whether every row the filters keep has an order (`order_price` set):
+/// the candidates are then read from the tokens with an open legacy order
+/// or v3 listing ([`ON_SALE_CTE`]) instead of from every token.
+fn on_sale_only(f: &NftFilters) -> bool {
+    f.is_on_sale == Some(true) || f.min_price.is_some() || f.max_price.is_some()
+}
+
+/// The tokens with an open legacy order or a v3 nft listing, whoever signed
+/// it: a superset of the rows whose `order_price` is set (that also needs
+/// the seller or signer to be the owner), which the filters still apply.
+/// `NOW_MS` is the bound clock. A v3 token id that is not a decimal is left
+/// out: the order leg compares it as text with the decimal token id, so it
+/// never matches a token.
+const ON_SALE_CTE: &str = "on_sale AS MATERIALIZED ( \
+    SELECT o.network, o.contract_address, o.token_id FROM shop.nft_order o WHERE o.status = 'open' AND o.expires_at > NOW_MS \
+    UNION \
+    SELECT lower(u.network), u.contract_address_sent, u.token_id::numeric FROM unified_trades u \
+    WHERE u.type = 'public_nft_order' AND u.token_id ~ '^[0-9]{1,78}$'), ";
+
+/// The candidate legs, one per source, each with its order legs (the
+/// `listed` shape), and the CTE prefix they read (`unified_trades`, and
+/// `on_sale` for [`on_sale_only`], when the filters read orders): empty, or
+/// ending in `, `. LAND reads `land`'s registries, `now_ms` is the bound
+/// clock, `since` the trades floor (`trades::mirrored_since`).
+fn candidate_legs(
     b: &mut Builder,
     f: &NftFilters,
     sources: Sources,
     land: Option<LandNetwork>,
     now_ms: i64,
     since: Option<chrono::NaiveDateTime>,
-) -> String {
+    restrict_on_sale: bool,
+) -> (String, Vec<String>) {
     let mut parts: Vec<String> = Vec::new();
     if sources.collections {
         parts.extend(collection_networks(f).into_iter().map(collection_source));
@@ -622,47 +694,82 @@ pub fn build_candidates(
     if sources.land {
         parts.push(land_source(land, reads_geography(f)));
     }
-    let base = parts.join(" UNION ALL ");
-    let with_orders = needs_orders(f);
     let now_ms_p = b.bind_i64(now_ms);
-    let orders = if with_orders {
+    let legacy = format!(
+        "LEFT JOIN LATERAL (SELECT o.* FROM shop.nft_order o WHERE o.network = b.network AND o.contract_address = b.contract_address \
+                           AND o.token_id = b.token_id AND o.status = 'open' AND o.expires_at > {now_ms_p} AND o.seller = b.owner) lo ON true"
+    );
+    let (prefix, columns, v3, restrict) = if needs_orders(f) {
         let now_p = b.bind_time(
             chrono::DateTime::from_timestamp_millis(now_ms)
                 .unwrap_or_default()
                 .naive_utc(),
         );
         let since_p = b.bind_opt_time(since);
-        format!(
-            ", {trades}, \
-             listed AS ( \
-               SELECT b.*, lo.order_id, lo.marketplace_address AS order_marketplace, lo.price AS legacy_price, lo.expires_at AS legacy_expires_at, \
-                      lo.created_at AS legacy_created_at, lo.updated_at AS legacy_updated_at, v3.amount_received AS v3_price, v3.created_at AS v3_created_at, \
-                      COALESCE(lo.price, v3.amount_received) AS order_price, \
-                      COALESCE(lo.created_at * 1000, (EXTRACT(EPOCH FROM v3.created_at) * 1000)::bigint) AS order_created_at \
-               FROM base b \
-               LEFT JOIN LATERAL (SELECT o.* FROM shop.nft_order o WHERE o.network = b.network AND o.contract_address = b.contract_address \
-                                  AND o.token_id = b.token_id AND o.status = 'open' AND o.expires_at > {now_ms_p} AND o.seller = b.owner) lo ON true \
-               LEFT JOIN LATERAL (SELECT u.amount_received, u.created_at FROM unified_trades u WHERE u.type = 'public_nft_order' \
-                                  AND lower(u.network) = b.network AND u.contract_address_sent = b.contract_address AND u.token_id = b.token_id::text \
-                                  AND u.signer = b.owner ORDER BY u.created_at DESC LIMIT 1) v3 ON true \
-             )",
-            trades = unified_trades_cte(&now_p, &since_p)
+        let mut prefix = format!("{}, ", unified_trades_cte(&now_p, &since_p));
+        let restrict = if restrict_on_sale && on_sale_only(f) {
+            prefix.push_str(&ON_SALE_CTE.replace("NOW_MS", &now_ms_p));
+            " WHERE (b.network, b.contract_address, b.token_id) IN (SELECT network, contract_address, token_id FROM on_sale)"
+        } else {
+            ""
+        };
+        (
+            prefix,
+            "v3.amount_received AS v3_price, v3.created_at AS v3_created_at, \
+             COALESCE(lo.price, v3.amount_received) AS order_price, \
+             COALESCE(lo.created_at * 1000, (EXTRACT(EPOCH FROM v3.created_at) * 1000)::bigint) AS order_created_at",
+            " LEFT JOIN LATERAL (SELECT u.amount_received, u.created_at FROM unified_trades u WHERE u.type = 'public_nft_order' \
+                AND lower(u.network) = b.network AND u.contract_address_sent = b.contract_address AND u.token_id = b.token_id::text \
+                AND u.signer = b.owner ORDER BY u.created_at DESC LIMIT 1) v3 ON true",
+            restrict,
         )
     } else {
-        ", listed AS ( \
-             SELECT b.*, lo.order_id, lo.marketplace_address AS order_marketplace, lo.price AS legacy_price, lo.expires_at AS legacy_expires_at, \
-                    lo.created_at AS legacy_created_at, lo.updated_at AS legacy_updated_at, NULL::numeric AS v3_price, NULL::timestamp AS v3_created_at, \
-                    NULL::numeric AS order_price, NULL::bigint AS order_created_at \
-             FROM base b \
-             LEFT JOIN LATERAL (SELECT o.* FROM shop.nft_order o WHERE o.network = b.network AND o.contract_address = b.contract_address \
-                                AND o.token_id = b.token_id AND o.status = 'open' AND o.expires_at > NOW_MS AND o.seller = b.owner) lo ON true \
-           )"
-            .replace("NOW_MS", &now_ms_p)
+        (
+            String::new(),
+            "NULL::numeric AS v3_price, NULL::timestamp AS v3_created_at, NULL::numeric AS order_price, NULL::bigint AS order_created_at",
+            "",
+            "",
+        )
     };
-    format!("WITH base AS ({base}){orders}")
+    let legs = parts
+        .into_iter()
+        .map(|source| {
+            format!(
+                "SELECT b.*, lo.order_id, lo.marketplace_address AS order_marketplace, lo.price AS legacy_price, lo.expires_at AS legacy_expires_at, \
+                        lo.created_at AS legacy_created_at, lo.updated_at AS legacy_updated_at, {columns} \
+                 FROM ({source}) b {legacy}{v3}{restrict}"
+            )
+        })
+        .collect();
+    (prefix, legs)
+}
+
+/// The candidate set with its order legs as `listed` (a CTE chain), for
+/// the total and the histograms. LAND reads `land`'s registries, `now_ms`
+/// is the bound clock, `since` the trades floor (`trades::mirrored_since`).
+pub fn build_candidates(
+    b: &mut Builder,
+    f: &NftFilters,
+    sources: Sources,
+    land: Option<LandNetwork>,
+    now_ms: i64,
+    since: Option<chrono::NaiveDateTime>,
+) -> String {
+    let (prefix, legs) = candidate_legs(b, f, sources, land, now_ms, since, true);
+    format!("WITH {prefix}listed AS ({})", legs.join(" UNION ALL "))
 }
 
 /// The page SQL and the capped total SQL (their own argument lists).
+///
+/// The page takes the `first + skip` best rows of each source under the
+/// filters and the sort, then sorts and pages their union: the window of
+/// the whole set is always among them, and a source read alone walks an
+/// index in the sort's order (`nft_mint_order_idx` for the newest first)
+/// instead of sorting every candidate. On 3.5M tokens the newest wearables
+/// went from 1.6 s to 15 ms, the page naming no category from 5.1 s to
+/// 0.28 s (its LAND leg reads every parcel's mint before sorting) and the
+/// wearables on sale from 2.2 s to 0.12 s (DATABASE.md, "Wearable and emote ownership
+/// workload").
 pub fn build_nfts_query(
     f: &NftFilters,
     sources: Sources,
@@ -677,9 +784,10 @@ pub fn build_nfts_query(
 ) {
     let page = {
         let mut b = Builder::new();
-        let ctes = build_candidates(&mut b, f, sources, land, now_ms, since);
+        let (prefix, legs) = candidate_legs(&mut b, f, sources, land, now_ms, since, true);
         let mut wheres = Vec::new();
         push_filters(&mut b, f, &mut wheres);
+        let window = b.bind_i64(first + skip);
         let lim = b.bind_i64(first);
         let off = b.bind_i64(skip);
         let where_sql = if wheres.is_empty() {
@@ -687,7 +795,17 @@ pub fn build_nfts_query(
         } else {
             format!("WHERE {}", wheres.join(" AND "))
         };
-        b.push(&format!("{ctes} SELECT c.*, c.token_id::text AS token_text, c.issued_id::text AS issued_text, c.item_blockchain_id::text AS item_text, c.legacy_price::text AS legacy_price_text FROM listed c {where_sql} {} LIMIT {lim} OFFSET {off}", sort_sql(f.sort_by)));
+        let sort = sort_sql(f.sort_by);
+        let tops: Vec<String> = legs
+            .iter()
+            .map(|leg| format!("(SELECT c.* FROM ({leg}) c {where_sql} {sort} LIMIT {window})"))
+            .collect();
+        b.push(&format!(
+            "WITH {prefix}listed AS ({}) SELECT c.*, c.token_id::text AS token_text, c.issued_id::text AS issued_text, \
+                    c.item_blockchain_id::text AS item_text, c.legacy_price::text AS legacy_price_text \
+             FROM listed c {sort} LIMIT {lim} OFFSET {off}",
+            tops.join(" UNION ALL ")
+        ));
         (b.sql, b.args)
     };
     let total = {
@@ -897,11 +1015,37 @@ pub async fn list_nfts(
                 .into_response(),
         );
     }
-    let sources = sources_for(f);
+    let mut sources = sources_for(f);
+    if super::nfts::merges_land(f) {
+        // A read that names no category answers every category, as
+        // upstream's does: the names and LAND legs join whenever their
+        // indexes are published, and a read without them still answers the
+        // wearables and emotes.
+        let names = Sources {
+            names: true,
+            ..Default::default()
+        };
+        sources.names = require_ready(&state.pool, None, f, names).await.is_ok();
+        sources.land = match state.land_network() {
+            Some(net) => land_ready(&state.pool, net).await,
+            None => false,
+        };
+    }
     require_sources(state, f, sources).await?;
     // The page, its total and the estates' parcels read one state.
     let land = state.land_network();
-    let mut conn = read_conn(&state.pool, land, sources).await?;
+    let mut conn = match open_read_conn(&state.pool, land, f, sources).await {
+        Err(ReadConnError::LandUnavailable) if !sources_for(f).land => {
+            // The optional LAND leg stopped being ready after its check.
+            sources.land = false;
+            read_conn(&state.pool, land, f, sources).await?
+        }
+        other => other.map_err(|e| match e {
+            ReadConnError::LandUnavailable => land_unavailable(),
+            ReadConnError::NftUnavailable(source, m) => unavailable(source, &m),
+            ReadConnError::Pool(e) => ApiError::internal(e.to_string()).into_response(),
+        })?,
+    };
     let now_ms = Utc::now().timestamp_millis();
     let ((page_sql, page_args), (total_sql, total_args)) =
         build_nfts_query(f, sources, land, first, skip, now_ms, trades_since(state));
@@ -958,10 +1102,11 @@ pub async fn nft_prices(state: &MarketplaceState, f: &NftFilters) -> Result<Hist
     let f = on_sale(f);
     let sources = sources_for(&f);
     let land = state.land_network();
-    let mut conn = open_read_conn(&state.pool, land, sources)
+    let mut conn = open_read_conn(&state.pool, land, &f, sources)
         .await
         .map_err(|e| match e {
             ReadConnError::LandUnavailable => NFT_PRICES_LAND_UNAVAILABLE.to_string(),
+            ReadConnError::NftUnavailable(_, m) => m,
             ReadConnError::Pool(e) => format!("acquiring a connection for the nft prices: {e}"),
         })?;
     let mut b = Builder::new();
@@ -1003,7 +1148,7 @@ pub async fn estate_sizes(state: &MarketplaceState, f: &NftFilters) -> Result<Hi
     };
     require_sources(state, &f, sources).await?;
     let land = state.land_network();
-    let mut conn = read_conn(&state.pool, land, sources).await?;
+    let mut conn = read_conn(&state.pool, land, &f, sources).await?;
     let mut b = Builder::new();
     let ctes = build_candidates(
         &mut b,
@@ -1412,5 +1557,109 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    /// The page's per-source top window answers exactly the page of the
+    /// whole candidate set sorted and paged, and the on-sale candidates
+    /// read from the listed tokens answer what every token filtered on its
+    /// order answers: over collections, names and LAND with tied mint
+    /// times, for every sort, the on-sale and category filters, and pages
+    /// that start inside and past the first source's rows.
+    #[tokio::test]
+    async fn the_per_source_window_pages_like_the_whole_set() {
+        let Some(own) = crate::market::tests::support::OwnDb::create("nftpage").await else {
+            return;
+        };
+        let pool = own.pool.clone();
+        let c = "0x00000000000000000000000000000000000000c1";
+        let a = "0x00000000000000000000000000000000000000aa";
+        let b = "0x00000000000000000000000000000000000000bb";
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, is_completed, is_approved, is_editable, created_at, updated_at, reviewed_at, mirrored_at) \
+             VALUES ('matic', '{c}', 137, 'Pirates', '{a}', '{a}', 'urn:decentraland:matic:collections-v2:{c}', true, true, false, 1, 1, 1, now()); \
+             INSERT INTO shop.items (network, contract_address, item_id, chain_id, item_type, urn, creator, rarity, total_supply, max_supply, available, price, image, name, category, body_shapes, search_is_collection_approved, created_at, updated_at, reviewed_at, mirrored_at) \
+             VALUES ('matic', '{c}', 0, 137, 'wearable_v2', 'urn:decentraland:matic:collections-v2:{c}:0', '{a}', 'rare', 1, 9, 1, 5, 'i', 'Hat', 'hat', ARRAY['BaseMale'], true, 1, 1, 1, now()), \
+                    ('matic', '{c}', 1, 137, 'emote_v1', 'urn:decentraland:matic:collections-v2:{c}:1', '{a}', 'rare', 1, 9, 1, 5, 'i', 'Dance', 'dance', ARRAY['BaseMale'], true, 1, 1, 1, now()); \
+             INSERT INTO shop.nft (network, contract_address, token_id, owner, item_id, issued_id, minted_block, minted_at, transferred_block, transferred_log, transferred_at, sold_at) \
+             SELECT 'matic', '{c}', g, CASE WHEN g % 2 = 0 THEN '{a}' ELSE '{b}' END, g % 2, g, g, 100 + g / 3, g, 0, 100 + g, CASE WHEN g % 4 = 0 THEN 500 + g END \
+             FROM generate_series(1, 12) g; \
+             INSERT INTO shop.nft (network, contract_address, token_id, owner, ens_subdomain, minted_block, minted_at, transferred_block, transferred_log, transferred_at) \
+             SELECT 'ethereum', '{DCL_REGISTRAR}', 1000 + g, '{a}', 'name' || g, g, 101 + g / 2, g, 0, 101 + g FROM generate_series(1, 6) g; \
+             INSERT INTO shop.nft_order (network, contract_address, token_id, order_id, marketplace_address, status, seller, price, expires_at, created_at, updated_at, updated_block, updated_log) \
+             VALUES ('matic', '{c}', 2, 'o1', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 30, 4000000000000, 10, 10, 1, 0), \
+                    ('matic', '{c}', 3, 'o2', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 10, 4000000000000, 11, 11, 1, 0), \
+                    ('matic', '{c}', 4, 'o3', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 20, 4000000000000, 12, 12, 1, 0), \
+                    ('ethereum', '{DCL_REGISTRAR}', 1002, 'o4', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 15, 4000000000000, 13, 13, 1, 0); \
+             INSERT INTO land_authz.token_right (token_address, token_id, x, y, owner, updated_block, updated_log) \
+             SELECT '{LAND_REGISTRY_MAINNET}', g, g, 0, '{a}', g, 0 FROM generate_series(1, 5) g; \
+             INSERT INTO land_authz.authz_event (block_number, log_index, block_time, token_address, kind, token_id, account) \
+             SELECT g, 0, 102 + g / 2, '{LAND_REGISTRY_MAINNET}', 'transfer', g, '{a}' FROM generate_series(1, 4) g"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let land = Some(LAND_MAINNET);
+        let now = 1_700_000_000_000;
+        let ids = |rows: &[sqlx::postgres::PgRow]| -> Vec<(String, String)> {
+            rows.iter()
+                .map(|r| (r.get("contract_address"), r.get("token_text")))
+                .collect()
+        };
+        let mut compared = 0;
+        for filters in [
+            vec![],
+            vec![("category", "wearable")],
+            vec![("isOnSale", "true")],
+            vec![("minPrice", "12")],
+            vec![("owner", a)],
+        ] {
+            for sort in [
+                "newest",
+                "name",
+                "recently_sold",
+                "cheapest",
+                "recently_listed",
+            ] {
+                let mut q = filters.clone();
+                q.push(("sortBy", sort));
+                let f = parse_filters(&pairs(&q)).unwrap();
+                let mut s = sources_for(&f);
+                if crate::market::nfts::merges_land(&f) {
+                    s.names = true;
+                    s.land = true;
+                }
+                for (first, skip) in [(2, 0), (3, 2), (4, 7), (50, 0), (5, 30)] {
+                    let ((page, args), _) = build_nfts_query(&f, s, land, first, skip, now, None);
+                    let got = sqlx::query_with(sqlx::AssertSqlSafe(page), args)
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                    let mut bld = Builder::new();
+                    let (prefix, legs) = candidate_legs(&mut bld, &f, s, land, now, None, false);
+                    let mut wheres = Vec::new();
+                    push_filters(&mut bld, &f, &mut wheres);
+                    let lim = bld.bind_i64(first);
+                    let off = bld.bind_i64(skip);
+                    let where_sql = if wheres.is_empty() {
+                        String::new()
+                    } else {
+                        format!("WHERE {}", wheres.join(" AND "))
+                    };
+                    bld.push(&format!(
+                        "WITH {prefix}listed AS ({}) SELECT c.contract_address, c.token_id::text AS token_text FROM listed c {where_sql} {} LIMIT {lim} OFFSET {off}",
+                        legs.join(" UNION ALL "),
+                        sort_sql(f.sort_by)
+                    ));
+                    let want = sqlx::query_with(sqlx::AssertSqlSafe(bld.sql), bld.args)
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                    assert_eq!(ids(&got), ids(&want), "{q:?} first={first} skip={skip}");
+                    compared += usize::from(!want.is_empty());
+                }
+            }
+        }
+        assert!(compared > 50, "the cases read rows: {compared}");
+        own.drop().await;
     }
 }

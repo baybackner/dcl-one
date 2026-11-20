@@ -14,7 +14,9 @@
 //! measurement window) never publishes, and neither does one held short by
 //! `MARKETPLACE_INDEX_STOP_BLOCK_*`. Readers trust an index through
 //! [`is_ready`]: `folded_block = last_block` and `folded_at` at most
-//! [`READY_WINDOW`] old at the caller's clock.
+//! [`READY_WINDOW`] old at the caller's clock. The `nft` index's readers use
+//! the publish marker alone (`owned_items::Rule`): every pass advances
+//! `last_block` before it folds and publishes.
 
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;

@@ -2,13 +2,14 @@
 //! and the same at `/explorer/{address}/...`. Three legs, merged, filtered,
 //! sorted (UCA order, rarest or newest first) and paged in Rust exactly as
 //! the old handler did: the base wearables (content entities), the owner's
-//! on-chain copies (the collections subgraph readers, plus the active escrow
+//! on-chain copies (the `nft` index, `owned_items`, plus the active escrow
 //! grants of `shop.usage_grants` unless `EXPLORER_ESCROW_GRANTS_ENABLED` is
 //! off, as under the mirror posture; the item type from the `items`
 //! mirror, the definitions from the content entities) and the third-party
-//! wearables (`third_party`). The old on-chain leg read the squid's `nft`
-//! table; without the subgraph readers this route answers the unavailable
-//! envelope, as the other ownership lambdas do.
+//! wearables (`third_party`). Until the index is published and recent and
+//! the items mirror has completed a pass, a read with the on-chain leg
+//! answers the unavailable envelope (`nft-index`), as the other ownership
+//! lambdas do.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -32,7 +33,6 @@ use super::definitions::{
 };
 use super::graph;
 use super::lambdas_catalog::cached_base_wearables;
-use super::readers;
 use super::third_party::{FetchFailure, OnFailure, TpwElement, fetch_all_third_party_wearables};
 use super::user_items::is_third_party_name_urn;
 use super::{MarketplaceState, SharedState, bad_request};
@@ -176,7 +176,7 @@ impl OwnedItem {
 }
 
 /// One owned copy: `(urn, token id, transferred at (seconds), rarity, price,
-/// subgraph item type, subgraph category)`.
+/// item type, item category)`.
 type CopyRow = (
     String,
     String,
@@ -187,14 +187,16 @@ type CopyRow = (
     Option<String>,
 );
 
-/// The owner's copies of `category` (the subgraph readers) and their active
+/// The owner's copies of `category` (the `nft` index) and their active
 /// escrow grants, newest first, grouped by URN in first-seen order.
 async fn fetch_owned_items(
     state: &MarketplaceState,
     owner: &str,
     category: &str,
 ) -> Result<Vec<OwnedItem>, String> {
-    let copies = graph::owned_copies(&state.index, owner, category).await?;
+    let copies = super::owned_items::owned_copies(state, owner, category)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut rows: Vec<CopyRow> = copies
         .iter()
         .map(|c| {
@@ -695,7 +697,7 @@ async fn explorer_items(
         q.collection_types.is_empty() || q.collection_types.iter().any(|t| t == "on-chain");
     if owner_valid
         && on_chain_allowed
-        && let Err(envelope) = readers::require_both_collections(state)
+        && let Err(envelope) = super::owned_items::require_inventory(state, category).await
     {
         return envelope;
     }

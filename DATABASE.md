@@ -2394,3 +2394,98 @@ in its own memory with the same rules, like the places reads fall back to the
 API; that mode serves one process only, so a deployment with several Sites
 replicas sets the database URL. The bootstrap defines the table; an existing
 database gains it from the object pass, so no step exists.
+
+## Wearable and emote ownership workload
+
+The shop's ownership reader (`services/catalyst/shop/src/market/owned_items.rs`)
+answers who holds which collection item from the nft index's fold, `shop.nft`,
+which the shop writes itself; it reads no other area's table. Readers:
+profiles and the Registry's profile batches (`/lambdas/profiles`, `POST
+/profiles`), the wearable and emote lists (`/lambdas/users/{a}/wearables`,
+`/emotes`, `/lambdas/collections/*-by-owner`), the explorer backpack,
+`/v1/users/{a}/wearables` and `/emotes`, outfits, the `/v1/orders` owner
+guard and the wearable and emote pages of `/v1/nfts`. Content deployment
+validation does not read it: it checks ownership by RPC at the entity's block
+and `shop.usage_grants`.
+
+Readiness, read on the cursor (`shop.chain_cursor`, `indexer = 'nft'`) in the
+same `REPEATABLE READ, READ ONLY` transaction as the rows, so a rewind that
+commits in between is never half-seen:
+
+- complete: `full_history` and `folded_block` set. A reorg rewind and an
+  unpublishable fold clear `folded_block`; only a pass that reaches the head,
+  folds and publishes sets it, and a rewind deletes the fold's rows in the
+  transaction that clears it. Between two folds `shop.nft` does not change,
+  so a complete cursor names a whole, published fold even while the next
+  pass has advanced `last_block` past `folded_block`. Profiles need complete
+  on the networks their items name; an incomplete one fails the read (503,
+  or a Registry batch left out and counted).
+- fresh: complete and `folded_at` within 30 minutes. Every other reader needs
+  it on the networks it reads (wearables both, emotes Polygon), and the lists
+  also need the items mirror's complete pass (`shop.mirror_state`); otherwise
+  they answer the `nft-index` envelope.
+
+Queries, all bounded by one owner or one batch:
+
+- an owner's copies: `shop.nft` by `owner` (`nft_owner_idx`), joined to
+  `shop.items` by `(network, contract_address, item_id)` on Polygon and to
+  `shop.collections` and `shop.items` by URN (the collection's URN and the
+  Issue log's `wearable_id`) on Ethereum; memoized 30 s per owner and
+  category, the gate checked on every call;
+- the profile batch: up to 128 profiles' `(owner, URN)` pairs unnested, v2
+  pairs joined to `shop.nft` on `(network, contract_address, item_id)` and
+  `owner`, v1 pairs through `shop.collections.urn` and `wearable_id`, newest
+  transfer first (`transferred_block`, `transferred_log` descending);
+- the orders guard: `NOT EXISTS` a `shop.nft` row of the listing's exact token
+  held by another address or burned, by primary key.
+
+Measured on a seeded database (3.0M Polygon tokens over 100,000 items with a
+skewed popularity, 300,000 owners of whom 20 hold about 30,000 tokens each,
+200,000 Ethereum v1 tokens and 300,000 names; PostgreSQL 18, warm cache):
+
+- the profile batch: each `(owner, URN)` pair is a `BitmapAnd` of
+  `nft_owner_idx` and `nft_item_idx`; 128 owners by 10 URNs took 220 ms, one
+  profile of 10 items 17 ms, and a 30,000-token owner wearing the ten
+  most-held items 21 ms. An index on `(owner, network, contract_address,
+  item_id)` cut those to 22, 0.2 and 0.9 ms, but at 442 MB against
+  `nft_owner_idx`'s 55 MB, and it made the planner read a 30,000-token
+  owner's inventory in 1.35 s instead of 89 ms, so it was not added;
+- an inventory read: 89 to 99 ms for a 30,000-token owner, 0.2 ms for a
+  typical one;
+- `/v1/nfts`: an owner's `category=wearable` page 95 ms and its capped total
+  131 ms for the 30,000-token owner, under 1 ms for a typical owner (with the
+  names leg when no category is named).
+
+The `/v1/nfts` page without an owner (seeded also with 90,000 parcels, 2,000
+estates and 3,500 open legacy orders) reads each source's first `first +
+skip` rows under the filters and the sort, then sorts and pages their union,
+which always holds the window of the whole set. Each collections and names
+source walks `nft_mint_order_idx` (`(network, minted_at DESC) WHERE owner IS
+NOT NULL`, 105 MB beside the 727 MB heap; an incremental sort orders the ties
+by contract and token) with nested-loop lookups of the item, the collection
+and the legacy order. A read that keeps only listed rows (`isOnSale=true`, a
+price bound) draws its candidates from the tokens with an open legacy order
+or v3 listing (`on_sale`, materialized once) and still applies the order
+filter, so it answers the same rows. Before and after, page and capped total
+(`first=24`):
+
+| Page | Before | After | Total before | Total after |
+|---|---|---|---|---|
+| newest `category=wearable` | 1,605 ms | 15 ms | 79 ms | 89 ms |
+| newest, no category (collections, names, LAND) | 5,138 ms | 282 ms | 80 ms | 90 ms |
+| newest `category=wearable&isOnSale=true` | 2,209 ms | 121 ms | 29,875 ms | 116 ms |
+
+Of the 282 ms, about 250 ms is the LAND source: its creation time is each
+token's first transfer (`land_authz.authz_event`), read for every parcel and
+estate before the sort. `sold_at` is a scalar subquery the plan evaluates for
+the page's rows only. The rows were identical to the earlier query's for the
+three pages, and `the_per_source_window_pages_like_the_whole_set` compares
+both shapes over every sort, filters and pages inside and past a source's
+rows. The index on `(network, minted_at DESC, contract_address, token_id)`
+answered within 6 ms of these at 396 MB.
+
+`nft_mint_order_idx` is a new object: `catalyst schema migrate` creates it
+(no step under `schemas/migrations/`) with a plain `CREATE INDEX` in its
+transaction, so it holds `shop.nft` against writes for the build (about 2 s
+on 3.5M rows), with every writer stopped as the migration requires. Each nft
+fold maintains it beside `nft_owner_idx` and `nft_item_idx`.

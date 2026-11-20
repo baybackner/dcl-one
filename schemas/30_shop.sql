@@ -470,6 +470,10 @@ CREATE INDEX nft_owner_idx ON shop.nft (owner) WHERE owner IS NOT NULL;
 -- The copies of an item: WHERE (network, contract_address, item_id) = ...
 -- (the index-served /v1/nfts over a matched item set, ?itemId=).
 CREATE INDEX nft_item_idx ON shop.nft (network, contract_address, item_id) WHERE item_id IS NOT NULL;
+-- The newest-first browse of /v1/nfts: each source's first `first + skip`
+-- held tokens by minted_at DESC, walked per network (an incremental sort
+-- orders the ties by contract and token) instead of sorting every candidate.
+CREATE INDEX nft_mint_order_idx ON shop.nft (network, minted_at DESC) WHERE owner IS NOT NULL;
 
 -- The legacy Marketplace order per token, folded: the latest order event
 -- decides (created = open, successful = sold, cancelled = cancelled); a

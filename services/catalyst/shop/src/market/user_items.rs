@@ -1,14 +1,16 @@
 //! `/lambdas/users/{address}/{wearables,emotes,names}` and the grouped
-//! `/lambdas/collections/*-by-owner/{owner}` lists over the subgraph readers.
-//! The old queries grouped in SQL over the squid; here the owner's copies
-//! come back from the subgraph newest first and are grouped, filtered,
-//! sorted (UCA order, only when `orderBy` is given) and paged in Rust.
-//! Definitions come from the content entities peer sync ingested. A reader
-//! that fails answers lamb2's 502 `FetcherError`.
-//! Without a reader the routes answer the unavailable envelope, as their
+//! `/lambdas/collections/*-by-owner/{owner}` lists. The owner's wearable and
+//! emote copies come from the `nft` index (`owned_items::owned_copies`)
+//! newest first and are grouped, filtered, sorted (UCA order, only when
+//! `orderBy` is given) and paged in Rust; the names from the marketplace
+//! subgraph. Definitions come from the content entities peer sync ingested.
+//! A read that fails answers lamb2's 502 `FetcherError`.
+//! Until the index is published and recent (`owned_items::Rule::Fresh`)
+//! and the items mirror has completed a pass, the wearable and emote
+//! routes answer the unavailable envelope (`nft-index`), as their
 //! `/marketplace-api/v1/users` twins do: the explorer reads these lambdas,
-//! and an empty page from an unconfigured node showed every avatar owning
-//! nothing (the old `squid_pool: None` behaviour the stage-5 rule replaced).
+//! and an empty page from a node without the index would show every avatar
+//! owning nothing.
 
 use std::collections::HashMap;
 
@@ -27,7 +29,8 @@ use crate::shared::query_params::{
 use super::definitions::{
     extract_emote_definition, extract_wearable_definition, locale_cmp, rarity_rank,
 };
-use super::graph::{self, OwnedCopy};
+use super::graph;
+use super::owned_items::{self, OwnedCopy};
 use super::readers;
 use super::{MarketplaceState, SharedState, bad_request};
 
@@ -267,14 +270,14 @@ async fn owned_items_response(
         .into_response();
     }
 
-    if let Err(envelope) = readers::require_both_collections(state) {
+    if let Err(envelope) = owned_items::require_inventory(state, item_category).await {
         return envelope;
     }
 
-    let copies = match graph::owned_copies(&state.index, address, item_category).await {
+    let copies = match owned_items::owned_copies(state, address, item_category).await {
         Ok(c) => c,
         Err(e) => {
-            return super::third_party::fetch_error(path_address, &e);
+            return e.into_response(|m| super::third_party::fetch_error(path_address, m));
         }
     };
     let mut items = group_copies(&copies);
@@ -475,7 +478,7 @@ async fn items_by_owner(
             .collect();
         return Json(json!(body)).into_response();
     }
-    if let Err(envelope) = readers::require_both_collections(state) {
+    if let Err(envelope) = owned_items::require_inventory(state, category).await {
         return envelope;
     }
     let key = (
@@ -502,7 +505,9 @@ async fn owned_items_body(
     include_definitions: bool,
     extract: fn(&Value, &str) -> Option<Value>,
 ) -> Result<Value, String> {
-    let copies = graph::owned_copies(&state.index, owner, category).await?;
+    let copies = owned_items::owned_copies(state, owner, category)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut rows: Vec<(String, i64, String)> = group_copies(&copies)
         .into_iter()
         .map(|g| {

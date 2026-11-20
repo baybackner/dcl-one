@@ -138,18 +138,58 @@ fn a_mirror_refuses_blank_profile_ownership_readers() {
         err.contains("MARKETPLACE_SUBGRAPH_URL is empty: unset it"),
         "{err}"
     );
-    let err = check_of(&[
+    // Blank collections subgraphs are no longer a profile ownership source.
+    check_of(&[
         db,
         (ENV, "mirror"),
         ("ETH_COLLECTIONS_SUBGRAPH_URL", " "),
         ("MATIC_COLLECTIONS_SUBGRAPH_URL", ""),
     ])
+    .unwrap();
+    let err = check_of(&[
+        db,
+        (ENV, "mirror"),
+        ("MARKETPLACE_NFT_INDEX_ENABLED", "false"),
+    ])
     .unwrap_err()
     .to_string();
     assert!(
-        err.contains("ETH_COLLECTIONS_SUBGRAPH_URL, MATIC_COLLECTIONS_SUBGRAPH_URL are empty"),
+        err.contains("MARKETPLACE_NFT_INDEX_ENABLED is off"),
         "{err}"
     );
+    let err = check_of(&[
+        db,
+        (ENV, "mirror"),
+        ("TRADE_RPC_URLS", "1=https://eth.example"),
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("names no 137= endpoint"), "{err}");
+    let err = check_of(&[db, (ENV, "mirror"), ("TRADE_RPC_URLS", "")])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("names no 137= endpoint"), "{err}");
+    check_of(&[
+        db,
+        (ENV, "mirror"),
+        ("TRADE_RPC_URLS", "137=https://polygon.example"),
+    ])
+    .unwrap();
+    // A file is read after the check; the walk refuses a wrong chain.
+    let with_file = [
+        db,
+        (ENV, "mirror"),
+        ("TRADE_RPC_URLS_FILE", "/run/credentials/trade"),
+    ];
+    check(&parsed_with_files(&with_file), &lookup(&env(&with_file))).unwrap();
+    // A testnet mirror serves the items as deployed until its chains are walked.
+    check_of(&[
+        db,
+        (ENV, "mirror"),
+        ("ETH_NETWORK", "sepolia"),
+        ("MARKETPLACE_NFT_INDEX_ENABLED", "false"),
+    ])
+    .unwrap();
     check_of(&[db, (ENV, "island")]).unwrap();
 }
 

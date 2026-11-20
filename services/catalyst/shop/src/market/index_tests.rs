@@ -940,6 +940,15 @@ async fn seed_item(
     .execute(pool)
     .await
     .unwrap();
+    // The items mirror's pass, which the owned-items reads need.
+    sqlx::query(
+        "INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at) \
+         VALUES ('items', $1, 'https://items.example', timezone('UTC', now())) ON CONFLICT (mirror, network) DO NOTHING",
+    )
+    .bind(network)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn owner_of(
@@ -1175,6 +1184,44 @@ async fn the_nft_walk_folds_owners_orders_and_resumes_a_kill_backfills_a_late_co
         (StatusCode::OK, json!({ "5000": 1 })),
         "{body}"
     );
+    // The ownership readers over the walked index: the emotes (Polygon
+    // only) list CARL's dance, and a profile naming BOB's hat and ALICE's
+    // parrot resolves each to its holder's token.
+    let (code, body) = get_json(
+        &super::router(st.clone()),
+        &format!("/lambdas/users/{CARL}/emotes"),
+    )
+    .await;
+    assert_eq!(
+        (
+            code,
+            body["elements"][0]["urn"].as_str(),
+            body["elements"][0]["name"].as_str()
+        ),
+        (
+            StatusCode::OK,
+            Some("urn:decentraland:matic:collections-v2:0xc2:0"),
+            Some("Moonwalk")
+        ),
+        "{body}"
+    );
+    let hat = "urn:decentraland:matic:collections-v2:0x00000000000000000000000000000000000000c1:0";
+    let parrot =
+        "urn:decentraland:matic:collections-v2:0x00000000000000000000000000000000000000c1:1";
+    let requested: std::collections::HashSet<(String, String)> = [
+        (BOB.to_string(), hat.to_string()),
+        (ALICE.to_string(), hat.to_string()),
+        (ALICE.to_string(), parrot.to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let owned =
+        super::owned_items::owned_tokens(&db.pool, &requested, super::owned_items::Rule::Complete)
+            .await
+            .unwrap();
+    assert_eq!(owned[BOB][hat], vec![t1.to_string()]);
+    assert_eq!(owned[ALICE][parrot], vec![t2.to_string()]);
+    assert!(!owned[ALICE].contains_key(hat), "ALICE sold the hat to BOB");
 
     // A late collection: the mirror learns c3 after the walk passed its
     // creation; the backfill lane reads it before the network republishes.
@@ -1286,6 +1333,90 @@ async fn a_reorg_past_the_confirmation_depth_rewinds_and_the_refold_follows_the_
             .await
             .unwrap();
     assert_eq!(orphans, 0);
+    db.drop().await;
+}
+
+/// A rewind deletes the log and the fold back to the start; the refill then
+/// takes several passes. Profile ownership (the relaxed rule, no clock)
+/// fails on every one of them instead of answering the half-walked table,
+/// which would strip items their owners hold: the publish marker stays
+/// cleared until a pass reaches the head, folds and publishes.
+#[tokio::test]
+async fn a_rewind_fails_profile_ownership_until_the_refill_publishes() {
+    let Some(db) = ScratchDb::create().await else {
+        return;
+    };
+    let s = nft_index::start_block(ChainNet::Matic);
+    let c1 = "0x00000000000000000000000000000000000000c1";
+    seed_collection(
+        &db.pool,
+        "matic",
+        c1,
+        s + 10,
+        "urn:decentraland:matic:collections-v2:0xc1",
+        "Pirates",
+    )
+    .await;
+    let t1 = v2_token(0, 1);
+    let chain = FakeChain::new(
+        s + 3_000,
+        vec![transfer(c1, ZERO, ALICE, t1, s + 100, 0)],
+        1_000_000,
+        100,
+    );
+    let url = serve(chain.clone()).await;
+    // Four 200-block windows a pass: the refill of 3,000 blocks is several passes.
+    let st = state_over(db.pool.clone(), &url, index_settings(4, 200), false);
+    assert!(
+        publish_nft(&st, &url, &NftIndex::new(ChainNet::Matic))
+            .await
+            .published
+    );
+    let urn = format!("urn:decentraland:matic:collections-v2:{c1}:0");
+    let requested: std::collections::HashSet<(String, String)> =
+        [(ALICE.to_string(), urn.clone())].into_iter().collect();
+    let read = || {
+        super::owned_items::owned_tokens(&db.pool, &requested, super::owned_items::Rule::Complete)
+    };
+    assert_eq!(read().await.unwrap()[ALICE][&urn], vec![t1.to_string()]);
+
+    let cursor = chain_walk::cursor(&db.pool, INDEXER_NFT, ChainNet::Matic)
+        .await
+        .unwrap()
+        .unwrap();
+    chain
+        .forks
+        .lock()
+        .insert(cursor.last_block as u64, format!("0x{}", "ee".repeat(32)));
+    let rewound = pass(&st, &url, &NftIndex::new(ChainNet::Matic)).await;
+    assert!(rewound.reorg_rewound_to.is_some(), "{rewound:?}");
+    chain.forks.lock().clear();
+    let mut refill_passes = 0;
+    loop {
+        let c = chain_walk::cursor(&db.pool, INDEXER_NFT, ChainNet::Matic)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.folded_block, None, "no publish mid-refill: {c:?}");
+        assert!(
+            matches!(
+                read().await,
+                Err(super::owned_items::ReadError::NotReady(..))
+            ),
+            "pass {refill_passes}: a profile read fails, never an empty inventory"
+        );
+        let outcome = pass(&st, &url, &NftIndex::new(ChainNet::Matic)).await;
+        refill_passes += 1;
+        if outcome.published {
+            break;
+        }
+        assert!(refill_passes < 40, "the refill never published");
+    }
+    assert!(
+        refill_passes > 2,
+        "the refill spans passes: {refill_passes}"
+    );
+    assert_eq!(read().await.unwrap()[ALICE][&urn], vec![t1.to_string()]);
     db.drop().await;
 }
 
@@ -1752,6 +1883,120 @@ async fn ethereum_names_v1_wearables_land_data_and_the_land_routes() {
         ),
         (StatusCode::OK, Some("Jester Feet"), Some("1")),
         "{body}"
+    );
+    // A v1 token's wearable id is its Issue log's, not a tokenURI.
+    let (wearable, issued): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT wearable_id, issued_id::text FROM shop.nft WHERE network = 'ethereum' AND contract_address = $1 AND token_id = 0",
+    )
+    .bind(v1)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (wearable.as_deref(), issued.as_deref()),
+        (Some("jester_feet"), Some("1"))
+    );
+    // A read naming no category also answers the owner's names and LAND,
+    // their indexes being published.
+    let (code, body) = get_json(&app, &format!("/v1/nfts?owner={ALICE}&network=ETHEREUM")).await;
+    let mut held: Vec<(String, String)> = body["data"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|r| {
+                    (
+                        r["nft"]["category"].as_str().unwrap_or("").to_string(),
+                        r["nft"]["name"].as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    held.sort();
+    assert_eq!(
+        (code, held),
+        (
+            StatusCode::OK,
+            vec![
+                ("estate".to_string(), "Fashion Street".to_string()),
+                ("wearable".to_string(), "Jester Feet".to_string())
+            ]
+        ),
+        "{body}"
+    );
+    let (code, body) = get_json(&app, &format!("/v1/nfts?owner={BOB}&network=ETHEREUM")).await;
+    assert_eq!(
+        (
+            code,
+            body["data"][0]["nft"]["name"].as_str(),
+            body["total"].as_i64()
+        ),
+        (StatusCode::OK, Some("PixelGolf"), Some(1)),
+        "{body}"
+    );
+    // A collection filter keeps the collections alone.
+    let (code, body) = get_json(
+        &app,
+        &format!("/v1/nfts?owner={ALICE}&network=ETHEREUM&category=wearable"),
+    )
+    .await;
+    assert_eq!(
+        (code, body["total"].as_i64()),
+        (StatusCode::OK, Some(1)),
+        "{body}"
+    );
+    // The wardrobe reads both networks: Polygon not published yet is the
+    // envelope naming it; published, ALICE's v1 copy is listed by the URN
+    // its Issue log names.
+    let lambdas = super::router(st.clone());
+    let wardrobe = format!("/lambdas/users/{ALICE}/wearables");
+    let (code, body) = get_json(&lambdas, &wardrobe).await;
+    assert_eq!(
+        (code, body["source"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("nft-index")),
+        "{body}"
+    );
+    assert!(
+        body["message"].as_str().unwrap().contains("matic"),
+        "{body}"
+    );
+    super::owned_items::test_support::publish(
+        &db.pool,
+        &[ChainNet::Matic],
+        true,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let (code, body) = get_json(&lambdas, &wardrobe).await;
+    assert_eq!(
+        (
+            code,
+            body["elements"][0]["urn"].as_str(),
+            body["elements"][0]["individualData"][0]["tokenId"].as_str(),
+            body["totalAmount"].as_i64()
+        ),
+        (
+            StatusCode::OK,
+            Some("urn:decentraland:ethereum:collections-v1:halloween_2019:jester_feet"),
+            Some("0"),
+            Some(1)
+        ),
+        "{body}"
+    );
+    let requested = [(
+        ALICE.to_string(),
+        "urn:decentraland:ethereum:collections-v1:halloween_2019:jester_feet".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    let owned =
+        super::owned_items::owned_tokens(&db.pool, &requested, super::owned_items::Rule::Complete)
+            .await
+            .unwrap();
+    assert_eq!(
+        owned[ALICE]["urn:decentraland:ethereum:collections-v1:halloween_2019:jester_feet"],
+        vec!["0".to_string()],
+        "the profile reader resolves the v1 URN by the Issue log's wearable id"
     );
     let (code, body) = get_json(&app, "/v1/nfts?category=parcel&search=37,55").await;
     assert_eq!(code, StatusCode::OK, "{body}");
