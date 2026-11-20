@@ -781,6 +781,10 @@ pub async fn serve(
                 warehouse_url: config.create.warehouse_url.clone(),
                 warehouse_token: config.create.warehouse_token.clone(),
                 warehouse_context_prefix: config.create.warehouse_context_prefix.clone(),
+                slack_bot_token: config.social.referral_slack_token.clone(),
+                slack_curation_channel: config.create.slack_curation_channel.clone(),
+                creators_url: config.create.creators_url.clone(),
+                builder_url: Some(config.worlds.builder_url.clone()),
             })
             .context("BUILDER_* / NEWSLETTER_* configuration")?,
         )

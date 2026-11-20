@@ -7,9 +7,10 @@
 //! are bound values over fixed SQL; nothing from the request becomes SQL
 //! text. Bounds: a collection's items and an address's items answer at most
 //! [`ROWS_CAP`] rows per response, `GET /v1/items` at most [`EVERY_ITEM_CAP`].
-//! The node keeps no curations yet, so a curation filter matches what an
-//! item with no curation matches (`synced` and a third-party `status`:
-//! nothing; `mappingStatus=unpublished_mapping`: the items with mappings).
+//! A collection's curation filters read each item's newest item curation:
+//! `synced`, its approved hash against the item's own; a third-party
+//! collection's `status`, whatever status it names, a pending one; and
+//! `mappingStatus=unpublished_mapping`, mappings it doesn't mark complete.
 
 use std::collections::HashMap;
 
@@ -184,7 +185,7 @@ fn standard_first(ids: Vec<(Uuid, bool)>) -> Vec<Uuid> {
 /// `getCollectionItems`' filters, read from the query string.
 struct CollectionFilters {
     name: Option<String>,
-    synced: bool,
+    synced: Option<bool>,
     status: bool,
     mapping: Option<bool>,
 }
@@ -193,7 +194,7 @@ impl CollectionFilters {
     fn of(q: &ListQuery) -> Result<Self, ApiError> {
         Ok(Self {
             name: q.non_empty("name")?.map(str::to_string),
-            synced: q.non_empty("synced")?.is_some(),
+            synced: q.non_empty("synced")?.map(|s| s == "true"),
             status: q.non_empty("status")?.is_some(),
             mapping: match q.non_empty("mappingStatus")? {
                 Some("missing_mapping") => Some(false),
@@ -226,12 +227,31 @@ impl ItemsComponent {
         .fetch_optional(&self.pool)
         .await?
         .unwrap_or(false);
+        let status = third_party && filters.status;
+        let mapping = filters.mapping.filter(|_| third_party);
         let mut scope = scope();
-        scope
-            .push("SELECT i.id, i.created_at, false AS tp FROM builder.items i WHERE i.collection_id = ")
-            .push_bind(read.id());
-        if filters.synced || (third_party && filters.status) {
-            scope.push(" AND false");
+        scope.push("SELECT i.id, i.created_at, false AS tp FROM builder.items i ");
+        if filters.synced.is_some() || status || mapping.is_some() {
+            scope.push(
+                "LEFT JOIN LATERAL (SELECT k.status, k.content_hash, k.is_mapping_complete \
+                 FROM builder.item_curations k WHERE k.item_id = i.id ORDER BY k.created_at DESC LIMIT 1) nk ON true ",
+            );
+        }
+        scope.push("WHERE i.collection_id = ").push_bind(read.id());
+        match filters.synced {
+            Some(true) => {
+                scope
+                    .push(" AND nk.status = 'approved' AND nk.content_hash = i.local_content_hash");
+            }
+            Some(false) => {
+                scope.push(
+                    " AND nk.status = 'approved' AND nk.content_hash <> i.local_content_hash",
+                );
+            }
+            None => {}
+        }
+        if status {
+            scope.push(" AND nk.status = 'pending'");
         }
         if let Some(name) = &filters.name {
             scope
@@ -239,9 +259,9 @@ impl ItemsComponent {
                 .push_bind(name.clone())
                 .push(" || '%'");
         }
-        if third_party && let Some(with_mappings) = filters.mapping {
+        if let Some(with_mappings) = mapping {
             scope.push(if with_mappings {
-                " AND i.mappings IS NOT NULL"
+                " AND i.mappings IS NOT NULL AND NOT COALESCE(nk.is_mapping_complete, false)"
             } else {
                 " AND i.mappings IS NULL"
             });

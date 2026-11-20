@@ -551,3 +551,54 @@ test('the seed\'s curations and forum fields reach upstream\'s tables', async ()
   assert.deepEqual(queries[1][1], ['cc', 'c1', 'pending', '0xcommittee', 'c', 'd'])
   assert.deepEqual(queries[2][1], ['ic', 'i1', 'approved', 'ab', true, 'e', 'f'])
 })
+
+test('the fake Slack answers chat.postMessage as Slack\'s Web API does and records each message it took', () => {
+  const { slackAnswer, SLACK_TOKEN, SLACK_CHANNEL } = require(script)
+  const auth = { authorization: `Bearer ${SLACK_TOKEN}` }
+  const body = value => Buffer.from(JSON.stringify(value))
+  const received = []
+  const first = slackAnswer('POST', '/api/chat.postMessage', auth, body({ channel: SLACK_CHANNEL, text: 'one', unfurl_links: false }), received)
+  assert.deepEqual(first, { status: 200, body: { ok: true, channel: SLACK_CHANNEL, ts: '1767225600.000001', message: { type: 'message', text: 'one' } } })
+  const second = slackAnswer('POST', '/api/chat.postMessage', auth, body({ channel: SLACK_CHANNEL, text: 'two' }), received)
+  assert.equal(second.body.ts, '1767225600.000002')
+  assert.deepEqual(received, [{ channel: SLACK_CHANNEL, text: 'one', unfurl_links: false }, { channel: SLACK_CHANNEL, text: 'two' }])
+  const refusal = (headers, sent) => slackAnswer('POST', '/api/chat.postMessage', headers, sent, received)
+  assert.deepEqual(refusal({ authorization: 'Bearer xoxb-other' }, body({ channel: SLACK_CHANNEL, text: 'x' })), { status: 200, body: { ok: false, error: 'invalid_auth' } })
+  assert.deepEqual(refusal({}, body({ channel: SLACK_CHANNEL, text: 'x' })), { status: 200, body: { ok: false, error: 'not_authed' } })
+  assert.deepEqual(refusal(auth, body({ channel: '', text: 'x' })), { status: 200, body: { ok: false, error: 'channel_not_found' } })
+  assert.deepEqual(refusal(auth, body({ channel: SLACK_CHANNEL })), { status: 200, body: { ok: false, error: 'no_text' } })
+  assert.equal(refusal(auth, Buffer.from('not json')).body.ok, false)
+  assert.equal(received.length, 2)
+  assert.equal(slackAnswer('POST', '/api/chat.update', auth, body({}), received), undefined)
+  assert.equal(slackAnswer('GET', '/api/chat.postMessage', auth, Buffer.alloc(0), received), undefined)
+})
+
+test('only a request to slack.com is sent to the fake Slack, over loopback http with its path, method and headers', () => {
+  const { slackRoute } = require(script)
+  const headers = { Authorization: 'Bearer x', 'Content-Type': 'application/json' }
+  const routed = slackRoute({ protocol: 'https:', hostname: 'slack.com', host: 'slack.com', port: null, path: '/api/chat.postMessage', method: 'POST', headers, agent: {} }, 4321)
+  assert.deepEqual(routed, { protocol: 'http:', hostname: '127.0.0.1', port: 4321, path: '/slack/api/chat.postMessage', method: 'POST', headers })
+  assert.equal(slackRoute({ protocol: 'https:', hostname: 'api.slack.com', path: '/api/chat.postMessage' }, 4321), undefined)
+  assert.equal(slackRoute({ protocol: 'https:', hostname: 'example.org', path: '/' }, 4321), undefined)
+  assert.equal(slackRoute('https://slack.com/api/chat.postMessage', 4321), undefined)
+})
+
+test('a capture records the Slack messages of its case in order, and nothing when there are none', () => {
+  const { slackRecord } = require(script)
+  assert.deepEqual(slackRecord([]), {})
+  assert.deepEqual(slackRecord([{ text: 'b' }, { text: 'a' }]), { slack: [{ text: 'b' }, { text: 'a' }] })
+})
+
+test('a seeded item\'s local content hash reaches upstream\'s items table', async () => {
+  const { seedDatabase, readSeed } = require(script)
+  const queries = []
+  const client = { async query(sql, values) { queries.push([sql, values]) } }
+  const item = { id: 'i1', name: 'I', owner: 'owner', collection_id: null, blockchain_item_id: null, data: {}, metrics: {}, thumbnail: 't', created_at: 'a', updated_at: 'b' }
+  const hash = 'a'.repeat(64)
+  await seedDatabase(client, { third_parties: [], collections: [], items: [item, { ...item, id: 'i2', local_content_hash: hash }], collection_curations: [], item_curations: [] }, { owner: { address: '0xowner' } })
+  assert.match(queries[0][0], /local_content_hash/)
+  assert.deepEqual(queries.map(([, values]) => values.at(-1)), [null, hash])
+  const seeded = readSeed().items.filter(row => row.local_content_hash)
+  assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3'])
+  assert.ok(seeded.every(row => /^[0-9a-f]{64}$/.test(row.local_content_hash)))
+})

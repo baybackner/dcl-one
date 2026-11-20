@@ -789,7 +789,8 @@
         "tags": []
       },
       "metrics": {},
-      "urn_suffix": "cap-1"
+      "urn_suffix": "cap-1",
+      "local_content_hash": "58a676c64c6c0010d9508e3dee5fb677bd576ecd2cb3a7a575b506e4011546ce"
     },
     {
       "id": "c011ec71-0000-4000-8000-0000000004a2",
@@ -809,7 +810,8 @@
         "tags": []
       },
       "metrics": {},
-      "urn_suffix": "helmet-2"
+      "urn_suffix": "helmet-2",
+      "local_content_hash": "ff3aa92c422bb9b16117152e435263cf070822e175c9647c83ceca46d8b9919b"
     },
     {
       "id": "c011ec71-0000-4000-8000-0000000004a3",
@@ -829,7 +831,8 @@
         "tags": []
       },
       "metrics": {},
-      "urn_suffix": "mask-3"
+      "urn_suffix": "mask-3",
+      "local_content_hash": "7e8f778897f448ea9eb00d252ebf7a052e611f0f440e37d6675a0d477d258950"
     }
   ],
   "chain": {

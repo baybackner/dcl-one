@@ -106,8 +106,21 @@ source is down.
   involves a third-party collection answers 503 until a read succeeds.
 - **Access checks never write.** A decision reads its sources and changes no
   row, also when it refuses.
+- **Curations.** A collection's curations, and an item's, are read and
+  written by a wallet with a role on the collection (for an item's, the
+  item's own owner instead of the collection's owner) or by a current
+  committee member. The collection must exist (404) and be published: a
+  standard one on chain, a third-party one with an item curation (409);
+  only then are the roles asked, so a stranger gets 401. The committee is
+  asked only when no role answers, and every committee question here waits
+  for a fresh read: while the committee can't be read, the committee's
+  curation listing and every decision only the committee can make answer
+  503, never a narrower view. Which status change each caller may make is
+  one table (`builder/src/curation/transitions.rs`); a write asks it again
+  inside its transaction, with the collection row locked.
 - **Admins.** `BUILDER_ADMIN_ADDRESSES` and the admin bearer open the
-  curation routes only; they grant no role on collections or items.
+  operator's item status routes only; they grant no role on collections,
+  items or their curations.
 
 ## Consequences
 
@@ -146,6 +159,10 @@ source is down.
   already answers it.
 - Between a creator transfer and the copy's next pass, the previous creator
   keeps the owner's access.
+- A wallet the committee no longer lists reads and changes no curation,
+  even one it is assigned to or decided; a committee member who also holds a
+  role reads and writes as that role until the table asks for the
+  committee.
 - A new role or source is one change to `access.rs`, which the authorization
   matrix test (`builder/src/tests/access_matrix.rs`) covers for every routed
   operation.

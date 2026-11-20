@@ -250,6 +250,7 @@ mod sealed {
     impl Sealed for super::CollectionSync {}
     impl Sealed for super::CollectionManage {}
     impl Sealed for super::Publisher {}
+    impl Sealed for super::Curator {}
 }
 
 /// A grant to record a review of one collection: a curation of it or of its
@@ -268,6 +269,51 @@ impl CurationGrant for Publisher {
     fn curated(&self) -> Uuid {
         self.id
     }
+}
+
+impl CurationGrant for Curator {
+    fn curated(&self) -> Uuid {
+        self.collection
+    }
+}
+
+/// May read the curations of a published collection, or of an item of one,
+/// and ask the transition table ([`crate::curation::transitions`]) for a
+/// write: as a creator (a role on the collection, or the item's owner) or as
+/// the committee.
+#[derive(Debug)]
+pub struct Curator {
+    collection: Uuid,
+    item: Option<Uuid>,
+    signer: String,
+    role: bool,
+    committee: bool,
+    registry: Option<Registry>,
+}
+
+impl Curator {
+    pub fn collection(&self) -> Uuid {
+        self.collection
+    }
+    pub fn item(&self) -> Option<Uuid> {
+        self.item
+    }
+    pub fn signer(&self) -> &str {
+        &self.signer
+    }
+    /// The current committee admitted the signer.
+    pub fn committee(&self) -> bool {
+        self.committee
+    }
+}
+
+/// Who `GET /v1/curations` answers for.
+#[derive(Debug)]
+pub enum CurationScope {
+    /// Every collection's curation.
+    Every(OnCommittee),
+    /// The curations of the collections the wallet holds a role on.
+    Own(Wallet),
 }
 
 /// A grant over one collection, for the reads that answer its row; only
@@ -315,6 +361,9 @@ impl CollectionManage {
 impl CollectionSync {
     pub fn id(&self) -> Uuid {
         self.id
+    }
+    pub fn signer(&self) -> &str {
+        &self.signer
     }
     pub fn third_party(&self) -> bool {
         self.third_party
@@ -1559,6 +1608,171 @@ pub(crate) async fn confirm_collection_sync(
         return Err(unauthorized_user(&sync.signer, COLLECTIONS, sync.id));
     }
     Ok(())
+}
+
+/// `builder-server`'s curation 404: no collection, or an item without one.
+fn curation_not_found(signer: &str) -> ApiError {
+    ApiError::not_found("Not found").with_data(json!({ "ethAddress": signer }))
+}
+
+/// `GET /v1/curations`: the committee reads every collection's curation
+/// (503 while the committee can't be read); anyone else the curations of the
+/// collections it holds a role on.
+pub async fn curation_scope(
+    state: &SharedState,
+    signer: &Signer,
+) -> Result<CurationScope, ApiError> {
+    if on_committee(state, signer.as_str()).await? {
+        return Ok(CurationScope::Every(OnCommittee {
+            member: signer.as_str().to_string(),
+        }));
+    }
+    Ok(CurationScope::Own(managing(state, signer).await?))
+}
+
+/// The curation routes of the collection `raw`: the collection must exist
+/// (404) and be published (409), then the signer must hold a role on it or
+/// be on the committee (401).
+pub async fn curate_collection(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<Curator, ApiError> {
+    let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let (mut conn, view) = decision(state).await?;
+    let c = collection(&mut conn, &view, id, providers(&registry))
+        .await?
+        .ok_or_else(|| curation_not_found(signer.as_str()))?;
+    drop(conn);
+    let role = c.role(signer.as_str());
+    admit(state, signer, &c, id, None, role, registry).await
+}
+
+/// The curation routes of the item `raw`: its collection must exist (404)
+/// and be published (409), then the signer must own the item, hold a
+/// manager's role on its collection or be on the committee (401).
+pub async fn curate_item(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<Curator, ApiError> {
+    let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[], &[id]).await?;
+    let (mut conn, view) = decision(state).await?;
+    let not_found = || curation_not_found(signer.as_str());
+    let i = item(&mut conn, id).await?.ok_or_else(not_found)?;
+    let parent_id = i.collection.ok_or_else(not_found)?;
+    let c = parent(&mut conn, &view, parent_id, providers(&registry)).await?;
+    drop(conn);
+    let s = signer.as_str();
+    let role = i.owner == s || c.manager(s) || c.provider_manager(s);
+    admit(state, signer, &c, parent_id, Some(id), role, registry).await
+}
+
+async fn admit(
+    state: &SharedState,
+    signer: &Signer,
+    c: &Collection,
+    collection: Uuid,
+    item: Option<Uuid>,
+    role: bool,
+    registry: Option<Registry>,
+) -> Result<Curator, ApiError> {
+    let s = signer.as_str();
+    if !c.published {
+        return Err(ApiError::conflict("Unpublished collection")
+            .with_data(json!({ "id": collection, "ethAddress": s })));
+    }
+    let committee = !role && on_committee(state, s).await?;
+    if !role && !committee {
+        return Err(ApiError::unauthorized("Unauthorized")
+            .with_data(json!({ "id": item.unwrap_or(collection), "ethAddress": s })));
+    }
+    Ok(Curator {
+        collection,
+        item,
+        signer: s.to_string(),
+        role,
+        committee,
+        registry,
+    })
+}
+
+/// `curator`, admitted as the committee when the signer is on it: for a
+/// write the transition table gives only the committee (503 while the
+/// committee can't be read).
+pub async fn as_committee(state: &SharedState, mut curator: Curator) -> Result<Curator, ApiError> {
+    if !curator.committee {
+        curator.committee = on_committee(state, &curator.signer).await?;
+    }
+    Ok(curator)
+}
+
+/// Whether `address` is on the current committee: who may be assigned a
+/// review (503 while the committee can't be read).
+pub async fn assignable(state: &SharedState, address: &str) -> Result<bool, ApiError> {
+    on_committee(state, &address.to_ascii_lowercase()).await
+}
+
+/// Whether the signer is on the committee by the read at hand, without
+/// waiting: for a notice, never for a grant.
+pub fn known_curator(state: &SharedState, curator: &Curator) -> bool {
+    curator.committee || known_committee(state, &curator.signer)
+}
+
+/// The facts of the curated collection a write reads, decided again inside
+/// its transaction.
+#[derive(Debug)]
+pub struct CuratedState {
+    pub name: String,
+    pub stored_owner: bool,
+    pub third_party: bool,
+    pub contract: Option<String>,
+}
+
+/// [`curate_collection`]'s and [`curate_item`]'s decision again, inside the
+/// write's transaction: the collection still published, the item still in
+/// it, a role still held unless the committee admitted the signer.
+pub(crate) async fn confirm_curator(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    curator: &Curator,
+) -> Result<CuratedState, ApiError> {
+    let gone = || curation_not_found(&curator.signer);
+    let c = collection(conn, view, curator.collection, providers(&curator.registry))
+        .await?
+        .ok_or_else(gone)?;
+    let s = curator.signer.as_str();
+    let role = match curator.item {
+        Some(id) => {
+            let i = item(conn, id).await?.ok_or_else(gone)?;
+            if i.collection != Some(curator.collection) {
+                return Err(gone());
+            }
+            i.owner == s || c.manager(s) || c.provider_manager(s)
+        }
+        None => c.role(s),
+    };
+    if !c.published {
+        return Err(ApiError::conflict("Unpublished collection")
+            .with_data(json!({ "id": curator.collection, "ethAddress": s })));
+    }
+    if curator.role && !role && !curator.committee {
+        return Err(ApiError::unauthorized("Unauthorized").with_data(
+            json!({ "id": curator.item.unwrap_or(curator.collection), "ethAddress": s }),
+        ));
+    }
+    let name: String = sqlx::query_scalar("SELECT name FROM builder.collections WHERE id = $1")
+        .bind(curator.collection)
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(CuratedState {
+        name,
+        stored_owner: c.stored_owner == s,
+        third_party: c.third_party,
+        contract: c.contract,
+    })
 }
 
 /// The node's own publication routes: the collection's stored owner and,

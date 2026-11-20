@@ -24,7 +24,9 @@ Captures use the shared conformance fixture format
 part's field `name`, `filename`, `type` and synthetic `text`), which the replay
 sends as form data; `response` with `status`,
 the kept headers and `body_json` or `body_bytes_b64`; `captured_from`,
-`captured_at` and `volatile_paths`. A volatile leaf is recorded as
+`captured_at` and `volatile_paths`. A capture whose request made upstream
+post to Slack carries `slack`: the JSON bodies upstream posted to Slack's
+`chat.postMessage`, in the order they arrived. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a
@@ -95,10 +97,11 @@ query string and a trailing slash are ignored), and must carry `replay`: the
 exact notes the replay produces for it, empty for a match. A capture whose
 request matches more than one in-scope operation is refused. A capture's
 `volatile_paths` may only end in a field named in `volatile_fields`
-(`created_at`, `updated_at`, `last_activity_at`), and the recorded value there must be
+(`created_at`, `updated_at`, `last_activity_at` and `id`, for a row the database
+names), and the recorded value there must be
 `<<VOLATILE>>`. A note is `status: ...`,
 `header ...`, a body path with `missing`, `extra` or `value`, `body bytes
-differ: ...` or `candidate body is not JSON: ...`, as
+differ: ...`, `candidate body is not JSON: ...` or `slack: ...`, as
 `social::test_fixtures::replay_signed` words them.
 
 ## Tests
@@ -130,7 +133,11 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
   Beyond the differ's notes, it adds `<path> volatile value is not a
   timestamp` when the node answers anything but a string or a number at a
   volatile path, and `<a> and <b> differ` when the node breaks a recorded
-  `volatile_equal` group.
+  `volatile_equal` group. The node posts its curation notices to a loopback
+  Slack that takes the capture's bot token; after each capture the replay
+  waits for the node's notices and adds `slack: fixture=<recorded>
+  candidate=<sent>` when the messages differ from the capture's `slack`
+  (none when it has none).
 
 `seed.json` accepts only the fields both seeders apply; any other field
 fails the replay test with its name. `collections` are the builder's rows,
@@ -141,7 +148,7 @@ upstream stores one; the replay stores the owner the seed names, which
 decides nothing on the node. `items` are the builder's item rows,
 with their `contents` (file to hash), `rarity` and, for a third-party item, the
 item part of its URN (`urn_suffix`; the replay stores the full URN the node
-keeps).
+keeps) and, optionally, its `local_content_hash` (64 lowercase hex digits).
 `collection_curations` are a collection's curation rows (status, the
 assignee's wallet role or null, and their dates) and `item_curations` an
 item's (status, a 64-digit lowercase hex content hash, the mapping flag or
@@ -213,9 +220,16 @@ Then it:
    rarities-with-oracle contract's `getRarityByName` (a `chain` rarity's
    `max_supply` and `mana_price`; a revert for another name), records the
    events upstream forwards to the warehouse (a `POST` with its token), and
-   stores, copies and deletes the objects an upload sends to S3, and points the peer, RPC,
-   forum, warehouse, S3, SNS and OpenSea settings at it. Slack is off and the feature flags are set off
-   through their `FF_*` overrides.
+   stores, copies and deletes the objects an upload sends to S3. It answers
+   the peer's profile read with no profile, so upstream names a person by
+   its shortened address, and answers Slack's `chat.postMessage` as Slack
+   does: a message with the configured bot token, a channel and a text is
+   recorded and answered `ok: true`, and anything else is a refusal that
+   fails the capture. It points the peer, RPC, forum, warehouse, S3, SNS and
+   OpenSea settings at the fake, and sends upstream's requests to
+   `slack.com`, which upstream addresses directly, to it over loopback. The
+   bot token is `xoxb-example123`, the channel `curation-example`, and the
+   feature flags are set off through their `FF_*` overrides.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
    with `--require`, into the migration process: proxy variables are
    removed, and a TCP connection to anything but localhost or a loopback
@@ -223,7 +237,8 @@ Then it:
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
    apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC, the
-   active-entities read, the warehouse and the S3 object writes. A case
+   active-entities read, the profile read, the warehouse, Slack and the S3
+   object writes. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
    process and on every thread of the migration process. It
@@ -234,7 +249,10 @@ Then it:
    signatures are the same on every run. Values the database clock sets are
    listed in the case's `volatile` paths. A volatile path must end in a
    field named in `parity.json` `volatile_fields` and match a recorded
-   value; the replay test holds committed captures to the same rule. The
+   value; the replay test holds committed captures to the same rule.
+   Upstream sends its Slack notices without waiting for them, so after each
+   answer the capture waits until every notice upstream started has
+   finished and records the messages Slack received meanwhile. The
    capture fails if upstream's answer or the request already holds a
    marker, and records which volatile values were equal before masking.
 6. Signs a case with a `signer` over the timestamped payload and its

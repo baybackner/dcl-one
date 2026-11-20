@@ -172,6 +172,8 @@ struct SeedItem {
     #[serde(default)]
     urn_suffix: Option<String>,
     #[serde(default)]
+    local_content_hash: Option<String>,
+    #[serde(default)]
     contents: BTreeMap<String, String>,
     data: Value,
     metrics: Value,
@@ -2097,8 +2099,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
             )
         });
         sqlx::query(
-            "INSERT INTO builder.items (id, name, eth_address, collection_id, blockchain_item_id, type, thumbnail, rarity, urn_suffix, data, metrics, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, 'wearable', $6, $7, $8, $9::text::json, $10::text::json, $11, $12)",
+            "INSERT INTO builder.items (id, name, eth_address, collection_id, blockchain_item_id, type, thumbnail, rarity, urn_suffix, data, metrics, created_at, updated_at, local_content_hash) \
+             VALUES ($1, $2, $3, $4, $5, 'wearable', $6, $7, $8, $9::text::json, $10::text::json, $11, $12, $13)",
         )
         .bind(i.id)
         .bind(&i.name)
@@ -2112,6 +2114,7 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .bind(i.metrics.to_string())
         .bind(i.created_at.naive_utc())
         .bind(i.updated_at.naive_utc())
+        .bind(&i.local_content_hash)
         .execute(pool)
         .await
         .unwrap_or_else(|e| panic!("seed.json item {}: {e}", i.id));
@@ -2241,8 +2244,55 @@ fn mounted(state: Arc<State>) -> Router {
 struct Replay {
     scratch: db::ScratchDb,
     app: Router,
+    state: Arc<State>,
+    slack: FakeSlack,
     wallets: BTreeMap<String, Wallet>,
     _dir: TempDir,
+}
+
+/// The bot token the capture configures upstream's Slack client with.
+const SLACK_TOKEN: &str = "xoxb-example123";
+/// The channel the capture configures upstream's curation notices for.
+const SLACK_CHANNEL: &str = "curation-example";
+
+/// A loopback Slack Web API that takes `chat.postMessage` from the bot and
+/// records each message's JSON body.
+#[derive(Clone, Default)]
+struct FakeSlack(Arc<std::sync::Mutex<Vec<Value>>>);
+
+impl FakeSlack {
+    async fn start(&self) -> String {
+        let posted = self.0.clone();
+        let app = Router::new().route(
+            "/api/chat.postMessage",
+            axum::routing::post(
+                move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
+                    let posted = posted.clone();
+                    async move {
+                        let bearer = headers.get("authorization").and_then(|v| v.to_str().ok());
+                        if bearer != Some(&format!("Bearer {SLACK_TOKEN}")) {
+                            return axum::Json(
+                                serde_json::json!({ "ok": false, "error": "invalid_auth" }),
+                            );
+                        }
+                        posted.lock().unwrap().push(body.clone());
+                        axum::Json(serde_json::json!({
+                            "ok": true, "channel": body["channel"], "ts": "1767225600.000100",
+                            "message": { "type": "message", "text": body["text"] },
+                        }))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}/api")
+    }
+
+    fn take(&self) -> Vec<Value> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
 }
 
 async fn replay_setup() -> Option<Replay> {
@@ -2272,6 +2322,8 @@ async fn replay_setup() -> Option<Replay> {
         uuid::Uuid::new_v4()
     )));
     let storage = Arc::new(Storage::from_config(&dir.0).await.unwrap());
+    let slack = FakeSlack::default();
+    let slack_api = slack.start().await;
     let mut state = State::new(
         scratch.pool.clone(),
         storage.clone(),
@@ -2282,15 +2334,27 @@ async fn replay_setup() -> Option<Replay> {
         Settings {
             writes_enabled: true,
             polygon_rpc_url: Some(oracle(&seed_data).await),
+            slack: Some(catalyst::builder::curation::slack::Slack {
+                token: SLACK_TOKEN.into(),
+                channel: SLACK_CHANNEL.into(),
+                api: slack_api,
+            }),
+            links: catalyst::builder::curation::slack::Links {
+                creators_url: Some("https://creators.example.org".into()),
+                builder_url: None,
+            },
             ..Settings::default()
         },
     )
     .unwrap();
     state.now = capture_clock;
+    state.foundation = Outbound::for_tests();
     let state = Arc::new(state);
     Some(Replay {
         scratch,
-        app: mounted(state),
+        app: mounted(state.clone()),
+        state,
+        slack,
         wallets,
         _dir: dir,
     })
@@ -2312,6 +2376,15 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
     let every_key = Volatility::default().with_ignored_fields(&[]);
     let (mut notes, body) = replay_with(&replay.app, prefix, name, &fx, &auth, &every_key).await;
     notes.extend(volatile_notes(raw, &body));
+    replay.state.notices.settled().await;
+    let sent = Value::Array(replay.slack.take());
+    let recorded = raw
+        .get("slack")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    if sent != recorded {
+        notes.push(format!("slack: fixture={recorded} candidate={sent}"));
+    }
     notes
 }
 

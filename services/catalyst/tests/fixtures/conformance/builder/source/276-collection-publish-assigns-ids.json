@@ -174,5 +174,13 @@
   "captured_at": "2026-01-01T00:00:00.000Z",
   "volatile_paths": [
     "data.items.updated_at"
+  ],
+  "slack": [
+    {
+      "channel": "curation-example",
+      "text": "🎨 New collection ready for review: <https://creators.example.org/collections/editor?collection=c011ec71-0000-4000-8000-000000000302&reviewing=true|Items on chain> by <https://creators.example.org/shop/items/creator/0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e|0xc1ab...c70e> (2 items).",
+      "unfurl_links": false,
+      "unfurl_media": false
+    }
   ]
 }

@@ -1,16 +1,17 @@
 import { z } from "zod";
 
+import { CollectionCurationOutSchema } from "../generated-schemas/builder";
+
 const CURATION_STATUSES = ["pending", "approved", "rejected"] as const;
 type CurationStatus = (typeof CURATION_STATUSES)[number];
 
-export const CollectionCurationSchema = z.object({
-  id: z.string(),
-  collection_id: z.string(),
-  assignee: z.string().nullable(),
-  status: z.enum(CURATION_STATUSES),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
+export const CollectionCurationSchema = CollectionCurationOutSchema.pick({
+  id: true,
+  collection_id: true,
+  assignee: true,
+  created_at: true,
+  updated_at: true,
+}).extend({ status: z.enum(CURATION_STATUSES) });
 
 z.object({
   id: z.string(),

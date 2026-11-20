@@ -11,6 +11,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
+const https = require('node:https')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
 const { BUILDER_REVISION: REVISION, assertPinnedSource, sourceCapture, requireDatabaseUrl } = require('./social-capture-common.cjs')
@@ -375,6 +376,93 @@ const CURATION_CASES = [
   { name: '350-address-items-curated', description: 'GET /{address}/items signed by that address, the owner of curated third-party items', method: 'GET', path: `/v1/${WALLETS.provider}/items`, signer: 'provider' },
   { name: '351-item-save-curated-urn-change', description: 'PUT /items/{id} signed by the provider\'s manager, changing the URN of a curated third-party item', method: 'PUT', path: `/v1/items/${id('4a1')}`, signer: 'provider', body: itemBody({ id: id('4a1'), collection_id: id('402'), eth_address: WALLETS.provider, name: 'Curated cap', rarity: null, urn: `${PROVIDER('curated')}:curated-wearables:cap-9` }) },
   { name: '352-item-delete-curated', description: 'DELETE /items/{id} signed by the provider\'s manager, a curated third-party item', method: 'DELETE', path: `/v1/items/${id('4a1')}`, signer: 'provider' }
+]
+
+const COMMITTEE = '0x01eba3f0e992f53debaf51ed3738dc2f23e09aee'
+const CREATED_ROW = ['data.id', 'data.created_at', 'data.updated_at']
+const curation = (body) => ({ curation: body })
+const collectionCuration = suffix => `/v1/collections/${id(suffix)}/curation`
+const itemCuration = suffix => `/v1/items/${id(suffix)}/curation`
+
+const CURATION_ROUTE_CASES = [
+  { name: '353-curations-committee', description: 'GET /curations signed by a committee member: the newest curation of every collection', method: 'GET', path: '/v1/curations', signer: 'committee' },
+  { name: '354-curations-stranger', description: 'GET /curations signed by a wallet that creates, manages and mints nothing', method: 'GET', path: '/v1/curations', signer: 'stranger' },
+  { name: '355-curations-provider', description: 'GET /curations signed by the chain creator of a collection under review and the manager of a provider with a curated collection', method: 'GET', path: '/v1/curations', signer: 'provider' },
+  { name: '356-curations-unsigned', description: 'GET /curations without a signature', method: 'GET', path: '/v1/curations' },
+  { name: '357-collection-curation-committee', description: 'GET /collections/{id}/curation signed by a committee member, a collection on chain with a pending curation', method: 'GET', path: collectionCuration('401'), signer: 'committee' },
+  { name: '358-collection-curation-owner', description: 'GET /collections/{id}/curation signed by the owner of a collection on chain with a pending curation', method: 'GET', path: collectionCuration('401'), signer: 'provider' },
+  { name: '359-collection-curation-stranger', description: 'GET /collections/{id}/curation signed by a wallet with no role on a collection on chain', method: 'GET', path: collectionCuration('401'), signer: 'stranger' },
+  { name: '360-collection-curation-draft', description: 'GET /collections/{id}/curation signed by the owner of a draft the chain doesn\'t hold', method: 'GET', path: collectionCuration('001'), signer: 'owner' },
+  { name: '361-collection-curation-unknown', description: 'GET /collections/{id}/curation of an id no collection has', method: 'GET', path: collectionCuration('4ff'), signer: 'owner' },
+  { name: '362-collection-curation-malformed-id', description: 'GET /collections/{id}/curation with an id that is not a UUID', method: 'GET', path: '/v1/collections/not-a-uuid/curation', signer: 'owner' },
+  { name: '363-collection-curation-none-owner', description: 'GET /collections/{id}/curation signed by the owner of a collection on chain that was never curated', method: 'GET', path: collectionCuration('006'), signer: 'owner' },
+  { name: '364-collection-curation-none-manager', description: 'GET /collections/{id}/curation signed by an on-chain manager of a collection on chain that was never curated', method: 'GET', path: collectionCuration('006'), signer: 'manager' },
+  { name: '365-collection-curation-third-party-manager', description: 'GET /collections/{id}/curation signed by the provider\'s manager, a third-party collection with curated items and an approved curation', method: 'GET', path: collectionCuration('402'), signer: 'provider' },
+  { name: '366-collection-curation-third-party-stranger', description: 'GET /collections/{id}/curation signed by a wallet with no role on a third-party collection with curated items', method: 'GET', path: collectionCuration('402'), signer: 'stranger' },
+  { name: '367-collection-curation-third-party-uncurated', description: 'GET /collections/{id}/curation signed by the provider\'s manager, a third-party collection with no item curation', method: 'GET', path: collectionCuration('008'), signer: 'owner' },
+  { name: '368-collection-curation-admin', description: 'GET /collections/{id}/curation signed by an ADMIN_ADDRESSES wallet with no other role, a collection on chain under review', method: 'GET', path: collectionCuration('401'), signer: 'admin' },
+  { name: '369-item-curations-manager', description: 'GET /collections/{id}/itemCurations signed by the provider\'s manager: the newest curation of each curated item', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, signer: 'provider' },
+  { name: '370-item-curations-bracketed-ids', description: 'GET /collections/{id}/itemCurations signed by the provider\'s manager, naming one item as itemIds[], as the old builder web sends an array', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, query: { 'itemIds[]': [id('4a1')] }, signer: 'provider' },
+  { name: '371-item-curations-repeated-ids', description: 'GET /collections/{id}/itemCurations signed by the provider\'s manager, naming two items by a repeated itemIds', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, query: { itemIds: [id('4a1'), id('4a2')] }, signer: 'provider' },
+  { name: '372-item-curations-single-id', description: 'GET /collections/{id}/itemCurations signed by the provider\'s manager, naming one item by a single itemIds, which is no array', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, query: { itemIds: id('4a1') }, signer: 'provider' },
+  { name: '373-item-curations-committee', description: 'GET /collections/{id}/itemCurations signed by a committee member', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, signer: 'committee' },
+  { name: '374-item-curations-stranger', description: 'GET /collections/{id}/itemCurations signed by a wallet with no role', method: 'GET', path: `/v1/collections/${id('402')}/itemCurations`, signer: 'stranger' },
+  { name: '375-item-curations-standard-owner', description: 'GET /collections/{id}/itemCurations signed by the owner of a standard collection on chain, which has no item curation', method: 'GET', path: `/v1/collections/${id('006')}/itemCurations`, signer: 'owner' },
+  { name: '376-item-curation-pending-manager', description: 'GET /items/{id}/curation signed by the provider\'s manager, an item whose newest curation is pending', method: 'GET', path: itemCuration('4a2'), signer: 'provider' },
+  { name: '377-item-curation-approved-manager', description: 'GET /items/{id}/curation signed by the provider\'s manager, an item whose curation is approved', method: 'GET', path: itemCuration('4a1'), signer: 'provider' },
+  { name: '378-item-curation-none-manager', description: 'GET /items/{id}/curation signed by the provider\'s manager, a never-curated item of a curated collection', method: 'GET', path: itemCuration('4a3'), signer: 'provider' },
+  { name: '379-item-curation-stranger', description: 'GET /items/{id}/curation signed by a wallet with no role', method: 'GET', path: itemCuration('4a2'), signer: 'stranger' },
+  { name: '380-item-curation-committee', description: 'GET /items/{id}/curation signed by a committee member', method: 'GET', path: itemCuration('4a2'), signer: 'committee' },
+  { name: '381-item-curation-orphan', description: 'GET /items/{id}/curation signed by the owner of an item with no collection', method: 'GET', path: itemCuration('3a1'), signer: 'owner' },
+  { name: '382-item-curation-draft-collection', description: 'GET /items/{id}/curation signed by the owner of an item of a collection the chain doesn\'t hold', method: 'GET', path: itemCuration('3f1'), signer: 'owner' },
+  { name: '383-item-curation-minted-owner', description: 'GET /items/{id}/curation signed by the owner of a minted item of a standard collection', method: 'GET', path: itemCuration('3b1'), signer: 'owner' },
+  { name: '384-item-curation-minted-manager', description: 'GET /items/{id}/curation signed by an on-chain manager of a minted item\'s collection', method: 'GET', path: itemCuration('3b1'), signer: 'manager' },
+  { name: '385-item-curation-minted-minter', description: 'GET /items/{id}/curation signed by an on-chain minter of a minted item\'s collection', method: 'GET', path: itemCuration('3b1'), signer: 'minter' },
+  { name: '386-collection-curation-request-pending', description: 'POST /collections/{id}/curation signed by the owner while a review request is pending', method: 'POST', path: collectionCuration('401'), signer: 'provider' },
+  { name: '387-collection-curation-request-stranger', description: 'POST /collections/{id}/curation signed by a wallet with no role', method: 'POST', path: collectionCuration('401'), signer: 'stranger' },
+  { name: '388-collection-curation-request-draft', description: 'POST /collections/{id}/curation signed by the owner of a draft the chain doesn\'t hold', method: 'POST', path: collectionCuration('001'), signer: 'owner' },
+  { name: '389-collection-curation-request-unknown', description: 'POST /collections/{id}/curation of an id no collection has', method: 'POST', path: collectionCuration('4ff'), signer: 'owner' },
+  { name: '390-collection-curation-request-long-note', description: 'POST /collections/{id}/curation signed by the owner with a note longer than 2,000 characters', method: 'POST', path: collectionCuration('006'), signer: 'owner', body: curation({ note: 'n'.repeat(2001) }) },
+  { name: '391-collection-curation-request-first', description: 'POST /collections/{id}/curation signed by the owner of a collection on chain, unapproved and never curated: its first review request', method: 'POST', path: collectionCuration('006'), signer: 'owner', volatile: CREATED_ROW },
+  { name: '392-collection-curation-request-changes', description: 'POST /collections/{id}/curation signed by the owner of a collection approved on chain and never curated: changes submitted for review', method: 'POST', path: collectionCuration('007'), signer: 'owner', volatile: CREATED_ROW },
+  { name: '393-collection-curation-request-assigned', description: 'POST /collections/{id}/curation signed by a committee member assigning itself a collection on chain that was never curated', method: 'POST', path: collectionCuration('302'), signer: 'committee', body: curation({ assignee: COMMITTEE }), volatile: CREATED_ROW },
+  { name: '394-collection-curation-request-committee', description: 'POST /collections/{id}/curation signed by a committee member without an assignee on another wallet\'s collection approved on chain', method: 'POST', path: collectionCuration('303'), signer: 'committee', volatile: CREATED_ROW },
+  { name: '395-curations-minter', description: 'GET /curations signed by the on-chain minter of a collection with a curation', method: 'GET', path: '/v1/curations', signer: 'minter', volatile: CREATED_ROW },
+  { name: '396-collection-curation-request-third-party', description: 'POST /collections/{id}/curation signed by the provider\'s manager, a third-party collection whose curation is approved', method: 'POST', path: collectionCuration('402'), signer: 'provider', volatile: CREATED_ROW },
+  { name: '397-collection-curation-update-no-curation', description: 'PATCH /collections/{id}/curation signed by a committee member with a body that has no curation', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: {} },
+  { name: '398-collection-curation-update-stranger', description: 'PATCH /collections/{id}/curation signed by a wallet with no role, approving', method: 'PATCH', path: collectionCuration('401'), signer: 'stranger', body: curation({ status: 'approved' }) },
+  { name: '399-collection-curation-update-owner-status', description: 'PATCH /collections/{id}/curation signed by the owner, approving its own collection', method: 'PATCH', path: collectionCuration('401'), signer: 'provider', body: curation({ status: 'approved' }) },
+  { name: '400-collection-curation-update-owner-assignee', description: 'PATCH /collections/{id}/curation signed by the owner, assigning a committee member', method: 'PATCH', path: collectionCuration('401'), signer: 'provider', body: curation({ assignee: COMMITTEE }) },
+  { name: '401-collection-curation-update-assignee-not-committee', description: 'PATCH /collections/{id}/curation signed by a committee member, assigning a wallet off the committee', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ assignee: ADDRESS.stranger }) },
+  { name: '402-collection-curation-update-unknown-status', description: 'PATCH /collections/{id}/curation signed by a committee member with a status that is no curation status', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ status: 'published' }) },
+  { name: '403-collection-curation-update-extra-key', description: 'PATCH /collections/{id}/curation signed by a committee member with an unknown key beside a valid status, on a collection with no curation row', method: 'PATCH', path: collectionCuration('104'), signer: 'committee', body: curation({ extra: 1, status: 'approved' }) },
+  { name: '404-collection-curation-update-none', description: 'PATCH /collections/{id}/curation signed by a committee member, approving a collection on chain that was never curated', method: 'PATCH', path: collectionCuration('104'), signer: 'committee', body: curation({ status: 'approved' }) },
+  { name: '405-collection-curation-update-draft', description: 'PATCH /collections/{id}/curation signed by a committee member on a draft the chain doesn\'t hold', method: 'PATCH', path: collectionCuration('001'), signer: 'committee', body: curation({ status: 'approved' }) },
+  { name: '406-collection-curation-assign-unchanged', description: 'PATCH /collections/{id}/curation signed by the assigned committee member, assigning itself again', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ assignee: COMMITTEE }), volatile: UPDATED },
+  { name: '407-collection-curation-unassign', description: 'PATCH /collections/{id}/curation signed by the assigned committee member, unassigning', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ assignee: null }), volatile: UPDATED },
+  { name: '408-collection-curation-assign', description: 'PATCH /collections/{id}/curation signed by a committee member, assigning itself', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ assignee: COMMITTEE }), volatile: UPDATED },
+  { name: '409-collection-curation-approve', description: 'PATCH /collections/{id}/curation signed by the assigned committee member, approving', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ status: 'approved' }), volatile: UPDATED },
+  { name: '410-collection-curation-approve-again', description: 'PATCH /collections/{id}/curation signed by the same committee member, approving again', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ status: 'approved' }), volatile: UPDATED },
+  { name: '411-collection-curation-reject', description: 'PATCH /collections/{id}/curation signed by a committee member, rejecting with two reasons and a message with surrounding spaces', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ rejectionMessage: '  Needs work  ', rejectionReasons: ['clipping', 'other'], status: 'rejected' }), volatile: UPDATED },
+  { name: '412-collection-curation-reject-edit', description: 'PATCH /collections/{id}/curation signed by a committee member, rejecting again with another message', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ rejectionMessage: 'Fix the clipping', status: 'rejected' }), volatile: UPDATED },
+  { name: '413-collection-curation-reject-long-message', description: 'PATCH /collections/{id}/curation signed by a committee member, rejecting with a message longer than 3,000 characters', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ rejectionMessage: 'm'.repeat(3001), status: 'rejected' }) },
+  { name: '414-collection-curation-reject-unknown-reason', description: 'PATCH /collections/{id}/curation signed by a committee member, rejecting with a reason that is not one of the twelve', method: 'PATCH', path: collectionCuration('401'), signer: 'committee', body: curation({ rejectionReasons: ['ugly'], status: 'rejected' }) },
+  { name: '415-collection-curation-request-after-rejection', description: 'POST /collections/{id}/curation signed by the owner after its collection\'s rejection: a review requested again', method: 'POST', path: collectionCuration('401'), signer: 'provider', volatile: CREATED_ROW },
+  { name: '416-collection-curation-approve-assigned', description: 'PATCH /collections/{id}/curation signed by the assigned committee member, approving a collection it assigned itself', method: 'PATCH', path: collectionCuration('302'), signer: 'committee', body: curation({ status: 'approved' }), volatile: CREATED_ROW },
+  { name: '417-collection-curation-reopen', description: 'PATCH /collections/{id}/curation signed by a committee member, setting an approved curation back to pending', method: 'PATCH', path: collectionCuration('302'), signer: 'committee', body: curation({ status: 'pending' }), volatile: CREATED_ROW },
+  { name: '418-item-curation-refresh-pending', description: 'PATCH /items/{id}/curation signed by the provider\'s manager, pending again on an item whose newest curation is pending, as the old builder web pushes changes', method: 'PATCH', path: itemCuration('4a2'), signer: 'provider', body: curation({ status: 'pending' }), volatile: UPDATED },
+  { name: '419-item-curation-approve-manager', description: 'PATCH /items/{id}/curation signed by the provider\'s manager, approving', method: 'PATCH', path: itemCuration('4a2'), signer: 'provider', body: curation({ status: 'approved' }) },
+  { name: '420-item-curation-update-stranger', description: 'PATCH /items/{id}/curation signed by a wallet with no role', method: 'PATCH', path: itemCuration('4a2'), signer: 'stranger', body: curation({ status: 'pending' }) },
+  { name: '421-item-curation-update-assignee', description: 'PATCH /items/{id}/curation signed by a committee member, assigning itself an item curation', method: 'PATCH', path: itemCuration('4a2'), signer: 'committee', body: curation({ assignee: COMMITTEE }) },
+  { name: '422-item-curation-update-none', description: 'PATCH /items/{id}/curation signed by a committee member, approving a never-curated item', method: 'PATCH', path: itemCuration('4a3'), signer: 'committee', body: curation({ status: 'approved' }) },
+  { name: '423-item-curation-approve', description: 'PATCH /items/{id}/curation signed by a committee member, approving an item whose newest curation is pending', method: 'PATCH', path: itemCuration('4a2'), signer: 'committee', body: curation({ status: 'approved' }), volatile: UPDATED },
+  { name: '424-item-curation-request-decided', description: 'POST /items/{id}/curation signed by the provider\'s manager, an item whose newest curation is approved: a new pending curation', method: 'POST', path: itemCuration('4a2'), signer: 'provider', volatile: CREATED_ROW },
+  { name: '425-item-curation-request-pending', description: 'POST /items/{id}/curation signed by the provider\'s manager, an item whose newest curation is pending', method: 'POST', path: itemCuration('4a2'), signer: 'provider' },
+  { name: '426-item-curation-request-never', description: 'POST /items/{id}/curation signed by the provider\'s manager, a never-curated item', method: 'POST', path: itemCuration('4a3'), signer: 'provider' },
+  { name: '427-item-curation-request-stranger', description: 'POST /items/{id}/curation signed by a wallet with no role', method: 'POST', path: itemCuration('4a2'), signer: 'stranger' },
+  { name: '428-item-curation-reopen-manager', description: 'PATCH /items/{id}/curation signed by the provider\'s manager, pending on an item whose newest curation is approved', method: 'PATCH', path: itemCuration('4a1'), signer: 'provider', body: curation({ status: 'pending' }), volatile: UPDATED },
+  { name: '429-curations-committee-after', description: 'GET /curations signed by a committee member after the reviews above', method: 'GET', path: '/v1/curations', signer: 'committee', volatile: CREATED_ROW },
+  { name: '430-collection-curation-after', description: 'GET /collections/{id}/curation signed by a committee member after the collection was approved, rejected and requested again', method: 'GET', path: collectionCuration('401'), signer: 'committee', volatile: CREATED_ROW }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2279,7 +2367,8 @@ const CASES = [
   ...SMALL_READ_CASES,
   ...LIFECYCLE_CASES,
   ...THIRD_PARTY_CASES,
-  ...CURATION_CASES
+  ...CURATION_CASES,
+  ...CURATION_ROUTE_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2659,10 +2748,87 @@ function warehouseAnswer(method, url, headers, bytes, received) {
   return { status: 200, body: {} }
 }
 
+/** The bot token upstream posts to the fake Slack with. */
+const SLACK_TOKEN = 'xoxb-example123'
+/** The curators' channel upstream posts to. */
+const SLACK_CHANNEL = 'curation-example'
+const SLACK_TS_SECONDS = Date.parse(CLOCK) / 1000
+
+/**
+ * The fake Slack's answer to one request under Slack's origin: `POST /api/chat.postMessage` with the
+ * bot token as a bearer, a channel and a text is recorded in `received` and answered as Slack's Web
+ * API does, HTTP 200 with `ok: true`; a missing or wrong token, a missing channel or text, or a body
+ * that isn't JSON is answered HTTP 200 with `ok: false` and Slack's error code; undefined for any
+ * other method or path.
+ */
+function slackAnswer(method, url, headers, bytes, received) {
+  if (method !== 'POST' || url !== '/api/chat.postMessage') return undefined
+  const refused = error => ({ status: 200, body: { ok: false, error } })
+  const authorization = headers.authorization
+  if (!authorization) return refused('not_authed')
+  if (authorization !== `Bearer ${SLACK_TOKEN}`) return refused('invalid_auth')
+  let message
+  try {
+    message = JSON.parse(bytes.toString('utf8'))
+  } catch {
+    return refused('invalid_json')
+  }
+  if (!message || typeof message.channel !== 'string' || !message.channel) return refused('channel_not_found')
+  if (typeof message.text !== 'string' && !Array.isArray(message.blocks)) return refused('no_text')
+  received.push(message)
+  const ts = `${SLACK_TS_SECONDS}.${String(received.length).padStart(6, '0')}`
+  return { status: 200, body: { ok: true, channel: message.channel, ts, message: { type: 'message', text: message.text } } }
+}
+
+/**
+ * The loopback `http.request` options that send a request upstream addresses to `slack.com` to the
+ * fake Slack on `port`, under `/slack`; undefined for any other request.
+ */
+function slackRoute(options, port) {
+  if (!options || typeof options !== 'object' || options.hostname !== 'slack.com') return undefined
+  return { protocol: 'http:', hostname: '127.0.0.1', port, path: `/slack${options.path}`, method: options.method, headers: options.headers }
+}
+
+/** What a capture records of the Slack messages its case sent: nothing, or `slack` in arrival order. */
+function slackRecord(messages) {
+  return messages.length ? { slack: messages } : {}
+}
+
+/** Sends this process's `https` requests to `slack.com` to the fake Slack on `port`; answers the undo. */
+function routeSlack(port) {
+  const request = https.request
+  https.request = (options, ...rest) => {
+    const routed = slackRoute(options, port)
+    return routed ? http.request(routed, ...rest) : request(options, ...rest)
+  }
+  return () => { https.request = request }
+}
+
+/**
+ * Tracks every promise the methods of upstream's `curationNotifications` answer, which upstream
+ * fires without awaiting; answers a function that waits until none is pending.
+ */
+function trackNotices(notifications) {
+  const pending = new Set()
+  for (const [name, method] of Object.entries(notifications)) {
+    if (typeof method !== 'function') continue
+    notifications[name] = (...args) => {
+      const sent = method.apply(notifications, args)
+      pending.add(sent)
+      Promise.resolve(sent).finally(() => pending.delete(sent)).catch(() => {})
+      return sent
+    }
+  }
+  return async () => {
+    while (pending.size) await Promise.allSettled([...pending])
+  }
+}
+
 function startFakes(req, unfaked, chain) {
   const { parse } = req('graphql')
   const s3Objects = new Map()
   const warehoused = []
+  const slacked = []
   const server = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -2672,6 +2838,13 @@ function startFakes(req, unfaked, chain) {
         response.end(JSON.stringify(body))
       }
       if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
+      if (request.method === 'GET' && /^\/peer\/lambdas\/profiles\/0x[0-9a-f]{40}$/.test(request.url)) return send(200, [])
+      if (request.url.startsWith('/slack/')) {
+        const answer = slackAnswer(request.method, request.url.slice('/slack'.length), request.headers, Buffer.concat(chunks), slacked)
+        if (!answer) unfaked.push(`slack ${request.method} ${request.url}`)
+        else if (!answer.body.ok) unfaked.push(`slack refused: ${answer.body.error}`)
+        return send(answer?.status ?? 404, answer?.body ?? { ok: false, error: 'unknown_method' })
+      }
       const warehouse = warehouseAnswer(request.method, request.url, request.headers, Buffer.concat(chunks), warehoused)
       if (warehouse) return send(warehouse.status, warehouse.body)
       if (request.url.startsWith('/s3/conformance/')) {
@@ -2715,6 +2888,7 @@ function startFakes(req, unfaked, chain) {
       send(200, { data })
     })
   })
+  server.slacked = slacked
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)))
 }
 
@@ -2747,7 +2921,8 @@ function upstreamEnvironment(fakeBase, url, admins) {
     FF_AUTO_CURATION: 'false',
     FF_AUTO_CURATION_REVIEW_FLOW: 'false',
     FF_COLLECTION_API_ALT: 'false',
-    SLACK_BOT_TOKEN: '',
+    SLACK_BOT_TOKEN: SLACK_TOKEN,
+    SLACK_CURATION_CHANNEL: SLACK_CHANNEL,
     ADMIN_ADDRESSES: admins,
     NODE_ENV: 'production'
   }
@@ -2781,8 +2956,8 @@ async function seedDatabase(client, seed, signers) {
   }
   for (const item of seed.items) {
     await client.query(
-      'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, rarity, urn_suffix, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
-      [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, JSON.stringify(item.contents || {}), item.rarity ?? null, item.urn_suffix ?? null, item.created_at, item.updated_at]
+      'INSERT INTO items (id, name, eth_address, collection_id, blockchain_item_id, type, data, metrics, thumbnail, contents, rarity, urn_suffix, created_at, updated_at, local_content_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+      [item.id, item.name, signers[item.owner].address, item.collection_id, item.blockchain_item_id, 'wearable', JSON.stringify(item.data), JSON.stringify(item.metrics), item.thumbnail, JSON.stringify(item.contents || {}), item.rarity ?? null, item.urn_suffix ?? null, item.created_at, item.updated_at, item.local_content_hash ?? null]
     )
   }
   for (const curation of seed.collection_curations) {
@@ -2944,7 +3119,7 @@ async function closeServer(server) {
 async function runUpstream(capture, url, seed, signers, unfaked) {
   const { upstream, req, load } = capture
   const fakes = await startFakes(req, unfaked, chainRows(seed, signers))
-  let listener, db
+  let listener, db, unrouteSlack
   try {
     const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url, signers.admin.address)
     migrate(upstream, environment)
@@ -2956,7 +3131,9 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     freezeClock()
     process.stdout.write = () => true
     process.stderr.write = () => true
+    unrouteSlack = routeSlack(fakes.address().port)
     const { app } = load('server.ts')
+    const noticesSettled = trackNotices(load('Curation/notifications').curationNotifications)
     db = load('database').db
     await db.connect(url)
     listener = await new Promise(resolve => {
@@ -2965,13 +3142,21 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     const base = `http://127.0.0.1:${listener.address().port}`
     const fixtures = []
     const bucket = `${environment.AWS_STORAGE_URL}/${environment.AWS_BUCKET_NAME}`
-    for (const item of CASES) fixtures.push([`${item.name}.json`, fixtureJson(await capture.record(base, item, bucket))])
+    for (const item of CASES) {
+      const sent = fakes.slacked.length
+      const fixture = await capture.record(base, item, bucket)
+      await noticesSettled()
+      const slack = slackRecord(fakes.slacked.slice(sent))
+      refuseMarkers(item.name, slack)
+      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack })])
+    }
     return fixtures
   } finally {
     try {
       await closeServer(listener)
       if (db) await db.close()
     } finally {
+      unrouteSlack?.()
       await closeServer(fakes)
     }
   }
@@ -3020,4 +3205,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

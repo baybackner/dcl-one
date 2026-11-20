@@ -161,6 +161,15 @@ pub struct RawSettings {
     pub warehouse_url: Option<String>,
     pub warehouse_token: Option<String>,
     pub warehouse_context_prefix: Option<String>,
+    /// `SLACK_BOT_TOKEN`: the bot the curation notices are posted as.
+    pub slack_bot_token: Option<String>,
+    /// `SLACK_CURATION_CHANNEL`: the curators' channel; notices need both.
+    pub slack_curation_channel: Option<String>,
+    /// `CREATORS_URL`: the creators site a notice links to.
+    pub creators_url: Option<String>,
+    /// `BUILDER_URL`: the legacy builder a notice links to without
+    /// `CREATORS_URL`.
+    pub builder_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -172,6 +181,9 @@ pub struct Settings {
     pub newsletter: Option<NewsletterForward>,
     pub foundation_url: Option<String>,
     pub warehouse: Option<WarehouseForward>,
+    /// The curators' Slack channel; none sends no notice.
+    pub slack: Option<curation::slack::Slack>,
+    pub links: curation::slack::Links,
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -246,7 +258,34 @@ impl Settings {
             }
             _ => None,
         };
+        let slack = match (
+            non_empty(&raw.slack_bot_token),
+            non_empty(&raw.slack_curation_channel),
+        ) {
+            (Some(token), Some(channel)) => Some(curation::slack::Slack {
+                token,
+                channel,
+                api: curation::slack::API.to_string(),
+            }),
+            _ => None,
+        };
+        let links = curation::slack::Links {
+            creators_url: non_empty(&raw.creators_url),
+            builder_url: non_empty(&raw.builder_url),
+        };
+        for (name, url) in [
+            ("CREATORS_URL", &links.creators_url),
+            ("BUILDER_URL", &links.builder_url),
+        ] {
+            if let Some(url) = url
+                && !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+            {
+                bail!("{name} must be an http(s) URL");
+            }
+        }
         Ok(Self {
+            slack,
+            links,
             writes_enabled: raw.writes_enabled,
             polygon_rpc_url,
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
@@ -284,6 +323,8 @@ pub struct State {
     pub now: fn() -> chrono::DateTime<chrono::Utc>,
     /// What the Polygon RPC says of collection contracts, kept per contract.
     pub deployments: collections::deployment::Deployments,
+    /// The curators' Slack notices.
+    pub notices: curation::slack::Notices,
 }
 
 pub type SharedState = Arc<State>;
@@ -298,6 +339,7 @@ impl State {
         eip1654: Option<Arc<dyn Eip1654Validator>>,
         settings: Settings,
     ) -> anyhow::Result<Self> {
+        let notices = curation::slack::Notices::new(settings.slack.clone(), settings.links.clone());
         Ok(Self {
             items: ItemsComponent::new(pool.clone(), blobs),
             newsletter: NewsletterComponent::new(pool),
@@ -312,18 +354,20 @@ impl State {
             third_parties: third_parties::ThirdParties::default(),
             now: chrono::Utc::now,
             deployments: collections::deployment::Deployments::default(),
+            notices,
         })
     }
 
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={}",
+            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={}",
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),
             self.settings.newsletter.is_some(),
             self.settings.warehouse.is_some(),
+            self.settings.slack.is_some(),
         )
     }
 }
@@ -397,6 +441,23 @@ fn api_routes() -> Router<SharedState> {
         .route(
             "/v1/collections/curation",
             get(handlers::curation::get_curation_collections),
+        )
+        .route("/v1/curations", get(handlers::curation::curations))
+        .route(
+            "/v1/collections/{id}/curation",
+            get(handlers::curation::collection_curation)
+                .patch(handlers::curation::update_collection_curation)
+                .post(handlers::curation::request_collection_curation),
+        )
+        .route(
+            "/v1/collections/{id}/itemCurations",
+            get(handlers::curation::collection_item_curations),
+        )
+        .route(
+            "/v1/items/{id}/curation",
+            get(handlers::curation::item_curation)
+                .patch(handlers::curation::update_item_curation)
+                .post(handlers::curation::request_item_curation),
         )
         .route(
             "/v1/{address}/collections",

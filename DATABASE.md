@@ -1634,6 +1634,11 @@ Statements:
 | --- | --- | --- |
 | a collection's newest curation, a decision, a listing row's `curation_status` and last activity | `collection_id = $1 ORDER BY created_at DESC LIMIT 1` | `collection_curations_collection_created_key` |
 | the committee's listing by assignee and status | the newest curation per collection (`DISTINCT ON (collection_id) ... ORDER BY collection_id, created_at DESC`), filtered | sequential read of the table (4,755 rows) |
+| `GET /v1/curations` for the committee | the newest curation per collection, at most 20,000 rows | sequential read of the table and a sort |
+| `GET /v1/curations` for another wallet | the newest curation of the collections whose chain copy row names it as creator, manager or minter, and of its providers' collections | `collections_contract_address_key`, `collections_third_party_urn_idx`, then the sequential read above |
+| `GET /v1/collections/:id/itemCurations` | each item of the collection joined to its curations, the newest per item, at most 20,000 rows | `items_collection_created_idx`, a hash join with the item curations |
+| `GET /v1/collections/:id/items` with `synced`, a third-party `status` or `mappingStatus=unpublished_mapping` | each item of the collection with its newest curation (`LATERAL ... LIMIT 1`) | `items_collection_created_idx`, `item_curations_item_created_key`, backward |
+| a curator's decision: the collection's newest `review.approved` or `review.rejected` | `collection_id = $1 AND type IN (...) ORDER BY created_at DESC, id DESC LIMIT 1` | `collection_events_collection_created_idx` |
 | an item's newest curation (`curation::newest_item_curation`, the one definition: the last created), once per listed item | `item_id = $1 ORDER BY created_at DESC LIMIT 1` | `item_curations_item_created_key`, backward |
 | the newest curation of each item of a collection | items by `collection_id`, each item's newest curation | `items_collection_created_idx`, `item_curations_item_created_key` |
 | an item is curated: the file rule, by-id reads, saves, deletes, slots | `EXISTS (... WHERE item_id = i.id)` | `item_curations_item_created_key` |
@@ -1655,7 +1660,11 @@ index probe (about 6 µs a row) and never the collection's other items: the
 unpaged bodies of the largest collection's 12,665 items take 742 ms, most of
 it the `id = ANY(...)` lookup of the rows, and the largest owner's 12,669
 items 99 ms. Only an item read by itself reads the collection's first
-curated item (7 ms in the largest collection).
+curated item (7 ms in the largest collection). The committee's
+`GET /v1/curations` reads its rows in 1.3 ms; `GET
+/v1/collections/:id/itemCurations` of the largest collection in 169 ms; that
+collection's `synced=true` page in 120 ms and its pending `status` page in
+8 ms.
 
 Invariants code upholds:
 
@@ -1668,6 +1677,12 @@ Invariants code upholds:
 - A writer of events stamps `created_at` after the collection's newest
   event, under the collection lock.
 - A cheque's `third_party_id` is its collection's provider.
+- A curation write (`curation::writes`) locks the collection row, decides
+  again who may write, reads the newest curation and asks the transition
+  table, all in one transaction; a committee write adds its
+  `ops.admin_audit` row (domain `create`) in it. A collection's approval
+  also sets each smart wearable's `items.video` to the `video.mp4` hash its
+  contents name, in the same transaction.
 
 Upgrade: the object pass creates the four tables; step
 `0058_builder_collection_forum` adds the forum columns and their checks. The

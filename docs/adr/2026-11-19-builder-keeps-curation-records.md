@@ -41,6 +41,40 @@ answer as it does upstream.
 - **Deletes.** An item's curations and a collection's curations and events
   go with them; a slot cheque, the record of slots consumed, keeps its
   collection.
+- **One transition table.** Who may move a curation from one status to
+  another is one table (`services/catalyst/builder/src/curation/transitions.rs`):
+  - a creator (a wallet with a role on the collection) opens a review
+    request when none is pending, and refreshes the content hash of an
+    item's pending curation;
+  - only the committee assigns a review, changes a collection curation's
+    status, or decides an item's curation, and a decided curation reopens
+    only by a new request;
+  - an assignee must be on the committee.
+
+  Each write runs in one transaction that locks the collection row, decides
+  again who may write and reads the newest curation under the lock, so
+  concurrent curators end in one state.
+- **What a decision writes.** A curator's decision records the reviewer, the
+  rejection reasons and message, and a `review.assigned`,
+  `review.approved` or `review.rejected` event; a repeated decision records
+  nothing new, and a rejection resent with other feedback corrects it. Every
+  committee write records its `ops.admin_audit` row in the same transaction.
+- **What an approval pins.** A collection's approval sets each smart
+  wearable's kept video to the `video.mp4` its saved contents name; a later
+  save of a published item keeps that video. An item's curation records the
+  item's content hash when it is submitted, and again when its pending
+  curation is refreshed, which is what the curator approves. The item's
+  contents read by its contract and on-chain id stay its latest saved
+  contents.
+- **Slack notices.** A publication, a review request, an assignee change
+  and a new decision are announced in the curators' Slack channel
+  (`SLACK_BOT_TOKEN`, `SLACK_CURATION_CHANNEL`), with links to the
+  collection's review page and the people's pages on `CREATORS_URL`. A
+  notice is sent only after its write commits, in a task of its own with a
+  10-second bound, through the client that follows no redirect; it is best
+  effort, so a Slack failure is logged without the token and changes no
+  answer. Text that comes from a creator is put on one line, cut and escaped
+  so it can't mention, link or format.
 
 ## Consequences
 
@@ -53,3 +87,7 @@ answer as it does upstream.
   recording a curation for each third-party item the node submitted itself.
 - A writer of curations or events holds the collection locked, which the
   code upholds; the schema can't.
+- A notice lost to a Slack outage isn't sent again; the timeline and the
+  audit rows keep the decision.
+- The curation lists answer at most 20,000 rows, above the reference data's
+  largest committee listing and largest collection.

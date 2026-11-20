@@ -378,7 +378,7 @@ async fn insert_item(
     sqlx::query(
         "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id, local_content_hash, \
            urn_suffix, is_published) \
-         VALUES ($1, $2, $3, 'Matrix item', 'wearable', $4, 'matrix-local-hash', $5, $6)",
+         VALUES ($1, $2, $3, 'Matrix item', 'wearable', $4, repeat('ab', 32), $5, $6)",
     )
     .bind(id)
     .bind(collection)
@@ -644,6 +644,14 @@ enum Op {
     ThirdPartySlots,
     ThirdPartyDelete,
     ThirdPartyUpdate,
+    Curations,
+    CollectionCuration,
+    CollectionItemCurations,
+    CollectionCurationUpdate,
+    CollectionCurationRequest,
+    ItemCuration,
+    ItemCurationUpdate,
+    ItemCurationRequest,
 }
 
 const NOT_PUBLISHED: &str = "The collection is not published.";
@@ -768,6 +776,14 @@ impl Op {
             ("GET", "/v1/thirdParties/{id}/slots") => Op::ThirdPartySlots,
             ("DELETE", "/v1/thirdParties/{id}") => Op::ThirdPartyDelete,
             ("PATCH", "/v1/thirdParties/{id}") => Op::ThirdPartyUpdate,
+            ("GET", "/v1/curations") => Op::Curations,
+            ("GET", "/v1/collections/{id}/curation") => Op::CollectionCuration,
+            ("PATCH", "/v1/collections/{id}/curation") => Op::CollectionCurationUpdate,
+            ("POST", "/v1/collections/{id}/curation") => Op::CollectionCurationRequest,
+            ("GET", "/v1/collections/{id}/itemCurations") => Op::CollectionItemCurations,
+            ("GET", "/v1/items/{id}/curation") => Op::ItemCuration,
+            ("PATCH", "/v1/items/{id}/curation") => Op::ItemCurationUpdate,
+            ("POST", "/v1/items/{id}/curation") => Op::ItemCurationRequest,
             _ => return None,
         })
     }
@@ -846,6 +862,28 @@ impl Op {
                 | Op::SaveItem
                 | Op::DeleteItem
                 | Op::UploadFiles
+                | Op::CollectionCuration
+                | Op::CollectionItemCurations
+                | Op::CollectionCurationUpdate
+                | Op::CollectionCurationRequest
+                | Op::ItemCuration
+                | Op::ItemCurationUpdate
+                | Op::ItemCurationRequest
+        )
+    }
+
+    /// A curation route: its cells read the curation a kind carries.
+    fn curation(self) -> bool {
+        matches!(
+            self,
+            Op::Curations
+                | Op::CollectionCuration
+                | Op::CollectionItemCurations
+                | Op::CollectionCurationUpdate
+                | Op::CollectionCurationRequest
+                | Op::ItemCuration
+                | Op::ItemCurationUpdate
+                | Op::ItemCurationRequest
         )
     }
 
@@ -873,6 +911,10 @@ impl Op {
                 | Op::ItemsStatus
                 | Op::ThirdPartyDelete
                 | Op::ThirdPartyUpdate
+                | Op::CollectionCurationUpdate
+                | Op::CollectionCurationRequest
+                | Op::ItemCurationUpdate
+                | Op::ItemCurationRequest
         )
     }
 
@@ -890,7 +932,13 @@ impl Op {
     fn on_items(self) -> bool {
         matches!(
             self,
-            Op::ReadItem | Op::SaveItem | Op::DeleteItem | Op::UploadFiles
+            Op::ReadItem
+                | Op::SaveItem
+                | Op::DeleteItem
+                | Op::UploadFiles
+                | Op::ItemCuration
+                | Op::ItemCurationUpdate
+                | Op::ItemCurationRequest
         )
     }
 
@@ -999,6 +1047,35 @@ impl Op {
             Op::DraftCollections => ("GET", "/v1/drafts/collections".into(), Payload::None),
             Op::DraftItems => ("GET", "/v1/drafts/items".into(), Payload::None),
             Op::CurationQueue => ("GET", "/v1/collections/curation".into(), Payload::None),
+            Op::Curations => ("GET", "/v1/curations".into(), Payload::None),
+            Op::CollectionCuration
+            | Op::CollectionItemCurations
+            | Op::CollectionCurationUpdate
+            | Op::CollectionCurationRequest => {
+                let (method, route) = match self {
+                    Op::CollectionCuration => ("GET", "curation"),
+                    Op::CollectionItemCurations => ("GET", "itemCurations"),
+                    Op::CollectionCurationUpdate => ("PATCH", "curation"),
+                    _ => ("POST", "curation"),
+                };
+                (
+                    method,
+                    format!("/v1/collections/{}/{route}", f.collection_id(kind)),
+                    approval(method),
+                )
+            }
+            Op::ItemCuration | Op::ItemCurationUpdate | Op::ItemCurationRequest => {
+                let method = match self {
+                    Op::ItemCuration => "GET",
+                    Op::ItemCurationUpdate => "PATCH",
+                    _ => "POST",
+                };
+                (
+                    method,
+                    format!("/v1/items/{}/curation", f.item_id(kind)),
+                    approval(method),
+                )
+            }
             Op::Ping => ("GET", "/ping".into(), Payload::None),
             Op::Info => ("GET", "/v1/info".into(), Payload::None),
             Op::Rarities => ("GET", "/v1/rarities".into(), Payload::None),
@@ -1070,6 +1147,9 @@ impl Op {
 
     /// The decision table; `None` where the cell doesn't apply.
     fn expect(self, kind: Kind, caller: Caller, f: &Fixture) -> Option<Expect> {
+        if self.curation() {
+            return self.expect_curation(kind, caller, f);
+        }
         let kind = kind.base();
         let signed = caller != Anonymous;
         if self == Op::Ping {
@@ -1263,6 +1343,81 @@ impl Op {
             },
             _ => None,
         }
+    }
+
+    /// The curation routes' decisions: the collection, then its
+    /// publication, then a role (for an item's curation, the item's own
+    /// owner instead of the collection's), then the committee; a write then
+    /// follows the transition table with the curation the kind carries.
+    fn expect_curation(self, kind: Kind, caller: Caller, f: &Fixture) -> Option<Expect> {
+        if caller == Anonymous {
+            return unauthenticated();
+        }
+        if self == Op::Curations {
+            return ok();
+        }
+        let on_item = self.on_items();
+        if !on_item && matches!(kind, Orphan | Unminted) {
+            return None;
+        }
+        let id = if on_item {
+            f.item_id(kind)
+        } else {
+            f.collection_id(kind)
+        };
+        match kind {
+            Missing | Orphan => {
+                return refused(404, "Not found");
+            }
+            Malformed => return invalid_uuid(&id),
+            _ if !kind.published() => return refused(409, "Unpublished collection"),
+            _ => {}
+        }
+        let role = if on_item {
+            kind.item_owner(caller) || kind.manager(caller)
+        } else {
+            kind.owner(caller) || kind.manager(caller)
+        };
+        let committee = caller == Committee;
+        if !role && !committee {
+            return unauthorized();
+        }
+        let item_curation = kind.base() == ThirdPartySubmitted;
+        let collection_curation = matches!(kind, ReviewPending | ReviewApproved | ReviewRejected);
+        let (curated, pending) = if on_item {
+            (
+                item_curation,
+                matches!(kind, ThirdPartySubmitted | CuratedPending),
+            )
+        } else {
+            (collection_curation, kind == ReviewPending)
+        };
+        match self {
+            Op::CollectionCurationUpdate | Op::ItemCurationUpdate if !committee => refused(
+                401,
+                "Only committee members can approve or reject a curation",
+            ),
+            Op::CollectionCurationUpdate | Op::ItemCurationUpdate if !curated => {
+                refused(404, "Curation does not exist")
+            }
+            Op::ItemCurationRequest if !curated => refused(
+                400,
+                "Item curations can't be created for items that weren't curated before",
+            ),
+            Op::CollectionCurationRequest | Op::ItemCurationRequest if pending => {
+                refused(400, "There is already an ongoing review request")
+            }
+            _ => ok(),
+        }
+    }
+}
+
+/// A curation write's body: a committee approval for a `PATCH`, none
+/// otherwise.
+fn approval(method: &str) -> Payload {
+    match method {
+        "PATCH" => Payload::Json(json!({ "curation": { "status": "approved" } })),
+        _ => Payload::None,
     }
 }
 
@@ -1703,7 +1858,16 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                             && !kind.owner(caller)
                             && !kind.manager(caller)
                     }
-                    Op::ListCollections | Op::ListItems | Op::Committee => true,
+                    Op::ListCollections | Op::ListItems | Op::Committee | Op::Curations => true,
+                    Op::CollectionCurationUpdate | Op::ItemCurationUpdate => kind.published(),
+                    Op::CollectionCuration
+                    | Op::CollectionItemCurations
+                    | Op::CollectionCurationRequest => {
+                        kind.published() && !kind.owner(caller) && !kind.manager(caller)
+                    }
+                    Op::ItemCuration | Op::ItemCurationRequest => {
+                        kind.published() && !kind.item_owner(caller) && !kind.manager(caller)
+                    }
                     _ => false,
                 };
                 let expect = |f: &Fixture| {

@@ -56,6 +56,17 @@ pub struct CreateConfig {
     #[arg(long, env = "WAREHOUSE_CONTEXT_PREFIX")]
     pub warehouse_context_prefix: Option<String>,
 
+    /// The curators' Slack channel (name or id) the `SLACK_BOT_TOKEN` bot
+    /// posts curation notices to; no notice is sent without both.
+    #[arg(long, env = "SLACK_CURATION_CHANNEL")]
+    pub slack_curation_channel: Option<String>,
+
+    /// The creators site (an http(s) URL, such as `https://example.org/create`)
+    /// a curation notice links a collection's review page to; its origin also
+    /// links the people it names.
+    #[arg(long, env = "CREATORS_URL")]
+    pub creators_url: Option<String>,
+
     /// Bearer of the moderator routes; unset refuses them.
     #[arg(
         long,
@@ -128,6 +139,7 @@ mod tests {
                 && c.create.warehouse_token.is_none()
                 && c.create.warehouse_context_prefix.is_none()
         );
+        assert!(c.create.slack_curation_channel.is_none() && c.create.creators_url.is_none());
         assert!(
             c.create.catalyrst_camera_reel_admin_token.is_none()
                 && c.create.camera_reel_metrics_bearer_token.is_none()

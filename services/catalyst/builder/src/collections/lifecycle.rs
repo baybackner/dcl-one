@@ -17,6 +17,7 @@ use crate::access::{self, CollectionEdit, CollectionLock, CollectionManage, Coll
 use crate::chain_state;
 use crate::collections::deployment::Onchain;
 use crate::collections::listing::ListQuery;
+use crate::curation::slack::Notice;
 use crate::http::{ApiError, Subject};
 use crate::items::listing::ItemsOut;
 use crate::items::save::forget_unnamed;
@@ -258,6 +259,7 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
             _ => return Err(not_published(id)),
         },
     };
+    let mut first_publication = false;
     if missing {
         for (place, (item, _)) in before.items.iter().enumerate() {
             if !on_chain.contains(&(place as u64)) {
@@ -285,6 +287,12 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         if now.pending || now.contract.as_deref() != Some(contract.as_str()) || !same_items {
             return Err(not_published(id));
         }
+        let first: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS (SELECT 1 FROM builder.collection_curations WHERE collection_id = $1)",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
         for (place, (item, _)) in now.items.iter().enumerate() {
             sqlx::query(
                 "UPDATE builder.items SET blockchain_item_id = $2, is_published = true, urn_suffix = $3, \
@@ -297,13 +305,27 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
             .await?;
         }
         tx.commit().await?;
+        first_publication = first;
     }
     let read = sync.full_read();
-    Ok(Published {
+    let published = Published {
         collection: state.items.collection(&read).await?,
         items: state
             .items
             .collection_items(&read, &ListQuery::parse(None))
             .await?,
-    })
+    };
+    if first_publication && published.collection.get("is_approved") != Some(&Value::Bool(true)) {
+        let name = published.collection["name"].as_str().unwrap_or_default();
+        state.notices.send(
+            &state.foundation,
+            id,
+            name,
+            sync.signer(),
+            Notice::Published {
+                items: before.items.len(),
+            },
+        );
+    }
+    Ok(published)
 }

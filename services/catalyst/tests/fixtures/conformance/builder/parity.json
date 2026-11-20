@@ -9,7 +9,8 @@
   "volatile_fields": [
     "created_at",
     "updated_at",
-    "last_activity_at"
+    "last_activity_at",
+    "id"
   ],
   "deliberate_gaps": {
     "timestamped-signatures-only": {
@@ -46,7 +47,8 @@
         "source/231-item-files-unsigned.json",
         "source/282-collection-lock-unsigned.json",
         "source/304-third-parties-unsigned.json",
-        "source/339-item-curated-unsigned.json"
+        "source/339-item-curated-unsigned.json",
+        "source/356-curations-unsigned.json"
       ],
       "anchors": []
     },
@@ -125,12 +127,16 @@
       ]
     },
     "invalid-body-detail": {
-      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN, POST /v1/collections/:id/tos and PATCH /v1/thirdParties/:id with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; upstream's data lists its JSON schema validator's errors, the node's is {}.",
+      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN, POST /v1/collections/:id/tos and PATCH /v1/thirdParties/:id with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; PATCH and POST /v1/collections/:id/curation and PATCH /v1/items/:id/curation answer 400 {ok:false, data, error:'Invalid schema'}. Upstream's data lists its JSON schema validator's errors, the node's is {}.",
       "captures": [
         "source/16-collection-invalid-body.json",
         "source/206-item-save-invalid-name.json",
         "source/287-collection-tos-invalid-email.json",
-        "source/327-third-party-update-invalid.json"
+        "source/327-third-party-update-invalid.json",
+        "source/390-collection-curation-request-long-note.json",
+        "source/402-collection-curation-update-unknown-status.json",
+        "source/413-collection-curation-reject-long-message.json",
+        "source/414-collection-curation-reject-unknown-reason.json"
       ],
       "anchors": []
     },
@@ -277,6 +283,62 @@
       ],
       "anchors": [
         "status: fixture=200 candidate=401"
+      ]
+    },
+    "curation-invalid-id": {
+      "text": "GET, PATCH and POST /v1/collections/:id/curation, GET /v1/collections/:id/itemCurations and GET, PATCH and POST /v1/items/:id/curation with an id that is not a UUID: upstream hands it to its database, whose error answers 200 {ok:false, data:{}, error:<the database's message>}; the node answers 400 {ok:false, data:{id}, error:'Invalid uuid <id>'}, as its other routes do. No client sends one.",
+      "captures": [
+        "source/362-collection-curation-malformed-id.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "curation-input": {
+      "text": "PATCH /v1/collections/:id/curation and PATCH /v1/items/:id/curation: the node answers 400 to a body without curation (upstream 200 {ok:false, error:'Could not get curation from request'}) and 400 Invalid schema to an assignee on an item's curation (upstream fails in its database and answers 200 {ok:false}). The old builder web always sends curation, and never an item's assignee.",
+      "captures": [
+        "source/397-collection-curation-update-no-curation.json",
+        "source/421-item-curation-update-assignee.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "fixed-capture-clock": {
+      "text": "A curation row written twice during the capture run: upstream ran on the capture's fixed clock, so a row created and later updated in the run reads the same created_at and updated_at there; the node stamps each write with its own clock, as upstream does outside the capture, so updated_at is later.",
+      "captures": [
+        "source/416-collection-curation-approve-assigned.json",
+        "source/417-collection-curation-reopen.json",
+        "source/429-curations-committee-after.json"
+      ],
+      "anchors": []
+    },
+    "item-curation-reopened-by-the-committee": {
+      "text": "PATCH /v1/items/:id/curation with status pending on an item whose newest curation is approved or rejected, by a wallet off the committee: upstream sets that decision back to pending; the node answers 401 Only committee members can approve or reject a curation and writes nothing. The old builder web sends a pending PATCH only for an item whose newest curation is already pending, and asks again for a decided one with POST /v1/items/:id/curation.",
+      "captures": [
+        "source/428-item-curation-reopen-manager.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=401"
+      ]
+    },
+    "curation-list-bounds": {
+      "text": "GET /v1/curations and GET /v1/collections/:id/itemCurations: the node answers at most 20,000 rows, above the committee's listing (3,502 collections) and the largest collection's item curations (12,665 items) in the reference data; upstream answers every row. GET /v1/collections/:id/itemCurations also refuses more than 20,000 itemIds with 400 and leaves out an itemIds value that is not a UUID, where upstream's database fails.",
+      "captures": [],
+      "anchors": []
+    },
+    "curation-notice-names": {
+      "text": "The curators' Slack notices name a person by a link labelled with the shortened address; upstream labels it with the profile name the catalyst holds for the address when it claimed one. A collection's name in a notice is cut to 300 characters.",
+      "captures": [],
+      "anchors": []
+    },
+    "curation-unknown-key": {
+      "text": "PATCH /v1/collections/:id/curation and PATCH /v1/items/:id/curation refuse a curation key the schema doesn't name with 400 Invalid schema, where upstream drops it and goes on; POST /v1/collections/:id/curation refuses a key other than assignee and note, and an assignee that is not a string, which upstream takes. The old builder web sends only status or assignee, and assignee or nothing.",
+      "captures": [
+        "source/403-collection-curation-update-extra-key.json"
+      ],
+      "anchors": [
+        "status: fixture=404 candidate=400"
       ]
     }
   },
@@ -551,7 +613,7 @@
       "id": "api_http:GET:/v1/collections/:id/items",
       "owner": "items",
       "status": "known_gap",
-      "result": "Lists of a draft, a collection on chain and a third-party collection, by id and by contract address, paged, filtered by name, synced, status and mappingStatus, by the owner, a stranger, an on-chain manager and minter, the committee and an admin wallet, and an unknown collection with an invalid status, were compared and match except the admin wallet's refusal. A third-party collection with curated items, for the provider's manager and for a signer with no role, matches: each item published and with the mapping flag of its own newest curation, a never-curated one unpublished and left out of the public list. Its status filter differs: an open gap.",
+      "result": "Lists of a draft, a collection on chain and a third-party collection, by id and by contract address, paged, filtered by name, synced, status and mappingStatus, by the owner, a stranger, an on-chain manager and minter, the committee and an admin wallet, and an unknown collection with an invalid status, were compared and match except the admin wallet's refusal. A third-party collection with curated items, for the provider's manager and for a signer with no role, matches: each item published and with the mapping flag of its own newest curation, a never-curated one unpublished and left out of the public list. Its status filter lists the items whose newest curation is pending, as upstream's does.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/28-collection-items-unsigned.json",
@@ -687,16 +749,10 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/349-collection-items-curated-status.json",
           "scope": "GET /collections/{id}/items signed by the provider's manager, filtered by curation status.",
-          "replay": [
-            "data.length value"
-          ],
-          "explained_by": {
-            "data.length value": "open:item-curation-filters"
-          }
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-curation-filters",
         "open:item-catalyst-state",
         "deliberate:admin-addresses-not-admitted",
         "deliberate:owner-is-the-chain-creator",
@@ -2841,47 +2897,432 @@
     {
       "id": "api_http:GET:/v1/curations",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The committee's, a stranger's, the provider's (creator of a collection on chain and manager of a third-party provider) and a minter's listing before and after the curation writes, and the unsigned request, were compared and match: the committee reads the newest curation of every collection by collection id, anyone else those of the collections it creates, manages or mints on chain and of its providers' collections. The committee's listing after the writes differs only by the capture's fixed clock.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/353-curations-committee.json",
+          "scope": "GET /curations signed by a committee member: the newest curation of every collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/354-curations-stranger.json",
+          "scope": "GET /curations signed by a wallet that creates, manages and mints nothing.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/355-curations-provider.json",
+          "scope": "GET /curations signed by the chain creator of a collection under review and the manager of a provider with a curated collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/356-curations-unsigned.json",
+          "scope": "GET /curations without a signature.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/395-curations-minter.json",
+          "scope": "GET /curations signed by the on-chain minter of a collection with a curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/429-curations-committee-after.json",
+          "scope": "GET /curations signed by a committee member after the reviews above.",
+          "replay": [
+            "data.created_at and data.updated_at differ"
+          ],
+          "explained_by": {
+            "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-list-bounds",
+        "deliberate:fixed-capture-clock",
+        "deliberate:unauthenticated-message"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:GET:/v1/collections/:id/itemCurations",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The newest curation of each item of a third-party collection for its provider's manager, the committee and a stranger, narrowed by bracketed and repeated itemIds, refused for a single itemIds, and the empty list of a standard collection on chain, were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/369-item-curations-manager.json",
+          "scope": "GET /collections/{id}/itemCurations signed by the provider's manager: the newest curation of each curated item.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/370-item-curations-bracketed-ids.json",
+          "scope": "GET /collections/{id}/itemCurations signed by the provider's manager, naming one item as itemIds[], as the old builder web sends an array.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/371-item-curations-repeated-ids.json",
+          "scope": "GET /collections/{id}/itemCurations signed by the provider's manager, naming two items by a repeated itemIds.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/372-item-curations-single-id.json",
+          "scope": "GET /collections/{id}/itemCurations signed by the provider's manager, naming one item by a single itemIds, which is no array.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/373-item-curations-committee.json",
+          "scope": "GET /collections/{id}/itemCurations signed by a committee member.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/374-item-curations-stranger.json",
+          "scope": "GET /collections/{id}/itemCurations signed by a wallet with no role.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/375-item-curations-standard-owner.json",
+          "scope": "GET /collections/{id}/itemCurations signed by the owner of a standard collection on chain, which has no item curation.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-list-bounds",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:GET:/v1/collections/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The newest curation of a published standard collection for the committee, its on-chain creator, an on-chain manager, a stranger and an admin wallet; of a published collection with none (answered without data); of a third-party collection for its provider's manager and a stranger; and the refusals of a draft, a third-party collection without item curations, an unknown and a malformed id, were compared; all match but the malformed id, a deliberate gap.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/357-collection-curation-committee.json",
+          "scope": "GET /collections/{id}/curation signed by a committee member, a collection on chain with a pending curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/358-collection-curation-owner.json",
+          "scope": "GET /collections/{id}/curation signed by the owner of a collection on chain with a pending curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/359-collection-curation-stranger.json",
+          "scope": "GET /collections/{id}/curation signed by a wallet with no role on a collection on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/360-collection-curation-draft.json",
+          "scope": "GET /collections/{id}/curation signed by the owner of a draft the chain doesn't hold.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/361-collection-curation-unknown.json",
+          "scope": "GET /collections/{id}/curation of an id no collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/362-collection-curation-malformed-id.json",
+          "scope": "GET /collections/{id}/curation with an id that is not a UUID.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data.id extra",
+            "error value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:curation-invalid-id",
+            "data.id extra": "deliberate:curation-invalid-id",
+            "error value": "deliberate:curation-invalid-id"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/363-collection-curation-none-owner.json",
+          "scope": "GET /collections/{id}/curation signed by the owner of a collection on chain that was never curated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/364-collection-curation-none-manager.json",
+          "scope": "GET /collections/{id}/curation signed by an on-chain manager of a collection on chain that was never curated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/365-collection-curation-third-party-manager.json",
+          "scope": "GET /collections/{id}/curation signed by the provider's manager, a third-party collection with curated items and an approved curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/366-collection-curation-third-party-stranger.json",
+          "scope": "GET /collections/{id}/curation signed by a wallet with no role on a third-party collection with curated items.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/367-collection-curation-third-party-uncurated.json",
+          "scope": "GET /collections/{id}/curation signed by the provider's manager, a third-party collection with no item curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/368-collection-curation-admin.json",
+          "scope": "GET /collections/{id}/curation signed by an ADMIN_ADDRESSES wallet with no other role, a collection on chain under review.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/430-collection-curation-after.json",
+          "scope": "GET /collections/{id}/curation signed by a committee member after the collection was approved, rejected and requested again.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-invalid-id",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:PATCH:/v1/collections/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The committee's assign (unchanged, unassign, assign), approve, repeated approval, rejection with reasons and message, its edit, reopening to pending and approval of another collection; the refusals of a missing curation, a stranger, a creator's status and assignee, an assignee off the committee, a schema refusal, an unknown key, a collection without a curation and a draft, were compared with their Slack notices and match but the deliberate gaps.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/397-collection-curation-update-no-curation.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member with a body that has no curation.",
+          "replay": [
+            "status: fixture=200 candidate=400"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:curation-input"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/398-collection-curation-update-stranger.json",
+          "scope": "PATCH /collections/{id}/curation signed by a wallet with no role, approving.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/399-collection-curation-update-owner-status.json",
+          "scope": "PATCH /collections/{id}/curation signed by the owner, approving its own collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/400-collection-curation-update-owner-assignee.json",
+          "scope": "PATCH /collections/{id}/curation signed by the owner, assigning a committee member.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/401-collection-curation-update-assignee-not-committee.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, assigning a wallet off the committee.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/402-collection-curation-update-unknown-status.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member with a status that is no curation status.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/403-collection-curation-update-extra-key.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member with an unknown key beside a valid status, on a collection with no curation row.",
+          "replay": [
+            "status: fixture=404 candidate=400",
+            "data.id missing",
+            "error value"
+          ],
+          "explained_by": {
+            "status: fixture=404 candidate=400": "deliberate:curation-unknown-key",
+            "data.id missing": "deliberate:curation-unknown-key",
+            "error value": "deliberate:curation-unknown-key"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/404-collection-curation-update-none.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, approving a collection on chain that was never curated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/405-collection-curation-update-draft.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member on a draft the chain doesn't hold.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/406-collection-curation-assign-unchanged.json",
+          "scope": "PATCH /collections/{id}/curation signed by the assigned committee member, assigning itself again.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/407-collection-curation-unassign.json",
+          "scope": "PATCH /collections/{id}/curation signed by the assigned committee member, unassigning.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/408-collection-curation-assign.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, assigning itself.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/409-collection-curation-approve.json",
+          "scope": "PATCH /collections/{id}/curation signed by the assigned committee member, approving.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/410-collection-curation-approve-again.json",
+          "scope": "PATCH /collections/{id}/curation signed by the same committee member, approving again.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/411-collection-curation-reject.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, rejecting with two reasons and a message with surrounding spaces.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/412-collection-curation-reject-edit.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, rejecting again with another message.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/413-collection-curation-reject-long-message.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, rejecting with a message longer than 3,000 characters.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/414-collection-curation-reject-unknown-reason.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, rejecting with a reason that is not one of the twelve.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/416-collection-curation-approve-assigned.json",
+          "scope": "PATCH /collections/{id}/curation signed by the assigned committee member, approving a collection it assigned itself.",
+          "replay": [
+            "data.created_at and data.updated_at differ"
+          ],
+          "explained_by": {
+            "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/417-collection-curation-reopen.json",
+          "scope": "PATCH /collections/{id}/curation signed by a committee member, setting an approved curation back to pending.",
+          "replay": [
+            "data.created_at and data.updated_at differ"
+          ],
+          "explained_by": {
+            "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-input",
+        "deliberate:curation-notice-names",
+        "deliberate:curation-unknown-key",
+        "deliberate:fixed-capture-clock",
+        "deliberate:invalid-body-detail",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "A creator's first request on an unapproved collection, a request on a collection approved on chain and on a third-party collection after its approval, a request again after a rejection, the committee's request with an assignee and without one, and the refusals of a pending review, a stranger, a draft, an unknown id and a note over 2,000 characters, were compared, with the Slack notices each sends, and match but the schema refusal's detail.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/386-collection-curation-request-pending.json",
+          "scope": "POST /collections/{id}/curation signed by the owner while a review request is pending.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/387-collection-curation-request-stranger.json",
+          "scope": "POST /collections/{id}/curation signed by a wallet with no role.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/388-collection-curation-request-draft.json",
+          "scope": "POST /collections/{id}/curation signed by the owner of a draft the chain doesn't hold.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/389-collection-curation-request-unknown.json",
+          "scope": "POST /collections/{id}/curation of an id no collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/390-collection-curation-request-long-note.json",
+          "scope": "POST /collections/{id}/curation signed by the owner with a note longer than 2,000 characters.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/391-collection-curation-request-first.json",
+          "scope": "POST /collections/{id}/curation signed by the owner of a collection on chain, unapproved and never curated: its first review request.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/392-collection-curation-request-changes.json",
+          "scope": "POST /collections/{id}/curation signed by the owner of a collection approved on chain and never curated: changes submitted for review.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/393-collection-curation-request-assigned.json",
+          "scope": "POST /collections/{id}/curation signed by a committee member assigning itself a collection on chain that was never curated.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/394-collection-curation-request-committee.json",
+          "scope": "POST /collections/{id}/curation signed by a committee member without an assignee on another wallet's collection approved on chain.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/396-collection-curation-request-third-party.json",
+          "scope": "POST /collections/{id}/curation signed by the provider's manager, a third-party collection whose curation is approved.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/415-collection-curation-request-after-rejection.json",
+          "scope": "POST /collections/{id}/curation signed by the owner after its collection's rejection: a review requested again.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-notice-names",
+        "deliberate:curation-unknown-key",
+        "deliberate:invalid-body-detail",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/curation/post",
@@ -2895,29 +3336,181 @@
     {
       "id": "api_http:GET:/v1/items/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "An item's newest curation (pending, approved, none) for the provider's manager, the committee and a stranger; a minted standard item for its owner, its on-chain manager and its minter; an orphan item and an item of a draft collection, were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/376-item-curation-pending-manager.json",
+          "scope": "GET /items/{id}/curation signed by the provider's manager, an item whose newest curation is pending.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/377-item-curation-approved-manager.json",
+          "scope": "GET /items/{id}/curation signed by the provider's manager, an item whose curation is approved.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/378-item-curation-none-manager.json",
+          "scope": "GET /items/{id}/curation signed by the provider's manager, a never-curated item of a curated collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/379-item-curation-stranger.json",
+          "scope": "GET /items/{id}/curation signed by a wallet with no role.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/380-item-curation-committee.json",
+          "scope": "GET /items/{id}/curation signed by a committee member.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/381-item-curation-orphan.json",
+          "scope": "GET /items/{id}/curation signed by the owner of an item with no collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/382-item-curation-draft-collection.json",
+          "scope": "GET /items/{id}/curation signed by the owner of an item of a collection the chain doesn't hold.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/383-item-curation-minted-owner.json",
+          "scope": "GET /items/{id}/curation signed by the owner of a minted item of a standard collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/384-item-curation-minted-manager.json",
+          "scope": "GET /items/{id}/curation signed by an on-chain manager of a minted item's collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/385-item-curation-minted-minter.json",
+          "scope": "GET /items/{id}/curation signed by an on-chain minter of a minted item's collection.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:PATCH:/v1/items/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The provider's manager refreshing a pending item curation's content hash, the committee's approval, and the refusals of a creator's approval, a stranger, an item never curated and an assignee, were compared and match; a creator setting a decided item curation back to pending is refused, a deliberate gap.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/418-item-curation-refresh-pending.json",
+          "scope": "PATCH /items/{id}/curation signed by the provider's manager, pending again on an item whose newest curation is pending, as the old builder web pushes changes.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/419-item-curation-approve-manager.json",
+          "scope": "PATCH /items/{id}/curation signed by the provider's manager, approving.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/420-item-curation-update-stranger.json",
+          "scope": "PATCH /items/{id}/curation signed by a wallet with no role.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/421-item-curation-update-assignee.json",
+          "scope": "PATCH /items/{id}/curation signed by a committee member, assigning itself an item curation.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "error value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:curation-input",
+            "error value": "deliberate:curation-input"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/422-item-curation-update-none.json",
+          "scope": "PATCH /items/{id}/curation signed by a committee member, approving a never-curated item.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/423-item-curation-approve.json",
+          "scope": "PATCH /items/{id}/curation signed by a committee member, approving an item whose newest curation is pending.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/428-item-curation-reopen-manager.json",
+          "scope": "PATCH /items/{id}/curation signed by the provider's manager, pending on an item whose newest curation is approved.",
+          "replay": [
+            "status: fixture=200 candidate=401",
+            "data.content_hash missing",
+            "data.created_at missing",
+            "data.id value",
+            "data.is_mapping_complete missing",
+            "data.item_id missing",
+            "data.status missing",
+            "data.updated_at missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=401": "deliberate:item-curation-reopened-by-the-committee",
+            "data.content_hash missing": "deliberate:item-curation-reopened-by-the-committee",
+            "data.created_at missing": "deliberate:item-curation-reopened-by-the-committee",
+            "data.id value": "deliberate:item-curation-reopened-by-the-committee",
+            "data.is_mapping_complete missing": "deliberate:item-curation-reopened-by-the-committee",
+            "data.item_id missing": "deliberate:item-curation-reopened-by-the-committee",
+            "data.status missing": "deliberate:item-curation-reopened-by-the-committee",
+            "data.updated_at missing": "deliberate:item-curation-reopened-by-the-committee",
+            "error extra": "deliberate:item-curation-reopened-by-the-committee",
+            "ok value": "deliberate:item-curation-reopened-by-the-committee"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:curation-input",
+        "deliberate:item-curation-reopened-by-the-committee",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:POST:/v1/items/:id/curation",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "A new submission of an item whose newest curation is decided, and the refusals of a pending one, a never-curated item and a stranger, were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/424-item-curation-request-decided.json",
+          "scope": "POST /items/{id}/curation signed by the provider's manager, an item whose newest curation is approved: a new pending curation.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/425-item-curation-request-pending.json",
+          "scope": "POST /items/{id}/curation signed by the provider's manager, an item whose newest curation is pending.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/426-item-curation-request-never.json",
+          "scope": "POST /items/{id}/curation signed by the provider's manager, a never-curated item.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/427-item-curation-request-stranger.json",
+          "scope": "POST /items/{id}/curation signed by a wallet with no role.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:chain-copy-lag",
+        "deliberate:committee-unavailable",
+        "deliberate:owner-is-the-chain-creator"
+      ],
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/validations",
@@ -3443,14 +4036,6 @@
     }
   ],
   "open_gaps": {
-    "item-curation-filters": {
-      "text": "GET /v1/collections/:id/items: upstream filters by each item's newest item curation. A status filter on a third-party collection, whatever status it names, lists the items whose newest curation is pending; synced, on any collection, lists the items whose newest curation is approved and whose local content hash equals (true) or differs from (false) its content hash; mappingStatus=unpublished_mapping on a third-party collection lists the items with mappings whose newest curation is not marked complete. The node lists nothing for status and synced, and every item with mappings for unpublished_mapping.",
-      "captures": [
-        "source/349-collection-items-curated-status.json"
-      ],
-      "closes": "The node filters a collection's items by their newest item curation as upstream does.",
-      "anchors": []
-    },
     "item-catalyst-state": {
       "text": "The node doesn't ask the catalyst about items: every body answers in_catalyst false and catalyst_content_hash null, a third-party item is approved and published only by the node's own records, and a third-party save checks a new URN against the node's items only. Upstream asks the catalyst for the item's entity: in_catalyst is whether it holds one, a third-party item held there is approved and published with its entity's merkle proof hash as catalyst_content_hash, and a third-party save refuses a URN the catalyst holds with 409.",
       "captures": [],

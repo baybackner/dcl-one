@@ -16,6 +16,11 @@ use uuid::Uuid;
 use crate::access::CurationGrant;
 use crate::http::ApiError;
 
+pub mod rows;
+pub mod slack;
+pub mod transitions;
+pub mod writes;
+
 /// A boolean over an item aliased `i`: the item was submitted for curation.
 /// A third-party item is published once this holds.
 pub const ITEM_CURATED: &str =
@@ -75,14 +80,16 @@ const LOCK_ITEM_COLLECTION: &str = "SELECT 1 FROM builder.collections c \
      JOIN builder.items i ON i.collection_id = c.id WHERE i.id = $1 FOR UPDATE OF c";
 
 /// Submits `item` for curation as its newest curation, inside the caller's
-/// transaction, with the item's collection locked until it ends.
+/// transaction, with the item's collection locked until it ends; the
+/// curation's id.
 pub async fn record_item_curation(
     conn: &mut PgConnection,
     item: Uuid,
     status: &str,
     content_hash: &str,
     is_mapping_complete: bool,
-) -> Result<(), ApiError> {
+) -> Result<Uuid, ApiError> {
+    let id = Uuid::new_v4();
     sqlx::query(LOCK_ITEM_COLLECTION)
         .bind(item)
         .execute(&mut *conn)
@@ -92,14 +99,14 @@ pub async fn record_item_curation(
          SELECT $1, $2, $3, $4, $5, at, at FROM (SELECT {} AS at) stamp",
         stamp_after("item_curations", "item_id")
     )))
-    .bind(Uuid::new_v4())
+    .bind(id)
     .bind(item)
     .bind(status)
     .bind(content_hash)
     .bind(is_mapping_complete)
     .execute(conn)
     .await?;
-    Ok(())
+    Ok(id)
 }
 
 /// Records a new curation of the collection `grant` names as its newest,
