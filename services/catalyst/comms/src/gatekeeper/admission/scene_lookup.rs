@@ -26,17 +26,6 @@ pub(crate) fn signed_realm_url(metadata: &Value) -> Option<&str> {
     metadata.pointer("/realm/hostname").and_then(Value::as_str)
 }
 
-/// The place a scene-signed request stands on: the world name for a world
-/// realm, else the scene id.
-pub fn place_from_metadata(meta: &Value) -> Option<String> {
-    if let Some(realm) = realm_name_from_metadata(meta)
-        && is_world_realm_name(&realm)
-    {
-        return Some(realm);
-    }
-    meta_str(meta, "sceneId")
-}
-
 /// The key the scene-bans listings use: a world realm keys on its scene hash
 /// when the metadata carries one, else on the world name (resolved below).
 pub(crate) fn listing_key_candidate(meta: &Value) -> Option<String> {
@@ -304,8 +293,16 @@ pub async fn try_load_place_info(
 pub struct PlaceLookup<'a> {
     state: &'a CommsState,
     place_id: String,
+    /// The `social.scene_admins.place_id` of the explicit admins: the place
+    /// of a scene (`ActiveDeployment::place_key`), or [`NO_ADMINS`].
+    admin_key: String,
     cell: tokio::sync::OnceCell<Result<Option<PlaceInfo>, String>>,
 }
+
+/// The admin key of a lookup that no `/scene-admin` grant reaches: a
+/// catalogue place or a whole world. `place_id` is never that key: the
+/// identity of a world scene can equal the id of an imported place.
+pub const NO_ADMINS: &str = "";
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -315,35 +312,41 @@ pub(crate) mod test_support {
         id: &str,
         info: PlaceInfo,
     ) -> PlaceLookup<'a> {
-        PlaceLookup {
-            state,
-            place_id: id.to_owned(),
-            cell: tokio::sync::OnceCell::new_with(Some(Ok(Some(info)))),
-        }
+        PlaceLookup::resolved(state, id, info, id)
     }
 }
 
 impl<'a> PlaceLookup<'a> {
     /// A place already bound to a current deployment by the ONE resolver.
     /// Moderation requests share this footprint for policy and room effects.
-    pub(crate) fn resolved(state: &'a CommsState, place_id: &str, info: PlaceInfo) -> Self {
+    pub(crate) fn resolved(
+        state: &'a CommsState,
+        place_id: &str,
+        info: PlaceInfo,
+        admin_key: &str,
+    ) -> Self {
         Self {
-            state,
-            place_id: place_id.to_owned(),
             cell: tokio::sync::OnceCell::new_with(Some(Ok(Some(info)))),
+            ..Self::new(state, place_id, admin_key)
         }
     }
 
-    pub fn new(state: &'a CommsState, place_id: &str) -> Self {
+    pub fn new(state: &'a CommsState, place_id: &str, admin_key: &str) -> Self {
         Self {
             state,
             place_id: place_id.to_string(),
+            admin_key: admin_key.to_string(),
             cell: tokio::sync::OnceCell::new(),
         }
     }
 
     pub fn place_id(&self) -> &str {
         &self.place_id
+    }
+
+    /// The `social.scene_admins.place_id` of this place's explicit admins.
+    pub fn admin_key(&self) -> &str {
+        &self.admin_key
     }
 
     /// `Err` carries the catalogue error text; callers map it to their status.

@@ -1858,7 +1858,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let rooms = scene::resolve_rooms(
         &state,
         &ctx(&genesis, "main", "bafkreiabc", Some("10,21")),
-        &PlaceLookup::new(&state, &genesis),
+        &PlaceLookup::new(&state, &genesis, &genesis),
     )
     .await
     .unwrap();
@@ -1866,7 +1866,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let err = scene::resolve_rooms(
         &state,
         &ctx(&genesis, "main", "bafkreiabc", Some("99,99")),
-        &PlaceLookup::new(&state, &genesis),
+        &PlaceLookup::new(&state, &genesis, &genesis),
     )
     .await
     .unwrap_err();
@@ -1877,7 +1877,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let err = scene::resolve_rooms(
         &state,
         &ctx(&genesis, &world, "bafkreiabc", None),
-        &PlaceLookup::new(&state, &genesis),
+        &PlaceLookup::new(&state, &genesis, &genesis),
     )
     .await
     .unwrap_err();
@@ -1888,7 +1888,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let rooms = scene::resolve_rooms(
         &state,
         &ctx(&world_place, &world, &world, None),
-        &PlaceLookup::new(&state, &world_place),
+        &PlaceLookup::new(&state, &world_place, &world_place),
     )
     .await
     .unwrap();
@@ -1906,7 +1906,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let rooms = scene::resolve_rooms(
         &state,
         &RoomContext::from_metadata(&serde_json::json!({}), &world_place),
-        &PlaceLookup::new(&state, &world_place),
+        &PlaceLookup::new(&state, &world_place, &world_place),
     )
     .await
     .unwrap();
@@ -1918,7 +1918,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     let err = scene::resolve_rooms(
         &state,
         &ctx("no-such-place", "main", "bafkreiabc", Some("10,20")),
-        &PlaceLookup::new(&state, "no-such-place"),
+        &PlaceLookup::new(&state, "no-such-place", "no-such-place"),
     )
     .await
     .unwrap_err();
@@ -1937,7 +1937,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
         scene::resolve_rooms(
             &unconfigured,
             &ctx("no-such-place", "main", "x", None),
-            &PlaceLookup::new(&unconfigured, "no-such-place")
+            &PlaceLookup::new(&unconfigured, "no-such-place", "no-such-place")
         )
         .await
         .unwrap()

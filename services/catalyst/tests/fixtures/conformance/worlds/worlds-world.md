@@ -519,8 +519,10 @@ tree, and orders by name (upstream: group order). `owner` is `null` for worlds w
     - dcl-one strips `.dcl.eth` for locally published worlds (`WORLDS_REALM_NAME_STRIP_ENS`, default true) and applies
       `realm_name_override` (`about.rs:209-210,303-326`); worlds-compatibility.md, "Realm name".
     - Drop-in: a client that compares `realmName` with the world name gets a different string;
-      `WORLDS_REALM_NAME_STRIP_ENS=false` gives a byte-equal answer.
-    - Severity: none (closed).
+      `WORLDS_REALM_NAME_STRIP_ENS=false` gives a byte-equal answer. A client that signs the stripped name back
+      reaches the world: with a realm URL, or (the Unity explorer on `/get-scene-adapter`) as realm and as scene.
+      An override is not resolved in that second form: the client gets the shared room `scene:<name>:<name>`.
+    - Severity: none for the stripped name (closed); low for an override signed without a realm URL (open).
 
 13. **WW-13 · `/about` · operator disable and live-holder quota block.** Status: intended (worlds-compatibility.md).
     - dcl-one: worlds-compatibility.md, "Operator disables apply at once".
