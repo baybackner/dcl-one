@@ -57,11 +57,21 @@
 //! Apple's latest refund decision per transaction (a `REFUND` or a
 //! `REFUND_REVERSED`, with its `signedDate`) is kept in
 //! `credits.iap_refund_decisions`, written under the transaction lock even
-//! when the purchase is not refunded or has no row yet. A refund or reversal
-//! signed before the recorded decision is stale: it is recorded under its
-//! uuid and applies nothing, so a reversal delivered before its refund keeps
-//! that refund from charging the wallet. An operator refund is not signed by
-//! Apple and is not compared.
+//! when the purchase is not refunded or has no row yet. Decisions are
+//! ordered by `signedDate`, then by notification uuid (bytewise), so two
+//! signed in the same millisecond end the same in either delivery order. A
+//! refund or reversal ordered before the recorded decision is stale: it is
+//! recorded under its uuid and applies nothing, so a reversal delivered
+//! before its refund keeps that refund from charging the wallet. An operator
+//! refund is not signed by Apple and records nothing; it is refused while
+//! the latest decision is a reversal unless the operator overrides it. A
+//! revoked transaction signed before a recorded reversal applies nothing.
+//! An operator reversal (`/admin/iap/reversals`) undoes a refund as Apple's
+//! does, for a `REFUND_REVERSED` too old to deliver.
+//!
+//! The account token is derived from the wallet address, so a purchase is
+//! credited to the wallet its token names whichever device bought it, and
+//! its refund charges that wallet back, as credits-server does.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -239,6 +249,8 @@ pub struct Purchase<'a> {
     pub channel: Channel,
     /// The notification that delivered it, if any.
     pub notice: Option<Notice<'a>>,
+    /// The transaction's own `signedDate`, in milliseconds since the epoch.
+    pub signed_date_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,7 +328,7 @@ pub enum RefundOutcome {
     },
     AlreadyRefunded,
     /// Signed before the transaction's latest refund decision (a refund or
-    /// reversal): applies nothing.
+    /// reversal), or an operator refund after Apple's reversal: applies nothing.
     Superseded,
     /// Not credited on this node: a `refunded` row now keeps it from being credited.
     NotCredited,
@@ -336,9 +348,10 @@ pub enum ReinstateOutcome {
     /// The purchase stands but is not credited here: no row, a held one, or
     /// a refund of a purchase never credited, now held. Credit it.
     Uncredited,
-    /// No refund of this transaction to reverse, or signed before its latest
-    /// refund decision.
+    /// No refund of this transaction to reverse.
     NotRefunded,
+    /// Signed before the transaction's latest refund decision: applies nothing.
+    Superseded,
 }
 
 /// A paid purchase not credited yet.
@@ -433,15 +446,46 @@ fn signed_at(n: Notice<'_>) -> Result<chrono::NaiveDateTime, ApiError> {
         .naive_utc())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
     Refund,
     Reversal,
 }
 
+impl Decision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Refund => "refund",
+            Self::Reversal => "reversal",
+        }
+    }
+}
+
+/// The transaction's latest recorded refund decision and its `signedDate`.
+async fn latest_decision(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction_id: &str,
+) -> Result<Option<(Decision, chrono::NaiveDateTime)>, ApiError> {
+    let row: Option<(String, chrono::NaiveDateTime)> = sqlx::query_as(
+        "SELECT decision, signed_at FROM credits.iap_refund_decisions WHERE transaction_id = $1",
+    )
+    .bind(transaction_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|(d, at)| {
+        let d = if d == Decision::Reversal.as_str() {
+            Decision::Reversal
+        } else {
+            Decision::Refund
+        };
+        (d, at)
+    }))
+}
+
 /// Records `notice` as the transaction's latest refund decision; false when
-/// one signed later is recorded, so this one is stale. Without a notice (an
-/// operator refund) nothing is compared.
+/// one ordered after it is recorded, so this one is stale. Decisions order by
+/// `signedDate`, then uuid bytewise; a retry of the recorded one is not stale.
+/// Without a notice (an operator refund) nothing is compared.
 async fn record_decision(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction_id: &str,
@@ -455,13 +499,11 @@ async fn record_decision(
          ON CONFLICT (transaction_id) DO UPDATE SET decision = EXCLUDED.decision, \
              signed_at = EXCLUDED.signed_at, notification_uuid = EXCLUDED.notification_uuid, \
              updated_at = timezone('UTC', now()) \
-         WHERE d.signed_at <= EXCLUDED.signed_at",
+         WHERE (d.signed_at, d.notification_uuid COLLATE \"C\") \
+               <= (EXCLUDED.signed_at, EXCLUDED.notification_uuid COLLATE \"C\")",
     )
     .bind(transaction_id)
-    .bind(match decision {
-        Decision::Refund => "refund",
-        Decision::Reversal => "reversal",
-    })
+    .bind(decision.as_str())
     .bind(signed_at(n)?)
     .bind(n.uuid)
     .execute(&mut **tx)
@@ -569,6 +611,16 @@ impl Credits {
             }
         }
         if p.revoked {
+            // Apple reversed the refund after signing this: it changes nothing.
+            if let Some((Decision::Reversal, at)) =
+                latest_decision(&mut tx, p.transaction_id).await?
+                && p.signed_date_ms.is_none_or(|ms| {
+                    chrono::DateTime::from_timestamp_millis(ms).is_none_or(|t| t.naive_utc() <= at)
+                })
+            {
+                tx.commit().await?;
+                return Ok(CreditOutcome::Revoked);
+            }
             // Recorded, so a later delivery of the same purchase is not credited either.
             sqlx::query(
                 "INSERT INTO credits.iap_transactions AS t \
@@ -695,7 +747,13 @@ impl Credits {
     /// Reverses one App Store transaction once; see the module docs.
     /// `product_id` is `None` for an operator refund, which records nothing
     /// for a transaction never seen. `percentage` is the refunded share in
-    /// thousandths of a percent; `None` refunds all of it.
+    /// thousandths of a percent; `None` refunds all of it. An operator refund
+    /// while Apple's latest decision is a reversal answers `Superseded` unless
+    /// `override_reversal`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the notification's fields and the operator's override, each used once"
+    )]
     pub async fn refund_iap(
         &self,
         transaction_id: &str,
@@ -704,6 +762,7 @@ impl Credits {
         reason: &str,
         percentage: Option<i64>,
         notice: Option<Notice<'_>>,
+        override_reversal: bool,
     ) -> Result<RefundOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
@@ -725,6 +784,16 @@ impl Credits {
         }
         if !record_decision(&mut tx, transaction_id, Decision::Refund, notice).await? {
             tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund signed before the transaction's latest refund decision: not applied");
+            tx.commit().await?;
+            return Ok(RefundOutcome::Superseded);
+        }
+        if notice.is_none()
+            && !override_reversal
+            && matches!(
+                latest_decision(&mut tx, transaction_id).await?,
+                Some((Decision::Reversal, _))
+            )
+        {
             tx.commit().await?;
             return Ok(RefundOutcome::Superseded);
         }
@@ -876,7 +945,8 @@ impl Credits {
     /// be on chain), and a block it raised, that no operator or later
     /// reversal took over, is lifted (and audited) once the balance covers
     /// the live pledges. A refund of a purchase never credited becomes a
-    /// `held` row, committed before the caller credits it.
+    /// `held` row, committed before the caller credits it. Without a notice
+    /// (an operator reversal) no decision is compared or recorded.
     pub async fn reinstate_iap(
         &self,
         transaction_id: &str,
@@ -900,7 +970,7 @@ impl Credits {
         if !record_decision(&mut tx, transaction_id, Decision::Reversal, notice).await? {
             tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the transaction's latest refund decision: not applied");
             tx.commit().await?;
-            return Ok(ReinstateOutcome::NotRefunded);
+            return Ok(ReinstateOutcome::Superseded);
         }
         // The decision commits; the credit that follows records the notification.
         let Some(row) = row else {

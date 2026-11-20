@@ -6,7 +6,8 @@
 //!   that does not verify answers 400; once verified, `ONE_TIME_CHARGE`
 //!   credits the wallet registered for the transaction's account token and
 //!   `REFUND` reverses it (`REFUND_REVERSED` undoes that; either one signed
-//!   before the transaction's latest refund decision applies nothing). A purchase not
+//!   before the transaction's latest refund decision answers `superseded` and
+//!   applies nothing). A purchase not
 //!   credited is held (`credits::iap`). A notification whose `signedDate` is
 //!   older than the accepted window (`credits::apple`) is refused with 200, so
 //!   Apple stops sending it; one already applied (its `notificationUUID`
@@ -26,9 +27,13 @@
 //!   account token.
 //! - operator `POST /credits/iap` (`/admin/iap/credits`) and
 //!   `POST /credits/iap/refund` (`/admin/iap/refunds`): the same credit and
-//!   reversal for support, behind the operator bearer; the credit is held
-//!   to the node's daily ceiling, not the per-wallet caps. Operator
-//!   `GET /credits/iap/held` (`/admin/iap/held`) lists the held purchases.
+//!   refund for support, behind the operator bearer; the credit is held
+//!   to the node's daily ceiling, not the per-wallet caps, and the refund
+//!   is refused (409) while Apple's latest decision is a reversal unless the
+//!   body sets `overrideReversal`. Operator `POST /credits/iap/reversal`
+//!   (`/admin/iap/reversals`) undoes a refund as `REFUND_REVERSED` does; a
+//!   purchase never credited becomes held, for `/admin/iap/credits`.
+//!   Operator `GET /credits/iap/held` (`/admin/iap/held`) lists the held purchases.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
@@ -76,35 +81,30 @@ pub async fn webhook(
         .ok_or_else(|| ApiError::bad_request("missing signedPayload"))?;
     let notification = match iap.verifier.notification(&signed, now()) {
         Ok(n) => n,
-        // Signed by Apple but too old: a retry carries the same signedDate.
-        Err(VerifyError::Expired {
-            notification_uuid,
-            signed_date_ms,
-        }) => {
-            tracing::warn!(
+        Err(e) => {
+            let Some((notification_uuid, signed_date_ms)) = e.out_of_window() else {
+                tracing::warn!(error = %e, "app store notification refused");
+                return Err(ApiError::bad_request("invalid signedPayload"));
+            };
+            // Too old: refused for good, since a retry carries the same signedDate.
+            if matches!(e, VerifyError::Expired { .. }) {
+                tracing::warn!(
+                    notification_uuid = %notification_uuid,
+                    signed_date_ms,
+                    "app store notification refused: signedDate older than the accepted window; apply it through /admin/iap/credits, /admin/iap/refunds or /admin/iap/reversals"
+                );
+                return Ok(Json(
+                    json!({ "ok": true, "error": "signed_date_out_of_window" }),
+                ));
+            }
+            // Ahead of this node's clock: answered for a retry. Apple's last retry
+            // comes 157 hours after the first, so a clock that stays behind loses it.
+            tracing::error!(
                 notification_uuid = %notification_uuid,
                 signed_date_ms,
-                "app store notification refused: signedDate older than the accepted window; credit or refund it through /admin/iap/credits or /admin/iap/refunds"
-            );
-            return Ok(Json(
-                json!({ "ok": true, "error": "signed_date_out_of_window" }),
-            ));
-        }
-        // Ahead of this node's clock: answered for a retry, which a node with a correct clock accepts.
-        Err(VerifyError::Ahead {
-            notification_uuid,
-            signed_date_ms,
-        }) => {
-            tracing::warn!(
-                notification_uuid = %notification_uuid,
-                signed_date_ms,
-                "app store notification refused: signedDate ahead of this node's clock; answered for a retry"
+                "app store notification refused: signedDate ahead of this node's clock; answered for a retry, check the node's clock"
             );
             return Err(ApiError::service_unavailable("signed_date_ahead"));
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "app store notification refused");
-            return Err(ApiError::bad_request("invalid signedPayload"));
         }
     };
     let uuid = notification.notification_uuid.as_str();
@@ -136,6 +136,7 @@ pub async fn webhook(
                     &reason,
                     t.revocation_percentage,
                     notice,
+                    false,
                 )
                 .await?
             {
@@ -176,6 +177,8 @@ pub async fn webhook(
             ReinstateOutcome::NotRefunded => {
                 Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
             }
+            // Signed before the transaction's latest refund or reversal.
+            ReinstateOutcome::Superseded => Ok(Json(json!({ "ok": true, "action": "superseded" }))),
         },
         "TEST" => Ok(Json(json!({ "ok": true, "test": true }))),
         other => {
@@ -211,6 +214,7 @@ async fn charge(
                 revoked: t.revoked,
                 channel: Channel::Notification,
                 notice,
+                signed_date_ms: t.signed_date_ms,
             },
         )
         .await?;
@@ -299,6 +303,7 @@ pub async fn verify(
                 revoked: t.revoked,
                 channel: Channel::Device,
                 notice: None,
+                signed_date_ms: t.signed_date_ms,
             },
         )
         .await?;
@@ -440,6 +445,7 @@ pub async fn admin_credit(
                 revoked: false,
                 channel: Channel::Operator,
                 notice: None,
+                signed_date_ms: None,
             },
         )
         .await?;
@@ -476,6 +482,9 @@ pub struct AdminRefundBody {
     #[serde(rename = "refundId")]
     refund_id: String,
     reason: String,
+    /// Refund even though Apple's latest decision reversed a refund.
+    #[serde(rename = "overrideReversal", default)]
+    override_reversal: bool,
 }
 
 pub async fn admin_refund(
@@ -499,6 +508,7 @@ pub async fn admin_refund(
             &b.reason,
             None,
             None,
+            b.override_reversal,
         )
         .await?
     {
@@ -511,16 +521,60 @@ pub async fn admin_refund(
             "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id,
             "refundId": b.refund_id, "removed": removed, "shortfall": shortfall, "revocations": revocations,
         }))),
-        // An operator refund carries no notice, so it is never superseded.
-        RefundOutcome::AlreadyRefunded | RefundOutcome::Superseded => {
+        RefundOutcome::AlreadyRefunded => {
             Err(ApiError::conflict("this transaction was already refunded"))
         }
+        RefundOutcome::Superseded => Err(ApiError::conflict(
+            "Apple reversed this transaction's refund; send overrideReversal: true to refund it anyway",
+        )),
         RefundOutcome::HeldRefunded => Ok(Json(json!({
             "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id,
             "refundId": b.refund_id, "removed": "0", "shortfall": "0", "revocations": 0, "held": true,
         }))),
         RefundOutcome::NotCredited => Err(ApiError::not_found(
             "no credited App Store transaction with this id",
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminReversalBody {
+    #[serde(rename = "appleTransactionId")]
+    apple_transaction_id: String,
+    /// Names this reversal; one reversal per refund grants once.
+    #[serde(rename = "reversalId")]
+    reversal_id: String,
+}
+
+/// Operator reversal of a refund (a `REFUND_REVERSED` too old to deliver).
+pub async fn admin_reversal(
+    _admin: RequireAdmin,
+    State(state): State<SharedState>,
+    body: Result<Json<AdminReversalBody>, JsonRejection>,
+) -> Result<Json<JsonValue>, ApiError> {
+    configured(&state)?;
+    let Json(b) = body.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    validate_id("appleTransactionId", &b.apple_transaction_id)?;
+    validate_id("reversalId", &b.reversal_id)?;
+    let ids = json!({ "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id, "reversalId": b.reversal_id });
+    match state
+        .credits
+        .reinstate_iap(&b.apple_transaction_id, &b.reversal_id, None)
+        .await?
+    {
+        ReinstateOutcome::Reinstated {
+            credits, withdrawn, ..
+        } => Ok(Json(json!({
+            "creditId": ids["creditId"], "appleTransactionId": ids["appleTransactionId"],
+            "reversalId": ids["reversalId"], "credits": credits, "revocationsWithdrawn": withdrawn,
+        }))),
+        // Held now: credit it through /admin/iap/credits.
+        ReinstateOutcome::Uncredited => Ok(Json(json!({
+            "creditId": ids["creditId"], "appleTransactionId": ids["appleTransactionId"],
+            "reversalId": ids["reversalId"], "held": true,
+        }))),
+        ReinstateOutcome::NotRefunded | ReinstateOutcome::Superseded => Err(ApiError::conflict(
+            "no refund of this transaction to reverse",
         )),
     }
 }

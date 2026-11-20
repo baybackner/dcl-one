@@ -1567,8 +1567,8 @@ transaction, keyed by Apple's transaction id (`shop/src/credits/iap.rs`).
 Writers are the App Store notification (`POST /credits/apple/webhook`), the
 device's `POST /credits/credits/iap/verify` and the operator's
 `POST /credits/credits/iap` (a credit), and the notification's `REFUND` and
-`REFUND_REVERSED` and the operator's `POST /credits/credits/iap/refund` (a
-reversal and its undo). A credit takes a transaction-scoped advisory lock on
+`REFUND_REVERSED` and the operator's `POST /credits/credits/iap/refund` and
+`POST /credits/credits/iap/reversal` (a refund and its undo). A credit takes a transaction-scoped advisory lock on
 the transaction id, then the node-wide App Store lock, reads the caps over the
 wallet's rows and the node's last 24 hours, inserts the row and grants the
 Credits in one transaction. A paid purchase it cannot credit (a cap, the
@@ -1648,8 +1648,9 @@ records nothing. A notification signed more than 7 days ago is refused with
 200 and a warning (`credits::apple`); one signed more than 5 minutes ahead of
 the node's clock answers 503, so Apple retries it. A redelivery older than
 7 days (for example from Apple's notification history after an outage) is
-therefore refused: credit or refund it through `/admin/iap/credits` or
-`/admin/iap/refunds`. The credits outbox tick deletes rows whose `signed_at`
+therefore refused: apply it through `/admin/iap/credits`,
+`/admin/iap/refunds` or `/admin/iap/reversals` (a reversal of a purchase
+never credited leaves it held, for `/admin/iap/credits`). The credits outbox tick deletes rows whose `signed_at`
 is older than 7 days plus a day (`NOTIFICATION_RECORD_SECS`, a margin for
 clocks that differ between nodes), one bounded batch per tick
 (`iap_notifications_signed_idx`); the table holds about eight days of
@@ -1658,16 +1659,22 @@ notifications. Invariant: a uuid is recorded only with its effects.
 `credits.iap_refund_decisions` keeps Apple's latest refund decision per
 transaction id: whether it is a `REFUND` or a `REFUND_REVERSED`, its
 `signedDate` (`signed_at`) and its uuid. A notification's refund or reversal
-upserts it under the transaction lock, before it reads or changes the
-transaction's row, only when its `signedDate` is not older than the one
-recorded (`ON CONFLICT ... WHERE`, primary key); a reversal writes it even
-when the purchase is still `paid` or has no row yet. A refund or reversal
-signed before the recorded decision applies nothing and keeps its uuid
-record, so a reversal delivered before the refund it undoes keeps that
-refund from charging the wallet, and a reversal of an earlier refund never
-undoes a later one. An operator refund is not signed by Apple, so it neither
-reads nor writes the table. One row per transaction that Apple refunded or
-reversed, kept like its `iap_transactions` row.
+upserts it under the transaction lock, before it changes the transaction's
+row, only when `(signed_at, notification_uuid)` (the uuid compared bytewise)
+is not ordered before the recorded pair (`ON CONFLICT ... WHERE`, primary
+key), so a retry of the recorded notification still applies and two
+decisions signed in the same millisecond end alike in either delivery order;
+a reversal writes it even when the purchase is still `paid` or has no row
+yet. A refund or reversal ordered before the recorded decision applies
+nothing and keeps its uuid record, so a reversal delivered before the refund
+it undoes keeps that refund from charging the wallet, and a reversal of an
+earlier refund never undoes a later one. A revoked transaction (from the
+device or a purchase notification) signed before a recorded reversal applies
+nothing. Operator refunds and reversals are not signed by Apple, so they
+write nothing; an operator refund reads the table and answers 409 while the
+latest decision is a reversal, unless the request sets `overrideReversal`.
+One row per transaction that Apple refunded or reversed, kept like its
+`iap_transactions` row.
 
 The bootstrap defines the four tables; an existing database gains them from
 the object pass, so no step exists.

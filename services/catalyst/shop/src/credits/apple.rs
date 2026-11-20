@@ -101,6 +101,23 @@ pub enum VerifyError {
     },
 }
 
+impl VerifyError {
+    /// The verified uuid and `signedDate` of a notification outside the window.
+    pub fn out_of_window(&self) -> Option<(&str, i64)> {
+        match self {
+            Self::Expired {
+                notification_uuid,
+                signed_date_ms,
+            }
+            | Self::Ahead {
+                notification_uuid,
+                signed_date_ms,
+            } => Some((notification_uuid, *signed_date_ms)),
+            _ => None,
+        }
+    }
+}
+
 /// The fields of a verified transaction the credits flow reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
@@ -113,6 +130,8 @@ pub struct Transaction {
     pub revoked: bool,
     /// The share Apple refunded, in thousandths of a percent (`revocationPercentage`); `None` is all of it.
     pub revocation_percentage: Option<i64>,
+    /// `signedDate`, in milliseconds since the epoch.
+    pub signed_date_ms: Option<i64>,
 }
 
 /// A verified notification; `transaction` is `None` for one that carries none (TEST, summaries).
@@ -250,6 +269,7 @@ impl Verifier {
                 .get("revocationPercentage")
                 .and_then(JsonValue::as_i64)
                 .filter(|v| (1..100_000).contains(v)),
+            signed_date_ms: p.get("signedDate").and_then(JsonValue::as_i64),
         })
     }
 
@@ -850,24 +870,14 @@ mod tests {
         let now = now();
         let at = |secs: i64| {
             let signed = c.notification_signed_at("TEST", None, Chain::app_data(), secs * 1000);
-            // The uuid is random: only its presence is compared.
-            v.notification(&signed, now).map_err(|e| match e {
-                VerifyError::Expired {
-                    notification_uuid,
-                    signed_date_ms,
-                } if notification_uuid.starts_with("uuid-") => VerifyError::Expired {
-                    notification_uuid: "uuid".into(),
-                    signed_date_ms,
-                },
-                VerifyError::Ahead {
-                    notification_uuid,
-                    signed_date_ms,
-                } if notification_uuid.starts_with("uuid-") => VerifyError::Ahead {
-                    notification_uuid: "uuid".into(),
-                    signed_date_ms,
-                },
-                other => other,
-            })
+            v.notification(&signed, now)
+        };
+        // The uuid is random: only its presence is compared.
+        let refused = |r: Result<Notification, VerifyError>| {
+            let e = r.unwrap_err();
+            let (uuid, ms) = e.out_of_window().expect("outside the window");
+            assert!(!uuid.is_empty());
+            (matches!(e, VerifyError::Expired { .. }), ms)
         };
         // The oldest retry Apple sends and a small clock skew pass.
         assert_eq!(
@@ -877,21 +887,9 @@ mod tests {
         assert!(at(now - NOTIFICATION_MAX_AGE_SECS).is_ok());
         assert!(at(now + NOTIFICATION_MAX_FUTURE_SECS).is_ok());
         let old = now - NOTIFICATION_MAX_AGE_SECS - 1;
-        assert_eq!(
-            at(old).unwrap_err(),
-            VerifyError::Expired {
-                notification_uuid: "uuid".into(),
-                signed_date_ms: old * 1000
-            }
-        );
+        assert_eq!(refused(at(old)), (true, old * 1000));
         let ahead = now + NOTIFICATION_MAX_FUTURE_SECS + 1;
-        assert_eq!(
-            at(ahead).unwrap_err(),
-            VerifyError::Ahead {
-                notification_uuid: "uuid".into(),
-                signed_date_ms: ahead * 1000
-            }
-        );
+        assert_eq!(refused(at(ahead)), (false, ahead * 1000));
     }
 
     #[test]
