@@ -2220,6 +2220,136 @@ neither catalogue holds the place and no pending row for it remains. Its context
 `content.deployments` for shared-scene rooms, by primary key or world name.
 Neither table has an FK: queue rows outlive catalogue deletion.
 
+## Scene admin grants
+
+`social.scene_admins` (`schemas/40_social.sql`) holds the explicit admins of a
+scene, one row for each `(place_id, admin_address)`. `place_id` is the place of
+the scene, read from the active deployment by the room resolver
+(`ActiveDeployment::place_key`): the `explore.world_scene_place` identity of a
+world scene, the canonical base parcel of a Genesis scene. These are the keys
+that scene storage uses.
+
+Workload: one primary-key read for each scene-signed gatekeeper request of a
+wallet that is not the owner (`Policy::is_admin`: `/scene-admin`, `/scene-bans`,
+`/scene-stream-access`, `/cast/*`, the stream key recheck), and one read of a
+place's rows (tens at most) for `GET /scene-admin` and for a room metadata
+refresh. Writes are rare: one row for `POST` or `DELETE /scene-admin`, and the
+place removal cleanup.
+
+Invariants:
+
+- A redeploy writes no row. A redeploy of the same place (a world scene whose
+  footprint overlaps exactly one scene of its world, a Genesis scene on the
+  same base parcel) keeps every grant. A different place has none.
+- An owner change writes no row. Ownership is read when a request arrives.
+- The cleanup of a removed place (above) revokes the grants made before the
+  removal (`added_at`; a cleanup that runs late keeps the later ones): those
+  on the places of the active scenes of a world (`explore.world_scene_place`
+  by `world_name` on `world_scene_place_deployment_idx`; the id of a world
+  place is the world name or an imported id, never the key of a grant), or
+  those on the base parcel of a Genesis place when no enabled `explore.place`
+  row (`world`, `disabled`, `base_position`) has that base. A retired
+  world-scene identity is not bound to a deployment again, so no request
+  reads its grants.
+- The release script `schemas/releases/scene-admin-place-keys.sql` moves the
+  grants of active deployments from the entity id to the place. Stop all old
+  API replicas before `catalyst schema migrate`, apply the script with the
+  administrative database role, then start the updated binaries: an old
+  binary reads and writes grants by entity id. `catalyst serve` refuses
+  startup while a grant of an active deployment has the entity key
+  (`ensure_scene_admin_place_release`). A binary-only rollback is not
+  supported after the move; restore the matching backup. An entity that is
+  active in several places (two worlds, a world and Genesis) gives each place
+  the grant. For one place and wallet the script keeps an active grant before
+  a revoked one, then the row with the newest change
+  (`COALESCE(removed_at, added_at)`), also against a row the place already
+  has. It removes each entity row that it moved.
+- A row keeps the entity key when its entity is not deployed, or has no
+  parcel that parses. A world scene with no active identity reads its grants
+  by entity id, so a retired world scene still reads such a row inside its
+  eviction window (`SCENE_EVICTION_TTL_MS`). No job deletes these rows: after
+  that window no request reads them and they stay (tens of rows at most).
+- `social.scene_base_parcel(parcels, declared_base)` is the one SQL copy of
+  the effective base parcel that the room resolver computes
+  (`ParcelSet::effective_base`). The release script and the import loads of
+  scene admins and scene bans call it; `the_sql_base_parcel_is_the_resolvers`
+  compares the two.
+
+## Stream key notifications
+
+A Cast stream key (`social.scene_stream_access`) is stale when the scene of its
+room was deployed again or removed, or when its minter lost the place. The
+gatekeeper checks a key on each use and in its key job
+(`comms-streaming-key-recheck`: 20 keys each 600 s in place order, so every
+key in `ceil(keys / 20) * 10` minutes; its cursor moves with each key and
+lives in the process, and the expiry of keys is a job of its own). Its listener
+(`gatekeeper::streaming::cast::listen`, the leased job
+`comms-streaming-key-listener`, so one `serve` process) runs that check at once
+for the place a write names, on two channels:
+
+- `new_deployment`, payload `<entity type>:<entity id>`: each
+  `content.deployments` insert and `content.unpublish_scene_*`. The listener
+  keeps the scenes and checks the key of the Genesis scene that the entity is
+  or replaced (`content.deployments` by `entity_id` and `deleter_deployment`).
+- `world_authority`, payload `world:<name>`: `worlds.notify_world_authority`
+  on a local scene inserted in or deleted from `worlds.world_scenes`, an owner
+  change in `worlds.worlds`, a `worlds.world_permissions` delete and a
+  `worlds.world_permission_parcels` insert (a grant narrowed to parcels no
+  longer holds the world's key). The listener checks the keys of the world's
+  scene rooms.
+
+Workload: a synced node sends hundreds to a few thousand scene messages a day,
+thousands in a burst during a first sync; world writes are tens a day and the
+world mirror sends none. One message is one read of the active keys of its
+place (`split_part(room_id, ':', 3)` or `starts_with(room_id, ...)` over the
+active rows, hundreds at most) and one authority decision for each key found,
+usually none. The check of every key at a subscription is one authority
+decision for each active key: a LAND or NAME read, or a world permission
+read, each bounded by its own timeout.
+
+Invariants:
+
+- `LISTEN` belongs to a session: the listener holds one connection of the
+  serve pool.
+- A payload names a public place: no address, no secret. Every role may
+  `LISTEN` and `NOTIFY`; a payload only selects keys for the check, which reads
+  the authority again. The world payload is cut at 1000 characters, so
+  `pg_notify` (8000 bytes) never fails the write.
+- PostgreSQL keeps no message for a session that is away: each subscription
+  starts with a check of every active key, and the key job stays.
+- The payloads that wait are a set: the messages for one place that arrive
+  during a check are one more check, not one for each message.
+- Two listeners during a lease change are safe: a revocation is one
+  conditional update of the key row.
+- An existing database gains the function and its triggers from the object
+  pass of `catalyst schema migrate`; no step exists.
+
+Not announced: a LAND owner or operator change, a NAME transfer until the
+owner reconcile writes `worlds.worlds.owner`, a ban. The key job and the check
+on each use cover them. A scene admin removal checks the key in its own
+request.
+
+## Stream state reconciliation
+
+The streaming job (`comms-streaming-ttl`, each 60 s) makes the `streaming`
+flag of `social.scene_stream_access` agree with LiveKit when a webhook was
+lost. One pass reads at most 20 streaming credentials (flag up, no stream: a
+lost `ingress_ended`), then at most 20 idle ones (flag down, the ingress
+publishes: a lost `ingress_started`), each kind the ones checked longest ago
+on its own partial index: `scene_stream_access_reconcile_idx` (`WHERE active
+AND streaming`) and `scene_stream_access_reconcile_idle_idx` (`WHERE active
+AND NOT streaming`). Each row read is one LiveKit `ListIngress` call and one
+update of `streaming_checked_at`.
+
+Workload: active credentials are one for each place with a key, hundreds at
+most; streams live at once are tens. A streaming credential is read again
+within `ceil(streaming / 20)` minutes and an idle one within
+`ceil(idle / 20)` minutes: the idle keys do not delay a live stream.
+
+An existing database gains the idle index from the object pass of `catalyst
+schema migrate` (a new name, built in the migrate transaction on a table of
+hundreds of rows); no step exists and no index is replaced.
+
 ## Player report intake workload
 
 The player report intake (the node area `/report-user`,
