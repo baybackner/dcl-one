@@ -51,7 +51,7 @@ use std::f32::consts::PI;
 const SKY_ENVMAP_SHADER_HANDLE: Handle<Shader> =
     weak_handle!("6b2f4c7e-3a1d-4f8e-9c2b-7d5e1a0f3b64");
 
-const SPECULAR_SIZE: u32 = 128;
+pub(super) const SPECULAR_SIZE: u32 = 128;
 const SPECULAR_MIPS: u32 = 8;
 const SPECULAR_SAMPLES: u32 = 32;
 // the low setting: one texel per face, straight from the (unfiltered) sky

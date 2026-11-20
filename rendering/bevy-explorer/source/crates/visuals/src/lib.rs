@@ -23,10 +23,10 @@ use bevy::{
     render::view::{Layer, RenderLayers},
 };
 
-use bevy::render::{Render, RenderApp, RenderSet};
+use bevy::render::RenderApp;
 use bevy_atmosphere::{
     model::AddAtmosphereModel,
-    pipeline::{AtmosphereImageBindGroupLayout, AtmosphereUpdateEvent},
+    pipeline::AtmosphereImageBindGroupLayout,
     prelude::{AtmosphereCamera, AtmosphereModel, AtmospherePlugin, AtmosphereSettings},
     system_param::AtmosphereMut,
 };
@@ -42,7 +42,10 @@ use common::{
     },
 };
 use console::DoAddConsoleCommand;
-use scene_runner::update_world::lights::{moon_direction, SUN_COLOR_NOON};
+use scene_runner::{
+    initialize_scene::TestingData,
+    update_world::lights::{moon_direction, SUN_COLOR_NOON},
+};
 
 use crate::{
     coast::CoastPlugin,
@@ -91,8 +94,14 @@ impl Plugin for VisualsPlugin {
             .add_systems(Update, update_dof)
             .add_systems(Startup, setup.in_set(SetupSets::Main));
 
+        // Scene snapshots need the reflection source at the probe's resolution.
+        let snapshots_only = app.world().resource::<TestingData>().test_scenes.is_some();
         app.insert_resource(AtmosphereSettings {
-            resolution: 1024,
+            resolution: if snapshots_only {
+                sky_envmap::SPECULAR_SIZE
+            } else {
+                1024
+            },
             dithering: true,
             skybox_creation_mode:
                 bevy_atmosphere::settings::SkyboxCreationMode::FromProjectionFarWithFallback(
@@ -128,23 +137,8 @@ impl Plugin for VisualsPlugin {
     }
 
     fn finish(&self, app: &mut App) {
-        let snapshots_only = app
-            .world()
-            .resource::<scene_runner::initialize_scene::TestingData>()
-            .test_scenes
-            .is_some();
-        let render_app = app.sub_app_mut(RenderApp);
-        render_app.init_resource::<AtmosphereImageBindGroupLayout>();
-        if snapshots_only {
-            // The player camera is inactive and snapshot cameras have no sky or
-            // environment map. Do not raymarch an unused 1024px sky cubemap every
-            // frame; scene lighting and snapshot rendering still run normally.
-            render_app.add_systems(
-                Render,
-                (|mut updates: ResMut<Events<AtmosphereUpdateEvent>>| updates.clear())
-                    .in_set(RenderSet::PrepareBindGroups),
-            );
-        }
+        app.sub_app_mut(RenderApp)
+            .init_resource::<AtmosphereImageBindGroupLayout>();
 
         app.add_atmosphere_model::<NishitaCloud>();
     }
