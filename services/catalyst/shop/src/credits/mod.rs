@@ -1296,6 +1296,7 @@ mod schema_tests {
             "iap_transactions",
             "iap_account_tokens",
             "iap_notifications",
+            "iap_refund_decisions",
         ] {
             assert!(
                 crate::db::SCHEMA_SQL.contains(&format!("CREATE TABLE credits.{table} (")),

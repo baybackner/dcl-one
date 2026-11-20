@@ -1,6 +1,7 @@
 // from: credits-server@d9c6a261f:src/logic/iap-mint.ts (mintIapCreditWithCapCheck, mintIapUsdTopUp), src/logic/iap-refund.ts (processRefund, refundUsd), src/logic/iap-quote.ts (evaluateIapPurchase), src/logic/iap-product-catalog.ts (IAP_PRODUCT_CATALOG_USD)
 //! App Store purchases of Credits (`credits.iap_transactions`,
-//! `credits.iap_account_tokens`, `credits.iap_notifications`).
+//! `credits.iap_account_tokens`, `credits.iap_notifications`,
+//! `credits.iap_refund_decisions`).
 //!
 //! A purchase is credited from Apple's signed transaction only: the product
 //! decides the Credits (`IAP_PRODUCT_CATALOG_USD`, product id to whole
@@ -51,8 +52,16 @@
 //! redelivery applies nothing. A notification Apple should retry (a held
 //! purchase of an unknown product or over the node's ceiling) and a reversal
 //! whose purchase is credited next, in its own transaction, are recorded by
-//! that credit instead. A reversal signed before the row's current refund
-//! (one whose record is kept) reverses an earlier refund and applies nothing.
+//! that credit instead.
+//!
+//! Apple's latest refund decision per transaction (a `REFUND` or a
+//! `REFUND_REVERSED`, with its `signedDate`) is kept in
+//! `credits.iap_refund_decisions`, written under the transaction lock even
+//! when the purchase is not refunded or has no row yet. A refund or reversal
+//! signed before the recorded decision is stale: it is recorded under its
+//! uuid and applies nothing, so a reversal delivered before its refund keeps
+//! that refund from charging the wallet. An operator refund is not signed by
+//! Apple and is not compared.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -306,6 +315,9 @@ pub enum RefundOutcome {
         revocations: usize,
     },
     AlreadyRefunded,
+    /// Signed before the transaction's latest refund decision (a later
+    /// reversal): applies nothing.
+    Superseded,
     /// Not credited on this node: a `refunded` row now keeps it from being credited.
     NotCredited,
     /// A `held` purchase, now `refunded`, so it is never credited.
@@ -324,7 +336,8 @@ pub enum ReinstateOutcome {
     /// The purchase stands but is not credited here: no row, a held one, or
     /// a refund of a purchase never credited, now held. Credit it.
     Uncredited,
-    /// No refund of this transaction to reverse.
+    /// No refund of this transaction to reverse, or signed before its latest
+    /// refund decision.
     NotRefunded,
 }
 
@@ -398,9 +411,7 @@ async fn claim(
     notice: Option<Notice<'_>>,
 ) -> Result<(), ApiError> {
     let Some(n) = notice else { return Ok(()) };
-    let signed_at = chrono::DateTime::from_timestamp_millis(n.signed_date_ms)
-        .ok_or_else(|| ApiError::bad_request("signedDate out of range"))?
-        .naive_utc();
+    let signed_at = signed_at(n)?;
     let inserted = sqlx::query(
         "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) VALUES ($1, $2) \
          ON CONFLICT (notification_uuid) DO NOTHING",
@@ -414,6 +425,49 @@ async fn claim(
         return Err(ApiError::conflict("this notification is already applied"));
     }
     Ok(())
+}
+
+fn signed_at(n: Notice<'_>) -> Result<chrono::NaiveDateTime, ApiError> {
+    Ok(chrono::DateTime::from_timestamp_millis(n.signed_date_ms)
+        .ok_or_else(|| ApiError::bad_request("signedDate out of range"))?
+        .naive_utc())
+}
+
+#[derive(Clone, Copy)]
+enum Decision {
+    Refund,
+    Reversal,
+}
+
+/// Records `notice` as the transaction's latest refund decision; false when
+/// one signed later is recorded, so this one is stale. Without a notice (an
+/// operator refund) nothing is compared.
+async fn record_decision(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction_id: &str,
+    decision: Decision,
+    notice: Option<Notice<'_>>,
+) -> Result<bool, ApiError> {
+    let Some(n) = notice else { return Ok(true) };
+    let written = sqlx::query(
+        "INSERT INTO credits.iap_refund_decisions AS d \
+             (transaction_id, decision, signed_at, notification_uuid) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (transaction_id) DO UPDATE SET decision = EXCLUDED.decision, \
+             signed_at = EXCLUDED.signed_at, notification_uuid = EXCLUDED.notification_uuid, \
+             updated_at = timezone('UTC', now()) \
+         WHERE d.signed_at <= EXCLUDED.signed_at",
+    )
+    .bind(transaction_id)
+    .bind(match decision {
+        Decision::Refund => "refund",
+        Decision::Reversal => "reversal",
+    })
+    .bind(signed_at(n)?)
+    .bind(n.uuid)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(written == 1)
 }
 
 /// Drops the claim of a notification whose effects commit without it.
@@ -664,6 +718,16 @@ impl Credits {
         .bind(refund_ref)
         .fetch_optional(&mut *tx)
         .await?;
+        // A redelivered refund, even after its reversal, applies once.
+        if row.as_ref().is_some_and(|r| r.get::<bool, _>("applied")) {
+            tx.commit().await?;
+            return Ok(RefundOutcome::AlreadyRefunded);
+        }
+        if !record_decision(&mut tx, transaction_id, Decision::Refund, notice).await? {
+            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund signed before the transaction's latest reversal: not applied");
+            tx.commit().await?;
+            return Ok(RefundOutcome::Superseded);
+        }
         let Some(row) = row else {
             if let Some(product_id) = product_id {
                 sqlx::query(
@@ -677,19 +741,14 @@ impl Credits {
                 .bind(reason)
                 .execute(&mut *tx)
                 .await?;
-                tx.commit().await?;
             }
+            tx.commit().await?;
             return Ok(RefundOutcome::NotCredited);
         };
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
         let refunded: bool = row.get("refunded");
         let credited: bool = row.get("credited");
-        // A redelivered refund, even after its reversal, applies once.
-        if row.get::<bool, _>("applied") {
-            tx.commit().await?;
-            return Ok(RefundOutcome::AlreadyRefunded);
-        }
         match (status.as_str(), address) {
             ("held", _) => {
                 sqlx::query(
@@ -831,32 +890,33 @@ impl Credits {
         let row = sqlx::query(
             "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
                     refunded_at IS NOT NULL AS refunded, \
-                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream, \
-                    (SELECT n.signed_at FROM credits.iap_notifications n \
-                     WHERE n.notification_uuid = refund_ref) > $2 AS later_refund \
+                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
-        .bind(notice.and_then(|n| {
-            chrono::DateTime::from_timestamp_millis(n.signed_date_ms).map(|d| d.naive_utc())
-        }))
         .fetch_optional(&mut *tx)
         .await?;
-        // Dropping `tx` drops the claim too: the credit that follows records the notification.
-        let Some(row) = row else {
-            return Ok(ReinstateOutcome::Uncredited);
-        };
-        // Signed before the row's current refund: it reverses an earlier one.
-        if row.get::<Option<bool>, _>("later_refund") == Some(true) {
-            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the current refund: not applied");
+        // Signed before the latest decision (a later refund): it reverses an earlier one.
+        if !record_decision(&mut tx, transaction_id, Decision::Reversal, notice).await? {
+            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the transaction's latest refund: not applied");
             tx.commit().await?;
             return Ok(ReinstateOutcome::NotRefunded);
         }
+        // The decision commits; the credit that follows records the notification.
+        let Some(row) = row else {
+            release(&mut tx, notice).await?;
+            tx.commit().await?;
+            return Ok(ReinstateOutcome::Uncredited);
+        };
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
         let credited = row.get::<Option<String>, _>("credited_by").is_some();
         let address = match status.as_str() {
-            "held" => return Ok(ReinstateOutcome::Uncredited),
+            "held" => {
+                release(&mut tx, notice).await?;
+                tx.commit().await?;
+                return Ok(ReinstateOutcome::Uncredited);
+            }
             // An upstream purchase's marker (the import) is never cleared.
             "refunded" if row.get::<bool, _>("upstream") => {
                 tx.commit().await?;

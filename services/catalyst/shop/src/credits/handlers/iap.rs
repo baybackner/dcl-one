@@ -5,7 +5,8 @@
 //!   Notifications V2. The signed payload is the authentication: a payload
 //!   that does not verify answers 400; once verified, `ONE_TIME_CHARGE`
 //!   credits the wallet registered for the transaction's account token and
-//!   `REFUND` reverses it (`REFUND_REVERSED` undoes that). A purchase not
+//!   `REFUND` reverses it (`REFUND_REVERSED` undoes that; either one signed
+//!   before the transaction's latest refund decision applies nothing). A purchase not
 //!   credited is held (`credits::iap`). A notification whose `signedDate` is
 //!   older than the accepted window (`credits::apple`) is refused with 200, so
 //!   Apple stops sending it; one already applied (its `notificationUUID`
@@ -148,6 +149,10 @@ pub async fn webhook(
                 }))),
                 RefundOutcome::AlreadyRefunded => {
                     Ok(Json(json!({ "ok": true, "action": "already_refunded" })))
+                }
+                // Apple reversed this refund in a later notification.
+                RefundOutcome::Superseded => {
+                    Ok(Json(json!({ "ok": true, "action": "superseded" })))
                 }
                 RefundOutcome::NotCredited | RefundOutcome::HeldRefunded => {
                     tracing::warn!(notification_uuid = %uuid, transaction_id = %t.transaction_id, "app store refund of a transaction never credited: recorded so it is never credited");
@@ -506,7 +511,8 @@ pub async fn admin_refund(
             "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id,
             "refundId": b.refund_id, "removed": removed, "shortfall": shortfall, "revocations": revocations,
         }))),
-        RefundOutcome::AlreadyRefunded => {
+        // An operator refund carries no notice, so it is never superseded.
+        RefundOutcome::AlreadyRefunded | RefundOutcome::Superseded => {
             Err(ApiError::conflict("this transaction was already refunded"))
         }
         RefundOutcome::HeldRefunded => Ok(Json(json!({

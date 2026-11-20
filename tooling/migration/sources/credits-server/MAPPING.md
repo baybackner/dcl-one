@@ -140,6 +140,6 @@ when every upstream flag really has expired or been lifted, rerun with
 - Left to the node: `packs`, `idempotency`, `captcha_challenges`, `carts`,
   `cart_items`, `checkouts`, `fulfillment_outbox`, `authorizations`,
   `authorization_lines`, `usage_settlements`, `revocations`, `usages`,
-  `usage_index_cursor`, `iap_notifications`.
+  `usage_index_cursor`, `iap_notifications`, `iap_refund_decisions`.
 
 No watermarks; every run re-scans and is idempotent.

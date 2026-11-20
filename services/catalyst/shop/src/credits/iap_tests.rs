@@ -1876,6 +1876,136 @@ async fn a_reversal_signed_before_the_current_refund_applies_nothing() {
     assert_eq!(available(&pool, &w.address).await, "0");
 }
 
+/// Status of the purchase, balance, whether the pledge is queued for
+/// revocation and whether the wallet is blocked.
+async fn standing(pool: &PgPool, id: &str, w: &Wallet, hash: &str) -> (String, String, bool, bool) {
+    (
+        row(pool, id).await.unwrap().0,
+        available(pool, &w.address).await,
+        queued(pool, hash).await,
+        blocked(pool, &w.address).await,
+    )
+}
+
+#[tokio::test]
+async fn a_reversal_delivered_before_its_refund_keeps_the_purchase_credited() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    // An applied refund would queue this pledge and block the wallet.
+    let hash = pledge(&pool, &w.address, 800, 0, 300).await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let at = |kind: &str, ms: i64| {
+        c.notification_signed_at(kind, Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    let refund = at("REFUND", now_ms - 2_000);
+    let reversal = at("REFUND_REVERSED", now_ms - 1_000);
+    let credited = ("paid".to_string(), "100".to_string(), false, false);
+
+    let (_, out) = notify(&app, reversal.clone()).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, credited);
+    let (status, out) = notify(&app, refund.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["action"], "superseded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, credited);
+
+    for signed in [&reversal, &refund] {
+        let (_, out) = notify(&app, signed.clone()).await;
+        assert_eq!(out["duplicate"], true, "{out}");
+        assert_eq!(standing(&pool, &id, &w, &hash).await, credited);
+    }
+    // Their records purged, the decision alone still refuses the refund.
+    forget(&pool, &reversal).await;
+    forget(&pool, &refund).await;
+    let (_, out) = notify(&app, reversal).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    let (_, out) = notify(&app, refund).await;
+    assert_eq!(out["action"], "superseded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, credited);
+}
+
+#[tokio::test]
+async fn a_reversal_before_any_purchase_row_keeps_its_older_refund_from_charging() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let at = |kind: &str, ms: i64| {
+        c.notification_signed_at(kind, Some(signed.clone()), Chain::app_data(), ms)
+    };
+    let (_, out) = notify(&app, at("REFUND_REVERSED", now_ms - 1_000)).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let hash = pledge(&pool, &w.address, 800, 0, 300).await;
+    let (_, out) = notify(&app, at("REFUND", now_ms - 2_000)).await;
+    assert_eq!(out["action"], "superseded", "{out}");
+    assert_eq!(
+        standing(&pool, &id, &w, &hash).await,
+        ("paid".to_string(), "100".to_string(), false, false)
+    );
+}
+
+#[tokio::test]
+async fn a_refund_delivered_before_an_older_reversal_stays_charged_back() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let hash = pledge(&pool, &w.address, 800, 0, 300).await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let at = |kind: &str, ms: i64| {
+        c.notification_signed_at(kind, Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    let refund = at("REFUND", now_ms - 1_000);
+    let reversal = at("REFUND_REVERSED", now_ms - 2_000);
+    let charged = ("refunded".to_string(), "0".to_string(), true, true);
+
+    let (_, out) = notify(&app, refund.clone()).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, charged);
+    let (_, out) = notify(&app, reversal.clone()).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, charged);
+
+    for signed in [&refund, &reversal] {
+        let (_, out) = notify(&app, signed.clone()).await;
+        assert_eq!(out["duplicate"], true, "{out}");
+        assert_eq!(standing(&pool, &id, &w, &hash).await, charged);
+    }
+    forget(&pool, &refund).await;
+    forget(&pool, &reversal).await;
+    let (_, out) = notify(&app, refund).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    let (_, out) = notify(&app, reversal).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(standing(&pool, &id, &w, &hash).await, charged);
+
+    // A second refund reference, signed after a reversal it is delivered
+    // before, is the latest decision even though it charges nothing again.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let at = |kind: &str, ms: i64| {
+        c.notification_signed_at(kind, Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    let (_, out) = notify(&app, at("REFUND", now_ms - 3_000)).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let (_, out) = notify(&app, at("REFUND", now_ms - 1_000)).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    let (_, out) = notify(&app, at("REFUND_REVERSED", now_ms - 2_000)).await;
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
 #[tokio::test]
 async fn a_second_refund_of_a_refunded_purchase_charges_nothing_back() {
     let Some(pool) = pool().await else { return };

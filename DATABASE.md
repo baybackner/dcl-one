@@ -1653,11 +1653,23 @@ therefore refused: credit or refund it through `/admin/iap/credits` or
 is older than 7 days plus a day (`NOTIFICATION_RECORD_SECS`, a margin for
 clocks that differ between nodes), one bounded batch per tick
 (`iap_notifications_signed_idx`); the table holds about eight days of
-notifications. A `REFUND_REVERSED` signed before the row's current refund
-(whose record is kept) reverses an earlier refund and applies nothing.
-Invariant: a uuid is recorded only with its effects.
+notifications. Invariant: a uuid is recorded only with its effects.
 
-The bootstrap defines the three tables; an existing database gains them from
+`credits.iap_refund_decisions` keeps Apple's latest refund decision per
+transaction id: whether it is a `REFUND` or a `REFUND_REVERSED`, its
+`signedDate` (`signed_at`) and its uuid. A notification's refund or reversal
+upserts it under the transaction lock, before it reads or changes the
+transaction's row, only when its `signedDate` is not older than the one
+recorded (`ON CONFLICT ... WHERE`, primary key); a reversal writes it even
+when the purchase is still `paid` or has no row yet. A refund or reversal
+signed before the recorded decision applies nothing and keeps its uuid
+record, so a reversal delivered before the refund it undoes keeps that
+refund from charging the wallet, and a reversal of an earlier refund never
+undoes a later one. An operator refund is not signed by Apple, so it neither
+reads nor writes the table. One row per transaction that Apple refunded or
+reversed, kept like its `iap_transactions` row.
+
+The bootstrap defines the four tables; an existing database gains them from
 the object pass, so no step exists.
 
 ## Credits checkout and broker claim edges

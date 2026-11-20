@@ -334,6 +334,20 @@ CREATE TABLE credits.iap_notifications (
 
 CREATE INDEX iap_notifications_signed_idx ON credits.iap_notifications (signed_at);
 
+-- Apple's latest refund decision per transaction (a `REFUND` or a
+-- `REFUND_REVERSED` notification, by `signedDate`), written under the
+-- transaction lock even when no purchase row exists yet; a refund or reversal
+-- signed before it applies nothing. Kept as long as the transaction's row.
+CREATE TABLE credits.iap_refund_decisions (
+    transaction_id text NOT NULL,
+    decision text NOT NULL,
+    signed_at timestamp without time zone NOT NULL,
+    notification_uuid text NOT NULL,
+    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT iap_refund_decisions_pkey PRIMARY KEY (transaction_id),
+    CONSTRAINT iap_refund_decisions_decision_check CHECK (decision IN ('refund', 'reversal'))
+);
+
 -- One open cart per wallet; the address is the natural key.
 CREATE TABLE credits.carts (
     id bigint GENERATED ALWAYS AS IDENTITY,

@@ -41,7 +41,7 @@ Not migrated, by reason:
 - Node-only state left to the node: packs (upstream packs are code), idempotency,
   captcha_challenges, carts, cart_items, checkouts, fulfillment_outbox,
   authorizations, authorization_lines, usage_settlements, revocations, usages,
-  usage_index_cursor, iap_notifications.
+  usage_index_cursor, iap_notifications, iap_refund_decisions.
 
 No step has a watermark; every run re-scans and the loads are idempotent
 (ledger rows by tx_ref, purchases by order_id, wallets and flags by address,
