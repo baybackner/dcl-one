@@ -11,6 +11,7 @@ import { COLLECTION_V2_DOMAIN, requireContracts } from "../chain/contracts";
 import { isSignatureDeclined, relayMetaTransaction, type MetaTxTarget } from "../chain/metatx";
 import { shopChainReader, waitForReceipt, type ChainReader } from "../chain/rpc";
 import { sendAndConfirm, TxPendingError, TxRevertedError } from "../chain/wallet";
+import { isRequestLimited } from "./errors";
 import { activeChainId } from "./network";
 import { canPayGasItself, showsWalletConfirmations } from "./wallet-kind";
 
@@ -125,7 +126,8 @@ export async function setAuthorization(opts: AuthorizationContext & { auth: Shop
       if (receipt.status === "reverted") throw new TxRevertedError(receipt, "The authorization");
       return;
     } catch (e) {
-      if (isSignatureDeclined(e) || e instanceof TxPendingError) throw e;
+      // A request limit frees up within seconds: the buyer waits and tries again, never pays gas for it.
+      if (isSignatureDeclined(e) || e instanceof TxPendingError || isRequestLimited(e)) throw e;
       // Unlike a purchase, this falls back to the wallet even when the relay may have sent the
       // call (`relayer-unreachable`): the same change applied twice leaves it applied once, so the
       // cost is a second prompt and its gas, and a web3 buyer can still approve or revoke while the

@@ -632,12 +632,12 @@ async fn an_unlisted_gateway_does_not_put_every_client_in_one_relay_bucket() {
 #[tokio::test]
 async fn relay_requests_from_one_ipv6_48_share_one_budget() {
     use crate::shared::limits::RateLimiter;
-    // Same budgets over an hour, so no token refills while the test runs.
-    let hour = std::time::Duration::from_secs(3600);
+    // Same budgets over a century: a token takes months to refill, so none does while the test runs.
+    let century = std::time::Duration::from_secs(100 * 365 * 24 * 3600);
     let mut slow = State::new(lazy_pool(), Outbound::for_tests(), Settings::for_tests())
         .expect("state builds");
-    slow.relay_limiter = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW, hour);
-    slow.relay_limiter_per_48 = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW_PER_48, hour);
+    slow.relay_limiter = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW, century);
+    slow.relay_limiter_per_48 = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW_PER_48, century);
     let relay: SharedState = Arc::new(slow);
     let app = crate::shared::client_ip::pin_client_headers(router(relay.clone()), Vec::new());
     let per_64 = super::RELAY_REQUESTS_PER_WINDOW;

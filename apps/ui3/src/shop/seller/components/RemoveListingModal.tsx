@@ -37,7 +37,8 @@ export function RemoveListing({ token }: { token: TokenRecord }) {
         try {
           hash = await cancelTrade({ provider: provider!, trade, mode });
         } catch (e) {
-          if (e instanceof GaslessCancelFailedError) setGaslessFailed(true);
+          // Offer the gas path only for the latest gasless refusal, not a request limit.
+          if (mode !== "direct") setGaslessFailed(e instanceof GaslessCancelFailedError);
           throw e;
         }
         markListingCancelled(qc, tradeId);

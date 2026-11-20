@@ -483,9 +483,10 @@ export async function cancelTrade(opts: { provider: Eip1193Provider; trade: Trad
       const hash = await sendMetaTransaction({ provider, contract: marketplace, kind: "offchain", functionData: data });
       return await waitForReceipt(trade.chainId, hash, "The cancellation", opts.wait);
     } catch (e) {
-      if (declined(e)) throw e;
+      // A request limit frees up within seconds: reported as is, never offered as a paid cancellation.
+      if (declined(e) || isRequestLimited(e)) throw e;
       if (mode === "gasless-only") throw new GaslessCancelFailedError(e);
-      if (!(e instanceof MetaTransactionError) || isRequestLimited(e)) throw e;
+      if (!(e instanceof MetaTransactionError)) throw e;
     }
   }
   await requireChain(provider, trade.chainId);

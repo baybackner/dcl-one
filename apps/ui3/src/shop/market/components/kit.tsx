@@ -16,6 +16,7 @@ import { formatMana, type ManaWei } from "@shop/model/money";
 import { useShopWallet } from "../../wallet/context";
 import { isWrongNetworkError } from "../../wallet/chain";
 import { dataUnavailable } from "../lib/api";
+import { isRequestLimited, relayLimitText } from "../../checkout/lib/errors";
 import { declined, isTxPending, isTxReverted } from "../lib/tx";
 import "../market.css";
 
@@ -187,6 +188,8 @@ export function writeFailureText(error: unknown): string {
   if (isTxPending(error)) return "The transaction is still pending. It may still complete; check again before trying anything else.";
   if (isTxReverted(error)) return "The transaction was reverted on chain. Nothing changed.";
   if (isWrongNetworkError(error)) return (error as Error).message;
+  const limited = isRequestLimited(error) ? relayLimitText(error) : null;
+  if (limited) return limited;
   return (error as Error)?.message || "Something went wrong.";
 }
 
