@@ -1784,6 +1784,46 @@ async fn feature_flags_mirror_stores_the_events_document_for_the_foundation_name
     db.teardown().await;
 }
 
+/// `EXPLORER_FEATURE_FLAGS_ORIGIN` names the site the explorer document is
+/// asked as; the events document is still asked as decentraland.org, the one
+/// site its Foundation wallets are set for. The mock answers any other site
+/// with an empty set.
+#[tokio::test]
+async fn feature_flags_mirror_asks_the_explorer_document_as_the_configured_site() {
+    let Some(db) = scratch_database().await else {
+        return;
+    };
+    let mock = mock();
+    let addr = serve_mock(mock.clone()).await;
+    let mut settings = Settings::for_tests(sources_at(addr));
+    settings.feature_flags_origin = "https://other.example".into();
+    let node = node_with_db(settings, db.pool.clone()).await;
+    let (jobs, ctx) = job_ctx().await;
+
+    feature_flags::run_pass(&node.state, &ctx).await.unwrap();
+    let stored = |app: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let (document,): (Value,) =
+                sqlx::query_as("SELECT document FROM explore_api.feature_flags WHERE app = $1")
+                    .bind(app)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            document
+        }
+    };
+    assert_eq!(
+        stored("explorer").await,
+        json!({"flags": {}, "variants": {}}),
+        "asked as the configured site"
+    );
+    assert_eq!(stored("events").await, *mock.events_flags.lock());
+
+    jobs.shutdown(Duration::from_secs(1)).await;
+    db.teardown().await;
+}
+
 #[tokio::test]
 async fn dapps_flags_refresh_preserves_the_audience_and_last_good_document() {
     let Some(db) = scratch_database().await else {

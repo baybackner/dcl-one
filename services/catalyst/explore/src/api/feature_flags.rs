@@ -1,8 +1,11 @@
 // from: catalyrst/crates/catalyrst-explorer-api/src/modules/feature_flags.rs (document and route shapes; the served document is the mirrored upstream one with feature_flags_local applied, the embedded asset only the fallback before the first pass)
-//! `GET /<app>.json` and `GET /flags/{name}`. Upstream serves the full flag set
-//! (including `explorer-alfa-minimum-requirements`) only to the
-//! `referer: https://decentraland.org` hostname strategy, so the mirror pass
-//! sends that header and this node serves the full set to everyone. The
+//! `GET /<app>.json` and `GET /flags/{name}`. Upstream answers by the
+//! `referer` hostname strategy, each site with its own set (decentraland.org's
+//! is the full one, `explorer-alfa-minimum-requirements` included), so the
+//! mirror pass asks for the explorer document as the node's site
+//! (`EXPLORER_FEATURE_FLAGS_ORIGIN`, decentraland.org when unset) and this node
+//! serves that set to everyone. The `events` document beside it is always asked
+//! as decentraland.org, the one site its Foundation wallets are set for. The
 //! document is kept as received (`explore_api.feature_flags`, one row per app)
 //! so a key upstream adds reaches the client; `feature_flags_local` overrides
 //! individual flags.
@@ -76,11 +79,16 @@ fn sibling_document(url: &str, app: &str) -> Option<String> {
     Some(format!("{dir}/{app}.json"))
 }
 
-/// One document: fetched with the referer strategy header, validated and
-/// stored as received under `app`; `If-None-Match` from the stored etag makes
-/// an unchanged upstream a 304 that only refreshes `fetched_at`. Answers the
+/// One document: fetched as the site `referer` names, validated and stored as
+/// received under `app`; `If-None-Match` from the stored etag makes an
+/// unchanged upstream a 304 that only refreshes `fetched_at`. Answers the
 /// stored document's etag.
-async fn mirror_document(state: &Shared, app: &str, url: &str) -> anyhow::Result<Option<String>> {
+async fn mirror_document(
+    state: &Shared,
+    app: &str,
+    url: &str,
+    referer: &str,
+) -> anyhow::Result<Option<String>> {
     let stored: Option<(Option<String>,)> =
         sqlx::query_as("SELECT etag FROM explore_api.feature_flags WHERE app = $1")
             .bind(app)
@@ -88,10 +96,7 @@ async fn mirror_document(state: &Shared, app: &str, url: &str) -> anyhow::Result
             .await
             .context("reading the stored feature flags etag")?;
     let etag = stored.and_then(|(e,)| e);
-    let mut headers: Vec<(&str, &str)> = vec![
-        ("referer", "https://decentraland.org"),
-        ("x-debug", "false"),
-    ];
+    let mut headers: Vec<(&str, &str)> = vec![("referer", referer), ("x-debug", "false")];
     if let Some(etag) = etag.as_deref() {
         headers.push(("if-none-match", etag));
     }
@@ -149,7 +154,7 @@ pub async fn run_pass(state: &Shared, ctx: &JobContext) -> anyhow::Result<()> {
     mirror::run(&state.pool, MIRROR, ctx, || async {
         let app = state.settings.feature_flags_app.as_str();
         let url = state.settings.sources.feature_flags.as_str();
-        let etag = mirror_document(state, app, url).await?;
+        let etag = mirror_document(state, app, url, &state.settings.feature_flags_origin).await?;
         // The explorer document is served from memory: reloaded as soon as
         // it is stored, before the events sibling can fail the pass.
         reload(&state.flags, &state.pool, app)
@@ -160,7 +165,13 @@ pub async fn run_pass(state: &Shared, ctx: &JobContext) -> anyhow::Result<()> {
         if events_app != app
             && let Some(events_url) = sibling_document(url, events_app)
         {
-            mirror_document(state, events_app, &events_url).await?;
+            mirror_document(
+                state,
+                events_app,
+                &events_url,
+                super::DEFAULT_FEATURE_FLAGS_ORIGIN,
+            )
+            .await?;
             let (events_doc,): (Value,) =
                 sqlx::query_as("SELECT document FROM explore_api.feature_flags WHERE app = $1")
                     .bind(events_app)

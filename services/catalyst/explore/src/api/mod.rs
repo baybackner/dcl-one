@@ -155,6 +155,10 @@ fn value_or(value: &str, default: String) -> String {
 }
 
 #[derive(Clone, Debug)]
+/// The site the flags are asked for when `EXPLORER_FEATURE_FLAGS_ORIGIN` is
+/// unset: Decentraland's own, which the service answers with the full set.
+pub(crate) const DEFAULT_FEATURE_FLAGS_ORIGIN: &str = "https://decentraland.org";
+
 pub struct Settings {
     pub sources: Sources,
     /// What the realm doc advertises as this node: `PUBLIC_URL`, trailing slash stripped.
@@ -169,6 +173,9 @@ pub struct Settings {
     pub bff_url: String,
     /// The one app whose flags document is mirrored (`explorer`).
     pub feature_flags_app: String,
+    /// The site the mirror asks the flags for (its Referer):
+    /// `EXPLORER_FEATURE_FLAGS_ORIGIN`, `https://decentraland.org` when unset.
+    pub feature_flags_origin: String,
     /// Floor between two downloads of the 38 MB tile grid (`EXPLORER_MAP_MIN_REFRESH_SECS`, 3600).
     pub map_min_refresh: Duration,
     pub version: String,
@@ -261,6 +268,10 @@ impl Settings {
             ),
             bff_url: value_or(&config.explore.bff_url, "/bff".into()),
             feature_flags_app: "explorer".into(),
+            feature_flags_origin: value_or(
+                &config.explore.explorer_feature_flags_origin,
+                DEFAULT_FEATURE_FLAGS_ORIGIN.into(),
+            ),
             map_min_refresh: Duration::from_secs(
                 config.explore.explorer_map_min_refresh_secs.max(1),
             ),
@@ -354,6 +365,7 @@ impl Settings {
             comms_fixed_adapter: "offline:offline".into(),
             bff_url: "/bff".into(),
             feature_flags_app: "explorer".into(),
+            feature_flags_origin: DEFAULT_FEATURE_FLAGS_ORIGIN.into(),
             map_min_refresh: Duration::from_secs(3600),
             version: "test".into(),
             commit_hash: String::new(),

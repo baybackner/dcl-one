@@ -167,6 +167,11 @@ pub struct ExploreConfig {
     #[arg(long, env = "EXPLORER_FEATURE_FLAGS_SOURCE_URL", default_value = "")]
     pub explorer_feature_flags_source_url: String,
 
+    /// The site the explorer flags are asked for: the service answers by
+    /// Referer, each site with its own set. Empty asks as decentraland.org.
+    #[arg(long, env = "EXPLORER_FEATURE_FLAGS_ORIGIN", default_value = "")]
+    pub explorer_feature_flags_origin: String,
+
     /// The Registry `/asset-bundle-registry/entities/*`, `/worlds/*/manifest`,
     /// `/denylist` and `/queues/status` reads go to, without a cache: a loopback
     /// URL is the local abgen runtime with native Registry state, any other a
