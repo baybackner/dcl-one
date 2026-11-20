@@ -9,21 +9,13 @@ use bevy::{
 };
 use common::structs::AppConfig;
 
-use super::{AppSetting, EnumAppSetting};
+use super::{AppSetting, EnumAppSetting, SettingCategory};
 
+/// Native only: the browser paces the web build to the display.
 #[derive(Debug, PartialEq, Eq)]
 pub enum VsyncSetting {
     Off,
     On,
-}
-
-impl VsyncSetting {
-    pub fn present_mode(&self) -> PresentMode {
-        match self {
-            VsyncSetting::Off => PresentMode::AutoNoVsync,
-            VsyncSetting::On => PresentMode::AutoVsync,
-        }
-    }
 }
 
 impl EnumAppSetting for VsyncSetting {
@@ -48,11 +40,11 @@ impl AppSetting for VsyncSetting {
     }
 
     fn description(&self) -> String {
-        "Sync frames to the monitor refresh.\n\nOn: the display's refresh rate sets the frame rate and Target Frame Rate is disabled. Off: Target Frame Rate caps the frame rate.".to_owned()
+        "Sync frames to the monitor's refresh rate.\n\nOn: no tearing; the frame rate is the Target Frame Rate or the monitor's refresh rate, whichever is lower. Off: frames show as soon as they are ready, at the Target Frame Rate.".to_owned()
     }
 
-    fn category() -> super::SettingCategory {
-        super::SettingCategory::Performance
+    fn category() -> SettingCategory {
+        SettingCategory::Graphics
     }
 
     fn save(&self, config: &mut AppConfig) {
@@ -68,8 +60,12 @@ impl AppSetting for VsyncSetting {
     }
 
     fn apply(&self, mut window: SystemParamItem<Self::Param>, _: Commands, _: &HashSet<Entity>) {
-        if let Ok(mut window) = window.single_mut() {
-            window.present_mode = self.present_mode();
-        }
+        let Ok(mut window) = window.single_mut() else {
+            return;
+        };
+        window.present_mode = match self {
+            VsyncSetting::Off => PresentMode::AutoNoVsync,
+            VsyncSetting::On => PresentMode::AutoVsync,
+        };
     }
 }

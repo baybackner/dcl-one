@@ -95,7 +95,9 @@ struct Jobs {
 }
 
 #[derive(Resource)]
-struct Booths(#[allow(dead_code)] Vec<BoothInstance>);
+struct Booths {
+    _live: Vec<BoothInstance>,
+}
 
 #[derive(Resource, Default)]
 struct RenderState {
@@ -187,7 +189,7 @@ fn main() -> AppExit {
         graphics: GraphicsSettings {
             vsync: false,
             log_fps: false,
-            fps_target: common::structs::UNCAPPED_FPS,
+            fps_target: 999,
             ..base_config.graphics
         },
         scene_imposter_bake: SceneImposterBake::Off,
@@ -286,7 +288,7 @@ fn setup(mut booth: PhotoBooth, jobs: Res<Jobs>, mut commands: Commands) {
             ));
         }
     }
-    commands.insert_resource(Booths(booths));
+    commands.insert_resource(Booths { _live: booths });
 }
 
 fn drive_capture(

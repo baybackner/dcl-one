@@ -13,7 +13,7 @@ use common::{
     rpc::RpcResultSender,
     structs::{
         AppConfig, CurrentRealm, EditorMode, PreviewMode, PrimaryUser, SessionGraphics,
-        StartupScenes, WorldHold, UNCAPPED_FPS,
+        StartupScenes, WorldHold,
     },
     util::JsThread,
 };
@@ -67,7 +67,6 @@ static HUD_MAIN_THREAD_COST_WINDOW: Mutex<Option<HudMainThreadCostDataPoint>> = 
 /// nothing, while the engine holds the lock (the page thread must not block). With
 /// `react_commits_reported` false, the window holds no React commits.
 #[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
 pub fn engine_set_hud_main_thread_cost(
     covered_seconds: f32,
     react_commits_reported: bool,
@@ -155,13 +154,6 @@ extern "C" {
     /// leave keys alone while the user types into scene UI.
     #[wasm_bindgen(js_name = "__setEngineTextFocus")]
     fn set_engine_text_focus(focused: bool);
-
-    /// Shows or hides the page's `#shader-compiling` indicator (the HUD's `renderBusy` probe)
-    /// while gpu_cache.js compiles pipelines asynchronously on the render worker; boot.js
-    /// defines it, gpu_cache.js calls the relay directly.
-    #[allow(dead_code)]
-    #[wasm_bindgen(js_name = "__setShaderCompiling")]
-    fn set_shader_compiling(on: bool);
 
     /// The render worker's gpu cache is warm (`engine_render_setup` done): boot.js completes
     /// the loading bar's gpu step.
@@ -858,8 +850,7 @@ pub fn update_winit_fps(
     mut winit: ResMut<WinitSettings>,
     mut last_target: Local<Option<usize>>,
 ) {
-    // without an applied cap, winit waits the shortest delay
-    let fps_target = session.applied_fps_target(&config).unwrap_or(UNCAPPED_FPS);
+    let fps_target = session.fps_target(&config);
     let target = if VIEWPORT_ACTIVE.load(Ordering::Relaxed) {
         fps_target.max(1)
     } else {

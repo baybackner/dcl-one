@@ -25,7 +25,10 @@ import type {
   FriendStatusData,
   HoverAction,
   HoverEvent,
+  ItemPurchaseRequest,
+  SetItemPurchaseState,
   HomeScene,
+  OutfitsData,
   LiveSceneInfo,
   LobbyStage,
   MapPinInfo,
@@ -221,6 +224,10 @@ export type BevyApiInterface = {
   getAvatarModifiers: () => Promise<AvatarModifierState[]>
   getPermissionRequestStream: () => Promise<AsyncIterable<PermissionRequestRaw>>
   setSinglePermission: (body: SetSinglePermission) => void
+  /** Scene requests to open the item purchase confirmation. Optional: absent on runtimes whose
+   *  SystemApi predates it. */
+  getItemPurchaseRequestStream?: () => Promise<AsyncIterable<ItemPurchaseRequest>>
+  setItemPurchaseState?: (body: SetItemPurchaseState) => void
   /** Password prompts for a world being entered (and their withdrawal). Optional: absent on
    *  runtimes whose SystemApi predates it. */
   getWorldAccessStream?: () => Promise<AsyncIterable<WorldAccessEvent>>
@@ -246,6 +253,9 @@ export type BevyApiInterface = {
    *  `/about`), null or undefined when it advertises none — only Genesis City realms do. */
   getSatelliteView: () => Promise<SatelliteView | null | undefined>
   setAvatar: (data: SetAvatarData) => Promise<unknown>
+  /** Signs and deploys the player's catalyst `outfits` entity; rejects for a guest, when `address`
+   *  is not the signed-in account, or when the catalyst refuses it. */
+  deployOutfits: (address: string, outfits: OutfitsData) => Promise<void>
   /** Any user's full deployed profile as the engine holds it (own, nearby and remote players,
    *  guests included), resolved through its profile cache and fetch cascade. Rejects once the
    *  engine has concluded the address can't be resolved. */

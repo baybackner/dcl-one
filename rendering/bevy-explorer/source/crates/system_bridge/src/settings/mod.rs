@@ -44,6 +44,7 @@ use language_setting::LanguageSetting;
 use load_distance::{LoadDistanceSetting, UnloadDistanceSetting};
 use max_avatars::MaxAvatarsSetting;
 use max_downloads::MaxDownloadsSetting;
+use max_lods::{MaxFarLodsSetting, MaxNearLodsSetting};
 use oob_setting::OobSetting;
 use player_settings::{JumpSetting, RunSpeedSetting, WalkSpeedSetting};
 use scene_threads::SceneThreadsSetting;
@@ -54,7 +55,6 @@ use volume_settings::{
     AvatarVolumeSetting, MasterVolumeSetting, SceneVolumeSetting, SystemVolumeSetting,
     VoiceChatVolumeSetting, VoiceVolumeSetting,
 };
-use vsync_setting::VsyncSetting;
 
 pub mod aa_settings;
 pub mod ambient_brightness_setting;
@@ -73,9 +73,11 @@ pub mod fog_settings;
 pub mod frame_rate;
 pub mod imposter_settings;
 pub mod language_setting;
+pub mod lens_flare_setting;
 pub mod load_distance;
 pub mod max_avatars;
 pub mod max_downloads;
+pub mod max_lods;
 pub mod oob_setting;
 pub mod parcel_grass_settings;
 pub mod player_settings;
@@ -89,6 +91,7 @@ pub mod spring_bones_setting;
 pub mod ssao_setting;
 pub mod video_threads;
 pub mod volume_settings;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod vsync_setting;
 pub mod window_settings;
 
@@ -198,6 +201,12 @@ impl Plugin for SettingBridgePlugin {
         #[cfg(not(target_arch = "wasm32"))]
         add_enum_setting::<SsaoSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<SkyReflectionSetting>(app, &mut settings, &mut schedule, &config);
+        add_enum_setting::<lens_flare_setting::LensFlareSetting>(
+            app,
+            &mut settings,
+            &mut schedule,
+            &config,
+        );
         add_enum_setting::<OobSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<CelShadingSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<AvatarOutlineSetting>(app, &mut settings, &mut schedule, &config);
@@ -212,10 +221,13 @@ impl Plugin for SettingBridgePlugin {
         if !is_preview {
             add_int_setting::<LoadDistanceSetting>(app, &mut settings, &mut schedule, &config);
             add_int_setting::<UnloadDistanceSetting>(app, &mut settings, &mut schedule, &config);
+            add_int_setting::<MaxNearLodsSetting>(app, &mut settings, &mut schedule, &config);
+            add_int_setting::<MaxFarLodsSetting>(app, &mut settings, &mut schedule, &config);
         }
 
-        add_enum_setting::<VsyncSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<FpsTargetSetting>(app, &mut settings, &mut schedule, &config);
+        #[cfg(not(target_arch = "wasm32"))]
+        add_enum_setting::<vsync_setting::VsyncSetting>(app, &mut settings, &mut schedule, &config);
         add_int_setting::<render_scale_setting::RenderScaleSetting>(
             app,
             &mut settings,
@@ -591,48 +603,6 @@ fn is_fullscreen_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn vsync_disables_the_target_frame_rate() {
-        let mut config = AppConfig::default();
-        let mut settings = Settings {
-            settings: Vec::default(),
-        };
-        settings.add_enum_setting::<VsyncSetting>(&config);
-        settings.add_enum_setting::<FpsTargetSetting>(&config);
-        let thirty = FpsTargetSetting::variants()
-            .iter()
-            .position(|v| v.name() == "30 fps")
-            .unwrap() as f32;
-        settings
-            .set_value(&mut config, &FpsTargetSetting::title(), thirty)
-            .unwrap();
-        let fps_target = |settings: &Settings| {
-            settings
-                .get()
-                .into_iter()
-                .find(|s| s.name == FpsTargetSetting::title())
-                .unwrap()
-        };
-        assert!(!fps_target(&settings).disabled);
-
-        settings
-            .set_value(&mut config, &VsyncSetting::title(), 1.0)
-            .unwrap();
-        assert!(config.graphics.vsync);
-        let info = fps_target(&settings);
-        assert!(info.disabled);
-        // the stored value is kept
-        assert_eq!(info.value, thirty);
-
-        settings
-            .set_value(&mut config, &VsyncSetting::title(), 0.0)
-            .unwrap();
-        let info = fps_target(&settings);
-        assert!(!info.disabled);
-        assert_eq!(info.value, thirty);
-        assert_eq!(config.graphics.fps_target, 30);
-    }
 
     #[test]
     fn prepasses_follow_the_avatar_outline() {
