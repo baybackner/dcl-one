@@ -94,7 +94,8 @@ across workers:
   per joint entity, shared by every skin that names the joint and written once a frame when
   the joint moves; slot 0 is the identity. A second buffer, `SkinUniforms::skin_joints_buffer`
   (mesh bind group binding 8), holds each skin's inverse bindposes with the joint's slot in
-  the bottom row's first component, and is uploaded only when a skin is added.
+  the bottom row's first component; a skin's entries are uploaded when the skin is added. A
+  joint with no transform when its skin is added renders at the identity until it has one.
   `skinning::skin_model` multiplies the two, so a shader that skins through it needs no
   change; one that reads `joint_matrices` itself must do the same. An avatar's body and
   wearables name the same joint entities, so their joints cost one matrix each a frame
