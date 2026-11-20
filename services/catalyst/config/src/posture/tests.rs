@@ -1193,6 +1193,37 @@ fn about_resource_check_is_off_unless_set() {
 }
 
 #[test]
+fn a_collections_subgraph_without_the_nft_walk_is_warned_about() {
+    let db = ("DATABASE_URL", "postgres:///catalyst");
+    let eth = ("ETH_COLLECTIONS_SUBGRAPH_URL", "https://reader.example/l1");
+    let matic = (
+        "MATIC_COLLECTIONS_SUBGRAPH_URL",
+        "https://reader.example/l2",
+    );
+    let index = ("MARKETPLACE_NFT_INDEX_ENABLED", "true");
+    let sepolia = ("ETH_NETWORK", "sepolia");
+    let run = |pairs: &[(&str, &str)]| unchecked_profile_items(&parsed(pairs));
+
+    for pairs in [
+        &[db, eth][..],
+        &[db, matic][..],
+        &[db, eth, matic, index, sepolia][..],
+    ] {
+        let warning = run(pairs).unwrap_or_else(|| panic!("{pairs:?}"));
+        assert!(warning.contains("served as deployed"), "{warning}");
+        assert!(!warning.contains("reader.example"), "{warning}");
+    }
+    for pairs in [
+        &[db][..],
+        &[db, index][..],
+        &[db, eth, matic, index][..],
+        &[db, ("ETH_COLLECTIONS_SUBGRAPH_URL", " ")][..],
+    ] {
+        assert_eq!(run(pairs), None, "{pairs:?}");
+    }
+}
+
+#[test]
 fn world_writes_need_the_names_reader_unless_chain_checks_are_skipped() {
     let db = ("DATABASE_URL", "postgres:///catalyst");
     let writes = ("WORLDS_WRITES_ENABLED", "true");

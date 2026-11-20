@@ -771,6 +771,24 @@ pub fn worlds_names_reader(config: &Config) -> anyhow::Result<Option<&'static st
     ))
 }
 
+/// Wearable and emote ownership is read from the nft index alone, which a
+/// node walks with `MARKETPLACE_NFT_INDEX_ENABLED` on mainnet. A node that
+/// names a collections subgraph and does not walk the index gets the
+/// warning returned here: the subgraph checks no ownership.
+pub fn unchecked_profile_items(config: &Config) -> Option<&'static str> {
+    let walks = config.marketplace.marketplace_nft_index_enabled
+        && config.node.eth_network.trim() == "mainnet";
+    let upstreams = &config.market_upstreams;
+    let subgraph = Config::non_empty(&upstreams.eth_collections_subgraph_url).is_some()
+        || Config::non_empty(&upstreams.matic_collections_subgraph_url).is_some();
+    (subgraph && !walks).then_some(
+        "a collections subgraph URL is set, but this node does not walk the nft index \
+         (MARKETPLACE_NFT_INDEX_ENABLED off, or ETH_NETWORK other than mainnet): the subgraphs check \
+         no ownership, so profiles and outfits are served as deployed and the owned wearable and \
+         emote routes answer the nft-index unavailable envelope",
+    )
+}
+
 /// A mirror replaces a Catalyst whose lambdas always check the profiles'
 /// items and names against their owner. The names read the marketplace
 /// subgraph, which may not be blanked; the wearables and emotes read the
