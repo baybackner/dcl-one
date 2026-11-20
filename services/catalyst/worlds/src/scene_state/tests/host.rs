@@ -294,7 +294,7 @@ async fn a_genesis_scene_loads_by_id_and_by_parcel_into_the_main_scope() {
          VALUES ('0x0', 'v3', 'scene', $1, $2::json, timezone('UTC', now()), $3, timezone('UTC', now()), '[]'::json) RETURNING id",
     )
     .bind(&id)
-    .bind(serde_json::json!({ "main": "bin/game.js", "scene": { "base": p2 } }))
+    .bind(serde_json::json!({ "v": { "main": "bin/game.js", "scene": { "base": p2 } } }))
     .bind(vec![p1.clone(), p2.clone()])
     .fetch_one(&h.state.pool)
     .await
@@ -1199,9 +1199,9 @@ async fn seed_genesis(h: &Host, parcels: &[String], opt_in: bool) -> String {
     let id = format!("bafyG{}", Uuid::new_v4().simple());
     let code_hash = store(&h.state, b"").await;
     let mut metadata =
-        serde_json::json!({ "main": "bin/game.js", "scene": { "base": parcels[0] } });
+        serde_json::json!({ "v": { "main": "bin/game.js", "scene": { "base": parcels[0] } } });
     if opt_in {
-        metadata["authoritativeMultiplayer"] = true.into();
+        metadata["v"]["authoritativeMultiplayer"] = true.into();
     }
     let dep_id: i32 = sqlx::query_scalar(
         "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
@@ -1360,7 +1360,7 @@ async fn seed_parked_genesis(h: &Host, id: &str, parcels: &[String]) {
          VALUES ('0x0', 'v3', 'scene', $1, $2::json, timezone('UTC', now()), $3, timezone('UTC', now()), '[]'::json) RETURNING id",
     )
     .bind(id)
-    .bind(serde_json::json!({ "main": "bin/game.js", "scene": { "base": parcels[0] } }))
+    .bind(serde_json::json!({ "v": { "main": "bin/game.js", "scene": { "base": parcels[0] } } }))
     .bind(parcels.to_vec())
     .fetch_one(&h.state.pool)
     .await

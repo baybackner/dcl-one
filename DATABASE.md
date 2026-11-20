@@ -145,8 +145,9 @@ access excludes clears, `/env*` and `/usage*`.
 `GET /world-storage/collaborator` is a rare, user-initiated, self-scoped listing.
 It derives membership at read time through `worlds.logs_permissions_decoded`, with no
 stored projection. The partial GIN `world_scenes_logs_permissions_decoded_idx` covers
-local world scenes; `deployments_scene_logs_permissions_decoded_idx` covers live
-Genesis scenes, followed by an `active_pointers_entity_id_idx` probe per match.
+local world scenes; `deployments_scene_v_logs_permissions_decoded_idx` covers live
+Genesis scenes (content stores metadata as `{"v": metadata}`, so it indexes
+`entity_metadata -> 'v' -> 'logsPermissions'`), followed by an `active_pointers_entity_id_idx` probe per match.
 Superseded Genesis rows leave the index. One statement counts and pages the
 matches by `deployed_at DESC, scene_id` with `LIMIT/OFFSET`.
 The function decodes JSON escapes as `JSON.parse` does and leaves out an entry
@@ -155,10 +156,12 @@ can fail an insert through an index. It reads the escapes as Unicode, so the dat
 must use the `UTF8` server encoding (the one `catalyst` supports): under another
 encoding a non-ASCII escape would fail the insert or the index build. `schema apply`
 and `schema migrate` check the server encoding before any schema changes. A database stamped before it keeps the
-superseded `worlds.logs_permissions` and its two indexes, which `catalyst schema
-status` does not report, until their release drops them. Run it once, with the
-administrative role, after `catalyst schema migrate` created the decoded function
-and every replica runs a binary that queries it (an older `serve` calls the old
+superseded `worlds.logs_permissions` and its two indexes, and a database migrated
+before the `v` path keeps `deployments_scene_logs_permissions_decoded_idx` on the
+unwrapped path; `catalyst schema status` reports none of them. Their release drops
+them. Run it with the administrative role, after `catalyst schema migrate` created
+the decoded function and its current indexes and every replica runs a binary that
+queries them (an older `serve` calls the old
 function from its storage grant and `GET /collaborator`, which fail after the
 drop); it refuses a database without the decoded function and both its indexes
 built and valid, and drops the old indexes concurrently, outside a transaction
@@ -168,7 +171,7 @@ built and valid, and drops the old indexes concurrently, outside a transaction
 psql "$DATABASE_URL" -X -f schemas/releases/worlds-logs-permissions-retired.sql
 ```
 
-The object pass builds `deployments_scene_logs_permissions_decoded_idx` on
+The object pass builds `deployments_scene_v_logs_permissions_decoded_idx` on
 `content.deployments` in the migrate transaction, not concurrently, so writes to
 that table wait for the build (unmeasured on production). To build it outside
 that window, run beforehand, with the same definition as `schemas/20_worlds.sql`
@@ -176,9 +179,9 @@ that window, run beforehand, with the same definition as `schemas/20_worlds.sql`
 
 ```sql
 CREATE FUNCTION worlds.logs_permissions_decoded(text) ... ; -- as in schemas/20_worlds.sql
-CREATE INDEX CONCURRENTLY deployments_scene_logs_permissions_decoded_idx
+CREATE INDEX CONCURRENTLY deployments_scene_v_logs_permissions_decoded_idx
     ON content.deployments
-    USING gin (worlds.logs_permissions_decoded((entity_metadata -> 'logsPermissions')::text))
+    USING gin (worlds.logs_permissions_decoded((entity_metadata -> 'v' -> 'logsPermissions')::text))
     WHERE entity_type = 'scene' AND deleter_deployment IS NULL;
 ```
 
@@ -234,6 +237,11 @@ access or other scenes' environment values. Mirroring cannot overwrite local
 saves or grant host authority. Keep live CRDT/tick state in the scene runtime;
 persist only what the restart contract requires. Test cross-scene/player
 isolation, redeploy, revocation and restart.
+
+For now a Genesis scene's storage scope (realm `main`) is its effective base
+parcel: the declared `metadata.scene.base` when it is one of the scene's parcels,
+else its least parcel. The resolver reads it at `entity_metadata -> 'v'`, where
+content stores the metadata as `{"v": metadata}`.
 
 Places owns one active identity row per world scene, explicitly bound to its
 current `(world_name, entity_id)` deployment. Worlds calls the Places identity
