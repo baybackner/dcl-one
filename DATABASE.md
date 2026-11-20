@@ -2418,15 +2418,19 @@ commits in between is never half-seen:
   transaction that clears it. `shop.nft` changes only in a fold's commit
   (one transaction per network) and in a rewind, so a reader never sees half
   a fold, and a complete cursor holds while the next pass has advanced
-  `last_block` past `folded_block`. The pass publishes or clears the marker
-  in a later statement, after it reads the chain head again: until then, and
-  until the next pass folds when that read fails, the new fold's rows are
-  read under the previous marker and its `folded_at`. They are later
-  transfers of the same walk. A fold that still owes a late collection's
-  backfill is unpublishable, and under the previous marker it shows that
-  collection's tokens transferred since the walk took it in and not its
-  earlier ones, which read as not held, as the whole collection did before
-  that fold. Profiles need complete
+  `last_block` past `folded_block`. A fold that still owes a late
+  collection's backfill is unpublishable: it holds that collection's tokens
+  transferred since the walk took it in and not its earlier ones. Its
+  transaction clears `folded_block` and `folded_at` with its rows (the
+  count of owed backfills is read in it, and the cursor's update is its last
+  statement), so those rows are never read as complete, whatever stops the
+  pass afterwards; the pass that finishes the backfill folds and publishes
+  again. A fold that owes nothing leaves the marker to the pass, which sets
+  it, or clears it when the pass is held short of the head or past the
+  publish lag, in a later statement after it reads the chain head again:
+  until then, and until the next pass folds when that read fails, the new
+  fold's rows are read under the previous marker and its `folded_at`. They
+  are later transfers of the same complete walk. Profiles need complete
   on the networks their items name; an incomplete one fails the read (503,
   or a Registry batch left out and counted).
 - fresh: complete and `folded_at` within 30 minutes. Every other reader needs

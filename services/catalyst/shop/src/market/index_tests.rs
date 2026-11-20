@@ -107,6 +107,9 @@ struct FakeChain {
     strip_timestamps: std::sync::atomic::AtomicBool,
     batches: AtomicUsize,
     drop_in_batch: Mutex<Vec<u64>>,
+    /// The `eth_blockNumber` calls still answered; the ones after are
+    /// refused (an endpoint that fails in the middle of a pass).
+    head_reads_left: std::sync::atomic::AtomicI64,
 }
 
 impl FakeChain {
@@ -130,6 +133,7 @@ impl FakeChain {
             strip_timestamps: std::sync::atomic::AtomicBool::new(false),
             batches: AtomicUsize::new(0),
             drop_in_batch: Mutex::new(Vec::new()),
+            head_reads_left: std::sync::atomic::AtomicI64::new(i64::MAX),
         })
     }
 
@@ -189,7 +193,12 @@ fn answer(chain: &FakeChain, body: &Value) -> Value {
     let reply = |result: Value| json!({ "jsonrpc": "2.0", "id": id, "result": result });
     let refuse = |message: String| json!({ "jsonrpc": "2.0", "id": body["id"], "error": { "code": -32602, "message": message } });
     match body["method"].as_str() {
-        Some("eth_blockNumber") => reply(json!(format!("0x{:x}", *chain.head.lock()))),
+        Some("eth_blockNumber") => {
+            if chain.head_reads_left.fetch_sub(1, Ordering::SeqCst) <= 0 {
+                return refuse("the head is unavailable".into());
+            }
+            reply(json!(format!("0x{:x}", *chain.head.lock())))
+        }
         Some("eth_chainId") => reply(json!("0x89")),
         // `royaltiesCutPerMillion()` of any venue: the pinned 2.5 %.
         Some("eth_call") if body["params"][0]["data"] == sales_index::ROYALTIES_CUT_SELECTOR => {
@@ -1417,6 +1426,133 @@ async fn a_rewind_fails_profile_ownership_until_the_refill_publishes() {
         "the refill spans passes: {refill_passes}"
     );
     assert_eq!(read().await.unwrap()[ALICE][&urn], vec![t1.to_string()]);
+    db.drop().await;
+}
+
+/// A pass that takes in a late collection folds while that collection's
+/// backfill is still owed. When the head read after that fold fails, the
+/// pass ends before its own marker update: the fold's transaction has
+/// already cleared the marker, so profile ownership fails instead of
+/// answering the collection's tokens transferred since the walk took it in
+/// without its earlier ones. The next passes backfill and publish.
+#[tokio::test]
+async fn a_fold_that_owes_a_backfill_clears_the_marker_when_the_pass_fails_after_it() {
+    let Some(db) = ScratchDb::create().await else {
+        return;
+    };
+    let s = nft_index::start_block(ChainNet::Matic);
+    let c1 = "0x00000000000000000000000000000000000000c1";
+    let late = "0x00000000000000000000000000000000000000c3";
+    seed_collection(
+        &db.pool,
+        "matic",
+        c1,
+        s + 10,
+        "urn:decentraland:matic:collections-v2:0xc1",
+        "Pirates",
+    )
+    .await;
+    let (t1, early, recent) = (v2_token(0, 1), v2_token(0, 7), v2_token(0, 8));
+    let head = s + 2_000;
+    let chain = FakeChain::new(
+        head,
+        vec![
+            transfer(c1, ZERO, ALICE, t1, s + 100, 0),
+            transfer(late, ZERO, ALICE, early, s + 500, 0),
+            transfer(late, ZERO, ALICE, recent, head + 10, 0),
+        ],
+        1_000_000,
+        100,
+    );
+    let url = serve(chain.clone()).await;
+    let st = state_over(db.pool.clone(), &url, index_settings(64, 1_000), false);
+    let ix = NftIndex::new(ChainNet::Matic);
+    assert!(publish_nft(&st, &url, &ix).await.published);
+    let c1_urn = format!("urn:decentraland:matic:collections-v2:{c1}:0");
+    let late_urn = format!("urn:decentraland:matic:collections-v2:{late}:0");
+    let requested: std::collections::HashSet<(String, String)> = [
+        (ALICE.to_string(), c1_urn.clone()),
+        (ALICE.to_string(), late_urn.clone()),
+    ]
+    .into_iter()
+    .collect();
+    let read = || {
+        super::owned_items::owned_tokens(&db.pool, &requested, super::owned_items::Rule::Complete)
+    };
+    assert_eq!(read().await.unwrap()[ALICE][&c1_urn], vec![t1.to_string()]);
+    let cursor = || async {
+        chain_walk::cursor(&db.pool, INDEXER_NFT, ChainNet::Matic)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let published = cursor().await;
+    assert!(published.folded_block.is_some(), "{published:?}");
+
+    // The mirror learns the late collection after the walk passed its
+    // creation; the pass reads the head once, then the endpoint fails.
+    seed_collection(
+        &db.pool,
+        "matic",
+        late,
+        s + 400,
+        "urn:decentraland:matic:collections-v2:0xc3",
+        "Late",
+    )
+    .await;
+    *chain.head.lock() = head + 100;
+    chain.head_reads_left.store(1, Ordering::SeqCst);
+    let rpc = Rpc::at(&st.http, &url);
+    let failed = chain_walk::run_pass(
+        &db.pool,
+        &rpc,
+        &ix,
+        &st.settings.market.indexes,
+        None,
+        &|_| {},
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{failed:#}").contains("eth_blockNumber after the fold"),
+        "{failed:#}"
+    );
+    chain.head_reads_left.store(i64::MAX, Ordering::SeqCst);
+    let c = cursor().await;
+    assert!(
+        c.last_block > published.last_block && c.fold_through == Some(c.last_block),
+        "the pass walked and folded before it failed: {c:?}"
+    );
+    assert_eq!(
+        owner_of(&db.pool, "matic", late, recent).await,
+        Some(Some(ALICE.to_string())),
+        "the fold committed the late collection's recent token"
+    );
+    assert_eq!(owner_of(&db.pool, "matic", late, early).await, None);
+    let owed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM shop.nft_contract WHERE contract_address = $1 AND backfill_from_block IS NOT NULL AND backfilled_to_block IS NULL",
+    )
+    .bind(late)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(owed, 1, "the backfill is still owed");
+    assert_eq!(c.folded_block, None, "the fold cleared the marker: {c:?}");
+    assert!(
+        matches!(
+            read().await,
+            Err(super::owned_items::ReadError::NotReady(..))
+        ),
+        "a profile read fails under a fold that owes a backfill"
+    );
+
+    assert!(publish_nft(&st, &url, &ix).await.published);
+    let owned = read().await.unwrap();
+    assert_eq!(owned[ALICE][&c1_urn], vec![t1.to_string()]);
+    assert_eq!(
+        owned[ALICE][&late_urn],
+        vec![recent.to_string(), early.to_string()]
+    );
     db.drop().await;
 }
 

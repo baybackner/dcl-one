@@ -30,9 +30,12 @@ transaction as its rows. Two rules:
 - Profiles need the index complete on the networks their items name: the
   whole history walked and a fold published, with no reorg rewind since and
   no later fold found unpublishable (`full_history` and `folded_block` set).
-  A pass commits its fold before it publishes or clears the marker, so until
-  that statement, or until the next pass when the chain head cannot be read
-  in between, the newer fold is read under the previous marker. An index
+  A fold that still owes a late collection's backfill clears the marker in
+  the transaction that commits its rows, so it is never read as complete. A
+  fold that owes nothing commits before its pass publishes, so until that
+  statement, or until the next pass when the chain head cannot be read in
+  between, its rows, later transfers of the same complete walk, are read
+  under the previous marker. An index
   that is complete but was published more than 30 minutes ago, as during an
   RPC outage, keeps serving them. An incomplete index fails the read: a
   direct read answers 503, and a Registry batch leaves the profile out and
