@@ -6800,6 +6800,27 @@ async fn cart_reads_and_writes_keep_their_totals_and_the_checkout_records_its_le
         .fetch_one(&pool)
         .await
         .unwrap();
+    let (old_notice, kept_notice) = (unique("iap-old"), unique("iap-kept"));
+    let max_age = chrono::Duration::seconds(super::apple::NOTIFICATION_MAX_AGE_SECS);
+    for (uuid, signed_at) in [
+        (
+            &old_notice,
+            super::store::now() - max_age - chrono::Duration::minutes(1),
+        ),
+        (
+            &kept_notice,
+            super::store::now() - max_age + chrono::Duration::hours(1),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) VALUES ($1, $2)",
+        )
+        .bind(uuid)
+        .bind(signed_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     let idle = state_with(
         pool.clone(),
         StateCfg::default(),
@@ -6808,6 +6829,18 @@ async fn cart_reads_and_writes_keep_their_totals_and_the_checkout_records_its_le
     );
     let processed = idle.outbox_worker().run_once().await.unwrap();
     assert_eq!(processed, 0, "no broker: the pending lines idle");
+    let notices: Vec<String> = sqlx::query_scalar(
+        "SELECT notification_uuid FROM credits.iap_notifications WHERE notification_uuid = ANY($1)",
+    )
+    .bind(vec![old_notice.clone(), kept_notice.clone()])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        notices,
+        vec![kept_notice],
+        "the tick purges notification records signed past the accepted age"
+    );
     let auth_status: String =
         sqlx::query_scalar("SELECT status FROM credits.authorizations WHERE id = $1")
             .bind(&stale_auth)

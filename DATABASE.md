@@ -1615,9 +1615,26 @@ transaction revoked when first seen, leaves a `refunded` row, so its later
 delivery credits nothing (an operator refund of an unknown id records
 nothing and answers 404; of a held one, turns it `refunded`). The Credits come from the product in Apple's signed
 transaction (`IAP_PRODUCT_CATALOG_USD`, whole Credits), never from the
-request. `revoked_credits` never exceeds `credits`. The bootstrap defines
-both tables; an existing database gains them from the object pass, so no step
-exists.
+request. `revoked_credits` never exceeds `credits`.
+
+`credits.iap_notifications` holds one row per App Store notification applied,
+keyed by its `notificationUUID`, with its `signedDate` (`signed_at`). The
+notification's credit, refund or reversal inserts it in its own transaction,
+after the transaction lock, so a crash never records a notification without
+its effects; the webhook reads it first (primary key) and answers a
+redelivery 200 without applying it, and a concurrent delivery that loses the
+insert answers 409, so Apple retries and finds it applied. A notification
+answered for a retry (a held purchase of an unknown product or over the
+node's ceiling) and a reversal whose purchase is credited next are recorded by
+that credit instead; one without a transaction or of a type not acted on
+records nothing. A notification signed more than 7 days ago or more than
+5 minutes ahead is refused (`credits::apple`), so the credits outbox tick
+deletes rows whose `signed_at` is past that age, one bounded batch per tick
+(`iap_notifications_signed_idx`); the table holds at most a week of
+notifications. Invariant: a uuid is recorded only with its effects.
+
+The bootstrap defines the three tables; an existing database gains them from
+the object pass, so no step exists.
 
 ## Credits checkout and broker claim edges
 

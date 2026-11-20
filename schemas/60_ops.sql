@@ -320,6 +320,20 @@ CREATE TABLE credits.iap_account_tokens (
     CONSTRAINT iap_account_tokens_address_check CHECK (address ~ '^0x[0-9a-f]{40}$')
 );
 
+-- One row per App Store server notification applied (`notificationUUID`),
+-- written in the transaction of its effects, so a redelivery applies nothing.
+-- A notification signed more than 7 days ago is refused
+-- (`credits::apple::NOTIFICATION_MAX_AGE_SECS`), so the outbox tick deletes
+-- rows by `signed_at` past that age.
+CREATE TABLE credits.iap_notifications (
+    notification_uuid text NOT NULL,
+    signed_at timestamp without time zone NOT NULL,
+    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT iap_notifications_pkey PRIMARY KEY (notification_uuid)
+);
+
+CREATE INDEX iap_notifications_signed_idx ON credits.iap_notifications (signed_at);
+
 -- One open cart per wallet; the address is the natural key.
 CREATE TABLE credits.carts (
     id bigint GENERATED ALWAYS AS IDENTITY,

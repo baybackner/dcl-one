@@ -6,10 +6,13 @@
 //!   that does not verify answers 400; once verified, `ONE_TIME_CHARGE`
 //!   credits the wallet registered for the transaction's account token and
 //!   `REFUND` reverses it (`REFUND_REVERSED` undoes that). A purchase not
-//!   credited is held (`credits::iap`). Every other outcome answers 200
-//!   except the ones Apple should retry: an unknown product, a purchase over
-//!   the node's daily ceiling and a node without App Store configuration
-//!   answer 503.
+//!   credited is held (`credits::iap`). A notification whose `signedDate` is
+//!   outside the accepted window (`credits::apple`) is refused with 200, so
+//!   Apple stops sending it; one already applied (its `notificationUUID`
+//!   recorded) answers 200 and applies nothing. Every other outcome answers
+//!   200 except the ones Apple should retry: an unknown product, a purchase
+//!   over the node's daily ceiling, a concurrent delivery of the same
+//!   notification (409) and a node without App Store configuration (503).
 //! - `POST /credits/iap/verify` (`/v1/iap/verify`, signed fetch): the device
 //!   posts StoreKit's `jwsRepresentation`; it credits the signer only when the
 //!   transaction's account token is the signer's. Business outcomes answer
@@ -35,10 +38,11 @@ use serde_json::{Value as JsonValue, json};
 use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::admin::{RequireAdmin, normalize_address, paginate};
-use crate::credits::apple::Transaction;
+use crate::credits::apple::{Transaction, VerifyError};
 use crate::credits::errors::ApiError;
 use crate::credits::iap::{
-    CapReason, Channel, CreditOutcome, HoldReason, Iap, Purchase, RefundOutcome, ReinstateOutcome,
+    CapReason, Channel, CreditOutcome, HoldReason, Iap, Notice, Purchase, RefundOutcome,
+    ReinstateOutcome,
 };
 use crate::types::UsdCents;
 
@@ -68,17 +72,37 @@ pub async fn webhook(
         .signed_payload
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::bad_request("missing signedPayload"))?;
-    let notification = iap.verifier.notification(&signed, now()).map_err(|e| {
-        tracing::warn!(error = %e, "app store notification refused");
-        ApiError::bad_request("invalid signedPayload")
-    })?;
+    let notification = match iap.verifier.notification(&signed, now()) {
+        Ok(n) => n,
+        // Signed by Apple but out of date: a retry carries the same signedDate.
+        Err(VerifyError::OutOfWindow) => {
+            tracing::warn!(
+                "app store notification refused: signedDate outside the accepted window"
+            );
+            return Ok(Json(
+                json!({ "ok": true, "error": "signed_date_out_of_window" }),
+            ));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "app store notification refused");
+            return Err(ApiError::bad_request("invalid signedPayload"));
+        }
+    };
     let uuid = notification.notification_uuid.as_str();
+    let notice = Some(Notice {
+        uuid,
+        signed_date_ms: notification.signed_date_ms,
+    });
+    if state.credits.iap_notification_applied(uuid).await? {
+        tracing::info!(notification_uuid = %uuid, "app store notification already applied");
+        return Ok(Json(json!({ "ok": true, "duplicate": true })));
+    }
     let Some(t) = notification.transaction else {
         tracing::info!(notification_uuid = %uuid, kind = %notification.notification_type, "app store notification without a transaction");
         return Ok(Json(json!({ "ok": true, "skipped": true })));
     };
     match notification.notification_type.as_str() {
-        "ONE_TIME_CHARGE" => charge(&state, iap, uuid, &t).await,
+        "ONE_TIME_CHARGE" => charge(&state, iap, notice, &t).await,
         "REFUND" => {
             let reason = format!(
                 "apple_refund:{}",
@@ -92,6 +116,7 @@ pub async fn webhook(
                     uuid,
                     &reason,
                     t.revocation_percentage,
+                    notice,
                 )
                 .await?
             {
@@ -112,7 +137,11 @@ pub async fn webhook(
                 }
             }
         }
-        "REFUND_REVERSED" => match state.credits.reinstate_iap(&t.transaction_id, uuid).await? {
+        "REFUND_REVERSED" => match state
+            .credits
+            .reinstate_iap(&t.transaction_id, uuid, notice)
+            .await?
+        {
             ReinstateOutcome::Reinstated {
                 credits, withdrawn, ..
             } => Ok(Json(json!({
@@ -120,7 +149,7 @@ pub async fn webhook(
                 "revocationsWithdrawn": withdrawn,
             }))),
             // Idempotent per transaction: a retry after a failed credit credits it.
-            ReinstateOutcome::Uncredited => charge(&state, iap, uuid, &t).await,
+            ReinstateOutcome::Uncredited => charge(&state, iap, notice, &t).await,
             ReinstateOutcome::NotRefunded => {
                 Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
             }
@@ -137,9 +166,10 @@ pub async fn webhook(
 async fn charge(
     state: &SharedState,
     iap: &Iap,
-    uuid: &str,
+    notice: Option<Notice<'_>>,
     t: &Transaction,
 ) -> Result<Json<JsonValue>, ApiError> {
+    let uuid = notice.map_or("", |n| n.uuid);
     let address = state
         .credits
         .wallet_for_iap_token(t.app_account_token.as_deref())
@@ -157,6 +187,7 @@ async fn charge(
                 quantity: Some(t.quantity),
                 revoked: t.revoked,
                 channel: Channel::Notification,
+                notice,
             },
         )
         .await?;
@@ -244,6 +275,7 @@ pub async fn verify(
                 quantity: Some(t.quantity),
                 revoked: t.revoked,
                 channel: Channel::Device,
+                notice: None,
             },
         )
         .await?;
@@ -384,6 +416,7 @@ pub async fn admin_credit(
                 quantity: b.quantity,
                 revoked: false,
                 channel: Channel::Operator,
+                notice: None,
             },
         )
         .await?;
@@ -436,7 +469,14 @@ pub async fn admin_refund(
     }
     match state
         .credits
-        .refund_iap(&b.apple_transaction_id, None, &b.refund_id, &b.reason, None)
+        .refund_iap(
+            &b.apple_transaction_id,
+            None,
+            &b.refund_id,
+            &b.reason,
+            None,
+            None,
+        )
         .await?
     {
         RefundOutcome::Reversed {

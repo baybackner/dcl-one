@@ -16,7 +16,10 @@
 //! - the leaf's P-256 key verifies the signature over `header.payload`;
 //! - the bundle id and environment (and, in production, the app's Apple id)
 //!   match the configuration. A notification's nested
-//!   `signedTransactionInfo` is verified the same way on its own.
+//!   `signedTransactionInfo` is verified the same way on its own;
+//! - a notification's `signedDate` is at most [`NOTIFICATION_MAX_AGE_SECS`]
+//!   old and at most [`NOTIFICATION_MAX_FUTURE_SECS`] ahead, and it carries a
+//!   `notificationUUID`.
 //!
 //! OCSP revocation checks of the chain are not performed.
 
@@ -29,6 +32,13 @@ use x509_parser::der_parser::oid::Oid;
 use x509_parser::prelude::FromDer;
 
 const MAX_SKEW_SECS: i64 = 60;
+/// How old a notification's `signedDate` may be. A retry keeps the original
+/// `signedDate`, and Apple retries an undelivered V2 notification five times,
+/// at 1, 12, 24, 48 and 72 hours after the previous attempt (157 hours in all),
+/// so 7 days keeps every retry. `credits.iap_notifications` keeps its rows as long.
+pub const NOTIFICATION_MAX_AGE_SECS: i64 = 7 * 24 * 3600;
+/// How far ahead of this node's clock a notification's `signedDate` may be.
+pub const NOTIFICATION_MAX_FUTURE_SECS: i64 = 5 * 60;
 const LEAF_MARKER: &[u64] = &[1, 2, 840, 113_635, 100, 6, 11, 1];
 const INTERMEDIATE_MARKER: &[u64] = &[1, 2, 840, 113_635, 100, 6, 2, 1];
 
@@ -73,6 +83,8 @@ pub enum VerifyError {
     App,
     #[error("signed for another environment")]
     Environment,
+    #[error("signedDate is outside the accepted window")]
+    OutOfWindow,
 }
 
 /// The fields of a verified transaction the credits flow reads.
@@ -95,6 +107,8 @@ pub struct Notification {
     pub notification_type: String,
     pub subtype: Option<String>,
     pub notification_uuid: String,
+    /// `signedDate`, in milliseconds since the epoch.
+    pub signed_date_ms: i64,
     pub transaction: Option<Transaction>,
 }
 
@@ -143,6 +157,14 @@ impl Verifier {
     /// Verifies a server notification and its nested transaction.
     pub fn notification(&self, signed: &str, now: i64) -> Result<Notification, VerifyError> {
         let payload = self.verify_jws(signed, now)?;
+        let signed_date_ms = payload
+            .get("signedDate")
+            .and_then(JsonValue::as_i64)
+            .ok_or(VerifyError::Malformed)?;
+        let notification_uuid = str_field(&payload, "notificationUUID")
+            .filter(|s| !s.is_empty())
+            .ok_or(VerifyError::Malformed)?
+            .to_string();
         let app = ["data", "summary", "appData"]
             .iter()
             .find_map(|k| payload.get(*k).filter(|v| v.is_object()))
@@ -156,6 +178,12 @@ impl Verifier {
         if str_field(app, "environment") != Some(self.environment.as_str()) {
             return Err(VerifyError::Environment);
         }
+        let now_ms = now.saturating_mul(1000);
+        if signed_date_ms < now_ms - NOTIFICATION_MAX_AGE_SECS * 1000
+            || signed_date_ms > now_ms + NOTIFICATION_MAX_FUTURE_SECS * 1000
+        {
+            return Err(VerifyError::OutOfWindow);
+        }
         let transaction = match payload
             .get("data")
             .and_then(|d| str_field(d, "signedTransactionInfo"))
@@ -168,9 +196,8 @@ impl Verifier {
                 .ok_or(VerifyError::Malformed)?
                 .to_string(),
             subtype: str_field(&payload, "subtype").map(str::to_string),
-            notification_uuid: str_field(&payload, "notificationUUID")
-                .unwrap_or_default()
-                .to_string(),
+            notification_uuid,
+            signed_date_ms,
             transaction,
         })
     }
@@ -464,15 +491,7 @@ pub(crate) mod testkit {
 
         /// A signed notification of `kind` nesting `transaction`.
         pub fn notification(&self, kind: &str, transaction: Option<String>) -> String {
-            self.notification_with(
-                kind,
-                transaction,
-                serde_json::json!({
-                    "bundleId": BUNDLE,
-                    "appAppleId": APP_APPLE_ID,
-                    "environment": "Sandbox",
-                }),
-            )
+            self.notification_with(kind, transaction, Self::app_data())
         }
 
         /// A signed notification of `kind` with its own `data` app fields.
@@ -480,7 +499,19 @@ pub(crate) mod testkit {
             &self,
             kind: &str,
             transaction: Option<String>,
+            data: JsonValue,
+        ) -> String {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            self.notification_signed_at(kind, transaction, data, now_ms)
+        }
+
+        /// A signed notification of `kind` whose `signedDate` is `signed_date_ms`.
+        pub fn notification_signed_at(
+            &self,
+            kind: &str,
+            transaction: Option<String>,
             mut data: JsonValue,
+            signed_date_ms: i64,
         ) -> String {
             if let Some(t) = transaction {
                 data["signedTransactionInfo"] = JsonValue::String(t);
@@ -488,8 +519,18 @@ pub(crate) mod testkit {
             self.sign(&serde_json::json!({
                 "notificationType": kind,
                 "notificationUUID": format!("uuid-{}", uuid::Uuid::new_v4()),
+                "signedDate": signed_date_ms,
                 "data": data,
             }))
+        }
+
+        /// The `data` app fields `notification` signs.
+        pub fn app_data() -> JsonValue {
+            serde_json::json!({
+                "bundleId": BUNDLE,
+                "appAppleId": APP_APPLE_ID,
+                "environment": "Sandbox",
+            })
         }
     }
 
@@ -779,6 +820,52 @@ mod tests {
             .notification(&c.notification("TEST", None), now())
             .unwrap();
         assert!(test.transaction.is_none());
+    }
+
+    #[test]
+    fn a_notification_signed_outside_the_window_is_refused() {
+        let c = chain(ChainSpec::default());
+        let v = c.verifier(Environment::Sandbox);
+        let now = now();
+        let at = |secs: i64| {
+            let signed = c.notification_signed_at("TEST", None, Chain::app_data(), secs * 1000);
+            v.notification(&signed, now)
+        };
+        // The oldest retry Apple sends and a small clock skew pass.
+        assert_eq!(
+            at(now - 157 * 3600).unwrap().signed_date_ms,
+            (now - 157 * 3600) * 1000
+        );
+        assert!(at(now - NOTIFICATION_MAX_AGE_SECS).is_ok());
+        assert!(at(now + NOTIFICATION_MAX_FUTURE_SECS).is_ok());
+        assert_eq!(
+            at(now - NOTIFICATION_MAX_AGE_SECS - 1).unwrap_err(),
+            VerifyError::OutOfWindow
+        );
+        assert_eq!(
+            at(now + NOTIFICATION_MAX_FUTURE_SECS + 1).unwrap_err(),
+            VerifyError::OutOfWindow
+        );
+    }
+
+    #[test]
+    fn a_notification_without_a_signed_date_or_uuid_is_malformed() {
+        let c = chain(ChainSpec::default());
+        let v = c.verifier(Environment::Sandbox);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let undated = c.sign(&serde_json::json!({
+            "notificationType": "TEST", "notificationUUID": "u-1", "data": Chain::app_data(),
+        }));
+        let unnamed = c.sign(&serde_json::json!({
+            "notificationType": "TEST", "notificationUUID": "", "signedDate": now_ms,
+            "data": Chain::app_data(),
+        }));
+        for signed in [undated, unnamed] {
+            assert_eq!(
+                v.notification(&signed, now()).unwrap_err(),
+                VerifyError::Malformed
+            );
+        }
     }
 
     #[test]

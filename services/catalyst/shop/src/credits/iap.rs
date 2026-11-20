@@ -1,6 +1,6 @@
 // from: credits-server@d9c6a261f:src/logic/iap-mint.ts (mintIapCreditWithCapCheck, mintIapUsdTopUp), src/logic/iap-refund.ts (processRefund, refundUsd), src/logic/iap-quote.ts (evaluateIapPurchase), src/logic/iap-product-catalog.ts (IAP_PRODUCT_CATALOG_USD)
 //! App Store purchases of Credits (`credits.iap_transactions`,
-//! `credits.iap_account_tokens`).
+//! `credits.iap_account_tokens`, `credits.iap_notifications`).
 //!
 //! A purchase is credited from Apple's signed transaction only: the product
 //! decides the Credits (`IAP_PRODUCT_CATALOG_USD`, product id to whole
@@ -43,6 +43,13 @@
 //!
 //! The paths that write both lock the wallet row before the transaction's
 //! row, as an operator block and a card reversal do.
+//!
+//! A server notification's `notificationUUID` is recorded in
+//! `credits.iap_notifications` in the transaction of its effects, so a
+//! redelivery applies nothing. A notification Apple should retry (a held
+//! purchase of an unknown product or over the node's ceiling) and a reversal
+//! whose purchase is credited next, in its own transaction, are recorded by
+//! that credit instead.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -199,6 +206,14 @@ impl Channel {
     }
 }
 
+/// The server notification behind a write, recorded with its effects.
+#[derive(Debug, Clone, Copy)]
+pub struct Notice<'a> {
+    pub uuid: &'a str,
+    /// `signedDate`, in milliseconds since the epoch.
+    pub signed_date_ms: i64,
+}
+
 pub struct Purchase<'a> {
     /// `None`: the transaction's account token names no wallet.
     pub address: Option<&'a str>,
@@ -210,6 +225,8 @@ pub struct Purchase<'a> {
     pub quantity: Option<i64>,
     pub revoked: bool,
     pub channel: Channel,
+    /// The notification that delivered it, if any.
+    pub notice: Option<Notice<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +266,14 @@ impl HoldReason {
             Self::Capped(reason) => reason.as_str(),
             Self::RefundReversed => "refund_reversed",
         }
+    }
+
+    /// A notification held for this reason is answered so Apple retries it.
+    pub fn retried(&self) -> bool {
+        matches!(
+            self,
+            Self::UnknownProduct | Self::Capped(CapReason::ServiceDailyLimit)
+        )
     }
 }
 
@@ -363,6 +388,44 @@ async fn lock_wallet_of(
     Ok(())
 }
 
+/// Records `notice` in this transaction; a uuid another transaction recorded
+/// (a concurrent delivery) answers 409, so Apple retries and then sees it applied.
+async fn claim(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    notice: Option<Notice<'_>>,
+) -> Result<(), ApiError> {
+    let Some(n) = notice else { return Ok(()) };
+    let signed_at = chrono::DateTime::from_timestamp_millis(n.signed_date_ms)
+        .ok_or_else(|| ApiError::bad_request("signedDate out of range"))?
+        .naive_utc();
+    let inserted = sqlx::query(
+        "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) VALUES ($1, $2)          ON CONFLICT (notification_uuid) DO NOTHING",
+    )
+    .bind(n.uuid)
+    .bind(signed_at)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(ApiError::conflict("this notification is already applied"));
+    }
+    Ok(())
+}
+
+/// Drops the claim of a notification whose effects commit without it.
+async fn release(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    notice: Option<Notice<'_>>,
+) -> Result<(), ApiError> {
+    if let Some(n) = notice {
+        sqlx::query("DELETE FROM credits.iap_notifications WHERE notification_uuid = $1")
+            .bind(n.uuid)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
 fn grant_key(transaction_id: &str) -> String {
     format!("apple-iap:{transaction_id}")
 }
@@ -396,10 +459,21 @@ impl Credits {
         })
     }
 
+    /// Whether a notification's effects were recorded.
+    pub async fn iap_notification_applied(&self, uuid: &str) -> Result<bool, ApiError> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM credits.iap_notifications WHERE notification_uuid = $1)",
+        )
+        .bind(uuid)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
     /// Credits one App Store transaction once; see the module docs.
     pub async fn credit_iap(&self, iap: &Iap, p: Purchase<'_>) -> Result<CreditOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(p.transaction_id)).await?;
+        claim(&mut tx, p.notice).await?;
         let existing = sqlx::query(
             "SELECT status, address, floor(credits)::bigint AS credits, product_id, quantity, \
                     refunded_at IS NOT NULL AS refunded \
@@ -413,23 +487,27 @@ impl Credits {
         if let Some(row) = existing {
             let status: String = row.get("status");
             let address: Option<String> = row.get("address");
-            match (status.as_str(), address) {
-                ("paid" | "imported", Some(_)) if p.revoked => return Ok(CreditOutcome::Revoked),
+            let settled = match (status.as_str(), address) {
+                ("paid" | "imported", Some(_)) if p.revoked => Some(CreditOutcome::Revoked),
                 ("imported", Some(_)) if row.get::<bool, _>("refunded") => {
-                    return Ok(CreditOutcome::Refunded);
+                    Some(CreditOutcome::Refunded)
                 }
-                ("paid" | "imported", Some(address)) => {
-                    return Ok(CreditOutcome::Credited {
-                        address,
-                        credits: row.get::<Option<i64>, _>("credits").unwrap_or(0),
-                        already: true,
-                    });
-                }
+                ("paid" | "imported", Some(address)) => Some(CreditOutcome::Credited {
+                    address,
+                    credits: row.get::<Option<i64>, _>("credits").unwrap_or(0),
+                    already: true,
+                }),
                 ("held", address) => {
                     held_for = address;
                     held_as = Some((row.get("product_id"), row.get("quantity")));
+                    None
                 }
-                _ => return Ok(CreditOutcome::Refunded),
+                _ => Some(CreditOutcome::Refunded),
+            };
+            if let Some(outcome) = settled {
+                // Commits the notification's record only.
+                tx.commit().await?;
+                return Ok(outcome);
             }
         }
         if p.revoked {
@@ -562,10 +640,12 @@ impl Credits {
         refund_ref: &str,
         reason: &str,
         percentage: Option<i64>,
+        notice: Option<Notice<'_>>,
     ) -> Result<RefundOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
+        claim(&mut tx, notice).await?;
         let row = sqlx::query(
             "SELECT status, address, refunded_at IS NOT NULL AS refunded, $2 = ANY(refund_refs) AS applied \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
@@ -596,6 +676,7 @@ impl Credits {
         let refunded: bool = row.get("refunded");
         // A redelivered refund, even after its reversal, applies once.
         if row.get::<bool, _>("applied") {
+            tx.commit().await?;
             return Ok(RefundOutcome::AlreadyRefunded);
         }
         match (status.as_str(), address) {
@@ -637,7 +718,10 @@ impl Credits {
                 self.charge_back_iap(tx, transaction_id, address, &charged, refund_ref, reason)
                     .await
             }
-            _ => Ok(RefundOutcome::AlreadyRefunded),
+            _ => {
+                tx.commit().await?;
+                Ok(RefundOutcome::AlreadyRefunded)
+            }
         }
     }
 
@@ -722,10 +806,12 @@ impl Credits {
         &self,
         transaction_id: &str,
         refund_ref: &str,
+        notice: Option<Notice<'_>>,
     ) -> Result<ReinstateOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
+        claim(&mut tx, notice).await?;
         let row = sqlx::query(
             "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
                     refunded_at IS NOT NULL AS refunded, \
@@ -735,6 +821,7 @@ impl Credits {
         .bind(transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
+        // Dropping `tx` drops the claim too: the credit that follows records the notification.
         let Some(row) = row else {
             return Ok(ReinstateOutcome::Uncredited);
         };
@@ -745,6 +832,7 @@ impl Credits {
             "held" => return Ok(ReinstateOutcome::Uncredited),
             // An upstream purchase's marker (the import) is never cleared.
             "refunded" if row.get::<bool, _>("upstream") => {
+                tx.commit().await?;
                 return Ok(ReinstateOutcome::NotRefunded);
             }
             "refunded" if !credited => {
@@ -759,14 +847,16 @@ impl Credits {
                 .bind(HoldReason::RefundReversed.as_str())
                 .execute(&mut *tx)
                 .await?;
+                release(&mut tx, notice).await?;
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::Uncredited);
             }
-            "refunded" | "imported" if row.get::<bool, _>("refunded") => match address {
-                Some(address) => address,
-                None => return Ok(ReinstateOutcome::NotRefunded),
-            },
-            _ => return Ok(ReinstateOutcome::NotRefunded),
+            "refunded" | "imported" if row.get::<bool, _>("refunded") => address,
+            _ => None,
+        };
+        let Some(address) = address else {
+            tx.commit().await?;
+            return Ok(ReinstateOutcome::NotRefunded);
         };
         let credits: String = row.get("revoked");
         sqlx::query(
@@ -931,6 +1021,9 @@ async fn hold(
 ) -> Result<CreditOutcome, ApiError> {
     if p.channel == Channel::Operator {
         return Ok(CreditOutcome::Held(reason));
+    }
+    if reason.retried() {
+        release(&mut tx, p.notice).await?;
     }
     sqlx::query(
         "INSERT INTO credits.iap_transactions AS t \
