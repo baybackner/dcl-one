@@ -238,7 +238,7 @@ saves or grant host authority. Keep live CRDT/tick state in the scene runtime;
 persist only what the restart contract requires. Test cross-scene/player
 isolation, redeploy, revocation and restart.
 
-For now a Genesis scene's storage scope (realm `main`) is its effective base
+A Genesis scene's storage scope (realm `main`) is its effective base
 parcel: the declared `metadata.scene.base` when it is one of the scene's parcels,
 else its least parcel. The resolver reads it at `entity_metadata -> 'v'`, where
 content stores the metadata as `{"v": metadata}`.
