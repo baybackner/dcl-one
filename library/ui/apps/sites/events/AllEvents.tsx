@@ -7,6 +7,7 @@ import { DayCard, UpcomingCard } from './cards'
 import { MyEvents, type MyEventsProps } from './MyEvents'
 import type { ExperienceCardProps } from './types'
 import { useEventsCopy } from './locale'
+import { Notice } from './Notice'
 import styles from './AllEvents.module.css'
 
 type AllEventsDay = {
@@ -173,16 +174,20 @@ function AllEvents({
             </button>
           </nav>
           {status === 'unavailable' ? (
-            <div role="alert" className={styles.message}>
-              <p>{text('Events are temporarily unavailable.')}</p>
-              {onRetry ? (
-                <Button variant="tertiary" size="sm" onClick={onRetry}>
-                  {text('Retry')}
-                </Button>
-              ) : null}
+            <div className={styles.message}>
+              <Notice tone="error">
+                {text('Events are temporarily unavailable.')}{' '}
+                {onRetry ? (
+                  <Button variant="tertiary" size="sm" onClick={onRetry}>
+                    {text('Retry')}
+                  </Button>
+                ) : null}
+              </Notice>
             </div>
           ) : status === 'loading' ? (
-            <p className={styles.message}>{text('Loading events…')}</p>
+            <div className={styles.message}>
+              <Notice>{text('Loading events…')}</Notice>
+            </div>
           ) : layout === 'list' ? (
             list.length ? (
               <ul

@@ -155,6 +155,7 @@ describe("when opening the Users page", () => {
       await user.click(within(dialog).getByRole("switch", { name: "Edit Events" }));
       await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
       expect((await within(dialog).findByRole("alert")).textContent).toBe("Permissions not saved");
+      expect(within(dialog).getByRole("alert").dataset.tone).toBe("error");
       expect(within(dialog).getByRole<HTMLInputElement>("switch", { name: "Edit Events" }).checked).toBe(true);
       expect(screen.queryByText("Permissions updated")).toBeNull();
       expect(readsOf(LIST)).toBe(1);

@@ -29,4 +29,24 @@ describe("when the actual association controls render", () => {
       expect(html).toMatch(/<select[^>]*disabled/);
     });
   });
+
+  describe("and the communities and schedules reads failed", () => {
+    beforeEach(() => {
+      options = { ...options, communitiesError: "Social down", schedulesError: "Schedules down" };
+      html = renderToString(<HangoutAssociations draft={draft} options={options} canEditAny canChangeCommunity onEdit={() => {}} />);
+    });
+
+    it("should report each failure in an error notice", () => {
+      expect(html).toMatch(/<p[^>]*data-tone="error"[^>]*role="alert"[^>]*>Could not load your communities: Social down<\/p>/);
+      expect(html).toMatch(/<p[^>]*data-tone="error"[^>]*role="alert"[^>]*>Could not load schedules: Schedules down<\/p>/);
+    });
+  });
+
+  describe("and the options are still loading", () => {
+    it("should keep a plain loading line, not a notice", () => {
+      html = renderToString(<HangoutAssociations draft={draft} options={null} canEditAny canChangeCommunity onEdit={() => {}} />);
+      expect(html).toContain('<p role="status">Loading communities and schedules…</p>');
+      expect(html).not.toContain("data-tone");
+    });
+  });
 });

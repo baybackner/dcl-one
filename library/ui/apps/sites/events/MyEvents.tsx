@@ -2,6 +2,7 @@ import { GeneralAdd } from '../../../foundations/icons'
 import { Button } from '../shared/Button/Button'
 import { MyEventCard } from './cards'
 import { useEventsCopy } from './locale'
+import { Notice } from './Notice'
 import type { MyEventCardProps } from './types'
 import styles from './MyEvents.module.css'
 
@@ -19,20 +20,22 @@ function MyEvents({ cards, status, createHref, onRetry }: MyEventsProps) {
   const { text } = useEventsCopy()
   if (status === 'unavailable')
     return (
-      <div role="alert" className={styles.empty}>
-        <p className={styles.emptyTitle}>{text("Couldn't load your events.")}</p>
-        {onRetry ? (
-          <Button variant="tertiary" size="sm" onClick={onRetry}>
-            {text('Retry')}
-          </Button>
-        ) : null}
+      <div className={styles.empty}>
+        <Notice tone="error">
+          {text("Couldn't load your events.")}{' '}
+          {onRetry ? (
+            <Button variant="tertiary" size="sm" onClick={onRetry}>
+              {text('Retry')}
+            </Button>
+          ) : null}
+        </Notice>
       </div>
     )
   if (status === 'loading')
     return (
-      <p role="status" className={styles.empty}>
-        {text('Loading your events…')}
-      </p>
+      <div className={styles.empty}>
+        <Notice>{text('Loading your events…')}</Notice>
+      </div>
     )
   if (!cards.length)
     return (

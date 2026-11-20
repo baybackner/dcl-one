@@ -127,6 +127,7 @@ describe('AllEvents', () => {
     it('should say the events are loading, not that there are none', () => {
       mount({ views, mine: { cards: [], status: 'loading', createHref: '/events/new-event' } })
       expect(screen.getByRole('status').textContent).toBe('Loading your events…')
+      expect(screen.getByRole('status').dataset.tone).toBe('info')
       expect(screen.queryByText("You don't have any event created")).toBeNull()
     })
 
@@ -138,6 +139,7 @@ describe('AllEvents', () => {
       })
       const alert = screen.getByRole('alert')
       expect(alert.textContent).toContain("Couldn't load your events.")
+      expect(alert.dataset.tone).toBe('error')
       await userEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
       expect(onRetry).toHaveBeenCalledOnce()
       expect(screen.queryByText("You don't have any event created")).toBeNull()

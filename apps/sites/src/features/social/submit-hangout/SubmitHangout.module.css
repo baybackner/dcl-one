@@ -13,21 +13,14 @@
   background-attachment: fixed;
 }
 
-.loading,
-.loadError {
-  margin: 0;
-  padding: var(--dcl-space-24) 20px;
-  font-size: 16px;
-}
-
-.loadError {
+/* The editor's loading or failed-read notice, with its retry under it. */
+.loadState {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--dcl-space-16);
+  padding: var(--dcl-space-24) 20px;
 }
-
-.loadError p { margin: 0; color: var(--dcl-text-primary); }
 
 .authoring .editorHeader,
 .authoring .editorControls {

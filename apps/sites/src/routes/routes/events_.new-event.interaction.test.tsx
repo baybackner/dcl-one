@@ -74,6 +74,7 @@ describe("when editing a hangout through its route", () => {
     it("should show the editor header and a loading status before the footer", () => {
       expect(screen.getByRole("heading", { name: "Edit Event" })).toBeTruthy();
       expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
+      expect(screen.getByRole("status").dataset.tone).toBe("info");
       expect(screen.getByRole("status").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
@@ -104,6 +105,7 @@ describe("when editing a hangout through its route", () => {
     it("should stay on the edit page and show the error with a retry under the header", () => {
       expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
       expect(screen.getByRole("alert").textContent).toBe("Event service unavailable");
+      expect(screen.getByRole("alert").dataset.tone).toBe("error");
       expect(screen.getByRole("heading", { name: "Edit Event" }).compareDocumentPosition(screen.getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
@@ -285,6 +287,7 @@ describe("when editing a hangout through its route", () => {
         vi.mocked(authoring.deleteHangout).mockRejectedValueOnce(new Error("Delete denied"));
         await user.click(screen.getByRole("button", { name: "Delete event" }));
         expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toBe("We couldn't delete your event. Please try again.");
+        expect(within(screen.getByRole("dialog")).getByRole("alert").dataset.tone).toBe("error");
         expect(within(screen.getByRole("dialog")).getByRole<HTMLButtonElement>("button", { name: "Delete event" }).disabled).toBe(false);
         expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
         expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(false);

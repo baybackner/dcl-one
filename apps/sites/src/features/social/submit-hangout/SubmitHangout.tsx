@@ -236,8 +236,8 @@ function SubmitHangoutInner({
   const canSubmit = !uploading && communityAllowed &&
     FORM_ORDER.every((section) => isStepValid(section, d));
   const onEdit = (patch: Partial<HangoutDraft>) => send({ type: "EDIT", patch });
-  const uploadFeedback = uploadError ? <p role="alert">{errorText(uploadError)}</p>
-    : uploading ? <p role="status">{text("Uploading image…")}</p> : null;
+  const uploadFeedback = uploadError ? <Notice tone="error">{errorText(uploadError)}</Notice>
+    : uploading ? <Notice>{text("Uploading image…")}</Notice> : null;
 
   function fields(section: HangoutStateId) {
     return (
@@ -257,7 +257,7 @@ function SubmitHangoutInner({
         {section === "details" && !editingInline && (
           <HangoutAssociations draft={d} options={options} canEditAny={canEditAny} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
         )}
-        {section === "details" && !communityAllowed && <p role="alert">{text("Choose a community you manage, or select None.")}</p>}
+        {section === "details" && !communityAllowed && <Notice tone="error">{text("Choose a community you manage, or select None.")}</Notice>}
       </>
     );
   }
@@ -379,16 +379,14 @@ function SubmitHangoutInner({
         )}
 
         {value === "submitting" && (
-          <p className="submit-hangout__status" role="status">
-            {text("Submitting your hangout for review…")}
-          </p>
+          <Notice>{text("Submitting your hangout for review…")}</Notice>
         )}
         {value === "submitted" && !needsSignIn && <SubmitSuccess mode={mode} approved={state.context.result?.approved ?? false} />}
 
         {state.context.error && value === "review" && (
-          <p className="submit-hangout__error" role="alert">
+          <Notice tone="error">
             {text("Submit failed: {error}. Please try again.", { error: errorText(state.context.error) })}
-          </p>
+          </Notice>
         )}
       </div>
     </div>
@@ -415,11 +413,11 @@ export function SubmitHangoutLoading({ mode, error, onRetry }: { mode: "create" 
     <div className={`submit-hangout ${styles.authoring}`} data-editor>
       <EditorHeader mode={mode} />
       {error ? (
-        <div className={styles.loadError}>
-          <p role="alert">{errorText(error)}</p>
+        <div className={styles.loadState}>
+          <Notice tone="error">{errorText(error)}</Notice>
           {onRetry && <Button variant="tertiary" onClick={onRetry}>{text("Retry")}</Button>}
         </div>
-      ) : <p className={styles.loading} role="status">{text("Loading your hangout…")}</p>}
+      ) : <div className={styles.loadState}><Notice>{text("Loading your hangout…")}</Notice></div>}
     </div>
   );
 }
@@ -549,11 +547,11 @@ function StepFields({
             </select>
           </label>
         ) : (
-          <p className="submit-hangout__hint" role="status">
+          <Notice tone={categoriesError ? "warning" : "info"}>
             {categoriesError
               ? text("Categories couldn't be loaded right now — you can continue and pick one later.")
               : text("No categories are available right now — you can continue without one.")}
-          </p>
+          </Notice>
         )}
         {privateFieldsEditable && <>
           <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Contact email")}<input className={`submit-hangout__field ${styles.field}`} type="email" value={draft.contact} onChange={(event) => onEdit({ contact: event.target.value })} /></label>

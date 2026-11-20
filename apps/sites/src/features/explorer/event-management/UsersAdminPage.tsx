@@ -1,5 +1,6 @@
 import { adminCopy } from "@dcl/one-ui/apps/sites/events/admin-copy";
 import { AdminPage, adminPageStyles } from "@dcl/one-ui/apps/sites/events/AdminPage";
+import { Notice } from "@dcl/one-ui/apps/sites/events/Notice";
 import { PermissionsModal } from "@dcl/one-ui/apps/sites/events/PermissionsModal";
 import { UsersTable, type AdminUserRow } from "@dcl/one-ui/apps/sites/events/UsersTable";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -90,7 +91,7 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
           permissions={editing.permissions}
           self={access.identity?.signer}
           busy={busy}
-          feedback={error ? <p className={adminPageStyles.error} role="alert">{error}</p> : undefined}
+          feedback={error ? <Notice tone="error">{error}</Notice> : undefined}
           onClose={() => { setError(null); setEditing(null); }}
           onSubmit={(payload) => void save(payload)}
         />

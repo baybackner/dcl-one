@@ -3,6 +3,7 @@ import { CheckboxLabel } from '../../../components/CheckboxLabel/CheckboxLabel'
 import { Button } from '../shared/Button/Button'
 import { adminCopy, REJECT_REASONS, type RejectReasonId } from './admin-copy'
 import { Dialog } from './Dialog'
+import { Notice } from './Notice'
 import styles from './AdminModal.module.css'
 
 const MAX_NOTES_LENGTH = 2000
@@ -56,11 +57,7 @@ export function RejectEventModal({ busy, feedback, onClose, onSubmit }: RejectEv
             </li>
           ))}
         </ul>
-        {missing ? (
-          <p className={styles.error} role="alert">
-            {adminCopy.reject.required}
-          </p>
-        ) : null}
+        {missing ? <Notice tone="error">{adminCopy.reject.required}</Notice> : null}
         <label className={styles.notes}>
           <span className={styles.notesLabel}>{adminCopy.reject.otherLabel}</span>
           <textarea

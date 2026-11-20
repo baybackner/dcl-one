@@ -2,6 +2,7 @@ import { adminCopy, rejectionReason, relativeDateLabel, type RejectReasonId } fr
 import { AdminPage, adminPageStyles } from "@dcl/one-ui/apps/sites/events/AdminPage";
 import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
 import { PendingEventCard } from "@dcl/one-ui/apps/sites/events/PendingEventCard";
+import { Notice } from "@dcl/one-ui/apps/sites/events/Notice";
 import { RejectEventModal } from "@dcl/one-ui/apps/sites/events/RejectEventModal";
 import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -137,17 +138,17 @@ function PendingQueue({ access }: { access: EventAdminAccess }) {
 
   const reviewPending = review !== null && eventReviewStatus(review) === "pending";
   const reviewStart = review ? eventOccurrence(review).start : null;
-  const errorAlert = error ? <p className={adminPageStyles.error} role="alert">{error}</p> : undefined;
+  const errorAlert = error ? <Notice tone="error">{error}</Notice> : undefined;
 
   return (
     <>
       <section className={adminPageStyles.section} aria-labelledby="pending-events-heading">
         <h1 id="pending-events-heading" className={adminPageStyles.title}>{adminCopy.pending.title}</h1>
         {queue.isPending ? (
-          <p className={adminPageStyles.status} role="status">{adminCopy.pending.loading}</p>
+          <div className={adminPageStyles.status}><Notice>{adminCopy.pending.loading}</Notice></div>
         ) : queue.isError ? (
           <div className={adminPageStyles.status}>
-            <p role="alert">{failure(queue.error)}</p>
+            <Notice tone="error">{failure(queue.error)}</Notice>
             <Button variant="secondary" onClick={() => void queue.refetch()}>{adminCopy.pending.retry}</Button>
           </div>
         ) : pending.length ? cards(pending) : (

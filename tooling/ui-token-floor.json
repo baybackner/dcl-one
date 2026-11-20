@@ -137,7 +137,7 @@
   },
   "apps/sites/src/features/social/submit-hangout/DeleteEventDialog.module.css": {
     "primitives": 0,
-    "tokens": 7
+    "tokens": 6
   },
   "apps/sites/src/features/social/submit-hangout/FeaturedAssetPicker.module.css": {
     "primitives": 2,
@@ -149,7 +149,7 @@
   },
   "apps/sites/src/features/social/submit-hangout/SubmitHangout.module.css": {
     "primitives": 0,
-    "tokens": 61
+    "tokens": 60
   },
   "apps/sites/src/features/social/submit-hangout/SubmitSuccess.module.css": {
     "primitives": 0,

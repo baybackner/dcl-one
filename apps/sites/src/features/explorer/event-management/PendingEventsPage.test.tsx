@@ -118,7 +118,9 @@ describe("when opening the Pending Events page", () => {
 
     it("should offer a retry instead of redirecting, and load the page once it succeeds", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
-      expect((await screen.findByRole("alert")).textContent).toBe("Settings unavailable");
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toBe("Settings unavailable");
+      expect(alert.dataset.tone).toBe("error");
       expect(screen.getByTestId("location").textContent).toBe(PATH);
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(await screen.findByRole("link", { name: "Moon concert" })).toBeTruthy();
@@ -159,7 +161,9 @@ describe("when opening the Pending Events page", () => {
 
     it("should show the failure and reload the queue on retry", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
-      expect((await screen.findByRole("alert")).textContent).toBe("Queue unavailable");
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toBe("Queue unavailable");
+      expect(alert.dataset.tone).toBe("error");
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(await screen.findByRole("link", { name: "Moon concert" })).toBeTruthy();
     });
@@ -230,6 +234,7 @@ describe("when opening the Pending Events page", () => {
     const reject = screen.getByRole("dialog", { name: "Reject Reason*" });
     await user.click(within(reject).getByRole("button", { name: "Submit" }));
     expect(within(reject).getByRole("alert").textContent).toBe("Select at least one reason");
+    expect(within(reject).getByRole("alert").dataset.tone).toBe("error");
     expect(postJSON).not.toHaveBeenCalled();
   });
 

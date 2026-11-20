@@ -70,6 +70,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
     const picker = screen.getByLabelText("Upload cover image");
     await user.upload(picker, image);
     expect((await screen.findByRole("alert")).textContent).toBe("Cover upload failed");
+    expect(screen.getByRole("alert").dataset.tone).toBe("error");
     await user.upload(picker, image);
     expect(await screen.findByRole("img", { name: "Hangout cover" })).toBeTruthy();
     expect(upload).toHaveBeenCalledTimes(2);

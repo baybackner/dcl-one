@@ -1,5 +1,6 @@
 import { adminCopy } from "@dcl/one-ui/apps/sites/events/admin-copy";
 import { adminPageStyles } from "@dcl/one-ui/apps/sites/events/AdminPage";
+import { Notice } from "@dcl/one-ui/apps/sites/events/Notice";
 import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
 import type { ReactNode } from "react";
 import { Navigate } from "react-router";
@@ -23,11 +24,11 @@ export function AdminAccessGate({ access, allowed, children }: { access: EventAd
       </div>
     );
   }
-  if (access.loading) return <p className={adminPageStyles.status} role="status">{adminCopy.pending.loading}</p>;
+  if (access.loading) return <div className={adminPageStyles.status}><Notice>{adminCopy.pending.loading}</Notice></div>;
   if (access.error) {
     return (
       <div className={adminPageStyles.status}>
-        <p role="alert">{access.error.message}</p>
+        <Notice tone="error">{access.error.message}</Notice>
         <Button variant="secondary" onClick={access.retry}>{adminCopy.pending.retry}</Button>
       </div>
     );

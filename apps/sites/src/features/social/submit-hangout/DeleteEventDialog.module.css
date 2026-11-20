@@ -17,14 +17,11 @@
   line-height: 1.334;
 }
 
-.copy,
-.error {
+.copy {
   margin: 0;
   font-size: 16px;
   line-height: 1.5;
 }
-
-.error { color: var(--dcl-feedback-error); }
 
 .actions {
   display: flex;

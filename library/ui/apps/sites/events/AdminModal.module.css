@@ -98,12 +98,6 @@
   outline: none;
 }
 
-.error {
-  margin: 0;
-  color: var(--dcl-feedback-error);
-  font-size: var(--dcl-font-size-body-xs);
-}
-
 .identity {
   display: flex;
   align-items: center;

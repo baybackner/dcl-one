@@ -34,14 +34,13 @@
   margin-top: var(--dcl-space-48);
 }
 
+/* A page's loading or failure notice, with its retry under it. */
 .status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dcl-space-16);
   margin: var(--dcl-space-24) 0;
-  color: var(--dcl-text-secondary);
-}
-
-.error {
-  margin: var(--dcl-space-8) 0 0;
-  color: var(--dcl-feedback-error);
 }
 
 /* The outcome of an approval, rejection or permission save, as the source's snackbar. */
