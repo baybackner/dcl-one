@@ -681,6 +681,7 @@ pub async fn serve(
         oz_sleep_between_checks: Duration::from_millis(
             config.economy.oz_sleep_time_between_checks_ms,
         ),
+        oz_accounts_first_wait: shop::evm::relayer::ACCOUNTS_FIRST_WAIT,
         meta_tx_broadcast_enabled: config.economy.meta_tx_broadcast_enabled,
         relayer_private_key: Config::non_empty(&config.economy.relayer_private_key),
         transactions_upstream_url: Config::non_empty(&config.economy.transactions_upstream_url),
@@ -719,6 +720,7 @@ pub async fn serve(
         shop::evm::State::new(pool.clone(), http_client.clone(), economy_settings)
             .context("provisioning the economy relayers")?,
     );
+    shop::evm::spawn_jobs(&economy_state, &jobs);
     shop::checkout::spawn_jobs(&economy_state, &jobs);
 
     let price = Arc::new(price::State::new(
