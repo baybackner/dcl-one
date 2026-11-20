@@ -35,10 +35,14 @@ const MAX_SKEW_SECS: i64 = 60;
 /// How old a notification's `signedDate` may be. A retry keeps the original
 /// `signedDate`, and Apple retries an undelivered V2 notification five times,
 /// at 1, 12, 24, 48 and 72 hours after the previous attempt (157 hours in all),
-/// so 7 days keeps every retry. `credits.iap_notifications` keeps its rows as long.
+/// so 7 days keeps every retry.
 pub const NOTIFICATION_MAX_AGE_SECS: i64 = 7 * 24 * 3600;
-/// How far ahead of this node's clock a notification's `signedDate` may be.
+/// How far ahead of this node's clock a notification's `signedDate` may be;
+/// one further ahead is answered for a retry (the node's clock is behind).
 pub const NOTIFICATION_MAX_FUTURE_SECS: i64 = 5 * 60;
+/// How long `credits.iap_notifications` keeps a record: the accepted age plus
+/// a day, so a node whose clock differs from the purging node's still finds it.
+pub const NOTIFICATION_RECORD_SECS: i64 = NOTIFICATION_MAX_AGE_SECS + 24 * 3600;
 const LEAF_MARKER: &[u64] = &[1, 2, 840, 113_635, 100, 6, 11, 1];
 const INTERMEDIATE_MARKER: &[u64] = &[1, 2, 840, 113_635, 100, 6, 2, 1];
 
@@ -83,8 +87,12 @@ pub enum VerifyError {
     App,
     #[error("signed for another environment")]
     Environment,
-    #[error("signedDate is outside the accepted window")]
-    OutOfWindow,
+    /// Signed more than [`NOTIFICATION_MAX_AGE_SECS`] ago: a retry carries the same date.
+    #[error("signedDate is older than the accepted window")]
+    Expired { signed_date_ms: i64 },
+    /// Signed more than [`NOTIFICATION_MAX_FUTURE_SECS`] ahead of this node's clock.
+    #[error("signedDate is ahead of this node's clock")]
+    Ahead { signed_date_ms: i64 },
 }
 
 /// The fields of a verified transaction the credits flow reads.
@@ -179,10 +187,11 @@ impl Verifier {
             return Err(VerifyError::Environment);
         }
         let now_ms = now.saturating_mul(1000);
-        if signed_date_ms < now_ms - NOTIFICATION_MAX_AGE_SECS * 1000
-            || signed_date_ms > now_ms + NOTIFICATION_MAX_FUTURE_SECS * 1000
-        {
-            return Err(VerifyError::OutOfWindow);
+        if signed_date_ms < now_ms - NOTIFICATION_MAX_AGE_SECS * 1000 {
+            return Err(VerifyError::Expired { signed_date_ms });
+        }
+        if signed_date_ms > now_ms + NOTIFICATION_MAX_FUTURE_SECS * 1000 {
+            return Err(VerifyError::Ahead { signed_date_ms });
         }
         let transaction = match payload
             .get("data")
@@ -838,13 +847,19 @@ mod tests {
         );
         assert!(at(now - NOTIFICATION_MAX_AGE_SECS).is_ok());
         assert!(at(now + NOTIFICATION_MAX_FUTURE_SECS).is_ok());
+        let old = now - NOTIFICATION_MAX_AGE_SECS - 1;
         assert_eq!(
-            at(now - NOTIFICATION_MAX_AGE_SECS - 1).unwrap_err(),
-            VerifyError::OutOfWindow
+            at(old).unwrap_err(),
+            VerifyError::Expired {
+                signed_date_ms: old * 1000
+            }
         );
+        let ahead = now + NOTIFICATION_MAX_FUTURE_SECS + 1;
         assert_eq!(
-            at(now + NOTIFICATION_MAX_FUTURE_SECS + 1).unwrap_err(),
-            VerifyError::OutOfWindow
+            at(ahead).unwrap_err(),
+            VerifyError::Ahead {
+                signed_date_ms: ahead * 1000
+            }
         );
     }
 

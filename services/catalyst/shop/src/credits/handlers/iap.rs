@@ -7,12 +7,13 @@
 //!   credits the wallet registered for the transaction's account token and
 //!   `REFUND` reverses it (`REFUND_REVERSED` undoes that). A purchase not
 //!   credited is held (`credits::iap`). A notification whose `signedDate` is
-//!   outside the accepted window (`credits::apple`) is refused with 200, so
+//!   older than the accepted window (`credits::apple`) is refused with 200, so
 //!   Apple stops sending it; one already applied (its `notificationUUID`
 //!   recorded) answers 200 and applies nothing. Every other outcome answers
-//!   200 except the ones Apple should retry: an unknown product, a purchase
-//!   over the node's daily ceiling, a concurrent delivery of the same
-//!   notification (409) and a node without App Store configuration (503).
+//!   200 except the ones Apple should retry: a `signedDate` ahead of the
+//!   node's clock (503), an unknown product, a purchase over the node's daily
+//!   ceiling, a concurrent delivery of the same notification (409) and a node
+//!   without App Store configuration (503).
 //! - `POST /credits/iap/verify` (`/v1/iap/verify`, signed fetch): the device
 //!   posts StoreKit's `jwsRepresentation`; it credits the signer only when the
 //!   transaction's account token is the signer's. Business outcomes answer
@@ -74,14 +75,23 @@ pub async fn webhook(
         .ok_or_else(|| ApiError::bad_request("missing signedPayload"))?;
     let notification = match iap.verifier.notification(&signed, now()) {
         Ok(n) => n,
-        // Signed by Apple but out of date: a retry carries the same signedDate.
-        Err(VerifyError::OutOfWindow) => {
+        // Signed by Apple but too old: a retry carries the same signedDate.
+        Err(VerifyError::Expired { signed_date_ms }) => {
             tracing::warn!(
-                "app store notification refused: signedDate outside the accepted window"
+                signed_date_ms,
+                "app store notification refused: signedDate older than the accepted window; credit or refund it through /admin/iap/credits or /admin/iap/refunds"
             );
             return Ok(Json(
                 json!({ "ok": true, "error": "signed_date_out_of_window" }),
             ));
+        }
+        // Ahead of this node's clock: answered for a retry, which a node with a correct clock accepts.
+        Err(VerifyError::Ahead { signed_date_ms }) => {
+            tracing::warn!(
+                signed_date_ms,
+                "app store notification refused: signedDate ahead of this node's clock; answered for a retry"
+            );
+            return Err(ApiError::service_unavailable("signed_date_ahead"));
         }
         Err(e) => {
             tracing::warn!(error = %e, "app store notification refused");

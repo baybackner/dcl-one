@@ -80,7 +80,7 @@ pub const CAPTCHA_PURGE_BATCH: i64 = 5_000;
 /// chain: `usage::expiry_bound_sql`), purge one batch of old captcha
 /// challenges (`expires_at < $3`, the `captcha_challenges_expires_idx`
 /// statement) and one of App Store notification records past the accepted
-/// age (`signed_at < $6`, `iap_notifications_signed_idx`), list the checkouts awaiting compensation and the outbox lines
+/// age plus a day (`signed_at < $6`, `iap_notifications_signed_idx`), list the checkouts awaiting compensation and the outbox lines
 /// awaiting a broker attempt (a frozen checkout's lines only while their buy
 /// is unsettled), all in one statement; the clock is a bind.
 pub(crate) const OUTBOX_TICK_SQL: &str = "WITH expired AS ( \
@@ -170,7 +170,7 @@ impl OutboxWorker {
             .bind(now - CAPTCHA_PURGE_AFTER)
             .bind(CAPTCHA_PURGE_BATCH)
             .bind(self.credits.usage_chain)
-            .bind(now - chrono::Duration::seconds(super::apple::NOTIFICATION_MAX_AGE_SECS))
+            .bind(now - chrono::Duration::seconds(super::apple::NOTIFICATION_RECORD_SECS))
             .fetch_all(&self.credits.pool)
             .await?;
         let mut expired = 0i64;

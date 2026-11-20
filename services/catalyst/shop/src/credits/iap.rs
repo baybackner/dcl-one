@@ -32,7 +32,10 @@
 //! from credits-server is charged back the same way; it keeps its
 //! `imported` status and `refunded_at` marks the refund. A refund reference
 //! (Apple's notification uuid, an operator's refund id) applies once, even
-//! after a reversal. A refund of a transaction never credited, or held,
+//! after a reversal. A transaction is refunded once (Apple's
+//! `revocationPercentage` is its refunded share): a refund with another
+//! reference of a transaction already refunded is recorded, not charged
+//! back again. A refund of a transaction never credited, or held,
 //! leaves a `refunded` row that keeps it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
 //! what was charged back, withdraws its revocations not sent yet while the
@@ -49,7 +52,8 @@
 //! redelivery applies nothing. A notification Apple should retry (a held
 //! purchase of an unknown product or over the node's ceiling) and a reversal
 //! whose purchase is credited next, in its own transaction, are recorded by
-//! that credit instead.
+//! that credit instead. A reversal signed before the row's current refund
+//! (one whose record is kept) reverses an earlier refund and applies nothing.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -399,7 +403,8 @@ async fn claim(
         .ok_or_else(|| ApiError::bad_request("signedDate out of range"))?
         .naive_utc();
     let inserted = sqlx::query(
-        "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) VALUES ($1, $2)          ON CONFLICT (notification_uuid) DO NOTHING",
+        "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) VALUES ($1, $2) \
+         ON CONFLICT (notification_uuid) DO NOTHING",
     )
     .bind(n.uuid)
     .bind(signed_at)
@@ -575,18 +580,20 @@ impl Credits {
             return hold(tx, &p, Some(&address), value, HoldReason::Capped(reason)).await;
         }
 
-        // A reversed refund's references stay, so its redelivery is not applied again.
-        let refund_refs: Option<Vec<String>> = sqlx::query_scalar(
-            "DELETE FROM credits.iap_transactions WHERE transaction_id = $1 AND status = 'held' \
-             RETURNING refund_refs",
-        )
-        .bind(p.transaction_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO credits.iap_transactions \
-                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, status, credited_by, refund_refs) \
-             VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, 'paid', $8, COALESCE($9, '{}'::text[]))",
+        // A held row turns `paid` in place: its account token, original id and
+        // refund references (a reversal's redelivery applies once) stay. Its
+        // `created_at` becomes the credit's time, which the caps count.
+        let written = sqlx::query(
+            "INSERT INTO credits.iap_transactions AS t \
+                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, status, credited_by) \
+             VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, 'paid', $8) \
+             ON CONFLICT (transaction_id) DO UPDATE SET \
+                 original_transaction_id = COALESCE(EXCLUDED.original_transaction_id, t.original_transaction_id), \
+                 product_id = EXCLUDED.product_id, address = EXCLUDED.address, credits = EXCLUDED.credits, \
+                 amount_cents = EXCLUDED.amount_cents, quantity = EXCLUDED.quantity, status = 'paid', \
+                 credited_by = EXCLUDED.credited_by, held_reason = NULL, \
+                 created_at = timezone('UTC', now()), updated_at = timezone('UTC', now()) \
+             WHERE t.status = 'held'",
         )
         .bind(p.transaction_id)
         .bind(p.original_transaction_id)
@@ -596,9 +603,12 @@ impl Credits {
         .bind(cents)
         .bind(quantity)
         .bind(p.channel.as_str())
-        .bind(refund_refs)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        if written != 1 {
+            return Err(ApiError::conflict("this transaction is already settled"));
+        }
         let detail = json!({
             "source": "apple",
             "transactionId": p.transaction_id,
@@ -718,7 +728,10 @@ impl Credits {
                 self.charge_back_iap(tx, transaction_id, address, &charged, refund_ref, reason)
                     .await
             }
+            // A transaction carries one refund (`revocationPercentage` is its
+            // refunded share), so another reference is recorded, not charged again.
             _ => {
+                tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund of a transaction already refunded under another reference: recorded, nothing charged back");
                 tx.commit().await?;
                 Ok(RefundOutcome::AlreadyRefunded)
             }
@@ -815,16 +828,27 @@ impl Credits {
         let row = sqlx::query(
             "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
                     refunded_at IS NOT NULL AS refunded, \
-                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
+                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream, \
+                    (SELECT n.signed_at FROM credits.iap_notifications n \
+                     WHERE n.notification_uuid = refund_ref) > $2 AS later_refund \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
+        .bind(notice.and_then(|n| {
+            chrono::DateTime::from_timestamp_millis(n.signed_date_ms).map(|d| d.naive_utc())
+        }))
         .fetch_optional(&mut *tx)
         .await?;
         // Dropping `tx` drops the claim too: the credit that follows records the notification.
         let Some(row) = row else {
             return Ok(ReinstateOutcome::Uncredited);
         };
+        // Signed before the row's current refund: it reverses an earlier one.
+        if row.get::<Option<bool>, _>("later_refund") == Some(true) {
+            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the current refund: not applied");
+            tx.commit().await?;
+            return Ok(ReinstateOutcome::NotRefunded);
+        }
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
         let credited = row.get::<Option<String>, _>("credited_by").is_some();

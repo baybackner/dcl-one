@@ -6801,15 +6801,17 @@ async fn cart_reads_and_writes_keep_their_totals_and_the_checkout_records_its_le
         .await
         .unwrap();
     let (old_notice, kept_notice) = (unique("iap-old"), unique("iap-kept"));
+    let kept_for = chrono::Duration::seconds(super::apple::NOTIFICATION_RECORD_SECS);
     let max_age = chrono::Duration::seconds(super::apple::NOTIFICATION_MAX_AGE_SECS);
     for (uuid, signed_at) in [
         (
             &old_notice,
-            super::store::now() - max_age - chrono::Duration::minutes(1),
+            super::store::now() - kept_for - chrono::Duration::minutes(1),
         ),
+        // Past the accepted age but within the margin: a node with a slower clock may still accept it.
         (
             &kept_notice,
-            super::store::now() - max_age + chrono::Duration::hours(1),
+            super::store::now() - max_age - chrono::Duration::hours(1),
         ),
     ] {
         sqlx::query(
@@ -6839,7 +6841,7 @@ async fn cart_reads_and_writes_keep_their_totals_and_the_checkout_records_its_le
     assert_eq!(
         notices,
         vec![kept_notice],
-        "the tick purges notification records signed past the accepted age"
+        "the tick purges notification records signed past the accepted age plus a day"
     );
     let auth_status: String =
         sqlx::query_scalar("SELECT status FROM credits.authorizations WHERE id = $1")

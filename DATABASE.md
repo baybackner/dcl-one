@@ -1575,14 +1575,19 @@ Credits in one transaction. A paid purchase it cannot credit (a cap, the
 node's ceiling, an unknown product or quantity, an account token naming no
 wallet) is upserted as `held` with its reason, unless an operator asked; a
 later delivery or an operator credit re-checks a held row and turns it `paid`
-(an operator credit with the held row's product and quantity only).
+in place (an operator credit with the held row's product and quantity only),
+keeping its account token, original transaction id and refund references;
+its `created_at` becomes the credit's time, so the 24-hour caps count it.
 A reversal takes the same transaction lock, then locks the wallet row before
 the transaction's row (the order of an operator block and a card reversal),
 flips the row to `refunded` (an `imported` row keeps its status and
 `refunded_at` marks the refund),
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
 records its reference (notification uuid or operator refund id) in
-`refund_refs`, which a reversal keeps, so a redelivered refund applies once,
+`refund_refs`, which a reversal keeps, so a redelivered refund applies once
+(a transaction is refunded once: Apple's `revocationPercentage` is its
+refunded share, so a refund under another reference of a row already
+refunded is recorded and logged, not charged back again),
 records what was removed in `revoked_credits` and the refunded USD in
 `refunded_cents` and, when the balance net of
 live pledges cannot cover it, queues the wallet's newest unexpired signed
@@ -1639,11 +1644,18 @@ insert answers 409, so Apple retries and finds it applied. A notification
 answered for a retry (a held purchase of an unknown product or over the
 node's ceiling) and a reversal whose purchase is credited next are recorded by
 that credit instead; one without a transaction or of a type not acted on
-records nothing. A notification signed more than 7 days ago or more than
-5 minutes ahead is refused (`credits::apple`), so the credits outbox tick
-deletes rows whose `signed_at` is past that age, one bounded batch per tick
-(`iap_notifications_signed_idx`); the table holds at most a week of
-notifications. Invariant: a uuid is recorded only with its effects.
+records nothing. A notification signed more than 7 days ago is refused with
+200 and a warning (`credits::apple`); one signed more than 5 minutes ahead of
+the node's clock answers 503, so Apple retries it. A redelivery older than
+7 days (for example from Apple's notification history after an outage) is
+therefore refused: credit or refund it through `/admin/iap/credits` or
+`/admin/iap/refunds`. The credits outbox tick deletes rows whose `signed_at`
+is older than 7 days plus a day (`NOTIFICATION_RECORD_SECS`, a margin for
+clocks that differ between nodes), one bounded batch per tick
+(`iap_notifications_signed_idx`); the table holds about eight days of
+notifications. A `REFUND_REVERSED` signed before the row's current refund
+(whose record is kept) reverses an earlier refund and applies nothing.
+Invariant: a uuid is recorded only with its effects.
 
 The bootstrap defines the three tables; an existing database gains them from
 the object pass, so no step exists.

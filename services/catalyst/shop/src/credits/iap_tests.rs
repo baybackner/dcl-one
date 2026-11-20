@@ -1512,8 +1512,10 @@ async fn a_refund_redelivered_after_its_reversal_applies_once() {
     )
     .await;
     assert_eq!(out["action"], "reinstated", "{out}");
+    // Without its notification record, the refund's reference alone keeps it applied once.
+    forget(&pool, &refund).await;
     let (_, out) = notify(&app, refund).await;
-    assert_eq!(out["duplicate"], true, "{out}");
+    assert_eq!(out["action"], "already_refunded", "{out}");
     assert_eq!(available(&pool, &w.address).await, "100");
 
     // A new refund of the same purchase still applies.
@@ -1530,10 +1532,49 @@ async fn a_refund_redelivered_after_its_reversal_applies_once() {
     assert_eq!(out["action"], "unknown_credit", "{out}");
     let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
     assert_eq!(out["action"], "minted", "{out}");
+    forget(&pool, &refund).await;
     let (_, out) = notify(&app, refund).await;
-    assert_eq!(out["duplicate"], true, "{out}");
+    assert_eq!(out["action"], "already_refunded", "{out}");
     assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
     assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+/// A string field of a signed payload.
+fn signed_field(signed: &str, field: &str) -> String {
+    use base64::Engine as _;
+    let payload = signed.split('.').nth(1).unwrap();
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .unwrap();
+    serde_json::from_slice::<Value>(&bytes).unwrap()[field]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The `notificationUUID` a signed notification carries.
+fn uuid_of(signed: &str) -> String {
+    signed_field(signed, "notificationUUID")
+}
+
+/// Drops a notification's record, as the purge does once it is old.
+async fn forget(pool: &PgPool, signed: &str) {
+    sqlx::query("DELETE FROM credits.iap_notifications WHERE notification_uuid = $1")
+        .bind(uuid_of(signed))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// How many records a notification left.
+async fn records(pool: &PgPool, signed: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM credits.iap_notifications WHERE notification_uuid = $1",
+    )
+    .bind(uuid_of(signed))
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 async fn held_reason(pool: &PgPool, id: &str) -> Option<String> {
@@ -1592,9 +1633,8 @@ async fn blocked(pool: &PgPool, address: &str) -> bool {
         .unwrap()
 }
 
-/// Credits `n` signed purchases of `PRODUCT` to `w`; returns their signed transactions.
 #[tokio::test]
-async fn a_notification_signed_outside_the_window_is_refused_without_a_retry() {
+async fn a_notification_signed_outside_the_window_is_refused_or_retried() {
     let Some(pool) = pool().await else { return };
     let c = chain(ChainSpec::default());
     let app = setup(&pool, &c, open_limits());
@@ -1611,13 +1651,20 @@ async fn a_notification_signed_outside_the_window_is_refused_without_a_retry() {
     };
     let max_age_ms = super::apple::NOTIFICATION_MAX_AGE_SECS * 1000;
     let skew_ms = super::apple::NOTIFICATION_MAX_FUTURE_SECS * 1000;
-    for signed_date_ms in [now_ms - max_age_ms - 60_000, now_ms + skew_ms + 60_000] {
-        let id = tx_id();
-        let (status, out) = notify(&app, charge_at(&id, signed_date_ms)).await;
-        assert_eq!(status, StatusCode::OK, "{out}");
-        assert_eq!(out["error"], "signed_date_out_of_window", "{out}");
-        assert!(row(&pool, &id).await.is_none());
-    }
+    // Too old: refused for good, since a retry carries the same signedDate.
+    let id = tx_id();
+    let (status, out) = notify(&app, charge_at(&id, now_ms - max_age_ms - 60_000)).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["error"], "signed_date_out_of_window", "{out}");
+    assert!(row(&pool, &id).await.is_none());
+
+    // Ahead of this node's clock: answered for a retry, so it is not lost.
+    let id = tx_id();
+    let ahead = charge_at(&id, now_ms + skew_ms + 60_000);
+    let (status, out) = notify(&app, ahead.clone()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{out}");
+    assert!(row(&pool, &id).await.is_none());
+    assert_eq!(records(&pool, &ahead).await, 0);
     assert_eq!(available(&pool, &w.address).await, "0");
 
     // Apple's last retry, 157 hours after the first attempt, still credits.
@@ -1680,6 +1727,232 @@ async fn a_notification_answered_for_a_retry_is_applied_by_the_retry() {
     assert_eq!(available(&pool, &w.address).await, "100");
 }
 
+#[tokio::test]
+async fn a_concurrent_delivery_of_the_same_notification_answers_409() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let id = tx_id();
+    let charge = c.notification(
+        "ONE_TIME_CHARGE",
+        Some(c.transaction(&id, PRODUCT, Some(&w.address))),
+    );
+    // Another delivery holds the uuid's record, not committed yet.
+    let mut other = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO credits.iap_notifications (notification_uuid, signed_at) \
+         VALUES ($1, timezone('UTC', now()))",
+    )
+    .bind(uuid_of(&charge))
+    .execute(&mut *other)
+    .await
+    .unwrap();
+    let delivery = tokio::spawn({
+        let (app, charge) = (app.clone(), charge.clone());
+        async move { notify(&app, charge).await }
+    });
+    // Wait until this delivery's claim waits on the other's record.
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+               AND query LIKE 'INSERT INTO credits.iap_notifications%')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    other.commit().await.unwrap();
+    let (status, out) = delivery.await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert!(row(&pool, &id).await.is_none());
+    assert_eq!(available(&pool, &w.address).await, "0");
+    assert_eq!(records(&pool, &charge).await, 1);
+}
+
+#[tokio::test]
+async fn a_reversal_credited_by_its_purchase_records_its_uuid_once() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let closed = setup(
+        &pool,
+        &c,
+        Limits {
+            daily_cents: 0,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed.clone()))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let reversal = c.notification("REFUND_REVERSED", Some(signed));
+    // Answered for a retry: nothing recorded, so the retry applies it.
+    let (status, out) = notify(&closed, reversal.clone()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{out}");
+    assert_eq!(records(&pool, &reversal).await, 0);
+    let (_, out) = notify(&app, reversal.clone()).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    assert_eq!(records(&pool, &reversal).await, 1);
+    let (_, out) = notify(&app, reversal.clone()).await;
+    assert_eq!(out["duplicate"], true, "{out}");
+    assert_eq!(records(&pool, &reversal).await, 1);
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+#[tokio::test]
+async fn a_hold_not_retried_keeps_its_notification_record() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let capped = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1,
+            ..open_limits()
+        },
+    );
+    let w = scratch_wallet();
+    // A wallet cap and an account token naming no wallet are held for an operator, not retried.
+    for token in [w.address.clone(), account_token(&scratch_wallet().address)] {
+        let id = tx_id();
+        let charge = c.notification(
+            "ONE_TIME_CHARGE",
+            Some(c.transaction(&id, PRODUCT, Some(&token))),
+        );
+        let (status, out) = notify(&capped, charge.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["held"], true, "{out}");
+        assert_eq!(records(&pool, &charge).await, 1);
+        let (_, out) = notify(&capped, charge).await;
+        assert_eq!(out["duplicate"], true, "{out}");
+        assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+    }
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+#[tokio::test]
+async fn a_reversal_signed_before_the_current_refund_applies_nothing() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let at = |kind: &str, ms: i64| {
+        c.notification_signed_at(kind, Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    let (_, out) = notify(&app, at("REFUND", now_ms - 3_000)).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let first_reversal = at("REFUND_REVERSED", now_ms - 2_000);
+    let (_, out) = notify(&app, first_reversal.clone()).await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    let (_, out) = notify(&app, at("REFUND", now_ms - 1_000)).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+
+    // Its record purged, the first reversal redelivered does not undo the second refund.
+    forget(&pool, &first_reversal).await;
+    let (status, out) = notify(&app, first_reversal).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["action"], "not_refunded", "{out}");
+    let id = signed_field(&bought[0], "transactionId");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+    assert_eq!(available(&pool, &w.address).await, "0");
+}
+
+#[tokio::test]
+async fn a_second_refund_of_a_refunded_purchase_charges_nothing_back() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 2).await;
+    let mut p = super::apple::testkit::transaction_payload(
+        &signed_field(&bought[0], "transactionId"),
+        PRODUCT,
+        Some(&w.address),
+    );
+    p["revocationPercentage"] = json!(50_000);
+    p["revocationReason"] = json!(0);
+    let (_, out) = notify(&app, c.notification("REFUND", Some(c.sign(&p)))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "150");
+
+    // Apple refunds a transaction once: another reference is recorded, not charged again.
+    p["revocationPercentage"] = json!(100_000);
+    let second = c.notification("REFUND", Some(c.sign(&p)));
+    let (_, out) = notify(&app, second.clone()).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    assert_eq!(records(&pool, &second).await, 1);
+    assert_eq!(available(&pool, &w.address).await, "150");
+}
+
+#[tokio::test]
+async fn crediting_a_held_purchase_keeps_its_row_and_counts_toward_the_caps() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let token = account_token(&w.address);
+    let id = tx_id();
+    let mut p = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&token));
+    p["originalTransactionId"] = json!(format!("{id}0"));
+    let signed = c.sign(&p);
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["held"], true, "{out}");
+    // Held for more than a day before the wallet registers.
+    sqlx::query(
+        "UPDATE credits.iap_transactions SET created_at = created_at - interval '25 hours' \
+         WHERE transaction_id = $1",
+    )
+    .bind(&id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    register(&app, &w).await;
+    // The wallet's daily cap allows this purchase and no other.
+    let ceiling = setup(
+        &pool,
+        &c,
+        Limits {
+            wallet_daily_cents: 1_000,
+            ..open_limits()
+        },
+    );
+    let (_, out) = notify(&ceiling, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let (status, token_kept, original, recent): (String, Option<String>, Option<String>, bool) =
+        sqlx::query_as(
+            "SELECT status, app_account_token, original_transaction_id, \
+                    created_at > timezone('UTC', now()) - interval '1 hour' \
+             FROM credits.iap_transactions WHERE transaction_id = $1",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "paid");
+    assert_eq!(token_kept, Some(token.clone()));
+    assert_eq!(original, Some(format!("{id}0")));
+    assert!(recent, "the credit's time is what the daily caps count");
+    let next = c.transaction(&tx_id(), PRODUCT, Some(&token));
+    let (_, out) = notify(&ceiling, c.notification("ONE_TIME_CHARGE", Some(next))).await;
+    assert_eq!(out["held"], true, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+/// Credits `n` signed purchases of `PRODUCT` to `w`; returns their signed transactions.
 async fn buy(app: &Router, c: &Chain, w: &Wallet, n: usize) -> Vec<String> {
     let mut signed = Vec::new();
     for _ in 0..n {

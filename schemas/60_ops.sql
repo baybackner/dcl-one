@@ -324,7 +324,7 @@ CREATE TABLE credits.iap_account_tokens (
 -- written in the transaction of its effects, so a redelivery applies nothing.
 -- A notification signed more than 7 days ago is refused
 -- (`credits::apple::NOTIFICATION_MAX_AGE_SECS`), so the outbox tick deletes
--- rows by `signed_at` past that age.
+-- rows by `signed_at` past that age plus a day (`NOTIFICATION_RECORD_SECS`).
 CREATE TABLE credits.iap_notifications (
     notification_uuid text NOT NULL,
     signed_at timestamp without time zone NOT NULL,
