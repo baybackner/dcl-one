@@ -321,6 +321,10 @@ mod decl {
 }
 pub use decl::*;
 
+/// The height limit, in metres, of a scene in a World: the parcel-count limit of the largest
+/// scene a World allows, 300 × 300 parcels (log2(90001) × 20 = 329.15 m), rounded up.
+pub const FIXED_SCENE_HEIGHT: f32 = 330.0;
+
 impl BoundRegion {
     pub fn new(min: IVec2, max: IVec2, parcel_count: u32) -> Self {
         Self {
@@ -329,6 +333,11 @@ impl BoundRegion {
             height: Self::height_for_parcels(parcel_count),
             parcel_count,
         }
+    }
+
+    /// the region with this height limit, in metres, in place of its parcel count's
+    pub fn with_height(self, height: f32) -> Self {
+        Self { height, ..self }
     }
 
     /// The height limit, in metres, over `parcel_count` parcels.
@@ -684,8 +693,9 @@ mod test {
     use bevy::math::{IVec2, Vec2, Vec3, Vec3Swizzles};
 
     use crate::{
-        reveal_mesh_tag, unrevealed_mesh_tag, BoundRegion, SCENE_MATERIAL_REVEAL_FULL_HEIGHT,
-        SCENE_MATERIAL_REVEAL_HIDE_HEIGHT, SCENE_MATERIAL_REVEAL_MESH_TAG_MASK,
+        reveal_mesh_tag, unrevealed_mesh_tag, BoundRegion, FIXED_SCENE_HEIGHT,
+        SCENE_MATERIAL_REVEAL_FULL_HEIGHT, SCENE_MATERIAL_REVEAL_HIDE_HEIGHT,
+        SCENE_MATERIAL_REVEAL_MESH_TAG_MASK,
     };
 
     /// the reveal height a shader reads back from a tag (reveal_discard in
@@ -937,6 +947,38 @@ mod test {
                         assert!(new >= reach, "{pos} old {old} new {new}");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn bounds_clip_at_the_height_their_regions_carry() {
+        use common::bounds_calc::scene_regions;
+
+        // one parcel (a single rectangle), and an L with a parcel apart (the cell table)
+        let shapes = [
+            vec![IVec2::ZERO],
+            vec![IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::splat(5)],
+        ];
+
+        for parcels in shapes {
+            let regions = scene_regions(parcels.iter().copied())
+                .into_iter()
+                .map(|r| BoundRegion::new(r.min, r.max, r.count).with_height(FIXED_SCENE_HEIGHT))
+                .collect::<Vec<_>>();
+            let mut buffers = bevy::asset::Assets::<super::ShaderStorageBuffer>::default();
+            let bounds = super::SceneBounds::new(&regions, Some(&mut buffers));
+
+            for parcel in parcels {
+                let centre = Vec3::new(
+                    parcel.x as f32 * 16.0 + 8.0,
+                    0.0,
+                    -parcel.y as f32 * 16.0 - 8.0,
+                );
+                let below = centre.with_y(FIXED_SCENE_HEIGHT - 1.0);
+                let above = centre.with_y(FIXED_SCENE_HEIGHT + 1.0);
+                assert_eq!(new_amount(&bounds, &buffers, 0.0, below), 0.0, "{parcel}");
+                assert_eq!(new_amount(&bounds, &buffers, 0.0, above), 1.0, "{parcel}");
             }
         }
     }
