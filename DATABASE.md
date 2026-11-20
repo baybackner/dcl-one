@@ -512,8 +512,8 @@ catalogue fills on its first pass), and one row per parcel for an operator's
 rating of a derived place; read by primary key for each settled row's parcels.
 Invariant: a parcel's row equals the rating of the derived place covering it,
 or of the last one; only the derive pass and the operator's place rating write
-it, and nothing deletes it. Both writers first take a transaction advisory
-lock per parcel in one sorted order, so a page that inserts a missing parcel
+it, and nothing deletes it. Both writers first take transaction advisory
+locks on the parcels' hash buckets (at most 128) in one sorted order, so a page that inserts a missing parcel
 after locking the recorded ones cannot deadlock with an operator's rating. The
 table is a new object: the object pass of
 `catalyst schema migrate` creates it, so no step exists.

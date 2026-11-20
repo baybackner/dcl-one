@@ -299,11 +299,13 @@ const OVERLAY: &str = "INSERT INTO explore.place_moderation (place_id, disabled,
          set_by = EXCLUDED.set_by,
          updated_at = EXCLUDED.updated_at";
 
-/// Takes a transaction lock per parcel `$1`, in one order, before a writer of
-/// `explore.place_parcel_rating` touches those rows: the derive pass inserts
-/// missing parcels after locking the others, so row locks alone can deadlock.
-pub(crate) const LOCK_PARCELS: &str = "SELECT pg_advisory_xact_lock(s.k) FROM \
-     (SELECT DISTINCT hashtextextended(pos, 7422) AS k FROM unnest($1::text[]) AS pos ORDER BY k) AS s";
+/// Takes the transaction locks of parcels `$1` (one of 128 hash buckets per
+/// parcel, so a large page holds at most 128), in one order, before a writer
+/// of `explore.place_parcel_rating` touches those rows: the derive pass
+/// inserts missing parcels after locking the others, so row locks alone can
+/// deadlock.
+pub(crate) const LOCK_PARCELS: &str = "SELECT pg_advisory_xact_lock(7422, s.k) FROM \
+     (SELECT DISTINCT hashtext(pos) & 127 AS k FROM unnest($1::text[]) AS pos ORDER BY k) AS s";
 
 /// The parcels of the derived place `$1`.
 const PLACE_PARCELS: &str = r#"
@@ -570,7 +572,7 @@ pub enum RatedRow<'a> {
 /// in the write's transaction, linking into the places site at `base`; any
 /// other outcome queues nothing. The caller holds the row's lock. A
 /// downgrade notice not yet sent takes the new message instead of a new row,
-/// and once one is sent the row's next waits an hour from it.
+/// and otherwise a row gets no new one within an hour of its last.
 pub async fn capture_creator_rating(
     tx: &mut Transaction<'_, Postgres>,
     base: &str,
@@ -629,7 +631,7 @@ pub async fn capture_creator_rating(
         if pending > 0 {
             return Ok(());
         }
-        // Once one was sent, the row's next waits an hour from it.
+        // Sent or failing: none within an hour of the row's last.
         let at = capture_at(tx).await?;
         sqlx::query(
             "INSERT INTO explore.moderation_hooks \
@@ -1160,8 +1162,8 @@ mod tests {
             .unwrap();
     }
 
-    /// Once a refused downgrade's notice is sent, the row's next one waits an
-    /// hour from it; an upgrade is never held back.
+    /// A refused downgrade's notice, once sent, holds the row's next one for
+    /// an hour from its capture; an upgrade is never held back.
     #[tokio::test]
     async fn a_sent_downgrade_notice_holds_the_next_for_the_hour() {
         let Some(pool) = crate::db::scratch::pool(2).await else {
