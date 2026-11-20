@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000
+Subject: linux: use the embedder's Wayland display while it sets one
+Date: 2026-11-20T15:27:53+00:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index d1be56e6f0a43bb3e83a355bc736c1b8f5ba3545..eadecc80ee9213ef188f08482c1aa1276156878a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -38,6 +38,28 @@ pub mod wayland_clipboard;
+ ))]
+ #[cfg(feature = "x11")]
+ pub mod x11_clipboard;
++#[cfg(all(
++    unix,
++    not(any(
++        target_os = "macos",
++        target_os = "android",
++        target_os = "ios",
++        target_os = "emscripten"
++    ))
++))]
++#[cfg(all(feature = "x11", feature = "wayland"))]
++pub mod linux_clipboard;
++#[cfg(all(
++    unix,
++    not(any(
++        target_os = "macos",
++        target_os = "android",
++        target_os = "ios",
++        target_os = "emscripten"
++    ))
++))]
++#[cfg(all(feature = "x11", feature = "wayland"))]
++pub use linux_clipboard::{clear_wayland_display, set_wayland_display};
+ 
+ #[cfg(windows)]
+ pub mod windows_clipboard;
+@@ -61,7 +83,18 @@ pub mod nop_clipboard;
+         target_os = "emscripten"
+     ))
+ ))]
+-#[cfg(feature = "x11")]
++#[cfg(all(feature = "x11", feature = "wayland"))]
++pub type ClipboardContext = linux_clipboard::LinuxClipboardContext;
++#[cfg(all(
++    unix,
++    not(any(
++        target_os = "macos",
++        target_os = "android",
++        target_os = "ios",
++        target_os = "emscripten"
++    ))
++))]
++#[cfg(all(feature = "x11", not(feature = "wayland")))]
+ pub type ClipboardContext = x11_clipboard::X11ClipboardContext;
+ #[cfg(windows)]
+ pub type ClipboardContext = windows_clipboard::WindowsClipboardContext;
+diff --git a/src/linux_clipboard.rs b/src/linux_clipboard.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..bec83f660ea360927ecc062813bb1796508c646a
+--- /dev/null
++++ b/src/linux_clipboard.rs
+@@ -0,0 +1,69 @@
++//! The clipboard of a Linux desktop: the Wayland display the embedder set, or X11 when it set
++//! none.
++
++use std::ffi::c_void;
++use std::sync::{Mutex, PoisonError};
++
++use async_trait::async_trait;
++
++use crate::common::{ClipboardProvider, Result};
++use crate::wayland_clipboard::{create_clipboards_from_external, Clipboard as WaylandClipboard};
++use crate::x11_clipboard::X11ClipboardContext;
++
++static WAYLAND: Mutex<Option<WaylandClipboard>> = Mutex::new(None);
++
++/// Routes [`LinuxClipboardContext`] through the Wayland display `display` until
++/// [`clear_wayland_display`], for a window that is on Wayland: its session may have no X server.
++/// Does nothing while a display is set; returns whether this call set one.
++///
++/// # Safety
++///
++/// `display` must be a valid `*mut wl_display`, and must stay valid until
++/// [`clear_wayland_display`] has returned and every context made in between is dropped.
++pub unsafe fn set_wayland_display(display: *mut c_void) -> bool {
++    let mut wayland = WAYLAND.lock().unwrap_or_else(PoisonError::into_inner);
++    if wayland.is_some() {
++        return false;
++    }
++    *wayland = Some(unsafe { create_clipboards_from_external(display) }.1);
++    true
++}
++
++/// Returns [`LinuxClipboardContext`] to X11. The use of the display ends here, or with the last
++/// context made from it.
++pub fn clear_wayland_display() {
++    let clipboard = WAYLAND.lock().unwrap_or_else(PoisonError::into_inner).take();
++    drop(clipboard);
++}
++
++pub enum LinuxClipboardContext {
++    Wayland(WaylandClipboard),
++    X11(X11ClipboardContext),
++}
++
++impl LinuxClipboardContext {
++    pub fn new() -> Result<LinuxClipboardContext> {
++        let wayland = WAYLAND.lock().unwrap_or_else(PoisonError::into_inner).clone();
++        Ok(match wayland {
++            Some(clipboard) => LinuxClipboardContext::Wayland(clipboard),
++            None => LinuxClipboardContext::X11(X11ClipboardContext::new()?),
++        })
++    }
++}
++
++#[async_trait]
++impl ClipboardProvider for LinuxClipboardContext {
++    async fn get_contents(&mut self) -> Result<String> {
++        match self {
++            LinuxClipboardContext::Wayland(clipboard) => clipboard.get_contents().await,
++            LinuxClipboardContext::X11(clipboard) => clipboard.get_contents().await,
++        }
++    }
++
++    async fn set_contents(&mut self, data: String) -> Result<()> {
++        match self {
++            LinuxClipboardContext::Wayland(clipboard) => clipboard.set_contents(data).await,
++            LinuxClipboardContext::X11(clipboard) => clipboard.set_contents(data).await,
++        }
++    }
++}
+diff --git a/src/wayland_clipboard.rs b/src/wayland_clipboard.rs
+index ab8b00818ac77897f2b66294ecdd1e70802fb5ce..2f5bf94b5b889a063a83b4378c64c4b5e9857690 100644
+--- a/src/wayland_clipboard.rs
++++ b/src/wayland_clipboard.rs
+@@ -22,6 +22,7 @@ use smithay_clipboard::Clipboard as WaylandClipboard;
+ 
+ use crate::common::{ClipboardProvider, Result};
+ 
++#[derive(Clone)]
+ pub struct Clipboard {
+     context: Arc<Mutex<WaylandClipboard>>,
+ }

@@ -127,4 +127,4 @@ bevy = { git = "https://github.com/decentraland/dcl-one", rev = "f31e04be7408ecf
 bevy_ecss = { git = "https://github.com/decentraland/dcl-one", rev = "da37b8fbfd7d2561257254f4ae9370ca33a71acb" }
 
 [patch."https://github.com/robtfm/copypwasmta"]
-copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "b56757323a5f73eb4a373fef69c4e840f76f98f2" }
+copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "7800fdce8ba4434c561f879a004d083473b4dfb2" }

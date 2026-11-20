@@ -510,7 +510,8 @@ ash = { workspace = true }
 # holds none of it. bevy's `wayland` by itself links libwayland-client; winit's `wayland-dlopen`
 # loads it at run time instead, so each binary of this package starts where the library is absent.
 bevy = { workspace = true, features = ["wayland"] }
-winit = { workspace = true, features = ["wayland-dlopen"] }
+winit = { workspace = true, features = ["wayland-dlopen", "rwh_06"] }
+copypwasmta = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
@@ -621,7 +622,7 @@ bevy_console = { git = "https://github.com/decentraland/dcl-one", rev = "62b94f3
 bevy_ecss = { git = "https://github.com/decentraland/dcl-one", rev = "da37b8fbfd7d2561257254f4ae9370ca33a71acb" }
 bevy_kira_audio = { git = "https://github.com/decentraland/dcl-one", rev = "343c72eb0e0e4b232aea96a4f5210209d06e113b" }
 bevy_simple_text_input = { git = "https://github.com/decentraland/dcl-one", rev = "0cc0431d0a0e851ca5297033bb992aae70053a9b" }
-copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "b56757323a5f73eb4a373fef69c4e840f76f98f2" }
+copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "7800fdce8ba4434c561f879a004d083473b4dfb2" }
 opener = { git = "https://github.com/decentraland/dcl-one", rev = "9fec930b69093f45e4a75e21d8a51d864639dc62" }
 
 # The manifests of bevy_dui, bevy_ecss, bevy_simple_text_input and boimp name three former forks
@@ -634,4 +635,4 @@ bevy = { git = "https://github.com/decentraland/dcl-one", rev = "f31e04be7408ecf
 bevy_ecss = { git = "https://github.com/decentraland/dcl-one", rev = "da37b8fbfd7d2561257254f4ae9370ca33a71acb" }
 
 [patch."https://github.com/robtfm/copypwasmta"]
-copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "b56757323a5f73eb4a373fef69c4e840f76f98f2" }
+copypwasmta = { git = "https://github.com/decentraland/dcl-one", rev = "7800fdce8ba4434c561f879a004d083473b4dfb2" }

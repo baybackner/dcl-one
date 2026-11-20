@@ -3864,7 +3864,7 @@ dependencies = [
 [[package]]
 name = "copypwasmta"
 version = "0.1.0"
-source = "git+https://github.com/decentraland/dcl-one?rev=b56757323a5f73eb4a373fef69c4e840f76f98f2#b56757323a5f73eb4a373fef69c4e840f76f98f2"
+source = "git+https://github.com/decentraland/dcl-one?rev=7800fdce8ba4434c561f879a004d083473b4dfb2#7800fdce8ba4434c561f879a004d083473b4dfb2"
 dependencies = [
  "async-trait",
  "clipboard-win",
