@@ -5985,7 +5985,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewNametagFeed.ts",
-      "sha256": "f14c2f2924ac9eac5b3cef3210c1da46987ad853b02e258f94a8b2cebe864ec8"
+      "sha256": "3daecbdce1a4b2036d25bd3519b8c151c559dc254101e7e0e461aa54b83e2deb"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/previewView.ts",
@@ -6165,7 +6165,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeAvatarPreviewShop.test.ts",
-      "sha256": "48c9c4339b7e03e9d1a04a22eb76c373120e521e4c2e9065c875ff458fa20f95"
+      "sha256": "267dafb520c2a7cb521a2d57aabefb27f2888edcecfa64f0f8d4c5dc34e7b5b4"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeChat.test.ts",
@@ -6229,7 +6229,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewNametagFeed.test.ts",
-      "sha256": "35bbfeb84568bd56c475dd18850e5542aace5e0ca4f209d80067cfab9bf22c3f"
+      "sha256": "890792637c2e63d16f885cda16077431feb2cbc2a74f61891d93464097d02700"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgePreviewView.test.ts",

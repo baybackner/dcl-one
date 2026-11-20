@@ -168,7 +168,7 @@ describe("the Shop's nametag feed", () => {
     expect(sent).toEqual([A, { x: A.x, y: A.y - 0.05 }, null])
   })
 
-  it('places the tag where each read says until the pose settles, after it starts and after an emote, then holds it', async () => {
+  it('places the tag where each read says until the pose settles, after it starts and after an emote, then holds the first settled place', async () => {
     const reads: ((p: Point | null) => void)[] = []
     const sent: (Point | null)[] = []
     const nametag = createNametagFeed<number, Point>({
@@ -186,19 +186,42 @@ describe("the Shop's nametag feed", () => {
     await read(0, A)
     await read(NAMETAG_READ_SECONDS, B) // still settling (a blend into the idle): the read places it
     expect(sent).toEqual([A, B])
-    await read(NAMETAG_SETTLE_SECONDS, A) // settled: the last place is held
-    await read(NAMETAG_READ_SECONDS, A)
-    expect(sent).toEqual([A, B])
+    await read(NAMETAG_SETTLE_SECONDS, A) // the first read begun once settled: placed, and held from now on
+    await read(NAMETAG_READ_SECONDS, B)
+    expect(sent).toEqual([A, B, A])
     nametag.release() // an emote: nothing is told until a read places the tag afresh
-    expect(sent).toEqual([A, B])
-    await read(NAMETAG_READ_SECONDS, A)
     expect(sent).toEqual([A, B, A])
-    await read(NAMETAG_SETTLE_SECONDS, B) // settled again: held at A
-    expect(sent).toEqual([A, B, A])
-    expect(reads).toHaveLength(6)
+    await read(NAMETAG_READ_SECONDS, B)
+    expect(sent).toEqual([A, B, A, B])
+    await read(NAMETAG_SETTLE_SECONDS, A) // settled again: this one is held
+    await read(NAMETAG_READ_SECONDS, B)
+    expect(sent).toEqual([A, B, A, B, A])
+    expect(reads).toHaveLength(7)
   })
 
-  it('places a read begun while settling afresh even if it answers after, and keeps a read pending over a release', async () => {
+  it('never holds a place read before the pose settled, however late it answers', async () => {
+    const reads: ((p: Point | null) => void)[] = []
+    const sent: (Point | null)[] = []
+    const nametag = createNametagFeed<number, Point>({
+      read: () => new Promise<Point | null>((resolve) => reads.push(resolve)),
+      settle: (kept, read) => kept ?? read,
+      project: (p) => p,
+      send: (p) => sent.push(p)
+    })
+    nametag.tick(0, 7) // begun mid-blend...
+    nametag.tick(NAMETAG_SETTLE_SECONDS + 0.05, 7)
+    reads[0](A) // ...answering once the pose has settled: placed, but not held
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7) // the first read begun once settled
+    reads[1](B)
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7)
+    reads[2](A) // held at B
+    await settle()
+    expect(sent).toEqual([A, B])
+  })
+
+  it('lands a read pending over a release as it would have, without holding it after', async () => {
     const reads: ((p: Point | null) => void)[] = []
     const sent: (Point | null)[] = []
     const nametag = createNametagFeed<number, Point>({
@@ -208,10 +231,10 @@ describe("the Shop's nametag feed", () => {
       send: (p) => sent.push(p)
     })
     nametag.tick(NAMETAG_SETTLE_SECONDS, 7)
-    reads[0](A)
+    reads[0](A) // settled: held from now on
     await settle()
     nametag.tick(NAMETAG_READ_SECONDS, 7) // a held read, pending...
-    nametag.release() // ...over an emote: it still lands, held
+    nametag.release() // ...over an emote: it lands held
     reads[1](B)
     await settle()
     expect(sent).toEqual([A])
@@ -220,5 +243,33 @@ describe("the Shop's nametag feed", () => {
     reads[2](B)
     await settle()
     expect(sent).toEqual([A, B])
+    nametag.tick(NAMETAG_READ_SECONDS, 7) // the first read begun once settled again: placed, then held
+    reads[3](A)
+    await settle()
+    nametag.tick(NAMETAG_READ_SECONDS, 7)
+    reads[4](B)
+    await settle()
+    expect(sent).toEqual([A, B, A])
+  })
+
+  it("seeds the hold afresh for another avatar, never from the last one's", async () => {
+    const reads: ((p: Point | null) => void)[] = []
+    const sent: (Point | null)[] = []
+    const nametag = createNametagFeed<number, Point>({
+      read: () => new Promise<Point | null>((resolve) => reads.push(resolve)),
+      settle: (kept, read) => kept ?? read,
+      project: (p) => p,
+      send: (p) => sent.push(p)
+    })
+    nametag.tick(NAMETAG_SETTLE_SECONDS, 7)
+    reads[0](A) // avatar 7's held place
+    await settle()
+    nametag.tick(0, 8) // avatar 8 takes the stage, mid-blend
+    reads[1](A)
+    await settle()
+    nametag.tick(NAMETAG_SETTLE_SECONDS, 8) // its first read begun once settled: placed, not held against the blend
+    reads[2](B)
+    await settle()
+    expect(sent).toEqual([A, null, A, B])
   })
 })

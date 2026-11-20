@@ -176,15 +176,18 @@ describe("the Shop's avatar preview", () => {
   })
 
   it("stands the tag on the avatar's axis, still while the head sways and turns, and moves it for a hat", async () => {
-    // the head off the axis, then swaying 3cm up and turned the other way, then under a hat
+    // the head off the axis (read again once the pose has settled), then swaying 3cm up and turned the other way,
+    // then under a hat
     const shop = await openShop([
+      { x: 0.2, y: 3.6, z: -0.3 },
       { x: 0.2, y: 3.6, z: -0.3 },
       { x: -0.15, y: 3.63, z: 0.2 },
       { x: 0.1, y: 3.95, z: 0 }
     ])
     const [first] = shop.tags()
     expect(first!.x).toBeCloseTo(0.5, 9)
-    await shop.frame(NAMETAG_SETTLE_SECONDS) // the sway's read, once the pose has settled
+    await shop.frame(NAMETAG_SETTLE_SECONDS) // the place held from now on
+    await shop.frame(0.25) // the sway's read
     expect(shop.tags()).toEqual([first])
     await shop.frame(0.25) // the hat's read
     const tags = shop.tags()
@@ -203,9 +206,10 @@ describe("the Shop's avatar preview", () => {
 
   it('places the tag afresh after an emote, where it would have held through a sway', async () => {
     // settled at 3.6m, then 3cm higher: held as a sway; then an emote stops and the head comes back 4cm higher
-    const shop = await openShop([ANCHOR, { x: 0, y: 3.63, z: 0 }, { x: 0, y: 3.64, z: 0 }])
+    const shop = await openShop([ANCHOR, ANCHOR, { x: 0, y: 3.63, z: 0 }, { x: 0, y: 3.64, z: 0 }])
     const [first] = shop.tags()
     await shop.frame(NAMETAG_SETTLE_SECONDS)
+    await shop.frame(0.25)
     expect(shop.tags()).toEqual([first])
     shop.emit({ kind: 'previewEmote', urn: null } as PageToScene)
     await shop.frame(0.25)

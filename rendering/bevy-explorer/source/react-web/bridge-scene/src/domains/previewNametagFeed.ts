@@ -10,8 +10,9 @@ export const NAMETAG_STEP = 0.001
 /** How often the anchor is read while the stage is up. */
 export const NAMETAG_READ_SECONDS = 0.25
 /** For this long after the tag is placed afresh (the feed starting, another avatar, an emote begun or stopped), a read
- *  places it where it reads rather than keeping the place held: the engine blends an animation into the next over up
- *  to 0.4s, and a place taken mid-blend would otherwise be kept for as long as the page is open. */
+ *  begun places it where it reads and is never held against: the engine blends an animation into the next over up to
+ *  0.4s, and a place taken mid-blend would otherwise be kept for as long as the page is open. The first read begun
+ *  after it places the tag too, and that place is the one held. */
 export const NAMETAG_SETTLE_SECONDS = 0.75
 
 export interface NametagFeed<A> {
@@ -23,8 +24,9 @@ export interface NametagFeed<A> {
   /** The view moved (the camera easing to another page's framing): the last anchor read is told where it falls
    *  now, without waiting for the next read. */
   reproject(): void
-  /** The avatar's pose is changing (an emote begun or stopped): the tag stays where it is, and the reads begun over
-   *  the next NAMETAG_SETTLE_SECONDS place it afresh before one is held. */
+  /** The avatar's pose is changing (an emote begun or stopped): the tag stays where it is, the reads begun over the
+   *  next NAMETAG_SETTLE_SECONDS place it afresh, and the first begun after places the one held. A read pending now
+   *  lands as it would have, but never becomes the place held. */
   release(): void
 }
 
@@ -45,6 +47,10 @@ export function createNametagFeed<A, O>(deps: {
   let wait = 0
   // How long reads still place the tag afresh rather than holding its place.
   let settling = NAMETAG_SETTLE_SECONDS
+  // Whether the place kept came from a read begun once the pose had settled: only then is it held against.
+  let seeded = false
+  // Bumped by a release: a read begun before one never becomes the place held after it.
+  let pose = 0
   let lastAvatar: A | null = null
   const publish = (anchor: WindowPoint | null): void => {
     if (anchor == null || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
@@ -64,6 +70,7 @@ export function createNametagFeed<A, O>(deps: {
     wait = 0
     last = null
     settling = NAMETAG_SETTLE_SECONDS
+    seeded = false
   }
   return {
     restage(): void {
@@ -90,12 +97,17 @@ export function createNametagFeed<A, O>(deps: {
       wait = NAMETAG_READ_SECONDS
       reading = true
       const asked = generation
-      const afresh = settling > 0
+      const askedPose = pose
+      // Decided as the read is begun, however late it answers: one begun while the pose settles places the tag where
+      // it reads, and so does the first begun after, which then seeds the hold.
+      const settled = settling <= 0
+      const held = settled && seeded
       deps.read(avatar).then(
         (anchor) => {
           if (asked !== generation) return
           reading = false
-          last = anchor == null ? null : deps.settle != null ? deps.settle(afresh ? null : last, anchor) : anchor
+          last = anchor == null ? null : deps.settle != null ? deps.settle(held ? last : null, anchor) : anchor
+          if (last != null && settled && askedPose === pose) seeded = true
           publish(last == null ? null : deps.project(last))
         },
         () => {
@@ -112,6 +124,8 @@ export function createNametagFeed<A, O>(deps: {
     },
     release(): void {
       settling = NAMETAG_SETTLE_SECONDS
+      seeded = false
+      pose++
     }
   }
 }
