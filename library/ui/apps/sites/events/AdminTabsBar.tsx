@@ -1,5 +1,5 @@
-import ChromeLink from '../../../components/chrome/ChromeLink'
-import { chromeLinkClick, useChromeNav } from '../../../components/chrome/chrome-nav'
+import ChromeLink from '../../../components/AppChrome/ChromeLink'
+import { chromeLinkClick, useChromeNav } from '../../../components/AppChrome/chrome-nav'
 import { Button } from '../shared/Button/Button'
 import { adminCopy } from './admin-copy'
 import styles from './AdminTabsBar.module.css'

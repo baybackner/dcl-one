@@ -464,7 +464,7 @@ describe("when navigating to /places in the browser", () => {
     await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
     await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/internal/dapps-flags?variants=1", expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith("/internal/feature-flags?variants=1", expect.anything());
   });
 
   it("should hand 0 while the flag is off", async () => {

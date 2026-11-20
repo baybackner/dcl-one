@@ -168,7 +168,7 @@ let flagsPrimed: Promise<void> | null = null;
 
 /**
  * Client navigations fetch the feeds through the browser cache; the server loader runs for the first document only.
- * Live Now's head count comes from this server's flags (/internal/dapps-flags), read once per document; without an
+ * Live Now's head count comes from this server's flags (/internal/feature-flags), read once per document; without an
  * answer it is 0, as the server's is.
  */
 export async function clientLoader(): Promise<{ liveMinUsers: number }> {

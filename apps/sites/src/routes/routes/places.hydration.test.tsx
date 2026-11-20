@@ -44,7 +44,7 @@ beforeEach(async () => {
 
 const FLAG = "dapps-places-live-min-user";
 
-/** The feature-flags service (as the server reads it) and this server's /internal/dapps-flags, both with `variant`. */
+/** The feature-flags service (as the server reads it) and this server's /internal/feature-flags, both with `variant`. */
 function serveFlags(variant: string) {
   vi.stubGlobal(
     "fetch",
@@ -53,7 +53,7 @@ function serveFlags(variant: string) {
         const payload = { type: "string", value: variant };
         return Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: { name: "min_users", enabled: true, payload } } });
       }
-      if (String(url).startsWith("/internal/dapps-flags")) return Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: variant } });
+      if (String(url).startsWith("/internal/feature-flags")) return Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: variant } });
       throw new Error(`unexpected fetch ${url}`);
     }),
   );
