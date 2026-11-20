@@ -1003,9 +1003,25 @@ fn derived_materials_cull_back_faces_and_drop_the_emissive_strength() {
         assert!(!base.double_sided, "{strength:?}");
         assert_eq!(
             base.emissive.to_vec3(),
-            Vec3::splat(0.25 * AVATAR_EMISSIVE_MULTIPLIER),
+            Vec3::splat(avatar_emission(0.25)),
             "{strength:?}"
         );
+    }
+}
+
+/// the emission curve: faint under a factor of 0.1, 2.5 at 0.2, steep above
+#[test]
+fn avatar_emission_follows_the_gamma_curve() {
+    for (factor, expected) in [
+        (0.0, 0.0),
+        (0.05, 0.127),
+        (0.1, 0.535),
+        (0.2, 2.5),
+        (0.5, 18.75),
+        (1.0, 86.2),
+    ] {
+        let got = avatar_emission(factor);
+        assert!((got - expected).abs() < 0.01 * expected.max(1.0), "{factor}: {got}");
     }
 }
 

@@ -1516,7 +1516,21 @@ pub struct AvatarMaterials(pub HashSet<AssetId<SceneMaterial>>);
 #[derive(Component, Debug)]
 pub struct PreviousAvatar(Entity);
 
-const AVATAR_EMISSIVE_MULTIPLIER: f32 = 4.0;
+/// An avatar's emission for one channel of a glTF emissive factor, in the toon lighting's output
+/// units (lit white is 1): five times the factor read as a gamma-encoded colour and decoded to
+/// linear (past 1 by a power of 2.2), times 2.5. A factor of 0.2 emits 2.5 and 1.0 about 86,
+/// while a factor under 0.1 stays faint. toon.wgsl undoes bound_material's x10 lift.
+fn avatar_emission(factor: f32) -> f32 {
+    let gamma = factor.max(0.0) * 5.0;
+    let linear = if gamma <= 0.04045 {
+        gamma / 12.92
+    } else if gamma < 1.0 {
+        ((gamma + 0.055) / 1.055).powf(2.4)
+    } else {
+        gamma.powf(2.2)
+    };
+    linear * 2.5
+}
 /// The camera-to-player dither's base opacity for avatars: an avatar fades as a whole, by the
 /// worst point of its capsule, so all of it shows the floor. Higher than text's for that reason.
 const AVATAR_DITHER_BASE_OPACITY: f32 = 0.5;
@@ -2217,19 +2231,18 @@ fn derived_scene_material(
     };
 
     // the glTF emissive factor alone: the loader's KHR_materials_emissive_strength divided out
-    let multiplier = AVATAR_EMISSIVE_MULTIPLIER
-        / loaded_avatar
-            .emissive_strengths
-            .get(&h_mat.0.id())
-            .copied()
-            .unwrap_or(1.0);
+    let strength = loaded_avatar
+        .emissive_strengths
+        .get(&h_mat.0.id())
+        .copied()
+        .unwrap_or(1.0);
     let emissive_color_specified =
         mat.emissive.red != 0.0 || mat.emissive.green != 0.0 || mat.emissive.blue != 0.0;
     let emissive = if emissive_color_specified {
         LinearRgba {
-            red: mat.emissive.red * multiplier,
-            green: mat.emissive.green * multiplier,
-            blue: mat.emissive.blue * multiplier,
+            red: avatar_emission(mat.emissive.red / strength),
+            green: avatar_emission(mat.emissive.green / strength),
+            blue: avatar_emission(mat.emissive.blue / strength),
             alpha: mat.emissive.alpha,
         }
     } else {
