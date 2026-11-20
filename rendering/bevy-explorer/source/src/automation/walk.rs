@@ -380,13 +380,31 @@ fn drive_walk(
         With<PrimaryUser>,
     >,
 ) {
+    if job.0.is_none() {
+        return;
+    }
+    let Ok((transform, modifier)) = player.single() else {
+        // nobody is left to walk: let the keys go and answer, or they stay down and the gesture
+        // stays claimed for good
+        if let Some(mut walk) = job.0.take() {
+            if matches!(walk.stage, Stage::Pressing { .. } | Stage::Holding { .. }) {
+                for binding in walk.jump.take().iter().chain(walk.held.iter().rev()) {
+                    release(&mut script, binding);
+                }
+            }
+            bypass.0 = false;
+            arbiter.release(WALK);
+            walk.reply.send(Err(refusal(
+                "the player was removed during the walk",
+                Some(json!({ "stage": walk.stage.name() })),
+            )));
+        }
+        return;
+    };
     let Some(walk) = job.0.as_mut() else {
         return;
     };
     let frame = frame.0;
-    let Ok((transform, modifier)) = player.single() else {
-        return;
-    };
     let position = transform.translation();
     let now = time.elapsed_secs_f64();
     let frame_seconds = FrameRate::measured(&diagnostics).frame_seconds as f64;

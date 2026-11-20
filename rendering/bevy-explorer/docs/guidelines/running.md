@@ -434,7 +434,9 @@ The HUD and input:
   reported with the bypass too) and `ignoreInputModifiers`. A walk that cannot start is refused
   before a key is pressed, with `{"refused", "cause"}`: a second walk (`cause.holder` `walk`), an
   action with a gamepad binding or none (`cause.input`), input the HUD holds (`cause.input`,
-  `cause.holder` `hud`), no player. `/walk_player_to` walks to a point instead. The walk is
+  `cause.holder` `hud`), no player. A walk whose player is removed while it runs lets its keys go
+  and fails the same way, with the stage it was at in `cause.stage`. `/walk_player_to` walks to a
+  point instead. The walk is
   camera-relative and the third-person camera sits beside and behind the avatar, so with the
   camera aimed at a near point a walk runs a few degrees off the avatar's line to that point; aim
   it at a far point on the line to walk straight.
