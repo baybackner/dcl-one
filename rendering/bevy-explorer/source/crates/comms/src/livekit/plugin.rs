@@ -3,7 +3,7 @@ use common::{
     debug_panic,
     inputs::SystemAction,
     rpc::{RpcCall, RpcCallEvent, RpcOrigin},
-    structs::{AudioSettings, MicState},
+    structs::MicState,
 };
 use dcl_component::proto_components::kernel::apis::{
     VideoTrackSourceType, VideoTracksActiveStreamsData, VideoTracksActiveStreamsResponse,
@@ -15,6 +15,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use {
     crate::livekit::LivekitAudioManager,
+    common::structs::AudioSettings,
     kira::{
         manager::{AudioManager, AudioManagerSettings, DefaultBackend},
         track::TrackBuilder,
@@ -58,8 +59,6 @@ impl Plugin for LivekitPlugin {
                 .add_systems(PreUpdate, crate::livekit::web::dispatch_page_events);
         }
 
-        app.init_resource::<AudioSettings>();
-
         // a headless app has no microphone, and plays no voices
         let headless = app
             .world()
@@ -89,8 +88,10 @@ impl Plugin for LivekitPlugin {
             app.add_systems(Startup, build_kira_audio_manager);
             app.add_systems(
                 Update,
-                respond_to_audio_settings_change
-                    .run_if(resource_exists_and_changed::<AudioSettings>),
+                respond_to_audio_settings_change.run_if(
+                    resource_exists::<LivekitAudioManager>
+                        .and(resource_exists_and_changed::<AudioSettings>),
+                ),
             );
         }
 
@@ -390,7 +391,7 @@ fn handle_input(
 fn respond_to_system_api(
     mut events: EventReader<SystemApi>,
     mut mic: ResMut<MicState>,
-    focus: super::mic::MicrophoneFocusRes,
+    focus: super::mic::MicrophoneFocus,
 ) {
     for ev in events.read() {
         match ev {

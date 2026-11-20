@@ -162,6 +162,7 @@ pub fn assemble(
         .add_plugins(WalletPlugin)
         // no client window: always focused
         .insert_resource(ClientWindowFocus::Focused)
+        .insert_resource(config.audio.clone())
         .add_plugins(CommsPlugin)
         .add_plugins(ban_block::BanBlockPlugin)
         // emote metadata (the loop flag scenes are told) resolves through the collectible

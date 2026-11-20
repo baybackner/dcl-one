@@ -336,7 +336,7 @@ fn voice_state_cmd(
     #[cfg(feature = "livekit")] speakers: ActiveSpeakers,
     #[cfg(feature = "livekit")] call: Option<Res<crate::voice_chat::VoiceChat>>,
     #[cfg(feature = "livekit")] call_mic: Option<Res<crate::voice_chat::CallMic>>,
-    #[cfg(feature = "livekit")] focus: crate::livekit::mic::MicrophoneFocusRes,
+    #[cfg(feature = "livekit")] focus: crate::livekit::mic::MicrophoneFocus,
     #[cfg(feature = "livekit")] call_participants: crate::voice_chat::CallParticipants,
 ) {
     if let Some(Ok(_)) = input.take() {

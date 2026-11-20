@@ -343,12 +343,12 @@ fn suppress_nearby_voice_on_refusal(
 
 /// The client window's focus as [`AudioSettings::microphone_focus`] adjusts it.
 #[derive(SystemParam)]
-pub(crate) struct MicrophoneFocusRes<'w> {
+pub(crate) struct MicrophoneFocus<'w> {
     focus: Res<'w, ClientWindowFocus>,
     audio: Res<'w, AudioSettings>,
 }
 
-impl MicrophoneFocusRes<'_> {
+impl MicrophoneFocus<'_> {
     pub(crate) fn get(&self) -> ClientWindowFocus {
         self.audio.microphone_focus(self.window())
     }
@@ -369,7 +369,7 @@ fn transmission_state(
     microphone_transmission_state: Res<State<MicrophoneTransmissionState>>,
     mut next_state: ResMut<NextState<MicrophoneTransmissionState>>,
     mut last: ResMut<LastTransmission>,
-    focus: MicrophoneFocusRes,
+    focus: MicrophoneFocus,
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
 ) {
@@ -549,7 +549,7 @@ fn enable_microphone_state_system(
     mut commands: Commands,
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: MicrophoneFocusRes,
+    focus: MicrophoneFocus,
 ) {
     if can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(focus.get())) {
         debug!("Microphone is now enabled.");
@@ -632,7 +632,7 @@ fn disable_microphone_state_system(
     mut commands: Commands,
     mic_state: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: MicrophoneFocusRes,
+    focus: MicrophoneFocus,
 ) {
     if !can_capture_microphone(&mic_state, &call_mic, microphone_state_focus(focus.get())) {
         debug!("Microphone is now disabled.");
@@ -696,7 +696,7 @@ fn reconcile_publications(
     )>,
     mic: Res<MicState>,
     call_mic: Res<CallMic>,
-    focus: MicrophoneFocusRes,
+    focus: MicrophoneFocus,
     permission: Res<State<MicrophonePermission>>,
     availability: Res<State<MicrophoneAvailability>>,
     drain: Res<MicrophoneDrain>,

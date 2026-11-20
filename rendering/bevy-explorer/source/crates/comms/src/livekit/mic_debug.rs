@@ -109,7 +109,7 @@ fn microphone_info(
         ),
     >,
     permission: Res<State<MicrophonePermission>>,
-    focus: MicrophoneFocusRes,
+    focus: MicrophoneFocus,
     transmission: Res<State<MicrophoneTransmissionState>>,
     speakers: Query<&LivekitParticipant, (With<ActiveSpeaker>, Without<Local>)>,
     #[cfg(not(target_arch = "wasm32"))] device: Option<Res<MicrophoneDevice>>,
