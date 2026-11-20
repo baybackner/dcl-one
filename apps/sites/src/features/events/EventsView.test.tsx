@@ -128,11 +128,28 @@ const profilesReply = (address: string) =>
   Response.json([{ avatars: [{ ethAddress: address, name: "OtoLam", avatar: { snapshots: { face256: FACE } } }] }]);
 
 describe("EventsView", () => {
-  it("should render no Live Now section when nothing is live and mark empty days", async () => {
+  it("should open Live Now with the Foundation's Genesis Plaza at 0,0 when nothing is live and mark empty days", async () => {
+    setup("/events");
+    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    expect(within(section).getByRole("link", { name: "Genesis Plaza" }).getAttribute("href")).toBe(
+      "/events?position=0%2C0",
+    );
+    expect(
+      within(section)
+        .getByRole("link", { name: /Jump In/ })
+        .getAttribute("href"),
+    ).toMatch(/\/play\/\?position=0%2C0$/);
+    expect(within(section).getByText("Decentraland Foundation")).toBeTruthy();
+    expect(within(section).getByText("0 online")).toBeTruthy();
+    expect(await screen.findAllByText("No events this day.")).not.toHaveLength(0);
+  });
+
+  it("should render no Live Now section while the live feed is unavailable", async () => {
+    vi.mocked(fetchMostActivePlaces).mockRejectedValue(new CatalystError("down", "/places", 503));
     setup("/events");
     await screen.findByRole("heading", { name: "All Events" });
+    await waitFor(() => expect(fetchMostActivePlaces).toHaveBeenCalled());
     expect(screen.queryByRole("heading", { name: "Live Now" })).toBeNull();
-    expect(await screen.findAllByText("No events this day.")).not.toHaveLength(0);
   });
 
   it("should link to the event hosting article on the site", async () => {
@@ -227,7 +244,8 @@ describe("EventsView", () => {
     await waitFor(() =>
       expect(vi.mocked(track)).toHaveBeenCalledWith(
         "lp_whatson_viewed",
-        { live_count: 0, upcoming_count: 1, filter: null, search: null },
+        // Genesis Plaza alone opens the rail when nothing is live.
+        { live_count: 1, upcoming_count: 1, filter: null, search: null },
         expect.anything(),
       ),
     );

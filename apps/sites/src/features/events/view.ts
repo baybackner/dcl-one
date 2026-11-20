@@ -1,3 +1,4 @@
+import plazaThumbnail from "@dcl/one-ui/apps/sites/assets/genesis-plaza.webp";
 import { eventText, type EventsLocale } from "@dcl/one-ui/apps/sites/events/locale";
 import type { EventCardCreator, UpcomingEventCardProps } from "@dcl/one-ui/apps/sites/events/types";
 
@@ -159,10 +160,38 @@ function placeOf(event: Event, places: readonly Place[]): Place | undefined {
   return places.find((place) => !place.world && place.positions.includes(parcel));
 }
 
-/** Genesis Plaza: the Genesis City scene source names so, else the one on parcel 0,0. */
-function genesisPlaza(places: readonly Place[]): Place | undefined {
+/** Genesis Plaza as source shows it when the feed does not list it: the Foundation's, on parcel 0,0, empty. */
+export const GENESIS_PLAZA: Place = {
+  id: "genesis-plaza",
+  title: "Genesis Plaza",
+  description: null,
+  image: plazaThumbnail,
+  owner: null,
+  positions: ["0,0"],
+  base_position: "0,0",
+  updated_at: null,
+  created_at: null,
+  contact_name: FOUNDATION_CONTACT_NAME,
+  categories: [],
+  highlighted: false,
+  highlighted_image: null,
+  user_count: 0,
+  user_visits: 0,
+  favorites: 0,
+  likes: 0,
+  like_rate: null,
+  world: false,
+  world_name: null,
+};
+
+/** Genesis Plaza: the Genesis City scene source names so, else the one on parcel 0,0, else the stand-in. */
+function genesisPlaza(places: readonly Place[]): Place {
   const city = places.filter((place) => !place.world);
-  return city.find((place) => place.title?.toLowerCase().includes("genesis plaza")) ?? city.find((place) => place.positions.includes("0,0"));
+  return (
+    city.find((place) => place.title?.toLowerCase().includes("genesis plaza")) ??
+    city.find((place) => place.positions.includes("0,0")) ??
+    GENESIS_PLAZA
+  );
 }
 
 /**
@@ -174,7 +203,7 @@ export function liveNowItems(data: LiveNowData, minUsers = DEFAULT_MIN_USERS): L
   const items = busyItems(data, minUsers);
   if (items.length) return items;
   const plaza = genesisPlaza(data.places);
-  return plaza ? [{ kind: "place", place: plaza, users: plaza.user_count ?? 0 }] : [];
+  return [{ kind: "place", place: plaza, users: plaza.user_count ?? 0 }];
 }
 
 function busyItems(data: LiveNowData, minUsers: number): LiveNowItem[] {

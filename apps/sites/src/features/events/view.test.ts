@@ -10,6 +10,7 @@ import {
   eventCreator,
   eventHref,
   eventPageShareUrl,
+  GENESIS_PLAZA,
   legacyEventsHref,
   liveNowItems,
   placeCreator,
@@ -39,10 +40,10 @@ describe("liveNowItems", () => {
 
   it("should leave out a live event whose scene is below the player threshold, and quiet places", () => {
     const items = liveNowItems({
-      events: [eventRecord({ live: true, x: 5, y: 5 })],
-      places: [placeRecord({ positions: ["5,5"], user_count: 4 })],
+      events: [eventRecord({ id: "quiet-event", live: true, x: 5, y: 5 })],
+      places: [placeRecord({ id: "quiet", positions: ["5,5"], user_count: 4 })],
     });
-    expect(items).toEqual([]);
+    expect(items.map((item) => (item.kind === "event" ? item.event.id : item.place.id))).toEqual(["genesis-plaza"]);
   });
 
   describe("when no place reaches the player threshold", () => {
@@ -61,11 +62,26 @@ describe("liveNowItems", () => {
     });
 
     it("should not take a World on 0,0 for Genesis Plaza", () => {
-      expect(liveNowItems({ events: [], places: [placeRecord({ world: true, world_name: "brai.dcl.eth", positions: ["0,0"], user_count: 0 })] })).toEqual([]);
+      const world = placeRecord({ id: "world", world: true, world_name: "brai.dcl.eth", positions: ["0,0"], user_count: 0 });
+      expect(liveNowItems({ events: [], places: [world] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
     });
 
-    it("should leave the rail empty when the feed has no Genesis Plaza", () => {
-      expect(liveNowItems({ events: [], places: [] })).toEqual([]);
+    it("should open the rail with the Foundation's Genesis Plaza on parcel 0,0 and no players when the feed has none", () => {
+      const items = liveNowItems({ events: [], places: [placeRecord({ id: "quiet", positions: ["5,5"], user_count: 2 })] });
+      expect(items).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
+      expect(GENESIS_PLAZA).toMatchObject({
+        id: "genesis-plaza",
+        title: "Genesis Plaza",
+        base_position: "0,0",
+        world: false,
+        contact_name: "Decentraland Foundation",
+        owner: null,
+      });
+      expect(GENESIS_PLAZA.image).toMatch(/genesis-plaza.*\.webp$/);
+    });
+
+    it("should open the rail with Genesis Plaza when the feed is empty", () => {
+      expect(liveNowItems({ events: [], places: [] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
     });
   });
 
