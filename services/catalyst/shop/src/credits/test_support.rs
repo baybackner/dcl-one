@@ -28,8 +28,12 @@ pub fn mana_payment_from(from: &str, confirmations: u64) -> ManaPaymentVerificat
     }
 }
 
-/// A configured broker that answers top-up verifications from `verifications` (an unknown hash is
-/// rejected); every other call is the unconfigured broker's answer.
+/// A configured broker that answers top-up verifications from `verifications`, matched exactly;
+/// every other call is the unconfigured broker's answer.
+///
+/// A hash missing from `verifications` answers 400 (`economy rejected the txHash`), not
+/// `NoPayment`. A test of the 422 "no payment" refusal must register its hash as
+/// [`ManaPaymentVerification::NoPayment`].
 #[derive(Default)]
 pub struct TopupBroker {
     pub verifications: HashMap<String, ManaPaymentVerification>,
@@ -88,5 +92,20 @@ impl Broker for TopupBroker {
             .get(tx_hash)
             .cloned()
             .ok_or_else(|| ApiError::bad_request("economy rejected the txHash"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_unregistered_hash_is_a_bad_request_not_no_payment() {
+        let err = TopupBroker::default()
+            .verify_mana_payment(&fresh_tx_hash())
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.to_string(), "economy rejected the txHash");
     }
 }
