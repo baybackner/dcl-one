@@ -5,30 +5,37 @@
 //! mesh that never glows carries `PropagateOver<Highlight>`; the nametag and the ghost stop the
 //! glow with `PropagateStop<Highlight>`.
 //!
-//! Only the explorer (`colliders`) drives the glow; a build without it still marks the meshes.
-#![cfg_attr(not(feature = "explorer"), allow(dead_code))]
+//! Only the explorer (`colliders`) drives the glow; the renderer alone still marks the meshes.
 
+#[cfg(feature = "explorer")]
+use bevy::app::Propagate;
 use bevy::{
-    app::{Inherited, Propagate, PropagateOver},
+    app::{Inherited, PropagateOver},
     prelude::*,
 };
 use scene_material::highlight::Highlight;
 
+#[cfg(feature = "explorer")]
 const AVATAR_GLOW_COLOR: Color = Color::srgb(0.0, 1.0, 0.52395105);
 /// the glow's opacity once it has faded in
+#[cfg(feature = "explorer")]
 const AVATAR_GLOW_OPACITY: f32 = 0.8;
 /// A share of the view's height, as `Highlight::width`: 3.5 pixels at 1080p.
+#[cfg(feature = "explorer")]
 const AVATAR_GLOW_WIDTH: f32 = 3.5 / 1080.0;
+#[cfg(feature = "explorer")]
 const AVATAR_GLOW_FADE_SECONDS: f32 = 0.1;
 
 /// On the player container: `target` 1.0 while hovered, 0.0 after; `alpha` moves toward it at a
 /// constant rate, a full fade taking `AVATAR_GLOW_FADE_SECONDS`. Removed when both are 0.
+#[cfg(feature = "explorer")]
 #[derive(Component, Debug, PartialEq, Clone, Copy)]
 pub(crate) struct HoverGlow {
     target: f32,
     alpha: f32,
 }
 
+#[cfg(feature = "explorer")]
 fn step_glow(glow: HoverGlow, dt: f32) -> HoverGlow {
     let step = dt / AVATAR_GLOW_FADE_SECONDS;
     let alpha = if glow.alpha < glow.target {
@@ -41,6 +48,7 @@ fn step_glow(glow: HoverGlow, dt: f32) -> HoverGlow {
 
 /// The highlight of a glow faded to `alpha`. The highlight pass blends its colour as
 /// premultiplied, so the colour is scaled by the opacity it carries.
+#[cfg(feature = "explorer")]
 fn glow_highlight(alpha: f32) -> Highlight {
     let opacity = AVATAR_GLOW_OPACITY * alpha;
     let color = AVATAR_GLOW_COLOR.to_linear();
@@ -82,6 +90,7 @@ pub(crate) fn set_hover_glows(mesh: &mut EntityCommands, glows: bool) {
 }
 
 /// fades `container`'s glow toward `target`, from nothing when a glow starts
+#[cfg(feature = "explorer")]
 pub(crate) fn set_glow_target(
     commands: &mut Commands,
     glows: &mut Query<&mut HoverGlow>,
@@ -101,6 +110,7 @@ pub(crate) fn set_glow_target(
 
 /// steps each glow and puts its highlight on the container for propagation to carry to the
 /// meshes; a finished glow takes the highlight and itself away
+#[cfg(feature = "explorer")]
 pub(crate) fn apply_hover_glow(
     mut commands: Commands,
     time: Res<Time>,
@@ -121,7 +131,7 @@ pub(crate) fn apply_hover_glow(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "explorer"))]
 mod tests {
     use std::time::Duration;
 
