@@ -10,80 +10,31 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Toon MASK wearables.** Unity alpha-blends after the cutoff, so thin masked lines look
   fine there and fat and black here. Bevy stays glTF-spec-correct (MASK is binary). We don't
   match.
-- **Toon avatars are fogged.** They are fogged like everything else; Unity's
-  `DCL_ToonBody.hlsl` computes a fog factor that its fragment
-  (`DCL_ToonBodyDoubleShadeWithFeather.hlsl`) never applies.
-- **Toon avatars take only the sun.** No point or spot light reaches them, as in Unity's shader
-  (its additional-light loop is commented out); the sun is the brightest directional light, so a
-  scene's `GlobalLight` reaches them.
-- **Toon avatars' ambient floor.** Unity floors the light colour with
-  `max(ShadeSH9(0), ShadeSH9(down))` (`DCL_ToonBodyDoubleShadeWithFeather.hlsl:93`). Here the
-  ambient is the sky envmap's diffuse irradiance, the Trilight ambient the world gets, read for a
-  white surface facing up and down; the constant spherical harmonics term `ShadeSH9(0)` is
-  approximated by the mean of the two. The toon reads that irradiance without the world's 0.96
-  dielectric factor (`DIELECTRIC_DIFFUSE`, `sky_envmap_lookup.wgsl`), as Unity's toon reads
-  `ShadeSH9` raw while its lit world shader scales it by one minus the reflectivity, so avatars
-  sit about 4% above a white world surface in shade; that matches Unity and is not to be
-  removed.
-- **Toon avatars without the sky envmap take the view's flat ambient.** A view without the sky
-  envmap (a texture camera without the skybox, as the Backpack preview is; a photo booth) has no
-  Trilight ambient, so the toon ambient there is the view's flat `AmbientLight`, the light the
-  world's pbr surfaces get in that view, converted to light units (`toon_flat_ambient`: colour
-  times brightness, times pi over `LIGHT_UNIT_LUX`) and passed through the same floor formula.
-  The Backpack preview has no directional light and an ambient brightness override of 5, which
-  at the default ambient setting is 5 light units: the floor saturates and the avatar is lit
-  flat at 1. With the sky envmap the flat ambient is not read: there it is only the level the sky reflections
-  are drawn towards. A photo booth (the profile renders of `avatar_render` included) has no
-  ambient to speak of, so it carries a key light of its own, a directional light of one light
-  unit; without it avatars there would sit at the `0.05 * _Unlit_Intensity` floor.
-- **Face features are lit by the ambient alone.** Unity draws the eyes, eyebrows and mouth with
-  their own shader (`DCL_Avatar_Facial_Feature_ForwardPass.hlsl`), which returns the base
-  colour times the spherical-harmonics ambient at the surface normal times 4, with no sun, no
-  bands and no saturation, so under a noon sky they are about twice their base colour, brighter
-  than the body. Here the same holds with the sky envmap's irradiance in light units
-  (`facial_feature_lighting`, `toon.wgsl`). A view without the sky envmap has a flat ambient
-  set to light the body flat, five light units in the Backpack preview, which would light them
-  twentyfold; there they take the noon Trilight's equator colour instead
-  (`facial_flat_ambient`), where Unity's preview, drawn in the world, takes the sky of the
-  moment. The masks keep the body's outline, which Unity's face shader does not draw.
-- **Toon avatars' outline is a screen-space line.** Unity draws an inverted hull
-  (`DCL_ToonOutline.hlsl`) for the avatars within 8 m; here the line is the prepass edge
-  detection, with Unity's colour (`_Outline_Color * base * base`, unlit), width
-  (`_Outline_Width * 0.001` m, thinning from `_Nearest_Distance` to `_Farthest_Distance`) and
-  cutoff. Differences kept: the 8 m cutoff is measured to each mesh's own origin, where
-  Unity measures once per avatar to the head anchor (`AvatarShapeVisibilitySystem.cs:93`), so
-  the outline comes and goes at a slightly different camera distance, and a mesh whose origin
-  is not the avatar's can gain or lose its line apart from the rest. A line thinner than a pixel covers that
-  fraction of the pixel and fades, where Unity's hull aliases. The hull lines any overlap, a
-  chin over the neck or a lock over the face; here a surface is lined where what lies behind
-  it is three pixel footprints deeper (`OUTLINE_EDGE_PX`, `scene_material::toon`), below which
-  a curved surface's own rise towards its silhouette would draw lines, so overlaps closer than
-  that (about 6 mm at 2 m in 1080p) have none. And there is no frustum test:
-  Unity skips avatars out of view, while an off-screen avatar has no fragments to draw a line
-  on, so the test would save nothing. The edge detection also darkens normal creases inside
-  the silhouette (the surface times 0.6320754, `bound_material_effect.wgsl`), which Unity's
-  hull does not draw; the crease is kept because the outline's look here relies on it. And
-  Unity outlines a preview avatar at any distance (`avatarShape.IsPreview ||`,
-  `AvatarShapeVisibilitySystem.cs:93`); here there is no preview flag, and the cutoff is
-  skipped in orthographic views instead, which is what the Backpack preview's camera is (it
-  stands more than 8 m back), with the width still following the distance. A perspective
-  texture camera follows the 8 m rule.
-- **A hovered avatar glows through the highlight pass.** Unity's values (`AvatarHighlight.asset`,
-  `AvatarHighlightSystem.cs`): sRGB `(0, 1, 0.52395105)` at opacity `0.8`, thickness `3.5`,
-  fading in and out over `0.1` s at a constant rate, on the opaque and alpha-tested meshes of
-  the wearables that are outline-compatible (`AvatarShapeComponent.CreateOutlineCompatibilityList`).
-  Differences kept: the glow is the pass scene entities use (`scene_material::highlight`), a
-  blurred silhouette, so its thickness is `3.5 / 1080` of the view's height where Unity's is
-  3.5 in its own pass. An alpha-tested mesh glows around its whole geometry, cut-out parts
-  included, since the pass draws silhouettes without the material's texture. The avatar
-  preview has no hover glow. The pass has no depth test and its mask shader discards nothing,
-  so the glow shows through whatever stands in front of the avatar, and it is not cut by the
-  camera dither or by the ghost reveal: an avatar faded by the dither, or still rising out of
-  its ghost, glows around its whole silhouette. The glow reaches every opaque or alpha-tested
-  `SceneMaterial` mesh under the player's container, an emote's props included, where Unity
-  lists the wearables' renderers only. And Unity gives an avatar shown with `ShowOnlyWearables`
-  no highlight at all (`CreateOutlineCompatibilityList` returns early); that case is not
-  ported, so the wearables of such an avatar glow like any other's.
+- **Toon avatars are fogged.** Like everything else; Unity's toon computes a fog factor its
+  fragment never applies.
+- **Toon avatars take only the sun.** No point or spot light reaches them, as in Unity, whose
+  toon additional-light loop is commented out.
+- **The toon ambient floor is the sky envmap's irradiance.** It stands in for Unity's
+  spherical harmonics, read up and down, and without the world's dielectric factor, as Unity reads
+  `ShadeSH9` raw. Avatars in shade sit about 4% above a white world surface; that matches Unity
+  and is not to be removed.
+- **Without the sky envmap, toon avatars take the view's flat ambient.** Such a view (the
+  Backpack preview, a photo booth) has no Trilight ambient. The Backpack is lit flat; a booth
+  carries a one-light-unit key light, or its avatars would sit at the night floor.
+- **Face features are lit by the ambient alone.** As Unity's facial shader: no sun and no bands,
+  so they are brighter than the body at noon and darker at night. A view without the sky envmap
+  takes the noon horizon colour, since its flat ambient would light them twentyfold. They keep
+  the body's outline, which Unity's face shader does not draw.
+- **The toon outline is a screen-space line, not an inverted hull.** It keeps Unity's colour,
+  width falloff and 8 m cutoff. Kept differences: the cutoff is per mesh, not per avatar; an
+  overlap shallower than the edge threshold gets no line, so a curved surface draws none on
+  itself; creases inside the silhouette darken, which the look relies on; and an orthographic
+  view (the Backpack) skips the cutoff, in place of Unity's preview flag.
+- **A hovered avatar glows through the shared highlight pass.** Unity's colour, opacity, width
+  and 0.1 s fade, through the pass scene entities use, so the glow shows through what stands in
+  front and ignores the camera dither and the ghost reveal. Kept differences: every opaque or
+  alpha-tested mesh under the player glows, an emote's props included, where Unity lists the
+  wearables only; an avatar shown with `ShowOnlyWearables` glows like any other.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest
