@@ -985,6 +985,50 @@ async fn seed_rights(pool: &PgPool) {
         .unwrap();
 }
 
+#[tokio::test]
+async fn parcel_owners_read_the_estate_owner_and_only_a_fresh_publication() {
+    let Some(db) = ScratchDb::create().await else {
+        return;
+    };
+    seed_rights(&db.pool).await;
+    let state = state_over(db.pool.clone(), Settings::for_tests(), None);
+    let mut conn = db.pool.acquire().await.unwrap();
+    let parcels = [(1, 1), (2, 2), (4, 4), (9, 9)];
+    assert_eq!(
+        state.owners_at(&mut conn, &parcels).await.unwrap(),
+        vec![None; 4]
+    );
+    sqlx::query("INSERT INTO land_authz.index_cursor (network,land_registry,estate_registry,last_block,folded_block,folded_at,full_replay_started) VALUES ($1,$2,$3,1,1,timezone('UTC',now()),true)")
+        .bind(NETWORK_MAINNET).bind(LAND).bind(ESTATE).execute(&mut *conn).await.unwrap();
+    let lower = |a: &str| Some(a.to_lowercase());
+    assert_eq!(
+        state.owners_at(&mut conn, &parcels).await.unwrap(),
+        vec![lower(BOB), lower(ALICE), None, None]
+    );
+    // An estate parcel whose estate is not indexed has no known owner.
+    sqlx::query("DELETE FROM land_authz.token_right WHERE token_address = $1")
+        .bind(ESTATE)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.owners_at(&mut conn, &[(2, 2)]).await.unwrap(),
+        vec![None]
+    );
+    sqlx::query(
+        "UPDATE land_authz.index_cursor SET folded_at=timezone('UTC',now())-interval '31 minutes'",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        state.owners_at(&mut conn, &[(1, 1)]).await.unwrap(),
+        vec![None]
+    );
+    drop(conn);
+    db.drop().await;
+}
+
 /// lamb2 folds the owner's authorization log into a JS `Map`
 /// (`parcel-rights-fetcher.ts`): the legs list operators by the approval
 /// that opened their current grant, a repeated approval keeps its place and

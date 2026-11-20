@@ -411,9 +411,10 @@ impl LandAuthzState {
     }
 
     /// The indexed owner of each parcel (its estate's owner when it sits in
-    /// one), lowercase and positional, on the caller's connection with the
-    /// publication check of [`Self::estate_at`]. An unpublished index, an
-    /// unindexed parcel or the zero address answer `None`.
+    /// one, never the estate registry), lowercase and positional, on the
+    /// caller's connection with the publication check of [`Self::estate_at`].
+    /// An unpublished index, an unindexed parcel or estate, no owner or the
+    /// zero address answer `None`.
     pub async fn owners_at(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -431,7 +432,7 @@ impl LandAuthzState {
              JOIN land_authz.token_right p ON p.token_address=c.land_registry AND p.x=t.x AND p.y=t.y \
              LEFT JOIN land_authz.estate_land el ON el.land_token_id=p.token_id \
              LEFT JOIN land_authz.token_right et ON et.token_address=c.estate_registry AND et.token_id=el.estate_token_id \
-             CROSS JOIN LATERAL (SELECT lower(COALESCE(CASE WHEN el.estate_token_id IS NOT NULL THEN et.owner END, p.owner)) AS owner) o \
+             CROSS JOIN LATERAL (SELECT lower(CASE WHEN el.estate_token_id IS NOT NULL THEN et.owner ELSE p.owner END) AS owner) o \
              WHERE c.network=$1 AND c.land_registry=$2 AND c.estate_registry=$3 \
                AND c.full_replay_started AND c.folded_block=c.last_block \
                AND c.folded_at <= timezone('UTC', now()) \

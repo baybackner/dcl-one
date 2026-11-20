@@ -2481,6 +2481,75 @@ mod tests {
         assert_eq!(t.rating(&r).await.as_deref(), Some("R"));
     }
 
+    #[tokio::test]
+    async fn a_filled_parcel_keeps_an_operators_rating_and_a_padded_creator_matches() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let x = u16::from_str_radix(&token[..4], 16).unwrap() as i32;
+        let y0 = u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000;
+        let parcel = |n: i32| format!("{x},{}", y0 + n);
+        let site = Some("https://decentraland.org/places");
+        let forget = |position: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = $1")
+                    .bind(position)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // A parcel recorded before the table fills as the operator's.
+        let a = parcel(0);
+        upsert_page(
+            &pool,
+            Ratings::deploy("0xowner", &a, &[&a], Some("T"), 0),
+            site,
+        )
+        .await
+        .unwrap();
+        t.rate(&a, "R", None).await;
+        forget(a.clone()).await;
+        upsert_page(
+            &pool,
+            Ratings::deploy("0xowner", &a, &[&a], Some("T"), 0),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.record(&a).await, Some(("R".into(), true)));
+
+        // A listed place whose stored creator is padded still holds a new
+        // place by that creator on its parcels.
+        let (b, c) = (parcel(2), parcel(3));
+        upsert_page(
+            &pool,
+            Ratings::deploy("0xowner", &b, &[&b, &c], Some("A"), 0),
+            site,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE explore.place SET creator_address = ' 0xOwner ' WHERE id = $1")
+            .bind(super::super::parcel_place_id(&b))
+            .execute(&pool)
+            .await
+            .unwrap();
+        forget(b.clone()).await;
+        forget(c.clone()).await;
+        upsert_page(
+            &pool,
+            Ratings::deploy("0xowner", &c, &[&b, &c], Some("T"), 1),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&c).await.as_deref(), Some("A"));
+    }
+
     /// Publishes a ready LAND index on an isolated database, with `owner` on
     /// each parcel.
     async fn land_index(pool: &PgPool, parcels: &[&String], owner: &str) -> LandAuthzState {

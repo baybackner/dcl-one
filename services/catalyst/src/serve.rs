@@ -417,7 +417,6 @@ pub async fn serve(
             .with_outbound(http_client.clone())
             .with_cors(explore_cors),
     );
-    explore.spawn_jobs(&jobs, http_client.clone());
 
     // The explorer-api readers and mirrors, the asset-bundle CDN read-through
     // cache (`/ab-cdn`, the old catalyrst-ab-cdn serving half) and the map
@@ -563,6 +562,9 @@ pub async fn serve(
         Some(market.index.clone()),
     ));
     explore.places.set_land_authz(land.clone());
+    // After the LAND authority attaches: the places derive pass records each
+    // parcel's owner from it.
+    explore.spawn_jobs(&jobs, http_client.clone());
 
     // The content server's local write path (src/content/{create_entity,
     // unpublish_scene,land_publish}): the write deployer over the ONE pool
