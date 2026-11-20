@@ -50,11 +50,11 @@
           "utility": null,
           "mappings": null,
           "urn": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:cap-1",
-          "in_catalyst": false,
-          "is_approved": false,
+          "in_catalyst": true,
+          "is_approved": true,
           "is_published": true,
           "content_hash": null,
-          "catalyst_content_hash": null,
+          "catalyst_content_hash": "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c",
           "isMappingComplete": true
         },
         {
@@ -122,11 +122,11 @@
           "utility": null,
           "mappings": null,
           "urn": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:mask-3",
-          "in_catalyst": false,
-          "is_approved": false,
-          "is_published": false,
+          "in_catalyst": true,
+          "is_approved": true,
+          "is_published": true,
           "content_hash": null,
-          "catalyst_content_hash": null,
+          "catalyst_content_hash": "3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a",
           "isMappingComplete": false
         }
       ]

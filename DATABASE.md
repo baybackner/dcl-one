@@ -1289,9 +1289,26 @@ Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
 | `GET /v1/items`, the 1,000 oldest | `items_created_idx`, then primary keys | ids under 1 ms; their 1,000 bodies about 10 ms |
 | one item by id with its chain merge | primary keys | under 0.3 ms |
 | a save's contents for 198 files, and the upload record cleanup | `item_contents_pkey`, `item_contents_hash_idx` | under 10 ms warm |
+| the catalyst's entity at each listed item's URN (12,665 items, 1,500,000 synthetic deployments, 6,000 at the items' URNs, cold cache) | `active_pointers_pointer_ops_idx` per item, `deployments_entity_id_key` per hit | about 1.6 s for the whole collection; one item 0.5 ms |
+| the third-party URN check's entity probe | `active_pointers_pointer_ops_idx`, `deployments_entity_id_key` | 0.5 ms |
 
 Invariants:
 
+- The catalyst is this node's content. A body reads, by shared SQL and in
+  the same statement, the active (`deleter_deployment IS NULL`) wearable or
+  emote deployment that `content.active_pointers` names at the item's
+  lowercased URN: a third-party item's own URN, a minted item's URN on the
+  chain copy. A third-party item matches only an entity whose metadata `id`
+  is its URN exactly, a minted item one whose `id` equals its URN ignoring
+  case; an entity the content denylist withholds is dropped after the read.
+  A match answers `in_catalyst` true and, for a third-party item, approved,
+  published and `catalyst_content_hash` = `metadata.merkleProof.entityHash`;
+  no match answers the node's own records, never 503. The third-party save
+  that claims a new URN refuses a URN with an active entity (409) and takes
+  one without only when the process is its own content authority or
+  `content::sync::item_coverage::item_history_coverage` answers covered for
+  both item types, read before the last entity probe; otherwise 503 and
+  nothing written. The builder never writes these tables.
 - Bounds. A collection's or an address's items answer at most 20,000 rows
   per response, `GET /v1/items` 1,000; an upload carries at most 256 parts,
   empty ones included, and 20 MiB in all. Filters are bound values over fixed SQL.

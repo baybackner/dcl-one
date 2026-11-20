@@ -125,6 +125,19 @@ struct Seed {
     item_curations: Vec<SeedItemCuration>,
     #[serde(default)]
     receipts: Vec<SeedReceipt>,
+    #[serde(default)]
+    entities: Vec<SeedEntity>,
+}
+
+/// An entity the catalyst holds, active at its pointer.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedEntity {
+    entity_id: String,
+    #[serde(rename = "type")]
+    entity_type: String,
+    pointer: String,
+    metadata: Value,
 }
 
 /// A slot cheque the registry consumed: its receipt is the cheque's digest.
@@ -1002,13 +1015,13 @@ fn a_gap_explains_nothing_on_a_capture_it_does_not_list() {
         evidence["replay"] = serde_json::json!(notes);
         evidence["explained_by"] = notes
             .iter()
-            .map(|n| (n.to_string(), Value::from("open:item-catalyst-state")))
+            .map(|n| (n.to_string(), Value::from("deliberate:stored-name-trimmed")))
             .collect::<serde_json::Map<_, _>>()
             .into();
     });
     refused(
         &errors,
-        "source/190-item-save-draft-owner.json: open:item-catalyst-state does not list this capture",
+        "source/190-item-save-draft-owner.json: deliberate:stored-name-trimmed does not list this capture",
     );
 }
 
@@ -2071,6 +2084,31 @@ fn check_providers(seed: &Seed) {
 }
 
 async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
+    for e in &seed.entities {
+        let pointer = e.pointer.to_lowercase();
+        sqlx::query(
+            "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, \
+               entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
+             VALUES ('0x0000000000000000000000000000000000000000', 'v3', $1, $2, $3::json, '2026-01-01', ARRAY[$4], \
+               '2026-01-01', '[]'::json)",
+        )
+        .bind(&e.entity_type)
+        .bind(&e.entity_id)
+        .bind(serde_json::json!({ "v": e.metadata }))
+        .bind(&pointer)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|err| panic!("seed.json entity {}: {err}", e.entity_id));
+        sqlx::query(
+            "INSERT INTO content.active_pointers (pointer, entity_id, entity_type) VALUES ($1, $2, $3)",
+        )
+        .bind(&pointer)
+        .bind(&e.entity_id)
+        .bind(&e.entity_type)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|err| panic!("seed.json entity {} pointer: {err}", e.entity_id));
+    }
     check_providers(seed);
     for provider in &seed.third_parties {
         sqlx::query(
@@ -2408,6 +2446,7 @@ async fn replay_setup() -> Option<Replay> {
     .unwrap();
     state.now = capture_clock;
     state.guarded = Outbound::for_tests();
+    state.content_sync.set_own_content_authority(true);
     let state = Arc::new(state);
     Some(Replay {
         scratch,

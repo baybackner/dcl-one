@@ -32,14 +32,21 @@ use crate::http::{ApiError, iso};
 const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 
 /// The `FROM` items a body reads: the item `i`, its collection `c`, the
-/// copy's collection `chain` and the copy's item `ci`.
+/// copy's collection `chain`, the copy's item `ci` and `cat`, the active
+/// wearable or emote entity this node's content holds at the item's URN (a
+/// third-party item's own, a minted one's the copy names).
 pub(crate) fn from(_view: &ReadView) -> &'static str {
     "builder.items i \
      LEFT JOIN builder.collections c ON c.id = i.collection_id \
      LEFT JOIN shop.collections chain ON chain.network = 'matic' \
        AND chain.contract_address = lower(c.contract_address) AND c.third_party_id IS NULL \
      LEFT JOIN shop.items ci ON ci.network = 'matic' AND ci.contract_address = chain.contract_address \
-       AND ci.item_id = CASE WHEN i.blockchain_item_id ~ '^[0-9]{1,78}$' THEN i.blockchain_item_id::numeric END"
+       AND ci.item_id = CASE WHEN i.blockchain_item_id ~ '^[0-9]{1,78}$' THEN i.blockchain_item_id::numeric END \
+     LEFT JOIN LATERAL (SELECT d.entity_id, d.entity_metadata -> 'v' ->> 'id' AS id, \
+         d.entity_metadata -> 'v' -> 'merkleProof' ->> 'entityHash' AS proof \
+       FROM content.active_pointers ap JOIN content.deployments d ON d.entity_id = ap.entity_id \
+       WHERE ap.pointer = lower(CASE WHEN c.third_party_id IS NOT NULL THEN i.urn_suffix ELSE ci.urn END) \
+         AND d.deleter_deployment IS NULL AND d.entity_type IN ('wearable', 'emote')) cat ON true"
 }
 
 /// The columns of [`ItemRow`] over [`from`] for a list: one probe of each
@@ -59,7 +66,8 @@ pub(crate) fn columns() -> String {
     chain.is_approved AS chain_approved, ci.urn AS chain_urn, ci.item_id::text AS chain_item_id, \
     ci.price::text AS chain_price, ci.beneficiary AS chain_beneficiary, ci.rarity AS chain_rarity, \
     ci.item_type AS chain_item_type, ci.total_supply::text AS chain_supply, \
-    ci.content_hash AS chain_content_hash",
+    ci.content_hash AS chain_content_hash, \
+    cat.entity_id AS catalyst_entity, cat.id AS catalyst_id, cat.proof AS catalyst_proof",
         crate::curation::newest_item_curation("i.id", MAPPED)
     )
 }
@@ -116,6 +124,9 @@ pub(crate) struct ItemRow {
     pub chain_item_type: Option<String>,
     pub chain_supply: Option<String>,
     pub chain_content_hash: Option<String>,
+    pub catalyst_entity: Option<String>,
+    pub catalyst_id: Option<String>,
+    pub catalyst_proof: Option<String>,
 }
 
 /// An item's body (builder-server's `FullItem`; `PublicItem` without
@@ -192,6 +203,20 @@ fn supply(text: Option<&str>) -> serde_json::Number {
 }
 
 impl ItemRow {
+    /// Forgets the catalyst's entity when the node withholds it.
+    pub(crate) fn withheld(mut self, denylist: &crate::content::Denylist) -> Self {
+        if self
+            .catalyst_entity
+            .as_deref()
+            .is_some_and(|entity| denylist.contains(entity))
+        {
+            self.catalyst_entity = None;
+            self.catalyst_id = None;
+            self.catalyst_proof = None;
+        }
+        self
+    }
+
     fn third_party(&self) -> bool {
         self.third_party_id.is_some() && self.urn_suffix.is_some() && self.collection_urn.is_some()
     }
@@ -209,6 +234,14 @@ impl ItemRow {
     pub(crate) fn out(self, reached: Reached, full: bool) -> Result<FullItemOut, ApiError> {
         let third_party = self.third_party();
         let merged = !third_party && self.chain_item_id.is_some();
+        let held = match (&self.catalyst_id, third_party) {
+            (Some(id), true) => self.urn_suffix.as_deref() == Some(id.as_str()),
+            (Some(id), false) => self
+                .chain_urn
+                .as_deref()
+                .is_some_and(|urn| urn.eq_ignore_ascii_case(id)),
+            (None, _) => false,
+        };
         let dcl_urn = (!third_party
             && reached == Reached::ById
             && self.collection_id.is_some()
@@ -261,13 +294,23 @@ impl ItemRow {
                 Reached::ById => self.collection_curation_mapped,
                 Reached::InList => self.own_curation_mapped,
             };
-            out.is_published = curation.is_some();
+            out.is_published = curation.is_some() || held;
             out.is_mapping_complete = Some(curation.unwrap_or(self.mappings.is_some()));
+            if held {
+                out.in_catalyst = true;
+                out.is_approved = true;
+                out.catalyst_content_hash = self.catalyst_proof;
+            }
         } else if merged {
             if self.chain_item_type.as_deref() != Some("emote_v1") {
                 out.rarity = self.chain_rarity.filter(|r| !r.is_empty()).or(out.rarity);
             }
-            out.urn = self.chain_urn.or(out.urn);
+            out.urn = if held {
+                self.catalyst_id
+            } else {
+                self.chain_urn.or(out.urn)
+            };
+            out.in_catalyst = held;
             out.is_published = true;
             out.is_approved = self.chain_approved.unwrap_or(false);
             out.eth_address = self
@@ -330,6 +373,9 @@ mod tests {
             chain_item_type: Some("wearable_v2".into()),
             chain_supply: Some("3".into()),
             chain_content_hash: Some(String::new()),
+            catalyst_entity: None,
+            catalyst_id: None,
+            catalyst_proof: None,
         }
     }
 

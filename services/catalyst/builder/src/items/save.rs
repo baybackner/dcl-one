@@ -449,7 +449,7 @@ impl ItemsComponent {
             .collect();
         forget_unnamed(&mut tx, &dropped).await?;
         tx.commit().await?;
-        listing::item(&self.pool, id, Reached::ById, true).await
+        listing::item(self, id, Reached::ById, true).await
     }
 }
 

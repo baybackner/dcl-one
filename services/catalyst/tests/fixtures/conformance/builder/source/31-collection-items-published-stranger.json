@@ -49,7 +49,7 @@
           "utility": null,
           "mappings": null,
           "urn": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000006:0",
-          "in_catalyst": false,
+          "in_catalyst": true,
           "is_approved": false,
           "is_published": true,
           "content_hash": "bafkreichainunapprovedhat",

@@ -335,6 +335,9 @@ pub struct State {
     pub deployments: collections::deployment::Deployments,
     /// The curators' Slack notices.
     pub notices: curation::slack::Notices,
+    /// The content sync's state: whether this process is its own content
+    /// authority, so an item URN its content lacks is unused.
+    pub content_sync: Arc<crate::content::SyncStatus>,
 }
 
 pub type SharedState = Arc<State>;
@@ -358,7 +361,7 @@ impl State {
     ) -> anyhow::Result<Self> {
         let notices = curation::slack::Notices::new(settings.slack.clone(), settings.links.clone());
         Ok(Self {
-            items: ItemsComponent::new(pool.clone(), blobs),
+            items: ItemsComponent::new(pool.clone(), blobs).with_denylist(denylist.clone()),
             newsletter: NewsletterComponent::new(pool),
             market,
             settings,
@@ -371,6 +374,7 @@ impl State {
             now: chrono::Utc::now,
             deployments: collections::deployment::Deployments::default(),
             notices,
+            content_sync: Arc::default(),
         })
     }
 

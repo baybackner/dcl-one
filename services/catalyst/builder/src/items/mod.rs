@@ -11,6 +11,8 @@
 //! schema convention), written as [`crate::http::iso`] writes it.
 
 pub mod body;
+#[cfg(test)]
+mod catalyst_state_tests;
 pub mod hash;
 pub mod listing;
 pub mod minted;
@@ -39,6 +41,7 @@ use super::http::{ApiError, iso_timestamp};
 pub struct ItemsComponent {
     pub(crate) pool: PgPool,
     pub(crate) blobs: Arc<Storage>,
+    pub(crate) denylist: Arc<crate::content::Denylist>,
     released: AtomicBool,
 }
 
@@ -55,8 +58,15 @@ impl ItemsComponent {
         Self {
             pool,
             blobs,
+            denylist: Arc::default(),
             released: AtomicBool::new(false),
         }
+    }
+
+    /// The store whose item bodies forget a catalyst entity `denylist` withholds.
+    pub fn with_denylist(mut self, denylist: Arc<crate::content::Denylist>) -> Self {
+        self.denylist = denylist;
+        self
     }
 
     /// 503 until `schemas/releases/builder-item-documents-and-uploaders.sql`

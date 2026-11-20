@@ -168,6 +168,7 @@ pub struct ItemSave {
     collection: Option<Uuid>,
     at: DateTime<Utc>,
     registry: Option<Registry>,
+    own_content: bool,
 }
 
 /// May delete the item or upload its files.
@@ -1168,6 +1169,7 @@ pub async fn save_item(
         collection: intent.collection,
         at: (state.now)(),
         registry,
+        own_content: state.content_sync.is_own_content_authority(),
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_save(&mut conn, &view, &save, intent).await?;
@@ -1266,6 +1268,50 @@ async fn urn_in_use(
     .bind(item)
     .fetch_one(conn)
     .await?)
+}
+
+/// Whether this node's content holds an active entity at `urn`.
+async fn urn_deployed(conn: &mut PgConnection, urn: &str) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM content.active_pointers ap \
+           JOIN content.deployments d ON d.entity_id = ap.entity_id \
+           WHERE ap.pointer = lower($1) AND d.deleter_deployment IS NULL)",
+    )
+    .bind(urn)
+    .fetch_one(conn)
+    .await?)
+}
+
+/// Whether the third-party URN `urn` a save claims (item part `item` of
+/// `third_party_id`) is taken: another item of the provider holds it, or
+/// this node's content holds an entity at it. A URN the content lacks is
+/// free only where the node can tell: it is its own content authority, or
+/// its wearable and emote history is covered (read before the content, so
+/// the coverage holds for what is read after it); else 503.
+async fn urn_taken(
+    conn: &mut PgConnection,
+    save: &ItemSave,
+    third_party_id: &str,
+    item: &str,
+    urn: &str,
+) -> Result<bool, ApiError> {
+    if urn_in_use(conn, save.id, third_party_id, item).await? || urn_deployed(conn, urn).await? {
+        return Ok(true);
+    }
+    if !save.own_content {
+        for entity_type in crate::content::sync::item_coverage::ITEM_TYPES {
+            if !matches!(
+                crate::content::sync::item_coverage::item_history_coverage(conn, entity_type)
+                    .await?,
+                crate::content::sync::item_coverage::Coverage::Covered { .. }
+            ) {
+                return Err(ApiError::service_unavailable(
+                    "The catalyst's items are not available. Try again later.",
+                ));
+            }
+        }
+    }
+    urn_deployed(conn, urn).await
 }
 
 fn with_id(id: Option<&str>, mut data: serde_json::Value) -> serde_json::Value {
@@ -1377,13 +1423,15 @@ pub(crate) async fn confirm_item_save(
                         json!({ "urn": item.urn }),
                     )));
                 }
-                if intent.id_given && urn_in_use(conn, id, &third_party_id, &urn.item).await? {
+                if intent.id_given
+                    && urn_taken(conn, save, &third_party_id, &urn.item, &built).await?
+                {
                     return Err(in_use(UPSERT));
                 }
             }
             Some(_) => {}
             None => {
-                if urn_in_use(conn, id, &third_party_id, &urn.item).await? {
+                if urn_taken(conn, save, &third_party_id, &urn.item, &built).await? {
                     return Err(in_use("inserted"));
                 }
             }
@@ -2195,6 +2243,7 @@ pub(crate) mod granted {
             collection,
             at: Utc::now(),
             registry: no_registry(),
+            own_content: true,
         }
     }
 

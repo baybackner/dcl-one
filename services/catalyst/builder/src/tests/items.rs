@@ -63,6 +63,7 @@ async fn over(pool: PgPool) -> App {
         )
         .unwrap(),
     );
+    state.content_sync.set_own_content_authority(true);
     App {
         pool,
         router: crate::router(state.clone()),

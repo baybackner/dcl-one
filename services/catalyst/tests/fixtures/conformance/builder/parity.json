@@ -378,6 +378,20 @@
       "text": "POST /v1/collections/:id/publish of a third-party collection: when the forum call after the submission fails or takes longer than 45 seconds, the node answers the committed publish as a success and logs the failure, and the next publish or POST /v1/collections/:id/post makes the topic; upstream answers HTTP 200 {ok:false} with the forum's error although the submission is stored.",
       "captures": [],
       "anchors": []
+    },
+    "catalyst-is-this-node": {
+      "text": "Item bodies and the third-party URN check read the node's own content as the catalyst: the active wearable or emote entity at the item's URN (a third-party item's own, matched exactly to the entity's metadata id; a minted item's on the chain copy, matched ignoring case), never an entity the node withholds. Such an item answers in_catalyst true; a third-party one is also approved and published with its entity's merkleProof.entityHash as catalyst_content_hash, and a minted one takes the entity's URN. When the node holds no entity at the URN, a body answers in_catalyst false and its node-recorded state, also while the node can't yet tell that no peer holds one; this is never answered with 503. A third-party save that claims a new URN refuses one the node holds with upstream's 409, and answers 503 'The catalyst's items are not available. Try again later.' and writes nothing while the node can tell neither way: it isn't its own content authority and its content sync hasn't proven, within 30 minutes of a pass's start, that it holds the peers' whole wearable and emote history. Upstream asks one configured catalyst over HTTP and treats its empty answer as unused.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-curation-reopen-later-reads": {
+      "text": "After the provider's manager asked, as capture 428 does, to set an item's decided curation back to pending, which the node refuses (item-curation-reopened-by-the-committee), a later read of that item or of an item of its collection answers the mapping flag of the curation the node kept, where upstream answers that of the curation it reopened.",
+      "captures": [
+        "source/473-item-deployed-uncurated-stranger.json",
+        "source/474-item-deployed-curated-manager.json",
+        "source/475-collection-items-deployed-stranger.json"
+      ],
+      "anchors": []
     }
   },
   "operations": [
@@ -399,7 +413,7 @@
     {
       "id": "api_http:GET:/v1/items",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "The committee's list, curated third-party items included, and a stranger's refusal were compared and match.",
       "evidence": [
         {
@@ -414,17 +428,17 @@
         }
       ],
       "gaps": [
-        "open:item-catalyst-state",
         "deliberate:item-list-bounds",
         "deliberate:committee-unavailable",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:catalyst-is-this-node"
       ],
       "remaining_verification": "A list over the 1,000 rows the node answers."
     },
     {
       "id": "api_http:GET:/v1/:address/items",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "An address's own items, paged, unpaginated, its orphans and one collection's, and another wallet's refused read, and an address's curated third-party items, were compared and match.",
       "evidence": [
         {
@@ -464,16 +478,16 @@
         }
       ],
       "gaps": [
-        "open:item-catalyst-state",
         "deliberate:item-list-bounds",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:catalyst-is-this-node"
       ],
       "remaining_verification": "A registry manager listing its provider's items."
     },
     {
       "id": "api_http:GET:/v1/items/:id",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "Reads by the owner, a stranger, the committee, an on-chain manager and minter, and an admin wallet of draft, unminted, minted, approved, third-party and orphan items, and an unknown and a malformed id, were compared. Each caller is admitted or refused as upstream decides and gets upstream's body for it, the chain's values merged into a minted item and a third-party item's URN and values; the admin wallet gets the public body. The provider's manager reading a curated third-party item gets upstream's body: published, with the mapping flag of the newest curation of the collection's first curated item by id. A signer with no role reading a third-party item of a collection with item curations, curated or not, gets upstream's public body.",
       "evidence": [
         {
@@ -610,17 +624,43 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/340-item-uncurated-in-curated-collection-stranger.json",
           "scope": "GET /items/{id} signed by a wallet with no role, a never-curated third-party item of a collection with curated items.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/473-item-deployed-uncurated-stranger.json",
+          "scope": "A signer with no role reads a third-party item the catalyst holds that was never submitted for curation.",
+          "replay": [
+            "data.isMappingComplete value"
+          ],
+          "explained_by": {
+            "data.isMappingComplete value": "deliberate:item-curation-reopen-later-reads"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/474-item-deployed-curated-manager.json",
+          "scope": "The provider's manager reads a curated third-party item the catalyst holds.",
+          "replay": [
+            "data.isMappingComplete value"
+          ],
+          "explained_by": {
+            "data.isMappingComplete value": "deliberate:item-curation-reopen-later-reads"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/476-item-deployed-minted-owner.json",
+          "scope": "The owner reads a minted standard item the catalyst holds.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-catalyst-state",
         "deliberate:admin-addresses-not-admitted",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:catalyst-is-this-node",
+        "deliberate:item-curation-reopen-later-reads"
       ],
-      "remaining_verification": "The catalyst's entities, when the node reads them."
+      "remaining_verification": "None for the catalyst state; the bodies of items the catalyst holds were compared for a third-party item never curated, a curated one and a minted standard one."
     },
     {
       "id": "api_http:GET:/v1/published-collections/:address/items/:id/utility",
@@ -650,7 +690,7 @@
     {
       "id": "api_http:GET:/v1/collections/:id/items",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "Lists of a draft, a collection on chain and a third-party collection, by id and by contract address, paged, filtered by name, synced, status and mappingStatus, by the owner, a stranger, an on-chain manager and minter, the committee and an admin wallet, and an unknown collection with an invalid status, were compared and match except the admin wallet's refusal. A third-party collection with curated items, for the provider's manager and for a signer with no role, matches: each item published and with the mapping flag of its own newest curation, a never-curated one unpublished and left out of the public list. Its status filter lists the items whose newest curation is pending, as upstream's does.",
       "evidence": [
         {
@@ -788,23 +828,34 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/349-collection-items-curated-status.json",
           "scope": "GET /collections/{id}/items signed by the provider's manager, filtered by curation status.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/475-collection-items-deployed-stranger.json",
+          "scope": "A signer with no role lists a third-party collection with deployed items.",
+          "replay": [
+            "data[].isMappingComplete value"
+          ],
+          "explained_by": {
+            "data[].isMappingComplete value": "deliberate:item-curation-reopen-later-reads"
+          }
         }
       ],
       "gaps": [
-        "open:item-catalyst-state",
         "deliberate:admin-addresses-not-admitted",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
         "deliberate:unauthenticated-message",
-        "deliberate:item-list-bounds"
+        "deliberate:item-list-bounds",
+        "deliberate:catalyst-is-this-node",
+        "deliberate:item-curation-reopen-later-reads"
       ],
       "remaining_verification": "The synced and mappingStatus filters over items with curations."
     },
     {
       "id": "api_http:PUT:/v1/items/:idOrURN",
       "owner": "items",
-      "status": "known_gap",
+      "status": "reviewed",
       "result": "Saves of draft, unminted and minted items by the owner, an on-chain manager, a stranger and the committee; creations into a draft, a published collection and no collection; moves and removals around a published collection; a rarity change; third-party saves by URN and by id, creations, URN conflicts, a curated item's refused URN change, a URN in another case and mappings; and each schema and path refusal were compared and match, except the schema refusal's detail and the unsigned message.",
       "evidence": [
         {
@@ -1001,19 +1052,24 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/351-item-save-curated-urn-change.json",
           "scope": "PUT /items/{id} signed by the provider's manager, changing the URN of a curated third-party item.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/472-item-save-third-party-urn-deployed.json",
+          "scope": "The provider's manager creates a third-party item under a URN the catalyst holds an entity at.",
+          "replay": []
         }
       ],
       "gaps": [
-        "open:item-catalyst-state",
         "deliberate:invalid-body-detail",
         "deliberate:unauthenticated-message",
         "deliberate:item-save-input",
         "deliberate:stored-name-trimmed",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:catalyst-is-this-node"
       ],
-      "remaining_verification": "The lock, a registry manager's accepted saves and the catalyst's entities."
+      "remaining_verification": "The lock and a registry manager's accepted saves."
     },
     {
       "id": "api_http:DELETE:/v1/items/:id",
@@ -4325,12 +4381,5 @@
       "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
     }
   ],
-  "open_gaps": {
-    "item-catalyst-state": {
-      "text": "The node doesn't ask the catalyst about items: every body answers in_catalyst false and catalyst_content_hash null, a third-party item is approved and published only by the node's own records, and a third-party save checks a new URN against the node's items only. Upstream asks the catalyst for the item's entity: in_catalyst is whether it holds one, a third-party item held there is approved and published with its entity's merkle proof hash as catalyst_content_hash, and a third-party save refuses a URN the catalyst holds with 409.",
-      "captures": [],
-      "closes": "The node reads its content server's active entities by the item's URN for in_catalyst, a third-party item's approval, publication and catalyst_content_hash, and the third-party URN check.",
-      "anchors": []
-    }
-  }
+  "open_gaps": {}
 }

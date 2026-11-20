@@ -1305,5 +1305,70 @@
       "salt": "0xc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
       "signer": "manager"
     }
+  ],
+  "entities": [
+    {
+      "entity_id": "bafkreientitymaskthreeuncurated",
+      "type": "wearable",
+      "pointer": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:mask-3",
+      "metadata": {
+        "id": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:mask-3",
+        "name": "mask-3",
+        "merkleProof": {
+          "index": 0,
+          "proof": [],
+          "hashingKeys": [
+            "id",
+            "name"
+          ],
+          "entityHash": "3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a"
+        }
+      }
+    },
+    {
+      "entity_id": "bafkreientitycaponecurated",
+      "type": "wearable",
+      "pointer": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:cap-1",
+      "metadata": {
+        "id": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:cap-1",
+        "name": "cap-1",
+        "merkleProof": {
+          "index": 0,
+          "proof": [],
+          "hashingKeys": [
+            "id",
+            "name"
+          ],
+          "entityHash": "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c"
+        }
+      }
+    },
+    {
+      "entity_id": "bafkreientityheldfourwithoutitem",
+      "type": "wearable",
+      "pointer": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:held-4",
+      "metadata": {
+        "id": "urn:decentraland:matic:collections-thirdparty:curated:curated-wearables:held-4",
+        "name": "held-4",
+        "merkleProof": {
+          "index": 0,
+          "proof": [],
+          "hashingKeys": [
+            "id",
+            "name"
+          ],
+          "entityHash": "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d"
+        }
+      }
+    },
+    {
+      "entity_id": "bafkreientitychainhatminted",
+      "type": "wearable",
+      "pointer": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000006:0",
+      "metadata": {
+        "id": "urn:decentraland:matic:collections-v2:0x5eed000000000000000000000000000000000006:0",
+        "name": "Chain hat"
+      }
+    }
   ]
 }

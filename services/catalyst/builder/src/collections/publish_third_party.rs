@@ -254,7 +254,7 @@ pub async fn publish(
     Ok(ThirdPartyPublished {
         collection,
         items: crate::items::listing::bodies(
-            state.items.pool(),
+            &state.items,
             &ids,
             crate::items::body::Reached::InList,
             true,

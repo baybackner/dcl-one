@@ -25,7 +25,7 @@ const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
 const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'rarities', 'thirdParties', 'receipts'])
 const RARITIES_WITH_ORACLE = '0xa9158e22f89bb3f69c5600338895cb5fb81e5090'
 const GET_RARITY_BY_NAME = 'b5262333'
-const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain', 'collection_curations', 'item_curations', 'receipts']
+const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain', 'collection_curations', 'item_curations', 'receipts', 'entities']
 const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'id_gt', 'creator', 'managers_contains', 'minters_contains', 'managers_contains_nocase', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
 const MOVED_ITEM_FILE = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy'
@@ -521,6 +521,12 @@ const THIRD_PARTY_PUBLISH_CASES = [
   { name: '469-collection-approval-data-unknown', description: 'GET /collections/{id}/approvalData signed by a committee member, an id no collection has', method: 'GET', path: approvalOf('3ff'), signer: 'committee' },
   { name: '470-collection-approval-data-unsigned', description: 'GET /collections/{id}/approvalData without a signature', method: 'GET', path: approvalOf('403') },
   { name: '471-collection-third-party-published-manager', description: 'GET /collections/{id} signed by the provider\'s manager after its items were submitted', method: 'GET', path: `/v1/collections/${id('403')}`, signer: 'manager', volatile: ['data.created_at', 'data.updated_at', 'data.reviewed_at'] }
+,
+  { name: '472-item-save-third-party-urn-deployed', description: 'PUT /items/{id} signed by the provider\'s manager, creating a third-party item under a URN the catalyst holds an entity at', method: 'PUT', path: `/v1/items/${id('4a4')}`, signer: 'provider', body: itemBody({ id: id('4a4'), collection_id: id('402'), name: 'Held helmet', rarity: null, urn: `${PROVIDER('curated')}:curated-wearables:held-4` }) },
+  { name: '473-item-deployed-uncurated-stranger', description: 'GET /items/{id} signed by a wallet with no role, a third-party item the catalyst holds that was never submitted for curation', method: 'GET', path: `/v1/items/${id('4a3')}`, signer: 'stranger' },
+  { name: '474-item-deployed-curated-manager', description: 'GET /items/{id} signed by the provider\'s manager, a curated third-party item the catalyst holds', method: 'GET', path: `/v1/items/${id('4a1')}`, signer: 'provider' },
+  { name: '475-collection-items-deployed-stranger', description: 'GET /collections/{id}/items signed by a wallet with no role, a third-party collection with deployed items', method: 'GET', path: `/v1/collections/${id('402')}/items`, signer: 'stranger' },
+  { name: '476-item-deployed-minted-owner', description: 'GET /items/{id} signed by the owner, a minted standard item the catalyst holds', method: 'GET', path: `/v1/items/${id('0b1')}`, signer: 'owner' }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2675,7 +2681,7 @@ function chainRows(seed, signers, req) {
     const { domain, types, value } = chequeTypedData(r.provider, r.qty, r.salt)
     return { id: ethers.utils._TypedDataEncoder.hash(domain, types, value).toLowerCase(), qty: r.qty, signer: signers[r.signer].address }
   }))
-  return { accounts, collections, items, registry, receipts, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
+  return { accounts, collections, items, registry, receipts, entities: seed.entities ?? [], rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
 }
 
 /**
@@ -2692,6 +2698,17 @@ function registryRows(registry, address) {
     isProgrammatic: !!provider.programmatic,
     metadata: { type: 'third_party_v2', thirdParty: { name: provider.name, description: '', contracts: [] } }
   }))
+}
+
+/**
+ * The content server's answer to `POST /content/entities/active {pointers}` from the seeded `entities`: each active
+ * entity at a pointer asked for, pointers compared lowercased as the content server stores them.
+ */
+function activeEntities(entities, bytes) {
+  const asked = new Set((JSON.parse(bytes.toString('utf8') || '{}').pointers ?? []).map(pointer => String(pointer).toLowerCase()))
+  return entities
+    .filter(entity => asked.has(entity.pointer.toLowerCase()))
+    .map(entity => ({ version: 'v3', id: entity.entity_id, type: entity.type, pointers: [entity.pointer.toLowerCase()], timestamp: 1767225600000, content: [], metadata: entity.metadata }))
 }
 
 /** The third-party subgraph's `receipts` of the cheques the registry consumed, each `{id, qty, signer}`. */
@@ -3020,7 +3037,7 @@ function startFakes(req, unfaked, chain, forum) {
         response.writeHead(status, { 'content-type': 'application/json' })
         response.end(JSON.stringify(body))
       }
-      if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, [])
+      if (request.method === 'POST' && request.url === '/peer/content/entities/active') return send(200, activeEntities(chain.entities, Buffer.concat(chunks)))
       if (request.method === 'GET' && /^\/peer\/lambdas\/profiles\/0x[0-9a-f]{40}$/.test(request.url)) return send(200, [])
       if (request.url.startsWith('/forum/')) {
         const answer = forumAnswer(request.method, request.url.slice('/forum'.length), request.headers, Buffer.concat(chunks), forum)
@@ -3400,4 +3417,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

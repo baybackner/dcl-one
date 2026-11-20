@@ -61,12 +61,12 @@ pub struct ItemsPageOut {
 
 /// The item `id`, as `reached`; 404 when gone.
 pub(crate) async fn item(
-    pool: &PgPool,
+    store: &ItemsComponent,
     id: Uuid,
     reached: Reached,
     full: bool,
 ) -> Result<FullItemOut, ApiError> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = store.pool.acquire().await?;
     let view = chain_state::for_read(&mut conn).await?;
     let row = sqlx::query_as::<_, ItemRow>(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM {} WHERE i.id = $1",
@@ -77,7 +77,7 @@ pub(crate) async fn item(
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| ApiError::not_found("Item not found"))?;
-    row.out(reached, full)
+    row.withheld(&store.denylist).out(reached, full)
 }
 
 /// The statement that reads the rows of a list's bodies, the ids as `$1`.
@@ -92,7 +92,7 @@ pub(crate) fn list_statement(view: &chain_state::ReadView) -> String {
 /// The bodies of `ids`, in that order, read in one read-only transaction
 /// without JIT (a page's bodies are a few thousand rows at most).
 pub(crate) async fn bodies(
-    pool: &PgPool,
+    store: &ItemsComponent,
     ids: &[Uuid],
     reached: Reached,
     full: bool,
@@ -100,7 +100,7 @@ pub(crate) async fn bodies(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut tx = pool.begin().await?;
+    let mut tx = store.pool.begin().await?;
     sqlx::query("SET TRANSACTION READ ONLY")
         .execute(&mut *tx)
         .await?;
@@ -114,7 +114,7 @@ pub(crate) async fn bodies(
     let mut rows: HashMap<Uuid, ItemRow> = rows.into_iter().map(|row| (row.id, row)).collect();
     ids.iter()
         .filter_map(|id| rows.remove(id))
-        .map(|row| row.out(reached, full))
+        .map(|row| row.withheld(&store.denylist).out(reached, full))
         .collect()
 }
 
@@ -208,7 +208,7 @@ impl CollectionFilters {
 impl ItemsComponent {
     /// `GET /v1/items/:id`.
     pub async fn item(&self, read: &ItemRead) -> Result<FullItemOut, ApiError> {
-        item(&self.pool, read.id(), Reached::ById, read.full()).await
+        item(self, read.id(), Reached::ById, read.full()).await
     }
 
     /// `GET /v1/collections/:id/items`: every item for a full read, else the
@@ -274,7 +274,7 @@ impl ItemsComponent {
         }
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
         let ids: Vec<Uuid> = ids.into_iter().map(|(id, _)| id).collect();
-        let results = bodies(&self.pool, &ids, Reached::InList, read.full()).await?;
+        let results = bodies(self, &ids, Reached::InList, read.full()).await?;
         Ok(answer(&page, total, results, Some(0)))
     }
 
@@ -322,7 +322,7 @@ impl ItemsComponent {
         scope.push_bind(wallet.provider_ids()).push(")");
         narrow(&mut scope);
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
-        let results = bodies(&self.pool, &standard_first(ids), Reached::InList, true).await?;
+        let results = bodies(self, &standard_first(ids), Reached::InList, true).await?;
         Ok(answer(&page, total, results, None))
     }
 
@@ -340,6 +340,6 @@ impl ItemsComponent {
              FROM builder.items i LEFT JOIN builder.collections c ON c.id = i.collection_id",
         );
         let (ids, _) = page_ids(&self.pool, sql, &page, false).await?;
-        bodies(&self.pool, &standard_first(ids), Reached::InList, true).await
+        bodies(self, &standard_first(ids), Reached::InList, true).await
     }
 }
