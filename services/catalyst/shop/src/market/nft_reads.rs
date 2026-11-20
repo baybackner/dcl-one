@@ -558,7 +558,9 @@ fn push_filters(b: &mut Builder, f: &NftFilters, wheres: &mut Vec<String>) {
         wheres.push("c.emote_has_geometry".into());
     }
     if f.emote_outcome_type.is_some() {
-        wheres.push("c.emote_outcome_type IS NOT NULL".into());
+        // A collections filter: the names and LAND rows of a read that
+        // names no category (`item_type` NULL) are not narrowed by it.
+        wheres.push("(c.item_type IS NULL OR c.emote_outcome_type IS NOT NULL)".into());
     }
     if f.include_social_emotes == Some(false) {
         wheres.push("c.emote_outcome_type IS NULL".into());
@@ -1593,7 +1595,8 @@ mod tests {
              INSERT INTO land_authz.token_right (token_address, token_id, x, y, owner, updated_block, updated_log) \
              SELECT '{LAND_REGISTRY_MAINNET}', g, g, 0, '{a}', g, 0 FROM generate_series(1, 5) g; \
              INSERT INTO land_authz.authz_event (block_number, log_index, block_time, token_address, kind, token_id, account) \
-             SELECT g, 0, 102 + g / 2, '{LAND_REGISTRY_MAINNET}', 'transfer', g, '{a}' FROM generate_series(1, 4) g"
+             SELECT g, 0, 102 + g / 2, '{LAND_REGISTRY_MAINNET}', 'transfer', g, '{a}' FROM generate_series(1, 4) g; \
+             UPDATE shop.items SET emote_outcome_type = 'so' WHERE contract_address = '{c}' AND item_id = 1"
         )))
         .execute(&pool)
         .await
@@ -1612,6 +1615,7 @@ mod tests {
             vec![("isOnSale", "true")],
             vec![("minPrice", "12")],
             vec![("owner", a)],
+            vec![("emoteOutcomeType", "so")],
         ] {
             for sort in [
                 "newest",
@@ -1660,6 +1664,39 @@ mod tests {
             }
         }
         assert!(compared > 50, "the cases read rows: {compared}");
+        // `emoteOutcomeType` narrows the collections to the emotes with an
+        // outcome and leaves the names and LAND of the same read alone.
+        let f = parse_filters(&pairs(&[("emoteOutcomeType", "so")])).unwrap();
+        assert!(crate::market::nfts::merges_land(&f));
+        let s = Sources {
+            names: true,
+            land: true,
+            ..sources_for(&f)
+        };
+        let ((page, args), (total, total_args)) = build_nfts_query(&f, s, land, 50, 0, now, None);
+        let rows = sqlx::query_with(sqlx::AssertSqlSafe(page), args)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let count = |category: &str| {
+            rows.iter()
+                .filter(|r| r.get::<String, _>("category") == category)
+                .count()
+        };
+        assert_eq!(
+            (
+                count("emote"),
+                count("wearable"),
+                count("ens"),
+                count("parcel")
+            ),
+            (6, 0, 6, 5)
+        );
+        let total: i64 = sqlx::query_scalar_with(sqlx::AssertSqlSafe(total), total_args)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total, 17);
         own.drop().await;
     }
 }

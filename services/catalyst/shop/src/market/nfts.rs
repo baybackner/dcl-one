@@ -399,7 +399,8 @@ fn only_land_registries(addresses: &[String]) -> bool {
 /// unfiltered list holds their LAND, estates and names next to their
 /// wearables and emotes. Only a read whose filters those legs carry joins
 /// them (no wearable, emote, item or creator filter, no contract, Ethereum
-/// or no network).
+/// or no network). `emoteOutcomeType` is not one of those: it narrows the
+/// collections rows and leaves these legs' rows alone.
 pub fn merges_land(f: &NftFilters) -> bool {
     let collection_only = f.is_wearable_head
         || f.is_wearable_accessory
@@ -1053,6 +1054,8 @@ mod tests {
         assert!(merges(&[owner, ("includeSocialEmotes", "false")]));
         assert!(merges(&[owner, ("network", "ETHEREUM")]));
         assert!(merges(&[owner, ("isOnSale", "true")]));
+        // Narrows the collections rows only (`nft_reads::push_filters`).
+        assert!(merges(&[owner, ("emoteOutcomeType", "so")]));
         // A category, Polygon, or a filter only collections carry keeps the collections read alone.
         for extra in [
             ("category", "wearable"),
