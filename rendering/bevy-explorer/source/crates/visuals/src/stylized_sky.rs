@@ -1325,6 +1325,51 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn the_screen_draws_the_sky_per_pixel() {
+        assert_sharp_disc(&sky_row_through_the_disc(()));
+    }
+
+    /// Depth of field leaves the sky sharp, as in Unity: the sky writes no depth, and the fork's
+    /// depth of field keeps cleared depth in focus. The explorer's High setting would otherwise
+    /// blur the sky by its widest circle, 20 pixels.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn depth_of_field_leaves_the_sky_sharp() {
+        use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
+        assert_sharp_disc(&sky_row_through_the_disc(DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 55.0,
+            aperture_f_stops: 0.05,
+            max_depth: 250.0,
+            max_circle_of_confusion_diameter: 20.0,
+            sensor_height: 0.06,
+        }));
+    }
+
+    /// The disc's edges are single steps between pixels 20 and 21, and 42 and 43.
+    fn assert_sharp_disc(row: &[u8]) {
+        // the two largest steps between neighbours are the disc's edges
+        let mut steps: Vec<(i32, usize)> = (0..row.len() - 1)
+            .map(|x| ((row[x + 1] as i32 - row[x] as i32).abs(), x))
+            .collect();
+        steps.sort_unstable_by(|a, b| b.cmp(a));
+        let (mut left, mut right) = (steps[0].1, steps[1].1);
+        if left > right {
+            std::mem::swap(&mut left, &mut right);
+        }
+        assert!(
+            steps[1].0 > 40,
+            "the disc's edge ramps: the steps are {:?}; row {row:?}",
+            &steps[..4]
+        );
+        assert!(
+            left.abs_diff(20) <= 1 && right.abs_diff(42) <= 1,
+            "the disc's edges are after pixels {left} and {right}, not 20 and 42; row {row:?}"
+        );
+    }
+
+    /// The red of the middle row of a 64 pixel camera, ten degrees tall and carrying `extra`,
+    /// that looks up at the dimmed noon disc.
+    fn sky_row_through_the_disc(extra: impl Bundle) -> Vec<u8> {
         use bevy::{
             core_pipeline::tonemapping::Tonemapping,
             render::{
@@ -1357,6 +1402,7 @@ mod tests {
             Msaa::Off,
             AtmosphereCamera::default(),
             Transform::default().looking_at(Vec3::Y, Vec3::Z),
+            extra,
         ));
         let noon = day_fraction(12.0);
         draw_sky(&mut app, |sky| {
@@ -1385,25 +1431,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
         let rgba = image.try_into_dynamic().unwrap().to_rgba8();
-        let row: Vec<u8> = (0..64).map(|x| rgba.get_pixel(x, 32).0[0]).collect();
-        // the two largest steps between neighbours are the disc's edges
-        let mut steps: Vec<(i32, usize)> = (0..63)
-            .map(|x| ((row[x + 1] as i32 - row[x] as i32).abs(), x))
-            .collect();
-        steps.sort_unstable_by(|a, b| b.cmp(a));
-        let (mut left, mut right) = (steps[0].1, steps[1].1);
-        if left > right {
-            std::mem::swap(&mut left, &mut right);
-        }
-        assert!(
-            steps[1].0 > 40,
-            "the disc's edge ramps: the steps are {:?}; row {row:?}",
-            &steps[..4]
-        );
-        // between pixels 20 and 21, and 42 and 43
-        assert!(
-            left.abs_diff(20) <= 1 && right.abs_diff(42) <= 1,
-            "the disc's edges are after pixels {left} and {right}, not 20 and 42; row {row:?}"
-        );
+        (0..64).map(|x| rgba.get_pixel(x, 32).0[0]).collect()
     }
 }
