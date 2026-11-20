@@ -621,7 +621,14 @@ async fn an_unlisted_gateway_does_not_put_every_client_in_one_relay_bucket() {
 /// refused, and the refusal leaves that /64's own budget untouched; another /48 is still served.
 #[tokio::test]
 async fn relay_requests_from_one_ipv6_48_share_one_budget() {
-    let relay = state(lazy_pool(), Settings::for_tests());
+    use crate::shared::limits::RateLimiter;
+    // Same budgets over an hour, so no token refills while the test runs.
+    let hour = std::time::Duration::from_secs(3600);
+    let mut slow = State::new(lazy_pool(), Outbound::for_tests(), Settings::for_tests())
+        .expect("state builds");
+    slow.relay_limiter = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW, hour);
+    slow.relay_limiter_per_48 = RateLimiter::new(super::RELAY_REQUESTS_PER_WINDOW_PER_48, hour);
+    let relay: SharedState = Arc::new(slow);
     let app = crate::shared::client_ip::pin_client_headers(router(relay.clone()), Vec::new());
     let per_64 = super::RELAY_REQUESTS_PER_WINDOW;
     let subnets = super::RELAY_REQUESTS_PER_WINDOW_PER_48 / per_64;
