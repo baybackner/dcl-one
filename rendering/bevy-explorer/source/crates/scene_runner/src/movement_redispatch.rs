@@ -7,11 +7,10 @@
 //! before the deadline covers the 90th percentile of the scene's recent ticks.
 //!
 //! The re-dispatch is sent the player's rotation as the late reply sets it
-//! (`RedispatchRotation`): the engine applies that reply's orientation
-//! only after the scene loop, and the scene turns from the rotation it is sent, so from the
-//! player's current rotation it would turn again from the one before that reply. Every other
-//! frame would then continue a different chain of replies, and the avatar would alternate
-//! between the two.
+//! (`RedispatchRotation`): the engine applies that reply's orientation only after the scene loop,
+//! and the scene turns from the rotation it is sent, so from the player's current rotation it
+//! would turn again from the one before that reply. Every other frame would then continue a
+//! different chain of replies, and the avatar would alternate between the two.
 
 use std::{collections::VecDeque, time::Duration};
 

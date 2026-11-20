@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
 use common::{
-    dynamics::PLAYER_GROUND_THRESHOLD,
+    dynamics::grounded,
     structs::{AvatarDynamicState, PrimaryCamera, PrimaryUser},
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
@@ -157,7 +157,7 @@ fn movement_state(
         "doubleJump":loc.and_then(|s| s.double_jump_height), "landing":loc.and_then(|s| s.hard_landing_cooldown),
         "requested":requested.map(vector), "actual":actual.map(vector),
         "external":step.external_velocity.map(vector),
-        "grounded":ground_height.map(|height| height <= PLAYER_GROUND_THRESHOLD),
+        "grounded":ground_height.map(grounded),
         "groundHeight":ground_height,
         "riserPush":assist.map(|(_, push)| push.0),
         "steps":assist.map(|(assist, _)| assist.steps),

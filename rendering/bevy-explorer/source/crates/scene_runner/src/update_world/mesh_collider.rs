@@ -27,9 +27,7 @@ use crate::{
     ContainerEntity, PrimaryUser, RendererSceneContext, SceneSets,
 };
 use common::{
-    dynamics::{
-        MAX_GROUND_INCLINE, PLAYER_COLLIDER_HEIGHT, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS,
-    },
+    dynamics::{walkable, PLAYER_COLLIDER_HEIGHT, PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS},
     sets::PostUpdateSets,
 };
 use console::DoAddConsoleCommand;
@@ -595,16 +593,48 @@ impl SceneColliderData {
     }
 
     /// The height of the avatar's feet at `origin` above the ground, and the ground's collider:
-    /// how far a ball of the avatar's radius drops from the feet (up to 10 m) before it rests on
-    /// a surface the avatar can stand on ([`MAX_GROUND_INCLINE`]). A first contact steeper than
+    /// how far a ball of the avatar's radius drops from the feet (up to 10 m) before it touches
+    /// any collider. Other players' avatars stand on this ground; the player's own stands on
+    /// [`Self::get_standing_ground`].
+    pub fn get_ground(&mut self, origin: Vec3) -> Option<(f32, ColliderId)> {
+        self.update_bvh();
+
+        let predicate = |h, _: &Collider| !self.disabled.contains(&h);
+        let contact = self
+            .query_pipeline(Self::ground_filter(&predicate))
+            .cast_shape(
+                &(origin + Vec3::Y * PLAYER_COLLIDER_RADIUS)
+                    .as_dvec3()
+                    .into(),
+                &(-DVec3::Y).into(),
+                &Ball::new(PLAYER_COLLIDER_RADIUS as f64),
+                ShapeCastOptions {
+                    max_time_of_impact: GROUND_CAST_DISTANCE,
+                    target_distance: 0.0,
+                    stop_at_penetration: true,
+                    compute_impact_geometry_on_penetration: true,
+                },
+            );
+
+        contact.map(|(handle, toi)| {
+            (
+                toi.time_of_impact as f32,
+                self.get_id(handle).unwrap().clone(),
+            )
+        })
+    }
+
+    /// The height of the player's feet at `origin` above the ground it stands on, and the
+    /// ground's collider: how far a ball of the avatar's radius drops from the feet (up to 10 m)
+    /// before it rests on a surface the avatar can stand on
+    /// ([`MAX_GROUND_INCLINE`](common::dynamics::MAX_GROUND_INCLINE)). A first contact steeper than
     /// that (a wall the ball grazes, the corner of an edge, a steep slope) is not ground: the
     /// height is then the nearer of the ball's drop past the colliders it touched steeply and the
     /// drop under the avatar's centre, so beside a wall in the air it is the height above the
     /// floor, and on a steep slope the feet stand clear of the slope under the centre.
-    pub fn get_ground(&mut self, origin: Vec3) -> Option<(f32, ColliderId)> {
+    pub fn get_standing_ground(&mut self, origin: Vec3) -> Option<(f32, ColliderId)> {
         self.update_bvh();
 
-        let walkable = |normal: DVec3| normal.y >= f64::from(MAX_GROUND_INCLINE.cos());
         let centre = (origin + Vec3::Y * PLAYER_COLLIDER_RADIUS).as_dvec3();
         let mut steep = Vec::new();
         let mut first_steep = None;
@@ -1217,10 +1247,11 @@ impl SceneColliderData {
 
 pub const GROUND_COLLISION_MASK: u32 = 1 << 31;
 
-/// How far below the feet [`SceneColliderData::get_ground`] looks for ground (m).
+/// How far below the feet [`SceneColliderData::get_ground`] and
+/// [`SceneColliderData::get_standing_ground`] look for ground (m).
 const GROUND_CAST_DISTANCE: f64 = 10.0;
-/// Colliders a ground cast passes after touching them too steeply before it settles for the
-/// height under the avatar's centre.
+/// Colliders [`SceneColliderData::get_standing_ground`] passes after touching them too steeply
+/// before it settles for the height under the avatar's centre.
 const GROUND_STEEP_EXCLUSIONS: usize = 3;
 
 /// Collision shapes, e.g. from `mesh_to_parry_shape`, for `set_physics_shape`.
@@ -1753,7 +1784,7 @@ mod tests {
             .is_none());
     }
 
-    const GROUNDED: f32 = common::dynamics::PLAYER_GROUND_THRESHOLD;
+    use common::dynamics::grounded;
 
     /// A floor whose top is y = 0.
     fn floor(colliders: &mut SceneColliderData) {
@@ -1782,7 +1813,7 @@ mod tests {
 
     fn height(colliders: &mut SceneColliderData, feet: Vec3) -> f32 {
         colliders
-            .get_ground(feet)
+            .get_standing_ground(feet)
             .map(|(h, _)| h)
             .unwrap_or(f32::INFINITY)
     }
@@ -1791,7 +1822,7 @@ mod tests {
     fn standing_on_a_floor_is_grounded() {
         let mut colliders = SceneColliderData::default();
         floor(&mut colliders);
-        assert!(height(&mut colliders, Vec3::ZERO) <= GROUNDED);
+        assert!(grounded(height(&mut colliders, Vec3::ZERO)));
         let h = height(&mut colliders, Vec3::new(0.0, 0.02, 0.0));
         assert!((h - 0.02).abs() < 1e-4, "{h}");
         let h = height(&mut colliders, Vec3::new(0.0, 2.0, 0.0));
@@ -1814,21 +1845,21 @@ mod tests {
             let h = height(&mut colliders, Vec3::new(0.0, 1.5, 0.0));
             assert!((h - 1.5).abs() < 1e-3, "face {face}: {h}");
             // standing on the floor against the wall is still grounded
-            assert!(
-                height(&mut colliders, Vec3::ZERO) <= GROUNDED,
-                "face {face}"
-            );
+            assert!(grounded(height(&mut colliders, Vec3::ZERO)), "face {face}");
         }
     }
 
     #[test]
     fn a_walkable_slope_is_ground_and_a_steeper_one_is_not() {
-        for (degrees, grounded) in [(40.0, true), (46.0, true), (47.0, false), (50.0, false)] {
+        for (degrees, standing) in [(40.0, true), (46.0, true), (47.0, false), (50.0, false)] {
             let mut colliders = SceneColliderData::default();
             let feet = ramp(&mut colliders, degrees, 0.01);
             let h = height(&mut colliders, feet);
-            assert_eq!(h <= GROUNDED, grounded, "{degrees} degrees: {h}");
-            if !grounded {
+            assert_eq!(grounded(h), standing, "{degrees} degrees: {h}");
+            // another player's avatar stands on the first surface its ball touches
+            let first = colliders.get_ground(feet).map_or(f32::INFINITY, |(h, _)| h);
+            assert!(grounded(first), "{degrees} degrees: {first}");
+            if !standing {
                 // the slope under the avatar's centre
                 let r = PLAYER_COLLIDER_RADIUS;
                 let below = r / degrees.to_radians().cos() - r + 0.01;
@@ -1851,14 +1882,14 @@ mod tests {
             Vec3::new(0.0, 0.0, feet.z - PLAYER_COLLIDER_RADIUS - 0.5),
             Vec3::new(20.0, 5.0, 0.5),
         );
-        assert!(height(&mut colliders, feet) <= GROUNDED);
+        assert!(grounded(height(&mut colliders, feet)));
     }
 
     #[test]
     fn an_edge_under_the_ball_but_not_the_centre_is_not_ground() {
         // a 0.3 m step whose edge is at x = 0: the ball rests on the edge from either side, but
         // from 0.22 m out (the walkable angle) the contact is too steep to stand on
-        for (x, grounded) in [(-0.1, true), (0.2, true), (0.25, false)] {
+        for (x, standing) in [(-0.1, true), (0.2, true), (0.25, false)] {
             let mut colliders = SceneColliderData::default();
             floor(&mut colliders);
             wall(
@@ -1875,8 +1906,8 @@ mod tests {
                 0.3 + (r * r - x * x).sqrt() - r
             };
             let h = height(&mut colliders, Vec3::new(x, y, 0.0));
-            assert_eq!(h <= GROUNDED, grounded, "x {x}: {h}");
-            if !grounded {
+            assert_eq!(grounded(h), standing, "x {x}: {h}");
+            if !standing {
                 assert!((h - y).abs() < 1e-3, "x {x}: {h} vs the floor {y}");
             }
         }

@@ -12,8 +12,8 @@ use bevy::{
 };
 use common::{
     dynamics::{
-        GROUND_SNAP_DROP, MAX_GROUND_INCLINE, MAX_STEP_HEIGHT, PLAYER_COLLIDER_OVERLAP,
-        PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD,
+        grounded, walkable, GROUND_SNAP_DROP, MAX_GROUND_INCLINE, MAX_STEP_HEIGHT,
+        PLAYER_COLLIDER_OVERLAP, PLAYER_COLLIDER_RADIUS, PLAYER_GROUND_THRESHOLD,
     },
     sets::{PostUpdateSets, SceneLoopSets, SceneSets},
     structs::{
@@ -826,8 +826,8 @@ pub(crate) fn apply_movement(
     let suppress = movement_suppressed(&movement_control, movement.initiated_at);
     // standing still: nothing moves, unless the avatar hovers over the ground it stands on and
     // the ground snap below settles it
-    let settle = dynamic_state.ground_height > SETTLE_HEIGHT
-        && dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
+    let settle =
+        dynamic_state.ground_height > SETTLE_HEIGHT && grounded(dynamic_state.ground_height);
 
     if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
         // the move has stopped, so its push against a riser ends: the next riser takes its own
@@ -859,9 +859,9 @@ pub(crate) fn apply_movement(
     // a slow move held at a riser this step (step offset)
     let mut held_at_riser = false;
     // on the ground at the end of the last step: the assists below hold for a walking avatar
-    let grounded = dynamic_state.ground_height <= PLAYER_GROUND_THRESHOLD;
+    let on_ground = grounded(dynamic_state.ground_height);
     // on the ground and asking for no rise: not the step a jump takes off in
-    let walking = grounded && movement.component.velocity.y <= 0.0;
+    let walking = on_ground && movement.component.velocity.y <= 0.0;
 
     // deliberately penetrating (placed here by movePlayerTo): don't move deeper into
     // whatever we're inside, but otherwise let the scene walk us out
@@ -919,16 +919,16 @@ pub(crate) fn apply_movement(
                 continue;
             }
         }
-        if grounded && contact_normal != DVec3::ZERO && !walkable(contact_normal) {
+        if on_ground && contact_normal != DVec3::ZERO && !walkable(contact_normal) {
             // slope limit: on the ground, a surface too steep to stand on stops the move into it
             // as a wall does, so the avatar does not walk up it
             let across = contact_normal.with_y(0.0).normalize_or_zero();
             velocity -= velocity.dot(across).min(0.0) * across;
-        } else if grounded && contact_normal != DVec3::ZERO && velocity.dot(contact_normal) < 0.0 {
+        } else if on_ground && contact_normal != DVec3::ZERO && velocity.dot(contact_normal) < 0.0 {
             // ground following: on ground it can stand on, the move keeps its horizontal speed,
             // turned along the ground, instead of losing the part into it
             velocity.y -= velocity.dot(contact_normal) / contact_normal.y;
-            followed = followed.max(contact_normal.with_y(0.0).length() / contact_normal.y);
+            followed = followed.max(slope(contact_normal));
             continue;
         }
         velocity = velocity - (velocity.dot(contact_normal).min(0.0) * contact_normal);
@@ -1175,11 +1175,6 @@ fn step_up(
         .then_some((landed, ahead.min(time)))
 }
 
-/// A contact normal of a surface the avatar can stand on ([`MAX_GROUND_INCLINE`]).
-fn walkable(normal: DVec3) -> bool {
-    normal.y >= f64::from(MAX_GROUND_INCLINE.cos())
-}
-
 /// The feet's height above ground the player stands on, over the colliders of the `scenes` around
 /// it; at most the height above the world floor.
 fn ground_height(scenes: &mut [(Entity, Mut<SceneColliderData>)], feet: Vec3) -> f32 {
@@ -1188,7 +1183,7 @@ fn ground_height(scenes: &mut [(Entity, Mut<SceneColliderData>)], feet: Vec3) ->
         .fold(feet.y, |ground, (_, collider_data)| {
             ground.min(
                 collider_data
-                    .get_ground(feet)
+                    .get_standing_ground(feet)
                     .map_or(f32::INFINITY, |(h, _)| h),
             )
         })
@@ -1235,7 +1230,9 @@ fn record_ground_collider(
             continue;
         };
 
-        if let Some((height, collider_id)) = collider_data.get_ground(transform.translation) {
+        if let Some((height, collider_id)) =
+            collider_data.get_standing_ground(transform.translation)
+        {
             if height < best_height {
                 if let Some(entity) = collider_data.get_collider_entity(&collider_id) {
                     best_height = height;
@@ -1948,7 +1945,7 @@ mod tests {
                 .get::<AvatarDynamicState>(player)
                 .unwrap()
                 .ground_height;
-            vertical = if fall && height > PLAYER_GROUND_THRESHOLD {
+            vertical = if fall && !grounded(height) {
                 vertical - 10.0 / fps as f32
             } else {
                 0.0
@@ -1987,7 +1984,7 @@ mod tests {
                     for x in a_frame_of_starts(fps, speed) {
                         let trace = down_a_ramp(degrees, fps, x, speed, false);
                         let hover = trace.iter().fold(0.0_f32, |hover, &(_, h)| hover.max(h));
-                        if hover > PLAYER_GROUND_THRESHOLD {
+                        if !grounded(hover) {
                             hovered.push((fps, degrees, speed, x, hover));
                         }
                     }
@@ -2014,7 +2011,7 @@ mod tests {
                         let trace = down_a_ramp(degrees, fps, x, speed, true);
                         let landed = trace
                             .iter()
-                            .find(|&&(x, height)| x < 1.0 && height <= PLAYER_GROUND_THRESHOLD)
+                            .find(|&&(x, height)| x < 1.0 && grounded(height))
                             .map(|&(x, _)| 1.0 - x);
                         if !landed.is_some_and(|past| past <= within) {
                             far.push((fps, degrees, speed, x, landed));
