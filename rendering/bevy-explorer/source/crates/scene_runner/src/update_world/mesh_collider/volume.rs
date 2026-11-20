@@ -1,9 +1,11 @@
 use bevy::math::{DVec2, DVec3, Vec3Swizzles};
+use itertools::Either;
 use scene_material::BoundRegion;
 
-/// How far past its parcels and above its height limit a scene is drawn, in metres: the scene
-/// materials discard what lies further out (`bound_material.wgsl`).
-const DRAWN_PAST_BOUNDS: f64 = 0.05;
+/// How far past its parcels and above its height limit a scene counts as drawn, in metres: the
+/// hard edge of the scene materials (`bound_material.wgsl`). With the out-of-bounds effect on
+/// they dissolve what lies past it over a wider band; colliders keep to this edge.
+pub(super) const DRAWN_PAST_BOUNDS: f64 = 0.05;
 
 /// The space a scene is drawn in: over its parcels, up to the height limit of each connected
 /// group of them. Without regions the scene is drawn everywhere.
@@ -48,11 +50,22 @@ impl SceneVolume {
     /// Whether a shape touches the volume: one whose lowest point is `bottom` and that reaches
     /// `radius` to each side of it.
     pub(super) fn reaches(&self, bottom: DVec3, radius: f64) -> bool {
+        self.touches(bottom, DVec3::ZERO, 0.0, radius)
+    }
+
+    /// Whether a sweep touches the volume at all: whether it has any of [`Self::stretches`].
+    pub(super) fn touches(
+        &self,
+        bottom: DVec3,
+        direction: DVec3,
+        distance: f64,
+        radius: f64,
+    ) -> bool {
         self.0.is_empty()
             || self
                 .0
                 .iter()
-                .any(|block| block.span(bottom, DVec3::ZERO, 0.0, radius).is_some())
+                .any(|block| block.span(bottom, direction, distance, radius).is_some())
     }
 
     /// The stretches of a sweep during which the swept shape touches the volume, in order. The
@@ -64,13 +77,13 @@ impl SceneVolume {
         direction: DVec3,
         distance: f64,
         radius: f64,
-    ) -> Vec<Stretch> {
+    ) -> impl Iterator<Item = Stretch> {
         if self.0.is_empty() {
-            return vec![Stretch {
+            return Either::Left(std::iter::once(Stretch {
                 start: 0.0,
                 end: distance,
                 entered: None,
-            }];
+            }));
         }
 
         let mut spans = self
@@ -89,7 +102,7 @@ impl SceneVolume {
                 _ => stretches.push(span),
             }
         }
-        stretches
+        Either::Right(stretches.into_iter())
     }
 }
 

@@ -2102,23 +2102,21 @@ mod pointer_target_tests {
     use crate::{
         initialize_scene::{LiveScenes, PointerResult, PortableScenes, ScenePointers},
         update_scene::synthetic_pointer::{Anchor, Hold, SyntheticAim},
+        update_world::mesh_collider::regions_of_parcels,
     };
     use bevy::ecs::system::RunSystemOnce;
-    use common::bounds_calc::scene_regions;
     use dcl_types::SceneId;
     use rapier3d_f64::prelude::{ColliderBuilder, Group, InteractionGroups, InteractionTestMode};
-    use scene_material::{BoundRegion, SceneBounds};
+    use scene_material::SceneBounds;
 
     #[test]
     fn the_pointer_passes_a_scenes_collider_over_another_scenes_parcel() {
         // A scene around a notch: parcels (0, 0) and (2, 0), joined by the row (0, 1), (1, 1),
         // (2, 1). The notch at (1, 0), which is not the scene's, spans world x 16 to 32 and z
         // -16 to 0; the scene's row behind it spans z -32 to -16.
-        let parcels = [(0, 0), (2, 0), (0, 1), (1, 1), (2, 1)].map(|(x, y)| IVec2::new(x, y));
-        let regions = scene_regions(parcels.into_iter())
-            .into_iter()
-            .map(|region| BoundRegion::new(region.min, region.max, region.count))
-            .collect::<Vec<_>>();
+        let parcels = [(0, 0), (2, 0), (0, 1), (1, 1), (2, 1)];
+        let regions = regions_of_parcels(&parcels);
+        let parcels = parcels.map(|(x, y)| IVec2::new(x, y));
 
         let mut world = World::new();
         let mut context = RendererSceneContext::new(

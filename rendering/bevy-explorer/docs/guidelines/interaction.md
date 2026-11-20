@@ -32,8 +32,8 @@ Scene raycast requests run in two tiers each frame (`update_scene/raycast_budget
   so its requests run then.
 - **World casts are cut per scene.** A cast that includes the world (`include_world`, or any cast
   of a portable) meets each scene it crosses only where that scene is drawn: over its parcels, up
-  to their height limit. A scene's cast at its own colliders is not cut. See
-  [Decisions](decisions.md).
+  to their height limit. The caster's own colliders are not cut, in a world cast or in a cast
+  at its own scene. See [Decisions](decisions.md).
 - **Budget.** A tenth of the target frame: `SceneUpdates::frame_target`, which `run_scene_loop`
   sets from the fps target (with the session override), capped at the refresh rate under vsync.
   That is 1.67 ms at 60 fps, 0.69 ms at 144 and 0.42 ms at 240. It follows the target, not the

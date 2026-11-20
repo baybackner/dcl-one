@@ -161,6 +161,22 @@ fn a_step_stops_at_a_collider_that_belongs_to_no_scene() {
     assert_near(position(&world, player), start.with_z(-7.45));
 }
 
+#[test]
+fn a_step_stops_at_the_collider_of_a_scene_that_shares_its_parcels_with_another() {
+    // co-tenant scenes of a server that hosts several rooms: the parcels name one of them
+    let start = IN_THE_SCENE.with_z(-4.0);
+    let (mut world, player) = world_with_player(start, ACROSS_THE_WALL);
+    let named = world.spawn(scene(&AROUND_A_NOTCH)).id();
+    place_scene(&mut world, named, &AROUND_A_NOTCH);
+    let mut co_tenant = scene(&AROUND_A_NOTCH);
+    add_wall_through_the_notch(&mut co_tenant);
+    world.spawn(co_tenant);
+
+    world.run_system_once(apply_movement).unwrap();
+
+    assert_near(position(&world, player), start.with_z(-7.45));
+}
+
 /// A box of `colliders` whose face stands 0.2 m from `player` towards -z: inside the capsule's
 /// 0.3 m, so the push-out moves the player 0.1 m away from it.
 fn add_box_against(colliders: &mut SceneColliderData, player: Vec3) {
@@ -325,6 +341,70 @@ fn a_collider_above_what_its_region_is_drawn_to_is_not_the_players_ground() {
         let recorded = world.get::<GroundCollider>(player).unwrap();
         assert_eq!(recorded.0.as_ref().map(|(entity, ..)| *entity), ground);
     }
+}
+
+/// Two parcels with another scene's between them: each is drawn to 20 m, and 0.05 m past it,
+/// while a collider is on up to the 31.7 m of a two-parcel scene.
+const IN_TWO_PIECES: [(i32, i32); 2] = [(0, 0), (2, 0)];
+
+/// Where a player stands on a collider that is cut at the height [`IN_TWO_PIECES`] is drawn to:
+/// the feet a millimetre above it.
+const ON_THE_HEIGHT_LIMIT: Vec3 = Vec3::new(8.0, 20.051, -8.0);
+
+/// A block of `colliders` under [`ON_THE_HEIGHT_LIMIT`], y from 18 to 26: across the height its
+/// region is drawn to.
+fn add_block_across_the_height_limit(colliders: &mut SceneColliderData, entity: Entity) {
+    add_box(
+        colliders,
+        0,
+        entity,
+        Vec3::new(8.0, 22.0, -8.0),
+        Vec3::new(4.0, 8.0, 4.0),
+    );
+}
+
+#[test]
+fn a_player_who_falls_onto_a_collider_cut_at_its_regions_height_limit_lands_on_it() {
+    // from half a metre above the limit, a metre down in the frame
+    let falling = Vec3::new(0.0, -10.0, 0.0);
+    let (mut world, player) = world_with_player(ON_THE_HEIGHT_LIMIT.with_y(20.5), falling);
+    let mut colliders = scene(&IN_TWO_PIECES);
+    add_block_across_the_height_limit(&mut colliders, Entity::PLACEHOLDER);
+    world.spawn(colliders);
+
+    // the frame the player lands in, and the next
+    for _ in 0..2 {
+        world.run_system_once(resolve_collisions).unwrap();
+        world.run_system_once(apply_movement).unwrap();
+
+        assert_near(position(&world, player), ON_THE_HEIGHT_LIMIT);
+        let above = ground_height(&world, player);
+        assert!(
+            above < PLAYER_GROUND_THRESHOLD,
+            "{above} m above the ground"
+        );
+    }
+}
+
+#[test]
+fn a_collider_cut_at_its_regions_height_limit_is_the_ground_of_a_player_who_stands_on_it() {
+    let block = Entity::from_raw(77);
+    let (mut world, player) = world_with_player(ON_THE_HEIGHT_LIMIT, Vec3::ZERO);
+    let mut colliders = scene(&IN_TWO_PIECES);
+    add_block_across_the_height_limit(&mut colliders, block);
+    let scene = world.spawn(colliders).id();
+    place_scene(&mut world, scene, &IN_TWO_PIECES);
+
+    world.run_system_once(apply_movement).unwrap();
+    let above = ground_height(&world, player);
+    assert!(
+        above < PLAYER_GROUND_THRESHOLD,
+        "{above} m above the ground"
+    );
+
+    world.run_system_once(record_ground_collider).unwrap();
+    let recorded = world.get::<GroundCollider>(player).unwrap();
+    assert_eq!(recorded.0.as_ref().map(|(entity, ..)| *entity), Some(block));
 }
 
 /// Times a frame of the player's collider queries (push-out, sweep, ground) with 225 scenes

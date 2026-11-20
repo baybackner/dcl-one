@@ -773,26 +773,30 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   rank hidden avatars to match.
 - **A scene's colliders answer only where the scene is drawn.** The avatar, the pointer and
   other scenes' world raycasts meet a scene's colliders only over the scene's own parcels, up to
-  the height limit of each connected group of them, and 0.05 m past both: the space the shaders
-  draw the scene in. Unity keeps every scene's colliders in one physics world, so a collider that
-  is on is solid wherever it reaches, over a neighbour's parcels too. Each scene here has a
-  collider set of its own, so a query is cut to where the scene applies: the avatar asks a scene
-  only while its capsule touches that space, and a ray or a swept capsule is cast against a scene
-  only over the stretches inside it. Three consequences look like mistakes:
+  the height limit of each connected group of them, and 0.05 m past both: the hard edge of the
+  scene materials. With the out-of-bounds effect on (`graphics.oob`) the materials dissolve what
+  lies past that edge over a wider band; colliders keep to the hard edge. Unity keeps every
+  scene's colliders in one physics world, so a collider that is on is solid wherever it reaches,
+  over a neighbour's parcels too. Each scene here has a collider set of its own, so a query is
+  cut to where the scene applies: the avatar asks a scene only while its capsule touches that
+  space, and a ray or a swept capsule is cast against a scene only over the stretches inside it.
+  Three consequences look like mistakes:
   - A ray that comes into a scene inside a solid primitive passes through that primitive, as a
     ray does not hit what its origin is inside. Mesh colliders are surfaces, hit as usual.
   - An avatar that comes into a scene already overlapping one of its colliders, having walked
     through the part that is not solid outside, is stopped at the scene's edge when its centre
     line is inside the collider or the overlap would push it back out. Any other overlap lets it
     in, and the push-out resolves it as usual: that is how it steps onto ground a little higher
-    than the ground it came from.
+    than the ground it came from. The top of the drawn space is such an edge: an avatar that
+    falls onto a collider which rises past the height its region is drawn to lands at that
+    height and stands there, on the ground.
   - A platform that carries the player over the scene's edge drops them once their capsule is
     clear of the scene.
 
-  A scene's own raycasts, trigger areas, the proximity lookup and the photo camera are not cut.
-  Neither is collider data without bounds: portables, the terrain, and scenes in a run that draws
-  out-of-bounds geometry. The whole-collider test (below) still turns off a collider that leaves
-  the scene's rectangle.
+  A scene's casts at its own colliders (in a world cast too), trigger areas, the proximity
+  lookup and the photo camera are not cut. Neither is collider data without bounds: portables,
+  the terrain, and scenes in a run that draws out-of-bounds geometry. The whole-collider test
+  (below) still turns off a collider that leaves the scene's rectangle.
 
 ## Deliberate choices that look like mistakes
 

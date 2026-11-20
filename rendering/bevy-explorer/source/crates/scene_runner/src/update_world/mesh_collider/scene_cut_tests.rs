@@ -1,6 +1,7 @@
-use super::{bounds_tests::scene_in_a_run, *};
-use common::bounds_calc::scene_regions;
-use scene_material::BoundRegion;
+use super::{
+    bounds_tests::{regions, scene_in_a_run},
+    *,
+};
 
 const MASK: u32 = ColliderLayer::ClPointer as u32 | ColliderLayer::ClPhysics as u32;
 
@@ -15,11 +16,7 @@ const AROUND_A_NOTCH: [(i32, i32); 5] = [(0, 0), (2, 0), (0, 1), (1, 1), (2, 1)]
 const IN_TWO_PIECES: [(i32, i32); 2] = [(0, 0), (2, 0)];
 
 fn scene(parcels: &[(i32, i32)]) -> SceneColliderData {
-    let regions = scene_regions(parcels.iter().map(|(x, y)| IVec2::new(*x, *y)))
-        .into_iter()
-        .map(|region| BoundRegion::new(region.min, region.max, region.count))
-        .collect::<Vec<_>>();
-    SceneColliderData::for_regions(&regions, parcels.len())
+    SceneColliderData::for_regions(&regions(parcels), parcels.len())
 }
 
 /// A box of `size` centred on `centre`, as a scene entity's `MeshCollider` registers it.
@@ -308,21 +305,6 @@ fn a_scene_is_cut_to_where_it_is_drawn_unless_the_run_shows_what_is_out_of_bound
 }
 
 #[test]
-fn scenes_on_the_same_parcels_each_answer_there() {
-    // co-tenant scenes of a server that hosts several rooms
-    for _ in 0..2 {
-        let mut colliders = scene(&[(0, 0)]);
-        add_box(
-            &mut colliders,
-            0,
-            Vec3::new(8.0, 1.0, -8.0),
-            Vec3::splat(2.0),
-        );
-        assert!(ray(&mut colliders, Vec3::new(8.0, 10.0, -8.0), Vec3::NEG_Y).is_some());
-    }
-}
-
-#[test]
 fn a_scene_reaches_an_avatar_whose_capsule_touches_it() {
     let colliders = scene(&AROUND_A_NOTCH);
 
@@ -444,6 +426,81 @@ fn an_avatar_that_enters_the_scene_against_a_wall_just_past_the_edge_is_stopped_
 }
 
 #[test]
+fn an_avatar_stopped_at_the_edge_on_a_shallow_path_stays_a_millimetre_clear_of_the_scene() {
+    let mut colliders = scene(&AROUND_A_NOTCH);
+    // x from 13 to 21 and z from -15 to -1: the avatar walks inside it, along the scene's edge
+    add_box(
+        &mut colliders,
+        0,
+        Vec3::new(17.0, 2.0, -8.0),
+        Vec3::new(8.0, 4.0, 14.0),
+    );
+
+    // 0.1 m towards the scene for each metre along its edge
+    let from = Vec3::new(16.55, 0.0, -4.0);
+    let path = Vec3::new(-0.1, 0.0, -1.0);
+    let hit = sweep(&mut colliders, from, path, 5.0).unwrap();
+    assert_eq!(hit.normal, Vec3::X);
+
+    // the capsule touches the scene at x = 16.35
+    let stopped = from.as_dvec3() + path.as_dvec3() * f64::from(hit.toi);
+    let clear = stopped.x - 16.35;
+    assert!(
+        (0.0009..0.0011).contains(&clear),
+        "{clear} m clear of the scene"
+    );
+}
+
+#[test]
+fn an_avatar_that_leaves_what_it_starts_inside_is_still_stopped_at_the_edge_of_a_scene() {
+    let mut colliders = scene(&AROUND_A_NOTCH);
+    // x from 13 to 21, across the edge at 16 between parcel (0, 0) and the notch
+    add_box(
+        &mut colliders,
+        0,
+        Vec3::new(17.0, 2.0, -8.0),
+        Vec3::new(8.0, 4.0, 8.0),
+    );
+    // the sweep of a player the scene has placed inside a collider
+    let mut leaving = |feet: Vec3| {
+        colliders.cast_avatar_nearest_in_scene(
+            feet.as_dvec3(),
+            DVec3::NEG_X,
+            5.0,
+            MASK,
+            true,
+            false,
+            HashSet::new(),
+            -PLAYER_COLLIDER_OVERLAP,
+        )
+    };
+
+    // from the notch: what it overlaps at the scene's edge is not what it started inside
+    let hit = leaving(Vec3::new(19.0, 0.0, -8.0)).expect("stopped at the edge");
+    assert_near(hit.toi, 2.649);
+    assert_eq!(hit.normal, Vec3::X);
+
+    // inside the scene it leaves the box it starts in
+    assert!(leaving(Vec3::new(15.0, 0.0, -8.0)).is_none());
+}
+
+#[test]
+fn a_sweep_that_does_not_touch_a_scene_leaves_its_bvh_unflushed() {
+    let mut colliders = scene(&AROUND_A_NOTCH);
+    add_slab(&mut colliders, 0);
+    let waiting = colliders.changed_colliders.len();
+    assert!(waiting > 0);
+
+    // in the notch, above the slab
+    assert!(sweep(&mut colliders, Vec3::new(24.0, 1.5, -4.0), Vec3::NEG_Z, 4.0).is_none());
+    assert_eq!(colliders.changed_colliders.len(), waiting);
+
+    // in the scene
+    assert!(sweep(&mut colliders, Vec3::new(8.0, 1.5, -4.0), Vec3::NEG_Z, 4.0).is_none());
+    assert!(colliders.changed_colliders.is_empty());
+}
+
+#[test]
 fn an_avatar_that_enters_the_scene_onto_higher_ground_is_let_in_and_lifted() {
     let mut colliders = scene(&AROUND_A_NOTCH);
     // ground 0.1 m above the level the avatar walks at in the notch
@@ -488,6 +545,12 @@ fn an_avatar_falling_onto_a_collider_that_tops_its_regions_height_lands_at_the_l
     let hit = sweep(&mut colliders, above, Vec3::NEG_Y, 20.0).unwrap();
     assert_near(hit.toi, 9.949);
     assert_eq!(hit.normal, Vec3::Y);
+
+    // a millimetre above what is drawn: out of the scene's reach, and on its ground
+    let stopped = above.as_dvec3() - DVec3::Y * f64::from(hit.toi);
+    assert!(!colliders.reaches_avatar(stopped));
+    assert!(colliders.grounds_avatar(stopped));
+    assert!(!colliders.grounds_avatar(stopped + DVec3::Y * 0.01));
 }
 
 #[test]

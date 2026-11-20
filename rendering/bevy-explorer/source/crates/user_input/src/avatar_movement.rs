@@ -640,7 +640,7 @@ pub fn apply_movement(
             scenes
                 .iter_mut()
                 .fold(transform.translation.y, |gh, (_, mut collider_data)| {
-                    if !collider_data.reaches_avatar(transform.translation.as_dvec3()) {
+                    if !collider_data.grounds_avatar(transform.translation.as_dvec3()) {
                         return gh;
                     }
                     gh.min(
@@ -735,7 +735,7 @@ pub fn apply_movement(
         scenes
             .iter_mut()
             .fold(transform.translation.y, |gh, (_, mut collider_data)| {
-                if !collider_data.reaches_avatar(transform.translation.as_dvec3()) {
+                if !collider_data.grounds_avatar(transform.translation.as_dvec3()) {
                     return gh;
                 }
                 gh.min(
@@ -788,7 +788,7 @@ fn record_ground_collider(
         let Ok(mut collider_data) = scenes.get_mut(scene) else {
             continue;
         };
-        if !collider_data.reaches_avatar(transform.translation.as_dvec3()) {
+        if !collider_data.grounds_avatar(transform.translation.as_dvec3()) {
             continue;
         }
 

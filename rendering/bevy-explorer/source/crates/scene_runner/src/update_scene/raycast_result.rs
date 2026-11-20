@@ -220,8 +220,17 @@ impl RaycastJob {
         }
     }
 
-    /// [`Self::nearest`], where the scene of `colliders` is drawn.
-    fn nearest_in_scene(&self, colliders: &SceneColliderData) -> Option<RaycastResult> {
+    /// [`Self::nearest`] for a scene of a world cast: another scene's colliders answer where
+    /// that scene is drawn, the caster's own wherever they are, as in a cast at its own scene.
+    fn nearest_in_world(
+        &self,
+        scene: Entity,
+        colliders: &SceneColliderData,
+    ) -> Option<RaycastResult> {
+        if scene == self.scene_root {
+            return self.nearest(colliders);
+        }
+
         match self.shape {
             RaycastShape::RsRay => colliders.cast_ray_nearest_in_scene_flushed(
                 self.origin,
@@ -245,8 +254,12 @@ impl RaycastJob {
         }
     }
 
-    /// [`Self::all`], where the scene of `colliders` is drawn.
-    fn all_in_scene(&self, colliders: &SceneColliderData) -> Vec<RaycastResult> {
+    /// [`Self::all`] for a scene of a world cast, as [`Self::nearest_in_world`].
+    fn all_in_world(&self, scene: Entity, colliders: &SceneColliderData) -> Vec<RaycastResult> {
+        if scene == self.scene_root {
+            return self.all(colliders);
+        }
+
         match self.shape {
             RaycastShape::RsRay => colliders.cast_ray_all_in_scene_flushed(
                 self.origin,
@@ -336,7 +349,7 @@ impl RaycastJob {
                         let Some(colliders) = scene_colliders(scene) else {
                             continue;
                         };
-                        if let Some(result) = self.nearest_in_scene(colliders) {
+                        if let Some(result) = self.nearest_in_world(scene, colliders) {
                             if best_result.as_ref().is_none_or(|(_, b)| b.toi > result.toi) {
                                 best_result = Some((scene, result));
                             }
@@ -359,7 +372,7 @@ impl RaycastJob {
                         let Some(colliders) = scene_colliders(*scene) else {
                             continue;
                         };
-                        for result in self.all_in_scene(colliders) {
+                        for result in self.all_in_world(*scene, colliders) {
                             results.push((*scene, result));
                         }
                     }
@@ -750,10 +763,8 @@ fn run_raycasts(
 #[cfg(test)]
 mod world_target_tests {
     use super::*;
-    use crate::update_world::mesh_collider::ColliderId;
-    use common::bounds_calc::scene_regions;
+    use crate::update_world::mesh_collider::{regions_of_parcels, ColliderId};
     use rapier3d_f64::prelude::{ColliderBuilder, Group, InteractionGroups, InteractionTestMode};
-    use scene_material::BoundRegion;
 
     const MASK: u32 = ColliderLayer::ClPointer as u32 | ColliderLayer::ClPhysics as u32;
 
@@ -762,11 +773,8 @@ mod world_target_tests {
     /// to 0. The scene has a post over the notch at x = 24 and one past it at x = 40, both on.
     fn scene_with_posts() -> (SceneColliderData, [ColliderId; 2]) {
         let parcels = [(0, 0), (2, 0), (0, 1), (1, 1), (2, 1)];
-        let regions = scene_regions(parcels.iter().map(|(x, y)| IVec2::new(*x, *y)))
-            .into_iter()
-            .map(|region| BoundRegion::new(region.min, region.max, region.count))
-            .collect::<Vec<_>>();
-        let mut colliders = SceneColliderData::for_regions(&regions, parcels.len());
+        let mut colliders =
+            SceneColliderData::for_regions(&regions_of_parcels(&parcels), parcels.len());
 
         let ids = [24.0, 40.0].map(|x| {
             let id = ColliderId::new(
@@ -797,16 +805,27 @@ mod world_target_tests {
         (colliders, ids)
     }
 
-    /// The hits of a cast along +x from parcel (0, 0), through the notch, as (collider, distance).
+    /// The scene with the posts.
+    fn scene() -> Entity {
+        Entity::from_raw(1)
+    }
+
+    fn another_scene() -> Entity {
+        Entity::from_raw(2)
+    }
+
+    /// The hits of a cast by `caster` along +x from parcel (0, 0), through the notch, as
+    /// (collider, distance).
     fn cast(
+        caster: Entity,
         shape: RaycastShape,
         query: RaycastQueryType,
-        targets: impl FnOnce(Entity) -> RaycastTargets,
+        targets: RaycastTargets,
     ) -> (Vec<(ColliderId, f32)>, [ColliderId; 2]) {
-        let scene = Entity::from_raw(1);
+        let scene = scene();
         let (colliders, ids) = scene_with_posts();
         let job = RaycastJob {
-            scene_root: scene,
+            scene_root: caster,
             scene_entity: SceneEntityId::ROOT,
             scene_translation: Vec3::ZERO,
             timestamp: None,
@@ -817,7 +836,7 @@ mod world_target_tests {
             mask: MASK,
             shape,
             query,
-            targets: targets(scene),
+            targets,
             results: Vec::new(),
         };
         let hits = job
@@ -828,42 +847,96 @@ mod world_target_tests {
         (hits, ids)
     }
 
-    fn world(scene: Entity) -> RaycastTargets {
-        RaycastTargets::World(vec![(scene, 0.0)])
+    fn world() -> RaycastTargets {
+        RaycastTargets::World(vec![(scene(), 0.0)])
     }
 
     #[test]
-    fn a_world_ray_hits_a_scene_only_where_the_scene_is() {
-        let (hits, [_, past_the_notch]) =
-            cast(RaycastShape::RsRay, RaycastQueryType::RqtHitFirst, world);
+    fn a_world_ray_hits_another_scene_only_where_that_scene_is() {
+        let (hits, [_, past_the_notch]) = cast(
+            another_scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtHitFirst,
+            world(),
+        );
         assert_eq!(hits, vec![(past_the_notch.clone(), 37.5)]);
 
-        let (hits, _) = cast(RaycastShape::RsRay, RaycastQueryType::RqtQueryAll, world);
+        let (hits, _) = cast(
+            another_scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtQueryAll,
+            world(),
+        );
         assert_eq!(hits, vec![(past_the_notch, 37.5)]);
     }
 
     #[test]
-    fn a_world_avatar_cast_hits_a_scene_only_where_the_scene_is() {
-        let (hits, [_, past_the_notch]) =
-            cast(RaycastShape::RsAvatar, RaycastQueryType::RqtHitFirst, world);
+    fn a_world_avatar_cast_hits_another_scene_only_where_that_scene_is() {
+        let (hits, [_, past_the_notch]) = cast(
+            another_scene(),
+            RaycastShape::RsAvatar,
+            RaycastQueryType::RqtHitFirst,
+            world(),
+        );
         assert_eq!(hits, vec![(past_the_notch.clone(), 37.2)]);
 
-        let (hits, _) = cast(RaycastShape::RsAvatar, RaycastQueryType::RqtQueryAll, world);
+        let (hits, _) = cast(
+            another_scene(),
+            RaycastShape::RsAvatar,
+            RaycastQueryType::RqtQueryAll,
+            world(),
+        );
         assert_eq!(hits, vec![(past_the_notch, 37.2)]);
     }
 
     #[test]
     fn a_scenes_own_ray_hits_its_colliders_wherever_they_are() {
-        let (hits, [in_the_notch, past_the_notch]) =
-            cast(RaycastShape::RsRay, RaycastQueryType::RqtHitFirst, |_| {
-                RaycastTargets::Own
-            });
+        let (hits, [in_the_notch, past_the_notch]) = cast(
+            scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtHitFirst,
+            RaycastTargets::Own,
+        );
         assert_eq!(hits, vec![(in_the_notch.clone(), 21.5)]);
 
-        let (mut hits, _) = cast(RaycastShape::RsRay, RaycastQueryType::RqtQueryAll, |_| {
-            RaycastTargets::Own
-        });
+        let (mut hits, _) = cast(
+            scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtQueryAll,
+            RaycastTargets::Own,
+        );
         hits.sort_by(|a, b| a.1.total_cmp(&b.1));
         assert_eq!(hits, vec![(in_the_notch, 21.5), (past_the_notch, 37.5)]);
+    }
+
+    #[test]
+    fn a_world_cast_hits_the_casters_own_colliders_wherever_they_are() {
+        let (hits, [in_the_notch, past_the_notch]) = cast(
+            scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtHitFirst,
+            world(),
+        );
+        assert_eq!(hits, vec![(in_the_notch.clone(), 21.5)]);
+
+        let (mut hits, _) = cast(
+            scene(),
+            RaycastShape::RsRay,
+            RaycastQueryType::RqtQueryAll,
+            world(),
+        );
+        hits.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(
+            hits,
+            vec![(in_the_notch.clone(), 21.5), (past_the_notch, 37.5)]
+        );
+
+        let (hits, _) = cast(
+            scene(),
+            RaycastShape::RsAvatar,
+            RaycastQueryType::RqtHitFirst,
+            world(),
+        );
+        assert_eq!(hits, vec![(in_the_notch, 21.2)]);
     }
 }

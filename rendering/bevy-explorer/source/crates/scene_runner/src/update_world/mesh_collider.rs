@@ -797,24 +797,18 @@ impl SceneColliderData {
         include_sensors: bool,
         size_adjust: f32,
     ) -> Vec<RaycastResult> {
-        let mut results = Vec::new();
-        let mut ignore = HashSet::new();
-
-        while let Some(result) = self.cast_avatar_nearest_flushed(
-            origin,
-            direction,
-            distance,
-            collision_mask,
-            skip_inside,
-            include_sensors,
-            ignore.iter().collect(),
-            size_adjust,
-        ) {
-            ignore.insert(result.id.clone());
-            results.push(result);
-        }
-
-        results
+        each_nearest(|ignore| {
+            self.cast_avatar_nearest_flushed(
+                origin,
+                direction,
+                distance,
+                collision_mask,
+                skip_inside,
+                include_sensors,
+                ignore,
+                size_adjust,
+            )
+        })
     }
 
     pub fn cast_avatar_nearest(
@@ -1044,10 +1038,7 @@ impl SceneColliderData {
     pub fn avatar_constraints(&mut self, translation: DVec3) -> (DVec3, DVec3) {
         self.update_bvh();
 
-        let avatar_inner_segment = parry::shape::Segment::new(
-            (DVec3::Y * PLAYER_COLLIDER_RADIUS as f64).into(),
-            (DVec3::Y * (PLAYER_COLLIDER_HEIGHT - PLAYER_COLLIDER_RADIUS) as f64).into(),
-        );
+        let avatar_inner_segment = avatar_centre_line();
 
         let mut constraint_min = DVec3::NEG_INFINITY;
         let mut constraint_max = DVec3::INFINITY;
@@ -1238,9 +1229,33 @@ impl SceneColliderData {
     }
 }
 
-/// A sweep stopped at the edge of a scene stops this far short of it, and one let into the scene
-/// stops this far inside, in metres: more than the rounding of the player's position, so the
-/// next frame finds the scene out of the player's reach, or within it.
+/// The centre line of the avatar's capsule, from its feet.
+fn avatar_centre_line() -> parry::shape::Segment {
+    parry::shape::Segment::new(
+        (DVec3::Y * PLAYER_COLLIDER_RADIUS as f64).into(),
+        (DVec3::Y * (PLAYER_COLLIDER_HEIGHT - PLAYER_COLLIDER_RADIUS) as f64).into(),
+    )
+}
+
+/// Every hit of a cast that returns its nearest hit outside the colliders it is given: the
+/// nearest, then the nearest of the rest.
+fn each_nearest(
+    mut nearest: impl FnMut(HashSet<&ColliderId>) -> Option<RaycastResult>,
+) -> Vec<RaycastResult> {
+    let mut results = Vec::new();
+    let mut ignore = HashSet::new();
+
+    while let Some(result) = nearest(ignore.iter().collect()) {
+        ignore.insert(result.id.clone());
+        results.push(result);
+    }
+
+    results
+}
+
+/// A sweep stopped at the edge of a scene stops this far from it, in metres: more than the
+/// rounding of the player's position, so the next frame finds the scene out of the player's
+/// reach. One let into the scene goes this far on along its path.
 const SCENE_EDGE_MARGIN: f64 = 0.001;
 
 impl SceneColliderData {
@@ -1250,6 +1265,15 @@ impl SceneColliderData {
     pub fn reaches_avatar(&self, translation: DVec3) -> bool {
         self.volume
             .reaches(translation, f64::from(PLAYER_COLLIDER_RADIUS))
+    }
+
+    /// Whether the scene's colliders can be the ground under an avatar that stands at
+    /// `translation`: [`Self::reaches_avatar`], or the avatar rests on the top of the space the
+    /// scene is drawn in, where [`Self::cast_avatar_nearest_in_scene`] stops one that comes down
+    /// onto a collider.
+    pub fn grounds_avatar(&self, translation: DVec3) -> bool {
+        // it rests one margin above the top; the rounding of its position adds less than another
+        self.reaches_avatar(translation - DVec3::Y * (2.0 * SCENE_EDGE_MARGIN))
     }
 
     /// [`Self::cast_ray_nearest_flushed`] over the stretches of the ray inside the space the
@@ -1272,7 +1296,6 @@ impl SceneColliderData {
                 f64::from(distance),
                 0.0,
             )
-            .into_iter()
             .find_map(|stretch| {
                 let start = stretch.start as f32;
                 let mut hit = self.cast_ray_nearest_flushed(
@@ -1335,6 +1358,16 @@ impl SceneColliderData {
         exclude_colliders: HashSet<&ColliderId>,
         size_adjust: f32,
     ) -> Option<RaycastResult> {
+        // a scene the sweep does not touch is not flushed for it
+        if !self.volume.touches(
+            origin,
+            direction,
+            distance,
+            f64::from(PLAYER_COLLIDER_RADIUS),
+        ) {
+            return None;
+        }
+
         self.update_bvh();
         self.cast_avatar_nearest_in_scene_flushed(
             origin,
@@ -1356,6 +1389,9 @@ impl SceneColliderData {
     /// the overlap pushes it back out of the scene: the part of a collider inside its scene is
     /// solid from every side. Any other overlap lets it just into the scene, where the push-out
     /// resolves it: ground a little higher than the ground it comes from, or a wall met side-on.
+    ///
+    /// `skip_inside` covers what the sweep starts inside, not what the capsule overlaps where it
+    /// comes into the scene.
     pub(crate) fn cast_avatar_nearest_in_scene_flushed(
         &self,
         origin: DVec3,
@@ -1371,7 +1407,6 @@ impl SceneColliderData {
             return None;
         }
 
-        let margin = SCENE_EDGE_MARGIN / direction.length();
         for stretch in self.volume.stretches(
             origin,
             direction,
@@ -1384,7 +1419,7 @@ impl SceneColliderData {
                 direction,
                 stretch.end - stretch.start,
                 collision_mask,
-                skip_inside,
+                skip_inside && stretch.entered.is_none(),
                 include_sensors,
                 exclude_colliders.clone(),
                 size_adjust,
@@ -1404,9 +1439,12 @@ impl SceneColliderData {
                             &exclude_colliders,
                         )
                     {
+                        // the margin is kept from the edge itself, however shallow the path
+                        let margin = SCENE_EDGE_MARGIN / direction.dot(edge).abs();
                         hit.toi = (stretch.start - margin).max(0.0) as f32;
                         hit.normal = edge.as_vec3();
                     } else {
+                        let margin = SCENE_EDGE_MARGIN / direction.length();
                         hit.toi = (stretch.start + margin).min(stretch.end) as f32;
                     }
                 }
@@ -1426,10 +1464,7 @@ impl SceneColliderData {
         include_sensors: bool,
         exclude_colliders: &HashSet<&ColliderId>,
     ) -> bool {
-        let centre_line = parry::shape::Segment::new(
-            (DVec3::Y * PLAYER_COLLIDER_RADIUS as f64).into(),
-            (DVec3::Y * (PLAYER_COLLIDER_HEIGHT - PLAYER_COLLIDER_RADIUS) as f64).into(),
-        );
+        let centre_line = avatar_centre_line();
         let predicate = |handle, _: &Collider| {
             !self.disabled.contains(&handle)
                 && self
@@ -1466,24 +1501,18 @@ impl SceneColliderData {
         include_sensors: bool,
         size_adjust: f32,
     ) -> Vec<RaycastResult> {
-        let mut results = Vec::new();
-        let mut ignore = HashSet::new();
-
-        while let Some(result) = self.cast_avatar_nearest_in_scene_flushed(
-            origin,
-            direction,
-            distance,
-            collision_mask,
-            skip_inside,
-            include_sensors,
-            ignore.iter().collect(),
-            size_adjust,
-        ) {
-            ignore.insert(result.id.clone());
-            results.push(result);
-        }
-
-        results
+        each_nearest(|ignore| {
+            self.cast_avatar_nearest_in_scene_flushed(
+                origin,
+                direction,
+                distance,
+                collision_mask,
+                skip_inside,
+                include_sensors,
+                ignore,
+                size_adjust,
+            )
+        })
     }
 }
 
@@ -1965,6 +1994,8 @@ fn waits_for_reveal(
 
 #[cfg(test)]
 mod bounds_tests;
+#[cfg(test)]
+pub(crate) use bounds_tests::regions as regions_of_parcels;
 #[cfg(test)]
 mod initial_transform_tests;
 #[cfg(test)]

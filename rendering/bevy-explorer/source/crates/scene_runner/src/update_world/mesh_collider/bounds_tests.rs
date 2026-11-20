@@ -5,7 +5,7 @@ use scene_material::{BoundRegion, SceneBounds};
 
 const MASK: u32 = ColliderLayer::ClPointer as u32 | ColliderLayer::ClPhysics as u32;
 
-fn regions(parcels: &[(i32, i32)]) -> Vec<BoundRegion> {
+pub(crate) fn regions(parcels: &[(i32, i32)]) -> Vec<BoundRegion> {
     scene_regions(parcels.iter().map(|(x, y)| IVec2::new(*x, *y)))
         .into_iter()
         .map(|region| BoundRegion::new(region.min, region.max, region.count))
