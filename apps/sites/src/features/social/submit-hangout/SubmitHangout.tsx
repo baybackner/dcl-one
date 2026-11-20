@@ -1,19 +1,22 @@
 import { useEventsCopy, type EventsLocale } from "@dcl/one-ui/apps/sites/events/locale";
 import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
-import { GeneralAdd, GeneralCamera, GeneralDelete, GeneralInfoButton } from "@dcl/one-ui/foundations/icons";
-import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
+import { GeneralAdd, GeneralDelete, GeneralGallery, GeneralInfoButton, GeneralLeftArrow, GeneralShowPreview } from "@dcl/one-ui/foundations/icons";
+import { Button } from "@dcl/one-ui";
+import { Button as SitesButton } from "@dcl/one-ui/apps/sites/shared/Button/Button";
 import { Notice, type NoticeTone } from "@dcl/one-ui/apps/sites/events/Notice";
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useMachine } from "@xstate/react";
 import { Link, useSearchParams } from "react-router";
 
 
 import type { TrackContext } from "@/core/lib/telemetry/track";
-import { isStepValid, toEventSchedule, type EventScheduleSource, type HangoutDraft } from "@/data/lib/catalyst/landings/submit-hangout";
+import { HANGOUT_BOUNDS, isStepValid, toEventSchedule, type EventScheduleSource, type HangoutDraft } from "@/data/lib/catalyst/landings/submit-hangout";
 import type { HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import { heroWhen, scheduleLine } from "../../components/event-schedule";
 import styles from "./SubmitHangout.module.css";
-import HangoutAssociations from "./HangoutAssociations";
+import HangoutAssociations, { AdminFields, CommunityField } from "./HangoutAssociations";
+import FeaturedAssetPicker from "./FeaturedAssetPicker";
+import SelectControl from "./SelectControl";
 import SubmitSuccess from "./SubmitSuccess";
 import {
   hangoutMachine,
@@ -239,6 +242,9 @@ function SubmitHangoutInner({
   const uploadFeedback = uploadError ? <Notice tone="error">{errorText(uploadError)}</Notice>
     : uploading ? <Notice>{text("Uploading image…")}</Notice> : null;
 
+  const onUpload = upload ? (file: File, vertical: boolean) => { void uploadImage(file, vertical); } : undefined;
+  const communityNotice = !communityAllowed && <Notice tone="error">{text("Choose a community you manage, or select None.")}</Notice>;
+
   function fields(section: HangoutStateId) {
     return (
       <>
@@ -248,16 +254,15 @@ function SubmitHangoutInner({
           categories={categories}
           categoriesError={categoriesError}
           onEdit={onEdit}
-          onUpload={upload ? (file, vertical) => { void uploadImage(file, vertical); } : undefined}
+          onUpload={onUpload}
           uploading={uploading}
           privateFieldsEditable={privateFieldsEditable}
           options={options}
-          inline={editingInline}
         />
-        {section === "details" && !editingInline && (
+        {section === "details" && (
           <HangoutAssociations draft={d} options={options} canEditAny={canEditAny} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
         )}
-        {section === "details" && !communityAllowed && <Notice tone="error">{text("Choose a community you manage, or select None.")}</Notice>}
+        {section === "details" && communityNotice}
       </>
     );
   }
@@ -286,32 +291,57 @@ function SubmitHangoutInner({
           <>
             {editingInline ? (
               <div className={styles.editorColumns}>
-                <div className={styles.coverPanel}>
-                  <fieldset className={styles.editorSection}><legend>{text("Cover")}</legend>{fields("cover")}</fieldset>
+                <div className={styles.mediaPanel}>
+                  <fieldset className={styles.editorSection}>
+                    <legend>{text("Cover")}</legend>
+                    <CoverFields draft={d} uploading={uploading} onUpload={onUpload} onEdit={onEdit} />
+                  </fieldset>
                   {uploadFeedback}
-                  <fieldset className={styles.editorSection}><legend>{text("Event details")}</legend>{fields("details")}</fieldset>
+                  <DescriptionFields draft={d} categories={categories} categoriesError={categoriesError} privateFieldsEditable={privateFieldsEditable} onEdit={onEdit} />
                 </div>
-                <div className={styles.schedulePanel}>
-                  {reviewNotice && <Notice tone={reviewTone}>{reviewNotice}</Notice>}
+                <div className={styles.detailsPanel}>
                   <div className={styles.sections}>
-                    <h2>{text("Event details")}</h2>
-                    <fieldset className={styles.editorSection}><legend>{text("Schedule")}</legend>{fields("schedule")}</fieldset>
-                    <fieldset className={styles.editorSection}><legend>{text("Location")}</legend>{fields("location")}</fieldset>
-                    <HangoutAssociations draft={d} options={options} canEditAny={canEditAny} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
-                  </div>
-                  <div className={styles.editorActions}>
-                    <div className={styles.reviewBar}>
-                      <p><GeneralInfoButton size={16} aria-hidden="true" />{text("The event submission will be reviewed by our team, you'll be notified by email")}</p>
-                      <Button variant="tertiary" disabled={!canSubmit} onClick={() => send({ type: "PREVIEW" })}>{text("Preview")}</Button>
+                    {reviewNotice && <Notice tone={reviewTone}>{reviewNotice}</Notice>}
+                    {canEditAny && (
+                      <fieldset className={styles.adminArea}>
+                        <legend>{text("Admin area")}</legend>
+                        <AdminFields draft={d} options={options} onEdit={onEdit} />
+                      </fieldset>
+                    )}
+                    <h2>{text("Hangout Details")}</h2>
+                    <ScheduleFields draft={d} onEdit={onEdit} />
+                    <LocationFields draft={d} options={options} onEdit={onEdit} />
+                    <div className={styles.row}>
+                      <CommunityField className={styles.grow} draft={d} options={options} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
+                      {privateFieldsEditable && (
+                        <Field label={text("Contact email")} className={styles.grow}>
+                          <input className={styles.control} type="email" value={d.contact} placeholder="hello@example.com" onChange={(event) => onEdit({ contact: event.target.value })} />
+                        </Field>
+                      )}
                     </div>
+                    {communityNotice}
+                    <FeaturedAssetPicker value={d.featuredItem ?? ""} onChange={(featuredItem) => onEdit({ featuredItem })} />
+                  </div>
+                  <div className={styles.actionBar}>
+                    <div className={styles.reviewNote}>
+                      <p><GeneralInfoButton size={16} aria-hidden="true" />{text("The hangout submission will be reviewed and approved by our team, you'll be notified by email.")}</p>
+                      <SitesButton variant="tertiary" size="sm" className={styles.previewButton} disabled={!canSubmit} onClick={() => send({ type: "PREVIEW" })}>
+                        {text("Preview")}<GeneralShowPreview size={16} aria-hidden="true" />
+                      </SitesButton>
+                    </div>
+                    <hr className={styles.divider} />
                     <div className={styles.formActions}>
                       {mode === "edit" && onDelete && (
                         <button type="button" className={styles.delete} onClick={onDelete}>
-                          {text("Delete")}<GeneralDelete size={20} aria-hidden="true" />
+                          {text("Delete")}<GeneralDelete size={24} aria-hidden="true" />
                         </button>
                       )}
-                      <Link className={styles.cancel} to={mode === "edit" ? "/events?tab=my" : "/events"}>{text("Cancel")}</Link>
-                      <Button disabled={!canSubmit} onClick={() => send({ type: "SUBMIT" })}>{text(mode === "edit" ? "Save changes" : "Submit Event")}</Button>
+                      <div className={styles.mainActions}>
+                        <Link className={styles.cancel} to={mode === "edit" ? "/events?tab=my" : "/events"}>{text("Cancel")}</Link>
+                        <Button variant="primary" size="lg" viewport="desktop" disabled={!canSubmit} onClick={() => send({ type: "SUBMIT" })}>
+                          {text(mode === "edit" ? "Save changes" : "Submit Event")}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -397,9 +427,163 @@ function EditorHeader({ mode }: { mode: "create" | "edit" }) {
   const { text } = useEventsCopy();
   return (
     <header className={`submit-hangout__header ${styles.editorHeader}`}>
-      <Link to="/events" className={styles.back} aria-label={text("Back to Events")} />
-      <h1>{text(mode === "edit" ? "Edit Event" : "Submit an Event")}</h1>
+      <Link to="/events" className={styles.back} aria-label={text("Back to Events")}><GeneralLeftArrow size={30} aria-hidden="true" /></Link>
+      <h1>{text(mode === "edit" ? "Edit hangout" : "Submit a hangout")}</h1>
     </header>
+  );
+}
+
+type EditFn = (patch: Partial<HangoutDraft>) => void;
+const DESCRIPTION_MAX = HANGOUT_BOUNDS.descriptionMax;
+const RECURRENCES = [
+  ["every_hour", "Every hour"],
+  ["every_day", "Every day"],
+  ["every_week", "Every week"],
+  ["every_month", "Every month"],
+  ["every_year", "Every year"],
+] as const;
+
+/**
+ * One labelled control of the editor: the title above, the control, and an optional line under it that
+ * stays outside the label so it is not read as part of the control's name.
+ */
+function Field({ label, className, footer, children }: { label: string; className?: string; footer?: ReactNode; children: ReactNode }) {
+  const control = (
+    <label className={[styles.fieldLabel, footer ? undefined : className].filter(Boolean).join(" ")}>
+      <span className={styles.fieldTitle}>{label}</span>
+      {children}
+    </label>
+  );
+  if (!footer) return control;
+  return <div className={[styles.fieldGroup, className].filter(Boolean).join(" ")}>{control}{footer}</div>;
+}
+
+function CoverFields({ draft, uploading, onUpload, onEdit }: { draft: HangoutDraft; uploading: boolean; onUpload?: (file: File, vertical: boolean) => void; onEdit: EditFn }) {
+  const { text } = useEventsCopy();
+  const [verticalCoverOpen, setVerticalCoverOpen] = useState(Boolean(draft.verticalImagePreviewUrl));
+  return (
+    <div className={styles.coverFields}>
+      <CoverField inline image={draft.imagePreviewUrl} uploading={uploading} onUpload={onUpload} onRemove={() => onEdit({ imagePreviewUrl: null })} />
+      <p className={styles.note}><GeneralInfoButton size={16} aria-hidden="true" />{text("Upload a PNG, JPG, or GIF (1340×670px, max 500kb). Center visuals and text to fit all screen resolutions.")}</p>
+      <details className={styles.verticalCover} open={verticalCoverOpen} onToggle={(event) => setVerticalCoverOpen(event.currentTarget.open)}>
+        <summary><GeneralAdd size={16} aria-hidden="true" /><strong>{text("Add Vertical Cover")}</strong> {text("(recommended)")}</summary>
+        <CoverField inline vertical image={draft.verticalImagePreviewUrl} uploading={uploading} onUpload={onUpload} onRemove={() => onEdit({ verticalImagePreviewUrl: null })} />
+      </details>
+    </div>
+  );
+}
+
+function DescriptionFields({ draft, categories, categoriesError, privateFieldsEditable, onEdit }: {
+  draft: HangoutDraft; categories: CategoryOption[]; categoriesError: boolean; privateFieldsEditable: boolean; onEdit: EditFn;
+}) {
+  const { locale, text } = useEventsCopy();
+  return (
+    <fieldset className={styles.editorSection}>
+      <legend>{text("Event details")}</legend>
+      <div className={styles.stack}>
+        <Field label={text("Hangout name")}>
+          <input className={styles.control} type="text" maxLength={HANGOUT_BOUNDS.nameMax} value={draft.name} placeholder={text("Be as descriptive as you can")} onChange={(event) => onEdit({ name: event.target.value })} />
+        </Field>
+        <Field label={text("Description")} footer={<span className={styles.counter}>{draft.description.length}/{DESCRIPTION_MAX}</span>}>
+          <textarea className={styles.control} rows={4} maxLength={DESCRIPTION_MAX} value={draft.description} placeholder={text("Describe what you'll be doing")} onChange={(event) => onEdit({ description: event.target.value })} />
+        </Field>
+        {categories.length > 0 ? (
+          <Field label={text("Category")}>
+            <SelectControl className={styles.control} value={draft.category} onChange={(event) => onEdit({ category: event.target.value })}>
+              <option value="">{text("None")}</option>
+              {categories.map((category) => <option key={category.name} value={category.name}>{category.i18n?.[locale] ?? category.label}</option>)}
+            </SelectControl>
+          </Field>
+        ) : (
+          <Notice tone={categoriesError ? "warning" : "info"}>
+            {categoriesError
+              ? text("Categories couldn't be loaded right now — you can continue and pick one later.")
+              : text("No categories are available right now — you can continue without one.")}
+          </Notice>
+        )}
+        {privateFieldsEditable && (
+          <Field label={text("Details for moderators")}>
+            <textarea className={styles.control} rows={3} maxLength={DESCRIPTION_MAX} value={draft.details} onChange={(event) => onEdit({ details: event.target.value })} />
+          </Field>
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
+function ScheduleFields({ draft, onEdit }: { draft: HangoutDraft; onEdit: EditFn }) {
+  const { text } = useEventsCopy();
+  return (
+    <fieldset className={styles.editorSection}>
+      <legend>{text("Schedule")}</legend>
+      <div className={styles.stack}>
+        <div className={styles.row}>
+          <Field label={text("Date")} className={styles.grow}>
+            <input className={styles.control} type="date" value={draft.startDate} onChange={(event) => onEdit({ startDate: event.target.value })} />
+          </Field>
+          <Field label={text("Start (UTC)")} className={styles.narrow}>
+            <input className={styles.control} type="time" value={draft.startTime} onChange={(event) => onEdit({ startTime: event.target.value })} />
+          </Field>
+          <Field label={text("Duration (hours)")} className={styles.narrow}>
+            <input className={styles.control} type="number" min="0.25" max="24" step="0.25" value={draft.durationHours} onChange={(event) => onEdit({ durationHours: Number(event.target.value) })} />
+          </Field>
+        </div>
+        <div className={styles.row}>
+          <Field label={text("Repeat hangout")} className={styles.grow}>
+            <SelectControl
+              className={styles.control}
+              value={draft.recurrent ? draft.recurrence : ""}
+              onChange={(event) => onEdit(event.target.value ? { recurrent: true, recurrence: event.target.value } : { recurrent: false })}
+            >
+              <option value="">{text("Does not repeat")}</option>
+              {RECURRENCES.map(([value, label]) => <option key={value} value={value}>{text(label)}</option>)}
+            </SelectControl>
+          </Field>
+          {draft.recurrent && (
+            <Field label={text("Ends")} className={styles.grow}>
+              <input className={styles.control} type="date" value={draft.recurrentUntil} onChange={(event) => onEdit({ recurrentUntil: event.target.value, recurrentCount: null })} />
+            </Field>
+          )}
+        </div>
+      </div>
+    </fieldset>
+  );
+}
+
+function LocationFields({ draft, options, onEdit }: { draft: HangoutDraft; options: HangoutOptions | null; onEdit: EditFn }) {
+  const { text } = useEventsCopy();
+  const isWorld = draft.location === "world";
+  return (
+    <fieldset className={styles.group}>
+      <legend className={styles.groupTitle}>{text("Location")}</legend>
+      <div className={styles.row}>
+        <Field label={text("Location Type")} className={styles.grow}>
+          <SelectControl className={styles.control} value={draft.location} onChange={(event) => onEdit({ location: event.target.value === "world" ? "world" : "land" })}>
+            <option value="land">{text("Land")}</option>
+            <option value="world">{text("World")}</option>
+          </SelectControl>
+        </Field>
+        {isWorld ? (
+          <Field
+            label={text("World")}
+            className={styles.grow}
+            footer={options?.worldsError && <span className={styles.fieldHint}>{text("World suggestions could not load. You can enter the world name.")}</span>}
+          >
+            <input className={styles.control} type="text" list="hangout-worlds" value={draft.worldName} placeholder="my-world.dcl.eth" onChange={(event) => onEdit({ worldName: event.target.value })} />
+            <datalist id="hangout-worlds">{options?.worlds.map((world) => <option value={world} key={world} />)}</datalist>
+          </Field>
+        ) : (
+          <>
+            <Field label={text("Latitude (X)")} className={styles.narrow}>
+              <input className={styles.control} type="number" value={draft.coordX} onChange={(event) => onEdit({ coordX: Number(event.target.value) })} />
+            </Field>
+            <Field label={text("Longitude (Y)")} className={styles.narrow}>
+              <input className={styles.control} type="number" value={draft.coordY} onChange={(event) => onEdit({ coordY: Number(event.target.value) })} />
+            </Field>
+          </>
+        )}
+      </div>
+    </fieldset>
   );
 }
 
@@ -415,12 +599,12 @@ export function SubmitHangoutLoading({ mode, error, onRetry, onSignIn }: { mode:
       {error ? (
         <div className={styles.loadState}>
           <Notice tone="error">{errorText(error)}</Notice>
-          {onRetry && <Button variant="tertiary" onClick={onRetry}>{text("Retry")}</Button>}
+          {onRetry && <SitesButton variant="tertiary" onClick={onRetry}>{text("Retry")}</SitesButton>}
         </div>
       ) : onSignIn ? (
         <div className={styles.loadState}>
           <Notice>{text("Sign in to edit your hangout.")}</Notice>
-          <Button variant="primary" onClick={onSignIn}>{text("Sign in")}</Button>
+          <SitesButton variant="primary" onClick={onSignIn}>{text("Sign in")}</SitesButton>
         </div>
       ) : <div className={styles.loadState}><Notice>{text("Loading your hangout…")}</Notice></div>}
     </div>
@@ -469,7 +653,6 @@ function StepFields({
   uploading,
   privateFieldsEditable,
   options,
-  inline,
 }: {
   step: HangoutStateId;
   draft: HangoutDraft;
@@ -480,25 +663,22 @@ function StepFields({
   uploading: boolean;
   privateFieldsEditable: boolean;
   options: HangoutOptions | null;
-  inline: boolean;
 }) {
   const { locale, text } = useEventsCopy();
   const [verticalCoverOpen, setVerticalCoverOpen] = useState(Boolean(draft.verticalImagePreviewUrl));
   if (step === "cover") {
     return (
-      <div className={`submit-hangout__fields ${styles.fields}`}>
-        {!inline && <p className="submit-hangout__hint">{text("Cover images are optional.")}</p>}
+      <div className="submit-hangout__fields">
+        <p className="submit-hangout__hint">{text("Cover images are optional.")}</p>
         <CoverField
-          inline={inline}
           image={draft.imagePreviewUrl}
           uploading={uploading}
           onUpload={onUpload}
           onRemove={() => onEdit({ imagePreviewUrl: null })}
         />
         <details className={styles.verticalCover} open={verticalCoverOpen} onToggle={(event) => setVerticalCoverOpen(event.currentTarget.open)}>
-          <summary>{inline ? <><GeneralAdd size={24} aria-hidden="true" /><strong>{text("Add Vertical Cover")}</strong> {text("(recommended)")}</> : text("Optional vertical cover")}</summary>
+          <summary>{text("Optional vertical cover")}</summary>
           <CoverField
-            inline={inline}
             vertical
             image={draft.verticalImagePreviewUrl}
             uploading={uploading}
@@ -512,25 +692,24 @@ function StepFields({
 
   if (step === "details") {
     return (
-      <div className={`submit-hangout__fields ${styles.fields} ${styles.descriptionFields}`}>
+      <div className="submit-hangout__fields">
         <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
-          <span>{text(inline ? "Event Name" : "Hangout Name")}</span>
+          <span>{text("Hangout Name")}</span>
           <input
             className={`submit-hangout__field ${styles.field}`}
             type="text"
-            maxLength={150}
+            maxLength={HANGOUT_BOUNDS.nameMax}
             value={draft.name}
             placeholder={text("Be as descriptive as you can")}
             onChange={(e) => onEdit({ name: e.target.value })}
           />
         </label>
         <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
-          <span>{text(inline ? "Event Description" : "Description")}</span>
+          <span>{text("Description")}</span>
           <textarea
             className={`submit-hangout__field ${styles.field}`}
-            rows={inline ? 3 : 2}
-            placeholder={inline ? text("Be as descriptive as you can") : undefined}
-            maxLength={5000}
+            rows={2}
+            maxLength={DESCRIPTION_MAX}
             value={draft.description}
             onChange={(e) => onEdit({ description: e.target.value })}
           />
@@ -560,7 +739,7 @@ function StepFields({
         )}
         {privateFieldsEditable && <>
           <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Contact email")}<input className={`submit-hangout__field ${styles.field}`} type="email" value={draft.contact} onChange={(event) => onEdit({ contact: event.target.value })} /></label>
-          <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Details for moderators")}<textarea aria-label={text("Details for moderators")} className={`submit-hangout__field ${styles.field}`} value={draft.details} maxLength={5000} onChange={(event) => onEdit({ details: event.target.value })} /></label>
+          <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Details for moderators")}<textarea aria-label={text("Details for moderators")} className={`submit-hangout__field ${styles.field}`} value={draft.details} maxLength={DESCRIPTION_MAX} onChange={(event) => onEdit({ details: event.target.value })} /></label>
         </>}
       </div>
     );
@@ -569,7 +748,7 @@ function StepFields({
   if (step === "location") {
     const isWorld = draft.location === "world";
     return (
-      <div className={`submit-hangout__fields ${styles.fields}`}>
+      <div className="submit-hangout__fields">
         <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
           {text("Location Type")}
           <select
@@ -598,7 +777,7 @@ function StepFields({
             {options?.worldsError && <span className="submit-hangout__hint">{text("World suggestions could not load. You can enter the world name.")}</span>}
           </label>
         ) : (
-          <div className={`submit-hangout__coords ${styles.coords}`}>
+          <div className="submit-hangout__coords">
             <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
               X
               <input
@@ -625,7 +804,7 @@ function StepFields({
 
   if (step === "schedule") {
     return (
-      <div className={`submit-hangout__fields ${styles.fields} ${styles.scheduleFields}`}>
+      <div className="submit-hangout__fields">
         <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
           {text("Date")}
           <input
@@ -644,11 +823,11 @@ function StepFields({
             onChange={(e) => onEdit({ startTime: e.target.value })}
           />
         </label>
-        <label className={`submit-hangout__fieldcheck ${styles.durationField}`}>
+        <label className="submit-hangout__fieldcheck">
           {text("Duration (hours)")}
           <input className={`submit-hangout__field ${styles.field}`} type="number" min="0.25" max="24" step="0.25" value={draft.durationHours} onChange={(event) => onEdit({ durationHours: Number(event.target.value) })} />
         </label>
-        <label className={`submit-hangout__fieldcheck ${styles.repeatField}`}>
+        <label className="submit-hangout__fieldcheck">
           <input
             type="checkbox"
             checked={draft.recurrent}
@@ -657,7 +836,7 @@ function StepFields({
           {text("Repeat Hangout")}
         </label>
         {draft.recurrent && (
-          <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Repeat")}<select className={`submit-hangout__field ${styles.field}`} value={draft.recurrence} onChange={(event) => onEdit({ recurrence: event.target.value })}><option value="every_hour">{text("Every hour")}</option><option value="every_day">{text("Every day")}</option><option value="every_week">{text("Every week")}</option><option value="every_month">{text("Every month")}</option><option value="every_year">{text("Every year")}</option></select></label>
+          <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>{text("Repeat")}<select className={`submit-hangout__field ${styles.field}`} value={draft.recurrence} onChange={(event) => onEdit({ recurrence: event.target.value })}>{RECURRENCES.map(([option, label]) => <option key={option} value={option}>{text(label)}</option>)}</select></label>
         )}
         {draft.recurrent && (
           <label className={`submit-hangout__fieldlabel ${styles.fieldLabel}`}>
@@ -703,14 +882,14 @@ function StepFields({
 }
 
 function CoverField({
-  inline,
+  inline = false,
   vertical = false,
   image,
   uploading,
   onUpload,
   onRemove,
 }: {
-  inline: boolean;
+  inline?: boolean;
   vertical?: boolean;
   image: string | null;
   uploading: boolean;
@@ -729,9 +908,9 @@ function CoverField({
       {image && (
         <figure className={styles.cover} onDragOver={(event) => event.preventDefault()} onDrop={dropCover}>
           <img className={styles.coverImage} src={image} alt={text(vertical ? "Vertical hangout cover" : "Hangout cover")} width={vertical ? 120 : 240} height={vertical ? 180 : 120} />
-          <button type="button" className="submit-hangout__btn" disabled={uploading} onClick={onRemove}>
+          <SitesButton variant="tertiary" size="sm" disabled={uploading} onClick={onRemove}>
             {text(vertical ? "Remove vertical cover" : "Remove cover image")}
-          </button>
+          </SitesButton>
         </figure>
       )}
       {onUpload && (!inline || !image) && (
@@ -740,9 +919,19 @@ function CoverField({
           onDragOver={(event) => event.preventDefault()}
           onDrop={dropCover}
         >
-          {inline && <GeneralCamera className={styles.camera} size={64} aria-hidden="true" />}
-          <strong>{uploadLabel}</strong>
-          <span>{text("Drop an image here or choose a file, up to 500 KiB.")}</span>
+          {inline ? (
+            <>
+              <GeneralGallery className={styles.gallery} size={48} aria-hidden="true" />
+              <strong>{vertical ? uploadLabel : text("Select an event cover")}</strong>
+              <span>{text("Choose a picture from your gallery or drop it here")}</span>
+              {!vertical && <small>{text("(recommended size: 1340 × 670)")}</small>}
+            </>
+          ) : (
+            <>
+              <strong>{uploadLabel}</strong>
+              <span>{text("Drop an image here or choose a file, up to 500 KiB.")}</span>
+            </>
+          )}
           <input
             type="file"
             aria-label={uploadLabel}

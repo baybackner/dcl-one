@@ -6,7 +6,7 @@ import type { AuthIdentity } from "../../auth/types";
 import { signedFetch } from "../../auth/signer";
 import { validFeaturedUrn } from "./hangout-options";
 
-const HANGOUT_BOUNDS = {
+export const HANGOUT_BOUNDS = {
   nameMax: 150,
   descriptionMax: 5000,
   coordMin: -150,

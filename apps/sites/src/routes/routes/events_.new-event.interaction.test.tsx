@@ -77,7 +77,7 @@ describe("when editing a hangout through its route", () => {
     beforeEach(() => mount());
 
     it("should show the editor header and a loading status before the footer", () => {
-      expect(screen.getByRole("heading", { name: "Edit Event" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Edit hangout" })).toBeTruthy();
       expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
       expect(screen.getByRole("status").dataset.tone).toBe("info");
       expect(screen.getByRole("status").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -111,7 +111,7 @@ describe("when editing a hangout through its route", () => {
       expect(router.state.location.pathname).toBe(EDIT_PATH);
       expect(screen.getByRole("alert").textContent).toBe("Event service unavailable");
       expect(screen.getByRole("alert").dataset.tone).toBe("error");
-      expect(screen.getByRole("heading", { name: "Edit Event" }).compareDocumentPosition(screen.getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Edit hangout" }).compareDocumentPosition(screen.getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
@@ -123,7 +123,7 @@ describe("when editing a hangout through its route", () => {
       });
 
       it("should read the event and permissions again and open the editor", async () => {
-        expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Monthly series");
+        expect(await screen.findByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Monthly series");
         expect(authoring.loadEditableHangout).toHaveBeenCalledTimes(2);
         expect(loadHangoutOptions).toHaveBeenCalledTimes(2);
         expect(screen.queryByRole("alert")).toBeNull();
@@ -196,7 +196,7 @@ describe("when editing a hangout through its route", () => {
     it("should wait for access without exposing an editor or delete action", () => {
       expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
       expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
-      expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Hangout name" })).toBeNull();
     });
 
     describe("and the account lacks edit permission", () => {
@@ -214,7 +214,7 @@ describe("when editing a hangout through its route", () => {
       it("should stay on the edit page with a retry instead of denying access", () => {
         expect(router.state.location.pathname).toBe(EDIT_PATH);
         expect(screen.getByRole("alert").textContent).toBe("Profile service unavailable");
-        expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+        expect(screen.queryByRole("textbox", { name: "Hangout name" })).toBeNull();
       });
 
       describe("and the retry shows the account may edit any event", () => {
@@ -254,7 +254,7 @@ describe("when editing a hangout through its route", () => {
     });
 
     it("should keep the prefilled cover, details, location and schedule in one editor", () => {
-      expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Monthly series");
+      expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Monthly series");
       expect(screen.getByRole("img", { name: "Hangout cover" }).getAttribute("src")).toBe(event.image);
       expect(screen.getByLabelText("World")).toHaveProperty("value", "music.dcl.eth");
       expect(screen.getByLabelText("Date")).toHaveProperty("value", "2099-06-01");
@@ -276,7 +276,7 @@ describe("when editing a hangout through its route", () => {
 
     it("should place Delete with the form actions, before Cancel and Save changes", () => {
       const del = screen.getByRole("button", { name: "Delete" });
-      expect(del.parentElement).toBe(screen.getByRole("button", { name: "Save changes" }).parentElement);
+      expect(del.parentElement?.contains(screen.getByRole("button", { name: "Save changes" }))).toBe(true);
       expect(del.compareDocumentPosition(screen.getByRole("link", { name: "Cancel" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getAllByRole("contentinfo")).toHaveLength(1);
     });
@@ -335,7 +335,7 @@ describe("when editing a hangout through its route", () => {
     });
 
     it("should not reset the scroll position", () => {
-      expect(screen.getByRole("textbox", { name: "Event Name" })).toBeTruthy();
+      expect(screen.getByRole("textbox", { name: "Hangout name" })).toBeTruthy();
       expect(scrollTo).not.toHaveBeenCalledWith(0, 0);
     });
   });

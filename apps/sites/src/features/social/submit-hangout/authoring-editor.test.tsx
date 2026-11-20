@@ -46,7 +46,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
   });
 
   it("should use the same upload path for dropping a cover", async () => {
-    fireEvent.drop(screen.getByText("Upload cover image").closest("label")!, {
+    fireEvent.drop(screen.getByLabelText("Upload cover image").closest("label")!, {
       dataTransfer: { files: [image] },
     });
     const cover = await screen.findByRole("img", { name: "Hangout cover" });
@@ -78,7 +78,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
 
   describe("and the required fields have been filled", () => {
     beforeEach(async () => {
-      await user.type(screen.getByRole("textbox", { name: "Event Name" }), "Open studio");
+      await user.type(screen.getByRole("textbox", { name: "Hangout name" }), "Open studio");
       await user.type(screen.getByLabelText("Date"), "2099-07-01");
       await user.type(screen.getByLabelText("Start (UTC)"), "18:30");
     });
@@ -87,7 +87,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
       await user.click(screen.getByRole("button", { name: "Preview" }));
       expect(screen.getByRole("dialog", { name: "Open studio" })).toBeTruthy();
       await user.click(screen.getByRole("button", { name: "Close" }));
-      expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Open studio");
+      expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Open studio");
       expect(submit).not.toHaveBeenCalled();
     });
 
@@ -101,7 +101,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
       const duration = screen.getByRole("spinbutton", { name: "Duration (hours)" });
       await user.clear(duration);
       await user.type(duration, "3");
-      await user.click(screen.getByRole("checkbox", { name: "Repeat Hangout" }));
+      await user.selectOptions(screen.getByRole("combobox", { name: "Repeat hangout" }), "every_week");
       await user.type(screen.getByLabelText("Ends"), "2099-07-29");
       await user.click(screen.getByRole("button", { name: "Preview" }));
       const preview = within(screen.getByRole("dialog"));
@@ -110,11 +110,27 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
       expect(submit).not.toHaveBeenCalled();
     });
 
+    it("should drop the recurrence and its end date when the creator picks Does not repeat", async () => {
+      const repeat = screen.getByRole("combobox", { name: "Repeat hangout" });
+      await user.selectOptions(repeat, "every_week");
+      expect(screen.getByLabelText("Ends")).toBeTruthy();
+      await user.selectOptions(repeat, "");
+      expect(screen.queryByLabelText("Ends")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Preview" }));
+      expect(within(screen.getByRole("dialog")).queryByText("Repeats weekly")).toBeNull();
+    });
+
+    it("should count the description against its limit", async () => {
+      expect(screen.getByText("0/5000")).toBeTruthy();
+      await user.type(screen.getByRole("textbox", { name: "Description" }), "Bring a friend");
+      expect(screen.getByText("14/5000")).toBeTruthy();
+    });
+
     it("should keep the form and let the creator retry after a denied submission", async () => {
       submit.mockRejectedValueOnce(new Error("Submission denied"));
       await user.click(screen.getByRole("button", { name: "Submit Event" }));
       await screen.findByText(/Submission denied/);
-      expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Open studio");
+      expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Open studio");
       await user.click(screen.getByRole("button", { name: "Submit Event" }));
       await screen.findByText("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
       expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -148,7 +164,7 @@ describe("when the single-page editor receives sign-in without remounting", () =
     const view = render(page(false));
     expect(screen.getByRole("button", { name: "Sign In to continue" })).toBeTruthy();
     view.rerender(page(true));
-    expect(await screen.findByRole("textbox", { name: "Event Name" })).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "Hangout name" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Submit Event" })).toBeTruthy();
     expect(track.mock.calls.filter(([event]) => event === HANGOUT_EVENTS.started)).toHaveLength(1);
   });
@@ -189,7 +205,7 @@ describe("when an event is saved from the single-page editor", () => {
 
     it("should cover the form with the pending-review confirmation and lock the page scroll", () => {
       expect(screen.getByRole("status").textContent).toBe("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
-      expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Hangout name" })).toBeNull();
       expect(document.body.style.overflow).toBe("hidden");
     });
 
@@ -244,7 +260,7 @@ describe("when an event is saved from the single-page editor", () => {
     it("should keep the form without a confirmation", async () => {
       expect(await screen.findByText(/Service unavailable/)).toBeTruthy();
       expect(screen.queryByRole("button", { name: "My Events" })).toBeNull();
-      expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Open studio");
+      expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Open studio");
     });
   });
 });
