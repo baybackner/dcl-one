@@ -146,18 +146,25 @@ export function editEventHref(id: string): string {
 const EVENT_ADMIN_STALE_MS = 30_000;
 
 /**
- * `edit_any_profile` is only a hint to probe: the moderator-only list decides whether the account may
- * read other accounts' grants, so a 403 there leaves `profiles` null instead of failing the read.
+ * Every account's grants, or null when the moderator-only list refuses this account (403): the server,
+ * not the `edit_any_profile` hint, decides who may read other accounts. Any other failure throws.
  */
-export async function loadEventAccess(identity: AuthIdentity, signal?: AbortSignal): Promise<EventAccess> {
-  const profile = await loadEventProfile(identity, signal);
-  if (!profile.permissions.includes("edit_any_profile")) return { profile, profiles: null };
+async function loadEventProfilesIfAllowed(identity: AuthIdentity, signal?: AbortSignal): Promise<EventProfile[] | null> {
   try {
-    return { profile, profiles: await loadEventProfiles(identity, signal) };
+    return await loadEventProfiles(identity, signal);
   } catch (error) {
-    if (error instanceof CatalystError && error.status === 403) return { profile, profiles: null };
+    if (error instanceof CatalystError && error.status === 403) return null;
     throw error;
   }
+}
+
+/** The account's own grants, and every account's when it may administer users (`profiles` null when not). */
+export async function loadEventAccess(identity: AuthIdentity, signal?: AbortSignal): Promise<EventAccess> {
+  const profile = await loadEventProfile(identity, signal);
+  const profiles = profile.permissions.includes("edit_any_profile")
+    ? await loadEventProfilesIfAllowed(identity, signal)
+    : null;
+  return { profile, profiles };
 }
 
 export const eventAccessQuery = (identity: AuthIdentity) =>
