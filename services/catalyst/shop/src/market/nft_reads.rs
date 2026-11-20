@@ -356,9 +356,17 @@ fn reads_geography(f: &NftFilters) -> bool {
 /// `geography`, the squid's distance to a plaza and road adjacency from
 /// `land_proximity` (an estate: its parcels' least known distance, -1 when
 /// none has one, and whether any touches a road), else NULL. The rows are
-/// `net`'s registries; with `None` the source matches no row.
-fn land_source(net: Option<LandNetwork>, geography: bool) -> String {
+/// `net`'s registries; with `None` the source matches no row. With
+/// `on_sale`, only the tokens of the `on_sale` CTE ([`ON_SALE_CTE`]), named
+/// on the registry's own rows so the per-token lookups below run for the
+/// listed tokens instead of for every parcel.
+fn land_source(net: Option<LandNetwork>, geography: bool, on_sale: bool) -> String {
     let (land, estate) = net.map_or(("", ""), |n| (n.land_registry, n.estate_registry));
+    let listed = if on_sale {
+        " AND (tr.token_address, tr.token_id) IN (SELECT s.contract_address, s.token_id FROM on_sale s WHERE s.network = 'ethereum')"
+    } else {
+        ""
+    };
     let (geo_columns, geo_join) = if geography {
         (
             format!(
@@ -404,15 +412,20 @@ fn land_source(net: Option<LandNetwork>, geography: bool) -> String {
          LEFT JOIN LATERAL (SELECT e.block_time FROM land_authz.authz_event e WHERE e.token_address = tr.token_address AND e.token_id = tr.token_id \
                             AND e.kind = 'transfer' ORDER BY e.block_number, e.log_index LIMIT 1) minted ON true \
          LEFT JOIN LATERAL (SELECT e.block_time FROM land_authz.authz_event e WHERE e.block_number = tr.updated_block AND e.log_index = tr.updated_log) touched ON true \
-         WHERE tr.token_address IN ('{land}', '{estate}') AND tr.owner IS NOT NULL"
+         WHERE tr.token_address IN ('{land}', '{estate}') AND tr.owner IS NOT NULL{listed}"
     )
+}
+
+/// Whether a filter reads the order legs. The capped total needs them only
+/// then: the legs are left joins of at most one row, so they change no
+/// count, and a sort does not either.
+fn filters_on_orders(f: &NftFilters) -> bool {
+    f.is_on_sale.is_some() || f.min_price.is_some() || f.max_price.is_some()
 }
 
 /// Whether the filter set reads the order legs (a filter or sort on them).
 fn needs_orders(f: &NftFilters) -> bool {
-    f.is_on_sale.is_some()
-        || f.min_price.is_some()
-        || f.max_price.is_some()
+    filters_on_orders(f)
         || matches!(
             f.sort_by,
             Some(NftSortBy::RecentlyListed) | Some(NftSortBy::CheapestParcel)
@@ -676,7 +689,12 @@ const ON_SALE_CTE: &str = "on_sale AS MATERIALIZED ( \
 /// `listed` shape), and the CTE prefix they read (`unified_trades`, and
 /// `on_sale` for [`on_sale_only`], when the filters read orders): empty, or
 /// ending in `, `. LAND reads `land`'s registries, `now_ms` is the bound
-/// clock, `since` the trades floor (`trades::mirrored_since`).
+/// clock, `since` the trades floor (`trades::mirrored_since`). Without
+/// `orders` the order columns are NULL and no order leg is read.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per input of the candidate SQL"
+)]
 fn candidate_legs(
     b: &mut Builder,
     f: &NftFilters,
@@ -685,31 +703,54 @@ fn candidate_legs(
     now_ms: i64,
     since: Option<chrono::NaiveDateTime>,
     restrict_on_sale: bool,
+    orders: bool,
 ) -> (String, Vec<String>) {
-    let mut parts: Vec<String> = Vec::new();
+    let restricted = orders && restrict_on_sale && on_sale_only(f);
+    // Each source, and whether it already keeps only the listed tokens.
+    let mut parts: Vec<(String, bool)> = Vec::new();
     if sources.collections {
-        parts.extend(collection_networks(f).into_iter().map(collection_source));
+        parts.extend(
+            collection_networks(f)
+                .into_iter()
+                .map(|net| (collection_source(net), false)),
+        );
     }
     if sources.names {
-        parts.push(names_source());
+        parts.push((names_source(), false));
     }
     if sources.land {
-        parts.push(land_source(land, reads_geography(f)));
+        parts.push((
+            land_source(land, reads_geography(f), restricted),
+            restricted,
+        ));
     }
     let now_ms_p = b.bind_i64(now_ms);
     let legacy = format!(
         "LEFT JOIN LATERAL (SELECT o.* FROM shop.nft_order o WHERE o.network = b.network AND o.contract_address = b.contract_address \
                            AND o.token_id = b.token_id AND o.status = 'open' AND o.expires_at > {now_ms_p} AND o.seller = b.owner) lo ON true"
     );
-    let (prefix, columns, v3, restrict) = if needs_orders(f) {
+    let (prefix, columns, v3, restrict) = if orders {
         let now_p = b.bind_time(
             chrono::DateTime::from_timestamp_millis(now_ms)
                 .unwrap_or_default()
                 .naive_utc(),
         );
         let since_p = b.bind_opt_time(since);
-        let mut prefix = format!("{}, ", unified_trades_cte(&now_p, &since_p));
-        let restrict = if restrict_on_sale && on_sale_only(f) {
+        // Not materialized: each leg's listing lookup then reads the
+        // trades its owner signed (`idx_trades_signer_created`) instead
+        // of scanning every open listing for every candidate row, which on
+        // 8,000 listed tokens and 4,600 listings took 2.9 s.
+        let trades = unified_trades_cte(&now_p, &since_p);
+        debug_assert!(trades.starts_with("unified_trades AS ("));
+        let mut prefix = format!(
+            "{}, ",
+            trades.replacen(
+                "unified_trades AS (",
+                "unified_trades AS NOT MATERIALIZED (",
+                1
+            )
+        );
+        let restrict = if restricted {
             prefix.push_str(&ON_SALE_CTE.replace("NOW_MS", &now_ms_p));
             " WHERE (b.network, b.contract_address, b.token_id) IN (SELECT network, contract_address, token_id FROM on_sale)"
         } else {
@@ -735,7 +776,8 @@ fn candidate_legs(
     };
     let legs = parts
         .into_iter()
-        .map(|source| {
+        .map(|(source, listed_only)| {
+            let restrict = if listed_only { "" } else { restrict };
             format!(
                 "SELECT b.*, lo.order_id, lo.marketplace_address AS order_marketplace, lo.price AS legacy_price, lo.expires_at AS legacy_expires_at, \
                         lo.created_at AS legacy_created_at, lo.updated_at AS legacy_updated_at, {columns} \
@@ -757,7 +799,20 @@ pub fn build_candidates(
     now_ms: i64,
     since: Option<chrono::NaiveDateTime>,
 ) -> String {
-    let (prefix, legs) = candidate_legs(b, f, sources, land, now_ms, since, true);
+    candidates_with(b, f, sources, land, now_ms, since, needs_orders(f))
+}
+
+/// [`build_candidates`], reading the order legs only with `orders`.
+fn candidates_with(
+    b: &mut Builder,
+    f: &NftFilters,
+    sources: Sources,
+    land: Option<LandNetwork>,
+    now_ms: i64,
+    since: Option<chrono::NaiveDateTime>,
+    orders: bool,
+) -> String {
+    let (prefix, legs) = candidate_legs(b, f, sources, land, now_ms, since, true, orders);
     format!("WITH {prefix}listed AS ({})", legs.join(" UNION ALL "))
 }
 
@@ -767,11 +822,11 @@ pub fn build_candidates(
 /// filters and the sort, then sorts and pages their union: the window of
 /// the whole set is always among them, and a source read alone walks an
 /// index in the sort's order (`nft_mint_order_idx` for the newest first)
-/// instead of sorting every candidate. On 3.5M tokens the newest wearables
-/// went from 1.6 s to 15 ms, the page naming no category from 5.1 s to
-/// 0.28 s (its LAND leg reads every parcel's mint before sorting) and the
-/// wearables on sale from 2.2 s to 0.12 s (DATABASE.md, "Wearable and emote ownership
-/// workload").
+/// instead of sorting every candidate. The capped total reads the order
+/// legs only when a filter needs them. Measured times, and the reads that
+/// stay slow (a sort by price or listing time without an on-sale filter
+/// sorts every candidate), are in DATABASE.md, "Wearable and emote
+/// ownership workload".
 pub fn build_nfts_query(
     f: &NftFilters,
     sources: Sources,
@@ -786,7 +841,16 @@ pub fn build_nfts_query(
 ) {
     let page = {
         let mut b = Builder::new();
-        let (prefix, legs) = candidate_legs(&mut b, f, sources, land, now_ms, since, true);
+        let (prefix, legs) = candidate_legs(
+            &mut b,
+            f,
+            sources,
+            land,
+            now_ms,
+            since,
+            true,
+            needs_orders(f),
+        );
         let mut wheres = Vec::new();
         push_filters(&mut b, f, &mut wheres);
         let window = b.bind_i64(first + skip);
@@ -812,7 +876,16 @@ pub fn build_nfts_query(
     };
     let total = {
         let mut b = Builder::new();
-        let ctes = build_candidates(&mut b, f, sources, land, now_ms, since);
+        // A sort on the order legs does not change the count.
+        let ctes = candidates_with(
+            &mut b,
+            f,
+            sources,
+            land,
+            now_ms,
+            since,
+            filters_on_orders(f),
+        );
         let mut wheres = Vec::new();
         push_filters(&mut b, f, &mut wheres);
         let cap = b.bind_i64(MAX_WINDOW + 1);
@@ -1204,7 +1277,7 @@ fn describe(r: &sqlx::postgres::PgRow, land_image_base: &str) -> AssetDescriptio
 /// registry of any network reads that network's rows.
 fn source_of(net: ChainNet, contract: &str) -> String {
     if let Some(land) = land_network_of_registry(contract) {
-        land_source(Some(land), false)
+        land_source(Some(land), false, false)
     } else if contract == DCL_REGISTRAR {
         names_source()
     } else {
@@ -1450,7 +1523,7 @@ mod tests {
     #[test]
     fn land_images_carry_the_configured_base_only() {
         for geography in [false, true] {
-            let sql = land_source(Some(LAND_MAINNET), geography);
+            let sql = land_source(Some(LAND_MAINNET), geography, false);
             assert!(!sql.contains("://"), "{sql}");
         }
         assert_eq!(
@@ -1512,7 +1585,7 @@ mod tests {
         }
         let rows: Vec<(String, i32, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT c.token_id::text, c.distance_to_plaza, c.adjacent_to_road FROM ({}) c WHERE c.token_id = ANY($1::numeric[]) ORDER BY c.token_id",
-            land_source(Some(LAND_MAINNET), true)
+            land_source(Some(LAND_MAINNET), true, false)
         )))
         .bind(&ids)
         .fetch_all(&pool)
@@ -1591,7 +1664,20 @@ mod tests {
              VALUES ('matic', '{c}', 2, 'o1', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 30, 4000000000000, 10, 10, 1, 0), \
                     ('matic', '{c}', 3, 'o2', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 10, 4000000000000, 11, 11, 1, 0), \
                     ('matic', '{c}', 4, 'o3', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 20, 4000000000000, 12, 12, 1, 0), \
-                    ('ethereum', '{DCL_REGISTRAR}', 1002, 'o4', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 15, 4000000000000, 13, 13, 1, 0); \
+                    ('ethereum', '{DCL_REGISTRAR}', 1002, 'o4', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 15, 4000000000000, 13, 13, 1, 0), \
+                    ('ethereum', '{LAND_REGISTRY_MAINNET}', 2, 'o5', '0x8e5660b4ab70168b5a6feea0e0315cb49c8cd539', 'open', '{a}', 25, 4000000000000, 14, 14, 1, 0); \
+             INSERT INTO shop.trades (id, network, chain_id, signature, hashed_signature, checks, signer, type, expires_at, effective_since, contract, created_at) \
+             SELECT md5('t' || v.n)::uuid, 'MATIC', 137, 's' || v.n, 'h' || v.n, '{{}}', v.signer, 'public_nft_order', '2100-01-01', '2000-01-01', '0xmarket', \
+                    timestamp '2023-01-01' + make_interval(days => v.n) \
+             FROM (VALUES (1, '{b}', 5, 7), (2, '{b}', 5, 9), (3, '{b}', 6, 3), (4, '{a}', 4, 5)) v(n, signer, token, price); \
+             INSERT INTO shop.trade_assets (id, trade_id, direction, asset_type, contract_address, extra) \
+             SELECT md5(d || n)::uuid, md5('t' || n)::uuid, d::shop.asset_direction_type, CASE d WHEN 'sent' THEN 3 ELSE 1 END, \
+                    CASE d WHEN 'sent' THEN '{c}' ELSE '0xmana' END, '0x' \
+             FROM generate_series(1, 4) n, (VALUES ('sent'), ('received')) x(d); \
+             INSERT INTO shop.trade_assets_erc721 (asset_id, token_id) \
+             SELECT md5('sent' || v.n)::uuid, v.token::text FROM (VALUES (1, 5), (2, 5), (3, 6), (4, 4)) v(n, token); \
+             INSERT INTO shop.trade_assets_erc20 (asset_id, amount) \
+             SELECT md5('received' || v.n)::uuid, v.price FROM (VALUES (1, 7), (2, 9), (3, 3), (4, 5)) v(n, price); \
              INSERT INTO land_authz.token_right (token_address, token_id, x, y, owner, updated_block, updated_log) \
              SELECT '{LAND_REGISTRY_MAINNET}', g, g, 0, '{a}', g, 0 FROM generate_series(1, 5) g; \
              INSERT INTO land_authz.authz_event (block_number, log_index, block_time, token_address, kind, token_id, account) \
@@ -1639,7 +1725,8 @@ mod tests {
                         .await
                         .unwrap();
                     let mut bld = Builder::new();
-                    let (prefix, legs) = candidate_legs(&mut bld, &f, s, land, now, None, false);
+                    let (prefix, legs) =
+                        candidate_legs(&mut bld, &f, s, land, now, None, false, needs_orders(&f));
                     let mut wheres = Vec::new();
                     push_filters(&mut bld, &f, &mut wheres);
                     let lim = bld.bind_i64(first);
@@ -1664,6 +1751,64 @@ mod tests {
             }
         }
         assert!(compared > 50, "the cases read rows: {compared}");
+        // The listed rows, cheapest first: a v3 listing by the token's owner
+        // (its latest one, 9), the legacy orders (one over a v3 listing of
+        // the same token) and the parcel's. Token 6 is listed, and token 3
+        // has an order, by an address that does not hold it.
+        let f = parse_filters(&pairs(&[("isOnSale", "true"), ("sortBy", "cheapest")])).unwrap();
+        let s = Sources {
+            names: true,
+            land: true,
+            ..sources_for(&f)
+        };
+        let ((page, args), (total, total_args)) = build_nfts_query(&f, s, land, 50, 0, now, None);
+        let rows = sqlx::query_with(sqlx::AssertSqlSafe(page), args)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let on_sale: Vec<(String, String)> = [
+            (c, "5"),
+            (DCL_REGISTRAR, "1002"),
+            (c, "4"),
+            (LAND_REGISTRY_MAINNET, "2"),
+            (c, "2"),
+        ]
+        .iter()
+        .map(|(contract, token)| (contract.to_string(), token.to_string()))
+        .collect();
+        assert_eq!(ids(&rows), on_sale);
+        let total: i64 = sqlx::query_scalar_with(sqlx::AssertSqlSafe(total), total_args)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total, 5);
+        // A sort on the order legs leaves them out of the capped total and
+        // counts the same rows.
+        let totals = |q: &'static [(&'static str, &'static str)]| {
+            let f = parse_filters(&pairs(q)).unwrap();
+            let s = Sources {
+                names: true,
+                land: true,
+                ..sources_for(&f)
+            };
+            let (_, (total, args)) = build_nfts_query(&f, s, land, 50, 0, now, None);
+            let pool = pool.clone();
+            let reads_trades = total.contains("unified_trades");
+            async move {
+                let count: i64 = sqlx::query_scalar_with(sqlx::AssertSqlSafe(total), args)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                (count, reads_trades)
+            }
+        };
+        assert_eq!(totals(&[]).await, (23, false));
+        assert_eq!(totals(&[("sortBy", "cheapest")]).await, (23, false));
+        assert_eq!(totals(&[("sortBy", "recently_listed")]).await, (23, false));
+        assert_eq!(
+            totals(&[("isOnSale", "false"), ("sortBy", "cheapest")]).await,
+            (18, true)
+        );
         // `emoteOutcomeType` narrows the collections to the emotes with an
         // outcome and leaves the names and LAND of the same read alone.
         let f = parse_filters(&pairs(&[("emoteOutcomeType", "so")])).unwrap();

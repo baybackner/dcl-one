@@ -79,6 +79,10 @@ CREATE TABLE shop.trade_assets_erc721 (
     asset_id uuid NOT NULL UNIQUE REFERENCES shop.trade_assets(id) ON DELETE CASCADE,
     token_id text NOT NULL
 );
+-- The open listing of one token: /v1/nfts looks up each candidate row's v3
+-- listing by token id (then its contract, signer and trade), instead of
+-- reading every open listing for every row.
+CREATE INDEX trade_assets_erc721_token_idx ON shop.trade_assets_erc721 (token_id);
 
 CREATE TABLE shop.trade_assets_erc20 (
     asset_id uuid NOT NULL UNIQUE REFERENCES shop.trade_assets(id) ON DELETE CASCADE,

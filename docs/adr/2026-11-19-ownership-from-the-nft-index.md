@@ -76,12 +76,15 @@ their reads move to the indexes.
 A `/v1/nfts` page without an owner reads each source's first `first + skip`
 rows in the page's order and pages their union, the collections and names
 walking `nft_mint_order_idx` and the on-sale reads starting from the listed
-tokens. On a 3.5M-token index the newest wearables take 15 ms, the page
-naming no category 282 ms (most of it the LAND source, which reads every
-parcel's mint before sorting) and the wearables on sale 121 ms
-(DATABASE.md, "Wearable and emote ownership workload"). Deeper windows,
-selective filters and the other sorts of a page without an owner are
-unmeasured.
+tokens. On a 3.5M-token index the newest wearables take 30 ms, the page
+naming no category 291 ms (most of it the LAND source, which reads every
+parcel's mint before sorting) and the wearables on sale, among 4,450 legacy
+orders and 4,600 v3 listings, 767 ms. A window of 10,000 rows takes 0.9 to
+1.6 s and the largest, 100,000 rows, 2.6 to 3.9 s; a sort by last sale reads
+every held token (1.6 to 3.3 s); and a sort by price or listing time
+without an on-sale filter prices every candidate and ends at the 60 s
+statement timeout (DATABASE.md, "Wearable and emote ownership workload").
+Production data is unmeasured.
 
 Revisit when the walk covers the testnets, or when a reader needs ownership
 fresher than the confirmation depth.

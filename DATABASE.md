@@ -2475,41 +2475,90 @@ skewed popularity, 300,000 owners of whom 20 hold about 30,000 tokens each,
   131 ms for the 30,000-token owner, under 1 ms for a typical owner (with the
   names leg when no category is named).
 
-The `/v1/nfts` page without an owner (seeded also with 90,000 parcels, 2,000
-estates and 3,500 open legacy orders) reads each source's first `first +
+The `/v1/nfts` page without an owner reads each source's first `first +
 skip` rows under the filters and the sort, then sorts and pages their union,
 which always holds the window of the whole set. Each collections and names
 source walks `nft_mint_order_idx` (`(network, minted_at DESC) WHERE owner IS
-NOT NULL`, 105 MB beside the 727 MB heap; an incremental sort orders the ties
-by contract and token) with nested-loop lookups of the item, the collection
-and the legacy order. A read that keeps only listed rows (`isOnSale=true`, a
-price bound) draws its candidates from the tokens with an open legacy order
-or v3 listing (`on_sale`, materialized once) and still applies the order
-filter, so it answers the same rows. Before and after, page and capped total
-(`first=24`):
+NOT NULL`; an incremental sort orders the ties by contract and token) with
+nested-loop lookups of the item, the collection and the legacy order. A read
+that keeps only listed rows (`isOnSale=true`, a price bound) draws its
+candidates from the tokens with an open legacy order or v3 listing
+(`on_sale`, materialized once) and still applies the order filter, so it
+answers the same rows; the LAND source names those tokens on the registry's
+own rows, so its per-token lookups run for the listed parcels only. The
+capped total reads the order legs only when a filter needs them: they are
+left joins of at most one row, so a sort on them changes no count.
 
-| Page | Before | After | Total before | Total after |
-|---|---|---|---|---|
-| newest `category=wearable` | 1,605 ms | 15 ms | 79 ms | 89 ms |
-| newest, no category (collections, names, LAND) | 5,138 ms | 282 ms | 80 ms | 90 ms |
-| newest `category=wearable&isOnSale=true` | 2,209 ms | 121 ms | 29,875 ms | 116 ms |
+Each candidate row's v3 listing is a lateral lookup in `unified_trades`,
+which these statements declare `NOT MATERIALIZED`: the lookup reads the
+listings of that token through `trade_assets_erc721_token_idx` on
+`shop.trade_assets_erc721 (token_id)` and the trades its owner signed
+(`idx_trades_signer_created`), instead of scanning every open listing for
+every row. The index is 432 kB on 4,900 listing assets (the table 528 kB);
+each ERC-721 asset that the trades mirror or a local signed trade inserts
+adds one entry, and the migrate object pass builds it. Planning such a
+statement takes about 9 ms.
 
-Of the 282 ms, about 250 ms is the LAND source: its creation time is each
-token's first transfer (`land_authz.authz_event`), read for every parcel and
-estate before the sort. `sold_at` is a scalar subquery the plan evaluates for
-the page's rows only. The rows were identical to the earlier query's for the
-three pages, and `the_per_source_window_pages_like_the_whole_set` compares
-both shapes over every sort, filters and pages inside and past a source's
-rows. The index on `(network, minted_at DESC, contract_address, token_id)`
-answered within 6 ms of these at 396 MB.
+Measured on a second seeded database (2,999,100 Polygon tokens over 100,000
+items of 5,000 collections, item popularity cubic-skewed so one collection
+holds 175,000 tokens and the smallest about 200; 200,000 Ethereum v1 tokens
+and 300,000 names; 20 owners of about 32,000 tokens among 300,000; 64 tokens
+share each mint time; 90,000 parcels and 2,000 estates; 4,450 open legacy
+orders and 4,600 served v3 token listings, some signed by an address that
+no longer holds the token; PostgreSQL 18, warm cache, `first=24`, each
+statement run through the route's query builder with bound parameters).
+Its rows were inserted in mint order, so the heap follows
+`nft_mint_order_idx` (43 MB here, 105 MB on the earlier seed) and the deep
+windows below are a lower bound for a table folded in another order.
 
-Only `first=24, skip=0` under the newest sort is measured. Unmeasured: a
-deep window (`first + skip` up to the 100,000 cap, read from every source),
-a selective filter under the newest sort (one creator, a rare rarity: a
-walk of `nft_mint_order_idx` may pass every non-matching token before it
-fills the window, most of the table when few tokens match) and the other
-sorts, which sort each source's candidates. These reads run under the
-pool's statement timeout (`PoolSettings`, 60 s by default) with no bound of their own.
+| Page without an owner | Page | Capped total | Where the time goes |
+|---|---|---|---|
+| newest, `category=wearable` | 30 ms | 92 ms | the Ethereum source passes the 238,000 names minted after the newest v1 token (22 ms) |
+| newest, no category | 291 ms | 88 ms | the LAND source reads every parcel's mint before sorting |
+| newest, `category=wearable&isOnSale=true` | 767 ms | 785 ms | 8,200 listed tokens, each with its token, item, order and listing lookups |
+| newest, `isOnSale=true`, no category | 838 ms | 822 ms | the same, with names and LAND |
+| cheapest or recently listed, `category=wearable&isOnSale=true` | 745 to 770 ms | 730 ms | the same |
+| newest, `category=wearable&isOnSale=false` | 1.0 s | 0.5 s | the listing lookup of each row walked |
+| newest, `category=wearable`, `skip=1,000` | 269 ms | 78 ms | 1,024 rows of each source |
+| the same, `skip=10,000` | 916 ms | 76 ms | 10,024 rows of each source |
+| the same, `skip=99,976` (the 100,000 window) | 2.6 s | 71 ms | 100,000 rows of the Polygon source with their lookups, the Ethereum source sorted on disk |
+| newest, no category, `skip=10,000` | 1.6 s | 91 ms | four sources of 10,024 rows |
+| the same, `skip=99,976` | 3.9 s | 95 ms | 392,000 rows sorted on disk (130 MB) |
+| newest, one creator of 3 items | 75 ms | 73 ms | drives from `items_creator_idx`; the Ethereum source reads its 200,000 tokens |
+| newest, `itemRarity=unique` (40 tokens) | 107 ms | 112 ms | drives from the items of that rarity through `nft_item_idx` |
+| newest, `itemRarity=mythic` (85,000 tokens) | 204 ms | 222 ms | walks `nft_mint_order_idx` |
+| name, `category=wearable` | 380 ms | 78 ms | the items sorted by name, then `nft_item_idx` |
+| name, no category | 0.7 to 1.2 s | 96 ms | the same, and 300,000 names sorted |
+| recently sold, `category=wearable` | 1.6 to 3.3 s | 80 ms | every held token read and sorted: no index orders `sold_at` |
+| recently sold, no category | 2.1 to 2.9 s | 94 ms | the same |
+| cheapest or recently listed, without an on-sale filter | over 60 s | 75 to 103 ms | every candidate (2.8M wearables) takes its listing lookup before the sort |
+
+The last row ends at the pool's statement timeout (`PoolSettings`, 60 s by
+default) and answers 500: rows with no order sort last, so the page needs
+the price of every candidate. Reading the listed rows first and the rest in
+key order would bound it; that is not built. With `unified_trades`
+materialized, no token index and the LAND source unrestricted, the same
+seed took 2.9 s for the wearables on sale (page and total), 30 s for the
+on-sale page naming no category, 59 s for `isOnSale=false`, and 30 s for the
+capped total of a sort by price. No read here has a bound of its own.
+
+With an owner: a 32,000-token owner's `category=wearable` page 78 ms and
+total 167 ms, its `isOnSale=true` page 277 ms, and its page sorted by price
+8.4 s (16 s before), the listing lookup of each of its tokens. A statement
+repeated on one connection is planned generically from its sixth run: that
+plan took 1.0 s for the 78 ms page and 1.6 s for the 8.4 s one.
+
+The earlier seed (3.0M Polygon tokens, 3,500 legacy orders, no v3 listing)
+gave, before and after the per-source windows: newest wearables 1,605 ms to
+15 ms, newest with no category 5,138 ms to 282 ms. `sold_at` of the LAND
+source is a scalar subquery the plan evaluates for the page's rows only.
+`the_per_source_window_pages_like_the_whole_set` compares the page with the
+whole set sorted and paged over every sort, filters and pages inside and
+past a source's rows, with legacy orders, v3 listings and a listed parcel,
+and checks the totals. The index on `(network, minted_at DESC,
+contract_address, token_id)` answered within 6 ms of `nft_mint_order_idx` at
+396 MB against 105 MB. Unmeasured: production data, a cold cache, and
+concurrent reads.
 
 `catalyst schema migrate`'s object pass builds `nft_mint_order_idx` on
 `shop.nft` (no step under `schemas/migrations/`) in the migrate transaction,
