@@ -1808,7 +1808,7 @@ fn ctx(place_id: &str, realm: &str, scene_id: &str, parcel: Option<&str>) -> Roo
     if let Some(parcel) = parcel {
         metadata["parcel"] = serde_json::json!(parcel);
     }
-    RoomContext::from_metadata(&metadata, place_id)
+    RoomContext::from_metadata(&metadata, place_id, "main")
 }
 
 #[tokio::test]
@@ -1905,7 +1905,7 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     );
     let rooms = scene::resolve_rooms(
         &state,
-        &RoomContext::from_metadata(&serde_json::json!({}), &world_place),
+        &RoomContext::from_metadata(&serde_json::json!({}), &world_place, "main"),
         &PlaceLookup::new(&state, &world_place, &world_place),
     )
     .await

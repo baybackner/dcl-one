@@ -522,6 +522,8 @@ tree, and orders by name (upstream: group order). `owner` is `null` for worlds w
       `WORLDS_REALM_NAME_STRIP_ENS=false` gives a byte-equal answer. A client that signs the stripped name back
       reaches the world: with a realm URL, or (the Unity explorer on `/get-scene-adapter`) as realm and as scene.
       An override is not resolved in that second form: the client gets the shared room `scene:<name>:<name>`.
+      An override that names another world with a scene here (its label or its `.eth` name) is refused on
+      `PUT /world/{name}/settings` and not advertised by `/about`, so it never seats visitors in that world's room.
     - Severity: none for the stripped name (closed); low for an override signed without a realm URL (open).
 
 13. **WW-13 · `/about` · operator disable and live-holder quota block.** Status: intended (worlds-compatibility.md).

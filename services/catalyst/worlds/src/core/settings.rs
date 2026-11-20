@@ -16,7 +16,7 @@ use bytes::BytesMut;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-use crate::comms::world_identity::{Parcel, WorldName};
+use crate::comms::world_identity::Parcel;
 use crate::policy::Permission;
 use crate::shared::identity::PermissionDecision;
 use crate::shared::signed_fetch::SignedPath;
@@ -41,14 +41,6 @@ const MAX_PREVIEW_WEARABLES: usize = 8;
 /// The realm name reaches the client as a bare token it may interpolate into a
 /// URL path, so anything that could change that URL's shape is refused here
 /// rather than at whatever consumes it later.
-/// The gatekeeper reads a bare realm name as the world `<name>.dcl.eth`
-/// (`bare_world`: the Unity explorer signs the realm name alone). A world
-/// that advertised the label of another world would send its visitors to the
-/// scene room of that world.
-fn names_another_world(world: &WorldName, realm_name: &str) -> bool {
-    crate::comms::world_identity::bare_world(realm_name).is_some_and(|other| &other != world)
-}
-
 fn is_valid_realm_name(name: &str) -> bool {
     !name.is_empty()
         && name.chars().count() <= REALM_NAME_MAX_LENGTH
@@ -236,8 +228,19 @@ pub async fn update_world_settings(
             declared,
         ))
     })??;
+    // The gatekeeper reads a signed realm name as the world it names (a bare
+    // label as `<label>.dcl.eth`: the Unity explorer signs the realm name
+    // alone), so an override naming another world held here would send this
+    // world's visitors to that world's room. `/about` repeats the check.
     if let Some(name) = input.realm_name_override.as_deref()
-        && names_another_world(&world, name)
+        && crate::queries::override_names_another_world(
+            &state.pool,
+            world.key(),
+            name,
+            &state.settings.realm_name,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("realm name override check: {e}")))?
     {
         return Err(SettingsError::invalid(format!(
             "Invalid realm_name_override: \"{name}\" is the name of another world."
@@ -696,18 +699,22 @@ mod tests {
     use super::super::deploy_form::test_support::multipart_from;
     use super::*;
 
+    /// The world a client signing an override would stand in: a bare label
+    /// or a full world name; never the shared realms or this node's realm.
     #[test]
-    fn a_realm_name_override_is_not_the_label_of_another_world() {
-        let world = WorldName::parse("alice.dcl.eth").unwrap();
-        for (name, refused) in [
-            ("bob", true),
-            ("Alice", false),
-            ("alice.dcl.eth", false),
-            ("bob.dcl.eth", false),
-            ("main", false),
-            ("bob.eth", false),
+    fn a_realm_name_override_stands_for_the_world_it_names() {
+        let world =
+            |name| crate::queries::override_world(name, "isla").map(|w| w.key().to_string());
+        for (name, expected) in [
+            ("bob", Some("bob.dcl.eth")),
+            ("MyGallery", Some("mygallery.dcl.eth")),
+            ("Bob.DCL.eth", Some("bob.dcl.eth")),
+            ("bob.eth", Some("bob.eth")),
+            ("main", None),
+            ("Isla", None),
+            ("localpreview", None),
         ] {
-            assert_eq!(names_another_world(&world, name), refused, "{name}");
+            assert_eq!(world(name).as_deref(), expected, "{name}");
         }
     }
 
