@@ -270,11 +270,11 @@ async fn owned_items_response(
         .into_response();
     }
 
-    if let Err(envelope) = owned_items::require_inventory(state, item_category).await {
-        return envelope;
-    }
-
-    let copies = match owned_items::owned_copies(state, address, item_category).await {
+    let gate = match owned_items::require_inventory(state, item_category).await {
+        Ok(gate) => gate,
+        Err(envelope) => return envelope,
+    };
+    let copies = match owned_items::owned_copies(state, gate, address, item_category).await {
         Ok(c) => c,
         Err(e) => {
             return e.into_response(|m| super::third_party::fetch_error(path_address, m));
@@ -478,9 +478,16 @@ async fn items_by_owner(
             .collect();
         return Json(json!(body)).into_response();
     }
-    if let Err(envelope) = owned_items::require_inventory(state, category).await {
-        return envelope;
-    }
+    let gate = match owned_items::require_inventory(state, category).await {
+        Ok(gate) => gate,
+        Err(envelope) => return envelope,
+    };
+    // The gate's own snapshot reads the copies (memoized), so the body
+    // below reads the index no second time.
+    let copies = match owned_items::owned_copies(state, gate, owner, category).await {
+        Ok(copies) => copies,
+        Err(e) => return super::third_party::fetch_error(owner, &e.to_string()),
+    };
     let key = (
         owner.to_lowercase(),
         category.to_string(),
@@ -489,7 +496,7 @@ async fn items_by_owner(
     let body = state
         .by_owner_cache
         .get_or_fetch(key, || async {
-            owned_items_body(state, owner, category, include_definitions, extract).await
+            owned_items_body(state, &copies, include_definitions, extract).await
         })
         .await;
     match body {
@@ -500,15 +507,11 @@ async fn items_by_owner(
 
 async fn owned_items_body(
     state: &MarketplaceState,
-    owner: &str,
-    category: &str,
+    copies: &[owned_items::OwnedCopy],
     include_definitions: bool,
     extract: fn(&Value, &str) -> Option<Value>,
 ) -> Result<Value, String> {
-    let copies = owned_items::owned_copies(state, owner, category)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut rows: Vec<(String, i64, String)> = group_copies(&copies)
+    let mut rows: Vec<(String, i64, String)> = group_copies(copies)
         .into_iter()
         .map(|g| {
             let rarity = g

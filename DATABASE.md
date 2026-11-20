@@ -2433,7 +2433,9 @@ Queries, all bounded by one owner or one batch:
   `shop.items` by `(network, contract_address, item_id)` on Polygon and to
   `shop.collections` and `shop.items` by URN (the collection's URN and the
   Issue log's `wearable_id`) on Ethereum; memoized 30 s per owner and
-  category, the gate checked on every call;
+  category. A request opens one snapshot: the gate is checked on it every
+  time, the rows are read on it, and a memoized answer runs no query after
+  the gate;
 - the profile batch: up to 128 profiles' `(owner, URN)` pairs unnested, v2
   pairs joined to `shop.nft` on `(network, contract_address, item_id)` and
   `owner`, v1 pairs through `shop.collections.urn` and `wearable_id`, newest

@@ -223,27 +223,22 @@ pub async fn snapshot(
     Ok(tx)
 }
 
-/// The route gate: `Err(envelope)` unless an inventory of `category` may
-/// be read now. A database error is a 500.
-pub async fn require_inventory(state: &MarketplaceState, category: &str) -> Result<(), Response> {
-    require(state, category_networks(category), Rule::Fresh, true).await
-}
+/// A passed inventory gate: the snapshot the gate was checked on, which
+/// [`owned_copies`] reads the rows from. One request opens one.
+pub struct Gate(Transaction<'static, Postgres>);
 
-/// [`snapshot`] as a route gate; the snapshot is let go.
-pub async fn require(
-    state: &MarketplaceState,
-    nets: &[ChainNet],
-    rule: Rule,
-    items: bool,
-) -> Result<(), Response> {
+/// The route gate: `Err(envelope)` unless an inventory of `category` may
+/// be read now (the node walks the index, [`Rule::Fresh`] and the items
+/// mirror's pass hold). A database error is a 500.
+pub async fn require_inventory(state: &MarketplaceState, category: &str) -> Result<Gate, Response> {
     if !walks_here(state) {
         return Err(not_ready(
             "this node does not walk the nft index (MARKETPLACE_NFT_INDEX_ENABLED off, or a network other than mainnet)",
         ));
     }
-    snapshot(&state.pool, nets, rule, items)
+    snapshot(&state.pool, category_networks(category), Rule::Fresh, true)
         .await
-        .map(drop)
+        .map(Gate)
         .map_err(|e| {
             e.into_response(|m| {
                 tracing::error!(error = m, "nft index gate failed");
@@ -320,22 +315,22 @@ async fn read_copies(
 }
 
 /// Every copy of `category` (`wearable` | `emote`) `owner` holds, newest
-/// transfer first, under [`Rule::Fresh`] and the items mirror's pass. The
-/// gate runs on every call; only the rows are memoized ([`OWNED_TTL`]).
+/// transfer first, read on the snapshot `gate` passed
+/// ([`require_inventory`] for the same category). The gate is checked on
+/// every request; only the rows are memoized ([`OWNED_TTL`]), and a
+/// memoized answer lets the snapshot go without another query.
 pub async fn owned_copies(
     state: &MarketplaceState,
+    gate: Gate,
     owner: &str,
     category: &str,
 ) -> Result<Arc<Vec<OwnedCopy>>, ReadError> {
-    if !walks_here(state) {
-        return Err(ReadError::NotReady(
-            Source::NftIndex,
-            "this node does not walk the nft index".to_string(),
-        ));
-    }
     let owner = owner.to_lowercase();
-    let mut tx = snapshot(&state.pool, category_networks(category), Rule::Fresh, true).await?;
     let key = (owner.clone(), category.to_string());
+    if let Some(copies) = state.owned_items.owned.get_fresh(&key) {
+        return Ok(copies);
+    }
+    let mut tx = gate.0;
     let copies = state
         .owned_items
         .owned

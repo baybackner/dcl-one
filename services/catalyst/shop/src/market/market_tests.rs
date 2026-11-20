@@ -3303,6 +3303,68 @@ async fn deep_merged_pages_read_the_graph_in_pages_it_accepts() {
     );
 }
 
+/// One inventory request opens one snapshot: the gate's. The copies are read
+/// on it, a memoized answer costs no query after the gate, and the gate
+/// still fails the request after the memo was filled.
+#[tokio::test]
+async fn an_inventory_read_reuses_its_gate_snapshot_and_gates_every_request() {
+    use super::owned_items::{owned_copies, require_inventory, test_support};
+    let up = FakeGraph::new();
+    let url = serve_graph(up.clone()).await;
+    let Some((state, own)) = state_over_own(&url, true).await else {
+        return;
+    };
+    let pool = state.pool.clone();
+    let c = contract_of(&tag(), 9);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO shop.items (network, contract_address, item_id, chain_id, item_type, urn, creator, rarity, total_supply, max_supply, available, price, image, name, category, body_shapes, search_is_collection_approved, created_at, updated_at, reviewed_at, mirrored_at) \
+         VALUES ('matic', '{c}', 0, 137, 'wearable_v2', 'urn:decentraland:matic:collections-v2:{c}:0', '{WALLET_B}', 'rare', 1, 9, 1, 5, 'i', 'Hat', 'hat', ARRAY['BaseMale'], true, 1, 1, 1, now()); \
+         INSERT INTO shop.nft (network, contract_address, token_id, owner, item_id, issued_id, minted_block, minted_at, transferred_block, transferred_log, transferred_at) \
+         VALUES ('matic', '{c}', 1, '{WALLET_A}', 0, 1, 1, 1, 1, 0, 1)"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    test_support::publish(
+        &pool,
+        &super::chain_walk::ChainNet::ALL,
+        true,
+        Duration::ZERO,
+    )
+    .await;
+    // Every other connection of the pool is held: a read that opened a
+    // second snapshot would wait for one.
+    let mut held = Vec::new();
+    for _ in 1..pool.options().get_max_connections() {
+        held.push(pool.acquire().await.unwrap());
+    }
+    for pass in ["read", "memoized"] {
+        let Ok(gate) = require_inventory(&state, "wearable").await else {
+            panic!("{pass}: the published index passes the gate")
+        };
+        let copies = tokio::time::timeout(
+            Duration::from_secs(10),
+            owned_copies(&state, gate, WALLET_A, "wearable"),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{pass}: the read waited for a second connection"))
+        .unwrap();
+        assert_eq!(copies.len(), 1, "{pass}");
+    }
+    drop(held);
+    sqlx::query(
+        "UPDATE shop.chain_cursor SET folded_block = NULL, folded_at = NULL WHERE indexer = 'nft'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let Err(resp) = require_inventory(&state, "wearable").await else {
+        panic!("the memo does not answer for an unpublished index")
+    };
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    own.drop().await;
+}
+
 /// The open listings' owner guard is an exact-token check on the nft index:
 /// a listing whose signer still holds that token stays, one whose token
 /// another address holds (even while the signer holds another copy of the

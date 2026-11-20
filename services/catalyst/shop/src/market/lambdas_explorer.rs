@@ -191,12 +191,10 @@ type CopyRow = (
 /// escrow grants, newest first, grouped by URN in first-seen order.
 async fn fetch_owned_items(
     state: &MarketplaceState,
+    copies: &[super::owned_items::OwnedCopy],
     owner: &str,
     category: &str,
 ) -> Result<Vec<OwnedItem>, String> {
-    let copies = super::owned_items::owned_copies(state, owner, category)
-        .await
-        .map_err(|e| e.to_string())?;
     let mut rows: Vec<CopyRow> = copies
         .iter()
         .map(|c| {
@@ -695,13 +693,25 @@ async fn explorer_items(
     let owner_valid = super::is_valid_eth_address(&addr.to_lowercase());
     let on_chain_allowed =
         q.collection_types.is_empty() || q.collection_types.iter().any(|t| t == "on-chain");
-    if owner_valid
-        && on_chain_allowed
-        && let Err(envelope) = super::owned_items::require_inventory(state, category).await
-    {
-        return envelope;
-    }
     let addr_lc = addr.to_lowercase();
+    // The on-chain leg's copies, read on the gate's own snapshot (memoized
+    // per owner), before the page cache: the gate holds on every request.
+    let copies = if owner_valid && on_chain_allowed {
+        let gate = match super::owned_items::require_inventory(state, category).await {
+            Ok(gate) => gate,
+            Err(envelope) => return envelope,
+        };
+        match super::owned_items::owned_copies(state, gate, &addr_lc, category).await {
+            Ok(copies) => Some(copies),
+            Err(e) => {
+                let e = FetchFailure::Fetch(e.to_string());
+                tracing::warn!(error = ?e, address = %addr_lc, category, "explorer backpack reader failed");
+                return e.response(&addr_lc);
+            }
+        }
+    } else {
+        None
+    };
     let mut ct_sorted = q.collection_types.clone();
     ct_sorted.sort();
     let mut cats_sorted = q.categories.clone();
@@ -736,7 +746,7 @@ async fn explorer_items(
     let result = state
         .explorer_cache
         .get_or_fetch(cache_key, || {
-            compute_explorer_items(state, &addr_lc, owner_valid, q, category, &valid)
+            compute_explorer_items(state, &addr_lc, copies.as_deref(), q, category, &valid)
         })
         .await;
     match result {
@@ -762,7 +772,7 @@ async fn explorer_items(
 async fn compute_explorer_items(
     state: &MarketplaceState,
     addr: &str,
-    owner_valid: bool,
+    copies: Option<&Vec<super::owned_items::OwnedCopy>>,
     q: ExplorerQuery,
     category: &'static str,
     valid_collection_types: &[&'static str],
@@ -776,8 +786,6 @@ async fn compute_explorer_items(
         && valid_collection_types.contains(&"base-wearable")
         && (q.collection_types.is_empty()
             || q.collection_types.iter().any(|t| t == "base-wearable"));
-    let on_chain_allowed = owner_valid
-        && (q.collection_types.is_empty() || q.collection_types.iter().any(|t| t == "on-chain"));
     let third_party_allowed = item_types.is_none()
         && valid_collection_types.contains(&"third-party")
         && (q.collection_types.is_empty() || q.collection_types.iter().any(|t| t == "third-party"));
@@ -789,8 +797,8 @@ async fn compute_explorer_items(
         }
     };
     let owned_leg = async {
-        if on_chain_allowed {
-            let mut owned = fetch_owned_items(state, addr, category).await?;
+        if let Some(copies) = copies {
+            let mut owned = fetch_owned_items(state, copies, addr, category).await?;
             if let Some(types) = item_types {
                 owned.retain(|it| it.item_type.as_deref().is_some_and(|t| types.contains(&t)));
             }

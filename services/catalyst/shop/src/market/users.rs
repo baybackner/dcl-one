@@ -323,8 +323,8 @@ async fn owned_or_unavailable(
     owner: &str,
     category: &str,
 ) -> Result<Vec<OwnedCopy>, Response> {
-    owned_items::require_inventory(state, category).await?;
-    owned_items::owned_copies(state, owner, category)
+    let gate = owned_items::require_inventory(state, category).await?;
+    owned_items::owned_copies(state, gate, owner, category)
         .await
         .map(|c| (*c).clone())
         .map_err(|e| e.into_response(|m| readers::upstream_failed("/v1/users", m)))
