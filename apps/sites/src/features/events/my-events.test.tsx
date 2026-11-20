@@ -19,7 +19,7 @@ const BOB = identity("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
 function seeded() {
   const client = new QueryClient();
-  client.setQueryData(myEventsQuery(ALICE).queryKey, { events: [], hasMore: false });
+  client.setQueryData(myEventsQuery(ALICE).queryKey, []);
   client.setQueryData(["events", "calendar"], []);
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   return { client, wrapper };

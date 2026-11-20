@@ -33,6 +33,23 @@ export async function loadOwnedEvents(identity: AuthIdentity, options: { offset:
   return eventPage(raw, options.offset, options.limit);
 }
 
+/**
+ * Every event the signer created, page after page: the list comes newest first, so its soonest upcoming
+ * event can sit on any page and a single page could hide it.
+ */
+export async function loadAllOwnedEvents(identity: AuthIdentity, signal?: AbortSignal): Promise<ManagedEvent[]> {
+  const limit = 100;
+  const owned = new Map<string, ManagedEvent>();
+  for (let offset = 0; ; offset += limit) {
+    const { events, hasMore } = await loadOwnedEvents(identity, { offset, limit }, signal);
+    const previousCount = owned.size;
+    for (const event of events) owned.set(event.id, event);
+    if (!hasMore || events.length === 0) break;
+    if (owned.size === previousCount) throw new Error("Your events list did not advance. Retry to reload it.");
+  }
+  return [...owned.values()];
+}
+
 function eventPage(raw: unknown, offset: number, limit: number) {
   const envelope = EventList.parse(raw);
   const rows = Array.isArray(envelope.data) ? envelope.data : envelope.data.events;

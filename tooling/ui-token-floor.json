@@ -149,15 +149,11 @@
   },
   "apps/sites/src/features/social/submit-hangout/SubmitHangout.module.css": {
     "primitives": 0,
-    "tokens": 62
+    "tokens": 64
   },
   "apps/sites/src/features/social/submit-hangout/SubmitSuccess.module.css": {
     "primitives": 0,
     "tokens": 12
-  },
-  "apps/ui3/src/explorer/pages/eventdetail.css": {
-    "primitives": 21,
-    "tokens": 0
   },
   "apps/ui3/src/explorer/pages/passport.css": {
     "primitives": 25,

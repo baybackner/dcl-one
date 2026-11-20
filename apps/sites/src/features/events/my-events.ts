@@ -5,26 +5,20 @@ import { eventText, type EventsLocale } from "@dcl/one-ui/apps/sites/events/loca
 
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import {
-  editEventHref, eventOccurrence, eventReviewStatus, loadOwnedEvents, ownedEventsKeys, type ManagedEvent,
+  editEventHref, eventOccurrence, eventReviewStatus, loadAllOwnedEvents, ownedEventsKeys, type ManagedEvent,
 } from "@/data/lib/catalyst/places/event-management";
 import type { CreatorProfiles } from "@/data/lib/catalyst/social/creator-profiles";
 import type { Zone } from "../components/event-schedule";
 import { eventCreator, relativeStart } from "./view";
 
-/** As source: one read of the member's events, every state, enough to cover anyone's upcoming ones. */
-const MY_EVENTS_LIMIT = 200;
-
 /**
- * The member's own read, under `["private", account, "events", "mine"]`: sign-out and an account switch
- * drop it, and `invalidateEventsAfterWrite` refreshes it. Nothing is read without a session.
+ * The member's own read, every page of it, under `["private", account, "events", "mine"]`: sign-out and
+ * an account switch drop it, and `invalidateEventsAfterWrite` refreshes it. Nothing is read without a session.
  */
 export function myEventsQuery(identity: AuthIdentity | null) {
   return queryOptions({
     queryKey: ownedEventsKeys.mine(identity?.signer ?? ""),
-    queryFn: identity
-      ? ({ signal }) => loadOwnedEvents(identity, { offset: 0, limit: MY_EVENTS_LIMIT }, signal)
-      : skipToken,
-    select: (page) => page.events,
+    queryFn: identity ? ({ signal }) => loadAllOwnedEvents(identity, signal) : skipToken,
   });
 }
 

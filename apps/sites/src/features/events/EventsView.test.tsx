@@ -42,7 +42,7 @@ vi.mock("@/data/lib/catalyst/places/index", async (original) => ({
 vi.mock("@/data/lib/catalyst/jump/place-lookup", () => ({ loadJumpPlace: vi.fn() }));
 vi.mock("@/data/lib/catalyst/places/event-management", async (original) => ({
   ...(await original<typeof import("@/data/lib/catalyst/places/event-management")>()),
-  loadOwnedEvents: vi.fn(),
+  loadAllOwnedEvents: vi.fn(),
 }));
 
 import type { AuthIdentity } from "@/data/lib/auth/types";
@@ -51,7 +51,7 @@ import { track } from "@/core/lib/telemetry/track";
 import { loadJumpPlace } from "@/data/lib/catalyst/jump/place-lookup";
 import { fetchEvent, fetchEvents, type Event } from "@/data/lib/catalyst/places/events";
 import { fetchMostActivePlaces } from "@/data/lib/catalyst/places/index";
-import { loadOwnedEvents, type ManagedEvent } from "@/data/lib/catalyst/places/event-management";
+import { loadAllOwnedEvents, type ManagedEvent } from "@/data/lib/catalyst/places/event-management";
 import type { DetectedPlatform } from "../download/options";
 import { columnsFor, EventsView } from "./EventsView";
 import { eventRecord, placeRecord } from "./fixtures";
@@ -470,17 +470,14 @@ describe("when /events opens My Events", () => {
     });
 
     it("should keep the whole page and list the member's upcoming events in start order, each opening its editor with its review status", async () => {
-      vi.mocked(loadOwnedEvents).mockResolvedValue({
-        hasMore: false,
-        events: [
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([
           owned({ id: "later", name: "Later Party", start_at: at(48), finish_at: at(50), next_start_at: at(48), next_finish_at: at(50) }),
           owned({ id: "draft", name: "Draft Night", approved: false, start_at: at(5), finish_at: at(6), next_start_at: at(5), next_finish_at: at(6) }),
           owned({ id: "no", name: "Turned Down", approved: false, rejected: true, start_at: at(10), finish_at: at(11), next_start_at: at(10), next_finish_at: at(11) }),
           owned({ id: "over", name: "Ended Show", start_at: at(-5), finish_at: at(-4), next_start_at: at(-5), next_finish_at: at(-4) }),
           owned({ id: "gone", name: "Deleted One", deleted_by_user: true, start_at: at(3), finish_at: at(4), next_start_at: at(3), next_finish_at: at(4) }),
           owned({ id: "theirs", name: "Not Mine", user: "0x2222222222222222222222222222222222222222", start_at: at(2), finish_at: at(3), next_start_at: at(2), next_finish_at: at(3) }),
-        ],
-      });
+        ]);
       setup("/events?tab=my");
       const panel = await screen.findByRole("tabpanel", { name: "My Events" });
       await within(panel).findByRole("heading", { name: "Hosted by me" });
@@ -497,28 +494,22 @@ describe("when /events opens My Events", () => {
       expect(screen.getByRole("tab", { name: "My Events" }).getAttribute("aria-selected")).toBe("true");
       expect(screen.queryByRole("navigation", { name: "Event days" })).toBeNull();
       expect(screen.getByRole("heading", { name: "Upcoming" })).toBeTruthy();
-      expect(vi.mocked(loadOwnedEvents)).toHaveBeenCalledWith(auth.identity, { offset: 0, limit: 200 }, expect.anything());
+      expect(vi.mocked(loadAllOwnedEvents)).toHaveBeenCalledWith(auth.identity, expect.anything());
       await waitFor(() => expect(scrolled).toHaveBeenCalledOnce());
       expect(scrolled.mock.contexts[0]).toBe(document.getElementById("all-events"));
     });
 
     it("should count a recurring event by its next occurrence", async () => {
-      vi.mocked(loadOwnedEvents).mockResolvedValue({
-        hasMore: false,
-        events: [
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([
           owned({ id: "weekly", name: "Weekly", recurrent: true, start_at: at(-200), finish_at: at(-199), next_start_at: at(30), next_finish_at: at(31) }),
-        ],
-      });
+        ]);
       setup("/events?tab=my");
       const panel = await screen.findByRole("tabpanel", { name: "My Events" });
       expect((await within(panel).findByRole("link", { name: "Weekly" })).getAttribute("href")).toBe("/events/edit-event/weekly");
     });
 
     it("should show the empty card with Create event when the member has no upcoming events", async () => {
-      vi.mocked(loadOwnedEvents).mockResolvedValue({
-        hasMore: false,
-        events: [owned({ id: "over", start_at: at(-5), finish_at: at(-4), next_start_at: at(-5), next_finish_at: at(-4) })],
-      });
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([owned({ id: "over", start_at: at(-5), finish_at: at(-4), next_start_at: at(-5), next_finish_at: at(-4) })]);
       setup("/events?tab=my");
       const panel = await screen.findByRole("tabpanel", { name: "My Events" });
       expect(await within(panel).findByText("You don't have any event created")).toBeTruthy();
@@ -527,19 +518,19 @@ describe("when /events opens My Events", () => {
     });
 
     it("should report a failed read with a Retry that reads again, and no empty card", async () => {
-      vi.mocked(loadOwnedEvents).mockRejectedValueOnce(new CatalystError("down", "/events/api/events", 503));
-      vi.mocked(loadOwnedEvents).mockResolvedValueOnce({ hasMore: false, events: [] });
+      vi.mocked(loadAllOwnedEvents).mockRejectedValueOnce(new CatalystError("down", "/events/api/events", 503));
+      vi.mocked(loadAllOwnedEvents).mockResolvedValueOnce([]);
       const { user } = setup("/events?tab=my");
       const alert = await screen.findByRole("alert");
       expect(alert.textContent).toContain("Couldn't load your events.");
       expect(screen.queryByText("You don't have any event created")).toBeNull();
       await user.click(within(alert).getByRole("button", { name: "Retry" }));
       expect(await screen.findByText("You don't have any event created")).toBeTruthy();
-      expect(vi.mocked(loadOwnedEvents)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(loadAllOwnedEvents)).toHaveBeenCalledTimes(2);
     });
 
     it("should go back to All Events from its tab without leaving the page", async () => {
-      vi.mocked(loadOwnedEvents).mockResolvedValue({ hasMore: false, events: [] });
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([]);
       const { router, user } = setup("/events?tab=my");
       await screen.findByText("You don't have any event created");
       await user.click(screen.getByRole("tab", { name: "All Events" }));
@@ -548,7 +539,7 @@ describe("when /events opens My Events", () => {
     });
 
     it("should fall back to All Events, without sending to sign in, when the member signs out on it", async () => {
-      vi.mocked(loadOwnedEvents).mockResolvedValue({ hasMore: false, events: [] });
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([]);
       const { router } = setup("/events?tab=my");
       await screen.findByText("You don't have any event created");
       auth.identity = null;
@@ -565,7 +556,7 @@ describe("when /events opens My Events", () => {
     setup("/events?tab=my");
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Fevents%3Ftab%3Dmy"));
     expect(assign).toHaveBeenCalledOnce();
-    expect(vi.mocked(loadOwnedEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(loadAllOwnedEvents)).not.toHaveBeenCalled();
     expect(screen.queryByRole("tabpanel", { name: "My Events" })).toBeNull();
   });
 });

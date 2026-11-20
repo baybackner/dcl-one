@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../client", async (original) => ({ ...await original<typeof import("../client")>(), postJSON: vi.fn(), signedGetJSON: vi.fn() }));
 import { CatalystError, postJSON, signedGetJSON } from "../client";
-import { eventAdminKeys, loadEventAccess, loadEventProfile, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
+import { eventAdminKeys, loadAllOwnedEvents, loadEventAccess, loadEventProfile, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
 import type { AuthIdentity } from "../../auth/types";
 import type { ManagedEvent } from "./event-management";
 
@@ -34,6 +34,33 @@ describe("when managing authenticated hangouts", () => {
   it("should scope a page of My Hangouts to the signed owner", async () => {
     await loadOwnedEvents(identity, { limit: 25, offset: 25, search: "music" });
     expect(signedGetJSON).toHaveBeenCalledWith("/events/api/events", expect.objectContaining({ identity, query: expect.objectContaining({ owner: true, list: "all", offset: 25, limit: 26, search: "music" }) }));
+  });
+
+  describe("and the owner's events span more than one page", () => {
+    // Newest first: the soonest upcoming event was created first, so it is on the last page.
+    const pageOne = Array.from({ length: 101 }, (_, index) => makeEvent(`newer-${index}`));
+    const soonest = { ...makeEvent("soonest"), start_at: "2099-01-01T10:00:00Z" };
+
+    it("should read every page so the soonest event on page two is kept", async () => {
+      vi.mocked(signedGetJSON)
+        .mockResolvedValueOnce({ ok: true, data: pageOne })
+        .mockResolvedValueOnce({ ok: true, data: [soonest] });
+      const events = await loadAllOwnedEvents(identity);
+      expect(events).toHaveLength(101);
+      expect(events.map((event) => event.id)).toContain("soonest");
+      expect(vi.mocked(signedGetJSON).mock.calls.map(([, init]) => (init as unknown as { query: { offset: number } }).query.offset)).toEqual([0, 100]);
+    });
+
+    it("should stop with an error when a page repeats instead of advancing", async () => {
+      vi.mocked(signedGetJSON).mockResolvedValue({ ok: true, data: pageOne });
+      await expect(loadAllOwnedEvents(identity)).rejects.toThrow("did not advance");
+      expect(signedGetJSON).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("should read one page when the owner has no events", async () => {
+    await expect(loadAllOwnedEvents(identity)).resolves.toEqual([]);
+    expect(signedGetJSON).toHaveBeenCalledTimes(1);
   });
 
   describe("and the signed moderation catalogue contains mixed states", () => {

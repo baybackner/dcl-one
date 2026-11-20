@@ -282,4 +282,41 @@ describe("when opening the Pending Events page", () => {
       expect(postJSON).not.toHaveBeenCalled();
     });
   });
+
+  // The Sites client renders in StrictMode, which runs each effect's cleanup and setup once more after
+  // mounting; an action's result must still close the dialog, report and clear the busy state.
+  describe("in StrictMode, as the Sites client renders", () => {
+    it("should close the review and report an approval", async () => {
+      renderAdminPage(<PendingEventsPage />, PATH, { strict: true });
+      await user.click(await screen.findByRole("link", { name: "Moon concert" }));
+      await user.click(within(screen.getByRole("dialog", { name: "Moon concert" })).getByRole("button", { name: "Approve" }));
+      expect(await screen.findByText("Event/Experience approved successfully")).toBeTruthy();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.getByTestId("location").textContent).toBe(PATH);
+    });
+
+    it("should close the reason dialog and report a rejection", async () => {
+      renderAdminPage(<PendingEventsPage />, PATH, { strict: true });
+      await user.click(await screen.findByRole("link", { name: "Moon concert" }));
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reject" }));
+      const reject = screen.getByRole("dialog", { name: "Reject Reason*" });
+      await user.click(within(reject).getByRole("checkbox", { name: /Invalid image/ }));
+      await user.click(within(reject).getByRole("button", { name: "Submit" }));
+      expect(await screen.findByText("Event/Experience rejected successfully")).toBeTruthy();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("should report a failed approval and let it be tried again", async () => {
+      api.failNext.moderate = new Error("The hangout changed. Refresh.");
+      renderAdminPage(<PendingEventsPage />, PATH, { strict: true });
+      await user.click(await screen.findByRole("link", { name: "Moon concert" }));
+      const review = screen.getByRole("dialog", { name: "Moon concert" });
+      await user.click(within(review).getByRole("button", { name: "Approve" }));
+      expect((await within(review).findByRole("alert")).textContent).toBe("The hangout changed. Refresh.");
+      const approve = within(review).getByRole<HTMLButtonElement>("button", { name: "Approve" });
+      expect(approve.disabled).toBe(false);
+      await user.click(approve);
+      expect(await screen.findByText("Event/Experience approved successfully")).toBeTruthy();
+    });
+  });
 });

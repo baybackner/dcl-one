@@ -40,7 +40,11 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useToast();
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    // StrictMode runs this setup again after a cleanup, so the flag is restored here, not only at creation.
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const rows: AdminUserRow[] = profiles.map((profile) => {
     const found = names.data?.[profile.user.toLowerCase()];

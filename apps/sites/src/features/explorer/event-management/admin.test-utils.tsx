@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { Fragment, StrictMode, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { vi } from "vitest";
 
@@ -90,10 +90,16 @@ function Location() {
   return <output data-testid="location">{location.pathname + location.search}</output>;
 }
 
-/** Renders a page at `path` beside a /events probe, under a fresh query client. */
-export function renderAdminPage(page: ReactElement, path: string) {
+/**
+ * Renders a page at `path` beside a /events probe, under a fresh query client. `strict` wraps it in
+ * StrictMode, as the Sites client entry renders it, so effects run, clean up and run again as in
+ * development; it also repeats the page's reads, so tests that count reads leave it off.
+ */
+export function renderAdminPage(page: ReactElement, path: string, { strict = false } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const Wrap = strict ? StrictMode : Fragment;
   const view = render(
+    <Wrap>
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
@@ -103,7 +109,8 @@ export function renderAdminPage(page: ReactElement, path: string) {
         </Routes>
         <Location />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </Wrap>,
   );
   return { client, view };
 }

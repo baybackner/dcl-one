@@ -204,4 +204,34 @@ describe("when opening the Users page", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(postJSON).not.toHaveBeenCalled();
   });
+
+  // The Sites client renders in StrictMode, which runs each effect's cleanup and setup once more after
+  // mounting; a save's result must still close the dialog, report and clear the busy state.
+  describe("in StrictMode, as the Sites client renders", () => {
+    async function addApprover() {
+      renderAdminPage(<UsersAdminPage />, PATH, { strict: true });
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), NEW_WALLET);
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      return dialog;
+    }
+
+    it("should close the dialog and report a saved change", async () => {
+      await addApprover();
+      expect(await screen.findByText("Permissions updated")).toBeTruthy();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("should keep the dialog with the failure and let it be saved again", async () => {
+      api.failNext.save = new Error("Permissions not saved");
+      const dialog = await addApprover();
+      expect((await within(dialog).findByRole("alert")).textContent).toBe("Permissions not saved");
+      const save = within(dialog).getByRole<HTMLButtonElement>("button", { name: "Save Changes" });
+      expect(save.disabled).toBe(false);
+      await user.click(save);
+      expect(await screen.findByText("Permissions updated")).toBeTruthy();
+    });
+  });
 });
