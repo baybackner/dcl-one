@@ -129,6 +129,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** The event card (an article) whose title link has this name. */
+function cardIn(scope: HTMLElement, name: string): HTMLElement {
+  const card = within(scope).getAllByRole("article").find((article) => within(article).queryByRole("link", { name }));
+  if (!card) throw new Error(`No card titled ${name}`);
+  return card;
+}
+
+async function findCard(name: string): Promise<HTMLElement> {
+  await screen.findByRole("link", { name });
+  return cardIn(document.body, name);
+}
+
 const FACE = "https://profile-images.decentraland.org/entities/bafyface/face.png";
 const profilesReply = (address: string) =>
   Response.json([{ avatars: [{ ethAddress: address, name: "OtoLam", avatar: { snapshots: { face256: FACE } } }] }]);
@@ -136,7 +148,7 @@ const profilesReply = (address: string) =>
 describe("EventsView", () => {
   it("should open Live Now with the Foundation's Genesis Plaza at 0,0 when nothing is live and mark empty days", async () => {
     setup("/events");
-    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    const section = await screen.findByRole("region", { name: "Live Now" });
     expect(within(section).getByRole("link", { name: "Genesis Plaza" }).getAttribute("href")).toBe(
       "/events?position=0%2C0",
     );
@@ -168,7 +180,7 @@ describe("EventsView", () => {
   it("should show a busy place in Live Now with a Jump In to the web explorer on desktop", async () => {
     live = { events: [], places: [placeRecord({ title: "Meta GamiMall", base_position: "1,95", user_count: 6 })] };
     setup("/events");
-    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    const section = await screen.findByRole("region", { name: "Live Now" });
     expect(within(section).getByRole("link", { name: "Meta GamiMall" }).getAttribute("href")).toBe(
       "/events?position=1%2C95",
     );
@@ -184,7 +196,7 @@ describe("EventsView", () => {
   it("should open the app on an Android phone instead of the web explorer", async () => {
     live = { events: [], places: [placeRecord({ base_position: "1,95", user_count: 6 })] };
     setup("/events", { kind: "mobile", os: "android" });
-    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    const section = await screen.findByRole("region", { name: "Live Now" });
     expect(
       within(section)
         .getByRole("link", { name: /Jump In/ })
@@ -250,12 +262,29 @@ describe("EventsView", () => {
     await waitFor(() =>
       expect(vi.mocked(track)).toHaveBeenCalledWith(
         "lp_whatson_viewed",
-        // Genesis Plaza alone opens the rail when nothing is live.
-        { live_count: 1, upcoming_count: 1, filter: null, search: null },
+        { live_count: 0, upcoming_count: 1, filter: null, search: null },
         expect.anything(),
       ),
     );
     expect(vi.mocked(track).mock.calls.filter(([name]) => name === "lp_whatson_viewed")).toHaveLength(1);
+  });
+
+  it("should count nothing live on a quiet node although Genesis Plaza opens the rail", async () => {
+    live.places = [placeRecord({ id: "plaza", title: "Genesis Plaza", positions: ["0,0"], user_count: 0 })];
+    setup("/events");
+    expect(await screen.findByRole("link", { name: "Genesis Plaza" })).toBeTruthy();
+    await waitFor(() =>
+      expect(vi.mocked(track)).toHaveBeenCalledWith("lp_whatson_viewed", expect.objectContaining({ live_count: 0 }), expect.anything()),
+    );
+  });
+
+  it("should count one live scene as one live item", async () => {
+    live.places = [placeRecord({ id: "busy", title: "Busy Club", positions: ["9,9"], user_count: 30 })];
+    setup("/events");
+    expect(await screen.findByRole("link", { name: "Busy Club" })).toBeTruthy();
+    await waitFor(() =>
+      expect(vi.mocked(track)).toHaveBeenCalledWith("lp_whatson_viewed", expect.objectContaining({ live_count: 1 }), expect.anything()),
+    );
   });
 
   it("should show an unavailable calendar with a Retry that reads it again", async () => {
@@ -414,10 +443,7 @@ describe("when calendar occupancy is available or unknown", () => {
       } as Event,
     ];
     setup("/events");
-    const title = await screen.findByRole("link", {
-      name: "Occupancy check",
-    });
-    const card = title.closest("article")!;
+    const card = await findCard("Occupancy check");
     expect(within(card).getByText("LIVE")).toBeTruthy();
     expect(within(card).queryByText("26 online")).toBeNull();
     if (expected) expect(within(card).getByText(expected)).toBeTruthy();
@@ -450,7 +476,7 @@ describe("when calendar occupancy is available or unknown", () => {
     calendar = [{ ...soon("now", "Live on phone", -0.5), live: true, x: 3, y: 7 }];
     setup("/events");
     const list = await screen.findByRole("list", { name: /^Events for / });
-    const liveCard = within(list).getByRole("link", { name: "Live on phone" }).closest("article")!;
+    const liveCard = cardIn(list, "Live on phone");
     expect(within(liveCard).getByRole("link", { name: "Jump in: Live on phone" }).getAttribute("href")).toMatch(
       /\/play\/\?position=3%2C7(&|$)/,
     );
@@ -462,10 +488,7 @@ describe("when calendar occupancy is available or unknown", () => {
     calendar = [soon("future", "Future registration count")];
     calendar[0]!.total_attendees = 26;
     setup("/events");
-    const title = await screen.findByRole("link", {
-      name: "Future registration count",
-    });
-    const card = title.closest("article")!;
+    const card = await findCard("Future registration count");
     expect(within(card).queryByText(/online$/)).toBeNull();
     expect(within(card).queryByText("LIVE")).toBeNull();
   });

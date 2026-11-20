@@ -7,7 +7,7 @@ import type { AuthIdentity } from "@/data/lib/auth/types";
 import { CatalystError, postJSON, signedGetJSON } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
 import { openSignIn } from "../../components/auth/signin-store";
-import { fakeEventsApi, makeEvent, makeIdentity, readsOf, renderAdminPage, type FakeEventsApi } from "./admin.test-utils";
+import { CREATOR, currentPath, fakeEventsApi, makeEvent, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "./admin.test-utils";
 import PendingEventsPage from "./PendingEventsPage";
 
 const auth = vi.hoisted(() => ({ identity: null as AuthIdentity | null, isConnected: false }));
@@ -36,7 +36,8 @@ describe("when opening the Pending Events page", () => {
     auth.identity = identity;
     auth.isConnected = true;
     api = {
-      profile: { user: identity.signer, permissions: ["approve_any_event"] },
+      // A reviewer: another creator's event takes both grants to approve or reject.
+      profile: { user: identity.signer, permissions: ["approve_any_event", "edit_any_event"] },
       profiles: "forbidden",
       events: [makeEvent(), makeEvent({ id: "approved-one", name: "Sun party", approved: true })],
       failNext: {},
@@ -69,7 +70,7 @@ describe("when opening the Pending Events page", () => {
 
     it("should redirect to /events without reading the queue", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
-      await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/events"));
+      await waitFor(() => expect(currentPath()).toBe("/events"));
       expect(readsOf(EVENTS)).toBe(0);
     });
   });
@@ -78,17 +79,21 @@ describe("when opening the Pending Events page", () => {
     beforeEach(() => {
       api.profile.permissions = ["approve_own_event"];
       api.events = [
-        makeEvent({ id: "own-one", name: "My own show" }),
-        makeEvent({ id: "other-one", name: "Someone else's show", user: "0x5555555555555555555555555555555555555555" }),
+        makeEvent({ id: "own-one", name: "My own show", user: MODERATOR }),
+        makeEvent({ id: "other-one", name: "Someone else's show", user: CREATOR }),
       ];
     });
 
-    it("should list only its own pending event and let it approve that one", async () => {
+    it("should list only its own pending event", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
       const pending = await screen.findByRole("region", { name: "Pending Events" });
-      await user.click(await within(pending).findByRole("link", { name: "My own show" }));
+      expect(await within(pending).findByRole("link", { name: "My own show" })).toBeTruthy();
       expect(within(pending).queryByRole("link", { name: "Someone else's show" })).toBeNull();
-      const review = screen.getByRole("dialog", { name: "My own show" });
+    });
+
+    it("should approve its own event and offer no rejection", async () => {
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=own-one`);
+      const review = await screen.findByRole("dialog", { name: "My own show" });
       expect(within(review).queryByRole("button", { name: "Reject" })).toBeNull();
       await user.click(within(review).getByRole("button", { name: "Approve" }));
       expect(await screen.findByText("Event/Experience approved successfully")).toBeTruthy();
@@ -104,12 +109,48 @@ describe("when opening the Pending Events page", () => {
     });
   });
 
+  describe("and the account may approve any event but not edit any", () => {
+    beforeEach(() => {
+      api.profile.permissions = ["approve_any_event"];
+      api.events = [
+        makeEvent({ id: "own-one", name: "My own show", user: MODERATOR }),
+        makeEvent({ id: "other-one", name: "Someone else's show", user: CREATOR }),
+      ];
+    });
+
+    it("should offer no moderation or edit for someone else's event, which the API refuses", async () => {
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=other-one`);
+      const review = await screen.findByRole("dialog", { name: "Someone else's show" });
+      expect(within(review).queryByRole("button", { name: "Approve" })).toBeNull();
+      expect(within(review).queryByRole("button", { name: "Reject" })).toBeNull();
+      expect(within(review).queryByRole("button", { name: "Edit Event" })).toBeNull();
+    });
+
+    it("should approve its own event", async () => {
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=own-one`);
+      const review = await screen.findByRole("dialog", { name: "My own show" });
+      await user.click(within(review).getByRole("button", { name: "Approve" }));
+      expect(await screen.findByText("Event/Experience approved successfully")).toBeTruthy();
+      expect(postJSON).toHaveBeenCalledWith(...moderation("own-one", { approved: true }));
+    });
+
+    it("should reject its own event with a reason", async () => {
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=own-one`);
+      await user.click(within(await screen.findByRole("dialog", { name: "My own show" })).getByRole("button", { name: "Reject" }));
+      const reject = screen.getByRole("dialog", { name: "Reject Reason*" });
+      await user.click(within(reject).getByRole("checkbox", { name: /Invalid image/ }));
+      await user.click(within(reject).getByRole("button", { name: "Submit" }));
+      expect(await screen.findByText("Event/Experience rejected successfully")).toBeTruthy();
+      expect(postJSON).toHaveBeenCalledWith(...moderation("own-one", { rejected: true, rejection_reason: "Invalid image" }));
+    });
+  });
+
   describe("and the permission read is refused", () => {
     beforeEach(() => { api.failNext.profile = new CatalystError("Forbidden", SETTINGS, 403); });
 
     it("should redirect to /events", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
-      await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/events"));
+      await waitFor(() => expect(currentPath()).toBe("/events"));
     });
   });
 
@@ -121,7 +162,7 @@ describe("when opening the Pending Events page", () => {
       const alert = await screen.findByRole("alert");
       expect(alert.textContent).toBe("Settings unavailable");
       expect(alert.dataset.tone).toBe("error");
-      expect(screen.getByTestId("location").textContent).toBe(PATH);
+      expect(currentPath()).toBe(PATH);
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(await screen.findByRole("link", { name: "Moon concert" })).toBeTruthy();
     });
@@ -173,7 +214,7 @@ describe("when opening the Pending Events page", () => {
     const { client } = renderAdminPage(<PendingEventsPage />, PATH);
     client.setQueryData(eventsPageKeys.detail("pending-one"), makeEvent());
     await user.click(await screen.findByRole("link", { name: "Moon concert" }));
-    expect(screen.getByTestId("location").textContent).toBe(`${PATH}?id=pending-one`);
+    expect(currentPath()).toBe(`${PATH}?id=pending-one`);
     const review = screen.getByRole("dialog", { name: "Moon concert" });
     expect(within(review).getByText("A concert")).toBeTruthy();
     await user.click(within(review).getByRole("button", { name: "Approve" }));
@@ -200,13 +241,14 @@ describe("when opening the Pending Events page", () => {
   describe("and the account may edit any event", () => {
     beforeEach(() => { api.profile.permissions = ["edit_any_event"]; });
 
-    it("should edit from the review but not approve", async () => {
+    it("should edit someone else's event from the review but not approve or reject it", async () => {
       renderAdminPage(<PendingEventsPage />, PATH);
       await user.click(await screen.findByRole("link", { name: "Moon concert" }));
       const review = screen.getByRole("dialog", { name: "Moon concert" });
       expect(within(review).queryByRole("button", { name: "Approve" })).toBeNull();
+      expect(within(review).queryByRole("button", { name: "Reject" })).toBeNull();
       await user.click(within(review).getByRole("button", { name: "Edit Event" }));
-      expect(screen.getByTestId("location").textContent).toBe("/events/edit-event/pending-one");
+      expect(currentPath()).toBe("/events/edit-event/pending-one");
     });
   });
 
@@ -297,7 +339,7 @@ describe("when opening the Pending Events page", () => {
       await user.click(within(screen.getByRole("dialog", { name: "Moon concert" })).getByRole("button", { name: "Approve" }));
       expect(await screen.findByText("Event/Experience approved successfully")).toBeTruthy();
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(screen.getByTestId("location").textContent).toBe(PATH);
+      expect(currentPath()).toBe(PATH);
     });
 
     it("should close the reason dialog and report a rejection", async () => {

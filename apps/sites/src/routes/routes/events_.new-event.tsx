@@ -16,6 +16,8 @@ import { getIdentity } from "@/data/lib/auth/session";
 import { SitesLayoutMaybe } from "@/features/components/chrome/SitesLayout";
 import type { SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { openSignIn } from "@/features/components/auth/signin-store";
+import { useSignInRequired } from "@/features/components/auth/useSignInRequired";
+import { parseUuidParam } from "@/data/lib/creators/ids";
 import { type PageDefaults } from "@/core/lib/telemetry/page-loader";
 import { pageLoader } from "@/core/lib/telemetry/page-loader";
 
@@ -66,7 +68,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs & { 
     mode,
     categories,
     categoriesError,
-    eventId: mode === "edit" ? params.id?.trim() || null : null,
+    // Event ids are UUIDs and the API refuses anything else, so a malformed id is no event at all.
+    eventId: mode === "edit" ? parseUuidParam(params.id?.trim()) ?? null : null,
     communityId: mode === "create" ? url.searchParams.get("community_id")?.trim() || "" : "",
     assignment,
   };
@@ -89,8 +92,9 @@ export function headers() {
 }
 
 const noSubscription = () => () => {};
-// Statuses that answer "this account cannot edit this event"; anything else may succeed on a retry.
-const DENIED_STATUSES = new Set([401, 403, 404]);
+// Statuses that answer "this account cannot edit this event" (400: the API refused the id itself);
+// anything else may succeed on a retry.
+const DENIED_STATUSES = new Set([400, 401, 403, 404]);
 // Layout effects warn during server rendering; the editor only scrolls in the browser.
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -149,11 +153,13 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
   const canChangeCommunity = d.mode === "create" || owner;
   // Another creator's event needs the account's permissions; a failed read of them is not an answer.
   const permissionsError = original && !owner && optionsResult ? optionsResult.error || options?.profileError || null : null;
-  // As decentraland.org: an edit link that is missing its event, signed out, refused or not found, or
-  // definitely not this account's to edit goes back to the Events page instead of showing an error.
+  // A signed-out edit link (a rejection email, say) asks for sign-in and returns to this same editor.
+  const signInNeeded = d.mode === "edit" && Boolean(d.eventId) && hydrated && !auth.isConnected;
+  useSignInRequired(signInNeeded, auth.isConnected);
+  // As decentraland.org: an edit link that is missing its event, refused or not found, or definitely not
+  // this account's to edit goes back to the Events page instead of showing an error.
   const editDenied = d.mode === "edit" && (
     !d.eventId
-    || (hydrated && !auth.isConnected)
     || Boolean(current?.error && DENIED_STATUSES.has(current.status ?? 0))
     || Boolean(original && !owner && optionsResult && !permissionsError && !canEditAny)
   );
@@ -195,6 +201,7 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
       {d.mode === "edit" && !editReady ? <SubmitHangoutLoading
         mode="edit"
         error={editFailed}
+        onSignIn={signInNeeded ? () => openSignIn() : undefined}
         onRetry={() => { setLoaded(null); setOptionsRead(null); setAttempt((previous) => previous + 1); }}
       /> : <SubmitHangout
         key={`${auth.address ?? "signed-out"}:${d.eventId ?? "new"}`}

@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { getIdentity } from "@/data/lib/auth/session";
-import { eventAdminKeys, saveEventPermissions, type EventProfile } from "@/data/lib/catalyst/places/event-management";
+import { eventAdminKeys, loadEventProfileSettings, saveEventPermissions, type EventProfile } from "@/data/lib/catalyst/places/event-management";
 import { creatorProfilesQuery } from "@/data/lib/catalyst/social/creator-profiles";
 import { useEventsFooterCopy } from "../../events/locale";
 import { openSignIn } from "../../components/auth/signin-store";
@@ -52,6 +52,8 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
     return { address: profile.user, name: found?.name || undefined, avatarUrl: found?.avatarUrl, permissions: profile.permissions };
   });
 
+  const listed = (address: string) => profiles.find((profile) => profile.user.toLowerCase() === address.toLowerCase());
+
   function open(next: Editing) {
     setError(null);
     setEditing(next);
@@ -66,11 +68,24 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
     if (busy) return;
     setBusy(true);
     setError(null);
+    let sent = permissions;
     try {
-      const saved = await saveEventPermissions(signer, address, permissions);
+      // A save replaces the wallet's whole set. A wallet the loaded list does not name (it is capped) may
+      // still hold grants, so Add keeps them: it reads the wallet's settings first and adds to them.
+      if (!editing?.user && !listed(address)) {
+        let held: EventProfile | null;
+        try {
+          held = await loadEventProfileSettings(signer, address);
+        } catch {
+          if (mounted.current) setError(adminCopy.permissions.readError);
+          return;
+        }
+        sent = [...new Set([...(held?.permissions ?? []), ...permissions])];
+      }
+      const saved = await saveEventPermissions(signer, address, sent);
       void client.invalidateQueries({ queryKey: eventAdminKeys.access(signer.signer) });
       if (!mounted.current) return;
-      const kept = saved.permissions.length !== permissions.length || permissions.some((permission) => !saved.permissions.includes(permission));
+      const kept = saved.permissions.length !== sent.length || sent.some((permission) => !saved.permissions.includes(permission));
       setEditing(null);
       setToast({ message: kept ? adminCopy.permissions.serverKept : adminCopy.permissions.saveSuccess, tone: "success" });
     } catch (cause) {
@@ -89,6 +104,7 @@ function UsersAdmin({ access, profiles }: { access: EventAdminAccess; profiles: 
           key={editing.user?.address ?? "add"}
           user={editing.user}
           permissions={editing.permissions}
+          existing={(address) => listed(address)?.permissions}
           self={access.identity?.signer}
           busy={busy}
           feedback={error ? <Notice tone="error">{error}</Notice> : undefined}

@@ -227,7 +227,9 @@ export function EventsView({ sid, platform, origin, initial }: EventsViewProps) 
   );
   const profiles = useCreatorProfiles(creatorGroups);
   // Counted once both reads settled, so a client navigation never reports the empty first render.
-  useViewedOnce(sid, !live.isPending && !upcoming.isPending, liveItems.length, upcomingEvents.length, offset);
+  // Genesis Plaza shown because nothing is live is not a live item.
+  const liveCount = liveItems.filter((item) => !(item.kind === "place" && item.fallback)).length;
+  useViewedOnce(sid, !live.isPending && !upcoming.isPending, liveCount, upcomingEvents.length, offset);
   const liveCards: LiveEventCardProps[] = liveItems.map((item): LiveEventCardProps => {
     if (item.kind === "event") {
       const href = eventHref(item.event.id, search);

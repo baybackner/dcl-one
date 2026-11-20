@@ -149,8 +149,10 @@ export function usersLabel(count: number, locale: EventsLocale = "en"): string {
   return eventText(locale, "{count} online", { count });
 }
 
+/** `fallback` marks Genesis Plaza shown only because nothing is live; it is not a live item. */
 export type LiveNowItem =
-  { kind: "event"; event: Event; users: number } | { kind: "place"; place: Place; users: number };
+  | { kind: "event"; event: Event; users: number }
+  | { kind: "place"; place: Place; users: number; fallback?: true };
 
 /** The busy place a live event runs in: the World it names, else the place covering its parcel. */
 function placeOf(event: Event, places: readonly Place[]): Place | undefined {
@@ -184,12 +186,15 @@ export const GENESIS_PLAZA: Place = {
   world_name: null,
 };
 
-/** Genesis Plaza: the Genesis City scene source names so, else the one on parcel 0,0, else the stand-in. */
+/**
+ * Genesis Plaza: the Genesis City scene on parcel 0,0, else one source names so, else the stand-in. The
+ * parcel goes first: any scene may carry the name ("Genesis Plaza Afterparty"), only the plaza covers 0,0.
+ */
 function genesisPlaza(places: readonly Place[]): Place {
   const city = places.filter((place) => !place.world);
   return (
-    city.find((place) => place.title?.toLowerCase().includes("genesis plaza")) ??
     city.find((place) => place.positions.includes("0,0")) ??
+    city.find((place) => place.title?.toLowerCase().includes("genesis plaza")) ??
     GENESIS_PLAZA
   );
 }
@@ -203,7 +208,7 @@ export function liveNowItems(data: LiveNowData, minUsers = DEFAULT_MIN_USERS): L
   const items = busyItems(data, minUsers);
   if (items.length) return items;
   const plaza = genesisPlaza(data.places);
-  return [{ kind: "place", place: plaza, users: plaza.user_count ?? 0 }];
+  return [{ kind: "place", place: plaza, users: plaza.user_count ?? 0, fallback: true }];
 }
 
 function busyItems(data: LiveNowData, minUsers: number): LiveNowItem[] {

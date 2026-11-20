@@ -79,8 +79,8 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
   describe("and the required fields have been filled", () => {
     beforeEach(async () => {
       await user.type(screen.getByRole("textbox", { name: "Event Name" }), "Open studio");
-      fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-07-01" } });
-      fireEvent.change(screen.getByLabelText("Start (UTC)"), { target: { value: "18:30" } });
+      await user.type(screen.getByLabelText("Date"), "2099-07-01");
+      await user.type(screen.getByLabelText("Start (UTC)"), "18:30");
     });
 
     it("should return from preview with the draft intact", async () => {

@@ -50,7 +50,7 @@ function serve(feeds: Feeds) {
 
 function Location() {
   const location = useLocation();
-  return <output data-testid="location">{location.pathname + location.search}</output>;
+  return <output aria-label="Location">{location.pathname + location.search}</output>;
 }
 
 function SessionFrame() {
@@ -92,9 +92,10 @@ function renderPage(url = "/places", platform: object = DESKTOP, unavailable = f
   return { user: userEvent.setup(), client };
 }
 
-const location = () => screen.getByTestId("location").textContent ?? "";
+const location = () => screen.getByRole("status", { name: "Location" }).textContent ?? "";
 
 beforeEach(() => {
+  resetPlacesFlagsRead();
   auth.current = { isConnected: false, identity: null };
   vi.stubGlobal(
     "fetch",
@@ -470,6 +471,32 @@ describe("when navigating to /places in the browser", () => {
   it("should hand 0 while the flag is off", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ flags: { [FLAG]: false }, variants: { [FLAG]: "5" } })));
     await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 0 });
+  });
+
+  describe("and the server already rendered this document with a head count", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      serve({ browse: [], live: [destination({ id: "busy", title: "Busy", user_count: 6 })] });
+      renderPage("/places", DESKTOP, false, "sid", 5);
+      await screen.findByRole("group", { name: "Live Now" });
+      fetchMock = vi.fn(async () => new Response("down", { status: 503 }));
+      vi.stubGlobal("fetch", fetchMock);
+    });
+
+    it("should keep the server's head count on the next navigation without reading the flags", async () => {
+      await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("should keep the head count of a successful read when a later navigation follows", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: "5" } })));
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
+    const failing = vi.fn(async () => new Response("down", { status: 503 }));
+    vi.stubGlobal("fetch", failing);
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
+    expect(failing).not.toHaveBeenCalled();
   });
 
   it("should hand 0 and not ask again on the next navigation when the flags cannot be read", async () => {

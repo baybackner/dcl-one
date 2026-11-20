@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { postJSON } from "@/data/lib/catalyst/client";
 import type { EventProfile } from "@/data/lib/catalyst/places/event-management";
-import { fakeEventsApi, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "./admin.test-utils";
+import { currentPath, fakeEventsApi, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "./admin.test-utils";
 import UsersAdminPage from "./UsersAdminPage";
 
 const auth = vi.hoisted(() => ({ identity: null as AuthIdentity | null, isConnected: false }));
@@ -67,7 +67,7 @@ describe("when opening the Users page", () => {
 
     it("should redirect to /events", async () => {
       renderAdminPage(<UsersAdminPage />, PATH);
-      await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/events"));
+      await waitFor(() => expect(currentPath()).toBe("/events"));
     });
   });
 
@@ -76,7 +76,7 @@ describe("when opening the Users page", () => {
 
     it("should redirect to /events without reading other accounts", async () => {
       renderAdminPage(<UsersAdminPage />, PATH);
-      await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/events"));
+      await waitFor(() => expect(currentPath()).toBe("/events"));
       expect(readsOf(LIST)).toBe(0);
     });
   });
@@ -90,22 +90,41 @@ describe("when opening the Users page", () => {
     const row = (await within(table).findByRole("button", { name: `${address(1)} (Selene)` })).closest("tr")!;
     expect(within(row).getAllByRole("img", { name: "Granted" })).toHaveLength(2);
     expect(screen.getByText("1–10 of 12")).toBeTruthy();
-    const bar = screen.getByRole("navigation", { name: "Event administration" });
-    expect(within(bar).getByRole("link", { name: "Users" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("should show the admin bar with Users current", async () => {
+    renderAdminPage(<UsersAdminPage />, PATH);
+    const bar = await screen.findByRole("navigation", { name: "Event administration" });
+    expect((await within(bar).findByRole("link", { name: "Users" })).getAttribute("aria-current")).toBe("page");
     expect(within(bar).getByRole("link", { name: "Pending Events" })).toBeTruthy();
   });
 
-  it("should page the accounts and filter them by wallet or name", async () => {
+  it("should show the next page of accounts", async () => {
     renderAdminPage(<UsersAdminPage />, PATH);
     await screen.findByText("1–10 of 12");
     await user.click(screen.getByRole("button", { name: "Next page" }));
     expect(screen.getByText("11–12 of 12")).toBeTruthy();
+  });
+
+  it("should filter the accounts by name", async () => {
+    renderAdminPage(<UsersAdminPage />, PATH);
+    await screen.findByText("1–10 of 12");
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "selene");
     expect(screen.getByText("1–1 of 1")).toBeTruthy();
-    await user.clear(screen.getByRole("searchbox", { name: "Search" }));
+  });
+
+  it("should say when no account matches the search", async () => {
+    renderAdminPage(<UsersAdminPage />, PATH);
+    await screen.findByText("1–10 of 12");
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "0xnothing");
     expect(screen.getByText("No matching users")).toBeTruthy();
+  });
+
+  it("should change the rows per page without reading the accounts again", async () => {
+    renderAdminPage(<UsersAdminPage />, PATH);
+    await screen.findByText("1–10 of 12");
     await user.selectOptions(screen.getByRole("combobox", { name: "Rows per page:" }), "25");
+    expect(screen.getByText("1–12 of 12")).toBeTruthy();
     expect(readsOf(LIST)).toBe(1);
   });
 
@@ -131,7 +150,7 @@ describe("when opening the Users page", () => {
     expect(postJSON).not.toHaveBeenCalled();
   });
 
-  it("should add a user with the chosen grants and refresh the list", async () => {
+  it("should add a wallet without settings with only the chosen grants and refresh the list", async () => {
     renderAdminPage(<UsersAdminPage />, PATH);
     await user.click(await screen.findByRole("button", { name: "+ Add User" }));
     const dialog = screen.getByRole("dialog", { name: "Add User" });
@@ -142,6 +161,92 @@ describe("when opening the Users page", () => {
     expect(postJSON).toHaveBeenCalledWith(...saving(NEW_WALLET, ["approve_any_event"]));
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(readsOf(LIST)).toBe(2));
+  });
+
+  describe("and the typed wallet is already listed", () => {
+    // Typed in another case than the list holds it, as a pasted checksummed address would be.
+    const listed = address(1).toUpperCase().replace("0X", "0x");
+
+    it("should turn the dialog into Edit User with the wallet's grants, and keep them all on save", async () => {
+      renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      await user.type(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Wallet Address" }), listed);
+      const dialog = screen.getByRole("dialog", { name: "Edit User" });
+      expect(within(dialog).getByRole<HTMLInputElement>("switch", { name: "Approve Own Events" }).checked).toBe(true);
+      expect(within(dialog).getByRole<HTMLInputElement>("switch", { name: "Edit Events" }).checked).toBe(true);
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      await screen.findByText("Permissions updated");
+      expect(postJSON).toHaveBeenCalledWith(...saving(listed, ["approve_own_event", "edit_any_event", "edit_any_schedule", "approve_any_event"]));
+    });
+
+    it("should return to Add User with the earlier choices when the address changes again", async () => {
+      renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      const wallet = within(dialog).getByRole("textbox", { name: "Wallet Address" });
+      await user.type(wallet, listed);
+      expect(screen.getByRole("dialog", { name: "Edit User" })).toBe(dialog);
+      await user.type(wallet, "{Backspace}");
+      expect(screen.getByRole("dialog", { name: "Add User" })).toBe(dialog);
+      expect(within(dialog).getByRole<HTMLInputElement>("switch", { name: "Approve Events" }).checked).toBe(true);
+      expect(within(dialog).getByRole<HTMLInputElement>("switch", { name: "Approve Own Events" }).checked).toBe(false);
+    });
+  });
+
+  describe("and the typed wallet is not listed but holds grants", () => {
+    beforeEach(() => {
+      api.settings = { [NEW_WALLET]: { user: NEW_WALLET, permissions: ["approve_own_event", "edit_any_schedule"] } };
+    });
+
+    it("should keep the wallet's grants and add the chosen one", async () => {
+      renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), NEW_WALLET);
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      await screen.findByText("Permissions updated");
+      expect(postJSON).toHaveBeenCalledWith(...saving(NEW_WALLET, ["approve_own_event", "edit_any_schedule", "approve_any_event"]));
+    });
+  });
+
+  describe("and reading the typed wallet's grants fails", () => {
+    beforeEach(() => { api.failNext.settings = new Error("Settings unavailable"); });
+
+    it("should save nothing and report the failure in the dialog", async () => {
+      renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), NEW_WALLET);
+      await user.click(within(dialog).getByRole("switch", { name: "Approve Events" }));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      expect((await within(dialog).findByRole("alert")).textContent).toBe("Unable to read this wallet's current permissions. Please try again.");
+      expect(postJSON).not.toHaveBeenCalled();
+      expect(within(dialog).getByRole<HTMLButtonElement>("button", { name: "Save Changes" }).disabled).toBe(false);
+    });
+  });
+
+  describe("and the signed-in account types its own wallet while not listed", () => {
+    beforeEach(() => {
+      api.profiles = [{ user: address(1), permissions: ["approve_own_event"] }];
+      api.settings = { [MODERATOR]: profile };
+    });
+
+    it("should lock its own user administration and keep it and its other grants on save", async () => {
+      renderAdminPage(<UsersAdminPage />, PATH);
+      await user.click(await screen.findByRole("button", { name: "+ Add User" }));
+      const dialog = screen.getByRole("dialog", { name: "Add User" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Wallet Address" }), MODERATOR);
+      const own = within(dialog).getByRole<HTMLInputElement>("switch", { name: "Edit Users" });
+      expect(own.disabled).toBe(true);
+      expect(own.checked).toBe(true);
+      expect(within(dialog).getByText("You cannot remove your own admin permission")).toBeTruthy();
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+      await screen.findByText("Permissions updated");
+      expect(postJSON).toHaveBeenCalledWith(...saving(MODERATOR, ["approve_any_event", "edit_any_profile"]));
+    });
   });
 
   describe("and saving fails", () => {

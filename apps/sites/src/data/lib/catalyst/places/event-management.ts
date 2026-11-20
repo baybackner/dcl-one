@@ -94,6 +94,12 @@ export async function loadEventProfiles(identity: AuthIdentity, signal?: AbortSi
   return apiOkOf(z.array(Profile)).parse(await signedGetJSON("/events/api/profiles/settings", { identity, signal })).data;
 }
 
+/** One wallet's stored grants, a moderator's read; null when the wallet never saved settings. */
+export async function loadEventProfileSettings(identity: AuthIdentity, address: string, signal?: AbortSignal): Promise<EventProfile | null> {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error("Enter a valid wallet address.");
+  return apiOkOf(Profile.nullable()).parse(await signedGetJSON(`/events/api/profiles/${address.toLowerCase()}/settings`, { identity, signal })).data;
+}
+
 export async function saveEventPermissions(identity: AuthIdentity, address: string, permissions: string[]): Promise<EventProfile> {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error("Enter a valid wallet address.");
   if (permissions.some((permission) => !EVENT_PERMISSIONS.some((entry) => entry.id === permission))) throw new Error("Choose a supported event permission.");

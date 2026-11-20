@@ -129,7 +129,7 @@ describe("when hydrating the real Places document", () => {
     const server = tree(data);
     const container = document.createElement("div");
     container.innerHTML = renderToString(server.element);
-    expect(container.textContent).toContain("Load more places");
+    expect(within(container).getByRole("button", { name: "Load more places" })).toBeTruthy();
     document.body.append(container);
     const observe = vi.fn();
     if (observable)
@@ -213,9 +213,12 @@ describe("when hydrating the real Places document", () => {
     expect(recover).not.toHaveBeenCalled();
     expect(within(rail()).getByRole("link", { name: "Busy" })).toBeTruthy();
     expect(within(rail()).queryByRole("link", { name: "Quiet" })).toBeNull();
+    // This server's flags would now answer 0; the document keeps the head count it was rendered with.
+    serveFlags("0");
     await act(async () => browser.router.navigate("/places?category=music"));
     await waitFor(() => expect(browser.router.state.navigation.state).toBe("idle"));
     expect(within(rail()).getByRole("link", { name: "Busy" })).toBeTruthy();
     expect(within(rail()).queryByRole("link", { name: "Quiet" })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).startsWith("/internal/feature-flags"))).toEqual([]);
   });
 });

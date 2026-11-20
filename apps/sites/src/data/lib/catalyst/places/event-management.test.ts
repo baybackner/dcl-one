@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../client", async (original) => ({ ...await original<typeof import("../client")>(), postJSON: vi.fn(), signedGetJSON: vi.fn() }));
 import { CatalystError, postJSON, signedGetJSON } from "../client";
-import { eventAdminKeys, loadAllOwnedEvents, loadEventAccess, loadEventProfile, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
+import { eventAdminKeys, loadAllOwnedEvents, loadEventAccess, loadEventProfile, loadEventProfileSettings, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
 import type { AuthIdentity } from "../../auth/types";
 import type { ManagedEvent } from "./event-management";
 
@@ -88,8 +88,8 @@ describe("when managing authenticated hangouts", () => {
       const result = await loadModerationEvents(identity);
       expect(result.events.map((row) => row.id)).toEqual(["pending", "recurring"]);
       expect(result.recentlyApproved.map((row) => row.id)).toEqual(["approved"]);
-      expect(signedGetJSON).toHaveBeenNthCalledWith(1, "/events/api/events", expect.objectContaining({ identity, query: { list: "active", order: "asc", offset: 0, limit: 101 } }));
-      expect(signedGetJSON).toHaveBeenNthCalledWith(2, "/events/api/events", expect.objectContaining({ identity, query: { list: "active", order: "asc", offset: 100, limit: 101 } }));
+      expect(signedGetJSON).toHaveBeenCalledWith("/events/api/events", expect.objectContaining({ identity, query: { list: "active", order: "asc", offset: 0, limit: 101 } }));
+      expect(signedGetJSON).toHaveBeenCalledWith("/events/api/events", expect.objectContaining({ identity, query: { list: "active", order: "asc", offset: 100, limit: 101 } }));
     });
   });
 
@@ -129,6 +129,32 @@ describe("when managing authenticated hangouts", () => {
     await expect(saveEventPermissions(identity, "invalid", ["approve_any_event"])).rejects.toThrow("valid wallet address");
     expect(postJSON).not.toHaveBeenCalled();
   });
+
+  describe("and reading one wallet's stored grants", () => {
+    const wallet = "0x4444444444444444444444444444444444444444";
+
+    it("should read the wallet's settings, signed, by its lowercased address", async () => {
+      vi.mocked(signedGetJSON).mockResolvedValue({ ok: true, data: { user: wallet, permissions: ["edit_any_schedule"], email: null } });
+      await expect(loadEventProfileSettings(identity, wallet.toUpperCase().replace("0X", "0x"))).resolves.toEqual({ user: wallet, permissions: ["edit_any_schedule"] });
+      expect(signedGetJSON).toHaveBeenCalledWith(`/events/api/profiles/${wallet}/settings`, expect.objectContaining({ identity }));
+    });
+
+    it("should answer null for a wallet that never saved settings", async () => {
+      vi.mocked(signedGetJSON).mockResolvedValue({ ok: true, data: null });
+      await expect(loadEventProfileSettings(identity, wallet)).resolves.toBeNull();
+    });
+
+    it("should fail on a refused read", async () => {
+      vi.mocked(signedGetJSON).mockRejectedValue(new CatalystError("Forbidden", "settings", 403));
+      await expect(loadEventProfileSettings(identity, wallet)).rejects.toThrow("Forbidden");
+    });
+
+    it("should reject an invalid address without reading", async () => {
+      await expect(loadEventProfileSettings(identity, "invalid")).rejects.toThrow("valid wallet address");
+      expect(signedGetJSON).not.toHaveBeenCalled();
+    });
+  });
+
   describe("and moderation was not applied", () => {
     beforeEach(() => { vi.mocked(postJSON).mockResolvedValue({ ok: true, data: { approved: false, rejected: true } }); });
     it("should reject an approval superseded by rejection", async () => {
@@ -199,5 +225,4 @@ describe("when managing authenticated hangouts", () => {
       expect(eventAdminKeys.queue("0xABC")).toEqual(["private", "0xabc", "event-admin", "queue"]);
     });
   });
-
 });

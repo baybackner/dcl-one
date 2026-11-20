@@ -68,6 +68,7 @@ export const adminCopy = {
     cancel: 'Cancel',
     save: 'Save Changes',
     saveError: 'Unable to save permissions. Please try again.',
+    readError: "Unable to read this wallet's current permissions. Please try again.",
     saveSuccess: 'Permissions updated',
     serverKept:
       "Permissions updated. The server kept the account's effective permissions: moderator accounts always retain every permission.",
@@ -134,8 +135,9 @@ export function rejectionReason(reasons: readonly RejectReasonId[], notes: strin
 }
 
 /**
- * A stored reason read back: the reasons' titles it starts with, and the moderator's note after them. A reason
- * that does not start with known titles (written elsewhere, or cut at the length limit) is kept whole as one reason.
+ * A stored reason read back: the known reasons' titles it starts with, and the moderator's note after them.
+ * Text that does not start with known titles (a note stored without reasons, or a reason written elsewhere)
+ * is all note, so only known titles are ever presented as reasons.
  */
 export function readRejectionReason(stored: string | null | undefined): {
   reasons: string[]
@@ -145,12 +147,12 @@ export function readRejectionReason(stored: string | null | undefined): {
   if (!text) return { reasons: [], note: '' }
   const known = new Set<string>(REJECT_REASONS.map((reason) => reason.title))
   const end = text.indexOf('. ')
-  const head = end === -1 ? text : text.slice(0, end)
+  const head = end === -1 ? text.replace(/\.$/, '') : text.slice(0, end)
   const titles = head.split(', ')
   if (titles.every((title) => known.has(title))) {
     return { reasons: titles, note: end === -1 ? '' : text.slice(end + 2).trim() }
   }
-  return { reasons: [text], note: '' }
+  return { reasons: [], note: text }
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000

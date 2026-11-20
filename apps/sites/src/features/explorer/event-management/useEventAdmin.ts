@@ -15,6 +15,7 @@ export type EventAdminAccess = {
   permissions: readonly string[];
   /** Any grant at all: decentraland.org shows the admin bar to such an account. */
   isAdmin: boolean;
+  /** Approving any event: another creator's only together with `canEditAny`, as the API requires. */
   canApproveAny: boolean;
   /** Approving the account's own events only; the API scopes its list and its approvals to them. */
   canApproveOwn: boolean;

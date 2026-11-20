@@ -11,14 +11,19 @@ import * as authoring from "@/data/lib/catalyst/landings/submit-hangout";
 import { CatalystError } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
 import { loadHangoutOptions, type HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
+import { openSignIn } from "@/features/components/auth/signin-store";
 import SubmitHangoutRoute from "./events_.new-event";
 
 vi.hoisted(() => { Object.assign(window, { __vite_plugin_react_preamble_installed__: true }); });
 
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: vi.fn() }));
 vi.mock("@/data/lib/auth/session", () => ({ getIdentity: vi.fn() }));
+vi.mock("@/features/components/auth/signin-store", () => ({ openSignIn: vi.fn() }));
 
 vi.mock("@/data/lib/catalyst/landings/hangout-options", async (original) => ({ ...await original<typeof import("@/data/lib/catalyst/landings/hangout-options")>(), loadHangoutOptions: vi.fn() }));
+
+const EVENT_ID = "5f0c6a52-6b1d-4c1e-9a77-0e8f5b2c4d10";
+const EDIT_PATH = `/events/edit-event/${EVENT_ID}`;
 
 describe("when editing a hangout through its route", () => {
   let options: HangoutOptions;
@@ -33,8 +38,8 @@ describe("when editing a hangout through its route", () => {
 
   let scrollTo: ReturnType<typeof vi.spyOn>;
 
-  function mount(path = "/events/edit-event/existing-event") {
-    const loaderData = { sid: "test", mode: "edit", eventId: "existing-event", communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
+  function mount(path = `/events/edit-event/${EVENT_ID}`, eventId: string | null = EVENT_ID) {
+    const loaderData = { sid: "test", mode: "edit", eventId, communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
     router = createMemoryRouter([
       { id: "hangout", path: "/events/edit-event/:id", Component: SubmitHangoutRoute as never, loader: () => loaderData },
       { path: "/events", element: <h1>What's On</h1> },
@@ -45,7 +50,7 @@ describe("when editing a hangout through its route", () => {
   beforeEach(() => {
     identity = { signer: "0x1111111111111111111111111111111111111111", ephemeral: { address: "0x2222222222222222222222222222222222222222", privateKey: "0x01" }, expiration: "2099-01-01T00:00:00Z", authChain: [] };
     event = {
-        id: "existing-event", name: "Monthly series", image: "https://example.com/cover.png", image_vertical: null,
+        id: EVENT_ID, name: "Monthly series", image: "https://example.com/cover.png", image_vertical: null,
         description: "Series", start_at: "2099-06-01T18:00:00Z", finish_at: "2099-06-01T20:00:00Z", next_start_at: null, next_finish_at: null,
         duration: 7_200_000, all_day: false, x: 0, y: 0, server: "music.dcl.eth", url: null, user: identity.signer, user_name: null,
         estate_id: null, estate_name: null, scene_name: null, approved: true, rejected: false, highlighted: false, trending: false, world: true,
@@ -63,7 +68,7 @@ describe("when editing a hangout through its route", () => {
     vi.spyOn(authoring, "loadEditableHangout").mockImplementationOnce(() => new Promise((resolve, reject) => { resolveLoad = resolve; rejectLoad = reject; }));
     vi.spyOn(authoring, "deleteHangout").mockResolvedValue(undefined);
     scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-    client = new QueryClient();
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(eventsPageKeys.detail(event.id), event);
   });
   afterEach(() => { cleanup(); client.clear(); vi.restoreAllMocks(); vi.resetAllMocks(); router.dispose(); });
@@ -83,10 +88,10 @@ describe("when editing a hangout through its route", () => {
     });
   });
 
-  describe.each([401, 403, 404])("and the event read answers %i", (status) => {
+  describe.each([400, 401, 403, 404])("and the event read answers %i", (status) => {
     beforeEach(async () => {
       mount();
-      await act(async () => rejectLoad(new CatalystError("Event not found", "/events/api/events/existing-event", status)));
+      await act(async () => rejectLoad(new CatalystError("Event not found", `/events/api/events/${EVENT_ID}`, status)));
     });
 
     it("should replace the edit page with the Events page without showing the error", async () => {
@@ -99,11 +104,11 @@ describe("when editing a hangout through its route", () => {
   describe("and the event read fails with a server error", () => {
     beforeEach(async () => {
       mount();
-      await act(async () => rejectLoad(new CatalystError("Event service unavailable", "/events/api/events/existing-event", 500)));
+      await act(async () => rejectLoad(new CatalystError("Event service unavailable", `/events/api/events/${EVENT_ID}`, 500)));
     });
 
     it("should stay on the edit page and show the error with a retry under the header", () => {
-      expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+      expect(router.state.location.pathname).toBe(EDIT_PATH);
       expect(screen.getByRole("alert").textContent).toBe("Event service unavailable");
       expect(screen.getByRole("alert").dataset.tone).toBe("error");
       expect(screen.getByRole("heading", { name: "Edit Event" }).compareDocumentPosition(screen.getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -133,7 +138,7 @@ describe("when editing a hangout through its route", () => {
     });
 
     it("should offer a retry instead of leaving the page", () => {
-      expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+      expect(router.state.location.pathname).toBe(EDIT_PATH);
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
   });
@@ -141,10 +146,38 @@ describe("when editing a hangout through its route", () => {
   describe("and the visitor is signed out", () => {
     beforeEach(() => {
       vi.mocked(useAuth).mockReturnValue({ identity: null, address: null, isConnected: false } as unknown as ReturnType<typeof useAuth>);
+      vi.mocked(getIdentity).mockReturnValue(null);
       mount();
     });
 
-    it("should replace the edit page with the Events page without reading the event", async () => {
+    it("should ask for sign-in and return to this same editor afterwards", async () => {
+      await waitFor(() => expect(openSignIn).toHaveBeenCalledWith({ redirectTo: EDIT_PATH }));
+    });
+
+    it("should stay on the edit page with a sign-in action instead of leaving for the Events page", () => {
+      expect(router.state.location.pathname).toBe(EDIT_PATH);
+      expect(screen.getByRole("status").textContent).toBe("Sign in to edit your hangout.");
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+      expect(authoring.loadEditableHangout).not.toHaveBeenCalled();
+    });
+
+    describe("and the visitor closes the sign-in prompt and asks again", () => {
+      beforeEach(async () => {
+        await waitFor(() => expect(openSignIn).toHaveBeenCalledTimes(1));
+        await user.click(screen.getByRole("button", { name: "Sign in" }));
+      });
+
+      it("should open sign-in again for this page", () => {
+        expect(openSignIn).toHaveBeenCalledTimes(2);
+        expect(router.state.location.pathname).toBe(EDIT_PATH);
+      });
+    });
+  });
+
+  describe("and the edit link names a malformed event id, which the loader reads as no event", () => {
+    beforeEach(() => mount("/events/edit-event/not-an-id", null));
+
+    it("should not read the event and replace the edit page with the Events page", async () => {
       await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
       expect(router.state.historyAction).toBe("REPLACE");
       expect(authoring.loadEditableHangout).not.toHaveBeenCalled();
@@ -179,7 +212,7 @@ describe("when editing a hangout through its route", () => {
       beforeEach(async () => { await act(async () => resolveOptions({ ...options, profileError: "Profile service unavailable" })); });
 
       it("should stay on the edit page with a retry instead of denying access", () => {
-        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        expect(router.state.location.pathname).toBe(EDIT_PATH);
         expect(screen.getByRole("alert").textContent).toBe("Profile service unavailable");
         expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
       });
@@ -193,7 +226,7 @@ describe("when editing a hangout through its route", () => {
 
         it("should open the delegated editor", async () => {
           expect(await screen.findByRole("textbox", { name: "Custom join link" })).toBeTruthy();
-          expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+          expect(router.state.location.pathname).toBe(EDIT_PATH);
         });
       });
     });
@@ -260,7 +293,7 @@ describe("when editing a hangout through its route", () => {
         await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
         expect(screen.queryByRole("dialog")).toBeNull();
         expect(authoring.deleteHangout).not.toHaveBeenCalled();
-        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        expect(router.state.location.pathname).toBe(EDIT_PATH);
       });
 
       it("should delete through the authenticated helper and open My Events", async () => {
@@ -289,7 +322,7 @@ describe("when editing a hangout through its route", () => {
         expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toBe("We couldn't delete your event. Please try again.");
         expect(within(screen.getByRole("dialog")).getByRole("alert").dataset.tone).toBe("error");
         expect(within(screen.getByRole("dialog")).getByRole<HTMLButtonElement>("button", { name: "Delete event" }).disabled).toBe(false);
-        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        expect(router.state.location.pathname).toBe(EDIT_PATH);
         expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(false);
       });
     });
@@ -297,7 +330,7 @@ describe("when editing a hangout through its route", () => {
 
   describe("and the edit link names an anchor", () => {
     beforeEach(async () => {
-      mount("/events/edit-event/existing-event#schedule");
+      mount(`${EDIT_PATH}#schedule`);
       await act(async () => { resolveOptions(options); resolveLoad(event); });
     });
 

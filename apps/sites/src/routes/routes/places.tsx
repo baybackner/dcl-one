@@ -8,7 +8,7 @@ import { JumpInModal } from "@dcl/one-ui/apps/sites/places/JumpInModal";
 import { LiveNow } from "@dcl/one-ui/apps/sites/places/LiveNow";
 import { LoadMore, PlaceGrid, PlacesMessage } from "@dcl/one-ui/apps/sites/places/PlaceGrid";
 import { PlacesPage } from "@dcl/one-ui/apps/sites/places/PlacesPage";
-import { remoteFlag, remoteFlagVariant } from "@dcl/one-ui/apps/shop/remote-flags";
+import { remoteFlag, remoteFlagsPrimed, remoteFlagVariant } from "@dcl/one-ui/apps/shop/remote-flags";
 import { remoteFlagOn, remoteFlagVariantIn } from "@shop/discovery/lib/rolloutFlags";
 import type { PlaceCardData, PlaceCardLabels } from "@dcl/one-ui/apps/sites/places/cards/types";
 
@@ -163,29 +163,40 @@ export function headers() {
   return { Vary: "User-Agent" };
 }
 
-/** One read of this server's rollout flags per document, whatever its outcome, so a filter change never waits on it. */
-let flagsPrimed: Promise<void> | null = null;
+/** Live Now's head count this document knows: the server's answer it rendered, or a browser read that succeeded. */
+let knownMinUsers: number | null = null;
+/** One browser read of this server's rollout flags per document that never had the server's answer. */
+let flagsRead: Promise<number | null> | null = null;
 
 /**
  * Client navigations fetch the feeds through the browser cache; the server loader runs for the first document only.
- * Live Now's head count comes from this server's flags (/internal/feature-flags), read once per document; without an
- * answer it is 0, as the server's is.
+ * Live Now's head count is the one this document already knows (the server's, kept at hydration), so a filter change
+ * never waits on the flags. A document that never had it reads this server's flags (/internal/feature-flags) once; a
+ * failed read keeps the last known value, which is 0 (every scene) when there was none.
  */
 export async function clientLoader(): Promise<{ liveMinUsers: number }> {
-  flagsPrimed ??= primeDappsFlags();
-  await flagsPrimed;
-  return { liveMinUsers: liveMinUsersFrom(remoteFlag, remoteFlagVariant) };
+  if (knownMinUsers !== null) return { liveMinUsers: knownMinUsers };
+  flagsRead ??= primeDappsFlags().then(() => (remoteFlagsPrimed() ? liveMinUsersFrom(remoteFlag, remoteFlagVariant) : null));
+  const read = await flagsRead;
+  if (read !== null) knownMinUsers = read;
+  return { liveMinUsers: knownMinUsers ?? 0 };
 }
 
-/** Forgets the once-per-document flags read (tests). */
+/** Forgets the head count and the flags read this document holds (tests). */
 export function resetPlacesFlagsRead(): void {
-  flagsPrimed = null;
+  knownMinUsers = null;
+  flagsRead = null;
 }
 
 const subscribeHydration = () => () => {};
 
 export default function Places({ loaderData }: Route.ComponentProps) {
   const server = loaderData && "dehydratedState" in loaderData ? loaderData : undefined;
+  const serverMinUsers = server?.liveMinUsers;
+  // Effects run only in the browser, so the module keeps this document's value and never a server request's.
+  useEffect(() => {
+    if (serverMinUsers !== undefined) knownMinUsers = serverMinUsers;
+  }, [serverMinUsers]);
   return (
     <HydrationBoundary state={server?.dehydratedState}>
       <PlacesExplorer

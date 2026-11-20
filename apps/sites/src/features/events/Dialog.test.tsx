@@ -14,7 +14,10 @@ vi.hoisted(() =>
 
 import { Dialog } from "@dcl/one-ui/apps/sites/events/Dialog";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function Harness({ keepOpener = true }: { keepOpener?: boolean }) {
   const [open, setOpen] = useState(false);

@@ -22,7 +22,7 @@ import {
 
 const NOW = Date.parse("2099-06-01T12:00:00Z");
 
-describe("liveNowItems", () => {
+describe("when building the Live Now rail", () => {
   it("should show a live event at a busy place with the place's players, then the other busy places", () => {
     const event = eventRecord({ id: "live", live: true, x: 1, y: 95 });
     const items = liveNowItems({
@@ -53,7 +53,7 @@ describe("liveNowItems", () => {
         events: [eventRecord({ live: true, x: 5, y: 5 })],
         places: [placeRecord({ id: "quiet", positions: ["5,5"], user_count: 2 }), plaza],
       });
-      expect(items).toEqual([{ kind: "place", place: plaza, users: 0 }]);
+      expect(items).toEqual([{ kind: "place", place: plaza, users: 0, fallback: true }]);
     });
 
     it("should find Genesis Plaza by its parcel when its title differs", () => {
@@ -61,14 +61,25 @@ describe("liveNowItems", () => {
       expect(liveNowItems({ events: [], places: [plaza] }).map((item) => item.kind === "place" && item.place.id)).toEqual(["spawn"]);
     });
 
+    it("should take the scene on parcel 0,0 over another scene whose title names Genesis Plaza", () => {
+      const afterparty = placeRecord({ id: "afterparty", title: "Genesis Plaza Afterparty", positions: ["40,40"], user_count: 0 });
+      const plaza = placeRecord({ id: "spawn", title: "Spawn", positions: ["0,0"], user_count: 1 });
+      expect(liveNowItems({ events: [], places: [afterparty, plaza] }).map((item) => item.kind === "place" && item.place.id)).toEqual(["spawn"]);
+    });
+
+    it("should find Genesis Plaza by its title when no scene covers parcel 0,0", () => {
+      const plaza = placeRecord({ id: "plaza", title: "Genesis Plaza", positions: ["1,1"], user_count: 0 });
+      expect(liveNowItems({ events: [], places: [plaza] }).map((item) => item.kind === "place" && item.place.id)).toEqual(["plaza"]);
+    });
+
     it("should not take a World on 0,0 for Genesis Plaza", () => {
       const world = placeRecord({ id: "world", world: true, world_name: "brai.dcl.eth", positions: ["0,0"], user_count: 0 });
-      expect(liveNowItems({ events: [], places: [world] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
+      expect(liveNowItems({ events: [], places: [world] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0, fallback: true }]);
     });
 
     it("should open the rail with the Foundation's Genesis Plaza on parcel 0,0 and no players when the feed has none", () => {
       const items = liveNowItems({ events: [], places: [placeRecord({ id: "quiet", positions: ["5,5"], user_count: 2 })] });
-      expect(items).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
+      expect(items).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0, fallback: true }]);
       expect(GENESIS_PLAZA).toMatchObject({
         id: "genesis-plaza",
         title: "Genesis Plaza",
@@ -81,8 +92,13 @@ describe("liveNowItems", () => {
     });
 
     it("should open the rail with Genesis Plaza when the feed is empty", () => {
-      expect(liveNowItems({ events: [], places: [] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0 }]);
+      expect(liveNowItems({ events: [], places: [] })).toEqual([{ kind: "place", place: GENESIS_PLAZA, users: 0, fallback: true }]);
     });
+  });
+
+  it("should mark only the Genesis Plaza stand-in as a fallback, never a live item", () => {
+    const items = liveNowItems({ events: [], places: [placeRecord({ id: "busy", positions: ["9,9"], user_count: 30 })] });
+    expect(items).toEqual([expect.not.objectContaining({ fallback: true })]);
   });
 
   it("should not add Genesis Plaza when a busy place already fills the rail", () => {
