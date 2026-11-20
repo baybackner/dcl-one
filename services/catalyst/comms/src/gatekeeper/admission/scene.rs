@@ -57,8 +57,8 @@ mod lookup;
 #[cfg(test)]
 use lookup::listing_key_candidate;
 pub use lookup::{
-    PlaceInfo, PlaceLookup, place_from_metadata, realm_name_from_metadata,
-    resolve_listing_place_id, resolve_world_scene_id, try_load_place_info,
+    NO_ADMINS, PlaceInfo, PlaceLookup, realm_name_from_metadata, resolve_listing_place_id,
+    resolve_world_scene_id, try_load_place_info,
 };
 pub(crate) use lookup::{
     meta_str, participant_room, require_genesis_deployment, resolve_adapter_room, signed_realm_url,
@@ -277,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_key_and_place_from_metadata() {
+    fn listing_key_from_metadata() {
         assert_eq!(
             listing_key_candidate(&json!({ "realmName": "foo.dcl.eth", "sceneId": "bafkreiabc" }))
                 .as_deref(),
@@ -303,14 +303,6 @@ mod tests {
         );
         assert_eq!(listing_key_candidate(&json!({})), None);
         assert_eq!(listing_key_candidate(&json!({ "realmName": "main" })), None);
-        assert_eq!(
-            place_from_metadata(&json!({ "realmName": "foo.dcl.eth", "sceneId": "x" })).as_deref(),
-            Some("foo.dcl.eth")
-        );
-        assert_eq!(
-            place_from_metadata(&json!({ "realmName": "main", "sceneId": "x" })).as_deref(),
-            Some("x")
-        );
     }
 
     /// A world published here signs its stripped `/about` realm name (or an
@@ -332,15 +324,19 @@ mod tests {
             Some("bafkreiabc")
         );
         assert_eq!(
-            place_from_metadata(&stripped).as_deref(),
-            Some("foo.dcl.eth")
-        );
-        assert_eq!(
             plan(&RoomContext::from_metadata(&stripped, "place-1")),
             RoomPlan::World {
                 world: "foo.dcl.eth".into(),
                 scene_id: Some("bafkreiabc".into()),
             }
+        );
+        let unity = json!({
+            "realm": { "serverName": "foo", "hostname": "worlds-content-server.node.example" },
+        });
+        assert_eq!(
+            realm_name_from_metadata(&unity).as_deref(),
+            Some("foo.dcl.eth"),
+            "the Unity client signs the worlds host alone"
         );
         let genesis = json!({
             "realm": { "serverName": "main", "hostname": "node.example" },
