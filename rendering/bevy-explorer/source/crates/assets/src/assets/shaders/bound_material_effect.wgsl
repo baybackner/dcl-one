@@ -136,37 +136,55 @@ fn apply_outline(position: vec4<f32>, color_in: vec4<f32>, outline_rgb: vec3<f32
 return out;
 }
 
-// the avatar outline (its constants are scene_material::toon's): a darker, more saturated tone of the surface, base being its base colour, that thins
-// with the mesh's distance from the camera and, in a perspective view, stops at the cutoff
-// distance. Distances are to the mesh's origin, so a whole mesh gains or loses its outline at
-// once. An orthographic view has no cutoff: its camera stands back however large it draws the
+// the avatar outline's width in metres at and below OUTLINE_NEAREST_M from the camera
+const OUTLINE_WIDTH_M: f32 = 0.002;
+// the camera distance at and below which the outline has its full width
+const OUTLINE_NEAREST_M: f32 = 0.5;
+// the camera distance at and beyond which the outline has no width
+const OUTLINE_FARTHEST_M: f32 = 100.0;
+// the grey of the outline, taken times the base colour twice: a darker, more saturated tone of the
+// surface it borders, not lit
+const OUTLINE_COLOR: f32 = 0.6320754;
+// the squared camera distance beyond which an avatar has no outline in a perspective view: 8 m
+const OUTLINE_MAX_SQR_DISTANCE: f32 = 64.0;
+// how far behind a fragment the mean of its four diagonal neighbours must lie for the line, in
+// pixel footprints (the metres one step to the neighbours spans at the fragment's depth). A
+// straight edge has half its neighbours behind it, so the surface behind needs a gap of three
+// footprints: a chin over the neck, an ear or a lock of hair is lined, while a curved surface's
+// own rise towards its silhouette stays below it
+const OUTLINE_EDGE_PX: f32 = 1.5;
+
+// the avatar outline: a darker, more saturated tone of the surface, base being its base colour,
+// that thins with the mesh's distance from the camera and, in a perspective view, stops at the
+// cutoff distance. Distances are to the mesh's origin, so a whole mesh gains or loses its outline
+// at once. An orthographic view has no cutoff: its camera stands back however large it draws the
 // avatar (the avatar preview). A pipeline importing this needs
-// scene_material::toon::toon_shader_defs
-#ifdef TOON_OUTLINE_WIDTH_M
+// scene_material::avatar_style_shader_defs
+#ifdef TOON_LIGHT_UNIT_LUX
 fn toon_outline(position: vec4<f32>, color_in: vec4<f32>, base: vec3<f32>, instance_index: u32, view_z: f32, sample_index: u32, dither_opacity: f32) -> vec4<f32> {
     let to_camera = mesh_functions::get_world_from_local(instance_index)[3].xyz - view.world_position;
     let sqr_distance = dot(to_camera, to_camera);
     let perspective = view.clip_from_view[3].w != 1.0;
     // past the cutoff a perspective view has no line, and no prepass read
-    if perspective && sqr_distance > bitcast<f32>(#{TOON_OUTLINE_MAX_SQR_DISTANCE}u) {
+    if perspective && sqr_distance > OUTLINE_MAX_SQR_DISTANCE {
         return color_in;
     }
     // the width in metres falls from full at the nearest distance to none at the farthest, and
     // is projected at this fragment's depth. focal_px is the pixels a metre covers one metre
     // deep, and at any depth in an orthographic view
-    let falloff = 1.0 - smoothstep(bitcast<f32>(#{TOON_OUTLINE_NEAREST_M}u), bitcast<f32>(#{TOON_OUTLINE_FARTHEST_M}u), sqrt(sqr_distance));
+    let falloff = 1.0 - smoothstep(OUTLINE_NEAREST_M, OUTLINE_FARTHEST_M, sqrt(sqr_distance));
     let focal_px = view.clip_from_view[1][1] * view.viewport.w * 0.5;
-    var width_px = bitcast<f32>(#{TOON_OUTLINE_WIDTH_M}u) * falloff * focal_px;
+    var width_px = OUTLINE_WIDTH_M * falloff * focal_px;
     if perspective {
         width_px /= view_z;
     }
     // the line is not lit: its colour is in the base colour's space, scaled by one light unit to
     // the pre-tonemap level of the lit body (toon.wgsl)
     let unit = bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u) * view.exposure / PI;
-    let outline_rgb = bitcast<f32>(#{TOON_OUTLINE_COLOR}u) * base * base * unit;
+    let outline_rgb = OUTLINE_COLOR * base * base * unit;
     // a crease darkens the surface by the outline's grey
-    let crease = vec3(bitcast<f32>(#{TOON_OUTLINE_COLOR}u));
-    return apply_outline(position, color_in, outline_rgb, crease, width_px, bitcast<f32>(#{TOON_OUTLINE_EDGE_PX}u), sample_index, dither_opacity);
+    let crease = vec3(OUTLINE_COLOR);
+    return apply_outline(position, color_in, outline_rgb, crease, width_px, OUTLINE_EDGE_PX, sample_index, dither_opacity);
 }
 #endif
 

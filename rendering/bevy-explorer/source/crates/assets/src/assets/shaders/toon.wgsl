@@ -11,8 +11,9 @@
 // alone, times a gain, with no sun, no bands and no saturation.
 // No point or spot light reaches the avatar (decisions.md).
 //
-// The constants are scene_material::toon's, carried as defs by its toon_shader_defs: a float is
-// its bit pattern, read with bitcast<f32>.
+// Two values are derived in Rust and carried as defs by scene_material::avatar_style_shader_defs,
+// each float as its bit pattern read with bitcast<f32>: TOON_LIGHT_UNIT_LUX (the light unit,
+// common::sky_preset::LIGHT_UNIT_LUX) and TOON_FACIAL_FLAT_AMBIENT_R/G/B.
 // Avatars still CAST shadows (that is the shadow pass's job, not this shading).
 
 #import bevy_pbr::{
@@ -35,21 +36,48 @@ const EMISSIVE_SCALE: f32 = 0.2;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
+// the half-Lambert below which the base colour gives way to the shades
+const BASE_COLOR_STEP: f32 = 0.2;
+// the width of the base-to-shade transition below BASE_COLOR_STEP
+const BASE_SHADE_FEATHER: f32 = 0.02;
+// the half-Lambert below which the first shade gives way to the second
+const SHADE_COLOR_STEP: f32 = 0.2;
+// the width of the first-to-second shade transition below SHADE_COLOR_STEP
+const SHADES_FEATHER: f32 = 0.05;
+// the grey the lit base colour is multiplied by in the first shade
+const FIRST_SHADE: f32 = 0.9490197;
+// the grey of the second, darker shade
+const SECOND_SHADE: f32 = 0.8000001;
+// the gain on the ambient light that floors the light colour
+const UNLIT_INTENSITY: f32 = 4.0;
+// the least ambient light the floor takes, before UNLIT_INTENSITY: with no light at all an
+// avatar is lit at a fifth of noon
+const UNLIT_FLOOR: f32 = 0.05;
+// the gain on the ambient light that lights the eyes, eyebrows and mouth
+const FACIAL_AMBIENT_GAIN: f32 = 4.0;
+// the rim light's width: the rim is the silhouette term to the power 2^(3 - 3 * RIM_POWER), so 0
+// keeps it at the very edge and 1 spreads it over the body
+const RIM_POWER: f32 = 0.3;
+// the silhouette term below which there is no rim light; above it the rim rises to 1
+const RIM_INSIDE_MASK: f32 = 0.15;
+// the rim light's strength, as saturate(1 + RIM_MASK_LEVEL): a tenth
+const RIM_MASK_LEVEL: f32 = -0.9;
+
 // the shadow mask (1 in the shades) and the shades term (the first shade blending into the
 // second) for a half-Lambert from n_dot_l and the sun's cast-shadow term (1 lit). A full shadow
 // halves the half-Lambert the mask reads, so only surfaces already turning away from the sun fall
 // into the shades; the shades blend on the unshadowed half-Lambert
 fn toon_mask_and_shades(n_dot_l: f32, shadow: f32) -> vec2<f32> {
-    let base_step = bitcast<f32>(#{TOON_BASE_COLOR_STEP}u);
-    let base_feather = bitcast<f32>(#{TOON_BASE_SHADE_FEATHER}u);
-    let shade_step = bitcast<f32>(#{TOON_SHADE_COLOR_STEP}u);
-    let shades_feather = bitcast<f32>(#{TOON_SHADES_FEATHER}u);
+    let base_step = BASE_COLOR_STEP;
+    let base_feather = BASE_SHADE_FEATHER;
+    let shade_step = SHADE_COLOR_STEP;
+    let shades_feather = SHADES_FEATHER;
 
     let half_lambert = 0.5 * n_dot_l + 0.5;
     let shadowed = half_lambert * saturate(shadow * 0.5 + 0.5);
     let mask = saturate(1.0 - (shadowed - (base_step - base_feather)) / base_feather);
     let second = saturate(1.0 - (half_lambert - (shade_step - shades_feather)) / shades_feather);
-    let shades = mix(bitcast<f32>(#{TOON_FIRST_SHADE}u), bitcast<f32>(#{TOON_SECOND_SHADE}u), second);
+    let shades = mix(FIRST_SHADE, SECOND_SHADE, second);
     return vec2(mask, shades);
 }
 
@@ -63,8 +91,8 @@ fn toon_diffuse(n_dot_l: f32, shadow: f32, light: vec3<f32>) -> vec3<f32> {
 // the light colour: the sun in light units, saturated so a bright sun never lifts avatars past
 // white, and floored by the ambient light times a gain and by a minimum so they stay visible
 fn toon_light(sun_lux: vec3<f32>, ambient: vec3<f32>) -> vec3<f32> {
-    let unlit = bitcast<f32>(#{TOON_UNLIT_INTENSITY}u);
-    let unlit_floor = bitcast<f32>(#{TOON_UNLIT_FLOOR}u);
+    let unlit = UNLIT_INTENSITY;
+    let unlit_floor = UNLIT_FLOOR;
     let default_light = saturate(max(ambient, vec3(unlit_floor)) * unlit);
     return max(default_light, saturate(sun_lux / bitcast<f32>(#{TOON_LIGHT_UNIT_LUX}u)));
 }
@@ -125,14 +153,14 @@ fn facial_feature_lighting(pbr_input: PbrInput) -> vec4<f32> {
     let ambient = toon_irradiance(pbr_input.N, world_position.xyz, &clusterable_object_index_ranges) * view.exposure / unit;
 #else
     // a view without the sky: its flat ambient is set to light the body flat, far above any sky,
-    // so the face features take the noon sky's horizon instead (scene_material::toon)
+    // so the face features take the noon sky's horizon instead
     let ambient = vec3(
         bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_R}u),
         bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_G}u),
         bitcast<f32>(#{TOON_FACIAL_FLAT_AMBIENT_B}u),
     );
 #endif
-    let light = max(ambient, vec3(0.0)) * bitcast<f32>(#{TOON_FACIAL_AMBIENT_GAIN}u);
+    let light = max(ambient, vec3(0.0)) * FACIAL_AMBIENT_GAIN;
     let color = base_color.rgb * light * unit + toon_emission(pbr_input);
     return vec4<f32>(color, base_color.a);
 }
@@ -208,11 +236,11 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
 
     // a white rim light on the silhouette, where the surface turns away from the view, in the
     // light colour
-    let rim_inside = bitcast<f32>(#{TOON_RIM_INSIDE_MASK}u);
+    let rim_inside = RIM_INSIDE_MASK;
     let rim_area = abs(1.0 - dot(n, v));
-    let rim_power = pow(rim_area, exp2(mix(3.0, 0.0, bitcast<f32>(#{TOON_RIM_POWER}u))));
+    let rim_power = pow(rim_area, exp2(mix(3.0, 0.0, RIM_POWER)));
     let rim = saturate((rim_power - rim_inside) / (1.0 - rim_inside))
-        * saturate(1.0 + bitcast<f32>(#{TOON_RIM_MASK_LEVEL}u));
+        * saturate(1.0 + RIM_MASK_LEVEL);
 
     // the rim adds on top of the lit colours
     var color = (base_color.rgb * diffuse + rim * light) * unit;

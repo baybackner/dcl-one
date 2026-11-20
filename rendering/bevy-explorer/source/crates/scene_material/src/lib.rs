@@ -17,13 +17,13 @@ use boimp::bake::{
     ImposterBakeMaterial, ImposterBakeMaterialExtension, ImposterBakeMaterialPlugin,
 };
 use common::{
+    sky_preset::{ambient_trilight, LIGHT_UNIT_LUX},
     structs::{PreviewMode, ShowOutOfBounds},
     util::InvertedScaleExt,
 };
 use highlight::HighlightPlugin;
 
 pub mod highlight;
-pub mod toon;
 
 pub type SceneMaterial = ExtendedMaterial<SceneBound>;
 
@@ -68,8 +68,15 @@ pub fn unrevealed_mesh_tag(tag: u32) -> u32 {
 }
 
 /// the tag bits an avatar's style is read from (the camera dither, the toon lighting and the
-/// outline) and the toon constants, for the pipeline of every shader that styles an avatar's
-/// meshes: bound_material.wgsl and mask_material.wgsl
+/// outline) and the toon values derived here, for the pipeline of every shader that styles an
+/// avatar's meshes: bound_material.wgsl and mask_material.wgsl. A def carries only integers, so
+/// each `f32` travels as its bit pattern and the shader reads it with `bitcast<f32>(#{NAME}u)`:
+/// - `TOON_LIGHT_UNIT_LUX`, the light unit;
+/// - `TOON_FACIAL_FLAT_AMBIENT_R/G/B`, the ambient light, in light units, that lights the eyes,
+///   eyebrows and mouth in a view without the sky environment map (the Backpack preview, a photo
+///   booth): the noon Trilight's equator colour, about what the sky gives a surface facing the
+///   horizon at noon. Such a view's flat ambient is set to light the body flat, far above any
+///   sky, so it is not read there.
 pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
     [
         (
@@ -89,7 +96,16 @@ pub fn avatar_style_shader_defs() -> Vec<ShaderDefVal> {
     ]
     .into_iter()
     .map(|(name, tag)| ShaderDefVal::UInt(name.to_owned(), tag))
-    .chain(toon::toon_shader_defs())
+    .chain({
+        let flat = ambient_trilight(0.5)[1];
+        [
+            ("TOON_LIGHT_UNIT_LUX", LIGHT_UNIT_LUX),
+            ("TOON_FACIAL_FLAT_AMBIENT_R", flat.x),
+            ("TOON_FACIAL_FLAT_AMBIENT_G", flat.y),
+            ("TOON_FACIAL_FLAT_AMBIENT_B", flat.z),
+        ]
+        .map(|(name, value)| ShaderDefVal::UInt(name.to_owned(), value.to_bits()))
+    })
     .collect()
 }
 
