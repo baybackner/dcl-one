@@ -98,7 +98,6 @@ pub async fn credits_grant(
                 address: &address,
                 amount: &amount,
                 kind,
-                operator: true,
                 reason: reason.as_deref(),
                 actor: Some(&actor),
                 idempotency_key: idempotency_key.as_deref(),

@@ -101,9 +101,6 @@ pub struct GrantRequest<'a> {
     pub address: &'a str,
     pub amount: &'a str,
     pub kind: &'a str,
-    /// An operator's grant or top-up recovery. A flagged wallet receives no credit
-    /// except a purchase it made itself (a Stripe payment, its own MANA claim).
-    pub operator: bool,
     pub reason: Option<&'a str>,
     pub actor: Option<&'a str>,
     pub idempotency_key: Option<&'a str>,
@@ -275,7 +272,6 @@ impl Credits {
             address,
             amount,
             kind,
-            operator,
             reason,
             actor,
             idempotency_key,
@@ -334,8 +330,8 @@ impl Credits {
             }
         }
 
-        // A flagged wallet receives only its own purchases; a replay above still answers its first outcome.
-        if operator || kind != "purchase" {
+        // The flag holds free credits only: a purchase or refund still credits; a replay above answers first.
+        if kind == "grant" {
             let source: Option<String> =
                 sqlx::query_scalar("SELECT source FROM credits.wallet_flags WHERE address = $1")
                     .bind(address)
@@ -343,7 +339,7 @@ impl Credits {
                     .await?;
             if let Some(source) = source {
                 return Err(ApiError::conflict(format!(
-                    "Wallet {address} is flagged ({source}); only its own purchases are credited"
+                    "Wallet {address} is flagged ({source}) and cannot receive granted credits"
                 )));
             }
         }

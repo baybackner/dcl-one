@@ -13,8 +13,9 @@
 //! replays it instead of granting again. A transfer paid by another wallet (an
 //! exchange, a smart wallet) cannot be recovered this way. A recovery credits
 //! the operator's amount, not one derived from the transfer value (no rate is
-//! recorded for the transfers it exists for), is refused for a flagged wallet
-//! until an unflag, and is not refused under `CREDITS_TRIAL_MODE`.
+//! recorded for the transfers it exists for), and is not refused under
+//! `CREDITS_TRIAL_MODE`. It is a paid credit, so a `credits.wallet_flags` flag,
+//! which holds only free grants, does not refuse it.
 
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};
@@ -356,7 +357,6 @@ pub async fn mana_topup(
             address: signer.as_str(),
             amount: &credits,
             kind: "purchase",
-            operator: false,
             reason: Some("MANA top-up"),
             actor: Some("mana-topup"),
             idempotency_key: Some(&idem),
