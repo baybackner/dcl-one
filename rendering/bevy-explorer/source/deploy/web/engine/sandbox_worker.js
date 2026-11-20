@@ -439,6 +439,12 @@ function tearDown() {
 const relayAtomicsStore = Atomics.store;
 const relayAtomicsLoad = Atomics.load;
 const relayAtomicsWait = Atomics.wait;
+// Waiting for the engine's send (relay.rs RelayWake): the view of the wake word is a view of engine
+// memory, so it only ever goes to these captured functions, and `then` is called through a bound
+// `call` rather than looked up on the promise.
+const relayWaitAsync = Atomics.waitAsync;
+const relayThen = Function.prototype.call.bind(Promise.prototype.then);
+const RelayInt32Array = Int32Array;
 const relaySetTimeout = setTimeout;
 const relayPostTask = self.scheduler?.postTask?.bind(self.scheduler);
 const relayLog = {
@@ -559,6 +565,11 @@ async function relayStart(compiledModule, sharedMemory, sceneModule) {
   if (!got) throw new Error("no scene in the relay queue");
   // from the engine's side, not the scene runtime's
   sceneId = BigInt.asUintN(64, enter(() => relay.relay_scene_id()));
+  // the word the engine bumps when it sends this scene something; undefined: sleep as before
+  // an i32 without the glue: as unsigned, for an address past 2 GiB
+  const wakePtr = enter(() => relay.relay_wake_ptr()) >>> 0;
+  const wakeView =
+    relayWaitAsync && wakePtr ? new RelayInt32Array(sharedMemory.buffer, wakePtr, 1) : undefined;
 
   let done = false;
   let finishRequested = false;
@@ -585,14 +596,24 @@ async function relayStart(compiledModule, sharedMemory, sceneModule) {
   // prototype, so reading its members can't reach anything scene code defined.
   const sleep = (ms, f) =>
     relayPostTask ? relayPostTask(f, { __proto__: null, delay: ms }) : relaySetTimeout(f, ms);
+  // idle wait for the engine's send: as long as the sleep it replaces, which also covers what
+  // wakes no one (global updates, the kill flag, the scene's own replies)
+  const RELAY_IDLE_MS = 1;
   const step = () => {
     if (done) return;
     let killed = 0;
     let moved = 0;
+    let wake = 0;
+    let seen = 0;
     try {
       enter(() => {
         killed = relay.relay_killed();
-        if (!killed) moved = relay.relay_pump();
+        if (!killed) {
+          wake = wakeView ? relay.relay_wake_mode() : 0;
+          // before the pump: a send after this changes the word, so the wait below can't miss it
+          if (wake) seen = relayAtomicsLoad(wakeView, 0);
+          moved = relay.relay_pump();
+        }
       });
       if (checkFailure()) killed = 1;
     } catch (e) {
@@ -612,7 +633,15 @@ async function relayStart(compiledModule, sharedMemory, sceneModule) {
       }
       return;
     }
-    sleep(moved ? 0 : 1, step);
+    if (moved || !wake) {
+      sleep(moved ? 0 : 1, step);
+      return;
+    }
+    // outside A (IN_RUST clear), so the engine may terminate the worker during the wait
+    const waited = relayWaitAsync(wakeView, 0, seen, RELAY_IDLE_MS);
+    if (waited.async) relayThen(waited.value, step);
+    // "not-equal": the engine sent something since the load
+    else sleep(0, step);
   };
   step();
 }
