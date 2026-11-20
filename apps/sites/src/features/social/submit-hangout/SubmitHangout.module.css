@@ -137,7 +137,7 @@
 .group > legend {
   float: left;
   width: 100%;
-  margin: 0 0 var(--dcl-space-12);
+  margin: 0;
   padding: 0;
   font-size: var(--dcl-font-size-body-md-strong);
   font-weight: 600;
@@ -176,7 +176,7 @@
 }
 
 .grow { flex: 1 1 0; min-width: 0; }
-.narrow { flex: 0 1 200px; min-width: 0; }
+.narrow { flex: 0 1 25%; min-width: 0; }
 
 /* Field titles and controls are written for this editor; the step wizard keeps its global classes. */
 .authoring .fieldLabel {
@@ -244,7 +244,8 @@
 
 .counter,
 .fieldHint,
-.note {
+.note,
+.reviewNote p {
   margin: 0;
   color: var(--dcl-text-secondary);
   font-size: var(--dcl-font-size-body-xs);
@@ -252,13 +253,15 @@
   line-height: 1.5;
 }
 
-.note {
+.note,
+.reviewNote p {
   display: flex;
   align-items: center;
   gap: var(--dcl-space-8);
 }
 
-.note svg { flex: none; }
+.note svg,
+.reviewNote svg { flex: none; }
 
 /* The featured-asset search reads as one more group of the form, not a boxed group. */
 .authoring .picker { gap: var(--dcl-space-12); }

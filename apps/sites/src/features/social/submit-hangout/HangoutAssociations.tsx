@@ -16,7 +16,7 @@ export function CommunityField({ draft, options, canChangeCommunity, onEdit, cla
   const { text } = useEventsCopy();
   const knownCommunity = options?.communities.some((community) => community.id === draft.communityId);
   return <div className={[styles.community, className].filter(Boolean).join(" ")}>
-    <label className={`submit-hangout__fieldlabel ${form.fieldLabel}`}><span className={form.fieldTitle}>{text("Community")}</span>
+    <label className={`submit-hangout__fieldlabel ${form.fieldLabel} ${styles.columnLabel}`}><span className={form.fieldTitle}>{text("Community")}</span>
       <SelectControl aria-label={text("Community")} className={`submit-hangout__field ${form.field}`} value={draft.communityId} disabled={!canChangeCommunity} onChange={(event) => onEdit({ communityId: event.target.value })}>
         <option value="">{text("None")}</option>
         {draft.communityId && !knownCommunity && <option value={draft.communityId}>{text("Current community")}</option>}
@@ -44,7 +44,7 @@ export function AdminFields({ draft, options, onEdit, className }: {
         {selectedSchedules.filter((id) => !schedules.some((schedule) => schedule.id === id)).map((id) => <label className="submit-hangout__fieldcheck" key={id}><input type="checkbox" checked onChange={() => onEdit({ scheduleIds: selectedSchedules.filter((selected) => selected !== id) })} />{text("Unavailable schedule (remove association)")}</label>)}
       </>}
     </fieldset>
-    <label className={`submit-hangout__fieldlabel ${form.fieldLabel}`}><span className={form.fieldTitle}>{text("Custom join link")}</span><input type="url" className={`submit-hangout__field ${form.field}`} value={draft.joinUrl ?? ""} onChange={(event) => onEdit({ joinUrl: event.target.value })} placeholder={text("Use the venue's default link")} /></label>
+    <label className={`submit-hangout__fieldlabel ${form.fieldLabel} ${styles.columnLabel}`}><span className={form.fieldTitle}>{text("Custom join link")}</span><input type="url" className={`submit-hangout__field ${form.field}`} value={draft.joinUrl ?? ""} onChange={(event) => onEdit({ joinUrl: event.target.value })} placeholder={text("Use the venue's default link")} /></label>
   </div>;
 }
 
