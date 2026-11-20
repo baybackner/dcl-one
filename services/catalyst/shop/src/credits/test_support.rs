@@ -29,7 +29,7 @@ pub fn mana_payment_from(from: &str, confirmations: u64) -> ManaPaymentVerificat
 }
 
 /// A configured broker that answers top-up verifications from `verifications`, matched exactly;
-/// every other call is the unconfigured broker's answer.
+/// every other call except `configured` (always `true`) is the unconfigured broker's answer.
 ///
 /// A hash missing from `verifications` answers 400 (`economy rejected the txHash`), not
 /// `NoPayment`. A test of the 422 "no payment" refusal must register its hash as

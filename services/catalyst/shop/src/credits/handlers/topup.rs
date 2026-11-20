@@ -12,8 +12,9 @@
 //! booked as a purchase, like the claim, and a later claim of that hash
 //! replays it instead of granting again. A transfer paid by another wallet (an
 //! exchange, a smart wallet) cannot be recovered this way. A recovery credits
-//! the operator's amount, not one derived from the transfer value, and is not
-//! refused under `CREDITS_TRIAL_MODE`.
+//! the operator's amount, not one derived from the transfer value (no rate is
+//! recorded for the transfers it exists for), is refused for a flagged wallet
+//! until an unflag, and is not refused under `CREDITS_TRIAL_MODE`.
 
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};
@@ -72,7 +73,7 @@ fn topup_idempotency_key(tx_hash_lowercase: &str) -> String {
 
 /// An operator's key for recovering a top-up: `Some(canonical key)` when it
 /// names one (prefix in any case, a valid hash), the same key a claim uses.
-fn recovered_topup_key(key: &str) -> Option<Result<String, ApiError>> {
+pub(crate) fn recovered_topup_key(key: &str) -> Option<Result<String, ApiError>> {
     let prefix = key.get(..MANA_TOPUP_KEY_PREFIX.len())?;
     if !prefix.eq_ignore_ascii_case(MANA_TOPUP_KEY_PREFIX) {
         return None;
@@ -83,34 +84,10 @@ fn recovered_topup_key(key: &str) -> Option<Result<String, ApiError>> {
     )
 }
 
-/// The key and ledger kind an operator grant books, on every operator route:
-/// a recovered top-up key becomes the claim's own key, is verified unless
-/// already booked (a booked key replays its first outcome) and is a purchase;
-/// any other key is a grant.
-pub async fn operator_grant_key(
-    state: &SharedState,
-    key: Option<String>,
-    address: &str,
-) -> Result<(Option<String>, &'static str), ApiError> {
-    let Some(recovered) = key.as_deref().and_then(recovered_topup_key) else {
-        return Ok((key, "grant"));
-    };
-    let recovered = recovered?;
-    if state
-        .credits
-        .find_grant_by_idempotency_key(&recovered)
-        .await?
-        .is_none()
-    {
-        verify_recovered_topup(state, &recovered, address).await?;
-    }
-    Ok((Some(recovered), "purchase"))
-}
-
 /// A recovery is booked only when the claim itself would grant that transfer
 /// to `address`; a transfer paid by another wallet (an exchange, a smart
 /// wallet) is refused here too.
-async fn verify_recovered_topup(
+pub(crate) async fn verify_recovered_topup(
     state: &SharedState,
     key: &str,
     address: &str,
@@ -379,6 +356,7 @@ pub async fn mana_topup(
             address: signer.as_str(),
             amount: &credits,
             kind: "purchase",
+            operator: false,
             reason: Some("MANA top-up"),
             actor: Some("mana-topup"),
             idempotency_key: Some(&idem),

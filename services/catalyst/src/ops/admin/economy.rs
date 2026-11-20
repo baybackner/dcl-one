@@ -32,8 +32,8 @@ use super::console::{
 };
 use crate::shared::writes::DataWrites;
 use crate::shop::credits::admin::{
-    normalize_address, validate_idempotency_key, validate_positive_amount, validated_reason,
-    validated_studio_name,
+    normalize_address, operator_grant_key, validate_idempotency_key, validate_positive_amount,
+    validated_reason, validated_studio_name,
 };
 use crate::shop::credits::admin_store::GrantRequest;
 use crate::shop::credits::errors::ApiError as CreditsError;
@@ -82,7 +82,7 @@ pub async fn credits_grant(
         let reason = validated_reason(&opt_string(&body, "reason"))?;
         let idempotency_key = validate_idempotency_key(&opt_string(&body, "idempotencyKey"))?;
         let studio_name = validated_studio_name(&opt_string(&body, "studioName"))?;
-        let (idempotency_key, kind) = crate::shop::credits::handlers::topup::operator_grant_key(
+        let (idempotency_key, kind) = operator_grant_key(
             &cs,
             idempotency_key,
             &address,
@@ -98,6 +98,7 @@ pub async fn credits_grant(
                 address: &address,
                 amount: &amount,
                 kind,
+                operator: true,
                 reason: reason.as_deref(),
                 actor: Some(&actor),
                 idempotency_key: idempotency_key.as_deref(),

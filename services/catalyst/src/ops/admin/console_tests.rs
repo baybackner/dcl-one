@@ -386,6 +386,7 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
             address: &booked_user,
             amount: "5",
             kind: "purchase",
+            operator: true,
             reason: None,
             actor: None,
             idempotency_key: Some(&key),
@@ -420,10 +421,10 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
     cleanup(&pool, &actor).await;
 }
 
-/// A console recovery of a top-up the wallet paid is booked as a purchase, so it credits a flagged wallet
-/// the console refuses a plain grant; a key naming no payment is refused and moves nothing.
+/// The console refuses a flagged wallet a plain grant and a recovery of a top-up it paid; a key naming no
+/// payment is refused, and none moves anything. After the unflag the recovery is booked as a purchase.
 #[tokio::test]
-async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wallet() {
+async fn a_console_recovery_of_a_paid_top_up_waits_for_the_unflag_and_is_a_purchase() {
     let Some(pool) = crate::db::scratch::pool(4).await else {
         return;
     };
@@ -510,6 +511,31 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
     )
     .await;
     assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a recovery is refused for the flag: {body}"
+    );
+    let booked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM credits.idempotency WHERE address = $1")
+            .bind(&user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(booked, 0, "the refused grants booked nothing");
+
+    sqlx::query("DELETE FROM credits.wallet_flags WHERE address = $1")
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        grant(format!("MANA-TOPUP:{paid}")),
+    )
+    .await;
+    assert_eq!(
         (status, body["body"]["replayed"].as_bool()),
         (StatusCode::OK, Some(false)),
         "the paid recovery is booked: {body}"
@@ -531,11 +557,6 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
         "only the paid recovery is booked, a purchase under the claim's own key"
     );
 
-    sqlx::query("DELETE FROM credits.wallet_flags WHERE address = $1")
-        .bind(&user)
-        .execute(&pool)
-        .await
-        .unwrap();
     for sql in [
         "DELETE FROM credits.ledger WHERE address = $1",
         "DELETE FROM credits.purchases WHERE address = $1",

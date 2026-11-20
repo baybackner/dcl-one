@@ -92,6 +92,31 @@ pub fn validate_idempotency_key(raw: &Option<String>) -> Result<Option<String>, 
     }
 }
 
+/// The key and ledger kind an operator grant books, on every operator route:
+/// a recovered top-up key becomes the claim's own key, is verified unless
+/// already booked (a booked key replays its first outcome) and is a purchase;
+/// any other key is a grant.
+pub async fn operator_grant_key(
+    state: &SharedState,
+    key: Option<String>,
+    address: &str,
+) -> Result<(Option<String>, &'static str), ApiError> {
+    use super::handlers::topup::{recovered_topup_key, verify_recovered_topup};
+    let Some(recovered) = key.as_deref().and_then(recovered_topup_key) else {
+        return Ok((key, "grant"));
+    };
+    let recovered = recovered?;
+    if state
+        .credits
+        .find_grant_by_idempotency_key(&recovered)
+        .await?
+        .is_none()
+    {
+        verify_recovered_topup(state, &recovered, address).await?;
+    }
+    Ok((Some(recovered), "purchase"))
+}
+
 pub fn normalize_address(raw: &str) -> Result<String, ApiError> {
     crate::shared::identity::Address::parse(raw)
         .map(|a| a.into_string())

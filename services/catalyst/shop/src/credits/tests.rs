@@ -1039,6 +1039,7 @@ async fn dispute_revokes_granted_credits_instead_of_paying_the_buyer_twice() {
             address: &addr,
             amount: "100",
             kind: "purchase",
+            operator: false,
             reason: Some("stripe purchase"),
             actor: Some("stripe"),
             idempotency_key: None,
@@ -1133,6 +1134,7 @@ async fn charge_refund_revokes_and_reports_the_unrecoverable_shortfall() {
             address: &addr,
             amount: "100",
             kind: "purchase",
+            operator: false,
             reason: None,
             actor: Some("stripe"),
             idempotency_key: None,
@@ -1177,6 +1179,7 @@ async fn charge_refund_revokes_and_reports_the_unrecoverable_shortfall() {
             address: &addr,
             amount: "5",
             kind: "grant",
+            operator: true,
             reason: None,
             actor: Some("test"),
             idempotency_key: None,
@@ -1332,6 +1335,7 @@ async fn pack_reversal_is_bounded_by_the_purchase_across_replays() {
             address: &addr,
             amount: "100",
             kind: "purchase",
+            operator: false,
             reason: None,
             actor: Some("stripe"),
             idempotency_key: None,
@@ -1451,6 +1455,7 @@ async fn spend_rejects_non_positive_amounts_and_never_mints() {
                     address: &addr,
                     amount: bad,
                     kind: "grant",
+                    operator: true,
                     reason: None,
                     actor: Some("t"),
                     idempotency_key: None,
@@ -1857,6 +1862,7 @@ async fn double_post_grants_once_and_replays_original_amounts() {
         address: &addr,
         amount,
         kind: "purchase",
+        operator: false,
         reason: Some("MANA top-up"),
         actor: Some("mana-topup"),
         idempotency_key: Some(&idem),
@@ -1913,6 +1919,7 @@ async fn an_operator_grant_notifies_once_and_a_purchase_never() {
         address: &addr,
         amount,
         kind,
+        operator: true,
         reason: None,
         actor: Some("ops"),
         idempotency_key: keyed.then_some(idem.as_str()),
@@ -5151,6 +5158,7 @@ async fn an_event_in_flight_holds_the_other_until_it_commits() {
                 address: &purchase.address,
                 amount: &purchase.credits,
                 kind: "purchase",
+                operator: false,
                 reason: Some("stripe checkout purchase"),
                 actor: Some("stripe"),
                 idempotency_key: Some("evt_inflight-grant"),
@@ -5614,6 +5622,7 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
             address: &earlier,
             amount: "40",
             kind: "purchase",
+            operator: true,
             reason: None,
             actor: None,
             idempotency_key: Some(&earlier_key),
@@ -9353,6 +9362,7 @@ async fn a_settled_session_naming_no_payment_intent_applies_the_reversals_of_the
                 address: &purchase.address,
                 amount: &purchase.credits,
                 kind: "purchase",
+                operator: false,
                 reason: Some("stripe checkout purchase"),
                 actor: Some("stripe"),
                 idempotency_key: Some("evt_stored_pi-grant"),
@@ -9912,8 +9922,8 @@ async fn a_trial_refuses_mana_top_ups_and_the_broker_checkout_before_any_work() 
 }
 
 /// An operator grant to a flagged wallet answers 409, naming the flag's source, and moves nothing; a grant
-/// made before the flag still replays its first outcome, a recovery of a top-up that wallet paid is still a
-/// purchase, and a recovery key naming no such payment is refused.
+/// made before the flag still replays its first outcome, a recovery of a top-up that wallet paid waits for
+/// the unflag and is then a purchase, and a recovery key naming no such payment is refused.
 #[tokio::test]
 async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     let Some(pool) = pool().await else { return };
@@ -10004,22 +10014,23 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
         "5",
         "the refused grants moved nothing"
     );
+    let recovery = grant(&format!("mana-topup:{paid}"));
     let (status, _, v) = send(
         &app,
         "POST",
         "/credits/admin/credits/grant",
         bearer.clone(),
-        Some(grant(&format!("mana-topup:{paid}"))),
+        Some(recovery.clone()),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(available(&pool, &addr).await, "10");
-    let kinds = ledger_kinds(&pool, &addr).await;
-    assert!(
-        kinds.iter().any(|(kind, _, _)| kind == "purchase"),
-        "the paid recovery is a purchase: {kinds:?}"
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert!(v.to_string().contains("flagged"), "{v}");
+    assert_eq!(
+        available(&pool, &addr).await,
+        "5",
+        "the refused grants moved nothing"
     );
-    // The refusal rolled its key back: after the unflag the same key grants.
+    // The refusals rolled their keys back: after the unflag the same keys grant.
     let (status, _, v) = send(
         &app,
         "DELETE",
@@ -10029,6 +10040,21 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer.clone(),
+        Some(recovery),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(available(&pool, &addr).await, "10");
+    let kinds = ledger_kinds(&pool, &addr).await;
+    assert!(
+        kinds.iter().any(|(kind, _, _)| kind == "purchase"),
+        "the paid recovery is a purchase: {kinds:?}"
+    );
     let (status, _, v) = send(
         &app,
         "POST",
@@ -10050,6 +10076,53 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
         .unwrap();
     cleanup(&pool, &addr).await;
     cleanup(&pool, &linked).await;
+}
+
+/// A flag refuses every credit to the wallet except a purchase it made itself: an operator's grant or
+/// top-up recovery and a refund answer 409 and move nothing, while its own Stripe or MANA purchase credits.
+#[tokio::test]
+async fn a_flagged_wallet_receives_only_its_own_purchases() {
+    let Some(pool) = pool().await else { return };
+    let addr = scratch_wallet().address;
+    sqlx::query("INSERT INTO credits.wallet_flags (address, source) VALUES ($1, 'test')")
+        .bind(&addr)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let credits = Credits::new(pool.clone());
+    let detail = json!({});
+    let request = |kind: &'static str, operator: bool| GrantRequest {
+        address: &addr,
+        amount: "3",
+        kind,
+        operator,
+        reason: None,
+        actor: Some("t"),
+        idempotency_key: None,
+        detail: &detail,
+        studio_name: None,
+    };
+    for (kind, operator) in [("grant", true), ("purchase", true), ("refund", false)] {
+        let err = credits
+            .admin_grant_credits(request(kind, operator))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ApiError::Conflict(m) if m.contains("flagged (test)")),
+            "{kind} by an operator={operator}: {err:?}"
+        );
+    }
+    assert_eq!(
+        available(&pool, &addr).await,
+        "0",
+        "the refusals moved nothing"
+    );
+    credits
+        .admin_grant_credits(request("purchase", false))
+        .await
+        .expect("the wallet's own purchase credits");
+    assert_eq!(available(&pool, &addr).await, "3");
+    cleanup(&pool, &addr).await;
 }
 
 /// The admin flag takes the body the events-notifier posts to `/flag`, its addresses under `addressesLinked`;

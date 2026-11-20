@@ -306,6 +306,7 @@ async fn credit_settled(
                         address: &purchase.address,
                         amount: &purchase.credits,
                         kind: "purchase",
+                        operator: false,
                         reason: Some(reason),
                         actor: Some(STRIPE_ACTOR),
                         idempotency_key: Some(event_id),

@@ -1,6 +1,7 @@
 //! Wallet flags over Postgres notifications. The `credits.wallet_flags`
-//! channel carries `{action: "flag", addresses, source, ip}` (the
-//! events-notifier's `/flag` body) or `{action: "unflag", address}`; one
+//! channel carries `{action: "flag", addresses, source, ip}`, the addresses
+//! also accepted under `addressesLinked` (the events-notifier's `/flag` body;
+//! naming both keys is refused), or `{action: "unflag", address}`; one
 //! leased listener per fleet applies them to `credits.wallet_flags` through
 //! the admin store, audited as the HTTP admin's flag is, where the node's
 //! writes are (`OPS_WRITES_ENABLED`). A notification reaches the listeners
