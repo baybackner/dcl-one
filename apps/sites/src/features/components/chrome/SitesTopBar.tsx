@@ -31,13 +31,15 @@ import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
 import ChromeLink from "@dcl/one-ui/components/chrome/ChromeLink";
 import { useSiteLayout } from "@dcl/one-ui/components/chrome/SiteLayout";
 import {
+  categoryForType,
   notificationBody,
+  notificationImage,
   notificationLink,
   notificationTitle,
   relativeTime,
   unreadCount,
 } from "@web-core/notifications/notificationsView";
-import SitesNotificationsDialog from "@dcl/one-ui/apps/sites/chrome/SitesNotificationsDialog";
+import SitesNotificationsDialog, { notificationMedia } from "@dcl/one-ui/apps/sites/chrome/SitesNotificationsDialog";
 import logo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 import wordmark from "@dcl/one-ui/apps/sites/assets/dcl_name.svg?url";
 import { SitesLocaleContext } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
@@ -247,6 +249,8 @@ export default function SitesTopBar({
         id: row.id,
         title: notificationTitle(row),
         description: notificationBody(row),
+        category: categoryForType(row.type),
+        ...notificationMedia(row.type, row.metadata, notificationImage(row)),
         href: notificationLink(row) ?? undefined,
         time: relativeTime(row.timestamp, Date.now()),
         unread: !row.read,

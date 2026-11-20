@@ -156,16 +156,16 @@ export function RemoteFlagsProvider({ answer, children }: { answer: RemoteFlagsA
 
 const skipSubscription = () => () => {};
 
-export function useRemoteFlagsAnswer(enabled = true): RemoteFlagsAnswer | null {
+export function useRemoteFlagsAnswer(enabled = true, refresh = refreshRemoteFlags): RemoteFlagsAnswer | null {
   const requestAnswer = useContext(RequestFlagsContext);
   const browserAnswer = useSyncExternalStore(enabled ? subscribe : skipSubscription, getAnswer, getServerAnswer);
   useEffect(() => {
     if (!enabled || requestAnswer) return;
-    void refreshRemoteFlags();
-    const onFocus = () => void refreshRemoteFlags();
+    void refresh();
+    const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [enabled, requestAnswer]);
+  }, [enabled, requestAnswer, refresh]);
   return enabled ? requestAnswer ?? browserAnswer : null;
 }
 
@@ -183,7 +183,7 @@ export function remoteFlagState(flag: RemoteFlag): boolean | null {
   return answer ? remoteFlagOn(answer, flag) : null;
 }
 
-export function useRemoteFlagState(flag: RemoteFlag, enabled = true): boolean | null {
-  const answer = useRemoteFlagsAnswer(enabled);
+export function useRemoteFlagState(flag: RemoteFlag, enabled = true, refresh = refreshRemoteFlags): boolean | null {
+  const answer = useRemoteFlagsAnswer(enabled, refresh);
   return answer ? remoteFlagOn(answer, flag) : null;
 }
