@@ -2190,11 +2190,19 @@ pub struct PreviewMode {
     pub preview_parcel: Option<IVec2>,
 }
 
-/// Render out-of-bounds geometry (dithered) instead of culling it. Set at startup
-/// (preview, a loopback realm, or editor mode — never a public realm); read by
-/// scene_material's show-outside-bounds observer.
+/// Render out-of-bounds geometry (dithered) instead of culling it, and keep its colliders on.
+/// Set at startup (preview, a loopback realm, or editor mode — never a public realm); read by
+/// scene_material's show-outside-bounds observer and by the scene collider data.
 #[derive(Debug, Resource, Default)]
 pub struct ShowOutOfBounds(pub bool);
+
+impl ShowOutOfBounds {
+    /// The switch for a run on `realm`: on in the editor, in preview and on a loopback realm
+    /// (local development). A run with no realm of its own passes none.
+    pub fn for_run(editor: bool, preview: bool, realm: Option<&str>) -> Self {
+        Self(editor || preview || realm.is_some_and(crate::util::is_loopback_url))
+    }
+}
 
 /// True when the explorer is embedded in a scene editor (the explicit `--editor` arg /
 /// `editor` web boot param — the editor host is expected to unfreeze scenes when the
@@ -2503,6 +2511,21 @@ pub struct WorldPasswordPrompter(pub tokio::sync::mpsc::UnboundedSender<WorldPas
 mod tests {
     use super::*;
     use crate::inputs::CommonInputAction;
+
+    #[test]
+    fn out_of_bounds_geometry_shows_in_the_editor_in_preview_and_on_a_loopback_realm() {
+        let public = Some("https://realm.example.test/main");
+        assert!(!ShowOutOfBounds::for_run(false, false, public).0);
+        assert!(ShowOutOfBounds::for_run(true, false, public).0);
+        assert!(ShowOutOfBounds::for_run(false, true, public).0);
+        assert!(ShowOutOfBounds::for_run(false, false, Some("http://127.0.0.1:8000")).0);
+        assert!(ShowOutOfBounds::for_run(false, false, Some("http://localhost:8000")).0);
+        // a preview server reached by its LAN address
+        assert!(!ShowOutOfBounds::for_run(false, false, Some("http://192.168.1.20:8000")).0);
+        // no realm of its own
+        assert!(!ShowOutOfBounds::for_run(false, false, None).0);
+        assert!(ShowOutOfBounds::for_run(false, true, None).0);
+    }
 
     #[test]
     fn fog_reads_the_old_variants_as_on() {

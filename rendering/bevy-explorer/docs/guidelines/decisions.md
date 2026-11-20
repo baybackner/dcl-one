@@ -782,6 +782,21 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **glTF occlusion textures are ignored.** Scene materials drop a glTF's occlusion texture, so
   baked ambient occlusion does not darken the ambient light. The Unity client's scene shader
   does not sample it either, and content is authored against that look.
+- **Colliders are bounded by the scene's rectangle, meshes by its parcels.** A scene collider is
+  off as a whole while its box reaches outside the rectangle around the scene's parcels or above
+  the scene's height limit; the shaders clip meshes to the parcels themselves. One large collider
+  often covers an irregular scene's whole footprint: Genesis Plaza's ground and building colliders
+  span the notches its road scenes sit in, and a test against the parcels would turn them off as
+  a whole. Unity (`333aa8826979186f1380058cc75f74b9630e4879`) tests the same rectangle, with the
+  same allowance at the edge. The height limit splits the same way: colliders take one limit from
+  the scene's whole parcel count, as Unity does, while the shaders clip each connected group of
+  parcels at its own, so over a scene in several pieces a collider can be solid above the height
+  its mesh is drawn to (two parcels apart: meshes to 20 m, colliders to 31.7 m). The box tested
+  for a mesh collider is the mesh's own box turned with the collider, which can be larger than the
+  mesh: a wall that runs diagonally in its own model can turn off while it is still inside the
+  rectangle. Triggers are not tested in either client. Preview, loopback and editor runs draw
+  out-of-bounds geometry and leave its colliders on too, so a creator can stand on, bump into
+  and select what reaches outside; every other run turns them off.
 - **The map carries over upstream's marker rules as they are**, so the two clients' maps match.
   A place of several parcels is marked on the parcel a walk over them stops at, which depends on
   their order and is not always the middle one; a cluster stands half a parcel south-west of the
