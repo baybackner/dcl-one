@@ -119,7 +119,8 @@ pub async fn webhook(
                 "ok": true, "action": "reinstated", "creditId": t.transaction_id, "credits": credits,
                 "revocationsWithdrawn": withdrawn,
             }))),
-            ReinstateOutcome::Cleared => charge(&state, iap, uuid, &t).await,
+            // Idempotent per transaction: a retry after a failed credit credits it.
+            ReinstateOutcome::Uncredited => charge(&state, iap, uuid, &t).await,
             ReinstateOutcome::NotRefunded => {
                 Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
             }

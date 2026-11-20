@@ -28,14 +28,20 @@
 //! blocked when the balance net of live pledges cannot cover it). When it
 //! cannot, the wallet's newest unexpired signed credits not queued yet,
 //! covering what they pledge beyond the balance, are queued for
-//! `revokeCredits` on chain (`credits.revocations`). A refund of a
+//! `revokeCredits` on chain (`credits.revocations`). A purchase imported
+//! from credits-server is charged back the same way; it keeps its
+//! `imported` status and `refunded_at` marks the refund. A refund of a
 //! transaction never credited, or held, leaves a `refunded` row that keeps
 //! it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
 //! what was charged back, withdraws its revocations not sent yet while the
 //! balance covers the credits left unqueued, lifts a block it raised once
-//! the balance covers the live pledges, or clears
-//! the `refunded` row of a purchase never credited so it can be credited.
+//! the balance covers the live pledges, or turns the `refunded` row of a
+//! purchase never credited back into a `held` one, in its own transaction,
+//! before crediting it, so a failed credit leaves the purchase held.
+//!
+//! The paths that write both lock the wallet row before the transaction's
+//! row, as an operator block and a card reversal do.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -108,6 +114,9 @@ impl Iap {
         let roots = load_roots(Path::new(dir.trim()))?;
         let verifier = Verifier::new(roots, bundle_id, raw.app_apple_id, environment)?;
         let catalog = parse_catalog(raw.catalog.as_deref().unwrap_or("{}"))?;
+        if catalog.is_empty() {
+            tracing::warn!("IAP_PRODUCT_CATALOG_USD is empty: every App Store purchase is held");
+        }
         let daily_cents = raw.daily_limit_cents.ok_or_else(|| {
             anyhow::anyhow!("IAP_DAILY_LIMIT_CENTS is required with APPLE_BUNDLE_ID")
         })?;
@@ -154,7 +163,16 @@ pub fn parse_catalog(raw: &str) -> anyhow::Result<HashMap<String, i64>> {
     parsed
         .into_iter()
         .map(|(product, credits)| match credits.as_i64() {
-            Some(c) if c > 0 && !product.is_empty() => Ok((product, c)),
+            // Bounded so the most units one transaction carries still fit in cents.
+            Some(c)
+                if c > 0
+                    && !product.is_empty()
+                    && c.checked_mul(MAX_QUANTITY)
+                        .and_then(UsdCents::from_credits)
+                        .is_some() =>
+            {
+                Ok((product, c))
+            }
             _ => anyhow::bail!(
                 "IAP_PRODUCT_CATALOG_USD maps each product id to a positive whole number of Credits"
             ),
@@ -217,6 +235,8 @@ pub enum HoldReason {
     UnknownProduct,
     Quantity,
     Capped(CapReason),
+    /// Apple reversed the refund of a purchase never credited.
+    RefundReversed,
 }
 
 impl HoldReason {
@@ -226,6 +246,7 @@ impl HoldReason {
             Self::UnknownProduct => "unknown_product",
             Self::Quantity => "quantity_out_of_range",
             Self::Capped(reason) => reason.as_str(),
+            Self::RefundReversed => "refund_reversed",
         }
     }
 }
@@ -271,8 +292,9 @@ pub enum ReinstateOutcome {
         /// Revocations this refund queued that were withdrawn before being sent.
         withdrawn: u64,
     },
-    /// The refund of a transaction never credited was cleared, so it can be credited.
-    Cleared,
+    /// The purchase stands but is not credited here: no row, a held one, or
+    /// a refund of a purchase never credited, now held. Credit it.
+    Uncredited,
     /// No refund of this transaction to reverse.
     NotRefunded,
 }
@@ -300,16 +322,16 @@ pub struct Totals {
 impl Totals {
     pub fn decide(&self, limits: &Limits, requested_cents: i64) -> Option<CapReason> {
         if limits.wallet_total_cents > 0
-            && self.total_cents + requested_cents > limits.wallet_total_cents
+            && self.total_cents.saturating_add(requested_cents) > limits.wallet_total_cents
         {
             return Some(CapReason::TotalLimit);
         }
         if limits.wallet_daily_cents > 0
-            && self.daily_cents + requested_cents > limits.wallet_daily_cents
+            && self.daily_cents.saturating_add(requested_cents) > limits.wallet_daily_cents
         {
             return Some(CapReason::DailyLimit);
         }
-        if self.service_daily_cents + requested_cents > limits.daily_cents {
+        if self.service_daily_cents.saturating_add(requested_cents) > limits.daily_cents {
             return Some(CapReason::ServiceDailyLimit);
         }
         None
@@ -321,6 +343,22 @@ async fn lock(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: &str) -> Resu
         .bind(key)
         .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+
+/// Locks the wallet behind a transaction's row first, so the App Store paths
+/// take row locks in the same order as an operator block and a card reversal.
+async fn lock_wallet_of(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction_id: &str,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "SELECT 1 FROM credits.wallets WHERE address = \
+             (SELECT address FROM credits.iap_transactions WHERE transaction_id = $1) FOR UPDATE",
+    )
+    .bind(transaction_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -362,7 +400,8 @@ impl Credits {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(p.transaction_id)).await?;
         let existing = sqlx::query(
-            "SELECT status, address, floor(credits)::bigint AS credits, product_id, quantity \
+            "SELECT status, address, floor(credits)::bigint AS credits, product_id, quantity, \
+                    refunded_at IS NOT NULL AS refunded \
              FROM credits.iap_transactions WHERE transaction_id = $1",
         )
         .bind(p.transaction_id)
@@ -375,6 +414,9 @@ impl Credits {
             let address: Option<String> = row.get("address");
             match (status.as_str(), address) {
                 ("paid" | "imported", Some(_)) if p.revoked => return Ok(CreditOutcome::Revoked),
+                ("imported", Some(_)) if row.get::<bool, _>("refunded") => {
+                    return Ok(CreditOutcome::Refunded);
+                }
                 ("paid" | "imported", Some(address)) => {
                     return Ok(CreditOutcome::Credited {
                         address,
@@ -433,10 +475,10 @@ impl Credits {
         if !(1..=MAX_QUANTITY).contains(&quantity) {
             return hold(tx, &p, Some(&address), None, HoldReason::Quantity).await;
         }
-        let credits = per_unit * quantity;
-        let cents = UsdCents::from_credits(credits)
-            .ok_or_else(|| ApiError::bad_request("credits out of range"))?
-            .get();
+        let (credits, cents) = per_unit
+            .checked_mul(quantity)
+            .and_then(|c| Some((c, UsdCents::from_credits(c)?.get())))
+            .ok_or_else(|| ApiError::bad_request("credits out of range"))?;
 
         // An operator credit is how a purchase refused by a wallet cap is reconciled.
         let limits = match p.channel {
@@ -519,8 +561,9 @@ impl Credits {
     ) -> Result<RefundOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
+        lock_wallet_of(&mut tx, transaction_id).await?;
         let row = sqlx::query(
-            "SELECT status, address FROM credits.iap_transactions \
+            "SELECT status, address, refunded_at IS NOT NULL AS refunded FROM credits.iap_transactions \
              WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
@@ -545,6 +588,7 @@ impl Credits {
         };
         let status: String = row.get("status");
         let address: Option<String> = row.get("address");
+        let refunded: bool = row.get("refunded");
         match (status.as_str(), address) {
             ("held", _) => {
                 sqlx::query(
@@ -561,12 +605,11 @@ impl Credits {
                 tx.commit().await?;
                 Ok(RefundOutcome::HeldRefunded)
             }
-            // Credited upstream: its Credits are plain ledger grants, never charged back here.
-            ("imported", _) => Ok(RefundOutcome::NotCredited),
-            ("paid", Some(address)) => {
+            // Credited upstream: charged back like a purchase credited here; it stays `imported`.
+            ("paid", Some(address)) | ("imported", Some(address)) if !refunded => {
                 let charged: String = sqlx::query_scalar(
                     "UPDATE credits.iap_transactions \
-                     SET status = 'refunded', \
+                     SET status = CASE WHEN status = 'paid' THEN 'refunded' ELSE status END, \
                          revoked_credits = CASE WHEN $4::bigint IS NULL THEN credits \
                                                 ELSE trim_scale(round(credits * $4::bigint / 100000, 2)) END, \
                          refunded_cents = CASE WHEN $4::bigint IS NULL THEN amount_cents \
@@ -657,13 +700,14 @@ impl Credits {
         })
     }
 
-    /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited purchase
-    /// gets back what its refund charged back, its revocations the job has
-    /// not claimed yet are withdrawn while the balance covers the unexpired
-    /// credits left unqueued (a claimed one may be on chain), and a block it
-    /// raised, that no operator or later reversal took over, is lifted (and
-    /// audited) once the balance covers the live pledges; a refund of a transaction
-    /// never credited is cleared so the purchase can be credited.
+    /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited (or
+    /// imported) purchase gets back what its refund charged back, its
+    /// revocations the job has not claimed yet are withdrawn while the
+    /// balance covers the unexpired credits left unqueued (a claimed one may
+    /// be on chain), and a block it raised, that no operator or later
+    /// reversal took over, is lifted (and audited) once the balance covers
+    /// the live pledges. A refund of a purchase never credited becomes a
+    /// `held` row, committed before the caller credits it.
     pub async fn reinstate_iap(
         &self,
         transaction_id: &str,
@@ -671,35 +715,53 @@ impl Credits {
     ) -> Result<ReinstateOutcome, ApiError> {
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
+        lock_wallet_of(&mut tx, transaction_id).await?;
         let row = sqlx::query(
             "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
+                    refunded_at IS NOT NULL AS refunded, \
                     refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
-        // An upstream purchase's marker (the import) is never cleared.
-        let Some(row) = row.filter(|r| {
-            r.get::<String, _>("status") == "refunded" && !r.get::<bool, _>("upstream")
-        }) else {
-            return Ok(ReinstateOutcome::NotRefunded);
+        let Some(row) = row else {
+            return Ok(ReinstateOutcome::Uncredited);
         };
-        let (Some(address), Some(_)) = (
-            row.get::<Option<String>, _>("address"),
-            row.get::<Option<String>, _>("credited_by"),
-        ) else {
-            sqlx::query("DELETE FROM credits.iap_transactions WHERE transaction_id = $1")
+        let status: String = row.get("status");
+        let address: Option<String> = row.get("address");
+        let credited = row.get::<Option<String>, _>("credited_by").is_some();
+        let address = match status.as_str() {
+            "held" => return Ok(ReinstateOutcome::Uncredited),
+            // An upstream purchase's marker (the import) is never cleared.
+            "refunded" if row.get::<bool, _>("upstream") => {
+                return Ok(ReinstateOutcome::NotRefunded);
+            }
+            "refunded" if !credited => {
+                // Held, not deleted: a failed credit after this commit leaves the purchase held.
+                sqlx::query(
+                    "UPDATE credits.iap_transactions \
+                     SET status = 'held', held_reason = $2, refund_ref = NULL, refund_reason = NULL, \
+                         refunded_at = NULL, updated_at = timezone('UTC', now()) \
+                     WHERE transaction_id = $1",
+                )
                 .bind(transaction_id)
+                .bind(HoldReason::RefundReversed.as_str())
                 .execute(&mut *tx)
                 .await?;
-            tx.commit().await?;
-            return Ok(ReinstateOutcome::Cleared);
+                tx.commit().await?;
+                return Ok(ReinstateOutcome::Uncredited);
+            }
+            "refunded" | "imported" if row.get::<bool, _>("refunded") => match address {
+                Some(address) => address,
+                None => return Ok(ReinstateOutcome::NotRefunded),
+            },
+            _ => return Ok(ReinstateOutcome::NotRefunded),
         };
         let credits: String = row.get("revoked");
         sqlx::query(
             "UPDATE credits.iap_transactions \
-             SET status = 'paid', revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
+             SET status = CASE WHEN status = 'refunded' THEN 'paid' ELSE status END, revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
                  refunded_at = NULL, raised_block = false, updated_at = timezone('UTC', now()) \
              WHERE transaction_id = $1",
         )
@@ -962,6 +1024,10 @@ mod tests {
         assert!(parse_catalog(r#"{"p1": 0}"#).is_err());
         assert!(parse_catalog(r#"{"p1": 1.5}"#).is_err());
         assert!(parse_catalog("[]").is_err());
+        assert!(
+            parse_catalog(&format!(r#"{{"p1": {}}}"#, i64::MAX / MAX_QUANTITY)).is_err(),
+            "a value whose most units overflow the cents is refused"
+        );
     }
 
     #[test]

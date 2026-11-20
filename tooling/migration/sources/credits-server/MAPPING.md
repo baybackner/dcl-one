@@ -25,13 +25,15 @@ stopped.
   not part of any node balance and the node has no bucket for them: holders
   keep spending them on-chain until they expire, and the node's balance
   shows only USD credits.
-- **In-app (Apple) credits cannot be clawed back.** USD credits granted by an
-  Apple purchase import as ordinary grants, and MANA ones are not imported,
-  so an Apple refund issued after cutover does not reverse them. The
+- **Only USD-rail in-app (Apple) credits can be clawed back.** USD credits
+  granted by an Apple purchase import as ordinary grants, and the
   `iap_transaction` step records each upstream USD-rail transaction as an
   `imported` row with its wallet, cents and upstream time (so the
-  per-wallet caps and the node's daily ceiling count it) and any other as a
-  `refunded` row without a wallet, so the node's App Store routes never
+  per-wallet caps and the node's daily ceiling count it, and an Apple
+  refund issued after cutover charges its Credits back from the wallet as
+  for a purchase credited on the node). MANA ones are not imported: any
+  other transaction becomes a `refunded` row without a wallet, which a
+  refund does not reverse. Either way the node's App Store routes never
   credit an upstream purchase a second time.
 - **Order of the App Store cutover.** Stop upstream's App Store routes (the
   notification URL and `/credits/iap/*`) before `iap_transaction` reads,

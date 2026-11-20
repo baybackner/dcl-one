@@ -270,6 +270,7 @@ CREATE TABLE credits.iap_transactions (
     refunded_cents bigint NOT NULL DEFAULT 0,
     refund_ref text,
     refund_reason text,
+    -- A refund of an `imported` row keeps its status; `refunded_at` marks it.
     refunded_at timestamp without time zone,
     -- The refund blocked the wallet; its reversal lifts that block once the balance covers the live pledges.
     -- An operator's block or unblock, or a later uncovered reversal, clears it.
@@ -557,9 +558,10 @@ CREATE INDEX usage_settlements_authorization_idx ON credits.usage_settlements (a
 -- the `CREDITS_REVOKER_KEY_FILE` signer when one is configured. The row is
 -- written in the transaction that decides the revocation; the job claims a
 -- `pending` row (`attempts + 1`, given back once it is sent; `attempts`
--- counts failures) before its broadcast, which runs outside it, `tx_hash` is stored before `eth_sendRawTransaction`
--- (a kill between the two leaves a pollable row; re-sending revokeCredits
--- for an already revoked hash is a no-op on chain).
+-- counts failures) before its broadcast, which runs outside it, and stores
+-- `tx_hash` once `eth_sendRawTransaction` answers (a kill between the two
+-- leaves a claimed `pending` row the next pass sends again; re-sending
+-- revokeCredits for an already revoked hash is a no-op on chain).
 CREATE TABLE credits.revocations (
     credit_hash text NOT NULL,
     authorization_id text NOT NULL,

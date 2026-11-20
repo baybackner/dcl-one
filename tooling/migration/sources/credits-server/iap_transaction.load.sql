@@ -3,10 +3,10 @@
 -- credited. Any other upstream transaction is kept as a `refunded` row
 -- without a wallet. Either way the node never credits it again (a device's
 -- or a notification's later delivery answers it credited or
--- `refunded_transaction`). A later Apple refund of it is not charged back:
--- USD credits arrive as plain ledger grants and MANA ones were never
--- granted on the node (README, known limitations). A row the node already
--- holds is left alone.
+-- `refunded_transaction`). A later Apple refund charges an `imported`
+-- row's Credits back from its wallet; a `refunded` one (MANA credits, never
+-- granted on the node) is not reversed. A row the node already holds is
+-- left alone.
 INSERT INTO credits.iap_transactions
     (transaction_id, product_id, address, credits, amount_cents, status,
      refund_ref, refund_reason, refunded_at, created_at)

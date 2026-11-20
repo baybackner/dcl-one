@@ -1564,7 +1564,10 @@ node's ceiling, an unknown product or quantity, an account token naming no
 wallet) is upserted as `held` with its reason, unless an operator asked; a
 later delivery or an operator credit re-checks a held row and turns it `paid`
 (an operator credit with the held row's product and quantity only).
-A reversal takes the same transaction lock, flips the row to `refunded`,
+A reversal takes the same transaction lock, then locks the wallet row before
+the transaction's row (the order of an operator block and a card reversal),
+flips the row to `refunded` (an `imported` row keeps its status and
+`refunded_at` marks the refund),
 charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
 records what was removed in `revoked_credits` and the refunded USD in
 `refunded_cents` and, when the balance net of
@@ -1577,10 +1580,15 @@ unblock, or a later reversal the balance cannot cover, clears the wallet's
 `revoked_credits` back (a `refund` ledger row), deletes its revocations still
 `pending` and unclaimed (`attempts = 0`; the revocation job counts the attempt
 before it broadcasts) when `available` covers the unexpired credits that leaves
-unqueued (a claimed or sent one is final), lifts the block it raised when `available`
+unqueued (a claimed or sent one is final: a broadcast that failed before it
+reached the chain still counts its attempt, so that revocation is never
+withdrawn), lifts the block it raised when `available`
 covers the wallet's live pledges (an `ops.admin_audit` `user.unblock` row, actor
-`apple`), and returns the row to `paid`, or deletes a `refunded` row never
-credited (not an imported upstream marker) so the purchase can be credited. Readers are the wallet's credit
+`apple`), and returns the row to `paid` (or clears an `imported` row's refund).
+A `refunded` row never credited (not an imported upstream marker) becomes
+`held` (`refund_reversed`) and commits before the credit runs in its own
+transaction, so a credit that fails leaves the purchase held, and a
+redelivery credits it. Readers are the wallet's credit
 orders (`address, created_at DESC`, rows this node credited), the caps
 (`address` and `created_at` partial indexes; rows credited here or
 `imported`) and the operator's held list (`GET /credits/credits/iap/held`,
@@ -1594,7 +1602,7 @@ find the wallet. One row per wallet.
 
 The credits-server import (`tooling/migration`) writes each upstream USD-rail
 App Store transaction as `imported` with its wallet, cents and upstream time
-(counted by the caps, never charged back) and any other as a `refunded` row
+(counted by the caps, charged back by a later refund) and any other as a `refunded` row
 without a wallet, and copies the account tokens, all insert-only, so a
 purchase credited upstream is never credited again. It reads after upstream's
 App Store routes stop writing.

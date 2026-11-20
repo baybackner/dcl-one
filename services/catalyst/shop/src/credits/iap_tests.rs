@@ -1320,12 +1320,34 @@ async fn a_held_purchase_refunded_is_never_credited() {
 }
 
 #[tokio::test]
-async fn an_imported_purchase_is_neither_credited_nor_charged_back_again() {
+async fn an_imported_purchase_is_charged_back_once_and_never_credited_again() {
     let Some(pool) = pool().await else { return };
     let c = chain(ChainSpec::default());
-    let app = setup(&pool, &c, open_limits());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
     let w = scratch_wallet();
     let (usd, mana) = (tx_id(), tx_id());
+    // Upstream's grant arrives as a plain ledger grant; the import records the purchase.
+    state
+        .credits
+        .admin_grant_credits(super::admin_store::GrantRequest {
+            address: &w.address,
+            amount: "100",
+            kind: "grant",
+            reason: Some("imported"),
+            actor: Some("migration"),
+            idempotency_key: None,
+            detail: &json!({}),
+            studio_name: None,
+        })
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, amount_cents, status) \
          VALUES ($1, $2, $3, 100, 1000, 'imported')",
@@ -1352,8 +1374,31 @@ async fn an_imported_purchase_is_neither_credited_nor_charged_back_again() {
     )
     .await;
     assert_eq!(out["alreadyExisted"], true, "{out}");
-    let (_, out) = notify(&app, c.notification("REFUND", Some(signed))).await;
-    assert_eq!(out["action"], "unknown_credit", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+
+    // A refund after the cutover charges it back once; the row stays imported.
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed.clone()))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(out["removed"], "100", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+    assert_eq!(row(&pool, &usd).await.unwrap().0, "imported");
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed.clone()))).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    let (_, out) = notify(
+        &app,
+        c.notification("ONE_TIME_CHARGE", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(out["error"], "refunded_transaction", "{out}");
+    let totals = super::store::Credits::iap_totals(&pool, &w.address)
+        .await
+        .unwrap();
+    assert_eq!(totals.total_cents, 1000, "a refunded import still counts");
+
+    // Its reversal grants the charge back and keeps it imported.
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
     assert_eq!(row(&pool, &usd).await.unwrap().0, "imported");
 
     // A reversed refund of an upstream purchase keeps its marker.
@@ -1361,7 +1406,69 @@ async fn an_imported_purchase_is_neither_credited_nor_charged_back_again() {
     let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
     assert_eq!(out["action"], "not_refunded", "{out}");
     assert_eq!(row(&pool, &mana).await.unwrap().0, "refunded");
-    assert_eq!(available(&pool, &w.address).await, "0");
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+#[tokio::test]
+async fn a_reversed_refund_of_an_uncredited_purchase_survives_a_failed_credit() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let w = scratch_wallet();
+
+    // The reversal is recorded, then the credit never runs: a redelivery credits it.
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed.clone()))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let first = state.credits.reinstate_iap(&id, "first").await.unwrap();
+    assert_eq!(first, super::iap::ReinstateOutcome::Uncredited);
+    assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+    assert_eq!(
+        held_reason(&pool, &id).await.as_deref(),
+        Some("refund_reversed")
+    );
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+
+    // The node's ceiling refuses the credit (503): the redelivery finds it held.
+    let closed = setup(
+        &pool,
+        &c,
+        Limits {
+            daily_cents: 0,
+            ..open_limits()
+        },
+    );
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    notify(&closed, c.notification("REFUND", Some(signed.clone()))).await;
+    let (status, out) = notify(
+        &closed,
+        c.notification("REFUND_REVERSED", Some(signed.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "200");
+}
+
+async fn held_reason(pool: &PgPool, id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT held_reason FROM credits.iap_transactions WHERE transaction_id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 /// A signed credit of `address` pledging `cents`, `age_secs` old, expiring
@@ -1802,4 +1909,249 @@ async fn a_reversed_refund_leaves_a_block_a_later_reversal_relies_on() {
     }
     assert_eq!(available(&pool, &w.address).await, "200");
     assert!(blocked(&pool, &w.address).await);
+}
+
+/// Waits until a backend of this database waits on a lock.
+async fn until_a_lock_wait(pool: &PgPool) {
+    for _ in 0..200 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("no backend waited on the wallet row");
+}
+
+/// Whether the transaction's row can be locked now, from another connection.
+async fn row_lockable(pool: &PgPool, id: &str) -> bool {
+    let mut probe = pool.begin().await.unwrap();
+    let ok = sqlx::query(
+        "SELECT 1 FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE NOWAIT",
+    )
+    .bind(id)
+    .execute(&mut *probe)
+    .await
+    .is_ok();
+    probe.rollback().await.unwrap();
+    ok
+}
+
+#[tokio::test]
+async fn refunds_and_reversals_lock_the_wallet_before_the_transaction_row() {
+    let Some(own) = super::tests::OwnDatabase::create("iap_lock_order").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    pledge(&pool, &w.address, 400, 0, 300).await;
+    let id: String = sqlx::query_scalar(
+        "SELECT transaction_id FROM credits.iap_transactions WHERE address = $1",
+    )
+    .bind(&w.address)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // An operator block holds the wallet row and then writes the wallet's App Store rows.
+    for step in ["refund", "reversal"] {
+        let mut operator = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM credits.wallets WHERE address = $1 FOR UPDATE")
+            .bind(&w.address)
+            .execute(&mut *operator)
+            .await
+            .unwrap();
+        let credits = state.credits.clone();
+        let id2 = id.clone();
+        let task = tokio::spawn(async move {
+            if step == "refund" {
+                credits
+                    .refund_iap(&id2, Some(PRODUCT), "r1", "apple_refund:test", None)
+                    .await
+                    .map(|_| ())
+            } else {
+                credits.reinstate_iap(&id2, "r1").await.map(|_| ())
+            }
+        });
+        until_a_lock_wait(&pool).await;
+        assert!(
+            row_lockable(&pool, &id).await,
+            "the {step} waits for the wallet before it locks the transaction's row"
+        );
+        operator.rollback().await.unwrap();
+        task.await.unwrap().unwrap();
+    }
+    assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
+    drop(bought);
+    drop(app);
+    drop(state);
+    own.drop().await;
+}
+
+/// A JSON-RPC chain for the revoker: fixed fees and nonce, every sent
+/// transaction recorded and confirmed.
+async fn spawn_revocation_chain() -> (String, Arc<std::sync::Mutex<usize>>) {
+    let sent = Arc::new(std::sync::Mutex::new(0usize));
+    let seen = sent.clone();
+    let rpc = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |axum::Json(req): axum::Json<Value>| {
+            let seen = seen.clone();
+            async move {
+                let id = req.get("id").cloned().unwrap_or(json!(1));
+                let result = match req["method"].as_str().unwrap_or("") {
+                    "eth_chainId" => json!("0x89"),
+                    "eth_estimateGas" => json!("0x5208"),
+                    "eth_gasPrice" => json!("0x3b9aca00"),
+                    "eth_maxPriorityFeePerGas" => json!("0x59682f00"),
+                    "eth_getTransactionCount" => json!("0x5"),
+                    "eth_blockNumber" => json!("0x50"),
+                    "eth_getBlockByNumber" => {
+                        json!({ "number": "0x50", "baseFeePerGas": "0x3b9aca00", "timestamp": "0x6553f100" })
+                    }
+                    "eth_sendRawTransaction" => {
+                        let raw = req["params"][0].as_str().unwrap_or("");
+                        let bytes = hex::decode(raw.trim_start_matches("0x")).unwrap_or_default();
+                        *seen.lock().unwrap() += 1;
+                        json!(format!("{:#x}", alloy_primitives::keccak256(&bytes)))
+                    }
+                    "eth_getTransactionReceipt" => {
+                        json!({ "status": "0x1", "blockNumber": "0x10", "logs": [] })
+                    }
+                    _ => json!(null),
+                };
+                axum::Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, rpc).await;
+    });
+    (format!("http://{addr}"), sent)
+}
+
+async fn revocation(pool: &PgPool, hash: &str) -> (String, i32, Option<String>) {
+    sqlx::query_as(
+        "SELECT status, attempts, tx_hash FROM credits.revocations WHERE credit_hash = $1",
+    )
+    .bind(hash)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_revocation_pass_claims_sends_and_skips_withdrawn_rows() {
+    use super::settlement::{RevocationOutcome, Revoker};
+    use crate::evm::chain::ChainComponent;
+    use crate::evm::signer::DirectSigner;
+    let Some(own) = super::tests::OwnDatabase::create("iap_revocation_pass").await else {
+        return;
+    };
+    let pool = own.pool.clone();
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let (url, sent) = spawn_revocation_chain().await;
+    let rpc = Arc::new(ChainComponent::new(
+        crate::http::Outbound::for_tests(),
+        &url,
+        std::time::Duration::from_secs(5),
+    ));
+    let key = hex::encode(PrivateKeySigner::random().to_bytes());
+    let revoker = |fee_cap: Option<u128>| Revoker {
+        credits: state.credits.clone(),
+        signer: Arc::new(
+            DirectSigner::new(
+                rpc.clone(),
+                &key,
+                137,
+                1_500_000,
+                std::time::Duration::from_millis(1),
+                std::time::Duration::from_millis(50),
+            )
+            .unwrap()
+            .with_max_fee_per_gas(fee_cap),
+        ),
+        chain_id: 137,
+    };
+
+    // A refund the balance cannot cover queues one signed credit.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let hash = pledge(&pool, &w.address, 400, 0, 300).await;
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+
+    // A broadcast refused before it is sent keeps the attempt: the revocation is final.
+    let out = revoker(Some(1)).run_pass(None).await.unwrap();
+    assert_eq!(
+        out,
+        RevocationOutcome {
+            errors: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(revocation(&pool, &hash).await, ("pending".into(), 1, None));
+    assert_eq!(*sent.lock().unwrap(), 0);
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["revocationsWithdrawn"], 0, "{out}");
+
+    // The next pass sends it and gives the claim back, then polls it confirmed.
+    let out = revoker(None).run_pass(None).await.unwrap();
+    assert_eq!(out.sent, 1, "{out:?}");
+    let (status, attempts, tx_hash) = revocation(&pool, &hash).await;
+    assert_eq!((status.as_str(), attempts), ("sent", 1));
+    assert!(tx_hash.is_some());
+    assert_eq!(*sent.lock().unwrap(), 1);
+    let out = revoker(None).run_pass(None).await.unwrap();
+    assert_eq!(out.confirmed, 1, "{out:?}");
+    assert_eq!(revocation(&pool, &hash).await.0, "confirmed");
+
+    // A revocation the reversal withdrew is never sent.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let withdrawn = pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["revocationsWithdrawn"], 1, "{out}");
+    let out = revoker(None).run_pass(None).await.unwrap();
+    assert_eq!(out, RevocationOutcome::default());
+    assert!(!queued(&pool, &withdrawn).await);
+    assert_eq!(*sent.lock().unwrap(), 1);
+    drop(app);
+    drop(state);
+    own.drop().await;
 }
