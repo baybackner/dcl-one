@@ -1,6 +1,7 @@
+import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 import type { AuthIdentity } from "../../auth/types";
-import { postJSON, signedGetJSON } from "../client";
+import { CatalystError, postJSON, signedGetJSON } from "../client";
 import { apiOkOf } from "../envelope";
 import { EventRecordSchema } from "../generated-schemas/events";
 
@@ -58,7 +59,7 @@ export async function loadModerationEvents(identity: AuthIdentity, signal?: Abor
   const cutoff = now - 24 * 60 * 60_000;
   const active = [...catalogue.values()].filter(event => !event.rejected && !event.deleted_by_user && !event.deleted_by_admin);
   return {
-    events: active.filter(event => !event.approved && Date.parse(event.next_finish_at ?? event.finish_at ?? "") > now),
+    events: active.filter(event => !event.approved && Date.parse(eventOccurrence(event).finish ?? "") > now),
     recentlyApproved: active.filter(event => event.approved && Date.parse(event.updated_at ?? "") >= cutoff),
     hasMore: false,
   };
@@ -81,3 +82,71 @@ export async function saveEventPermissions(identity: AuthIdentity, address: stri
   if (permissions.some((permission) => !EVENT_PERMISSIONS.some((entry) => entry.id === permission))) throw new Error("Choose a supported event permission.");
   return apiOkOf(Profile).parse(await postJSON(`/events/api/profiles/${address.toLowerCase()}/settings`, { permissions }, { identity, method: "PATCH" })).data;
 }
+
+/** An account's event permissions and, for a moderator, every account's grants. */
+export type EventAccess = { profile: EventProfile; profiles: EventProfile[] | null };
+
+/** The signed reads of the admin pages are the account's own, so they sit under `["private", account, ...]`. */
+export const eventAdminKeys = {
+  all: (account: string) => ["private", account.toLowerCase(), "event-admin"] as const,
+  access: (account: string) => ["private", account.toLowerCase(), "event-admin", "access"] as const,
+  queue: (account: string) => ["private", account.toLowerCase(), "event-admin", "queue"] as const,
+};
+
+/** The member's own events (My Events), read signed, so private to the account. */
+export const ownedEventsKeys = {
+  mine: (account: string) => ["private", account.toLowerCase(), "events", "mine"] as const,
+};
+
+export type EventReviewStatus = "pending" | "approved" | "rejected";
+
+/** Where an event stands in review; a rejection wins over a stale approval. */
+export function eventReviewStatus(event: Pick<ManagedEvent, "approved" | "rejected">): EventReviewStatus {
+  if (event.rejected) return "rejected";
+  return event.approved ? "approved" : "pending";
+}
+
+/**
+ * The occurrence an event is shown by, as decentraland.org: a recurring event with a next occurrence
+ * counts by it (start and finish together), any other by its own start and finish.
+ */
+export function eventOccurrence(event: Pick<ManagedEvent, "recurrent" | "start_at" | "finish_at" | "next_start_at" | "next_finish_at">): { start: string | null; finish: string | null } {
+  return event.recurrent && event.next_start_at && event.next_finish_at
+    ? { start: event.next_start_at, finish: event.next_finish_at }
+    : { start: event.start_at, finish: event.finish_at };
+}
+
+export function editEventHref(id: string): string {
+  return `/events/edit-event/${encodeURIComponent(id)}`;
+}
+
+const EVENT_ADMIN_STALE_MS = 30_000;
+
+/**
+ * `edit_any_profile` is only a hint to probe: the moderator-only list decides whether the account may
+ * read other accounts' grants, so a 403 there leaves `profiles` null instead of failing the read.
+ */
+export async function loadEventAccess(identity: AuthIdentity, signal?: AbortSignal): Promise<EventAccess> {
+  const profile = await loadEventProfile(identity, signal);
+  if (!profile.permissions.includes("edit_any_profile")) return { profile, profiles: null };
+  try {
+    return { profile, profiles: await loadEventProfiles(identity, signal) };
+  } catch (error) {
+    if (error instanceof CatalystError && error.status === 403) return { profile, profiles: null };
+    throw error;
+  }
+}
+
+export const eventAccessQuery = (identity: AuthIdentity) =>
+  queryOptions({
+    queryKey: eventAdminKeys.access(identity.signer),
+    staleTime: EVENT_ADMIN_STALE_MS,
+    queryFn: ({ signal }) => loadEventAccess(identity, signal),
+  });
+
+export const moderationQueueQuery = (identity: AuthIdentity) =>
+  queryOptions({
+    queryKey: eventAdminKeys.queue(identity.signer),
+    staleTime: EVENT_ADMIN_STALE_MS,
+    queryFn: ({ signal }) => loadModerationEvents(identity, signal),
+  });

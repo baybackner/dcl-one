@@ -79,4 +79,14 @@ describe("Dialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(focus).not.toHaveBeenCalled();
   });
+
+  it("should cap a narrower dialog at its own width", () => {
+    render(<Dialog labelledBy="t" maxWidth={540} onClose={() => {}}><h2 id="t">Delete</h2></Dialog>);
+    expect(screen.getByRole("dialog").style.getPropertyValue("--dialog-max-width")).toBe("540px");
+  });
+
+  it("should keep the default width when none is given", () => {
+    render(<Dialog labelledBy="t" onClose={() => {}}><h2 id="t">Details</h2></Dialog>);
+    expect(screen.getByRole("dialog").getAttribute("style")).toBeNull();
+  });
 });

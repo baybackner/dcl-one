@@ -1,0 +1,197 @@
+import { adminCopy, rejectionReason, relativeDateLabel, type RejectReasonId } from "@dcl/one-ui/apps/sites/events/admin-copy";
+import { AdminPage, adminPageStyles } from "@dcl/one-ui/apps/sites/events/AdminPage";
+import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
+import { PendingEventCard } from "@dcl/one-ui/apps/sites/events/PendingEventCard";
+import { RejectEventModal } from "@dcl/one-ui/apps/sites/events/RejectEventModal";
+import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
+
+import { getIdentity } from "@/data/lib/auth/session";
+import { invalidateEventsAfterWrite } from "@/data/lib/catalyst/places/events-page";
+import {
+  editEventHref, eventAdminKeys, eventOccurrence, eventReviewStatus, moderateEvent, moderationQueueQuery, type ManagedEvent,
+} from "@/data/lib/catalyst/places/event-management";
+import { useEventsFooterCopy } from "@/features/events/locale";
+import { openSignIn } from "../../components/auth/signin-store";
+import SitesLayout from "../../components/chrome/SitesLayout";
+import { AdminAccessGate } from "./AdminAccessGate";
+import { EventAdminTabs } from "./EventAdminTabs";
+import { useEventAdmin, type EventAdminAccess } from "./useEventAdmin";
+import { useToast } from "./useToast";
+import styles from "./PendingEventsPage.module.css";
+
+/** The Users and Pending pages render in English, as decentraland.org's (its admin copy has no translations). */
+const DATE_LOCALE = "en-US";
+const PENDING_PATH = "/events/admin/pending-events";
+const failure = (error: unknown) => error instanceof Error && error.message ? error.message : adminCopy.pending.actionError;
+
+export default function PendingEventsPage() {
+  const access = useEventAdmin();
+  const footerCopy = useEventsFooterCopy();
+  return (
+    <SitesLayout active="whatson" headerSurface="overlay" overlayNav footerCopy={footerCopy}>
+      <AdminPage bar={<EventAdminTabs active="pending" />}>
+        <AdminAccessGate access={access} allowed={access.canSeePending}>
+          <PendingQueue key={access.identity?.signer.toLowerCase()} access={access} />
+        </AdminAccessGate>
+      </AdminPage>
+    </SitesLayout>
+  );
+}
+
+function PendingQueue({ access }: { access: EventAdminAccess }) {
+  const identity = access.identity;
+  const client = useQueryClient();
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const queue = useQuery(identity ? moderationQueueQuery(identity) : { queryKey: eventAdminKeys.queue("anonymous"), queryFn: skipToken });
+  const [rejecting, setRejecting] = useState<ManagedEvent | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useToast();
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+
+  const signer = identity?.signer.toLowerCase() ?? "";
+  const own = (event: ManagedEvent) => (event.user ?? "").toLowerCase() === signer;
+  // A reviewer's list has every creator's pending events; an own-events approver's has only theirs
+  // (the API answers them no one else's), kept to theirs here too.
+  const reviewer = access.canApproveAny || access.canEditAny;
+  const pending = (queue.data?.events ?? []).filter((event) => reviewer || own(event));
+  // The API lets an own-events approver approve their own event, and stores a rejection reason only
+  // from an `approve_any_event` reviewer, so Reject stays a reviewer's action.
+  const mayApprove = (event: ManagedEvent) => access.canApproveAny || (access.canApproveOwn && own(event));
+  const mayEdit = (event: ManagedEvent) => access.canEditAny || own(event);
+  const recentlyApproved = queue.data?.recentlyApproved ?? [];
+  const openId = params.get("id");
+  const review = openId ? [...pending, ...recentlyApproved].find((event) => event.id === openId) ?? null : null;
+  const now = new Date();
+
+  function select(id: string | null) {
+    setError(null);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (id) next.set("id", id);
+      else next.delete("id");
+      return next;
+    }, { replace: !id, preventScrollReset: true });
+  }
+
+  function closeReview() {
+    if (!busy) select(null);
+  }
+
+  async function moderate(event: ManagedEvent, action: "approve" | "reject", reason?: string) {
+    const signer = getIdentity();
+    if (!signer || signer.signer.toLowerCase() !== identity?.signer.toLowerCase()) {
+      openSignIn();
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await moderateEvent(signer, event.id, action, reason);
+      void invalidateEventsAfterWrite(client);
+      if (!mounted.current) return;
+      setRejecting(null);
+      select(null);
+      setToast({ message: action === "approve" ? adminCopy.pending.approveSuccess : adminCopy.pending.rejectSuccess, tone: "success" });
+    } catch (cause) {
+      if (mounted.current) setError(failure(cause));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+
+  const cards = (events: ManagedEvent[]) => (
+    <ul className={styles.grid}>
+      {events.map((event) => {
+        const { start } = eventOccurrence(event);
+        return (
+          <li key={event.id}>
+            <PendingEventCard
+              title={event.name}
+              image={event.image}
+              href={`${PENDING_PATH}?id=${encodeURIComponent(event.id)}`}
+              onOpen={(click) => {
+                click.preventDefault();
+                select(event.id);
+              }}
+              status={eventReviewStatus(event)}
+              dateLabel={relativeDateLabel(start, now, DATE_LOCALE)}
+              creatorName={event.user_name ?? undefined}
+              time={start ? { label: new Date(start).toLocaleTimeString(DATE_LOCALE, { hour: "numeric", minute: "2-digit" }), dateTime: start } : undefined}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  const reviewPending = review !== null && eventReviewStatus(review) === "pending";
+  const reviewStart = review ? eventOccurrence(review).start : null;
+  const errorAlert = error ? <p className={adminPageStyles.error} role="alert">{error}</p> : undefined;
+
+  return (
+    <>
+      <section className={adminPageStyles.section} aria-labelledby="pending-events-heading">
+        <h1 id="pending-events-heading" className={adminPageStyles.title}>{adminCopy.pending.title}</h1>
+        {queue.isPending ? (
+          <p className={adminPageStyles.status} role="status">{adminCopy.pending.loading}</p>
+        ) : queue.isError ? (
+          <div className={adminPageStyles.status}>
+            <p role="alert">{failure(queue.error)}</p>
+            <Button variant="secondary" onClick={() => void queue.refetch()}>{adminCopy.pending.retry}</Button>
+          </div>
+        ) : pending.length ? cards(pending) : (
+          <p className={styles.empty}>{adminCopy.pending.empty}</p>
+        )}
+      </section>
+      <section className={adminPageStyles.section} aria-labelledby="recently-approved-heading">
+        <h2 id="recently-approved-heading" className={adminPageStyles.title}>
+          {adminCopy.pending.recentlyApproved}{" "}
+          <span className={adminPageStyles.subtitle}>{adminCopy.pending.recentlyApprovedSubtitle}</span>
+        </h2>
+        {cards(recentlyApproved)}
+      </section>
+      {review && !rejecting ? (
+        <EventDetailModal
+          title={review.name}
+          image={review.image}
+          live={false}
+          when={reviewStart ? { label: new Date(reviewStart).toLocaleString(DATE_LOCALE), dateTime: reviewStart } : undefined}
+          location={{ world: review.world, label: review.world ? review.server || "World location not published" : `${review.x},${review.y}` }}
+          description={review.description ?? undefined}
+          creator={review.user_name ? { name: review.user_name } : undefined}
+          onClose={closeReview}
+          feedback={errorAlert}
+          actions={<>
+            {reviewPending && mayApprove(review) ? (
+              <Button disabled={busy} onClick={() => void moderate(review, "approve")}>{adminCopy.pending.approve}</Button>
+            ) : null}
+            {reviewPending && access.canApproveAny ? (
+              <Button variant="tertiary" disabled={busy} onClick={() => { setError(null); setRejecting(review); }}>{adminCopy.pending.reject}</Button>
+            ) : null}
+            {mayEdit(review) ? (
+              <Button variant="tertiary" disabled={busy} onClick={() => navigate(editEventHref(review.id))}>{adminCopy.pending.edit}</Button>
+            ) : null}
+          </>}
+        />
+      ) : null}
+      {rejecting ? (
+        <RejectEventModal
+          busy={busy}
+          feedback={errorAlert}
+          onClose={() => { setError(null); setRejecting(null); }}
+          onSubmit={({ reasons, notes }: { reasons: RejectReasonId[]; notes: string }) => void moderate(rejecting, "reject", rejectionReason(reasons, notes))}
+        />
+      ) : null}
+      <div role="status">
+        {toast ? <p className={adminPageStyles.toast} data-tone={toast.tone}>{toast.message}</p> : null}
+      </div>
+    </>
+  );
+}

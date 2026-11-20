@@ -2,6 +2,7 @@ import { useEventsCopy } from "@dcl/one-ui/apps/sites/events/locale";
 import type { HangoutDraft } from "@/data/lib/catalyst/landings/submit-hangout";
 import type { HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import styles from "./HangoutAssociations.module.css";
+import form from "./SubmitHangout.module.css";
 import FeaturedAssetPicker from "./FeaturedAssetPicker";
 
 export default function HangoutAssociations({ draft, options, canEditAny, canChangeCommunity, onEdit }: {
@@ -12,9 +13,9 @@ export default function HangoutAssociations({ draft, options, canEditAny, canCha
   const knownCommunity = options?.communities.some((community) => community.id === draft.communityId);
   const schedules = options?.schedules ?? [];
   const selectedSchedules = draft.scheduleIds ?? [];
-  return <div className={styles.root}>
-    <label className={`submit-hangout__fieldlabel ${styles.communityLabel}`}>{text("Community")}
-      <select aria-label={text("Community")} className="submit-hangout__field" value={draft.communityId} disabled={!canChangeCommunity} onChange={(event) => onEdit({ communityId: event.target.value })}>
+  return <div className={`${styles.root} ${form.associations}`}>
+    <label className={`submit-hangout__fieldlabel ${form.fieldLabel} ${styles.communityLabel}`}>{text("Community")}
+      <select aria-label={text("Community")} className={`submit-hangout__field ${form.field}`} value={draft.communityId} disabled={!canChangeCommunity} onChange={(event) => onEdit({ communityId: event.target.value })}>
         <option value="">{text("None")}</option>
         {draft.communityId && !knownCommunity && <option value={draft.communityId}>{text("Current community")}</option>}
         {options?.communities.map((community) => <option value={community.id} key={community.id}>{community.name}</option>)}
@@ -32,7 +33,7 @@ export default function HangoutAssociations({ draft, options, canEditAny, canCha
           {selectedSchedules.filter((id) => !schedules.some((schedule) => schedule.id === id)).map((id) => <label className="submit-hangout__fieldcheck" key={id}><input type="checkbox" checked onChange={() => onEdit({ scheduleIds: selectedSchedules.filter((selected) => selected !== id) })} />{text("Unavailable schedule (remove association)")}</label>)}
         </>}
       </fieldset>
-      <label className="submit-hangout__fieldlabel">{text("Custom join link")}<input type="url" className="submit-hangout__field" value={draft.joinUrl ?? ""} onChange={(event) => onEdit({ joinUrl: event.target.value })} placeholder={text("Use the venue's default link")} /></label>
+      <label className={`submit-hangout__fieldlabel ${form.fieldLabel}`}>{text("Custom join link")}<input type="url" className={`submit-hangout__field ${form.field}`} value={draft.joinUrl ?? ""} onChange={(event) => onEdit({ joinUrl: event.target.value })} placeholder={text("Use the venue's default link")} /></label>
     </>}
   </div>;
 }

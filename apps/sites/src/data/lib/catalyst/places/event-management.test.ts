@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../client", async (original) => ({ ...await original<typeof import("../client")>(), postJSON: vi.fn(), signedGetJSON: vi.fn() }));
-import { postJSON, signedGetJSON } from "../client";
-import { loadEventProfile, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
+import { CatalystError, postJSON, signedGetJSON } from "../client";
+import { eventAdminKeys, loadEventAccess, loadEventProfile, loadModerationEvents, loadOwnedEvents, moderateEvent, saveEventPermissions } from "./event-management";
 import type { AuthIdentity } from "../../auth/types";
 import type { ManagedEvent } from "./event-management";
 
@@ -48,7 +48,7 @@ describe("when managing authenticated hangouts", () => {
         .mockResolvedValueOnce({ ok: true, data: [...firstPage, pending] })
         .mockResolvedValueOnce({ ok: true, data: [
           pending,
-          { ...makeEvent("recurring"), finish_at: insideWindow, next_finish_at: future },
+          { ...makeEvent("recurring"), recurrent: true, finish_at: insideWindow, next_start_at: future, next_finish_at: future },
           { ...makeEvent("approved"), approved: true, updated_at: insideWindow },
           { ...makeEvent("older"), approved: true, updated_at: outsideWindow },
           { ...makeEvent("missing-date"), approved: true },
@@ -137,6 +137,39 @@ describe("when managing authenticated hangouts", () => {
     });
     it("should show exactly one page and only enable Next for a lookahead row", async () => {
       await expect(loadOwnedEvents(identity, { offset: 25, limit: 25 })).resolves.toEqual({ events: rows.slice(0, 25), hasMore: count > 25 });
+    });
+  });
+
+  describe("and reading the account's admin access", () => {
+    const answer = (permissions: string[], list: () => unknown) => {
+      vi.mocked(signedGetJSON).mockImplementation(async (path: string) =>
+        path === "/events/api/profiles/me/settings" ? { ok: true, data: { user: identity.signer, permissions } } : list());
+    };
+
+    it("should not read other accounts without the profile permission", async () => {
+      answer(["approve_any_event"], () => { throw new Error("unexpected"); });
+      await expect(loadEventAccess(identity)).resolves.toEqual({ profile: { user: identity.signer, permissions: ["approve_any_event"] }, profiles: null });
+      expect(signedGetJSON).toHaveBeenCalledTimes(1);
+    });
+
+    it("should read every account's grants for a moderator", async () => {
+      answer(["edit_any_profile"], () => ({ ok: true, data: [{ user: identity.signer, permissions: ["edit_any_profile"] }] }));
+      await expect(loadEventAccess(identity)).resolves.toMatchObject({ profiles: [{ user: identity.signer }] });
+    });
+
+    it("should treat a refused list as no user administration", async () => {
+      answer(["edit_any_profile"], () => { throw new CatalystError("Forbidden", "list", 403); });
+      await expect(loadEventAccess(identity)).resolves.toMatchObject({ profiles: null });
+    });
+
+    it("should fail on any other list failure", async () => {
+      answer(["edit_any_profile"], () => { throw new CatalystError("Unavailable", "list", 503); });
+      await expect(loadEventAccess(identity)).rejects.toThrow("Unavailable");
+    });
+
+    it("should keep each account's admin reads under its own private key", () => {
+      expect(eventAdminKeys.access("0xABC")).toEqual(["private", "0xabc", "event-admin", "access"]);
+      expect(eventAdminKeys.queue("0xABC")).toEqual(["private", "0xabc", "event-admin", "queue"]);
     });
   });
 

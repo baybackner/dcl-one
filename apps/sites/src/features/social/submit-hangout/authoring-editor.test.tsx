@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SubmitFn } from "@/data/lib/catalyst/landings/submit-hangout";
+import { emptyDraft, type SubmitFn } from "@/data/lib/catalyst/landings/submit-hangout";
 import SubmitHangout from "./SubmitHangout";
 import { HANGOUT_EVENTS, type TrackFn } from "./machine";
 
@@ -115,7 +115,7 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
       await screen.findByText(/Submission denied/);
       expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Open studio");
       await user.click(screen.getByRole("button", { name: "Submit Event" }));
-      await screen.findByText(/It is pending review/);
+      await screen.findByText("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
       expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
         draft: expect.objectContaining({ name: "Open studio", startDate: "2099-07-01", startTime: "18:30" }),
       }));
@@ -150,5 +150,100 @@ describe("when the single-page editor receives sign-in without remounting", () =
     expect(await screen.findByRole("textbox", { name: "Event Name" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Submit Event" })).toBeTruthy();
     expect(track.mock.calls.filter(([event]) => event === HANGOUT_EVENTS.started)).toHaveLength(1);
+  });
+});
+
+describe("when an event is saved from the single-page editor", () => {
+  let user: ReturnType<typeof userEvent.setup>;
+  let submit: ReturnType<typeof vi.fn<SubmitFn>>;
+  let router: ReturnType<typeof createMemoryRouter>;
+  function page(mode: "create" | "edit") {
+    router = createMemoryRouter([
+      { path: "/events/new-event", element: <SubmitHangout
+            editor
+            signedIn
+            mode={mode}
+            draft={{ ...emptyDraft(), name: "Open studio", startDate: "2099-07-01", startTime: "18:30" }}
+            trackCtx={{ sid: "test", story: "landings/submit-hangout", variant: "wizard" }}
+            categories={[]}
+            submit={submit}
+            track={vi.fn()}
+          /> },
+      { path: "/events", element: <h1>What's On</h1> },
+    ], { initialEntries: ["/events/new-event"] });
+    return <RouterProvider router={router} />;
+  }
+  beforeEach(() => {
+    user = userEvent.setup();
+    submit = vi.fn<SubmitFn>().mockResolvedValue({ id: "saved-event", approved: false });
+  });
+  afterEach(() => { cleanup(); router.dispose(); document.body.style.overflow = ""; });
+
+  describe("and it was a new event", () => {
+    beforeEach(async () => {
+      render(page("create"));
+      await user.click(screen.getByRole("button", { name: "Submit Event" }));
+      await screen.findByRole("button", { name: "My Events" });
+    });
+
+    it("should cover the form with the pending-review confirmation and lock the page scroll", () => {
+      expect(screen.getByRole("status").textContent).toBe("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
+      expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+      expect(document.body.style.overflow).toBe("hidden");
+    });
+
+    it("should move focus to the confirmation message, which leaves the actions outside the live region", () => {
+      expect(document.activeElement).toBe(screen.getByRole("status"));
+      expect(screen.getByRole("status").contains(screen.getByRole("button", { name: "My Events" }))).toBe(false);
+    });
+
+    it("should open My Events from the confirmation", async () => {
+      await user.click(screen.getByRole("button", { name: "My Events" }));
+      expect(router.state.location.pathname + router.state.location.search).toBe("/events?tab=my");
+      expect(document.body.style.overflow).toBe("");
+    });
+
+    it("should go back to the Events page from the confirmation", async () => {
+      await user.click(screen.getByRole("button", { name: "Back to Explore" }));
+      expect(router.state.location.pathname + router.state.location.search).toBe("/events");
+    });
+  });
+
+  describe("and the new event comes back already approved", () => {
+    beforeEach(async () => {
+      submit.mockResolvedValueOnce({ id: "saved-event", approved: true });
+      render(page("create"));
+      await user.click(screen.getByRole("button", { name: "Submit Event" }));
+    });
+
+    it("should say it is live instead of awaiting review", async () => {
+      expect(await screen.findByText("Your event was created and is now live.")).toBeTruthy();
+      expect(screen.queryByText(/notified once it's approved/)).toBeNull();
+    });
+  });
+
+  describe("and it was an existing event", () => {
+    beforeEach(async () => {
+      render(page("edit"));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+    });
+
+    it("should confirm the update", async () => {
+      expect(await screen.findByText("Your event was updated successfully.")).toBeTruthy();
+    });
+  });
+
+  describe("and the save fails", () => {
+    beforeEach(async () => {
+      submit.mockRejectedValueOnce(new Error("Service unavailable"));
+      render(page("edit"));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+    });
+
+    it("should keep the form without a confirmation", async () => {
+      expect(await screen.findByText(/Service unavailable/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "My Events" })).toBeNull();
+      expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Open studio");
+    });
   });
 });

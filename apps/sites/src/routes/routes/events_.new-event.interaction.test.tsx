@@ -8,6 +8,7 @@ import type { AuthIdentity } from "@/data/lib/auth/types";
 import { useAuth } from "@/data/lib/auth/context";
 import { getIdentity } from "@/data/lib/auth/session";
 import * as authoring from "@/data/lib/catalyst/landings/submit-hangout";
+import { CatalystError } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
 import { loadHangoutOptions, type HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import SubmitHangoutRoute from "./events_.new-event";
@@ -30,6 +31,17 @@ describe("when editing a hangout through its route", () => {
   let resolveOptions: (options: HangoutOptions) => void;
   let user: ReturnType<typeof userEvent.setup>;
 
+  let scrollTo: ReturnType<typeof vi.spyOn>;
+
+  function mount(path = "/events/edit-event/existing-event") {
+    const loaderData = { sid: "test", mode: "edit", eventId: "existing-event", communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
+    router = createMemoryRouter([
+      { id: "hangout", path: "/events/edit-event/:id", Component: SubmitHangoutRoute as never, loader: () => loaderData },
+      { path: "/events", element: <h1>What's On</h1> },
+    ], { initialEntries: [path], hydrationData: { loaderData: { hangout: loaderData } } });
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+  }
+
   beforeEach(() => {
     identity = { signer: "0x1111111111111111111111111111111111111111", ephemeral: { address: "0x2222222222222222222222222222222222222222", privateKey: "0x01" }, expiration: "2099-01-01T00:00:00Z", authChain: [] };
     event = {
@@ -50,81 +62,171 @@ describe("when editing a hangout through its route", () => {
     vi.mocked(getIdentity).mockReturnValue(identity);
     vi.spyOn(authoring, "loadEditableHangout").mockImplementationOnce(() => new Promise((resolve, reject) => { resolveLoad = resolve; rejectLoad = reject; }));
     vi.spyOn(authoring, "deleteHangout").mockResolvedValue(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    const loaderData = { sid: "test", mode: "edit", eventId: "existing-event", communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
-    router = createMemoryRouter([
-      { id: "hangout", path: "/events/edit-event/:id", Component: SubmitHangoutRoute as never, loader: () => loaderData },
-      { path: "/events", element: <h1>What's On</h1> },
-    ], { initialEntries: ["/events/edit-event/existing-event"], hydrationData: { loaderData: { hangout: loaderData } } });
+    scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     client = new QueryClient();
     client.setQueryData(eventsPageKeys.detail(event.id), event);
-    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
   });
   afterEach(() => { cleanup(); client.clear(); vi.restoreAllMocks(); vi.resetAllMocks(); router.dispose(); });
 
-  it("should keep loading inside the page before the footer", () => {
-    expect(screen.getByRole("status").textContent).toContain("Loading your hangout");
-    expect(screen.getByRole("status").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  describe("and the event is still loading", () => {
+    beforeEach(() => mount());
+
+    it("should show the editor header and a loading status before the footer", () => {
+      expect(screen.getByRole("heading", { name: "Edit Event" })).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
+      expect(screen.getByRole("status").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("should not offer a delete action", () => {
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    });
   });
-  it("should keep a load failure within the page chrome", async () => {
-    await act(async () => rejectLoad(new Error("You cannot edit this event")));
-    expect(screen.getByRole("alert").textContent).toContain("You cannot edit this event");
-    expect(screen.getByRole("alert").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-  describe("and the event read fails transiently", () => {
+
+  describe.each([401, 403, 404])("and the event read answers %i", (status) => {
     beforeEach(async () => {
-      await act(async () => rejectLoad(new Error("Event service unavailable")));
-      vi.mocked(authoring.loadEditableHangout).mockResolvedValueOnce(event);
-      vi.mocked(loadHangoutOptions).mockResolvedValueOnce(options);
+      mount();
+      await act(async () => rejectLoad(new CatalystError("Event not found", "/events/api/events/existing-event", status)));
     });
-    it("should retry both the event read and access lookup", async () => {
-      await user.click(screen.getByRole("button", { name: "Check access again" }));
-      await screen.findByRole("heading", { name: "Edit Event" });
-      expect(authoring.loadEditableHangout).toHaveBeenCalledTimes(2);
-      expect(loadHangoutOptions).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText("Event service unavailable")).toBeNull();
+
+    it("should replace the edit page with the Events page without showing the error", async () => {
+      await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.queryByText("Event not found")).toBeNull();
     });
   });
+
+  describe("and the event read fails with a server error", () => {
+    beforeEach(async () => {
+      mount();
+      await act(async () => rejectLoad(new CatalystError("Event service unavailable", "/events/api/events/existing-event", 500)));
+    });
+
+    it("should stay on the edit page and show the error with a retry under the header", () => {
+      expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+      expect(screen.getByRole("alert").textContent).toBe("Event service unavailable");
+      expect(screen.getByRole("heading", { name: "Edit Event" }).compareDocumentPosition(screen.getByRole("alert")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    describe("and the retry succeeds", () => {
+      beforeEach(async () => {
+        vi.mocked(authoring.loadEditableHangout).mockResolvedValueOnce(event);
+        vi.mocked(loadHangoutOptions).mockResolvedValueOnce(options);
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+      });
+
+      it("should read the event and permissions again and open the editor", async () => {
+        expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Monthly series");
+        expect(authoring.loadEditableHangout).toHaveBeenCalledTimes(2);
+        expect(loadHangoutOptions).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole("alert")).toBeNull();
+      });
+    });
+  });
+
+  describe("and the event read times out without a status", () => {
+    beforeEach(async () => {
+      mount();
+      await act(async () => rejectLoad(new Error("The request timed out")));
+    });
+
+    it("should offer a retry instead of leaving the page", () => {
+      expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  });
+
+  describe("and the visitor is signed out", () => {
+    beforeEach(() => {
+      vi.mocked(useAuth).mockReturnValue({ identity: null, address: null, isConnected: false } as unknown as ReturnType<typeof useAuth>);
+      mount();
+    });
+
+    it("should replace the edit page with the Events page without reading the event", async () => {
+      await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(authoring.loadEditableHangout).not.toHaveBeenCalled();
+    });
+  });
+
   describe("and another creator's event loads before permissions", () => {
     beforeEach(async () => {
+      mount();
       event.user = "0x3333333333333333333333333333333333333333";
       event.contact = "owner@example.test";
       event.details = "Owner private notes";
       await act(async () => resolveLoad(event));
     });
+
     it("should wait for access without exposing an editor or delete action", () => {
       expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
-      expect(screen.queryByRole("button", { name: "Delete hangout" })).toBeNull();
-      expect(screen.queryByRole("heading", { name: "Edit Event" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
     });
+
     describe("and the account lacks edit permission", () => {
       beforeEach(async () => { await act(async () => resolveOptions(options)); });
-      it("should deny access and keep delete hidden", () => {
-        expect(screen.getByRole("alert").textContent).toBe("You don't have permission to edit this hangout.");
-        expect(screen.queryByRole("button", { name: "Delete hangout" })).toBeNull();
+
+      it("should replace the edit page with the Events page", async () => {
+        await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
+        expect(router.state.historyAction).toBe("REPLACE");
       });
     });
+
+    describe("and the account's permissions cannot be read", () => {
+      beforeEach(async () => { await act(async () => resolveOptions({ ...options, profileError: "Profile service unavailable" })); });
+
+      it("should stay on the edit page with a retry instead of denying access", () => {
+        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        expect(screen.getByRole("alert").textContent).toBe("Profile service unavailable");
+        expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+      });
+
+      describe("and the retry shows the account may edit any event", () => {
+        beforeEach(async () => {
+          vi.mocked(authoring.loadEditableHangout).mockResolvedValueOnce(event);
+          vi.mocked(loadHangoutOptions).mockResolvedValueOnce({ ...options, profile: { user: identity.signer, permissions: ["edit_any_event"] } });
+          await user.click(screen.getByRole("button", { name: "Retry" }));
+        });
+
+        it("should open the delegated editor", async () => {
+          expect(await screen.findByRole("textbox", { name: "Custom join link" })).toBeTruthy();
+          expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        });
+      });
+    });
+
     describe("and the account may edit any event", () => {
       beforeEach(async () => {
         options.profile = { user: identity.signer, permissions: ["edit_any_event"] };
         await act(async () => resolveOptions(options));
       });
+
       it("should show delegated controls while keeping owner fields private", () => {
         expect(screen.getByRole("textbox", { name: "Custom join link" })).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Delete hangout" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
         expect(screen.queryByRole("textbox", { name: "Contact email" })).toBeNull();
         expect(screen.queryByRole("textbox", { name: "Details for moderators" })).toBeNull();
         expect((screen.getByRole("combobox", { name: "Community" }) as HTMLSelectElement).disabled).toBe(true);
       });
     });
   });
-  describe("and the event has loaded", () => {
-    beforeEach(async () => { await act(async () => { resolveOptions(options); resolveLoad(event); }); });
+
+  describe("and the owner's event has loaded", () => {
+    beforeEach(async () => {
+      mount();
+      await act(async () => { resolveOptions(options); resolveLoad(event); });
+    });
+
     it("should keep the prefilled cover, details, location and schedule in one editor", () => {
       expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Monthly series");
       expect(screen.getByRole("img", { name: "Hangout cover" }).getAttribute("src")).toBe(event.image);
       expect(screen.getByLabelText("World")).toHaveProperty("value", "music.dcl.eth");
       expect(screen.getByLabelText("Date")).toHaveProperty("value", "2099-06-01");
+    });
+
+    it("should open the editor at the top of the page", () => {
+      expect(scrollTo).toHaveBeenLastCalledWith(0, 0);
     });
 
     it("should retain the saved recurrence interval in edit preview", async () => {
@@ -136,22 +238,69 @@ describe("when editing a hangout through its route", () => {
       await user.selectOptions(screen.getByRole("combobox", { name: "Community" }), "");
       expect((screen.getByRole("combobox", { name: "Community" }) as HTMLSelectElement).value).toBe("");
     });
-    it("should show exactly one footer after the delete control", () => {
+
+    it("should place Delete with the form actions, before Cancel and Save changes", () => {
+      const del = screen.getByRole("button", { name: "Delete" });
+      expect(del.parentElement).toBe(screen.getByRole("button", { name: "Save changes" }).parentElement);
+      expect(del.compareDocumentPosition(screen.getByRole("link", { name: "Cancel" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getAllByRole("contentinfo")).toHaveLength(1);
-      expect(screen.getByRole("button", { name: "Delete hangout" }).compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
-    it("should delete the event through the authenticated data helper and navigate back", async () => {
-      await user.click(screen.getByRole("button", { name: "Delete hangout" }));
-      expect(authoring.deleteHangout).toHaveBeenCalledWith(identity, event.id);
-      await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
-      expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(true);
+
+    describe("and the owner asks to delete it", () => {
+      beforeEach(async () => { await user.click(screen.getByRole("button", { name: "Delete" })); });
+
+      it("should ask for confirmation before deleting", () => {
+        expect(screen.getByRole("dialog", { name: "Are you sure you want to delete your event?" })).toBeTruthy();
+        expect(authoring.deleteHangout).not.toHaveBeenCalled();
+      });
+
+      it("should keep the event and the editor when the owner cancels", async () => {
+        await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(authoring.deleteHangout).not.toHaveBeenCalled();
+        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+      });
+
+      it("should delete through the authenticated helper and open My Events", async () => {
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        expect(authoring.deleteHangout).toHaveBeenCalledWith(identity, event.id);
+        await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
+        expect(router.state.location.search).toBe("?tab=my");
+        expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(true);
+      });
+
+      it("should keep the dialog busy and undismissable while the delete is in flight", async () => {
+        let finish: () => void = () => {};
+        vi.mocked(authoring.deleteHangout).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        const dialog = within(screen.getByRole("dialog"));
+        expect(dialog.getByRole<HTMLButtonElement>("button", { name: "Deleting…" }).disabled).toBe(true);
+        expect(dialog.getByRole<HTMLButtonElement>("button", { name: "Cancel" }).disabled).toBe(true);
+        await user.keyboard("{Escape}");
+        expect(screen.getByRole("dialog")).toBeTruthy();
+        await act(async () => finish());
+      });
+
+      it("should keep the editor open and report a failed delete in the dialog", async () => {
+        vi.mocked(authoring.deleteHangout).mockRejectedValueOnce(new Error("Delete denied"));
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toBe("We couldn't delete your event. Please try again.");
+        expect(within(screen.getByRole("dialog")).getByRole<HTMLButtonElement>("button", { name: "Delete event" }).disabled).toBe(false);
+        expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
+        expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(false);
+      });
     });
-    it("should keep the editor open and show a failed delete", async () => {
-      vi.mocked(authoring.deleteHangout).mockRejectedValueOnce(new Error("Delete denied"));
-      await user.click(screen.getByRole("button", { name: "Delete hangout" }));
-      expect(screen.getByRole("alert").textContent).toBe("Delete denied");
-      expect(router.state.location.pathname).toBe("/events/edit-event/existing-event");
-      expect(client.getQueryState(eventsPageKeys.detail(event.id))?.isInvalidated).toBe(false);
+  });
+
+  describe("and the edit link names an anchor", () => {
+    beforeEach(async () => {
+      mount("/events/edit-event/existing-event#schedule");
+      await act(async () => { resolveOptions(options); resolveLoad(event); });
+    });
+
+    it("should not reset the scroll position", () => {
+      expect(screen.getByRole("textbox", { name: "Event Name" })).toBeTruthy();
+      expect(scrollTo).not.toHaveBeenCalledWith(0, 0);
     });
   });
 });

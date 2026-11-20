@@ -132,6 +132,41 @@ const messages = {
     'すべてのイベント'
   ],
   'My Events': ['Mis eventos', 'Mes événements', '我的活动', '내 이벤트', 'マイイベント'],
+  'Hosted by me': [
+    'Organizados por mí',
+    'Organisés par moi',
+    '我主办的',
+    '내가 주최한 이벤트',
+    '主催したイベント'
+  ],
+  "You don't have any event created": [
+    'No creaste ningún evento',
+    'Vous n’avez créé aucun événement',
+    '你还没有创建任何活动',
+    '생성한 이벤트가 없습니다',
+    '作成したイベントはありません'
+  ],
+  'Create event': [
+    'Crear evento',
+    'Créer un événement',
+    '创建活动',
+    '이벤트 만들기',
+    'イベントを作成'
+  ],
+  "Couldn't load your events.": [
+    'No se pudieron cargar tus eventos.',
+    'Impossible de charger vos événements.',
+    '无法加载你的活动。',
+    '이벤트를 불러올 수 없습니다.',
+    'イベントを読み込めませんでした。'
+  ],
+  'Loading your events…': [
+    'Cargando tus eventos…',
+    'Chargement de vos événements…',
+    '正在加载你的活动…',
+    '이벤트를 불러오는 중…',
+    'イベントを読み込んでいます…'
+  ],
   Today: ['Hoy', 'Aujourd’hui', '今天', '오늘', '今日'],
   Tomorrow: ['Mañana', 'Demain', '明天', '내일', '明日'],
   'Navigate to previous dates': [
@@ -780,6 +815,64 @@ const messages = {
     '正在加载你的活动…',
     '이벤트를 불러오는 중…',
     'イベントを読み込み中…'
+  ],
+  'Your event was created successfully. You\'ll be notified once it\'s approved. Track its status in "My Events"':
+    [
+      'Tu evento se creó correctamente. Te avisaremos cuando se apruebe. Seguí su estado en "Mis eventos"',
+      'Votre événement a bien été créé. Vous serez averti dès qu’il sera approuvé. Suivez son statut dans « Mes événements »',
+      '你的活动已成功创建。审核通过后我们会通知你。可在“我的活动”中查看状态',
+      '이벤트가 생성되었습니다. 승인되면 알려 드립니다. "내 이벤트"에서 상태를 확인하세요',
+      'イベントを作成しました。承認されたらお知らせします。「マイイベント」でステータスを確認できます'
+    ],
+  'Your event was created and is now live.': [
+    'Tu evento se creó y ya está publicado.',
+    'Votre événement a été créé et il est maintenant en ligne.',
+    '你的活动已创建，现已上线。',
+    '이벤트가 생성되어 지금 공개되었습니다.',
+    'イベントを作成し、公開しました。'
+  ],
+  'Your event was updated successfully.': [
+    'Tu evento se actualizó correctamente.',
+    'Votre événement a bien été mis à jour.',
+    '你的活动已成功更新。',
+    '이벤트가 업데이트되었습니다.',
+    'イベントを更新しました。'
+  ],
+  'Back to Explore': [
+    'Volver a explorar',
+    'Retour à l’exploration',
+    '返回探索',
+    '탐색으로 돌아가기',
+    '探索に戻る'
+  ],
+  Delete: ['Eliminar', 'Supprimer', '删除', '삭제', '削除'],
+  'Are you sure you want to delete your event?': [
+    '¿Seguro que querés eliminar tu evento?',
+    'Voulez-vous vraiment supprimer votre événement ?',
+    '确定要删除你的活动吗？',
+    '이벤트를 삭제하시겠습니까?',
+    'イベントを削除してもよろしいですか？'
+  ],
+  'This event will be permanently removed from your events. This action can’t be undone.': [
+    'Este evento se quitará de forma permanente de tus eventos. Esta acción no se puede deshacer.',
+    'Cet événement sera définitivement retiré de vos événements. Cette action est irréversible.',
+    '此活动将从你的活动中永久移除。此操作无法撤销。',
+    '이 이벤트는 내 이벤트에서 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다.',
+    'このイベントはマイイベントから完全に削除されます。この操作は元に戻せません。'
+  ],
+  'Delete event': [
+    'Eliminar evento',
+    'Supprimer l’événement',
+    '删除活动',
+    '이벤트 삭제',
+    'イベントを削除'
+  ],
+  "We couldn't delete your event. Please try again.": [
+    'No pudimos eliminar tu evento. Intentá de nuevo.',
+    'Impossible de supprimer votre événement. Veuillez réessayer.',
+    '无法删除你的活动，请重试。',
+    '이벤트를 삭제하지 못했습니다. 다시 시도해 주세요.',
+    'イベントを削除できませんでした。もう一度お試しください。'
   ],
   'Check access again': [
     'Volver a verificar el acceso',

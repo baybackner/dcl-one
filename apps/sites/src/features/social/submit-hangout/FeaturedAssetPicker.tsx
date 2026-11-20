@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { searchFeaturedAssets, type FeaturedAsset } from "@/data/lib/catalyst/landings/hangout-options";
 
 import styles from "./FeaturedAssetPicker.module.css";
+import form from "./SubmitHangout.module.css";
 
 export default function FeaturedAssetPicker({ value, onChange }: { value: string; onChange: (urn: string) => void }) {
   const { text, errorText } = useEventsCopy();
@@ -24,10 +25,10 @@ export default function FeaturedAssetPicker({ value, onChange }: { value: string
   }, [search, attempt]);
   const current = read?.query === search ? read : null;
   const selected = current?.assets?.find((asset) => asset.urn === value);
-  return <fieldset className={styles.root}>
+  return <fieldset className={`${styles.root} ${form.picker}`}>
     <legend>{text("Featured wearable, emote or collection")}</legend>
     {value && <p className="submit-hangout__hint">{text("Selected: {asset}", { asset: label ?? selected?.name ?? value })} <button type="button" className="submit-hangout__btn" onClick={() => { onChange(""); setQuery(""); setLabel(null); }}>{text("Remove featured asset")}</button></p>}
-    <label className="submit-hangout__fieldlabel">{text("Search featured items or collections")}<input className="submit-hangout__field" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text("Search the catalogue or paste an asset URN")} /></label>
+    <label className={`submit-hangout__fieldlabel ${form.fieldLabel}`}>{text("Search featured items or collections")}<input className={`submit-hangout__field ${form.field}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text("Search the catalogue or paste an asset URN")} /></label>
     {search.length > 0 && search.length < 3 && <p className="submit-hangout__hint">{text("Enter at least three characters.")}</p>}
     {search.length >= 3 && !current && <p role="status">{text("Searching the catalogue…")}</p>}
     {current?.error && <p role="alert">{errorText(current.error)} <button type="button" className="submit-hangout__btn" onClick={() => setAttempt((previous) => previous + 1)}>{text("Retry asset search")}</button></p>}

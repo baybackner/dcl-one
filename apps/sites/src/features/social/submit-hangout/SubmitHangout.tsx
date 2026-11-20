@@ -1,6 +1,6 @@
 import { useEventsCopy, type EventsLocale } from "@dcl/one-ui/apps/sites/events/locale";
 import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
-import { GeneralAdd, GeneralCamera, GeneralInfoButton } from "@dcl/one-ui/foundations/icons";
+import { GeneralAdd, GeneralCamera, GeneralDelete, GeneralInfoButton } from "@dcl/one-ui/foundations/icons";
 import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useMachine } from "@xstate/react";
@@ -13,6 +13,7 @@ import type { HangoutOptions } from "@/data/lib/catalyst/landings/hangout-option
 import { heroWhen, scheduleLine } from "../../components/event-schedule";
 import styles from "./SubmitHangout.module.css";
 import HangoutAssociations from "./HangoutAssociations";
+import SubmitSuccess from "./SubmitSuccess";
 import {
   hangoutMachine,
   HANGOUT_EVENTS,
@@ -48,6 +49,8 @@ type SubmitHangoutProps = {
   canChangeCommunity?: boolean;
   editor?: boolean;
   reviewNotice?: string;
+  /** Edit mode: opens the delete confirmation from the form's actions. */
+  onDelete?: () => void;
 };
 
 export default function SubmitHangout({
@@ -69,6 +72,7 @@ export default function SubmitHangout({
   canChangeCommunity = mode === "create",
   editor = false,
   reviewNotice,
+  onDelete,
 }: SubmitHangoutProps) {
   const [searchParams] = useSearchParams();
 
@@ -96,6 +100,7 @@ export default function SubmitHangout({
       canEditAny={canEditAny}
       privateFieldsEditable={privateFieldsEditable}
       canChangeCommunity={canChangeCommunity}
+      onDelete={onDelete}
     />
   );
 }
@@ -119,6 +124,7 @@ type InnerProps = {
   canEditAny: boolean;
   privateFieldsEditable: boolean;
   canChangeCommunity: boolean;
+  onDelete?: () => void;
 };
 
 function uiStateFor(value: HangoutStateId): "signin" | "success" | "form" {
@@ -146,6 +152,7 @@ function SubmitHangoutInner({
   canEditAny,
   privateFieldsEditable,
   canChangeCommunity,
+  onDelete,
 }: InnerProps) {
   const { locale, text, errorText } = useEventsCopy();
   const [, setSearchParams] = useSearchParams();
@@ -249,14 +256,12 @@ function SubmitHangoutInner({
 
   return (
     <div className={inline ? `submit-hangout ${styles.authoring}` : "submit-hangout"} data-editor={inline || undefined} data-step={inline ? undefined : step} data-state={value}>
-      <header className={`submit-hangout__header ${inline ? styles.editorHeader : ""}`}>
-        {inline
-          ? <Link to="/events" className={styles.back} aria-label={text("Back to Events")} />
-          : <Link to="/events">{text("Back to Events")}</Link>}
-        <h1>{text(inline
-          ? mode === "edit" ? "Edit Event" : "Submit an Event"
-          : mode === "edit" ? "Edit Hangout" : "Submit a Hangout")}</h1>
-      </header>
+      {inline ? <EditorHeader mode={mode} /> : (
+        <header className="submit-hangout__header">
+          <Link to="/events">{text("Back to Events")}</Link>
+          <h1>{text(mode === "edit" ? "Edit Hangout" : "Submit a Hangout")}</h1>
+        </header>
+      )}
 
       <div className={`submit-hangout__controls ${inline ? styles.editorControls : ""}`} role="group" aria-label={text(inline ? "Event editor" : "Hangout wizard")}>
         {(value === "signinGate" || needsSignIn) && (
@@ -292,6 +297,11 @@ function SubmitHangoutInner({
                       <Button variant="tertiary" disabled={!canSubmit} onClick={() => send({ type: "PREVIEW" })}>{text("Preview")}</Button>
                     </div>
                     <div className={styles.formActions}>
+                      {mode === "edit" && onDelete && (
+                        <button type="button" className={styles.delete} onClick={onDelete}>
+                          {text("Delete")}<GeneralDelete size={20} aria-hidden="true" />
+                        </button>
+                      )}
                       <Link className={styles.cancel} to={mode === "edit" ? "/events?tab=my" : "/events"}>{text("Cancel")}</Link>
                       <Button disabled={!canSubmit} onClick={() => send({ type: "SUBMIT" })}>{text(mode === "edit" ? "Save changes" : "Submit Event")}</Button>
                     </div>
@@ -365,12 +375,7 @@ function SubmitHangoutInner({
             {text("Submitting your hangout for review…")}
           </p>
         )}
-        {value === "submitted" && !needsSignIn && (
-          <div role="status">
-            <p>{mode === "edit" ? text("Your hangout was updated.") : text("Your hangout was created.")}{state.context.result?.approved ? "" : ` ${text("It is pending review.")}`}</p>
-            {state.context.result?.id && <Link to={`/events/edit-event/${encodeURIComponent(state.context.result.id)}`}>{text("Edit hangout")}</Link>}
-          </div>
-        )}
+        {value === "submitted" && !needsSignIn && <SubmitSuccess mode={mode} approved={state.context.result?.approved ?? false} />}
 
         {state.context.error && value === "review" && (
           <p className="submit-hangout__error" role="alert">
@@ -378,6 +383,35 @@ function SubmitHangoutInner({
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+function EditorHeader({ mode }: { mode: "create" | "edit" }) {
+  const { text } = useEventsCopy();
+  return (
+    <header className={`submit-hangout__header ${styles.editorHeader}`}>
+      <Link to="/events" className={styles.back} aria-label={text("Back to Events")} />
+      <h1>{text(mode === "edit" ? "Edit Event" : "Submit an Event")}</h1>
+    </header>
+  );
+}
+
+/**
+ * The editor's page while the event to edit is read, or when that read failed and can be retried:
+ * the same header, so nothing jumps when the form arrives.
+ */
+export function SubmitHangoutLoading({ mode, error, onRetry }: { mode: "create" | "edit"; error?: string | null; onRetry?: () => void }) {
+  const { text, errorText } = useEventsCopy();
+  return (
+    <div className={`submit-hangout ${styles.authoring}`} data-editor>
+      <EditorHeader mode={mode} />
+      {error ? (
+        <div className={styles.loadError}>
+          <p role="alert">{errorText(error)}</p>
+          {onRetry && <Button variant="tertiary" onClick={onRetry}>{text("Retry")}</Button>}
+        </div>
+      ) : <p className={styles.loading} role="status">{text("Loading your hangout…")}</p>}
     </div>
   );
 }
