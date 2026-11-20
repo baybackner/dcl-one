@@ -103,18 +103,10 @@
   border-color: #ff2d55;
 }
 
-.submit-hangout__hint,
-.submit-hangout__status {
+.submit-hangout__hint {
   margin: 0;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.78);
-}
-
-.submit-hangout__error {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: #ff8aa0;
 }
 
 .submit-hangout__review {

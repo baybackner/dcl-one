@@ -1,9 +1,6 @@
 import "@dcl/one-ui/foundations/foundations.css";
 import { useState } from "react";
-import {
-  useSearchParams,
-  type ShouldRevalidateFunctionArgs,
-} from "react-router";
+import { type ShouldRevalidateFunctionArgs } from "react-router";
 import { HydrationBoundary } from "@tanstack/react-query";
 import SitesLayout from "@/features/components/chrome/SitesLayout";
 import type { SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
@@ -11,8 +8,7 @@ import type { SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-loca
 import { detectPlatform } from "@/features/download/options";
 import { EventsLocaleProvider, useEventsFooterCopy } from "@/features/events/locale";
 import { EventsView } from "@/features/events/EventsView";
-import { TAB_PARAM } from "@/features/events/view";
-import EventManagement from "@/features/explorer/event-management/EventManagement";
+import { EventAdminTabs } from "@/features/explorer/event-management/EventAdminTabs";
 import { loadEventsPage } from "../lib/events-loader";
 
 import type { Route } from "./+types/events";
@@ -64,7 +60,6 @@ export default function Events(props: Route.ComponentProps) {
 }
 
 function EventsRoute({ loaderData }: Route.ComponentProps) {
-  const [params] = useSearchParams();
   const footerCopy = useEventsFooterCopy();
   // A client navigation has no loader data: the session and device come from the browser instead.
   const [first] = useState(() => ({
@@ -81,9 +76,11 @@ function EventsRoute({ loaderData }: Route.ComponentProps) {
       ? { now: loaderData.now, unavailable: loaderData.unavailable }
       : null,
   }));
-  return params.get(TAB_PARAM) === "my" ? <EventManagement mode="mine" /> : (
+  // My Events (`?tab=my`) is a view of this page: EventsView swaps the All Events section for it.
+  return (
     <HydrationBoundary state={loaderData?.dehydratedState ?? undefined}>
       <SitesLayout active="whatson" headerSurface="overlay" overlayNav footerCopy={footerCopy}>
+        <EventAdminTabs active="events" />
         <EventsView
           sid={first.sid}
           platform={first.platform}

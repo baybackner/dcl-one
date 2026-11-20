@@ -427,9 +427,9 @@
     "primitives": 0,
     "tokens": 10
   },
-  "apps/sites/src/features/explorer/event-management/EventManagement.module.css": {
-    "primitives": 12,
-    "tokens": 22
+  "apps/sites/src/features/explorer/event-management/PendingEventsPage.module.css": {
+    "primitives": 0,
+    "tokens": 3
   },
   "apps/sites/src/features/not-found/NotFoundPage.module.css": {
     "primitives": 0,
@@ -455,6 +455,10 @@
     "primitives": 0,
     "tokens": 11
   },
+  "apps/sites/src/features/social/submit-hangout/DeleteEventDialog.module.css": {
+    "primitives": 0,
+    "tokens": 6
+  },
   "apps/sites/src/features/social/submit-hangout/FeaturedAssetPicker.module.css": {
     "primitives": 2,
     "tokens": 0
@@ -465,11 +469,11 @@
   },
   "apps/sites/src/features/social/submit-hangout/SubmitHangout.module.css": {
     "primitives": 0,
-    "tokens": 52
+    "tokens": 60
   },
-  "apps/ui3/src/explorer/pages/eventdetail.css": {
-    "primitives": 21,
-    "tokens": 0
+  "apps/sites/src/features/social/submit-hangout/SubmitSuccess.module.css": {
+    "primitives": 0,
+    "tokens": 12
   },
   "apps/ui3/src/explorer/pages/passport.css": {
     "primitives": 25,

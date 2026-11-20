@@ -40,6 +40,10 @@ vi.mock("@/data/lib/catalyst/places/index", async (original) => ({
   fetchMostActivePlaces: vi.fn(),
 }));
 vi.mock("@/data/lib/catalyst/jump/place-lookup", () => ({ loadJumpPlace: vi.fn() }));
+vi.mock("@/data/lib/catalyst/places/event-management", async (original) => ({
+  ...(await original<typeof import("@/data/lib/catalyst/places/event-management")>()),
+  loadAllOwnedEvents: vi.fn(),
+}));
 
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { CatalystError } from "@/data/lib/catalyst/client";
@@ -47,6 +51,7 @@ import { track } from "@/core/lib/telemetry/track";
 import { loadJumpPlace } from "@/data/lib/catalyst/jump/place-lookup";
 import { fetchEvent, fetchEvents, type Event } from "@/data/lib/catalyst/places/events";
 import { fetchMostActivePlaces } from "@/data/lib/catalyst/places/index";
+import { loadAllOwnedEvents, type ManagedEvent } from "@/data/lib/catalyst/places/event-management";
 import type { DetectedPlatform } from "../download/options";
 import { columnsFor, EventsView } from "./EventsView";
 import { eventRecord, placeRecord } from "./fixtures";
@@ -124,16 +129,45 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** The event card (an article) whose title link has this name. */
+function cardIn(scope: HTMLElement, name: string): HTMLElement {
+  const card = within(scope).getAllByRole("article").find((article) => within(article).queryByRole("link", { name }));
+  if (!card) throw new Error(`No card titled ${name}`);
+  return card;
+}
+
+async function findCard(name: string): Promise<HTMLElement> {
+  await screen.findByRole("link", { name });
+  return cardIn(document.body, name);
+}
+
 const FACE = "https://profile-images.decentraland.org/entities/bafyface/face.png";
 const profilesReply = (address: string) =>
   Response.json([{ avatars: [{ ethAddress: address, name: "OtoLam", avatar: { snapshots: { face256: FACE } } }] }]);
 
 describe("EventsView", () => {
-  it("should render no Live Now section when nothing is live and mark empty days", async () => {
+  it("should open Live Now with the Foundation's Genesis Plaza at 0,0 when nothing is live and mark empty days", async () => {
+    setup("/events");
+    const section = await screen.findByRole("region", { name: "Live Now" });
+    expect(within(section).getByRole("link", { name: "Genesis Plaza" }).getAttribute("href")).toBe(
+      "/events?position=0%2C0",
+    );
+    expect(
+      within(section)
+        .getByRole("link", { name: /Jump In/ })
+        .getAttribute("href"),
+    ).toMatch(/\/play\/\?position=0%2C0$/);
+    expect(within(section).getByText("Decentraland Foundation")).toBeTruthy();
+    expect(within(section).getByText("0 online")).toBeTruthy();
+    expect(await screen.findAllByText("No events this day.")).not.toHaveLength(0);
+  });
+
+  it("should render no Live Now section while the live feed is unavailable", async () => {
+    vi.mocked(fetchMostActivePlaces).mockRejectedValue(new CatalystError("down", "/places", 503));
     setup("/events");
     await screen.findByRole("heading", { name: "All Events" });
+    await waitFor(() => expect(fetchMostActivePlaces).toHaveBeenCalled());
     expect(screen.queryByRole("heading", { name: "Live Now" })).toBeNull();
-    expect(await screen.findAllByText("No events this day.")).not.toHaveLength(0);
   });
 
   it("should link to the event hosting article on the site", async () => {
@@ -146,7 +180,7 @@ describe("EventsView", () => {
   it("should show a busy place in Live Now with a Jump In to the web explorer on desktop", async () => {
     live = { events: [], places: [placeRecord({ title: "Meta GamiMall", base_position: "1,95", user_count: 6 })] };
     setup("/events");
-    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    const section = await screen.findByRole("region", { name: "Live Now" });
     expect(within(section).getByRole("link", { name: "Meta GamiMall" }).getAttribute("href")).toBe(
       "/events?position=1%2C95",
     );
@@ -162,7 +196,7 @@ describe("EventsView", () => {
   it("should open the app on an Android phone instead of the web explorer", async () => {
     live = { events: [], places: [placeRecord({ base_position: "1,95", user_count: 6 })] };
     setup("/events", { kind: "mobile", os: "android" });
-    const section = (await screen.findByRole("heading", { name: "Live Now" })).closest("section")!;
+    const section = await screen.findByRole("region", { name: "Live Now" });
     expect(
       within(section)
         .getByRole("link", { name: /Jump In/ })
@@ -194,13 +228,12 @@ describe("EventsView", () => {
     expect(router.state.location.search).toBe("?day=365");
   });
 
-  it("should offer All Events and My Events as links to a signed-in member, the current one marked", async () => {
+  it("should offer All Events and My Events as link tabs to a signed-in member, the current one selected", async () => {
     auth.identity = { signer: "0xAB" } as unknown as AuthIdentity;
     const { router, user } = setup("/events");
-    const views = await screen.findByRole("navigation", { name: "Events views" });
-    expect(within(views).queryByRole("tab")).toBeNull();
-    expect(within(views).getByRole("link", { name: "All Events" }).getAttribute("aria-current")).toBe("page");
-    const mine = within(views).getByRole("link", { name: "My Events" });
+    const views = await screen.findByRole("tablist", { name: "Events views" });
+    expect(within(views).getByRole("tab", { name: "All Events" }).getAttribute("aria-selected")).toBe("true");
+    const mine = within(views).getByRole("tab", { name: "My Events" });
     expect(mine.getAttribute("href")).toBe("/events?tab=my");
     await user.click(mine);
     expect(router.state.location.search).toBe("?tab=my");
@@ -209,7 +242,7 @@ describe("EventsView", () => {
   it("should show the section title instead of the views when signed out", async () => {
     setup("/events");
     expect(await screen.findByRole("heading", { name: "All Events" })).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "Events views" })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "Events views" })).toBeNull();
   });
 
   it("should report the page view once its reads settle, with their counts", async () => {
@@ -234,6 +267,24 @@ describe("EventsView", () => {
       ),
     );
     expect(vi.mocked(track).mock.calls.filter(([name]) => name === "lp_whatson_viewed")).toHaveLength(1);
+  });
+
+  it("should count nothing live on a quiet node although Genesis Plaza opens the rail", async () => {
+    live.places = [placeRecord({ id: "plaza", title: "Genesis Plaza", positions: ["0,0"], user_count: 0 })];
+    setup("/events");
+    expect(await screen.findByRole("link", { name: "Genesis Plaza" })).toBeTruthy();
+    await waitFor(() =>
+      expect(vi.mocked(track)).toHaveBeenCalledWith("lp_whatson_viewed", expect.objectContaining({ live_count: 0 }), expect.anything()),
+    );
+  });
+
+  it("should count one live scene as one live item", async () => {
+    live.places = [placeRecord({ id: "busy", title: "Busy Club", positions: ["9,9"], user_count: 30 })];
+    setup("/events");
+    expect(await screen.findByRole("link", { name: "Busy Club" })).toBeTruthy();
+    await waitFor(() =>
+      expect(vi.mocked(track)).toHaveBeenCalledWith("lp_whatson_viewed", expect.objectContaining({ live_count: 1 }), expect.anything()),
+    );
   });
 
   it("should show an unavailable calendar with a Retry that reads it again", async () => {
@@ -392,10 +443,7 @@ describe("when calendar occupancy is available or unknown", () => {
       } as Event,
     ];
     setup("/events");
-    const title = await screen.findByRole("link", {
-      name: "Occupancy check",
-    });
-    const card = title.closest("article")!;
+    const card = await findCard("Occupancy check");
     expect(within(card).getByText("LIVE")).toBeTruthy();
     expect(within(card).queryByText("26 online")).toBeNull();
     if (expected) expect(within(card).getByText(expected)).toBeTruthy();
@@ -428,7 +476,7 @@ describe("when calendar occupancy is available or unknown", () => {
     calendar = [{ ...soon("now", "Live on phone", -0.5), live: true, x: 3, y: 7 }];
     setup("/events");
     const list = await screen.findByRole("list", { name: /^Events for / });
-    const liveCard = within(list).getByRole("link", { name: "Live on phone" }).closest("article")!;
+    const liveCard = cardIn(list, "Live on phone");
     expect(within(liveCard).getByRole("link", { name: "Jump in: Live on phone" }).getAttribute("href")).toMatch(
       /\/play\/\?position=3%2C7(&|$)/,
     );
@@ -440,10 +488,7 @@ describe("when calendar occupancy is available or unknown", () => {
     calendar = [soon("future", "Future registration count")];
     calendar[0]!.total_attendees = 26;
     setup("/events");
-    const title = await screen.findByRole("link", {
-      name: "Future registration count",
-    });
-    const card = title.closest("article")!;
+    const card = await findCard("Future registration count");
     expect(within(card).queryByText(/online$/)).toBeNull();
     expect(within(card).queryByText("LIVE")).toBeNull();
   });
@@ -452,5 +497,113 @@ describe("when calendar occupancy is available or unknown", () => {
 describe("columnsFor", () => {
   it("should show five days on wide screens, four from desktop, two on tablets and a list on phones", () => {
     expect([1920, 1536, 1535, 1024, 1023, 768, 767, 390].map(columnsFor)).toEqual([5, 5, 4, 4, 2, 2, 1, 1]);
+  });
+});
+
+describe("when /events opens My Events", () => {
+  const SIGNER = "0x1111111111111111111111111111111111111111";
+  const owned = (over: Partial<Event>) => eventRecord({ user: SIGNER, ...over }) as unknown as ManagedEvent;
+  const at = (hours: number) => new Date(Date.now() + hours * HOUR).toISOString();
+  let scrolled: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled as unknown as Element["scrollIntoView"];
+  });
+
+  describe("and the member is signed in", () => {
+    beforeEach(() => {
+      auth.identity = { signer: SIGNER } as unknown as AuthIdentity;
+    });
+
+    it("should keep the whole page and list the member's upcoming events in start order, each opening its editor with its review status", async () => {
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([
+          owned({ id: "later", name: "Later Party", start_at: at(48), finish_at: at(50), next_start_at: at(48), next_finish_at: at(50) }),
+          owned({ id: "draft", name: "Draft Night", approved: false, start_at: at(5), finish_at: at(6), next_start_at: at(5), next_finish_at: at(6) }),
+          owned({ id: "no", name: "Turned Down", approved: false, rejected: true, start_at: at(10), finish_at: at(11), next_start_at: at(10), next_finish_at: at(11) }),
+          owned({ id: "over", name: "Ended Show", start_at: at(-5), finish_at: at(-4), next_start_at: at(-5), next_finish_at: at(-4) }),
+          owned({ id: "gone", name: "Deleted One", deleted_by_user: true, start_at: at(3), finish_at: at(4), next_start_at: at(3), next_finish_at: at(4) }),
+          owned({ id: "theirs", name: "Not Mine", user: "0x2222222222222222222222222222222222222222", start_at: at(2), finish_at: at(3), next_start_at: at(2), next_finish_at: at(3) }),
+        ]);
+      setup("/events?tab=my");
+      const panel = await screen.findByRole("tabpanel", { name: "My Events" });
+      await within(panel).findByRole("heading", { name: "Hosted by me" });
+      const links = within(panel).getAllByRole("link").filter((link) => link.getAttribute("href")?.includes("/edit-event/"));
+      expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+        ["Draft Night", "/events/edit-event/draft"],
+        ["Turned Down", "/events/edit-event/no"],
+        ["Later Party", "/events/edit-event/later"],
+      ]);
+      const items = within(panel).getAllByRole("listitem");
+      expect(within(items[0]!).getByText("Pending")).toBeTruthy();
+      expect(within(items[1]!).getByText("Rejected")).toBeTruthy();
+      expect(within(items[2]!).getByText("Approved")).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "My Events" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.queryByRole("navigation", { name: "Event days" })).toBeNull();
+      expect(screen.getByRole("heading", { name: "Upcoming" })).toBeTruthy();
+      expect(vi.mocked(loadAllOwnedEvents)).toHaveBeenCalledWith(auth.identity, expect.anything());
+      await waitFor(() => expect(scrolled).toHaveBeenCalledOnce());
+      expect(scrolled.mock.contexts[0]).toBe(document.getElementById("all-events"));
+    });
+
+    it("should count a recurring event by its next occurrence", async () => {
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([
+          owned({ id: "weekly", name: "Weekly", recurrent: true, start_at: at(-200), finish_at: at(-199), next_start_at: at(30), next_finish_at: at(31) }),
+        ]);
+      setup("/events?tab=my");
+      const panel = await screen.findByRole("tabpanel", { name: "My Events" });
+      expect((await within(panel).findByRole("link", { name: "Weekly" })).getAttribute("href")).toBe("/events/edit-event/weekly");
+    });
+
+    it("should show the empty card with Create event when the member has no upcoming events", async () => {
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([owned({ id: "over", start_at: at(-5), finish_at: at(-4), next_start_at: at(-5), next_finish_at: at(-4) })]);
+      setup("/events?tab=my");
+      const panel = await screen.findByRole("tabpanel", { name: "My Events" });
+      expect(await within(panel).findByText("You don't have any event created")).toBeTruthy();
+      expect(within(panel).getByRole("link", { name: "Create event" }).getAttribute("href")).toBe("/events/new-event");
+      await waitFor(() => expect(scrolled).toHaveBeenCalledOnce());
+    });
+
+    it("should report a failed read with a Retry that reads again, and no empty card", async () => {
+      vi.mocked(loadAllOwnedEvents).mockRejectedValueOnce(new CatalystError("down", "/events/api/events", 503));
+      vi.mocked(loadAllOwnedEvents).mockResolvedValueOnce([]);
+      const { user } = setup("/events?tab=my");
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Couldn't load your events.");
+      expect(screen.queryByText("You don't have any event created")).toBeNull();
+      await user.click(within(alert).getByRole("button", { name: "Retry" }));
+      expect(await screen.findByText("You don't have any event created")).toBeTruthy();
+      expect(vi.mocked(loadAllOwnedEvents)).toHaveBeenCalledTimes(2);
+    });
+
+    it("should go back to All Events from its tab without leaving the page", async () => {
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([]);
+      const { router, user } = setup("/events?tab=my");
+      await screen.findByText("You don't have any event created");
+      await user.click(screen.getByRole("tab", { name: "All Events" }));
+      expect(router.state.location.search).toBe("");
+      expect(await screen.findByRole("tabpanel", { name: "All Events" })).toBeTruthy();
+    });
+
+    it("should fall back to All Events, without sending to sign in, when the member signs out on it", async () => {
+      vi.mocked(loadAllOwnedEvents).mockResolvedValue([]);
+      const { router } = setup("/events?tab=my");
+      await screen.findByText("You don't have any event created");
+      auth.identity = null;
+      await act(() => router.navigate("/events?tab=my&day=1"));
+      await waitFor(() => expect(router.state.location.search).toBe("?day=1"));
+      expect(await screen.findByRole("heading", { name: "All Events" })).toBeTruthy();
+      expect(signIn.openSignIn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("should send a signed-out visitor to sign in and back to My Events, reading nothing", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { origin: "https://example.org", pathname: "/events", search: "?tab=my", hash: "", assign });
+    setup("/events?tab=my");
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/auth/login?redirectTo=%2Fevents%3Ftab%3Dmy"));
+    expect(assign).toHaveBeenCalledOnce();
+    expect(vi.mocked(loadAllOwnedEvents)).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tabpanel", { name: "My Events" })).toBeNull();
   });
 });

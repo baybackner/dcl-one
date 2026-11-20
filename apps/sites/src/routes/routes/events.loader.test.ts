@@ -115,11 +115,17 @@ describe("the /events loader", () => {
     expect(loadJumpPlace).not.toHaveBeenCalled();
   });
 
-  it("should not read the public feed for My Events", async () => {
+  it("should render the public feed around My Events, since it is a section of the same page", async () => {
     const { data, status } = await load("/events?tab=my");
     expect(status).toBe(200);
     expect(data.tab).toBe("my");
-    expect(fetchEvents).not.toHaveBeenCalled();
+    expect(fetchEvents).toHaveBeenCalled();
+    expect(data.dehydratedState).not.toBeNull();
+  });
+
+  it("should mark no tab for an unknown tab value", async () => {
+    const { data } = await load("/events?tab=other");
+    expect(data.tab).toBeNull();
   });
 
   it("should detect a phone from the request, for Jump In's app launch", async () => {
