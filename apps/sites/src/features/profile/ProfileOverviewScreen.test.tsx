@@ -17,6 +17,8 @@ vi.mock("@/data/lib/catalyst/social/badges", async (original) => ({
   fetchUserBadges: net.fetchUserBadges,
 }));
 
+import { ChromeNavContext } from "@dcl/one-ui/components/chrome/chrome-nav";
+
 import { emptyProfile, type ProfileVM } from "@/data/lib/catalyst/social/profile";
 
 import { ProfileOverviewScreen } from "./ProfileOverviewScreen";
@@ -50,7 +52,9 @@ function show(vm: ProfileVM, own = false, onTab = vi.fn(), hasProfile = false) {
   );
   render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <ChromeNavContext.Provider value={{ headerLayout: "native" }}>
+        <RouterProvider router={router} />
+      </ChromeNavContext.Provider>
     </QueryClientProvider>,
   );
   return router;
@@ -80,8 +84,9 @@ describe("profile overview screen, header", () => {
   it("keeps the global header in the layout flow above Profile", () => {
     show(profile());
 
-    const layout = screen.getByRole("heading", { level: 1, name: "Alice" }).closest(".site-layout");
-    expect(layout?.classList.contains("site-layout--overlay")).toBe(false);
+    const layout = screen.getByRole("heading", { level: 1, name: "Alice" }).closest("[data-site-layout]");
+    expect(layout?.getAttribute("data-header-layout")).toBe("native");
+    expect(layout?.hasAttribute("data-header-overlay")).toBe(false);
   });
 
   it("shows an unclaimed name with the address's last four characters", () => {
