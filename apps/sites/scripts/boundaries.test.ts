@@ -58,7 +58,6 @@ const WAIVED = new Set([
   "src/data/lib/catalyst/creator-hub/scene-drafts.test.ts -> @/routes/routes/api.creator-hub.drafts.$",
   "src/data/lib/catalyst/creator-hub/wearable-publish-collection.ts -> @/features/creator-hub/wearable-publish-collection/machine",
   "src/data/lib/catalyst/creator-hub/wearable-publish-collection.ts -> @/features/creator-hub/wearable-publish-collection/PublishCollectionWizard",
-  "src/data/lib/catalyst/landings/rsvp.ts -> @/features/social/rsvp-event/machine",
 ]);
 
 function importViolations(): { key: string; message: string }[] {

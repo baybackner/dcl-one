@@ -13,7 +13,7 @@ import { invalidateEventsAfterWrite } from "@/data/lib/catalyst/places/events-pa
 import {
   editEventHref, eventAdminKeys, eventOccurrence, eventReviewStatus, moderateEvent, moderationQueueQuery, type ManagedEvent,
 } from "@/data/lib/catalyst/places/event-management";
-import { useEventsFooterCopy } from "@/features/events/locale";
+import { useEventsFooterCopy } from "../../events/locale";
 import { openSignIn } from "../../components/auth/signin-store";
 import SitesLayout from "../../components/chrome/SitesLayout";
 import { AdminAccessGate } from "./AdminAccessGate";

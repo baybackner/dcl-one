@@ -174,40 +174,10 @@ export type LandingsEvents = {
   lp_legal_viewed: {
     doc: "brand" | "content" | "creatorFund" | "credits" | "ethics" | "privacy" | "referral" | "rewards" | "security" | "terms";
   };
-  lp_rsvp_cancelled: {
-    count: number;
-    event_id: string;
-    stub: boolean;
-  };
-  lp_rsvp_cancelling: {
-    event_id: string;
-  };
-  lp_rsvp_confirmed: {
-    event_id: string;
-  };
-  lp_rsvp_error: {
-    event_id: string;
-    reason: string;
-  };
-  lp_rsvp_going: {
-    count: number;
-    event_id: string;
-    stub: boolean;
-  };
-  lp_rsvp_signin: {
-    event_id: string;
-    simulated: boolean;
-  };
-  lp_rsvp_started: {
-    event_id: string;
-  };
-  lp_rsvp_submitting: {
-    event_id: string;
-  };
   lp_whatson_viewed: {
     filter: null | string;
     live_count: number;
-    search: null | string;
+    search: null;
     upcoming_count: number;
   };
   report_category_set: {
@@ -216,7 +186,7 @@ export type LandingsEvents = {
   report_completed: {
     evidence_count: number;
     reason: "" | "cheating" | "harassment" | "illegal_content" | "impersonation" | "scam_phishing";
-    report_id?: string;
+    report_id: string;
   };
   report_details_set: {
     description_len: number;
@@ -225,7 +195,7 @@ export type LandingsEvents = {
     file_count: number;
   };
   report_failed: {
-    reason?: string;
+    reason: string;
   };
   report_review_reached: Record<string, never>;
   report_started: Record<string, never>;
