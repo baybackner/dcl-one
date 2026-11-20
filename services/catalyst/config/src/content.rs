@@ -39,6 +39,20 @@ pub struct ContentConfig {
     #[arg(long, env = "SYNC_FROM_TIMESTAMP_MS", default_value_t = 0)]
     pub sync_from_timestamp_ms: i64,
 
+    /// Seconds between the end of one item history replay pass and the start
+    /// of the next. Each pass reads every source catalyst's whole wearable and
+    /// emote `/pointer-changes` history (about 81 MB and 160 requests per
+    /// source in November 2026), so the default 1200 costs a source about
+    /// 5.3 GB a day; a pass proves item coverage for 30 minutes from its
+    /// start, so a value at or above about 1,650 leaves gaps when the builder
+    /// can't tell a third-party item URN is unused. 0 turns the replay off.
+    #[arg(long, env = "SYNC_ITEM_REPLAY_INTERVAL_SECS", default_value_t = 1200)]
+    pub sync_item_replay_interval_secs: u64,
+
+    /// Milliseconds between two pages of an item history replay pass.
+    #[arg(long, env = "SYNC_ITEM_REPLAY_PAGE_PAUSE_MS", default_value_t = 200)]
+    pub sync_item_replay_page_pause_ms: u64,
+
     /// Non-profile types first, then profiles; /about reports the ready types.
     #[arg(long, env = "PHASED_SYNC", default_value_t = true, action = clap::ArgAction::Set)]
     pub phased_sync: bool,
