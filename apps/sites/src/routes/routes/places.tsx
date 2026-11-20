@@ -8,6 +8,8 @@ import { JumpInModal } from "@dcl/one-ui/apps/sites/places/JumpInModal";
 import { LiveNow } from "@dcl/one-ui/apps/sites/places/LiveNow";
 import { LoadMore, PlaceGrid, PlacesMessage } from "@dcl/one-ui/apps/sites/places/PlaceGrid";
 import { PlacesPage } from "@dcl/one-ui/apps/sites/places/PlacesPage";
+import { remoteFlag, remoteFlagVariant } from "@dcl/one-ui/apps/shop/remote-flags";
+import { remoteFlagOn, remoteFlagVariantIn } from "@shop/discovery/lib/rolloutFlags";
 import type { PlaceCardData, PlaceCardLabels } from "@dcl/one-ui/apps/sites/places/cards/types";
 
 import { QUERY_CLIENT_CONFIG } from "@/core/lib/query/defaults";
@@ -22,11 +24,14 @@ import {
   CATEGORY_OPTIONS,
   effectiveSearch,
   liveFeedQuery,
+  liveMinUsersFrom,
   parseCategory,
   parseSection,
   type DiscoverCategory,
   type ExploreSection,
 } from "@/data/lib/catalyst/places/discover";
+import { primeDappsFlags } from "@/data/lib/feature-flags.browser";
+import { dappsFlagsAnswer } from "@/data/lib/feature-flags.server";
 import { openSignIn } from "@/features/components/auth/signin-store";
 import { detectPlatform, type DetectedPlatform } from "@/features/download/options";
 import { modalPlace, placeCard, placeJumpIn, type CreatorProfiles } from "@/features/places/cards";
@@ -122,6 +127,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const view = readView(new URL(request.url).searchParams);
   const client = new QueryClient(QUERY_CLIENT_CONFIG);
   let unavailable = false;
+  // Live Now's head count, from the rollout flags this server holds; without an answer the rail keeps every scene.
+  const minUsers = dappsFlagsAnswer().then(
+    (answer) => liveMinUsersFrom((flag) => remoteFlagOn(answer, flag), (flag) => remoteFlagVariantIn(answer, flag)),
+    () => 0,
+  );
   const reads = Promise.all([
     view.section === "all"
       ? client.fetchInfiniteQuery(browsePlacesQuery(view)).catch(() => {
@@ -143,7 +153,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const dehydratedState = dehydrate(client);
   client.clear();
   return wrap(
-    { sid, platform: detectPlatform(request.headers.get("user-agent")), dehydratedState, unavailable },
+    { sid, platform: detectPlatform(request.headers.get("user-agent")), dehydratedState, unavailable, liveMinUsers: await minUsers },
     { status: unavailable ? 503 : 200 },
   );
 }
@@ -153,24 +163,44 @@ export function headers() {
   return { Vary: "User-Agent" };
 }
 
-/** Client navigations fetch through the browser cache; the server loader runs for the first document only. */
-export async function clientLoader(): Promise<null> {
-  return null;
+/** One read of this server's rollout flags per document, whatever its outcome, so a filter change never waits on it. */
+let flagsPrimed: Promise<void> | null = null;
+
+/**
+ * Client navigations fetch the feeds through the browser cache; the server loader runs for the first document only.
+ * Live Now's head count comes from this server's flags (/internal/dapps-flags), read once per document; without an
+ * answer it is 0, as the server's is.
+ */
+export async function clientLoader(): Promise<{ liveMinUsers: number }> {
+  flagsPrimed ??= primeDappsFlags();
+  await flagsPrimed;
+  return { liveMinUsers: liveMinUsersFrom(remoteFlag, remoteFlagVariant) };
+}
+
+/** Forgets the once-per-document flags read (tests). */
+export function resetPlacesFlagsRead(): void {
+  flagsPrimed = null;
 }
 
 const subscribeHydration = () => () => {};
 
 export default function Places({ loaderData }: Route.ComponentProps) {
+  const server = loaderData && "dehydratedState" in loaderData ? loaderData : undefined;
   return (
-    <HydrationBoundary state={loaderData?.dehydratedState}>
-      <PlacesExplorer loaderSid={loaderData?.sid} loaderPlatform={loaderData?.platform} unavailable={loaderData?.unavailable ?? false} />
+    <HydrationBoundary state={server?.dehydratedState}>
+      <PlacesExplorer
+        loaderSid={server?.sid}
+        loaderPlatform={server?.platform}
+        unavailable={server?.unavailable ?? false}
+        liveMinUsers={loaderData?.liveMinUsers ?? 0}
+      />
     </HydrationBoundary>
   );
 }
 
-type ExplorerProps = { loaderSid?: string; loaderPlatform?: DetectedPlatform; unavailable: boolean };
+type ExplorerProps = { loaderSid?: string; loaderPlatform?: DetectedPlatform; unavailable: boolean; liveMinUsers: number };
 
-function PlacesExplorer({ loaderSid, loaderPlatform, unavailable }: ExplorerProps) {
+function PlacesExplorer({ loaderSid, loaderPlatform, unavailable, liveMinUsers }: ExplorerProps) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const view = readView(params);
@@ -198,7 +228,7 @@ function PlacesExplorer({ loaderSid, loaderPlatform, unavailable }: ExplorerProp
     if (heldKey !== null && heldKey !== viewKey) setHeldKey(null);
   }, [heldKey, viewKey]);
   const browse = useBrowsePlaces({ category: view.category, search: view.search }, view.section === "all" && !held);
-  const live = useLiveRail(showsLive(view));
+  const live = useLiveRail(showsLive(view), liveMinUsers);
   const member = useMemberPlaces(view.section, hydrated ? identity : null);
 
   const liveRail = showsLive(view) ? live.rail : [];

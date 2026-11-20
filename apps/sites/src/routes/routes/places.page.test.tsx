@@ -12,7 +12,9 @@ import { pageSid } from "@/core/lib/telemetry/session";
 import { usePrivateQueryLifecycle } from "@/features/components/chrome/usePrivateQueryLifecycle";
 import { openSignIn } from "@/features/components/auth/signin-store";
 
-import Places from "./places";
+import { primeRemoteFlags } from "@dcl/one-ui/apps/shop/remote-flags";
+
+import Places, { clientLoader, resetPlacesFlagsRead } from "./places";
 import { track } from "@/core/lib/telemetry/track";
 
 vi.hoisted(() =>
@@ -57,7 +59,7 @@ function SessionFrame() {
   return <Outlet />;
 }
 
-function renderPage(url = "/places", platform: object = DESKTOP, unavailable = false, loaderSid: string | null = "sid") {
+function renderPage(url = "/places", platform: object = DESKTOP, unavailable = false, loaderSid: string | null = "sid", liveMinUsers?: number) {
   const Stub = createRoutesStub([
     {
       id: "root",
@@ -75,7 +77,7 @@ function renderPage(url = "/places", platform: object = DESKTOP, unavailable = f
               <Location />
             </>
           ),
-          loader: () => ({ sid: loaderSid ?? undefined, platform, dehydratedState: undefined, unavailable }),
+          loader: () => ({ sid: loaderSid ?? undefined, platform, dehydratedState: undefined, unavailable, liveMinUsers }),
         },
       ],
     },
@@ -428,5 +430,53 @@ describe("when a card is opened", () => {
     await user.click(await screen.findByRole("link", { name: "Quiet" }));
     expect(await screen.findByText("Place page")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("when the flags set Live Now's head count", () => {
+  it("should leave out scenes under the loader's head count", async () => {
+    serve({ browse: [], live: [destination({ id: "busy", title: "Busy", user_count: 6 }), destination({ id: "quiet", title: "Quiet", user_count: 2 })] });
+    renderPage("/places", DESKTOP, false, "sid", 5);
+    const group = await screen.findByRole("group", { name: "Live Now" });
+    expect(within(group).getByRole("link", { name: "Busy" })).toBeTruthy();
+    expect(within(group).queryByRole("link", { name: "Quiet" })).toBeNull();
+  });
+
+  it("should keep every scene when the loader hands no head count", async () => {
+    serve({ browse: [], live: [destination({ id: "plaza", title: "Plaza", user_count: 0 })] });
+    renderPage();
+    const group = await screen.findByRole("group", { name: "Live Now" });
+    expect(within(group).getByRole("link", { name: "Plaza" })).toBeTruthy();
+  });
+});
+
+describe("when navigating to /places in the browser", () => {
+  const FLAG = "dapps-places-live-min-user";
+
+  beforeEach(() => {
+    resetPlacesFlagsRead();
+    primeRemoteFlags(null);
+  });
+
+  it("should read the head count from this server's flags once per document", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: "5" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 5 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/internal/dapps-flags?variants=1", expect.anything());
+  });
+
+  it("should hand 0 while the flag is off", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ flags: { [FLAG]: false }, variants: { [FLAG]: "5" } })));
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 0 });
+  });
+
+  it("should hand 0 and not ask again on the next navigation when the flags cannot be read", async () => {
+    const fetchMock = vi.fn(async () => new Response("down", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 0 });
+    await expect(clientLoader()).resolves.toEqual({ liveMinUsers: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

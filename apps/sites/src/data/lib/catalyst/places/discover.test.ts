@@ -7,6 +7,8 @@ import {
   browsePageRows,
   effectiveSearch,
   fetchPlaceCreators,
+  liveMinUsers,
+  liveMinUsersFrom,
   nextBrowseOffset,
   parseCategory,
   parseSection,
@@ -142,6 +144,46 @@ describe("when choosing Live Now", () => {
 
   it("should leave out scenes under the minimum head count", () => {
     expect(selectLiveRail([destination({ user_count: 1 })], 2)).toEqual([]);
+  });
+});
+
+describe("when reading Live Now's head count from the dapps-places-live-min-user variant", () => {
+  it.each([
+    ["5", 5],
+    ["0", 0],
+    [" 3 ", 3],
+    ["5\n", 5],
+  ])("should read %j as %i", (variant, expected) => {
+    expect(liveMinUsers(variant)).toBe(expected);
+  });
+
+  it.each(["abc", "-1", "1.5", "", "   ", "1e3", "5px"])("should fall back to 0 for the unusable payload %j", (variant) => {
+    expect(liveMinUsers(variant)).toBe(0);
+  });
+
+  it.each([null, undefined])("should fall back to 0 without a variant (%s)", (variant) => {
+    expect(liveMinUsers(variant)).toBe(0);
+  });
+
+  it("should take the variant while its flag is on", () => {
+    const on = vi.fn(() => true);
+    const variant = vi.fn(() => "5");
+    expect(liveMinUsersFrom(on, variant)).toBe(5);
+    expect(on).toHaveBeenCalledWith("places-live-min-user");
+    expect(variant).toHaveBeenCalledWith("places-live-min-user");
+  });
+
+  it("should ignore the variant while its flag is off", () => {
+    expect(liveMinUsersFrom(() => false, () => "5")).toBe(0);
+  });
+
+  it("should be 0 when the flag is on without a variant", () => {
+    expect(liveMinUsersFrom(() => true, () => null)).toBe(0);
+  });
+
+  it("should let a nonzero head count drop quieter scenes from the rail", () => {
+    const rows = [destination({ id: "busy", user_count: 6 }), destination({ id: "quiet", user_count: 2 })];
+    expect(selectLiveRail(rows, liveMinUsersFrom(() => true, () => "5")).map((row) => row.id)).toEqual(["busy"]);
   });
 });
 

@@ -15,7 +15,9 @@ import { destination } from "@/data/lib/catalyst/places/destination.fixture";
 import { fetchDestinations } from "@/data/lib/catalyst/places/destinations";
 import { loader as rootLoader, shouldRevalidate } from "../root";
 import { track } from "@/core/lib/telemetry/track";
-import Places, { loader, clientLoader } from "./places";
+import { resetDappsFlags } from "@/data/lib/feature-flags.server";
+import { primeRemoteFlags } from "@dcl/one-ui/apps/shop/remote-flags";
+import Places, { loader, clientLoader, resetPlacesFlagsRead } from "./places";
 
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ isConnected: false, identity: null }) }));
 vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
@@ -34,7 +36,28 @@ beforeEach(async () => {
   vi.clearAllMocks();
   dom = await builtinEnvironments.jsdom.setup(globalThis, { jsdom: { url: "https://example.org/places" } });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  resetDappsFlags();
+  resetPlacesFlagsRead();
+  primeRemoteFlags(null);
+  serveFlags("0");
 });
+
+const FLAG = "dapps-places-live-min-user";
+
+/** The feature-flags service (as the server reads it) and this server's /internal/dapps-flags, both with `variant`. */
+function serveFlags(variant: string) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (String(url).endsWith("/dapps.json")) {
+        const payload = { type: "string", value: variant };
+        return Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: { name: "min_users", enabled: true, payload } } });
+      }
+      if (String(url).startsWith("/internal/dapps-flags")) return Response.json({ flags: { [FLAG]: true }, variants: { [FLAG]: variant } });
+      throw new Error(`unexpected fetch ${url}`);
+    }),
+  );
+}
 let hydrated: Root | undefined;
 const clients: QueryClient[] = [];
 const routers: ReturnType<typeof createMemoryRouter>[] = [];
@@ -165,5 +188,34 @@ describe("when hydrating the real Places document", () => {
     expect(b.places.dehydratedState.queries[0]?.queryKey).toEqual(["places", "browse", "art", "bravo"]);
     expect(JSON.stringify(a.places.dehydratedState)).not.toContain('"bravo"');
     expect(JSON.stringify(b.places.dehydratedState)).not.toContain('"alpha"');
+  });
+
+  it("should hydrate Live Now under the flag's head count and keep it on a client navigation", async () => {
+    serveFlags("5");
+    const live = [destination({ id: "busy", title: "Busy", user_count: 6 }), destination({ id: "quiet", title: "Quiet", user_count: 2 })];
+    vi.mocked(fetchDestinations).mockImplementation(async (params) =>
+      params?.limit === 40 ? { data: live, total: 2, received: 2, copy: null } : { data: [], total: 0, received: 0, copy: null },
+    );
+    const data = await documentData("https://example.org/places");
+    expect(data.places.liveMinUsers).toBe(5);
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(tree(data).element);
+    document.body.append(container);
+    const rail = () => within(container).getByRole("group", { name: "Live Now" });
+    // The server markup already leaves the quieter scene out.
+    expect(within(rail()).getByRole("link", { name: "Busy" })).toBeTruthy();
+    expect(within(rail()).queryByRole("link", { name: "Quiet" })).toBeNull();
+    const recover = vi.fn();
+    const browser = tree(data);
+    await act(async () => {
+      hydrated = hydrateRoot(container, browser.element, { onRecoverableError: recover });
+    });
+    expect(recover).not.toHaveBeenCalled();
+    expect(within(rail()).getByRole("link", { name: "Busy" })).toBeTruthy();
+    expect(within(rail()).queryByRole("link", { name: "Quiet" })).toBeNull();
+    await act(async () => browser.router.navigate("/places?category=music"));
+    await waitFor(() => expect(browser.router.state.navigation.state).toBe("idle"));
+    expect(within(rail()).getByRole("link", { name: "Busy" })).toBeTruthy();
+    expect(within(rail()).queryByRole("link", { name: "Quiet" })).toBeNull();
   });
 });

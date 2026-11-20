@@ -25,6 +25,11 @@ export const REMOTE_FLAG = {
    * then only they get in (seller/lib/featureFlags.ts).
    */
   myStore: "shop-my-store",
+  /**
+   * Not the Shop's: Sites' Places page reads it from the same `dapps` file (sites@production discover.flags.ts
+   * useLiveMinUsers). While on, its variant's payload is the head count a scene needs for Live Now.
+   */
+  placesLiveMinUsers: "places-live-min-user",
 } as const;
 
 export type RemoteFlag = (typeof REMOTE_FLAG)[keyof typeof REMOTE_FLAG];
