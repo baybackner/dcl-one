@@ -313,6 +313,112 @@ async fn credits_calls_record_the_wallet_in_the_ledgers_own_audit_row() {
     cleanup(&pool, &actor).await;
 }
 
+/// A console grant under a top-up key goes through the bearer route's recovery: an unbooked transfer is
+/// verified first (no economy here, so it is refused and books nothing), a malformed hash is refused, and a
+/// booked recovery replays.
+#[tokio::test]
+async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
+    let Some(pool) = crate::db::scratch::pool(4).await else {
+        return;
+    };
+    let cs = Arc::new(crate::shop::credits::State::new(
+        pool.clone(),
+        Outbound::for_tests(),
+        crate::shop::credits::Settings {
+            writes_enabled: true,
+            admin_token: Some("credits-tok".into()),
+            ..crate::shop::credits::Settings::for_tests()
+        },
+        crate::shop::credits::Sources {
+            market: None,
+            price: None,
+            economy: None,
+        },
+        None,
+    ));
+    let (app, actor, cookie) = console(
+        &pool,
+        true,
+        Domains {
+            credits: Some(cs.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (user, booked_user) = (random_address(), random_address());
+    let tx_hash = || format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
+    let (unbooked, booked) = (tx_hash(), tx_hash());
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        json!({ "address": user, "amount": "5", "idempotencyKey": format!("MANA-TOPUP:{unbooked}") }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_IMPLEMENTED,
+        "verified first: {body}"
+    );
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        json!({ "address": user, "amount": "5", "idempotencyKey": "mana-topup:0x12" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let booked_rows: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM credits.ledger WHERE address = $1) \
+         + (SELECT count(*) FROM credits.idempotency WHERE address = $1 OR idempotency_key = $2)",
+    )
+    .bind(&user)
+    .bind(format!("mana-topup:{unbooked}"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(booked_rows, 0, "the refused grants booked nothing");
+
+    let key = format!("mana-topup:{booked}");
+    cs.credits
+        .admin_grant_credits(crate::shop::credits::admin_store::GrantRequest {
+            address: &booked_user,
+            amount: "5",
+            kind: "purchase",
+            reason: None,
+            actor: None,
+            idempotency_key: Some(&key),
+            detail: &json!({}),
+            studio_name: None,
+        })
+        .await
+        .unwrap();
+    let (status, body) = post(
+        &app,
+        &cookie,
+        "/admin/api/credits/grant",
+        json!({ "address": booked_user, "amount": "5", "idempotencyKey": key.to_uppercase().replace("0X", "0x") }),
+    )
+    .await;
+    assert_eq!(
+        (status, body["body"]["replayed"].as_bool()),
+        (StatusCode::OK, Some(true)),
+        "a booked recovery replays: {body}"
+    );
+    for address in [&user, &booked_user] {
+        for sql in [
+            "DELETE FROM credits.ledger WHERE address = $1",
+            "DELETE FROM credits.purchases WHERE address = $1",
+            "DELETE FROM credits.idempotency WHERE address = $1",
+            "DELETE FROM ops.admin_audit WHERE domain = 'credits' AND target = $1",
+            "DELETE FROM credits.wallets WHERE address = $1",
+        ] {
+            sqlx::query(sql).bind(address).execute(&pool).await.unwrap();
+        }
+    }
+    cleanup(&pool, &actor).await;
+}
+
 #[tokio::test]
 async fn price_overrides_take_the_price_bearer_and_the_data_switch() {
     let Some(pool) = crate::db::scratch::pool(4).await else {

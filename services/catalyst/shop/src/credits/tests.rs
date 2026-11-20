@@ -5554,8 +5554,8 @@ fn fresh_tx_hash() -> String {
     format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2))
 }
 
-/// A confirmed 100 MANA transfer from `from` to the top-up address.
-fn mana_payment_from(from: &str) -> ManaPaymentVerification {
+/// A confirmed 100 MANA transfer from `from` to the top-up address, `confirmations` deep.
+fn mana_payment_from(from: &str, confirmations: u64) -> ManaPaymentVerification {
     ManaPaymentVerification::Confirmed {
         from: from.to_string(),
         to: "0x1111111111111111111111111111111111111111".into(),
@@ -5563,7 +5563,7 @@ fn mana_payment_from(from: &str) -> ManaPaymentVerification {
         block: super::escrow::TransferBlock {
             number: 1_000,
             timestamp: 978_307_210,
-            confirmations: 64,
+            confirmations,
         },
     }
 }
@@ -5574,27 +5574,26 @@ fn mana_payment_from(from: &str) -> ManaPaymentVerification {
 async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
     let Some(pool) = pool().await else { return };
     let wallet = scratch_wallet();
-    let hash = format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
-    let (unpaid, foreign) = (fresh_tx_hash(), fresh_tx_hash());
+    let (hash, unpaid, foreign, shallow) = (
+        fresh_tx_hash(),
+        fresh_tx_hash(),
+        fresh_tx_hash(),
+        fresh_tx_hash(),
+    );
     let mut broker = MockBroker::configured();
     broker
         .verifications
-        .insert(hash.clone(), mana_payment_from(&wallet.address));
+        .insert(hash.clone(), mana_payment_from(&wallet.address, 64));
     broker
         .verifications
         .insert(unpaid.clone(), ManaPaymentVerification::NoPayment);
     broker.verifications.insert(
         foreign.clone(),
-        mana_payment_from("0x2222222222222222222222222222222222222222"),
+        mana_payment_from("0x2222222222222222222222222222222222222222", 64),
     );
-    let shallow = fresh_tx_hash();
-    let mut shallow_payment = mana_payment_from(&wallet.address);
-    if let ManaPaymentVerification::Confirmed { block, .. } = &mut shallow_payment {
-        block.confirmations = 1;
-    }
     broker
         .verifications
-        .insert(shallow.clone(), shallow_payment);
+        .insert(shallow.clone(), mana_payment_from(&wallet.address, 1));
     let state = state_with(
         pool.clone(),
         StateCfg {
@@ -5648,11 +5647,25 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
     .await;
     assert_eq!(status, StatusCode::OK, "a booked recovery replays: {v}");
     assert_eq!(v["replayed"], true, "{v}");
+    // A booked key retried with another amount or wallet is a mismatch, not a new verification (that
+    // transfer was paid by another wallet, so verifying would answer 422).
+    for (address, amount) in [(earlier.as_str(), "41"), (wallet.address.as_str(), "40")] {
+        let (status, _, v) = send(
+            &app,
+            "POST",
+            "/credits/admin/credits/grant",
+            bearer.clone(),
+            Some(json!({ "address": address, "amount": amount, "idempotencyKey": earlier_key })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{address} {amount}: {v}");
+    }
     assert_eq!(
         available(&pool, &earlier).await,
         "40",
         "nothing moved again"
     );
+    assert_eq!(available(&pool, &wallet.address).await, "0");
     cleanup(&pool, &earlier).await;
     let (status, _, v) = send(
         &app,
@@ -9924,7 +9937,7 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     let mut broker = MockBroker::configured();
     broker
         .verifications
-        .insert(paid.clone(), mana_payment_from(&addr));
+        .insert(paid.clone(), mana_payment_from(&addr, 64));
     broker
         .verifications
         .insert(unpaid.clone(), ManaPaymentVerification::NoPayment);
@@ -9975,12 +9988,13 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
         (StatusCode::OK, Some(true)),
         "{v}"
     );
+    let refused = unique("g-flag");
     let (status, _, v) = send(
         &app,
         "POST",
         "/credits/admin/credits/grant",
         bearer.clone(),
-        Some(grant(&unique("g-flag"))),
+        Some(grant(&refused)),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{v}");
@@ -10007,7 +10021,7 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
         &app,
         "POST",
         "/credits/admin/credits/grant",
-        bearer,
+        bearer.clone(),
         Some(grant(&format!("mana-topup:{paid}"))),
     )
     .await;
@@ -10018,6 +10032,35 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
         kinds.iter().any(|(kind, _, _)| kind == "purchase"),
         "the paid recovery is a purchase: {kinds:?}"
     );
+    // The refusal rolled its key back: after the unflag the same key grants.
+    let (status, _, v) = send(
+        &app,
+        "DELETE",
+        &format!("/credits/admin/flags/{addr}"),
+        bearer.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, _, v) = send(
+        &app,
+        "POST",
+        "/credits/admin/credits/grant",
+        bearer,
+        Some(grant(&refused)),
+    )
+    .await;
+    assert_eq!(
+        (status, v["replayed"].as_bool()),
+        (StatusCode::OK, Some(false)),
+        "{v}"
+    );
+    assert_eq!(available(&pool, &addr).await, "15");
+    sqlx::query("DELETE FROM social.notifications WHERE address = $1")
+        .bind(&addr)
+        .execute(&pool)
+        .await
+        .unwrap();
     cleanup(&pool, &addr).await;
     cleanup(&pool, &linked).await;
 }

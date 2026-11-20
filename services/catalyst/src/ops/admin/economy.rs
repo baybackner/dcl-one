@@ -82,6 +82,12 @@ pub async fn credits_grant(
         let reason = validated_reason(&opt_string(&body, "reason"))?;
         let idempotency_key = validate_idempotency_key(&opt_string(&body, "idempotencyKey"))?;
         let studio_name = validated_studio_name(&opt_string(&body, "studioName"))?;
+        let (idempotency_key, kind) = crate::shop::credits::handlers::topup::operator_grant_key(
+            &cs,
+            idempotency_key,
+            &address,
+        )
+        .await?;
         let mut detail = json!({ "address": address, "amount": amount, "reason": reason, "idempotencyKey": idempotency_key, "via": "console" });
         if let Some(studio) = &studio_name {
             detail["studioName"] = json!(studio);
@@ -91,7 +97,7 @@ pub async fn credits_grant(
             .admin_grant_credits(GrantRequest {
                 address: &address,
                 amount: &amount,
-                kind: "grant",
+                kind,
                 reason: reason.as_deref(),
                 actor: Some(&actor),
                 idempotency_key: idempotency_key.as_deref(),
