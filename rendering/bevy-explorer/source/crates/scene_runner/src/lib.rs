@@ -864,14 +864,20 @@ impl ContainingScene<'_, '_> {
 
     // get all scenes within radius of the given position, plus any global scenes
     pub fn get_area_position(&self, position: Vec3, radius: f32) -> HashSet<Entity> {
+        let mut results = HashSet::default();
+        self.extend_area_position(position, radius, &mut results);
+        results
+    }
+
+    /// Adds [`Self::get_area_position`]'s scenes to `results`, for a caller that keeps the set
+    /// from frame to frame.
+    pub fn extend_area_position(&self, position: Vec3, radius: f32, results: &mut HashSet<Entity>) {
         let focus = position.xz() * Vec2::new(1.0, -1.0);
         let min_point = focus - Vec2::splat(radius);
         let max_point = focus + Vec2::splat(radius);
 
         let min_parcel = (min_point / PARCEL_SIZE).floor().as_ivec2();
         let max_parcel = (max_point / PARCEL_SIZE).floor().as_ivec2();
-
-        let mut results = HashSet::default();
 
         for parcel_x in min_parcel.x..=max_parcel.x {
             for parcel_y in min_parcel.y..=max_parcel.y {
@@ -885,8 +891,12 @@ impl ContainingScene<'_, '_> {
             }
         }
 
-        results.extend(self.get_portables(false));
-        results
+        results.extend(
+            self.portable_scenes
+                .iter()
+                .filter_map(|(hash, _)| self.live_scenes.scenes.get(hash))
+                .copied(),
+        );
     }
 
     // get all scenes along a ray ordered by closest point, together with distance to closest point

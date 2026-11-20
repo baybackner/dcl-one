@@ -49,7 +49,7 @@ use scene_runner::{
         },
         AddCrdtInterfaceExt,
     },
-    ContainingScene, SceneEntity, SceneLoopSchedule, SceneUpdates, MOVEMENT_CONTROLLER,
+    ContainingScene, OutOfWorld, SceneEntity, SceneLoopSchedule, SceneUpdates, MOVEMENT_CONTROLLER,
 };
 
 pub struct AvatarMovementPlugin;
@@ -794,7 +794,7 @@ pub(crate) fn apply_movement(
         ),
         With<PrimaryUser>,
     >,
-    mut scenes: Query<(Entity, &mut SceneColliderData)>,
+    mut colliders: ColliderHolders,
     containing_scenes: ContainingScene,
     time_res: Res<Time>,
     mut info: ResMut<AvatarMovementInfo>,
@@ -802,21 +802,42 @@ pub(crate) fn apply_movement(
     mut jumping: Local<bool>,
     movement_control: Res<EngineMovementControl>,
     central: Res<CentralCollisions>,
+    // kept from frame to frame so that choosing the colliders allocates nothing
+    (mut area, mut holders): (Local<HashSet<Entity>>, Local<Vec<Entity>>),
 ) {
     let Ok((mut transform, mut dynamic_state, movement, mut riser_push, mut assist)) =
         player.single_mut()
     else {
         return;
     };
-    // the casts below test only the scenes around the capsule: those it can reach this frame. A
-    // scene moving the avatar more than a parcel in a frame sweeps the scenes a parcel around it.
-    let reach = frame_reach(movement.component.velocity, time_res.delta_secs()).min(PARCEL_SIZE);
-    let area =
-        containing_scenes.get_area_position(transform.translation, PLAYER_COLLIDER_RADIUS + reach);
-    let mut scenes = scenes
-        .iter_mut()
-        .filter(|(scene, _)| area.contains(scene))
-        .collect::<Vec<_>>();
+    // the scene's velocity; one that is not finite moves nothing
+    let requested = Some(movement.component.velocity)
+        .filter(|velocity| velocity.is_finite())
+        .unwrap_or(Vec3::ZERO);
+    // the casts below test the colliders of the scenes around the capsule, those it can reach
+    // this frame, and every collider no scene holds (the ground of empty parcels, the stand-in of
+    // a scene still loading). A move of more than a parcel in a frame tests every collider.
+    let reach = frame_reach(requested, time_res.delta_secs());
+    let everywhere = reach > PARCEL_SIZE;
+    area.clear();
+    if !everywhere {
+        containing_scenes.extend_area_position(
+            transform.translation,
+            PLAYER_COLLIDER_RADIUS + reach + COLLIDER_OVERHANG,
+            &mut area,
+        );
+    }
+    holders.clear();
+    holders.extend(
+        colliders
+            .iter()
+            .filter(|&(holder, _, is_scene)| everywhere || !is_scene || area.contains(&holder))
+            .map(|(holder, ..)| holder),
+    );
+    let mut scenes = Nearby {
+        colliders: &mut colliders,
+        holders: &holders,
+    };
     let step_push = &mut riser_push.0;
 
     info.0.step_time = time_res.delta_secs();
@@ -829,14 +850,14 @@ pub(crate) fn apply_movement(
     let settle =
         dynamic_state.ground_height > SETTLE_HEIGHT && grounded(dynamic_state.ground_height);
 
-    if suppress || (movement.component.velocity == Vec3::ZERO && !settle) {
+    if suppress || (requested == Vec3::ZERO && !settle) {
         // the move has stopped, so its push against a riser ends: the next riser takes its own
         *step_push = 0.0;
         dynamic_state.velocity = Vec3::ZERO;
         dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
         end_jump_on_landing(&mut dynamic_state);
         *last_step = LastMovementStep {
-            requested_velocity: Some(Vector3::world_vec_from_vec3(&movement.component.velocity)),
+            requested_velocity: Some(Vector3::world_vec_from_vec3(&requested)),
             actual_velocity: Some(Vector3::world_vec_from_vec3(&Vec3::ZERO)),
             external_velocity: info.0.external_velocity,
         };
@@ -852,7 +873,7 @@ pub(crate) fn apply_movement(
     let start = transform.translation.as_dvec3();
     let mut position = start;
     let mut time = time_res.delta_secs_f64();
-    let mut velocity = movement.component.velocity.as_dvec3();
+    let mut velocity = requested.as_dvec3();
     let mut steps = 0;
     // the steepest walkable slope the move was turned along (ground following), for the snap
     let mut followed = 0.0_f64;
@@ -861,7 +882,7 @@ pub(crate) fn apply_movement(
     // on the ground at the end of the last step: the assists below hold for a walking avatar
     let on_ground = grounded(dynamic_state.ground_height);
     // on the ground and asking for no rise: not the step a jump takes off in
-    let walking = on_ground && movement.component.velocity.y <= 0.0;
+    let walking = on_ground && requested.y <= 0.0;
 
     // deliberately penetrating (placed here by movePlayerTo): don't move deeper into
     // whatever we're inside, but otherwise let the scene walk us out
@@ -953,10 +974,10 @@ pub(crate) fn apply_movement(
 
     debug!(
         "move {:.7} + {:.7} = {:.7} ({steps} iterations)",
-        transform.translation, movement.component.velocity, position
+        transform.translation, requested, position
     );
 
-    info.0.requested_velocity = Some(Vector3::world_vec_from_vec3(&movement.component.velocity));
+    info.0.requested_velocity = Some(Vector3::world_vec_from_vec3(&requested));
     info.0.actual_velocity = Some(Vector3::world_vec_from_vec3(
         &actual_velocity(
             transform.translation.as_dvec3(),
@@ -978,7 +999,7 @@ pub(crate) fn apply_movement(
 
     // for now we hack in the old dynamic state values for animations
     dynamic_state.velocity = velocity;
-    if movement.component.velocity.y > 10.0 {
+    if requested.y > 10.0 {
         if !*jumping {
             dynamic_state.jump_time = time_res.elapsed_secs_f64();
             *jumping = true;
@@ -989,6 +1010,38 @@ pub(crate) fn apply_movement(
     dynamic_state.ground_height = ground_height(&mut scenes, transform.translation);
     end_jump_on_landing(&mut dynamic_state);
 }
+
+/// Every holder of colliders, and whether it is a scene.
+type ColliderHolders<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut SceneColliderData,
+        Has<RendererSceneContext>,
+    ),
+>;
+
+/// The colliders [`apply_movement`] casts the avatar against this frame: those of the `holders`.
+struct Nearby<'a, 'w, 's> {
+    colliders: &'a mut ColliderHolders<'w, 's>,
+    holders: &'a [Entity],
+}
+
+impl Nearby<'_, '_, '_> {
+    fn for_each(&mut self, mut f: impl FnMut(Entity, &mut SceneColliderData)) {
+        let mut holders = self.colliders.iter_many_mut(self.holders);
+        while let Some((holder, mut colliders, _)) = holders.fetch_next() {
+            f(holder, &mut colliders);
+        }
+    }
+}
+
+/// How far past its scene's parcels a collider still stops the avatar coming from the next parcel
+/// (m): a wall or a fence set on the parcel edge, part of its thickness over it.
+/// [`apply_movement`] casts against the scenes whose parcels come within the capsule's radius,
+/// the frame's reach and this.
+const COLLIDER_OVERHANG: f32 = 0.2;
 
 /// The velocity of a step that moved the avatar from `from` to `to` in `delta` seconds. A frame
 /// with no elapsed time (the first) reports none, though the ground snap can still move the
@@ -1005,7 +1058,7 @@ fn actual_velocity(from: DVec3, to: DVec3, delta: f64) -> DVec3 {
 /// `motion` is a velocity, distance when it is a unit direction), over the colliders of the
 /// `scenes` around it: the span to the hit and the collider's normal there.
 fn cast_avatar(
-    scenes: &mut [(Entity, Mut<SceneColliderData>)],
+    scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     motion: DVec3,
@@ -1014,7 +1067,7 @@ fn cast_avatar(
 ) -> Option<(f64, DVec3)> {
     let mut nearest = None;
     let mut span = span;
-    for (e, collider_data) in scenes.iter_mut() {
+    scenes.for_each(|e, collider_data| {
         if let Some(hit) = collider_data.cast_avatar_nearest(
             position,
             motion,
@@ -1023,7 +1076,7 @@ fn cast_avatar(
             skip_inside,
             false,
             disabled
-                .get(&*e)
+                .get(&e)
                 .map(|d| d.iter().collect())
                 .unwrap_or_default(),
             -PLAYER_COLLIDER_OVERLAP,
@@ -1031,7 +1084,7 @@ fn cast_avatar(
             span = hit.toi as f64;
             nearest = Some((span, hit.normal.as_dvec3()));
         }
-    }
+    });
     nearest
 }
 
@@ -1040,7 +1093,7 @@ fn cast_avatar(
 /// by a rounding error larger than the sweep's overlap (micrometres a few hundred metres from the
 /// origin), and the cast would stop on the wall at once.
 fn cast_down(
-    scenes: &mut [(Entity, Mut<SceneColliderData>)],
+    scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     reach: f64,
@@ -1068,7 +1121,7 @@ fn cast_down(
 /// the steepest ground the step `followed`, or of the ground it started on (the foot of a slope
 /// the step ran down), over the distance moved.
 fn snap_to_ground(
-    scenes: &mut [(Entity, Mut<SceneColliderData>)],
+    scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     start: DVec3,
     mut position: DVec3,
@@ -1097,7 +1150,7 @@ fn slope(normal: DVec3) -> f64 {
 /// The slope of the walkable ground a walking step starts on, within [`PLAYER_GROUND_THRESHOLD`]
 /// below `start` (0 for none).
 fn start_slope(
-    scenes: &mut [(Entity, Mut<SceneColliderData>)],
+    scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     start: DVec3,
 ) -> f64 {
@@ -1144,7 +1197,7 @@ fn frame_reach(velocity: Vec3, delta: f32) -> f32 {
 /// [`step_reach`], down onto the ground. The new position and the time it used; None unless it
 /// lands higher, on ground it can stand on, with the riser's top no higher than the step.
 fn step_up(
-    scenes: &mut [(Entity, Mut<SceneColliderData>)],
+    scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     horizontal: DVec3,
@@ -1177,16 +1230,14 @@ fn step_up(
 
 /// The feet's height above ground the player stands on, over the colliders of the `scenes` around
 /// it; at most the height above the world floor.
-fn ground_height(scenes: &mut [(Entity, Mut<SceneColliderData>)], feet: Vec3) -> f32 {
-    scenes
-        .iter_mut()
-        .fold(feet.y, |ground, (_, collider_data)| {
-            ground.min(
-                collider_data
-                    .get_standing_ground(feet)
-                    .map_or(f32::INFINITY, |(h, _)| h),
-            )
-        })
+fn ground_height(scenes: &mut Nearby, feet: Vec3) -> f32 {
+    let mut ground = feet.y;
+    scenes.for_each(|_, collider_data| {
+        if let Some((height, _)) = collider_data.get_standing_ground(feet) {
+            ground = ground.min(height);
+        }
+    });
+    ground
 }
 
 /// Forget the take-off time once the player is back on the ground and no longer rising, so that
@@ -1207,11 +1258,12 @@ fn record_ground_collider(
         &Transform,
         &ActivePlayerComponent<AvatarMovement>,
         &mut GroundCollider,
+        Has<OutOfWorld>,
     )>,
     containing_scenes: ContainingScene,
     mut scenes: Query<&mut SceneColliderData>,
 ) {
-    let Ok((transform, movement, mut ground)) = player.single_mut() else {
+    let Ok((transform, movement, mut ground, out_of_world)) = player.single_mut() else {
         return;
     };
 
@@ -1223,8 +1275,13 @@ fn record_ground_collider(
 
     let mut best_height = PLAYER_GROUND_THRESHOLD;
 
-    // around where the move left the player this frame
-    let area = containing_scenes.get_area_position(transform.translation, PLAYER_COLLIDER_RADIUS);
+    // around where the move left the player this frame; out of world (arriving, its destination
+    // still loading), the portables only
+    let area = if out_of_world {
+        containing_scenes.get_portables(false)
+    } else {
+        containing_scenes.get_area_position(transform.translation, PLAYER_COLLIDER_RADIUS)
+    };
     for scene in area {
         let Ok(mut collider_data) = scenes.get_mut(scene) else {
             continue;
@@ -1645,7 +1702,33 @@ mod tests {
             .init_resource::<ScenePointers>();
     }
 
-    /// Makes `scene` the live scene `hash` on `parcels`.
+    /// The context of a scene `hash`, `scene`: a portable started at `portable`'s tick, or a
+    /// parcel scene.
+    fn scene_context(scene: Entity, hash: &str, portable: Option<u32>) -> RendererSceneContext {
+        use dcl_types::SceneId;
+
+        RendererSceneContext::new(
+            SceneId::DUMMY,
+            hash.to_owned(),
+            "storage_root".to_owned(),
+            portable.is_some(),
+            portable.unwrap_or_default(),
+            hash.to_owned(),
+            IVec2::ZERO,
+            HashSet::from_iter([IVec2::ZERO]),
+            vec![],
+            default(),
+            vec![],
+            scene,
+            0.0,
+            false,
+            "sdk_version",
+            false,
+            false,
+        )
+    }
+
+    /// Makes `scene` the live parcel scene `hash` on `parcels`.
     fn place_scene(
         app: &mut App,
         scene: Entity,
@@ -1655,6 +1738,9 @@ mod tests {
         use scene_runner::initialize_scene::{LiveScenes, PointerResult, ScenePointers};
 
         let world = app.world_mut();
+        world
+            .entity_mut(scene)
+            .insert(scene_context(scene, hash, None));
         world
             .resource_mut::<LiveScenes>()
             .scenes
@@ -1673,11 +1759,17 @@ mod tests {
 
     /// Places a scene `hash` on `parcel` holding a wall: a box at `centre`, `half` its extents.
     fn add_wall_scene(app: &mut App, hash: &str, parcel: IVec2, centre: Vec3, half: Vec3) {
+        let scene = add_holder(app, centre, half);
+        place_scene(app, scene, hash, [parcel]);
+    }
+
+    /// A holder of colliders that is no scene, as the ground of empty parcels and the stand-in of
+    /// a scene still loading are, holding a box at `centre`, `half` its extents.
+    fn add_holder(app: &mut App, centre: Vec3, half: Vec3) -> Entity {
         let mut colliders = SceneColliderData::default();
         let id = ColliderId::new(SceneEntityId::ROOT, None, 0);
         colliders.set_wall(&id, centre, half, Quat::IDENTITY);
-        let scene = app.world_mut().spawn(colliders).id();
-        place_scene(app, scene, hash, [parcel]);
+        app.world_mut().spawn(colliders).id()
     }
 
     #[test]
@@ -1713,13 +1805,70 @@ mod tests {
     }
 
     #[test]
-    fn a_frames_reach_covers_its_move_and_a_step_offset() {
-        // a run at 60 fps
-        let reach = frame_reach(Vec3::new(10.0, 0.0, 0.0), 1.0 / 60.0);
-        assert!(reach > 10.0 / 60.0 + step_reach() as f32, "{reach}");
-        assert!((reach - 0.33).abs() < 0.01, "{reach}");
-        // standing still: a step offset
-        assert_eq!(frame_reach(Vec3::ZERO, 1.0 / 60.0), step_reach() as f32);
+    fn the_ground_no_scene_holds_is_stood_on_stepped_onto_and_followed_down() {
+        // the ground of empty parcels, raised 0.5 m over the floor scene's, with a block 0.1 m
+        // higher from x 10 to 12
+        let start = Vec3::new(8.0, 0.5, -8.0);
+        let (mut app, player) = movement_app(&[], start);
+        add_holder(
+            &mut app,
+            Vec3::new(8.0, 0.25, -8.0),
+            Vec3::new(8.0, 0.25, 8.0),
+        );
+        add_holder(
+            &mut app,
+            Vec3::new(11.0, 0.3, -8.0),
+            Vec3::new(1.0, 0.3, 8.0),
+        );
+        // landing from a jump
+        app.world_mut()
+            .get_mut::<AvatarDynamicState>(player)
+            .unwrap()
+            .jump_time = 5.0;
+        app.update();
+        let state = app.world().get::<AvatarDynamicState>(player).unwrap();
+        assert!(grounded(state.ground_height), "{}", state.ground_height);
+        assert!(state.jump_time <= 0.0, "the jump goes on");
+
+        let assist = |app: &App| *app.world().get::<GroundAssist>(player).unwrap();
+        let on = run_for(&mut app, player, Vec3::new(1.5, 0.0, 0.0), 100);
+        assert!(on.x > 10.5 && (on.y - 0.6).abs() < 0.01, "{on}");
+        assert_eq!(assist(&app).steps, 1, "{:?}", assist(&app));
+        let off = run_for(&mut app, player, Vec3::new(1.5, 0.0, 0.0), 100);
+        assert!(off.x > 12.5 && (off.y - 0.5).abs() < 0.01, "{off}");
+        assert!(assist(&app).snaps > 0, "{:?}", assist(&app));
+        let state = app.world().get::<AvatarDynamicState>(player).unwrap();
+        assert!(grounded(state.ground_height), "{}", state.ground_height);
+    }
+
+    #[test]
+    fn a_wall_of_a_scene_still_loading_stops_a_run() {
+        // the stand-in of the scene loading on parcel 1,0 holds a wall 0.5 m into it
+        let wall = (Vec3::new(17.0, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        let face = 16.5 - PLAYER_COLLIDER_RADIUS;
+        for fps in [30.0, 60.0] {
+            let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+            let (mut app, player) = movement_app_at(&[], Vec3::new(15.0, 0.0, -8.0), frame);
+            add_holder(&mut app, wall.0, wall.1);
+            app.update();
+            let end = run_for(&mut app, player, Vec3::new(10.0, 0.0, 0.0), 30);
+            assert!((end.x - face).abs() < 0.01, "{fps} fps: stopped at {end}");
+        }
+    }
+
+    #[test]
+    fn a_wall_reaching_over_its_scenes_edge_stops_a_walk_from_the_next_parcel() {
+        // the scene of parcel 1,0 holds a wall reaching 0.2 m over the parcels' edge (x 16)
+        let wall = (Vec3::new(16.3, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
+        let face = 15.8 - PLAYER_COLLIDER_RADIUS;
+        for fps in [30.0, 60.0, 144.0] {
+            let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+            let (mut app, player) = movement_app_at(&[], Vec3::new(14.5, 0.0, -8.0), frame);
+            add_wall_scene(&mut app, "next", IVec2::new(1, 0), wall.0, wall.1);
+            app.update();
+            let end = run_for(&mut app, player, Vec3::new(1.5, 0.0, 0.0), 2 * fps as usize);
+            assert!((end.x - face).abs() < 0.01, "{fps} fps: stopped at {end}");
+        }
     }
 
     /// Runs `frames` frames of the scene moving the player at `velocity`; its position after.
@@ -1781,22 +1930,25 @@ mod tests {
     }
 
     #[test]
-    fn a_run_at_30_fps_stops_at_the_wall_of_the_next_parcels_scene_from_any_point_a_frame_away() {
-        // a run at 10 m/s moves 0.33 m in a 30 fps frame; the wall 0.05 m into parcel 1,0, the
-        // avatar's front from 0.35 to 0.05 m short of it
-        let frame = std::time::Duration::from_secs_f64(1.0 / 30.0);
+    fn a_run_stops_at_the_wall_of_the_next_parcels_scene_from_any_point_a_frame_away() {
+        // a run at 10 m/s; the wall 0.05 m into parcel 1,0, the avatar's front from 0.05 m short
+        // of it to a frame's move further
         let wall = (Vec3::new(16.55, 1.0, -8.0), Vec3::new(0.5, 1.0, 8.0));
         let face = 16.05 - PLAYER_COLLIDER_RADIUS;
-        for k in 0..11 {
-            let start = Vec3::new(15.4 + k as f32 * 0.03, 0.0, -8.0);
-            let (mut app, player) = movement_app_at(&[], start, frame);
-            add_wall_scene(&mut app, "next", IVec2::new(1, 0), wall.0, wall.1);
-            app.update();
-            let end = run_for(&mut app, player, Vec3::new(10.0, 0.0, 0.0), 30);
-            assert!(
-                (end.x - face).abs() < 0.01,
-                "from {start}: stopped at {end}"
-            );
+        for fps in [30.0, 60.0, 144.0] {
+            let frame = std::time::Duration::from_secs_f64(1.0 / fps);
+            let step = 10.0 / fps as f32;
+            for k in 0..11 {
+                let start = Vec3::new(face - 0.05 - step * k as f32 / 10.0, 0.0, -8.0);
+                let (mut app, player) = movement_app_at(&[], start, frame);
+                add_wall_scene(&mut app, "next", IVec2::new(1, 0), wall.0, wall.1);
+                app.update();
+                let end = run_for(&mut app, player, Vec3::new(10.0, 0.0, 0.0), 30);
+                assert!(
+                    (end.x - face).abs() < 0.01,
+                    "{fps} fps from {start}: stopped at {end}"
+                );
+            }
         }
     }
 
@@ -1842,9 +1994,9 @@ mod tests {
     }
 
     #[test]
-    fn a_move_of_more_than_a_parcel_in_a_frame_is_cast_against_the_scenes_a_parcel_around() {
+    fn a_move_of_more_than_a_parcel_in_a_frame_is_cast_against_every_collider() {
         // 40 m in a 20 ms frame from the middle of parcel 0,0: a wall of the next parcel's scene
-        // stops it, one two parcels away is not cast against
+        // stops it, and so does one two parcels away
         let start = Vec3::new(8.0, 0.0, -8.0);
         let velocity = Vec3::new(2000.0, 0.0, 0.0);
         let (mut app, player) = movement_app(&[], start);
@@ -1860,21 +2012,22 @@ mod tests {
         add_wall_scene(&mut app, "far", IVec2::new(2, 0), far.0, far.1);
         app.update();
         let end = run_for(&mut app, player, velocity, 1);
-        assert!(end.x > 40.0, "stopped at {end}");
+        let face = 36.0 - PLAYER_COLLIDER_RADIUS;
+        assert!((end.x - face).abs() < 0.01, "stopped at {end}");
     }
 
     #[test]
-    fn a_scene_velocity_that_is_not_finite_ends_the_frame() {
-        // the scenes cast against stay those a parcel around the avatar, however far the velocity
-        // would carry it
+    fn a_scene_velocity_that_is_not_finite_moves_nothing() {
         for velocity in [
             Vec3::NAN,
             Vec3::new(f32::INFINITY, 0.0, 0.0),
             Vec3::new(0.0, 0.0, f32::NEG_INFINITY),
         ] {
-            let (mut app, player) = movement_app(&[], Vec3::new(8.0, 0.0, -8.0));
+            let start = Vec3::new(8.0, 0.0, -8.0);
+            let (mut app, player) = movement_app(&[], start);
             app.update();
-            run_for(&mut app, player, velocity, 3);
+            let end = run_for(&mut app, player, velocity, 3);
+            assert_eq!(end, start, "{velocity}");
         }
     }
 
@@ -2276,8 +2429,6 @@ mod tests {
     /// middle of parcel 0,0, with no movement chosen yet. Movement initiated at or before
     /// `accept_movement_after` is not applied.
     fn rotation_app(accept_movement_after: f64) -> (App, Entity) {
-        use scene_runner::initialize_scene::{LiveScenes, PortableScenes, ScenePointers};
-
         let mut app = App::new();
         app.insert_resource(EngineMovementControl {
             accept_movement_after,
@@ -2285,9 +2436,6 @@ mod tests {
         })
         .init_resource::<AppConfig>()
         .init_resource::<LatestFramePick<AvatarMovement>>()
-        .init_resource::<LiveScenes>()
-        .init_resource::<PortableScenes>()
-        .init_resource::<ScenePointers>()
         .insert_resource(FrameCount(0))
         .add_systems(Update, stage_redispatch_rotation)
         .add_systems(
@@ -2298,6 +2446,7 @@ mod tests {
             )
                 .chain(),
         );
+        add_scene_resources(&mut app);
         let player = app
             .world_mut()
             .spawn((
@@ -2316,9 +2465,7 @@ mod tests {
     /// the scene of parcel 0,0.
     fn add_scene(app: &mut App, hash: &str, portable: Option<u32>) -> (Entity, Entity) {
         use dcl_types::SceneId;
-        use scene_runner::initialize_scene::{
-            LiveScenes, PointerResult, PortableScenes, PortableSource, ScenePointers,
-        };
+        use scene_runner::initialize_scene::{LiveScenes, PortableScenes, PortableSource};
 
         let scene = app.world_mut().spawn_empty().id();
         let scene_player = app
@@ -2329,46 +2476,26 @@ mod tests {
                 id: SceneEntityId::PLAYER,
             })
             .id();
-        let mut context = RendererSceneContext::new(
-            SceneId::DUMMY,
-            hash.to_owned(),
-            "storage_root".to_owned(),
-            portable.is_some(),
-            portable.unwrap_or_default(),
-            hash.to_owned(),
-            IVec2::ZERO,
-            HashSet::from_iter([IVec2::ZERO]),
-            vec![],
-            default(),
-            vec![],
-            scene,
-            0.0,
-            false,
-            "sdk_version",
-            false,
-            false,
-        );
-        context.associate_bevy_entity(SceneEntityId::PLAYER, scene_player);
-        let world = app.world_mut();
-        world.entity_mut(scene).insert(context);
-        world
-            .resource_mut::<LiveScenes>()
-            .scenes
-            .insert(hash.to_owned(), scene);
         if portable.is_some() {
+            let world = app.world_mut();
+            world
+                .entity_mut(scene)
+                .insert(scene_context(scene, hash, portable));
+            world
+                .resource_mut::<LiveScenes>()
+                .scenes
+                .insert(hash.to_owned(), scene);
             world.resource_mut::<PortableScenes>().insert(
                 hash.to_owned(),
                 PortableSource::new(hash.to_owned(), None, None, false),
             );
         } else {
-            world.resource_mut::<ScenePointers>().insert(
-                IVec2::ZERO,
-                PointerResult::Exists {
-                    hash: hash.to_owned(),
-                    urn: None,
-                },
-            );
+            place_scene(app, scene, hash, [IVec2::ZERO]);
         }
+        app.world_mut()
+            .get_mut::<RendererSceneContext>(scene)
+            .unwrap()
+            .associate_bevy_entity(SceneEntityId::PLAYER, scene_player);
         (scene, scene_player)
     }
 
