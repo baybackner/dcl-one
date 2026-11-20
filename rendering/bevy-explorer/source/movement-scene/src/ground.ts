@@ -1,11 +1,10 @@
 import { ColliderLayer, engine, Entity, RaycastQueryType, RaycastShape, raycastSystem, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math';
 import { playerPosition, prevPlayerPosition, tick } from '.';
-import { GROUND_CAST_RANGE, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, PLAYER_COLLIDER_RADIUS, VEC3_NEG_INF, VEC3_UP, VEC3_ZERO } from './constants';
+import { GROUND_CAST_RANGE, GROUND_SNAP_STEP_DROP, GROUNDED_ANGLE, GROUNDED_HEIGHT, PLAYER_COLLIDER_RADIUS, VEC3_UP, VEC3_ZERO } from './constants';
 
 // updated in raycast update
 export var groundNormal = Vector3.Zero();
-var groundPosition = Vector3.Zero();
 export var groundDistance = 0;
 // ground straight below the centre (point ray): feet height above it (Infinity: none in range) and its normal
 var groundRayDistance = Infinity;
@@ -41,14 +40,12 @@ export function initGroundRaycast() {
     },
         (hit) => {
             Vector3.copyFrom(VEC3_ZERO, groundNormal);
-            Vector3.copyFrom(VEC3_NEG_INF, groundPosition);
             groundDistance = playerPosition.y;
 
             if (hit.hits.some((hit) => {
                 Vector3.copyFrom(hit.normalHit ?? VEC3_ZERO, groundNormal);
 
                 let groundTest = (hit.length < PLAYER_COLLIDER_RADIUS + GROUNDED_HEIGHT) && (hit.normalHit?.y ?? 0) >= GROUNDED_ANGLE_Y_LEN;
-                Vector3.copyFrom(hit.position ?? VEC3_NEG_INF, groundPosition);
                 groundDistance = Math.min(hit.length - PLAYER_COLLIDER_RADIUS, playerPosition.y);
 
                 return groundTest;

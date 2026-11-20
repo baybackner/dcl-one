@@ -534,7 +534,9 @@ const FWD_CAST_LENGTH = 1.3; // m
 // at exactly max step height is still hit. It reads the height ahead in the same tick as the forward cast.
 const LANDING_CAST_HEIGHT = MAX_STEP_HEIGHT + 0.1;
 const LANDING_CAST_INSET = 0.05; // past the riser face, so the probe lands on the tread rather than the riser
-// down to a walkable slope's descent over the forward cast's reach
+// It reaches below the feet, not only down to them: engineStepAhead counts the rise from the ground under the avatar,
+// landingHeight + max(0, groundDistance), so while the avatar is above that ground a tread below its feet can still be a
+// step. Below the feet it reaches as far as a walkable slope drops over the forward cast's length, about 1.4 m.
 const LANDING_CAST_RANGE = LANDING_CAST_HEIGHT + FWD_CAST_LENGTH * Math.tan(GROUNDED_ANGLE * Math.PI / 180);
 
 // cast fwd (nearest hit)
