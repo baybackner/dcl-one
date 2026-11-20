@@ -1021,7 +1021,10 @@ fn avatar_emission_follows_the_gamma_curve() {
         (1.0, 86.2),
     ] {
         let got = avatar_emission(factor);
-        assert!((got - expected).abs() < 0.01 * expected.max(1.0), "{factor}: {got}");
+        assert!(
+            (got - expected).abs() < 0.01 * expected.max(1.0),
+            "{factor}: {got}"
+        );
     }
 }
 
