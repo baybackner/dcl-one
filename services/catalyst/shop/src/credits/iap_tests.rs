@@ -1512,6 +1512,20 @@ async fn a_refund_redelivered_after_its_reversal_applies_once() {
     let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
     assert_eq!(out["action"], "refunded", "{out}");
     assert_eq!(available(&pool, &w.address).await, "0");
+
+    // A purchase first credited by the reversal keeps the refund's reference.
+    let w = scratch_wallet();
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let refund = c.notification("REFUND", Some(signed.clone()));
+    let (_, out) = notify(&app, refund.clone()).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let (_, out) = notify(&app, c.notification("REFUND_REVERSED", Some(signed))).await;
+    assert_eq!(out["action"], "minted", "{out}");
+    let (_, out) = notify(&app, refund).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
+    assert_eq!(available(&pool, &w.address).await, "100");
 }
 
 async fn held_reason(pool: &PgPool, id: &str) -> Option<String> {

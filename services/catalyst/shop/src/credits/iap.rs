@@ -497,16 +497,18 @@ impl Credits {
             return hold(tx, &p, Some(&address), value, HoldReason::Capped(reason)).await;
         }
 
-        sqlx::query(
-            "DELETE FROM credits.iap_transactions WHERE transaction_id = $1 AND status = 'held'",
+        // A reversed refund's references stay, so its redelivery is not applied again.
+        let refund_refs: Option<Vec<String>> = sqlx::query_scalar(
+            "DELETE FROM credits.iap_transactions WHERE transaction_id = $1 AND status = 'held' \
+             RETURNING refund_refs",
         )
         .bind(p.transaction_id)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
         sqlx::query(
             "INSERT INTO credits.iap_transactions \
-                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, status, credited_by) \
-             VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, 'paid', $8)",
+                 (transaction_id, original_transaction_id, product_id, address, credits, amount_cents, quantity, status, credited_by, refund_refs) \
+             VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, 'paid', $8, COALESCE($9, '{}'::text[]))",
         )
         .bind(p.transaction_id)
         .bind(p.original_transaction_id)
@@ -516,6 +518,7 @@ impl Credits {
         .bind(cents)
         .bind(quantity)
         .bind(p.channel.as_str())
+        .bind(refund_refs)
         .execute(&mut *tx)
         .await?;
         let detail = json!({
