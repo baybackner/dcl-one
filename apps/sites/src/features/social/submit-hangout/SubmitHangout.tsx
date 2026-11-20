@@ -2,6 +2,7 @@ import { useEventsCopy, type EventsLocale } from "@dcl/one-ui/apps/sites/events/
 import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
 import { GeneralAdd, GeneralCamera, GeneralDelete, GeneralInfoButton } from "@dcl/one-ui/foundations/icons";
 import { Button } from "@dcl/one-ui/apps/sites/shared/Button/Button";
+import { Notice, type NoticeTone } from "@dcl/one-ui/apps/sites/events/Notice";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useMachine } from "@xstate/react";
 import { Link, useSearchParams } from "react-router";
@@ -49,6 +50,8 @@ type SubmitHangoutProps = {
   canChangeCommunity?: boolean;
   editor?: boolean;
   reviewNotice?: string;
+  /** How the notice reads: a rejection is an error, a note on an approved event a warning. */
+  reviewTone?: NoticeTone;
   /** Edit mode: opens the delete confirmation from the form's actions. */
   onDelete?: () => void;
 };
@@ -72,6 +75,7 @@ export default function SubmitHangout({
   canChangeCommunity = mode === "create",
   editor = false,
   reviewNotice,
+  reviewTone = "warning",
   onDelete,
 }: SubmitHangoutProps) {
   const [searchParams] = useSearchParams();
@@ -85,6 +89,7 @@ export default function SubmitHangout({
       stateId={stateId}
       inline={inline}
       reviewNotice={reviewNotice}
+      reviewTone={reviewTone}
       trackCtx={trackCtx}
       categories={categories}
       categoriesError={categoriesError}
@@ -109,6 +114,8 @@ type InnerProps = {
   stateId: HangoutStateId;
   inline: boolean;
   reviewNotice?: string;
+  /** How the notice reads: a rejection is an error, a note on an approved event a warning. */
+  reviewTone?: NoticeTone;
   trackCtx: TrackContext;
   categories: CategoryOption[];
   categoriesError: boolean;
@@ -137,6 +144,7 @@ function SubmitHangoutInner({
   stateId,
   inline,
   reviewNotice,
+  reviewTone = "warning",
   trackCtx,
   categories,
   categoriesError,
@@ -284,7 +292,7 @@ function SubmitHangoutInner({
                   <fieldset className={styles.editorSection}><legend>{text("Event details")}</legend>{fields("details")}</fieldset>
                 </div>
                 <div className={styles.schedulePanel}>
-                  {reviewNotice && <p className={styles.reviewNotice}>{reviewNotice}</p>}
+                  {reviewNotice && <Notice tone={reviewTone}>{reviewNotice}</Notice>}
                   <div className={styles.sections}>
                     <h2>{text("Event details")}</h2>
                     <fieldset className={styles.editorSection}><legend>{text("Schedule")}</legend>{fields("schedule")}</fieldset>

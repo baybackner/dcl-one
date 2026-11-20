@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { useEventsCopy } from "@dcl/one-ui/apps/sites/events/locale";
+import { rejectedNotice } from "@/features/social/submit-hangout/review-notice";
 import { EventsLocaleProvider, useEventsFooterCopy } from "@/features/events/locale";
 import { SubmitHangoutView as LdSubmitHangoutView } from "@dcl/one-ui/apps/sites/events/SubmitHangoutView";
 
@@ -99,7 +100,7 @@ export default function SubmitHangoutRoute(props: Route.ComponentProps) {
 
 function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
   const footerCopy = useEventsFooterCopy();
-  const { text } = useEventsCopy();
+  const { text, locale } = useEventsCopy();
   const queryClient = useQueryClient();
   const d = loaderData as LoaderData;
   const auth = useAuth();
@@ -204,12 +205,11 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
         }}
         editor
         reviewNotice={original?.rejected
-          ? original.rejection_reason
-            ? text("This event was rejected: {reason}", { reason: original.rejection_reason })
-            : text("This event was rejected.")
+          ? rejectedNotice(original.rejection_reason, locale)
           : original?.approved
             ? text("Changes to approved events may require another review.")
             : undefined}
+        reviewTone={original?.rejected ? "error" : "warning"}
         categories={d.categories}
         categoriesError={d.categoriesError}
         mode={d.mode}

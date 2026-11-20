@@ -300,13 +300,6 @@
 
 .cancel { padding: var(--dcl-space-12); color: inherit; font-weight: 600; text-decoration: none; }
 
-.reviewNotice {
-  margin: 0;
-  padding: var(--dcl-space-12);
-  border-radius: var(--dcl-radius-md);
-  background: var(--dcl-transparencies-white-10);
-}
-
 .coverField,
 .dropZone {
   display: grid;

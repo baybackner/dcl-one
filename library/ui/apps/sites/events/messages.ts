@@ -1116,19 +1116,20 @@ const messages = {
     '변경 사항 저장',
     '変更を保存'
   ],
-  'This event was rejected: {reason}': [
-    'Este evento fue rechazado: {reason}',
-    'Cet événement a été refusé : {reason}',
-    '此活动未通过审核：{reason}',
-    '이벤트가 거부되었습니다: {reason}',
-    'イベントが却下されました：{reason}'
-  ],
-  'This event was rejected.': [
-    'Este evento fue rechazado.',
-    'Cet événement a été refusé.',
-    '此活动未通过审核。',
-    '이벤트가 거부되었습니다.',
-    'イベントが却下されました。'
+  'This event has been rejected because of {reasons}. Please update the information and submit again':
+    [
+      'Este evento fue rechazado por {reasons}. Actualiza la información y envíalo de nuevo',
+      'Cet événement a été refusé pour les raisons suivantes : {reasons}. Mettez à jour les informations et soumettez-le à nouveau',
+      '此活动因{reasons}未通过审核。请更新信息后重新提交',
+      '{reasons} 때문에 이벤트가 거부되었습니다. 정보를 수정한 뒤 다시 제출하세요',
+      '{reasons}のため、このイベントは却下されました。情報を更新して再度提出してください'
+    ],
+  'This event has been rejected. Please update the information and submit again': [
+    'Este evento fue rechazado. Actualiza la información y envíalo de nuevo',
+    'Cet événement a été refusé. Mettez à jour les informations et soumettez-le à nouveau',
+    '此活动未通过审核。请更新信息后重新提交',
+    '이벤트가 거부되었습니다. 정보를 수정한 뒤 다시 제출하세요',
+    'このイベントは却下されました。情報を更新して再度提出してください'
   ],
   'Changes to approved events may require another review.': [
     'Los cambios a eventos aprobados podrían requerir otra revisión.',

@@ -133,6 +133,26 @@ export function rejectionReason(reasons: readonly RejectReasonId[], notes: strin
   return [titles, notes.trim()].filter(Boolean).join('. ').slice(0, REJECTION_REASON_MAX_LENGTH)
 }
 
+/**
+ * A stored reason read back: the reasons' titles it starts with, and the moderator's note after them. A reason
+ * that does not start with known titles (written elsewhere, or cut at the length limit) is kept whole as one reason.
+ */
+export function readRejectionReason(stored: string | null | undefined): {
+  reasons: string[]
+  note: string
+} {
+  const text = stored?.trim() ?? ''
+  if (!text) return { reasons: [], note: '' }
+  const known = new Set<string>(REJECT_REASONS.map((reason) => reason.title))
+  const end = text.indexOf('. ')
+  const head = end === -1 ? text : text.slice(0, end)
+  const titles = head.split(', ')
+  if (titles.every((title) => known.has(title))) {
+    return { reasons: titles, note: end === -1 ? '' : text.slice(end + 2).trim() }
+  }
+  return { reasons: [text], note: '' }
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /** "Today", "Tomorrow", "In 3 Days", or the day and month ("19 NOV") further out or in the past. */
