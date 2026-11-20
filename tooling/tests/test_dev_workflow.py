@@ -253,27 +253,54 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                 stale.write_bytes(b'old')
             library_receipts = json.dumps({'reason': 'compiler-artifact', 'filenames': libraries})
             os.link(app, current)
-            with patch('builtins.print') as diagnostic:
-                self.assertEqual(prune(deps, library_receipts), 6)
-                diagnostic.assert_called_once()
-                self.assertIn('Kept all 2 hashed Catalyst binaries', diagnostic.call_args.args[0])
-            self.assertTrue(old.exists())
-            self.assertTrue(all(Path(lib).exists() for lib in libraries))
-            # Cargo emits the published executable as the bin target's sole filename.
+            # The smoke profile disables debug info, so this receipt lists only the executable.
             bin_receipt = json.dumps({'reason': 'compiler-artifact', 'target': {'kind': ['bin']},
                                       'filenames': [str(app)], 'executable': str(app)})
             receipts = library_receipts + '\n' + bin_receipt
-            current.unlink()
-            with patch('builtins.print') as diagnostic:
-                self.assertEqual(prune(deps, receipts), 0)
-                diagnostic.assert_called_once()
-            self.assertTrue(old.exists())
-            os.link(app, current)
-            self.assertEqual(prune(deps, receipts), 3)
+            self.assertEqual(prune(deps, receipts), 9)
+            self.assertTrue(all(Path(lib).exists() for lib in libraries))
             self.assertFalse(old.exists())
             self.assertTrue(current.samefile(app))
             self.assertTrue(other.exists())
             self.assertEqual(prune(deps, receipts), 0)
+
+    def test_smoke_reports_when_hashed_binaries_are_kept(self):
+        prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
+        for reported in (False, True):
+            with self.subTest(app_reported=reported), tempfile.TemporaryDirectory() as temporary:
+                deps = Path(temporary) / 'deps'
+                deps.mkdir()
+                app = deps.parent / 'catalyst'
+                app.write_bytes(b'current')
+                candidate = deps / ('catalyst-' + 'a' * 16)
+                lib = deps / ('libcrate-' + 'a' * 16 + '.rlib')
+                lib.touch()
+                filenames = [str(lib)]
+                if reported:
+                    filenames.append(str(app))
+                    candidate.write_bytes(b'unmatched')
+                else:
+                    os.link(app, candidate)
+                receipt = json.dumps({'reason': 'compiler-artifact', 'filenames': filenames})
+                with patch('builtins.print') as diagnostic:
+                    self.assertEqual(prune(deps, receipt), 0)
+                    diagnostic.assert_called_once()
+                    self.assertIn('Kept all 1 hashed Catalyst', diagnostic.call_args.args[0])
+                self.assertTrue(candidate.exists())
+
+    def test_smoke_prunes_a_dangling_library_symlink(self):
+        prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
+        with tempfile.TemporaryDirectory() as temporary:
+            deps = Path(temporary)
+            active = deps / ('libcrate-' + 'a' * 16 + '.so')
+            active.touch()
+            obsolete = deps / ('libcrate-' + 'b' * 16 + '.so')
+            obsolete.symlink_to('missing-library')
+            link_size = obsolete.lstat().st_size
+            receipt = json.dumps({'reason': 'compiler-artifact', 'filenames': [str(active)]})
+            self.assertEqual(prune(deps, receipt), link_size)
+            self.assertFalse(obsolete.is_symlink())
+            self.assertTrue(active.exists())
 
     def test_smoke_counts_only_the_last_unlinked_name(self):
         prune = runpy.run_path(str(WORKFLOW.parents[2] / "tooling/catalyst-smoke-cache.py"))["prune"]
