@@ -120,17 +120,9 @@ async fn publication_uses_owned_persisted_files_and_stable_item_order() {
     cleanup(&store, &[id], &hashes).await;
 }
 
-async fn published_draft(store: &crate::items::ItemsComponent, linked: bool) -> (Uuid, Uuid) {
+async fn published_draft(store: &crate::items::ItemsComponent) -> (Uuid, Uuid) {
     let id = Uuid::new_v4();
-    let urn = format!(
-        "urn:decentraland:matic:collections-thirdparty:guard{}:c",
-        id.simple()
-    );
-    let mut draft =
-        json!({ "id": id, "name": format!("Guarded {}", &id.simple().to_string()[..8]) });
-    if linked {
-        draft["urn"] = json!(urn);
-    }
+    let draft = json!({ "id": id, "name": format!("Guarded {}", &id.simple().to_string()[..8]) });
     let draft: crate::drafts::CollectionDraft = serde_json::from_value(draft).unwrap();
     super::support::save_collection(
         store,
@@ -153,10 +145,9 @@ async fn published_draft(store: &crate::items::ItemsComponent, linked: bool) -> 
     (id, item_id)
 }
 
-async fn publication_rows(store: &crate::items::ItemsComponent, id: Uuid) -> (i64, i64) {
-    sqlx::query_as(
-        "SELECT (SELECT count(*) FROM builder.collection_publications WHERE collection_id = $1), \
-                (SELECT count(*) FROM builder.linked_collection_publications WHERE collection_id = $1)",
+async fn publication_rows(store: &crate::items::ItemsComponent, id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM builder.collection_publications WHERE collection_id = $1",
     )
     .bind(id)
     .fetch_one(store.pool())
@@ -172,7 +163,7 @@ fn already_published(err: crate::http::ApiError) {
 }
 
 /// A collection published by the copy of the subgraph or by a minted item
-/// can't start another publication in either flow, and a published receipt
+/// can't start another publication, and a published receipt
 /// keeps the standard flow on the publication it recorded.
 #[tokio::test]
 async fn a_published_collection_cannot_begin_another_publication() {
@@ -180,12 +171,9 @@ async fn a_published_collection_cannot_begin_another_publication() {
         return;
     };
     let mut created = Vec::new();
-    for linked in [false, true] {
-        for signal in ["copy", "minted"] {
-            if linked && signal == "copy" {
-                continue;
-            }
-            let (id, item) = published_draft(&store, linked).await;
+    for signal in ["copy", "minted"] {
+        {
+            let (id, item) = published_draft(&store).await;
             created.push(id);
             let contract = if signal == "copy" {
                 Some(super::support::on_chain(store.pool(), id, false).await)
@@ -197,44 +185,29 @@ async fn a_published_collection_cannot_begin_another_publication() {
                     .unwrap();
                 None
             };
-            if linked {
-                already_published(
-                    store
-                        .prepare_linked_publication(&granted::publisher(OWNER, id))
-                        .await
-                        .unwrap_err(),
-                );
-                already_published(
-                    store
-                        .begin_linked_publication(&granted::publisher(OWNER, id), "any revision")
-                        .await
-                        .unwrap_err(),
-                );
-            } else {
-                already_published(
-                    store
-                        .prepare_publication(&granted::publisher(OWNER, id))
-                        .await
-                        .unwrap_err(),
-                );
-                already_published(
-                    store
-                        .begin_publication(&granted::publisher(OWNER, id), "any revision")
-                        .await
-                        .unwrap_err(),
-                );
-            }
+            already_published(
+                store
+                    .prepare_publication(&granted::publisher(OWNER, id))
+                    .await
+                    .unwrap_err(),
+            );
+            already_published(
+                store
+                    .begin_publication(&granted::publisher(OWNER, id), "any revision")
+                    .await
+                    .unwrap_err(),
+            );
             assert_eq!(
                 publication_rows(&store, id).await,
-                (0, 0),
-                "linked={linked} {signal}: nothing begun"
+                0,
+                "{signal}: nothing begun"
             );
             if let Some(contract) = contract {
                 super::support::off_chain(store.pool(), &contract).await;
             }
         }
     }
-    let (id, _) = published_draft(&store, false).await;
+    let (id, _) = published_draft(&store).await;
     created.push(id);
     sqlx::query(
         "INSERT INTO builder.collection_publications (collection_id, preparation, status, tx_hash, contract_address) \
@@ -268,33 +241,6 @@ async fn a_published_collection_cannot_begin_another_publication() {
     .await
     .unwrap();
     assert_eq!(status, "published");
-    let (id, _) = published_draft(&store, true).await;
-    created.push(id);
-    sqlx::query(
-        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
-         VALUES ($1, $3, '{}', $2, 'submitted', $4)",
-    )
-    .bind(id)
-    .bind(format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()))
-    .bind(json!({
-        "id": id, "revision": "recorded", "name": "Guarded", "creator": OWNER,
-        "urn": "urn:decentraland:matic:collections-thirdparty:guard:c",
-        "third_party_id": "urn:decentraland:matic:collections-thirdparty:guard", "item_ids": []
-    }))
-    .bind(json!({ "qty": 1, "salt": "0x00", "signature": "0x00" }))
-    .execute(store.pool())
-    .await
-    .unwrap();
-    assert_eq!(
-        store
-            .begin_linked_publication(&granted::publisher(OWNER, id), "another revision")
-            .await
-            .unwrap_err()
-            .status(),
-        409,
-        "a submitted linked publication keeps the collection on it"
-    );
-    assert_eq!(publication_rows(&store, id).await, (0, 1));
     cleanup(&store, &created, &[]).await;
 }
 

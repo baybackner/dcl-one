@@ -42,7 +42,6 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
 - **Published** is any of:
   - the copy holds a row for the collection's contract address;
   - the node holds its own verified publication receipt;
-  - the node holds a submitted linked publication;
   - an item of the collection has an on-chain id;
   - an item of the collection has an item curation, a third-party item
     submitted for review.
@@ -52,7 +51,7 @@ The node already holds a copy of the Polygon collections subgraph. The shop's
   itself becomes such a record through `POST /v1/collections/{id}/publish`:
   once the copy, or else the Polygon RPC, holds the contract at the stored
   address, each item gets the on-chain id of its place in creation order.
-- **Approved** is the copy's approval of the contract. A linked (third-party)
+- **Approved** is the copy's approval of the contract. A third-party
   collection has no contract and is never approved.
 - **Fail closed.** Every read starts with the copy's readiness:
   - With no complete pass, every route that needs published or approved

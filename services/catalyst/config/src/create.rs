@@ -8,11 +8,6 @@ pub struct CreateConfig {
     #[arg(long, env = "CREATE_WRITES_ENABLED", default_value_t = false, action = clap::ArgAction::Set)]
     pub create_writes_enabled: bool,
 
-    /// The Foundation's builder API a linked publication is verified against
-    /// (the mirror posture's: Decentraland's); empty answers that route 503.
-    #[arg(long, env = "BUILDER_FOUNDATION_URL", default_value = "")]
-    pub builder_foundation_url: String,
-
     /// Polygon JSON-RPC (https to a public host) that verifies publication
     /// receipts and reads the rarities' MANA prices; unset, publication
     /// begin/claim/verify and the rarities routes answer 503.

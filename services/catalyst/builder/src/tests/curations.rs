@@ -2,6 +2,7 @@
 //! collection's review events and the slot cheques of a third-party
 //! publication, and what each table refuses by itself.
 
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -492,17 +493,187 @@ async fn a_forum_claim_is_held_only_by_a_collection_without_a_link() {
         "collections_forum_claim_check",
     )
     .await;
-    let columns: Vec<String> = sqlx::query_scalar(
-        "SELECT column_name::text FROM information_schema.columns \
-         WHERE table_schema = 'builder' AND table_name = 'linked_collection_publications'",
+    let linked: bool =
+        sqlx::query_scalar("SELECT to_regclass('builder.linked_collection_publications') IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(linked, "the schema keeps no linked publication of its own");
+}
+
+/// The linked publication table as the releases before its retirement
+/// left it, with its forum link when `forum` (before the linked-forum
+/// release).
+async fn legacy_linked_publications(pool: &PgPool, forum: bool) {
+    accepted(
+        pool,
+        &format!(
+            "CREATE TABLE builder.linked_collection_publications (
+                collection_id uuid NOT NULL,
+                preparation jsonb NOT NULL,
+                snapshot jsonb NOT NULL,
+                salt text NOT NULL,
+                status text NOT NULL,
+                cheque jsonb,
+                {}
+                created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+                updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+                CONSTRAINT linked_collection_publications_pkey PRIMARY KEY (collection_id),
+                CONSTRAINT linked_collection_publications_collection_id_fkey FOREIGN KEY (collection_id)
+                    REFERENCES builder.collections (id) ON DELETE CASCADE,
+                CONSTRAINT linked_collection_publications_salt_key UNIQUE (salt),
+                CONSTRAINT linked_collection_publications_salt_check CHECK (salt ~ '^0x[0-9a-f]{{64}}$'),
+                CONSTRAINT linked_collection_publications_status_check
+                    CHECK (status IN ('prepared', 'signing', 'authorized', 'submitted')),
+                CONSTRAINT linked_collection_publications_cheque_state_check
+                    CHECK ((status IN ('prepared', 'signing')) = (cheque IS NULL)),
+                CONSTRAINT linked_collection_publications_preparation_check
+                    CHECK (jsonb_typeof(preparation) = 'object' AND preparation ? 'revision')
+            )",
+            if forum { "forum_url text," } else { "" }
+        ),
+    )
+    .await;
+}
+
+fn linked_release() -> String {
+    include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/releases/builder-linked-publications-retired.sql"
+    ))
+    .replace("\\set ON_ERROR_STOP on", "")
+}
+
+#[tokio::test]
+async fn the_linked_publications_release_keeps_each_submitted_cheque_and_repeats() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    legacy_linked_publications(&pool, false).await;
+    let submitted = collection(&pool, true).await;
+    let authorized = collection(&pool, true).await;
+    let prepared = collection(&pool, true).await;
+    let standard = collection(&pool, false).await;
+    let salt = |n: u8| format!("0x{}", format!("{n:02x}").repeat(32));
+    let signature = format!("0x{}00", "AB".repeat(64));
+    for (id, status, cheque) in [
+        (
+            submitted,
+            "submitted",
+            Some(json!({ "qty": 2, "salt": salt(1), "signature": signature })),
+        ),
+        (
+            authorized,
+            "authorized",
+            Some(json!({ "qty": 1, "salt": salt(2), "signature": signature })),
+        ),
+        (prepared, "prepared", None),
+    ] {
+        sqlx::query(
+            "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque, updated_at) \
+             VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, $3, $4, '2026-02-03 04:05:06.789')",
+        )
+        .bind(id)
+        .bind(cheque.as_ref().map_or_else(|| salt(3), |c| c["salt"].as_str().unwrap().to_string()))
+        .bind(status)
+        .bind(cheque)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("UPDATE builder.collections SET publication_pending = true WHERE id = ANY($1)")
+        .bind(vec![authorized, prepared, standard])
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/migrations/0063_builder_linked_publications_retired.sql"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let pending: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM builder.collections WHERE publication_pending ORDER BY id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert!(
-        !columns.iter().any(|c| c == "forum_url"),
-        "a linked publication keeps no forum link of its own: {columns:?}"
+    assert_eq!(pending, [standard]);
+    for _ in 0..2 {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(linked_release()))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let gone: bool =
+        sqlx::query_scalar("SELECT to_regclass('builder.linked_collection_publications') IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(gone);
+    let cheques: Vec<(Uuid, String, String, String, i32, chrono::NaiveDateTime)> = sqlx::query_as(
+        "SELECT collection_id, third_party_id, signature, salt, qty, created_at FROM builder.slot_usage_cheques",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        cheques,
+        [(
+            submitted,
+            PROVIDER.to_string(),
+            format!("0x{}1b", "ab".repeat(64)),
+            salt(1),
+            2,
+            chrono::NaiveDateTime::parse_from_str(
+                "2026-02-03 04:05:06.789",
+                "%Y-%m-%d %H:%M:%S%.f"
+            )
+            .unwrap()
+        )]
     );
+}
+
+#[tokio::test]
+async fn the_linked_publications_release_needs_its_step_and_the_forum_release() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    legacy_linked_publications(&pool, true).await;
+    let mut conn = pool.acquire().await.unwrap();
+    let error = sqlx::raw_sql(sqlx::AssertSqlSafe(linked_release()))
+        .execute(&mut *conn)
+        .await
+        .unwrap_err();
+    sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("builder-linked-forum-retired.sql"),
+        "{error}"
+    );
+    accepted(
+        &pool,
+        "DELETE FROM meta.schema_steps WHERE step = '0063_builder_linked_publications_retired'",
+    )
+    .await;
+    let error = sqlx::raw_sql(sqlx::AssertSqlSafe(linked_release()))
+        .execute(&mut *conn)
+        .await
+        .unwrap_err();
+    sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+    assert!(
+        error.to_string().contains("run catalyst schema migrate"),
+        "{error}"
+    );
+    let kept: bool = sqlx::query_scalar(
+        "SELECT to_regclass('builder.linked_collection_publications') IS NOT NULL",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert!(kept);
 }
 
 #[tokio::test]
@@ -512,11 +683,7 @@ async fn a_linked_forum_release_preserves_links_and_repeats_without_a_second_sou
     };
     let copied = collection(&pool, true).await;
     let kept = collection(&pool, true).await;
-    accepted(
-        &pool,
-        "ALTER TABLE builder.linked_collection_publications ADD COLUMN forum_url text",
-    )
-    .await;
+    legacy_linked_publications(&pool, true).await;
     for id in [copied, kept] {
         sqlx::query("INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, forum_url) VALUES ($1, '{\"revision\":\"revision\"}', '{}', '0x' || replace($1::text, '-', '') || replace($1::text, '-', ''), 'prepared', 'https://forum.example.org/t/linked/7')")
             .bind(id).execute(&pool).await.unwrap();
@@ -597,11 +764,7 @@ async fn linked_forum_retirement_requires_the_additive_migration() {
     let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
         return;
     };
-    accepted(
-        &pool,
-        "ALTER TABLE builder.linked_collection_publications ADD COLUMN forum_url text",
-    )
-    .await;
+    legacy_linked_publications(&pool, true).await;
     accepted(
         &pool,
         "DELETE FROM meta.schema_steps WHERE step = '0062_builder_collection_forum_claim'",
@@ -982,7 +1145,7 @@ async fn collection_curations_recorded_together_are_each_newer_than_the_last() {
         return;
     };
     let c = collection(&pool, true).await;
-    let grant = crate::access::granted::publisher(OWNER, c);
+    let grant = crate::access::granted::third_party_publish(OWNER, c, PROVIDER);
     accepted(
         &pool,
         &format!(
@@ -1051,7 +1214,7 @@ async fn concurrent_writers_of_one_collections_curations_queue_behind_its_lock()
         return;
     };
     let c = collection(&pool, true).await;
-    let grant = crate::access::granted::publisher(OWNER, c);
+    let grant = crate::access::granted::third_party_publish(OWNER, c, PROVIDER);
     writers_queue(
         &pool,
         "collection_curations",

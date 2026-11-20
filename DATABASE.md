@@ -908,9 +908,9 @@ What the two checks enforced, and where it holds now:
   published collection. It is gone on purpose: a draft may hold the contract
   address computed before its deployment.
 - `collections_pending_not_published_check` kept a published collection from
-  having a publication in flight. The code holds it: the standard and the
-  linked publication flows refuse a published collection when they prepare
-  and when they begin, after the collection row is locked
+  having a publication in flight. The code holds it: the standard
+  publication flow refuses a published collection when it prepares and
+  when it begins, after the collection row is locked
   (`chain_state::published`), and every draft write refuses it after the same
   lock.
 
@@ -1018,6 +1018,28 @@ columns are gone. Do not reset a database.
 Peer sync is not a backup of local state: a node taking local writes holds the only copy of that data. Before turning a write switch on, the operator backs up the database, the blob store (`STORAGE_ROOT_FOLDER`) and the credentials (`ENCRYPTION_KEY` among them) and tests a restore; the application does not enforce this. Development and commit builds sharing a database must agree on its schema; do not reset or silently migrate shared state to fit a working tree.
 
 
+### Retired builder linked publications
+
+A third-party collection is submitted through `POST
+/v1/collections/{id}/publish` alone, so `builder.linked_collection_publications`
+has no reader or writer. Fresh databases don't have it. Step
+`0063_builder_linked_publications_retired` clears `publication_pending` on
+every third-party collection, which only that flow set, so an attempt left
+in flight doesn't keep its collection's drafts at 423.
+
+With the new binary serving and a verified backup, run
+`schemas/releases/builder-linked-publications-retired.sql` after
+`builder-linked-forum-retired.sql`. It copies the cheque of each `submitted`
+row into `builder.slot_usage_cheques` (lowercased, `v` stored as 27 or 28,
+`created_at` the row's `updated_at`, a salt its provider already used
+skipped), clears `publication_pending` on third-party collections again and
+drops the table, in one transaction with a 10 s lock timeout. It refuses,
+changing nothing, a database without step 0063, one that still holds the
+linked forum column, and one with a submitted row whose cheque a cheque row
+can't keep. A second run notes the table is gone. Until it runs,
+`approvalData` answers 401 for a collection whose only cheque is in that
+table.
+
 ## Builder chain state workload
 
 The builder derives a collection's chain state on read and never stores it
@@ -1046,10 +1068,12 @@ The builder's own rows: a `builder.collections` row is a creator's draft.
   or else the Polygon RPC, holds the contract at that address, each item
   gets the on-chain id of its place in creation order, and the collection
   reads as published from then on.
-- A linked (third-party) collection carries its provider urn from the draft
-  on (`third_party_id` is the urn without its last segment) and is published
-  through `builder.linked_collection_publications`.
-- `publication_pending` freezes the draft and its items while either
+- A third-party collection carries its provider urn from the draft on
+  (`third_party_id` is the urn without its last segment). It is published
+  once an item of it has an item curation: `POST
+  /v1/collections/{id}/publish` submits the items a provider manager names,
+  with its slot cheque ("Builder curations workload").
+- `publication_pending` freezes the draft and its items while the standard
   publication row is in flight.
 
 The curation console's under-review listing reads the collections subgraph
@@ -1077,8 +1101,8 @@ Invariants:
   complete pass older than 30 minutes (`chain_state::STALE_AFTER`, twice the
   collections mirror's default period): listings and bodies are served from
   the copy. Every decision that grants access or allows a write answers 503,
-  and so do the standard and the linked publication preparations, which
-  refuse a published collection.
+  and so does the standard publication's preparation, which refuses a
+  published collection.
 - A decision also dates what it read. A row older than 30 minutes by its own
   `mirrored_at` (every pass rewrites every row it walks) answers 503 when its
   facts are asked for. An absence is dated by the start of the pass that saw
@@ -1096,16 +1120,15 @@ Invariants:
   one behind refuses data that much younger.
 - Published is any of: a `shop.collections` row for `('matic',
   lower(builder.collections.contract_address))`; a `published`
-  `builder.collection_publications` row; a `submitted`
-  `builder.linked_collection_publications` row; an item of the collection
+  `builder.collection_publications` row; an item of the collection
   with a `blockchain_item_id`; an item of the collection with an item
   curation (`builder.item_curations`). The node's own records close the window
   between a deployment and the copy's next pass. `publication_pending` stays
   a stored state of the node's flow, not a published flag.
-- Approved is the copy's `is_approved` for a standard collection. A linked
-  collection, which has no contract, is never approved.
+- Approved is the copy's `is_approved` for a standard collection. A
+  third-party collection, which has no contract, is never approved.
 - A published collection begins no publication and takes no draft write.
-  Both publication flows refuse it when they prepare and when they begin
+  The standard publication refuses it when it prepares and when it begins
   (`chain_state::published`, after the collection row is locked); every draft
   write refuses it after the same lock. A collection may hold its contract
   address before deployment.
@@ -1173,9 +1196,9 @@ Invariants:
 - A page selects its ids first (narrow sort, `LIMIT`, `OFFSET`) and builds
   bodies only for them (`c.id = ANY(ARRAY(...))`).
 - The public search resolves the published collections whose name matches
-  first, probing only the published ids (`items_minted_collection_idx`, the
-  submitted linked publications and the third-party collections with a
-  curated item, then `collections_pkey` with the name
+  first, probing only the published ids (`items_minted_collection_idx` and
+  the third-party collections with a curated item, then `collections_pkey`
+  with the name
   filter), and binds them; no statement reachable without a signature reads
   every collection.
 - An address listing resolves the address's collection ids first (its
@@ -1288,10 +1311,11 @@ Invariants:
 - A publication takes only uploaded files. The publication snapshot
   (`SNAPSHOT_QUERY` in `services/catalyst/builder/src/publication.rs`) marks
   an item `missing_content` when it names a hash with no upload record by the
-  wallet that wrote that name (`item_contents.named_by`), and both the standard and the linked publication refuse such
-  an item before they start (tests
+  wallet that wrote that name (`item_contents.named_by`), and both the
+  standard publication and the third-party publish refuse such an item
+  before they write (tests
   `a_standard_publication_takes_only_files_each_names_writer_uploaded` and
-  `a_linked_publication_takes_only_files_each_names_writer_uploaded`).
+  `every_refusal_answers_before_anything_is_written`).
 
 Upgrade: step `0057_builder_item_contents_order` adds `item_contents.position`
 and drops the key from `item_contents.hash` to `uploaded_contents`. A step
@@ -1616,8 +1640,8 @@ Tables and what they hold:
   COALESCE(payload->>'reason', ''))` over the four verdict types.
 - `builder.slot_usage_cheques`: one row per signed slot cheque of a
   third-party publication: `third_party_id`, `signature` (0x and 130 hex
-  digits), `salt` (0x and 64 hex digits, unique per provider), `qty`
-  (positive). Never updated.
+  digits, `v` 27 or 28), `salt` (0x and 64 hex digits, unique per
+  provider), `qty` (positive). Never updated.
 - `builder.collections.forum_link` (an `http(s)` URL without spaces, at
   most 2,048 characters) and `forum_id` (the forum post, only with a
   link). These columns are the one source of a collection's forum link.
@@ -1656,7 +1680,13 @@ Statements:
 | a collection's events page and its newest event | `collection_id = $1 ORDER BY created_at DESC, id DESC` | `collection_events_collection_created_idx` |
 | the validator sweep's started runs in a window | `type = 'review.automated_started' AND created_at` in range | `collection_events_automated_started_idx` |
 | a verdict recorded once | `INSERT ... ON CONFLICT DO NOTHING` | `collection_events_verdict_validation_idx` |
-| a collection's newest cheque | `collection_id = $1 ORDER BY created_at DESC LIMIT 1` | `slot_usage_cheques_collection_created_idx` |
+| a collection's newest cheque (`approvalData`) | `collection_id = $1 ORDER BY created_at DESC LIMIT 1` | `slot_usage_cheques_collection_created_idx` |
+| a third-party publish's free slots | the distinct items with a curation of the provider's collections | `collections_linked_contract_key` (leading `third_party_id`), `items_collection_created_idx`, `item_curations_item_created_key` |
+| a third-party publish's named items | `id = ANY($1) ... FOR UPDATE`, at most 20,000 ids | `items_pkey` |
+| a third-party publish's pending check | the collection's items joined to their curations, `status = 'pending'` | `items_collection_created_idx`, `item_curations_item_created_key` |
+| a cheque whose salt the provider used | `INSERT ... ON CONFLICT (third_party_id, salt) DO NOTHING` | `slot_usage_cheques_third_party_salt_key` |
+| a third-party publish's item curations | one `INSERT ... SELECT` over the named items, each stamped after its newest curation | `item_curations_item_created_key` |
+| `approvalData`'s content hashes | each curated item of the collection, its newest curation | `items_collection_created_idx`, `item_curations_item_created_key` |
 
 Measured at the reference size, events synthesized at five per review: the
 newest curation of each of the 12,665 items of the largest collection in
@@ -1685,6 +1715,18 @@ Invariants code upholds:
 - A writer of events stamps `created_at` after the collection's newest
   event, under the collection lock.
 - A cheque's `third_party_id` is its collection's provider.
+- A third-party publish (`collections/publish_third_party.rs`) runs in one
+  transaction: the collection row `FOR UPDATE`, then the provider's
+  advisory lock (`builder.virtual_third_parties:<id>`, the key every write
+  of the provider takes, always after a collection row), then the access
+  decision again, the free slots, the named items `FOR UPDATE`, the cheque,
+  the item curations (`curation::record_item_curations`) and one new
+  pending collection curation. Two publishes of one provider spend its free
+  slots one after the other. A cheque is stored lowercase with a 65-byte
+  signature (a 64-byte compact one is expanded, `v` 0 and 1 stored as 27
+  and 28); a salt the provider already used refuses the publish with 400
+  and nothing is written. No registry, forum or Slack call runs while it
+  holds the connection.
 - A curation write (`curation::writes`) locks the collection row, decides
   again who may write, reads the newest curation and asks the transition
   table, all in one transaction; a committee write adds its

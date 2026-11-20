@@ -16,8 +16,8 @@ item_content stops on a missing hash.
 
 Not migrated: projects, asset_packs, assets, deployments,
 pools, pool_groups, pool_likes (no target), the collections' managers,
-minters and reviewed_at columns (no target column). collection_publications and
-linked_collection_publications stay the node's.
+minters and reviewed_at columns (no target column). collection_publications
+stays the node's.
 
 No step has a watermark: published/curation state is derived from other
 tables, so every run re-scans. Deletions upstream are not detected.

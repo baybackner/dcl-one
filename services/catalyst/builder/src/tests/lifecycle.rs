@@ -113,7 +113,7 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
     )
     .unwrap();
     state.now = options.now;
-    state.foundation = dcl_http::Outbound::for_tests();
+    state.guarded = dcl_http::Outbound::for_tests();
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
@@ -770,12 +770,21 @@ async fn a_submitted_third_party_collection_is_never_deleted() {
     .execute(&node.pool)
     .await
     .unwrap();
+    let item = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
-         VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, 'submitted', '{}')",
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type) VALUES ($1, $2, $3, 'Hat', 'wearable')",
     )
+    .bind(item)
     .bind(id)
-    .bind(format!("0x{}{}", id.simple(), id.simple()))
+    .bind(address(OWNER_KEY))
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash) VALUES ($1, $2, 'pending', repeat('ab', 32))",
+    )
+    .bind(Uuid::new_v4())
+    .bind(item)
     .execute(&node.pool)
     .await
     .unwrap();

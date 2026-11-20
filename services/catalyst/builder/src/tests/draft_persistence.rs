@@ -457,12 +457,21 @@ async fn a_submitted_third_party_collection_keeps_its_urn_but_takes_other_edits(
     )
     .await
     .unwrap();
+    let item = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
-         VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, 'submitted', '{}')",
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type) VALUES ($1, $2, $3, 'Hat', 'wearable')",
     )
+    .bind(item)
     .bind(id)
-    .bind(format!("0x{}", "1".repeat(64)))
+    .bind(OWNER)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash) VALUES ($1, $2, 'pending', repeat('ab', 32))",
+    )
+    .bind(Uuid::new_v4())
+    .bind(item)
     .execute(store.pool())
     .await
     .unwrap();

@@ -22,10 +22,10 @@ const ROOT = path.resolve(__dirname, '..')
 const FIXTURES = path.join(ROOT, 'services/catalyst/tests/fixtures/conformance/builder')
 const GUARD = path.join(__dirname, 'builder-server-offline.cjs')
 const KEPT_RESPONSE_HEADERS = ['content-type', 'cache-control', 'location']
-const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'rarities', 'thirdParties'])
+const FAKED_GRAPH_FIELDS = new Set(['accounts', 'collections', 'items', 'rarities', 'thirdParties', 'receipts'])
 const RARITIES_WITH_ORACLE = '0xa9158e22f89bb3f69c5600338895cb5fb81e5090'
 const GET_RARITY_BY_NAME = 'b5262333'
-const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain', 'collection_curations', 'item_curations']
+const SEED_KEYS = ['wallets', 'third_parties', 'registry', 'collections', 'items', 'chain', 'collection_curations', 'item_curations', 'receipts']
 const FAKED_WHERE_KEYS = new Set(['id', 'id_in', 'id_gt', 'creator', 'managers_contains', 'minters_contains', 'managers_contains_nocase', 'collection', 'isCommitteeMember'])
 const VOLATILE = '<<VOLATILE>>'
 const MOVED_ITEM_FILE = 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy'
@@ -491,6 +491,36 @@ const FORUM_CASES = [
   { name: '449-curation-post-mention', description: 'POST /collections/{id}/curation/post signed by a committee member with a raw that mentions a group', method: 'POST', path: forumReply('401'), signer: 'committee', body: { forumPost: { raw: 'The collection has been assigned to @admins' } } },
   { name: '450-collection-post-third-party-draft', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection none of whose items was submitted', method: 'POST', path: forumPost('008'), signer: 'owner' },
   { name: '451-collection-post-third-party-again', description: 'POST /collections/{id}/post signed by the provider\'s manager of a third-party collection that has its forum post', method: 'POST', path: forumPost('402'), signer: 'provider' }
+]
+
+const REGISTERED = PROVIDER('registered')
+const publishOf = suffix => `/v1/collections/${id(suffix)}/publish`
+const approvalOf = suffix => `/v1/collections/${id(suffix)}/approvalData`
+const salt32 = byte => `0x${byte.repeat(32)}`
+const cheque = (signer, provider, qty, salt, sentQty) => ({ signer, provider, qty, salt, ...(sentQty === undefined ? {} : { sentQty }) })
+const PUBLISHED_TP = ['data.collection.created_at', 'data.collection.updated_at', 'data.collection.reviewed_at', 'data.itemCurations.id', 'data.itemCurations.created_at', 'data.itemCurations.updated_at']
+
+const THIRD_PARTY_PUBLISH_CASES = [
+  { name: '452-collection-publish-third-party-stranger', description: 'POST /collections/{id}/publish of a third-party collection signed by a wallet that manages no provider, with a cheque it signed', method: 'POST', path: publishOf('403'), signer: 'stranger', body: { itemIds: [id('4b1')] }, cheque: cheque('stranger', REGISTERED, 1, salt32('e2')) },
+  { name: '453-collection-publish-third-party-committee', description: 'POST /collections/{id}/publish of a third-party collection signed by a committee member that doesn\'t manage its provider', method: 'POST', path: publishOf('403'), signer: 'committee', body: { itemIds: [id('4b1')] }, cheque: cheque('committee', REGISTERED, 1, salt32('e3')) },
+  { name: '454-collection-publish-third-party-no-cheque', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager, naming items without a cheque', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b1')] } },
+  { name: '455-collection-publish-third-party-other-signer', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager with a cheque the provider\'s other manager signed', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b1'), id('4b2')] }, cheque: cheque('minter', REGISTERED, 2, salt32('e4')) },
+  { name: '456-collection-publish-third-party-quantity', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager naming two items with a cheque for one', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b1'), id('4b2')] }, cheque: cheque('manager', REGISTERED, 1, salt32('e5')) },
+  { name: '457-collection-publish-third-party-foreign-item', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager naming an item of another collection', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b1'), id('4a1')] }, cheque: cheque('manager', REGISTERED, 2, salt32('e6')) },
+  { name: '458-collection-publish-third-party-unknown-item', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager naming no item that exists', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4ff')] }, cheque: cheque('manager', REGISTERED, 1, salt32('e7')) },
+  { name: '459-collection-publish-third-party-no-slots', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager naming more items than the provider has slots', method: 'POST', path: publishOf('405'), signer: 'manager', body: { itemIds: [id('4d1'), id('4d2')] }, cheque: cheque('manager', PROVIDER('scarce'), 2, salt32('e8')) },
+  { name: '460-collection-publish-third-party', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager naming two items with the cheque it signed', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b1'), id('4b2')] }, cheque: cheque('manager', REGISTERED, 2, salt32('b0')), volatile: PUBLISHED_TP },
+  { name: '461-collection-publish-third-party-pending', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager while its items are under review', method: 'POST', path: publishOf('403'), signer: 'manager', body: { itemIds: [id('4b2')] }, cheque: cheque('manager', REGISTERED, 1, salt32('e9')) },
+  { name: '462-collection-publish-third-party-consumed', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager with the cheque the registry later consumed', method: 'POST', path: publishOf('404'), signer: 'manager', body: { itemIds: [id('4c1')] }, cheque: cheque('manager', REGISTERED, 1, salt32('c0')), volatile: PUBLISHED_TP },
+  { name: '463-collection-publish-third-party-reused-salt', description: 'POST /collections/{id}/publish of a third-party collection signed by its provider\'s manager with a cheque whose salt another publication of the provider used', method: 'POST', path: publishOf('406'), signer: 'manager', body: { itemIds: [id('4e1')] }, cheque: cheque('manager', REGISTERED, 1, salt32('b0')), volatile: PUBLISHED_TP },
+  { name: '464-collection-approval-data-committee', description: 'GET /collections/{id}/approvalData signed by a committee member, a third-party collection with items under review', method: 'GET', path: approvalOf('403'), signer: 'committee' },
+  { name: '465-collection-approval-data-consumed', description: 'GET /collections/{id}/approvalData signed by a committee member, a third-party collection whose cheque the registry consumed', method: 'GET', path: approvalOf('404'), signer: 'committee' },
+  { name: '466-collection-approval-data-manager', description: 'GET /collections/{id}/approvalData signed by the provider\'s manager, not on the committee', method: 'GET', path: approvalOf('403'), signer: 'manager' },
+  { name: '467-collection-approval-data-standard', description: 'GET /collections/{id}/approvalData signed by a committee member, a standard collection', method: 'GET', path: approvalOf('302'), signer: 'committee' },
+  { name: '468-collection-approval-data-unsubmitted', description: 'GET /collections/{id}/approvalData signed by a committee member, a third-party collection none of whose items was submitted', method: 'GET', path: approvalOf('008'), signer: 'committee' },
+  { name: '469-collection-approval-data-unknown', description: 'GET /collections/{id}/approvalData signed by a committee member, an id no collection has', method: 'GET', path: approvalOf('3ff'), signer: 'committee' },
+  { name: '470-collection-approval-data-unsigned', description: 'GET /collections/{id}/approvalData without a signature', method: 'GET', path: approvalOf('403') },
+  { name: '471-collection-third-party-published-manager', description: 'GET /collections/{id} signed by the provider\'s manager after its items were submitted', method: 'GET', path: `/v1/collections/${id('403')}`, signer: 'manager', volatile: ['data.created_at', 'data.updated_at', 'data.reviewed_at'] }
 ]
 
 const report = process.stderr.write.bind(process.stderr)
@@ -2397,7 +2427,8 @@ const CASES = [
   ...THIRD_PARTY_CASES,
   ...CURATION_CASES,
   ...CURATION_ROUTE_CASES,
-  ...FORUM_CASES
+  ...FORUM_CASES,
+  ...THIRD_PARTY_PUBLISH_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2584,7 +2615,7 @@ async function signedHeaders(req, wallet, item) {
 }
 
 /** The collections subgraph's rows for `seed.chain`, in the shape upstream's fragments select. */
-function chainRows(seed, signers) {
+function chainRows(seed, signers, req) {
   const addresses = roles => roles.map(role => signers[role].address)
   const accounts = addresses(seed.chain.committee).map(address => ({ id: address, address, isCommitteeMember: true }))
   const collections = seed.chain.collections.map(c => ({
@@ -2639,7 +2670,12 @@ function chainRows(seed, signers) {
   })
   for (const collection of collections) collection.items = items.filter(item => item.collection.id === collection.id)
   const registry = registryRows(seed.registry, role => signers[role].address)
-  return { accounts, collections, items, registry, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
+  const { ethers } = req('ethers')
+  const receipts = receiptRows((seed.receipts ?? []).map(r => {
+    const { domain, types, value } = chequeTypedData(r.provider, r.qty, r.salt)
+    return { id: ethers.utils._TypedDataEncoder.hash(domain, types, value).toLowerCase(), qty: r.qty, signer: signers[r.signer].address }
+  }))
+  return { accounts, collections, items, registry, receipts, rarities: rarityRows(seed.chain.rarities), oracle: seed.chain.rarities }
 }
 
 /**
@@ -2651,11 +2687,42 @@ function registryRows(registry, address) {
     id: provider.id,
     root: null,
     managers: provider.managers.map(address),
-    maxItems: '100',
+    maxItems: provider.max_items ?? '100',
     isApproved: provider.approved ?? true,
     isProgrammatic: !!provider.programmatic,
     metadata: { type: 'third_party_v2', thirdParty: { name: provider.name, description: '', contracts: [] } }
   }))
+}
+
+/** The third-party subgraph's `receipts` of the cheques the registry consumed, each `{id, qty, signer}`. */
+function receiptRows(receipts) {
+  return receipts.map(r => ({ id: r.id, qty: String(r.qty), signer: r.signer }))
+}
+
+/** The Polygon Third Party Registry's EIP-712 typed data a manager signs to consume `qty` slots of `provider` under `salt`. */
+function chequeTypedData(provider, qty, salt) {
+  return {
+    domain: {
+      name: 'Decentraland Third Party Registry',
+      version: '1',
+      verifyingContract: '0x1C436C1EFb4608dFfDC8bace99d2B03c314f3348',
+      salt: `0x${'00'.repeat(31)}89`
+    },
+    types: { ConsumeSlots: [{ name: 'thirdPartyId', type: 'string' }, { name: 'qty', type: 'uint256' }, { name: 'salt', type: 'bytes32' }] },
+    value: { thirdPartyId: provider, qty, salt }
+  }
+}
+
+/**
+ * `item.body` with the cheque `item.cheque` describes: `signer` signs `qty` slots of `provider` under
+ * `salt`; `sentQty` sends another quantity than was signed.
+ */
+async function withCheque(item, signers) {
+  if (!item.cheque) return item.body
+  const { signer, provider, qty, salt, sentQty } = item.cheque
+  const { domain, types, value } = chequeTypedData(provider, qty, salt)
+  const signature = await signers[signer].root._signTypedData(domain, types, value)
+  return { ...item.body, cheque: { qty: sentQty ?? qty, salt, signature } }
 }
 
 /** The collections subgraph's `rarities` for `seed.chain.rarities`, with the fields upstream selects. */
@@ -2995,7 +3062,7 @@ function startFakes(req, unfaked, chain, forum) {
       }
       const { query, variables = {} } = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       const operation = parse(query).definitions.find(d => d.kind === 'OperationDefinition')
-      const subgraph = request.url === '/graph/collections' ? chain : request.url === '/graph/third-parties' ? { thirdParties: chain.registry } : {}
+      const subgraph = request.url === '/graph/collections' ? chain : request.url === '/graph/third-parties' ? { thirdParties: chain.registry, receipts: chain.receipts } : {}
       const data = {}
       for (const field of operation.selectionSet.selections) {
         if (!FAKED_GRAPH_FIELDS.has(field.name.value)) unfaked.push(`graph ${field.name.value}`)
@@ -3198,7 +3265,7 @@ async function record(req, base, signers, volatileFields, item, bucket) {
   const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
   const headers = item.signer ? await signedHeaders(req, signers[item.signer], item) : { ...item.headers }
   if (item.body !== undefined) headers['content-type'] = 'application/json'
-  const sent = requestBody(item)
+  const sent = requestBody({ ...item, body: await withCheque(item, signers) })
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
     method: item.method,
     headers,
@@ -3243,7 +3310,7 @@ async function closeServer(server) {
 
 async function runUpstream(capture, url, seed, signers, unfaked) {
   const { upstream, req, load } = capture
-  const fakes = await startFakes(req, unfaked, chainRows(seed, signers), forumState(seed.collections))
+  const fakes = await startFakes(req, unfaked, chainRows(seed, signers, req), forumState(seed.collections))
   let listener, db, unrouteSlack
   try {
     const environment = upstreamEnvironment(`http://127.0.0.1:${fakes.address().port}`, url, signers.admin.address)
@@ -3333,4 +3400,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

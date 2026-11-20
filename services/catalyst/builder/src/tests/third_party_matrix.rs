@@ -18,6 +18,8 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use alloy::signers::SignerSync;
+
 use super::support::{FakeCommittee, FakeRegistry, registry_index, temp_storage, unique, wallet};
 use crate::shared::signed_fetch::test_support::signed_headers_by;
 use crate::storage::Storage;
@@ -210,8 +212,8 @@ async fn fixture(w: &World, provider: Provider) -> Fixture {
     let item = Uuid::new_v4();
     let item_urn = format!("{collection_urn}:hat");
     sqlx::query(
-        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix) \
-         VALUES ($1, $2, $3, 'Hat', 'wearable', $4)",
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix, local_content_hash) \
+         VALUES ($1, $2, $3, 'Hat', 'wearable', $4, repeat('ab', 32))",
     )
     .bind(item)
     .bind(collection)
@@ -301,7 +303,9 @@ async fn snapshot(pool: &PgPool) -> Value {
            'collections', (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.id), '[]') FROM builder.collections c), \
            'items', (SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.id), '[]') FROM builder.items i), \
            'contents', (SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY e.item_id, e.file), '[]') FROM builder.item_contents e), \
-           'virtual', (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v.id), '[]') FROM builder.virtual_third_parties v))",
+           'virtual', (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v.id), '[]') FROM builder.virtual_third_parties v), \
+           'cheques', (SELECT count(*) FROM builder.slot_usage_cheques), \
+           'curations', (SELECT count(*) FROM builder.item_curations) + (SELECT count(*) FROM builder.collection_curations))",
     )
     .fetch_one(pool)
     .await
@@ -324,13 +328,14 @@ enum Op {
     Slots,
     ThirdParty,
     ThirdParties,
-    LinkedPublication,
+    Publish,
+    ApprovalData,
     DraftCollections,
     ForumPost,
 }
 use Op::*;
 
-const OPS: [Op; 17] = [
+const OPS: [Op; 18] = [
     ReadCollection,
     CollectionItems,
     ReadItem,
@@ -345,7 +350,8 @@ const OPS: [Op; 17] = [
     Slots,
     ThirdParty,
     ThirdParties,
-    LinkedPublication,
+    Publish,
+    ApprovalData,
     DraftCollections,
     ForumPost,
 ];
@@ -354,7 +360,13 @@ impl Op {
     fn writes(self) -> bool {
         matches!(
             self,
-            SaveCollection | CreateCollection | DeleteItem | DeleteCollection | Terms | ForumPost
+            SaveCollection
+                | CreateCollection
+                | DeleteItem
+                | DeleteCollection
+                | Terms
+                | ForumPost
+                | Publish
         )
     }
 
@@ -415,9 +427,24 @@ impl Op {
             ),
             ThirdParty => ("GET", format!("/v1/thirdParties/{}", f.provider), None),
             ThirdParties => ("GET", "/v1/thirdParties".to_string(), None),
-            LinkedPublication => (
+            Publish => {
+                let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+                let digest = crate::cheques::digest(&f.provider, 1, salt.parse().unwrap());
+                let signature = wallet(caller.key().unwrap_or(STRANGER_KEY))
+                    .sign_hash_sync(&alloy_primitives::B256::from(digest))
+                    .unwrap();
+                (
+                    "POST",
+                    format!("/v1/collections/{}/publish", f.collection),
+                    Some(json!({ "itemIds": [f.item], "cheque": {
+                        "qty": 1, "salt": salt,
+                        "signature": format!("0x{}", hex::encode(signature.as_bytes())),
+                    } })),
+                )
+            }
+            ApprovalData => (
                 "GET",
-                format!("/v1/collections/{}/linked-publication", f.collection),
+                format!("/v1/collections/{}/approvalData", f.collection),
                 None,
             ),
         }
@@ -476,7 +503,12 @@ impl Op {
                     Expect::Lists(listed(p, caller))
                 }
             }
-            LinkedPublication => Expect::Status(401),
+            Publish => Expect::Status(match (signed, manages, p.registered()) {
+                (true, true, true) => 200,
+                (true, true, false) => 409,
+                _ => 401,
+            }),
+            ApprovalData => Expect::Status(401),
         }
     }
 }
@@ -584,6 +616,35 @@ async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
     w.registry
         .set(&f.provider, "managers", json!([Manager.address()]));
     assert_eq!(as_former(path).await, StatusCode::UNAUTHORIZED);
+    let (_, publish, body) = Publish.request(&f, Manager);
+    let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let digest = crate::cheques::digest(&f.provider, 1, salt.parse().unwrap());
+    let signature = wallet(FORMER_KEY)
+        .sign_hash_sync(&alloy_primitives::B256::from(digest))
+        .unwrap();
+    let mut body = body.unwrap();
+    body["cheque"] = json!({ "qty": 1, "salt": salt, "signature": format!("0x{}", hex::encode(signature.as_bytes())) });
+    let before = snapshot(&w.pool).await;
+    let now = Utc::now().timestamp_millis().to_string();
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(&publish)
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in signed_headers_by(&wallet(FORMER_KEY), "post", &publish, "{}", true, &now)
+        .await
+        .iter()
+    {
+        request = request.header(name, value);
+    }
+    let status = w
+        .app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(snapshot(&w.pool).await, before);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -605,7 +666,8 @@ async fn while_the_registry_cant_tell_every_third_party_decision_is_503_and_writ
                     true,
                     false,
                 );
-                let readable_anyway = matches!(op, ReadItem | ReadFile) && caller == Creator;
+                let readable_anyway =
+                    (matches!(op, ReadItem | ReadFile) && caller == Creator) || op == ApprovalData;
                 if status != StatusCode::SERVICE_UNAVAILABLE && !readable_anyway {
                     failures.push(format!("{op:?} {p:?} {caller:?}: {status} {answer}"));
                 }

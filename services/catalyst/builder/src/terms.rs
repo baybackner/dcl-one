@@ -153,7 +153,7 @@ async fn send(state: &State, event: &str, body: &Value) -> bool {
         None => "builder".to_string(),
     };
     let sent = state
-        .foundation
+        .guarded
         .post(&warehouse.url)
         .header("x-token", &warehouse.token)
         .json(&json!({ "context": context, "event": event, "body": body }))

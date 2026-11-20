@@ -62,7 +62,7 @@ async fn env_with(pool: PgPool, forum_on: bool) -> Env {
         },
     )
     .unwrap();
-    state.foundation = dcl_http::Outbound::for_tests();
+    state.guarded = dcl_http::Outbound::for_tests();
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))

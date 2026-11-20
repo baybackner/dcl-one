@@ -10,7 +10,8 @@
     "created_at",
     "updated_at",
     "last_activity_at",
-    "id"
+    "id",
+    "reviewed_at"
   ],
   "deliberate_gaps": {
     "timestamped-signatures-only": {
@@ -50,7 +51,8 @@
         "source/339-item-curated-unsigned.json",
         "source/356-curations-unsigned.json",
         "source/441-curation-post-unsigned.json",
-        "source/431-collection-post-unsigned.json"
+        "source/431-collection-post-unsigned.json",
+        "source/470-collection-approval-data-unsigned.json"
       ],
       "anchors": []
     },
@@ -352,6 +354,28 @@
     },
     "forum-reply-fields": {
       "text": "POST /v1/collections/:id/curation/post: the node refuses unknown outer fields and unknown forumPost fields; raw and an ignored topic_id are accepted. At github.com/decentraland/builder-server 98897af, src/Curation/Curation.router.ts createCurationNewAssigneePost extracts only forumPost.raw and ignores other fields. The node test a_reply_is_refused_in_builder_servers_order_before_the_forum_is_asked covers outer and nested category fields, including mutation proofs of both parser rules. This difference is source-verified and node-tested, not recorded in an upstream capture.",
+      "captures": [],
+      "anchors": []
+    },
+    "cheque-salt-reused": {
+      "text": "POST /v1/collections/:id/publish of a third-party collection: a cheque whose salt its provider already used in a stored cheque is refused with 400 {ok:false, data:{id}, error:'An error occurred trying to publish: the cheque was already used'} and nothing is written; upstream stores the second cheque and submits the items, though the registry consumes a salt once. The node also stores each cheque lowercased with a 65-byte signature whose v is 27 or 28 (a 64-byte compact signature expanded), so approvalData answers that spelling.",
+      "captures": [
+        "source/463-collection-publish-third-party-reused-salt.json"
+      ],
+      "anchors": []
+    },
+    "third-party-publish-input": {
+      "text": "POST /v1/collections/:id/publish of a third-party collection: itemIds must be a list of at most 20,000 item ids, else 400 'Invalid request body', where upstream answers HTTP 200 {ok:false} with its database's error; the node refuses a high-s cheque signature and answers a cheque whose salt or signature doesn't read with 'Error: invalid salt' or 'Error: invalid signature' after upstream's message instead of its library's text; it refuses an item naming a file its name's writer never uploaded with 400 '<name>: upload missing content before publishing', and an item with no content hash with 409; and it never reads itemIds or the cheque from the query string. No legitimate client sends these.",
+      "captures": [],
+      "anchors": []
+    },
+    "third-party-registry-unavailable": {
+      "text": "GET /v1/collections/:id/approvalData: when the third-party registry can't be read, or its receipts answer is unreadable, the node answers 503; upstream answers HTTP 200 {ok:false} with the error.",
+      "captures": [],
+      "anchors": []
+    },
+    "third-party-publish-forum-after-commit": {
+      "text": "POST /v1/collections/:id/publish of a third-party collection: when the forum call after the submission fails or takes longer than 45 seconds, the node answers the committed publish as a success and logs the failure, and the next publish or POST /v1/collections/:id/post makes the topic; upstream answers HTTP 200 {ok:false} with the forum's error although the submission is stored.",
       "captures": [],
       "anchors": []
     }
@@ -2082,6 +2106,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/346-collection-forum-stranger.json",
           "scope": "GET /collections/{id} signed by a wallet with no role, a collection on chain with a forum post.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/471-collection-third-party-published-manager.json",
+          "scope": "Signed by the provider's manager after its items were submitted through publish.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -2101,8 +2130,8 @@
     {
       "id": "api_http:POST:/v1/collections/:id/publish",
       "owner": "collections",
-      "status": "known_gap",
-      "result": "The owner's publish of a collection on chain holding an item without an on-chain id (assigned in creation order), the same publish again, and the refusals of a stranger and of a draft the chain doesn't hold were compared and match, but the repeated publish's items, a deliberate gap. A third-party collection's publish differs: an open gap.",
+      "status": "reviewed",
+      "result": "The owner's publish of a collection on chain holding an item without an on-chain id (assigned in creation order), the same publish again, and the refusals of a stranger and of a draft the chain doesn't hold were compared and match, but the repeated publish's items, a deliberate gap. A third-party collection's publish was compared for its provider's manager naming items with the cheque it signed, and for each refusal upstream makes: a signer who doesn't manage the provider (the committee included), no item ids, no cheque, another wallet's cheque, a quantity other than the items', an item of another collection, no item, too few slots, and items under review; each matches, with the cheque, the item curations, the new collection curation, the Slack notice and the forum topic it writes. A cheque whose salt the provider already used is refused, a deliberate gap.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/276-collection-publish-assigns-ids.json",
@@ -2144,25 +2173,99 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/280-collection-publish-linked.json",
           "scope": "POST /collections/{id}/publish signed by the provider manager of a third-party collection, without item ids.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/452-collection-publish-third-party-stranger.json",
+          "scope": "A third-party collection, signed by a wallet that manages no provider, with a cheque it signed.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/453-collection-publish-third-party-committee.json",
+          "scope": "A third-party collection, signed by a committee member that doesn't manage its provider.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/454-collection-publish-third-party-no-cheque.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming items without a cheque.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/455-collection-publish-third-party-other-signer.json",
+          "scope": "A third-party collection, signed by its provider's manager with a cheque the provider's other manager signed.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/456-collection-publish-third-party-quantity.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming two items with a cheque for one.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/457-collection-publish-third-party-foreign-item.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming an item of another collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/458-collection-publish-third-party-unknown-item.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming no item that exists.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/459-collection-publish-third-party-no-slots.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming more items than its provider has slots.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/460-collection-publish-third-party.json",
+          "scope": "A third-party collection, signed by its provider's manager, naming two items with the cheque it signed: the cheque, the item curations, the collection curation, the Slack notice and the forum topic.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/461-collection-publish-third-party-pending.json",
+          "scope": "A third-party collection with items under review, signed by its provider's manager.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/462-collection-publish-third-party-consumed.json",
+          "scope": "A third-party collection, signed by its provider's manager, with the cheque the registry later consumed.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/463-collection-publish-third-party-reused-salt.json",
+          "scope": "A third-party collection, signed by its provider's manager, with a cheque whose salt another publication of the provider used.",
           "replay": [
             "status: fixture=200 candidate=400",
+            "data.collection missing",
             "data.id extra",
-            "error value"
+            "data.itemCurations missing",
+            "data.items missing",
+            "error extra",
+            "ok value",
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"📦 New Third Party items ready for review: <https://creators.example.org/collections/editor?collection=c011ec71-0000-4000-8000-000000000406&reviewing=true|Reused wearables> by <https://creators.example.org/shop/items/creator/0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0|0x1257...48c0> (1 item).\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]",
+            "forum.length: baseline=1 candidate=0"
           ],
           "explained_by": {
-            "status: fixture=200 candidate=400": "open:third-party-publish",
-            "data.id extra": "open:third-party-publish",
-            "error value": "open:third-party-publish"
+            "status: fixture=200 candidate=400": "deliberate:cheque-salt-reused",
+            "data.collection missing": "deliberate:cheque-salt-reused",
+            "data.id extra": "deliberate:cheque-salt-reused",
+            "data.itemCurations missing": "deliberate:cheque-salt-reused",
+            "data.items missing": "deliberate:cheque-salt-reused",
+            "error extra": "deliberate:cheque-salt-reused",
+            "ok value": "deliberate:cheque-salt-reused",
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"📦 New Third Party items ready for review: <https://creators.example.org/collections/editor?collection=c011ec71-0000-4000-8000-000000000406&reviewing=true|Reused wearables> by <https://creators.example.org/shop/items/creator/0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0|0x1257...48c0> (1 item).\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]": "deliberate:cheque-salt-reused",
+            "forum.length: baseline=1 candidate=0": "deliberate:cheque-salt-reused"
           }
         }
       ],
       "gaps": [
-        "open:third-party-publish",
         "deliberate:publish-repeat-items-merged",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:cheque-salt-reused",
+        "deliberate:third-party-publish-input",
+        "deliberate:third-party-publish-forum-after-commit"
       ],
-      "remaining_verification": "Third-party publish with its slot cheque. The curation row, forum post and Slack notice upstream's first publication starts belong to the curation changes; this route makes none."
+      "remaining_verification": "A repeat publish of more items once the first are decided (a forum post update) is covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/owner/sync",
@@ -2313,11 +2416,56 @@
     {
       "id": "api_http:GET:/v1/collections/:id/approvalData",
       "owner": "collections",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The committee's read of a third-party collection under review and of one whose cheque the registry consumed, and the refusals of a wallet off the committee, a standard collection, a third-party collection with nothing submitted, an unknown id and an unsigned request were compared and match.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/464-collection-approval-data-committee.json",
+          "scope": "Signed by a committee member: a third-party collection with items under review, its cheque, root and content hashes.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/465-collection-approval-data-consumed.json",
+          "scope": "Signed by a committee member: a third-party collection whose cheque the registry consumed.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/466-collection-approval-data-manager.json",
+          "scope": "Signed by the provider's manager, not on the committee.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/467-collection-approval-data-standard.json",
+          "scope": "Signed by a committee member: a standard collection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/468-collection-approval-data-unsubmitted.json",
+          "scope": "Signed by a committee member: a third-party collection none of whose items was submitted.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/469-collection-approval-data-unknown.json",
+          "scope": "Signed by a committee member: an id no collection has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/470-collection-approval-data-unsigned.json",
+          "scope": "Unsigned.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:unauthenticated-message",
+        "deliberate:committee-unavailable",
+        "deliberate:third-party-registry-unavailable"
+      ],
+      "remaining_verification": "None for the cases captured; the content hashes of an item submitted twice are covered by the node's tests."
     },
     {
       "id": "api_http:PUT:/v1/collections/:id",
@@ -4183,16 +4331,6 @@
       "captures": [],
       "closes": "The node reads its content server's active entities by the item's URN for in_catalyst, a third-party item's approval, publication and catalyst_content_hash, and the third-party URN check.",
       "anchors": []
-    },
-    "third-party-publish": {
-      "text": "POST /v1/collections/:id/publish of a third-party collection: upstream publishes the items the body names against the provider's slots, and without itemIds answers 200 {ok:false, error:'Could not get itemIds from request'}; the node answers 400 and publishes a third-party collection through its linked publication.",
-      "captures": [
-        "source/280-collection-publish-linked.json"
-      ],
-      "closes": "The node publishes a third-party collection's items from POST /v1/collections/:id/publish with their slot cheque, as upstream does.",
-      "anchors": [
-        "status: fixture=200 candidate=400"
-      ]
     }
   }
 }

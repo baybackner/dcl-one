@@ -436,6 +436,52 @@ test('the fake third-party subgraph answers each seeded provider with its approv
   assert.deepEqual(unfaked, [])
 })
 
+test('the fake third-party subgraph answers a provider\'s seeded item allowance and the receipts of consumed cheques', () => {
+  const { registryRows, receiptRows, selected, FAKED_GRAPH_FIELDS } = require(script)
+  const rows = registryRows([
+    { id: 'urn:decentraland:matic:collections-thirdparty:scarce', name: 'Scarce', managers: ['manager'], max_items: '1' },
+    { id: 'urn:decentraland:matic:collections-thirdparty:plenty', name: 'Plenty', managers: ['manager'] }
+  ], role => `0x${role}`)
+  assert.deepEqual(rows.map(row => row.maxItems), ['1', '100'])
+  const consumed = `0x${'ab'.repeat(32)}`
+  const receipts = receiptRows([{ id: consumed, qty: 2, signer: '0xmanager' }])
+  assert.deepEqual(receipts, [{ id: consumed, qty: '2', signer: '0xmanager' }])
+  assert.ok(FAKED_GRAPH_FIELDS.has('receipts'))
+  const field = {
+    name: { value: 'receipts' },
+    arguments: [
+      { name: { value: 'first' }, value: { kind: 'IntValue', value: '1' } },
+      { name: { value: 'where' }, value: { kind: 'ObjectValue', fields: [{ name: { value: 'id' }, value: { kind: 'Variable', name: { value: 'hash' } } }] } }
+    ]
+  }
+  const unfaked = []
+  assert.deepEqual(selected(field, receipts, { hash: consumed }, unfaked), receipts)
+  assert.deepEqual(selected(field, receipts, { hash: `0x${'cd'.repeat(32)}` }, unfaked), [])
+  assert.deepEqual(unfaked, [])
+})
+
+test('a case\'s cheque is its signer\'s signature of the registry\'s typed data for its provider, quantity and salt', async () => {
+  const { chequeTypedData, withCheque } = require(script)
+  const salt = `0x${'0b'.repeat(32)}`
+  const typed = chequeTypedData('urn:decentraland:matic:collections-thirdparty:registered', 2, salt)
+  assert.deepEqual(typed.domain, {
+    name: 'Decentraland Third Party Registry',
+    version: '1',
+    verifyingContract: '0x1C436C1EFb4608dFfDC8bace99d2B03c314f3348',
+    salt: `0x${'00'.repeat(31)}89`
+  })
+  assert.deepEqual(typed.types, { ConsumeSlots: [{ name: 'thirdPartyId', type: 'string' }, { name: 'qty', type: 'uint256' }, { name: 'salt', type: 'bytes32' }] })
+  assert.deepEqual(typed.value, { thirdPartyId: 'urn:decentraland:matic:collections-thirdparty:registered', qty: 2, salt })
+  const signed = []
+  const wallet = { _signTypedData: async (domain, types, value) => { signed.push([domain, types, value]); return '0xsigned' } }
+  const item = { name: 'case', body: { itemIds: ['a'] }, cheque: { signer: 'manager', provider: 'urn:decentraland:matic:collections-thirdparty:registered', qty: 2, salt } }
+  assert.deepEqual(await withCheque(item, { manager: { root: wallet } }), { itemIds: ['a'], cheque: { qty: 2, salt, signature: '0xsigned' } })
+  assert.deepEqual(signed, [[typed.domain, typed.types, typed.value]])
+  const sent = { ...item, cheque: { ...item.cheque, sentQty: 3 } }
+  assert.deepEqual((await withCheque(sent, { manager: { root: wallet } })).cheque.qty, 3)
+  assert.deepEqual(await withCheque({ name: 'plain', body: { itemIds: [] } }, {}), { itemIds: [] })
+})
+
 test('a multipart case sends its parts as form data and records them', async () => {
   const { requestBody } = require(script)
   const parts = [{ name: 'bafkreiexample', filename: 'blob', type: 'application/octet-stream', text: 'conformance bytes' }]
@@ -599,7 +645,7 @@ test('a seeded item\'s local content hash reaches upstream\'s items table', asyn
   assert.match(queries[0][0], /local_content_hash/)
   assert.deepEqual(queries.map(([, values]) => values.at(-1)), [null, hash])
   const seeded = readSeed().items.filter(row => row.local_content_hash)
-  assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3'])
+  assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3', '4b1', '4b2', '4c1', '4d1', '4d2', '4e1'])
   assert.ok(seeded.every(row => /^[0-9a-f]{64}$/.test(row.local_content_hash)))
 })
 

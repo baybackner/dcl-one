@@ -91,7 +91,7 @@ pub(crate) fn list_statement(view: &chain_state::ReadView) -> String {
 
 /// The bodies of `ids`, in that order, read in one read-only transaction
 /// without JIT (a page's bodies are a few thousand rows at most).
-async fn bodies(
+pub(crate) async fn bodies(
     pool: &PgPool,
     ids: &[Uuid],
     reached: Reached,

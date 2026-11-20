@@ -490,11 +490,6 @@ const ROWS: &[Row] = &[
         "LEASE_AUTHORIZATIONS_URL",
         "https://decentraland.github.io/linker-server-authorizations/authorizations.json",
     ),
-    upstream(
-        "upstreams",
-        "BUILDER_FOUNDATION_URL",
-        "https://builder-api.decentraland.org",
-    ),
     // `/convert` fetches a client-named URL only on a mirror.
     mirrored("upstreams", "MEDIA_CONVERT_REMOTE_SOURCES"),
     // Only the scratch journey stack runs on the LiveKit dev pair, which

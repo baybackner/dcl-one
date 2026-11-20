@@ -427,20 +427,12 @@ async fn fixture(pool: &PgPool, kind: Kind) -> Fixture {
                 .await
                 .unwrap();
             }
-            if kind == ThirdPartySubmitted {
-                sqlx::query(
-                    "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
-                     VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, 'submitted', '{}')",
-                )
-                .bind(id)
-                .bind(format!("0x{}{}", id.simple(), id.simple()))
-                .execute(pool)
-                .await
-                .unwrap();
-            }
             let third_party = urn.as_deref().map(|urn| (urn, kind == ThirdPartySubmitted));
             let item = insert_item(pool, Some(id), false, third_party).await;
-            if let Some(status) = kind.curation() {
+            if let Some(status) = kind
+                .curation()
+                .or((kind == ThirdPartySubmitted).then_some("pending"))
+            {
                 sqlx::query(
                     "INSERT INTO builder.item_curations (id, item_id, status, content_hash) VALUES ($1, $2, $3, $4)",
                 )
@@ -500,7 +492,7 @@ async fn snapshot(pool: &PgPool) -> Value {
            'contents', (SELECT count(*) FROM builder.item_contents), \
            'uploads', (SELECT count(*) FROM builder.uploaded_contents), \
            'publications', (SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.collection_id), '[]') FROM builder.collection_publications p), \
-           'linked', (SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.collection_id), '[]') FROM builder.linked_collection_publications l), \
+           'cheques', (SELECT COALESCE(jsonb_agg(to_jsonb(q) ORDER BY q.id), '[]') FROM builder.slot_usage_cheques q), \
            'curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.collection_curations k), \
            'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k))",
     )
@@ -617,13 +609,6 @@ enum Op {
     PublicationCancel,
     PublicationClaim,
     PublicationStatus,
-    LinkedPrepare,
-    LinkedBegin,
-    LinkedClaim,
-    LinkedAuthorize,
-    LinkedCancel,
-    LinkedStatus,
-    LinkedVerify,
     CurationQueue,
     ItemStatus,
     ItemsStatus,
@@ -639,6 +624,7 @@ enum Op {
     OwnerSync,
     Terms,
     Publish,
+    ApprovalData,
     ThirdParties,
     ThirdPartyRead,
     ThirdPartySlots,
@@ -660,8 +646,6 @@ const NOT_PUBLISHED: &str = "The collection is not published.";
 
 const RARITIES_UNAVAILABLE: &str = "The rarities are not available. Try again later.";
 
-const NO_FOUNDATION: &str =
-    "Foundation review is off on this node: BUILDER_FOUNDATION_URL names no Foundation";
 const NOT_ADMIN: &str =
     "Not authorized: curation requires the admin token or a committee-address signed request";
 
@@ -725,7 +709,6 @@ fn router_routes() -> Vec<(String, String)> {
 impl Op {
     fn of(method: &str, path: &str) -> Option<Self> {
         const PUBLICATION: &str = "/v1/collections/{id}/publication";
-        const LINKED: &str = "/v1/collections/{id}/linked-publication";
         Some(match (method, path) {
             ("GET", "/v1/collections/{id}") => Op::ReadCollection,
             ("PUT", "/v1/collections/{id}") => Op::SaveCollection,
@@ -751,13 +734,6 @@ impl Op {
             ("DELETE", PUBLICATION) => Op::PublicationCancel,
             ("PATCH", PUBLICATION) => Op::PublicationClaim,
             ("GET", "/v1/collections/{id}/publication/status") => Op::PublicationStatus,
-            ("GET", LINKED) => Op::LinkedPrepare,
-            ("POST", LINKED) => Op::LinkedBegin,
-            ("PATCH", LINKED) => Op::LinkedClaim,
-            ("PUT", LINKED) => Op::LinkedAuthorize,
-            ("DELETE", LINKED) => Op::LinkedCancel,
-            ("GET", "/v1/collections/{id}/linked-publication/status") => Op::LinkedStatus,
-            ("POST", "/v1/collections/{id}/linked-publication/verify") => Op::LinkedVerify,
             ("GET", "/v1/collections/curation") => Op::CurationQueue,
             ("PATCH", "/v1/collections/{id}/items/{item}/status") => Op::ItemStatus,
             ("PATCH", "/v1/collections/{id}/items/status") => Op::ItemsStatus,
@@ -773,6 +749,7 @@ impl Op {
             ("POST", "/v1/collections/{id}/owner/sync") => Op::OwnerSync,
             ("POST", "/v1/collections/{id}/tos") => Op::Terms,
             ("POST", "/v1/collections/{id}/publish") => Op::Publish,
+            ("GET", "/v1/collections/{id}/approvalData") => Op::ApprovalData,
             ("GET", "/v1/thirdParties") => Op::ThirdParties,
             ("GET", "/v1/thirdParties/{id}") => Op::ThirdPartyRead,
             ("GET", "/v1/thirdParties/{id}/slots") => Op::ThirdPartySlots,
@@ -804,19 +781,6 @@ impl Op {
         )
     }
 
-    fn linked(self) -> bool {
-        matches!(
-            self,
-            Op::LinkedPrepare
-                | Op::LinkedBegin
-                | Op::LinkedClaim
-                | Op::LinkedAuthorize
-                | Op::LinkedCancel
-                | Op::LinkedStatus
-                | Op::LinkedVerify
-        )
-    }
-
     fn small_read(self) -> bool {
         matches!(
             self,
@@ -844,8 +808,6 @@ impl Op {
             &KINDS
         } else if self.publication() {
             &[Missing, Draft]
-        } else if self.linked() {
-            &[Missing, ThirdParty]
         } else {
             &[Missing]
         }
@@ -860,6 +822,7 @@ impl Op {
                 | Op::OwnerSync
                 | Op::Terms
                 | Op::Publish
+                | Op::ApprovalData
                 | Op::SaveCollection
                 | Op::CollectionItems
                 | Op::ReadItem
@@ -908,11 +871,6 @@ impl Op {
                 | Op::PublicationTransaction
                 | Op::PublicationCancel
                 | Op::PublicationClaim
-                | Op::LinkedBegin
-                | Op::LinkedClaim
-                | Op::LinkedAuthorize
-                | Op::LinkedCancel
-                | Op::LinkedVerify
                 | Op::ItemStatus
                 | Op::ItemsStatus
                 | Op::ThirdPartyDelete
@@ -995,6 +953,11 @@ impl Op {
             Op::DeleteCollection => (
                 "DELETE",
                 format!("/v1/collections/{}", f.collection_id(kind)),
+                Payload::None,
+            ),
+            Op::ApprovalData => (
+                "GET",
+                format!("/v1/collections/{}/approvalData", f.collection_id(kind)),
                 Payload::None,
             ),
             Op::ForumPost => (
@@ -1131,21 +1094,6 @@ impl Op {
                     Op::PublicationCancel => ("DELETE", "publication", Payload::None),
                     Op::PublicationClaim => ("PATCH", "publication", revision),
                     Op::PublicationStatus => ("GET", "publication/status", Payload::None),
-                    Op::LinkedPrepare => ("GET", "linked-publication", Payload::None),
-                    Op::LinkedBegin => ("POST", "linked-publication", revision),
-                    Op::LinkedClaim => ("PATCH", "linked-publication", revision),
-                    Op::LinkedAuthorize => (
-                        "PUT",
-                        "linked-publication",
-                        Payload::Json(json!({ "qty": 1, "salt": "0x01", "signature": "0x01" })),
-                    ),
-                    Op::LinkedCancel => ("DELETE", "linked-publication", Payload::None),
-                    Op::LinkedStatus => ("GET", "linked-publication/status", Payload::None),
-                    Op::LinkedVerify => (
-                        "POST",
-                        "linked-publication/verify",
-                        Payload::Json(json!({ "collection": {}, "items": {}, "curations": {} })),
-                    ),
                     Op::ItemStatus => (
                         "PATCH",
                         "items/{item}/status",
@@ -1198,10 +1146,9 @@ impl Op {
         {
             return unauthenticated();
         }
-        if self.publication() || self.linked() {
+        if self.publication() {
             let collection = f.collection_id(kind);
             return match kind {
-                _ if self == Op::LinkedVerify => refused(503, NO_FOUNDATION),
                 Missing => not_found(&collection, "collections"),
                 _ if caller == Owner && self == Op::PublicationTransaction => refused(
                     404,
@@ -1291,6 +1238,7 @@ impl Op {
             | Op::OwnerSync
             | Op::Terms
             | Op::Publish
+            | Op::ApprovalData
             | Op::ForumPost
                 if matches!(kind, Missing | Malformed) =>
             {
@@ -1306,6 +1254,12 @@ impl Op {
             }
             Op::ForumPost if kind.published() || kind.third_party() => ok(),
             Op::ForumPost => refused(409, "The collection is not published"),
+            Op::ApprovalData if !committee => unauthorized(),
+            Op::ApprovalData if kind.third_party() => refused(401, NOT_PUBLISHED),
+            Op::ApprovalData => refused(409, "Collection is not Third Party"),
+            Op::OwnerSync | Op::Publish if kind.third_party() && !owner => {
+                unauthorized_user(&caller.address(), "collections", &collection)
+            }
             Op::OwnerSync | Op::Publish if !owner && !manager && !committee => {
                 unauthorized_user(&caller.address(), "collections", &collection)
             }
@@ -1323,10 +1277,7 @@ impl Op {
                 refused(400, "Third party collections have no on-chain owner")
             }
             Op::OwnerSync => ok(),
-            Op::Publish if kind.third_party() => refused(
-                400,
-                "Third party collections are published through the linked publication",
-            ),
+            Op::Publish if kind.third_party() => ok(),
             Op::Publish if kind.on_chain() => refused(409, "The item is not published."),
             Op::Publish => refused(401, NOT_PUBLISHED),
             Op::CollectionItems => match kind {
@@ -1503,7 +1454,7 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
         },
     )
     .unwrap();
-    state.foundation = dcl_http::Outbound::for_tests();
+    state.guarded = dcl_http::Outbound::for_tests();
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
@@ -1768,7 +1719,7 @@ async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
 fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     match caller {
         Anonymous => unauthenticated(),
-        _ if op == Op::ForumReply => None,
+        _ if matches!(op, Op::ForumReply | Op::ApprovalData) => None,
         _ if op.by_id()
             && matches!(
                 kind.base(),
@@ -1784,7 +1735,7 @@ fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
 /// With the copy stale (`stale`) or without a complete pass, every by-id
 /// decision answers 503, but a stored owner's read of their own draft
 /// (standard, not on chain, or third-party) while the copy is only stale:
-/// no chain fact can change that answer.
+/// no chain fact can change that answer. `approvalData` reads no chain fact.
 async fn assert_cannot_tell(m: &Matrix, stale: bool) {
     let mut failures = Vec::new();
     for op in ops().into_iter().filter(|op| op.by_id()) {
@@ -1906,9 +1857,11 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                     }
                     Op::OwnerSync | Op::Publish => {
                         !matches!(kind, Missing | Malformed)
+                            && !kind.third_party()
                             && !kind.owner(caller)
                             && !kind.manager(caller)
                     }
+                    Op::ApprovalData => !matches!(kind, Missing | Malformed),
                     Op::ListCollections
                     | Op::ListItems
                     | Op::Committee

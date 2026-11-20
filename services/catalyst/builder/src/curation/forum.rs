@@ -296,6 +296,46 @@ impl Forum {
         Ok(positive(&body["topic_id"]))
     }
 
+    /// The text of the post `post`.
+    pub async fn raw_of(&self, client: &dcl_http::Outbound, post: i32) -> Result<String, Failure> {
+        let request = self.request(
+            client,
+            reqwest::Method::GET,
+            &format!("/posts/{post}.json"),
+            true,
+        );
+        let (status, body) = self.send(request, "read post").await?;
+        if !status.is_success() {
+            return Err(Failure::Refused(status));
+        }
+        body.as_ref()
+            .and_then(|b| b["raw"].as_str())
+            .map(str::to_string)
+            .ok_or(Failure::Invalid)
+    }
+
+    /// Replaces the text of the post `post` with `raw`.
+    pub async fn update(
+        &self,
+        client: &dcl_http::Outbound,
+        post: i32,
+        raw: &str,
+    ) -> Result<(), Failure> {
+        let request = self
+            .request(
+                client,
+                reqwest::Method::PUT,
+                &format!("/posts/{post}.json"),
+                true,
+            )
+            .json(&json!({ "raw": raw }));
+        let (status, body) = self.send(request, "update post").await?;
+        if !status.is_success() || errors(&body).is_some() {
+            return Err(Failure::Refused(status));
+        }
+        Ok(())
+    }
+
     /// Replies `raw` in the topic `topic`.
     pub async fn reply(
         &self,
@@ -525,6 +565,7 @@ pub mod fake {
         calls: Vec<Value>,
         topics: Vec<Topic>,
         posts: Vec<(i64, i64)>,
+        raws: std::collections::HashMap<i64, String>,
         made_topics: i64,
         made_posts: i64,
         refuse: usize,
@@ -576,7 +617,7 @@ pub mod fake {
         pub async fn start(&self) -> String {
             let app = Router::new()
                 .route("/posts.json", post(Self::create))
-                .route("/posts/{file}", get(Self::read_post))
+                .route("/posts/{file}", get(Self::read_post).put(Self::update_post))
                 .with_state(self.clone());
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -684,7 +725,7 @@ pub mod fake {
                 inner.made_posts += 1;
                 json!({ "id": next_post, "topic_id": topic, "topic_slug": slug, "post_number": number })
             } else {
-                let (Some(title), Some(_)) = (parsed["title"].as_str(), parsed["raw"].as_str())
+                let (Some(title), Some(raw)) = (parsed["title"].as_str(), parsed["raw"].as_str())
                 else {
                     return refused(StatusCode::UNPROCESSABLE_ENTITY, "Title can't be blank");
                 };
@@ -707,6 +748,7 @@ pub mod fake {
                     posts: vec![next_post],
                 });
                 inner.posts.push((next_post, topic));
+                inner.raws.insert(next_post, raw.to_string());
                 inner.made_topics += 1;
                 inner.made_posts += 1;
                 json!({ "id": next_post, "topic_id": topic, "topic_slug": slug, "post_number": 1 })
@@ -735,11 +777,50 @@ pub mod fake {
             let inner = fake.0.lock().unwrap();
             let id: Option<i64> = file.strip_suffix(".json").and_then(|id| id.parse().ok());
             match inner.posts.iter().find(|(post, _)| Some(*post) == id) {
-                Some((post, topic)) => {
-                    Json(json!({ "id": post, "topic_id": topic, "raw": "" })).into_response()
-                }
+                Some((post, topic)) => Json(json!({
+                    "id": post, "topic_id": topic,
+                    "raw": inner.raws.get(post).cloned().unwrap_or_default(),
+                }))
+                .into_response(),
                 None => not_found(),
             }
+        }
+
+        async fn update_post(
+            State(fake): State<Self>,
+            headers: HeaderMap,
+            Path(file): Path<String>,
+            body: String,
+        ) -> Response {
+            let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            if !fake.record("PUT", &format!("/posts/{file}"), &headers, parsed.clone()) {
+                return refused(
+                    StatusCode::FORBIDDEN,
+                    "You are not permitted to view the requested resource.",
+                );
+            }
+            let mut inner = fake.0.lock().unwrap();
+            let id: Option<i64> = file.strip_suffix(".json").and_then(|id| id.parse().ok());
+            let Some((post, topic)) = inner
+                .posts
+                .iter()
+                .find(|(post, _)| Some(*post) == id)
+                .copied()
+            else {
+                return not_found();
+            };
+            let Some(raw) = parsed["raw"].as_str() else {
+                return refused(StatusCode::UNPROCESSABLE_ENTITY, "Body can't be blank");
+            };
+            inner.raws.insert(post, raw.to_string());
+            let slug = inner
+                .topics
+                .iter()
+                .find(|t| t.id == topic)
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
+            Json(json!({ "post": { "id": post, "topic_id": topic, "topic_slug": slug } }))
+                .into_response()
         }
     }
 }

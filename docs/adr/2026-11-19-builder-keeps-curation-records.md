@@ -38,6 +38,23 @@ answer as it does upstream.
   and rejection reasons are checked against builder-server's values;
   addresses are lowercase; a forum link is an `http(s)` URL that the node
   stores and returns but never fetches.
+- **Third-party items reach curation through publish.** `POST
+  /v1/collections/{id}/publish` of a third-party collection, as
+  builder-server answers it, is the one way a third-party item is
+  submitted: a current manager of the provider names the items with a slot
+  cheque it signed, the EIP-712 `ConsumeSlots(thirdPartyId, qty, salt)`
+  under the Polygon Third Party Registry's domain. The node recovers the
+  signer, requires the signer, the provider, the quantity and the items to
+  match, and counts the provider's free slots (the registry's `maxItems`
+  less its items ever curated) under the provider's lock. In one
+  transaction it stores the cheque, a pending curation of each item and a
+  new pending curation of the collection; a refusal writes nothing. The
+  committee then reviews the items through the curation routes and
+  approves them with the registry transaction that consumes the cheque;
+  `GET /v1/collections/{id}/approvalData` gives the committee the newest
+  cheque, the items' content hashes, the registry's root and whether the
+  registry already holds the cheque's receipt. No other builder decides a
+  submission.
 - **Deletes.** An item's curations and a collection's curations and events
   go with them; a slot cheque, the record of slots consumed, keeps its
   collection.
@@ -117,6 +134,12 @@ answer as it does upstream.
   removes the extra column with writers stopped and a verified backup.
   An upgraded deployment verifies retained links against its configured
   forum origin before enabling writes.
+- A database bootstrapped before third-party publish keeps the linked
+  publication table until
+  `schemas/releases/builder-linked-publications-retired.sql` copies its
+  submitted cheques into `builder.slot_usage_cheques` and drops it.
+- A publish whose forum call or Slack notice fails stands; the topic is
+  made by the next publish or by `POST /v1/collections/{id}/post`.
 - A notice lost to a Slack outage isn't sent again; the timeline and the
   audit rows keep the decision.
 - The curation lists answer at most 20,000 rows, above the reference data's

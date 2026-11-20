@@ -139,8 +139,18 @@ pub struct CollectionSync {
     id: Uuid,
     signer: String,
     committee: bool,
-    third_party: bool,
+    provider: Option<String>,
     registry: Option<Registry>,
+}
+
+/// May submit the third-party collection's items for curation with a slot
+/// cheque: a manager of its provider, by the registry the decision read.
+#[derive(Debug)]
+pub struct ThirdPartyPublish {
+    id: Uuid,
+    signer: String,
+    provider: String,
+    registry: Registry,
 }
 
 /// May read the item; `full` also reads what only its owner's side sees.
@@ -249,7 +259,7 @@ mod sealed {
     impl Sealed for super::CollectionEdit {}
     impl Sealed for super::CollectionSync {}
     impl Sealed for super::CollectionManage {}
-    impl Sealed for super::Publisher {}
+    impl Sealed for super::ThirdPartyPublish {}
     impl Sealed for super::Curator {}
 }
 
@@ -265,7 +275,7 @@ impl CurationGrant for CollectionManage {
     }
 }
 
-impl CurationGrant for Publisher {
+impl CurationGrant for ThirdPartyPublish {
     fn curated(&self) -> Uuid {
         self.id
     }
@@ -366,7 +376,7 @@ impl CollectionSync {
         &self.signer
     }
     pub fn third_party(&self) -> bool {
-        self.third_party
+        self.provider.is_some()
     }
     /// The full read this grant opens: the body and every item.
     pub fn full_read(&self) -> CollectionRead {
@@ -455,6 +465,7 @@ fn parse(raw: &str) -> Result<Uuid, ApiError> {
 struct Collection {
     stored_owner: String,
     contract: Option<String>,
+    provider: Option<String>,
     third_party: bool,
     provider_managers: Vec<String>,
     programmatic: bool,
@@ -603,7 +614,8 @@ async fn collection(
         .and_then(|id| registry.and_then(|r| third_parties::provider(r, id)))
         .map_or(virtual_programmatic.unwrap_or(false), |p| p.is_programmatic);
     let provider_managers = provider
-        .map(|id| provider_managers(registry, &id, virtual_managers.as_deref()))
+        .as_deref()
+        .map(|id| provider_managers(registry, id, virtual_managers.as_deref()))
         .unwrap_or_default();
     let published = chain_state::published(conn, view, id).await?;
     let facts = match &contract {
@@ -615,6 +627,7 @@ async fn collection(
     Ok(Some(Collection {
         stored_owner,
         contract,
+        provider,
         third_party,
         provider_managers,
         programmatic,
@@ -775,6 +788,40 @@ pub async fn manage_provider(
         id: id.to_string(),
         registry,
     })
+}
+
+/// May read the data the committee's registry transaction needs to approve
+/// the collection.
+#[derive(Debug)]
+pub struct ApprovalRead {
+    id: Uuid,
+}
+
+impl ApprovalRead {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+}
+
+/// `GET /v1/collections/:id/approvalData`: the collection must exist (400,
+/// 404), then the signer must be a current committee member (401; 503
+/// while the committee can't be read).
+pub async fn read_approval(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<ApprovalRead, ApiError> {
+    let id = parse(raw)?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = $1)")
+            .bind(id)
+            .fetch_one(state.items.pool())
+            .await?;
+    if !exists {
+        return Err(not_found(id, COLLECTIONS));
+    }
+    committee(state, signer).await?;
+    Ok(ApprovalRead { id })
 }
 
 /// The signer must be a current committee member.
@@ -1614,8 +1661,8 @@ pub async fn reply_on_forum(
 }
 
 /// `POST /v1/collections/:id/publish` and `/owner/sync`: the collection's
-/// owner, its on-chain manager, its provider's manager or a current
-/// committee member.
+/// owner, its on-chain manager or a current committee member; a
+/// third-party collection's provider manager alone.
 pub async fn sync_collection(
     state: &SharedState,
     signer: &Signer,
@@ -1630,16 +1677,80 @@ pub async fn sync_collection(
     drop(conn);
     let s = signer.as_str();
     let committee = !c.role(s);
-    if committee && !on_committee(state, s).await? {
+    if committee && (c.third_party || !on_committee(state, s).await?) {
         return Err(unauthorized_user(s, COLLECTIONS, id));
     }
     Ok(CollectionSync {
         id,
         signer: s.to_string(),
         committee,
-        third_party: c.third_party,
+        provider: c.provider,
         registry,
     })
+}
+
+/// The third-party side of [`sync_collection`]'s grant: the publish of a
+/// third-party collection; a standard collection's grant comes back.
+pub fn publish_third_party(sync: CollectionSync) -> Result<ThirdPartyPublish, CollectionSync> {
+    match (sync.provider, sync.registry) {
+        (Some(provider), Some(registry)) if !sync.committee => Ok(ThirdPartyPublish {
+            id: sync.id,
+            signer: sync.signer,
+            provider,
+            registry,
+        }),
+        (provider, registry) => Err(CollectionSync {
+            provider,
+            registry,
+            ..sync
+        }),
+    }
+}
+
+impl ThirdPartyPublish {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    pub fn signer(&self) -> &str {
+        &self.signer
+    }
+
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub fn registry(&self) -> &[Provider] {
+        &self.registry
+    }
+
+    /// The full read of the collection it publishes.
+    pub fn full_read(&self) -> CollectionRead {
+        CollectionRead {
+            id: self.id,
+            full: true,
+            programmatic: third_parties::provider(&self.registry, &self.provider)
+                .is_some_and(|p| p.is_programmatic),
+        }
+    }
+}
+
+/// [`publish_third_party`]'s decision again, inside the publish's
+/// transaction: the collection still of the provider, the signer still its
+/// manager.
+pub(crate) async fn confirm_third_party_publish(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    grant: &ThirdPartyPublish,
+) -> Result<(), ApiError> {
+    let c = collection(conn, view, grant.id, Some(&grant.registry)).await?;
+    if c.is_none_or(|c| {
+        c.provider.as_deref() != Some(grant.provider.as_str()) || !c.provider_manager(&grant.signer)
+    }) {
+        return Err(ApiError::unauthorized("Unauthorized to upsert collection")
+            .with_data(json!({ "id": grant.id, "eth_address": grant.signer })));
+    }
+    Ok(())
 }
 
 /// [`sync_collection`]'s decision again, inside the write's transaction: a
@@ -1823,32 +1934,24 @@ pub(crate) async fn confirm_curator(
     })
 }
 
-/// The node's own publication routes: the collection's stored owner and,
-/// for a third-party collection, a manager of its provider as well.
+/// The node's own standard publication routes: the stored owner of a
+/// standard collection.
 pub async fn publisher(
     state: &SharedState,
     signer: &Signer,
     id: Uuid,
 ) -> Result<Publisher, ApiError> {
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
-    let row: Option<(String, Option<String>, Option<Vec<String>>)> = sqlx::query_as(
-        "SELECT c.eth_address, c.third_party_id, v.managers FROM builder.collections c \
-         LEFT JOIN builder.virtual_third_parties v ON v.id = c.third_party_id WHERE c.id = $1",
+    let row: Option<(String, bool)> = sqlx::query_as(
+        "SELECT eth_address, third_party_id IS NOT NULL FROM builder.collections WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(state.items.pool())
     .await?;
     let s = signer.as_str();
-    let Some((owner, provider, listed)) = row else {
+    let Some((owner, third_party)) = row else {
         return Err(not_found(id, COLLECTIONS));
     };
-    let manages = provider.is_none_or(|provider| {
-        has_manager(
-            &provider_managers(providers(&registry), &provider, listed.as_deref()),
-            s,
-        )
-    });
-    if owner != s || !manages {
+    if third_party || owner != s {
         return Err(unauthorized_user(s, COLLECTIONS, id));
     }
     Ok(Publisher {
@@ -2101,6 +2204,15 @@ pub(crate) mod granted {
             signer: signer.to_string(),
             at: Utc::now(),
             registry: no_registry(),
+        }
+    }
+
+    pub fn third_party_publish(signer: &str, id: Uuid, provider: &str) -> ThirdPartyPublish {
+        ThirdPartyPublish {
+            id,
+            signer: signer.to_string(),
+            provider: provider.to_string(),
+            registry: Registry::default(),
         }
     }
 

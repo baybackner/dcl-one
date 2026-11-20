@@ -110,10 +110,8 @@ pub fn retried_title(title: &str, contract: &str) -> String {
     format!("{title} {}", shorten(contract))
 }
 
-/// The body of a collection's post. A thumbnail links into the item files
-/// under `files` (`BUILDER_SERVER_URL`).
-pub fn body(collection: &PostCollection, links: &Links, files: &str) -> String {
-    let items: Vec<String> = collection
+fn items_text(collection: &PostCollection, links: &Links, files: &str) -> String {
+    collection
         .items
         .iter()
         .take(MAX_ITEMS)
@@ -137,12 +135,33 @@ pub fn body(collection: &PostCollection, links: &Links, files: &str) -> String {
                 links.item_editor(collection.id, item.id)
             )
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The body of a collection's post. A thumbnail links into the item files
+/// under `files` (`BUILDER_SERVER_URL`).
+pub fn body(collection: &PostCollection, links: &Links, files: &str) -> String {
     format!(
         "# {}\n\n  [View entire collection]({})\n\n  ## Wearables\n\n  {}",
         sanitize(&collection.name),
         links.editor(collection.id),
-        items.join("\n\n")
+        items_text(collection, links, files)
+    )
+}
+
+/// A third-party collection's post `old` with the items of `collection`
+/// published on `date` (`M/D/YYYY`) appended.
+pub fn update(
+    old: &str,
+    collection: &PostCollection,
+    links: &Links,
+    files: &str,
+    date: &str,
+) -> String {
+    format!(
+        "\n  {old}\n  \n\n\n## New wearables updated at {date}\n  {}\n  ",
+        items_text(collection, links, files)
     )
 }
 

@@ -22,11 +22,6 @@ const WRITES: &[(&str, &str)] = &[
     ("PUT", "/v1/collections/{id}/publication"),
     ("PATCH", "/v1/collections/{id}/publication"),
     ("DELETE", "/v1/collections/{id}/publication"),
-    ("POST", "/v1/collections/{id}/linked-publication"),
-    ("PUT", "/v1/collections/{id}/linked-publication"),
-    ("PATCH", "/v1/collections/{id}/linked-publication"),
-    ("DELETE", "/v1/collections/{id}/linked-publication"),
-    ("POST", "/v1/collections/{id}/linked-publication/verify"),
     ("PATCH", "/v1/collections/{id}/items/{id}/status"),
     ("PATCH", "/v1/collections/{id}/items/status"),
 ];

@@ -1,7 +1,7 @@
 -- Catalyst v2: the creator plane (the old catalyrst-create bundle): `builder`,
 -- the pre-publish draft store behind builder-api.decentraland.org (creator
--- drafts, uploads, curation state, collection publication and linked
--- publication state, newsletter opt-ins; no scenes), and
+-- drafts, uploads, curation state, collection publication state,
+-- newsletter opt-ins; no scenes), and
 -- `camera_reel`, the player photo gallery behind camera-reel-service.
 --
 -- Two schemas in one file, not one `create` schema: `create` is a reserved
@@ -247,28 +247,6 @@ CREATE TABLE builder.collection_publications (
     CONSTRAINT collection_publications_contract_state_check
         CHECK ((status = 'published') = (contract_address IS NOT NULL)),
     CONSTRAINT collection_publications_preparation_check
-        CHECK (jsonb_typeof(preparation) = 'object' AND preparation ? 'revision')
-);
-
-CREATE TABLE builder.linked_collection_publications (
-    collection_id uuid NOT NULL,
-    preparation jsonb NOT NULL,
-    snapshot jsonb NOT NULL,
-    salt text NOT NULL,
-    status text NOT NULL,
-    cheque jsonb,
-    created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
-    updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
-    CONSTRAINT linked_collection_publications_pkey PRIMARY KEY (collection_id),
-    CONSTRAINT linked_collection_publications_collection_id_fkey FOREIGN KEY (collection_id)
-        REFERENCES builder.collections (id) ON DELETE CASCADE,
-    CONSTRAINT linked_collection_publications_salt_key UNIQUE (salt),
-    CONSTRAINT linked_collection_publications_salt_check CHECK (salt ~ '^0x[0-9a-f]{64}$'),
-    CONSTRAINT linked_collection_publications_status_check
-        CHECK (status IN ('prepared', 'signing', 'authorized', 'submitted')),
-    CONSTRAINT linked_collection_publications_cheque_state_check
-        CHECK ((status IN ('prepared', 'signing')) = (cheque IS NULL)),
-    CONSTRAINT linked_collection_publications_preparation_check
         CHECK (jsonb_typeof(preparation) = 'object' AND preparation ? 'revision')
 );
 

@@ -281,14 +281,13 @@ async fn standard_receipt(conn: &mut PgConnection, c: &Collection) {
     .unwrap();
 }
 
-async fn linked_receipt(conn: &mut PgConnection, c: &Collection, status: &str) {
+async fn submitted(conn: &mut PgConnection, c: &Collection) {
     sqlx::query(
-        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
-         VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, $3, CASE WHEN $3 IN ('prepared', 'signing') THEN NULL ELSE '{}'::jsonb END)",
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash) \
+         SELECT $1, i.id, 'pending', repeat('ab', 32) FROM builder.items i WHERE i.collection_id = $2 LIMIT 1",
     )
+    .bind(Uuid::new_v4())
     .bind(c.id)
-    .bind(format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()))
-    .bind(status)
     .execute(conn)
     .await
     .unwrap();
@@ -406,23 +405,16 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
 
     let linked = builder_collection(&mut tx, true, None).await;
     item(&mut tx, linked.id, false).await;
-    linked_receipt(&mut tx, &linked, "authorized").await;
     assert_eq!(
         derived(&mut tx, linked.id).await,
         (false, false),
-        "an authorized linked publication is not submitted yet"
+        "a third-party collection with no item submitted is a draft"
     );
-    sqlx::query(
-        "UPDATE builder.linked_collection_publications SET status = 'submitted' WHERE collection_id = $1",
-    )
-    .bind(linked.id)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
+    submitted(&mut tx, &linked).await;
     assert_eq!(
         derived(&mut tx, linked.id).await,
         (true, false),
-        "a submitted linked publication is published; a linked collection is never approved, as upstream's"
+        "a third-party collection with an item submitted is published; it is never approved, as upstream's"
     );
     item(&mut tx, linked.id, false).await;
     assert_eq!(
@@ -526,7 +518,6 @@ async fn no_route_reads_or_writes_derived_state_while_the_copy_cannot_tell() {
     let decision_reads = [
         format!("/v1/collections/{collection}"),
         format!("/v1/collections/{collection}/publication"),
-        format!("/v1/collections/{collection}/linked-publication"),
     ];
     let owner = format!("{:#x}", wallet(OWNER_KEY).address());
     let new_collection =

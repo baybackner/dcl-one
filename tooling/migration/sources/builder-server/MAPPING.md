@@ -129,7 +129,7 @@ object_key, hash, size)` with `source = 'builder-server'` and
 - `collections.managers`, `minters`, `reviewed_at`: no target column.
 - Terms of service: upstream forwards each acceptance to its warehouse and
   stores none, so there is nothing to import into `builder.terms_acceptances`.
-- Left to the node: `collection_publications`, `linked_collection_publications`,
+- Left to the node: `collection_publications`,
   `items.in_catalyst`, `items.catalyst_content_hash`,
   `newsletter_subscriptions` (upstream forwards opt-ins and stores none).
 

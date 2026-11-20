@@ -53,8 +53,7 @@ const SIGNED: &[(&str, &str, &str)] = &[
         r#"{"revision":"r"}"#,
     ),
     ("GET", "/v1/collections/{id}/publication/status", ""),
-    ("GET", "/v1/collections/{id}/linked-publication", ""),
-    ("GET", "/v1/collections/{id}/linked-publication/status", ""),
+    ("GET", "/v1/collections/{id}/approvalData", ""),
 ];
 
 fn app(state: crate::SharedState) -> Router {
@@ -202,7 +201,6 @@ async fn an_unsigned_request_is_refused_before_its_id_or_body_is_read() {
     let app = app(state_with_settings(crate::Settings {
         writes_enabled: true,
         admin_token: Some("example-admin-token".into()),
-        foundation_url: None,
         ..crate::Settings::default()
     })
     .await);
@@ -218,14 +216,7 @@ async fn an_unsigned_request_is_refused_before_its_id_or_body_is_read() {
         ("POST", "/v1/collections/{id}/publication", "{}"),
         ("PUT", "/v1/collections/{id}/publication", "{}"),
         ("PATCH", "/v1/collections/{id}/publication", "{}"),
-        ("POST", "/v1/collections/{id}/linked-publication", "{}"),
-        ("PUT", "/v1/collections/{id}/linked-publication", "{}"),
-        ("PATCH", "/v1/collections/{id}/linked-publication", "{}"),
-        (
-            "POST",
-            "/v1/collections/{id}/linked-publication/verify",
-            "{}",
-        ),
+        ("POST", "/v1/collections/{id}/publish", "{not json"),
         ("PATCH", "/v1/collections/{id}/items/{id}/status", "{}"),
         ("PATCH", "/v1/collections/{id}/items/status", "{}"),
         ("GET", "/v1/collections/{id}/items?page=two", ""),

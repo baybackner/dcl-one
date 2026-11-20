@@ -54,6 +54,9 @@ pub struct Links {
 pub enum Notice {
     /// A standard collection's first publication, with its item count.
     Published { items: usize },
+    /// A third-party collection's items submitted for curation, with their
+    /// count.
+    ThirdPartyPublished { items: usize },
     /// A creator asked for a review again.
     ReviewRequested { after_rejection: bool },
     /// The assignee changed; `None` is unassigned.
@@ -151,6 +154,11 @@ impl Links {
         match notice {
             Notice::Published { items } => format!(
                 "🎨 New collection ready for review: {link} by {} ({items} {}).",
+                self.person(actor, false),
+                if *items == 1 { "item" } else { "items" }
+            ),
+            Notice::ThirdPartyPublished { items } => format!(
+                "📦 New Third Party items ready for review: {link} by {} ({items} {}).",
                 self.person(actor, false),
                 if *items == 1 { "item" } else { "items" }
             ),

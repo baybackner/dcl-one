@@ -544,6 +544,8 @@ pub async fn committee_index(fake: &FakeCommittee) -> Arc<crate::chain_index::Ch
 #[derive(Clone, Default)]
 pub struct FakeRegistry {
     providers: Arc<std::sync::Mutex<Option<BTreeMap<String, serde_json::Value>>>>,
+    receipts: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    receipts_down: Arc<std::sync::atomic::AtomicBool>,
     hits: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -603,6 +605,18 @@ impl FakeRegistry {
         self.hits.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Holds the receipt `id`: the registry consumed that cheque.
+    pub fn consume(&self, id: &str) {
+        self.receipts.lock().unwrap().insert(id.to_string());
+    }
+
+    /// Answers a query of receipts with a GraphQL error (`true`) while the
+    /// providers still answer.
+    pub fn fail_receipts(&self, down: bool) {
+        self.receipts_down
+            .store(down, std::sync::atomic::Ordering::SeqCst);
+    }
+
     async fn answer(
         axum::extract::State(fake): axum::extract::State<Self>,
         axum::Json(body): axum::Json<serde_json::Value>,
@@ -611,6 +625,26 @@ impl FakeRegistry {
         let Some(providers) = fake.providers.lock().unwrap().clone() else {
             return axum::Json(serde_json::json!({ "errors": [{ "message": "indexing error" }] }));
         };
+        if body["query"]
+            .as_str()
+            .is_some_and(|q| q.contains("receipts"))
+        {
+            if fake.receipts_down.load(std::sync::atomic::Ordering::SeqCst) {
+                return axum::Json(
+                    serde_json::json!({ "errors": [{ "message": "indexing error" }] }),
+                );
+            }
+            let id = body["variables"]["id"].as_str().unwrap_or_default();
+            let held: Vec<serde_json::Value> = fake
+                .receipts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| *r == id)
+                .map(|r| serde_json::json!({ "id": r }))
+                .collect();
+            return axum::Json(serde_json::json!({ "data": { "receipts": held } }));
+        }
         let from = body["variables"]["idFrom"]
             .as_str()
             .unwrap_or("")

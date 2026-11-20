@@ -3,9 +3,9 @@
 //! item and collection drafts, uploaded content, the committee's item
 //! curation, standard collection publication (Polygon factory parameters
 //! prepared here, signed and submitted by the client, the receipt verified
-//! here) and linked (third-party) publication (frozen snapshot, stable
-//! nonce, the owner-signed provider-slot cheque, the Foundation review)
-//! and the newsletter opt-in. It keeps no scenes: no projects, manifests,
+//! here), third-party publication (the items a provider manager submits for
+//! curation with its signed slot cheque, [`cheques`]) and the newsletter
+//! opt-in. It keeps no scenes: no projects, manifests,
 //! asset packs or scene files. Schema `builder` (`schemas/50_create.sql`).
 //!
 //! What it reuses: the ONE pool; the ONE `http::Outbound` client for the
@@ -19,10 +19,10 @@
 //! read by shared SQL, for a collection's published and approved state
 //! ([`chain_state`]: 503 while the copy can't tell) and the chain facts a
 //! collection's body and listings merge ([`collections`]). The one
-//! client it does not share is the Foundation review's
-//! (`linked_publication_review::foundation_client`: guarded as the shared
-//! one, but no redirects; the reason is in that module), which the
-//! terms-of-service forward to the warehouse ([`terms`]) takes too. Every write goes behind
+//! client it does not share is [`guarded_client`]: guarded as the shared
+//! one, but it follows no redirect, so a credential it carries never
+//! reaches another host; the terms-of-service forward to the warehouse
+//! ([`terms`]), the Slack notices and the forum take it. Every write goes behind
 //! `CREATE_WRITES_ENABLED` ([`writes`], default false, 503 with
 //! `Retry-After`, built the way `social::writes` gates the social writes).
 //!
@@ -34,7 +34,7 @@
 //! The curation routes need the admin bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`,
 //! constant-time, fails closed) or a `BUILDER_ADMIN_ADDRESSES` signer; chain
 //! writes are prepared here and signed and submitted by the client, the
-//! receipt verified over the Polygon RPC; the linked cheque is verified only;
+//! receipt verified over the Polygon RPC; a slot cheque is verified only;
 //! v2 never holds a signing key.
 //!
 //! Deviations from the old crate, all deliberate: the signed-fetch window is
@@ -68,6 +68,7 @@ pub(crate) use catalyst_storage as storage;
 pub mod access;
 pub mod auth;
 pub mod chain_state;
+pub mod cheques;
 pub mod collections;
 pub mod committee;
 pub mod curation;
@@ -76,9 +77,6 @@ pub mod handlers;
 pub mod http;
 pub mod items;
 pub mod kept;
-pub mod linked_publication;
-pub mod linked_publication_review;
-pub mod linked_publication_store;
 pub mod onchain;
 pub mod publication;
 pub mod publication_chain;
@@ -102,7 +100,7 @@ use sqlx::PgPool;
 use crate::chain_index::ChainIndex;
 use crate::storage::Storage;
 use dcl_auth::eip1654::Eip1654Validator;
-use dcl_http::Outbound;
+use dcl_http::{HttpClientCfg, Outbound};
 
 use items::{ItemsComponent, NewsletterComponent};
 
@@ -156,9 +154,6 @@ pub struct RawSettings {
     pub newsletter_service_url: Option<String>,
     pub newsletter_publication_id: Option<String>,
     pub newsletter_api_key: Option<String>,
-    /// `BUILDER_FOUNDATION_URL`: the Foundation builder API a linked
-    /// publication is verified against; unset answers 503 there.
-    pub foundation_url: Option<String>,
     pub warehouse_url: Option<String>,
     pub warehouse_token: Option<String>,
     pub warehouse_context_prefix: Option<String>,
@@ -191,7 +186,6 @@ pub struct Settings {
     pub admin_addresses: Vec<String>,
     pub admin_token: Option<String>,
     pub newsletter: Option<NewsletterForward>,
-    pub foundation_url: Option<String>,
     pub warehouse: Option<WarehouseForward>,
     /// The curators' Slack channel; none sends no notice.
     pub slack: Option<curation::slack::Slack>,
@@ -251,13 +245,6 @@ impl Settings {
             }
             _ => None,
         };
-        let foundation_url =
-            non_empty(&raw.foundation_url).map(|u| u.trim_end_matches('/').to_string());
-        if let Some(url) = &foundation_url
-            && !dcl_http::is_safe_http_url(url)
-        {
-            bail!("BUILDER_FOUNDATION_URL must be a public http(s) URL");
-        }
         let warehouse = match (
             non_empty(&raw.warehouse_url),
             non_empty(&raw.warehouse_token),
@@ -317,7 +304,6 @@ impl Settings {
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
             admin_token: non_empty(&raw.admin_token),
             newsletter,
-            foundation_url,
             warehouse,
         })
     }
@@ -331,9 +317,9 @@ pub struct State {
     pub market: Option<Arc<ChainIndex>>,
     pub settings: Settings,
     pub http: Outbound,
-    /// The guarded, no-redirect client: the Foundation review reads and the
-    /// warehouse forward, whose requests carry a credential.
-    pub foundation: Outbound,
+    /// [`guarded_client`]: the warehouse forward, the Slack notices and the
+    /// forum, whose requests carry a credential.
+    pub guarded: Outbound,
     pub eip1654: Option<Arc<dyn Eip1654Validator>>,
     /// The content state's denylist (the same `Arc`): a hash the camera reel
     /// withheld (rejected or deleted photo) is a 404 on the storage routes
@@ -353,6 +339,13 @@ pub struct State {
 
 pub type SharedState = Arc<State>;
 
+/// The guarded client that follows no redirect, 20 s a request, built once
+/// per process: the shared one follows redirects with the request's headers.
+pub fn guarded_client() -> Outbound {
+    Outbound::new(HttpClientCfg::default().with_total_timeout(std::time::Duration::from_secs(20)))
+        .expect("the guarded client builds")
+}
+
 impl State {
     pub fn new(
         pool: PgPool,
@@ -370,7 +363,7 @@ impl State {
             market,
             settings,
             http,
-            foundation: linked_publication_review::foundation_client(),
+            guarded: guarded_client(),
             eip1654,
             denylist,
             rarities: rarities::Rarities::default(),
@@ -415,22 +408,6 @@ fn api_routes() -> Router<SharedState> {
             get(handlers::publication::status),
         )
         .route(
-            "/v1/collections/{id}/linked-publication",
-            get(handlers::linked_publication::prepare)
-                .post(handlers::linked_publication::begin)
-                .patch(handlers::linked_publication::claim)
-                .put(handlers::linked_publication::authorize)
-                .delete(handlers::linked_publication::cancel),
-        )
-        .route(
-            "/v1/collections/{id}/linked-publication/status",
-            get(handlers::linked_publication::status),
-        )
-        .route(
-            "/v1/collections/{id}/linked-publication/verify",
-            post(handlers::linked_publication::verify),
-        )
-        .route(
             "/v1/drafts/collections",
             get(handlers::drafts::get_collection_drafts),
         )
@@ -461,6 +438,10 @@ fn api_routes() -> Router<SharedState> {
         .route(
             "/v1/collections/{id}/publish",
             post(handlers::lifecycle::publish),
+        )
+        .route(
+            "/v1/collections/{id}/approvalData",
+            get(handlers::lifecycle::approval_data),
         )
         .route(
             "/v1/collections/curation",

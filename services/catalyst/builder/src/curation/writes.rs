@@ -483,7 +483,7 @@ pub async fn update_collection(
     let notices = &state.notices;
     if let Some(assignee) = reassigned {
         notices.send(
-            &state.foundation,
+            &state.guarded,
             id,
             &curated.name,
             curator.signer(),
@@ -494,7 +494,7 @@ pub async fn update_collection(
     }
     if let Some((status, Decision::New)) = decision {
         notices.send(
-            &state.foundation,
+            &state.guarded,
             id,
             &curated.name,
             curator.signer(),
@@ -590,13 +590,9 @@ pub async fn open_collection(
     }
     tx.commit().await?;
     if let Some(notice) = notice {
-        state.notices.send(
-            &state.foundation,
-            id,
-            &curated.name,
-            curator.signer(),
-            notice,
-        );
+        state
+            .notices
+            .send(&state.guarded, id, &curated.name, curator.signer(), notice);
     }
     Ok(CollectionCurationOpened {
         id: opened,

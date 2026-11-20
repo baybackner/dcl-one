@@ -49,6 +49,20 @@
           "description": "",
           "contracts": [],
           "published": true
+        },
+        {
+          "id": "urn:decentraland:matic:collections-thirdparty:scarce",
+          "root": null,
+          "managers": [
+            "0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0"
+          ],
+          "maxItems": "1",
+          "isApproved": true,
+          "isProgrammatic": false,
+          "name": "Scarce provider",
+          "description": "",
+          "contracts": [],
+          "published": true
         }
       ]
     }

@@ -143,6 +143,29 @@ pub async fn registry(index: &ChainIndex) -> Result<Vec<Provider>, String> {
     Err(format!("registry longer than {MAX_PAGES} pages"))
 }
 
+const RECEIPT: &str = "query receipt($id: ID!) { receipts(first: 1, where: { id: $id }) { id } }";
+
+/// Whether the registry holds the receipt `id`, the digest of a slot cheque
+/// it consumed (lowercase `0x` hex); `Err` when the node has no registry
+/// subgraph, the subgraph fails, or its answer names another receipt.
+pub async fn receipt_exists(index: &ChainIndex, id: &str) -> Result<bool, String> {
+    let url = index
+        .settings
+        .third_party_registry_subgraph_url
+        .as_deref()
+        .ok_or("no third-party registry subgraph is configured")?;
+    let data = graph_query(index, url, RECEIPT, json!({ "id": id })).await?;
+    match data
+        .get("receipts")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    {
+        Some([]) => Ok(false),
+        Some([receipt]) if receipt.get("id").and_then(Value::as_str) == Some(id) => Ok(true),
+        _ => Err("registry answered an unreadable receipt".into()),
+    }
+}
+
 fn first_report(id: &str) -> bool {
     static REPORTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
     REPORTED
@@ -287,6 +310,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct Fake {
         records: Arc<Mutex<Option<Vec<Value>>>>,
+        receipts: Arc<Mutex<Option<Vec<Value>>>>,
         bodies: Arc<Mutex<Vec<Value>>>,
         hits: Arc<AtomicUsize>,
     }
@@ -297,6 +321,16 @@ mod tests {
     ) -> axum::Json<Value> {
         fake.hits.fetch_add(1, Ordering::SeqCst);
         fake.bodies.lock().unwrap().push(body.clone());
+        if body["query"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("receipts")
+        {
+            return axum::Json(match fake.receipts.lock().unwrap().clone() {
+                Some(receipts) => json!({ "data": { "receipts": receipts } }),
+                None => json!({ "errors": [{ "message": "indexing error" }] }),
+            });
+        }
         let Some(mut records) = fake.records.lock().unwrap().clone() else {
             return axum::Json(json!({ "errors": [{ "message": "indexing error" }] }));
         };
@@ -348,6 +382,40 @@ mod tests {
 
     fn set(fake: &Fake, records: Option<Vec<Value>>) {
         *fake.records.lock().unwrap() = records;
+    }
+
+    #[tokio::test]
+    async fn a_receipt_is_found_by_its_id_and_an_unreadable_answer_fails() {
+        let consumed = format!("0x{}", "1f".repeat(32));
+        let other = format!("0x{}", "2e".repeat(32));
+        let fake = Fake::default();
+        let index = index(&fake).await;
+        *fake.receipts.lock().unwrap() = Some(vec![json!({ "id": consumed })]);
+        assert_eq!(receipt_exists(&index, &consumed).await, Ok(true));
+        let body = fake.bodies.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(body["variables"], json!({ "id": consumed }));
+        assert!(
+            body["query"]
+                .as_str()
+                .unwrap()
+                .contains("receipts(first: 1, where: { id: $id })")
+        );
+        *fake.receipts.lock().unwrap() = Some(vec![]);
+        assert_eq!(receipt_exists(&index, &other).await, Ok(false));
+        for answer in [
+            None,
+            Some(vec![json!({ "id": other })]),
+            Some(vec![json!({ "qty": "1" })]),
+            Some(vec![json!({ "id": consumed }), json!({ "id": consumed })]),
+        ] {
+            *fake.receipts.lock().unwrap() = answer.clone();
+            assert!(
+                receipt_exists(&index, &consumed).await.is_err(),
+                "{answer:?}"
+            );
+        }
+        let unconfigured = ChainIndex::new(Outbound::for_tests(), IndexSettings::for_tests());
+        assert!(receipt_exists(&unconfigured, &consumed).await.is_err());
     }
 
     #[tokio::test]

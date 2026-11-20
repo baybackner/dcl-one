@@ -318,7 +318,7 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
     if first_publication && published.collection.get("is_approved") != Some(&Value::Bool(true)) {
         let name = published.collection["name"].as_str().unwrap_or_default();
         state.notices.send(
-            &state.foundation,
+            &state.guarded,
             id,
             name,
             sync.signer(),

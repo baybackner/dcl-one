@@ -123,6 +123,18 @@ struct Seed {
     chain: SeedChain,
     collection_curations: Vec<SeedCollectionCuration>,
     item_curations: Vec<SeedItemCuration>,
+    #[serde(default)]
+    receipts: Vec<SeedReceipt>,
+}
+
+/// A slot cheque the registry consumed: its receipt is the cheque's digest.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedReceipt {
+    provider: String,
+    qty: i32,
+    salt: String,
+    signer: String,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +169,7 @@ struct SeedThirdParty {
     #[serde(default)]
     programmatic: bool,
     approved: Option<bool>,
+    max_items: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1880,7 +1893,7 @@ async fn chain_subgraphs(seed: &Seed) -> (String, String) {
                 "id": p.id,
                 "root": null,
                 "managers": roles(seed, &p.managers),
-                "maxItems": "100",
+                "maxItems": p.max_items.as_deref().unwrap_or("100"),
                 "isApproved": p.approved.unwrap_or(true),
                 "isProgrammatic": p.programmatic,
                 "metadata": { "type": "third_party_v2", "thirdParty": {
@@ -1897,6 +1910,21 @@ async fn chain_subgraphs(seed: &Seed) -> (String, String) {
         .map(|r| serde_json::json!({ "id": r.name, "name": r.name, "price": r.price, "maxSupply": r.max_supply }))
         .collect();
     let listed = serde_json::json!({ "data": { "rarities": rarities } });
+    let receipts: Vec<Value> = seed
+        .receipts
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": format!("0x{}", hex::encode(catalyst_builder::cheques::digest(
+                    &r.provider,
+                    r.qty,
+                    r.salt.parse().expect("seed.json receipt salt"),
+                ))),
+                "qty": r.qty.to_string(),
+                "signer": seed.wallets[&r.signer],
+            })
+        })
+        .collect();
     let app = Router::new()
         .route(
             "/graph/collections",
@@ -1906,7 +1934,17 @@ async fn chain_subgraphs(seed: &Seed) -> (String, String) {
             "/graph/third-parties",
             axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
                 let providers = providers.clone();
+                let receipts = receipts.clone();
                 async move {
+                    if body["query"]
+                        .as_str()
+                        .is_some_and(|q| q.contains("receipts"))
+                    {
+                        let id = body["variables"]["id"].as_str().unwrap_or_default();
+                        let held: Vec<Value> =
+                            receipts.into_iter().filter(|r| r["id"] == id).collect();
+                        return axum::Json(serde_json::json!({ "data": { "receipts": held } }));
+                    }
                     let from = body["variables"]["idFrom"]
                         .as_str()
                         .unwrap_or_default()
@@ -2369,7 +2407,7 @@ async fn replay_setup() -> Option<Replay> {
     )
     .unwrap();
     state.now = capture_clock;
-    state.foundation = Outbound::for_tests();
+    state.guarded = Outbound::for_tests();
     let state = Arc::new(state);
     Some(Replay {
         scratch,

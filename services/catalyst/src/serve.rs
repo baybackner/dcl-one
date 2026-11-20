@@ -793,7 +793,6 @@ pub async fn serve(
                 newsletter_service_url: config.create.newsletter_service_url.clone(),
                 newsletter_publication_id: config.create.newsletter_publication_id.clone(),
                 newsletter_api_key: config.create.newsletter_service_api_key.clone(),
-                foundation_url: Some(config.create.builder_foundation_url.clone()),
                 warehouse_url: config.create.warehouse_url.clone(),
                 warehouse_token: config.create.warehouse_token.clone(),
                 warehouse_context_prefix: config.create.warehouse_context_prefix.clone(),

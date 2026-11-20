@@ -5,7 +5,6 @@ pub mod curation;
 pub mod drafts;
 pub mod forum;
 pub mod lifecycle;
-pub mod linked_publication;
 pub mod newsletter;
 pub mod publication;
 pub mod small_reads;

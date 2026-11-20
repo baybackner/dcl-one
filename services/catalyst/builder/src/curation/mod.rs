@@ -112,6 +112,45 @@ pub async fn record_item_curation(
     Ok(id)
 }
 
+/// Submits each of `items` (its id, content hash and whether its mapping is
+/// complete), all of the collection `grant` names, for curation as its
+/// newest with `status`, in one statement inside the caller's transaction,
+/// with the collection locked until it ends; the curations written.
+pub async fn record_item_curations(
+    conn: &mut PgConnection,
+    grant: &impl CurationGrant,
+    items: &[(Uuid, String, bool)],
+    status: &str,
+) -> Result<Vec<rows::ItemCurationOut>, ApiError> {
+    sqlx::query(LOCK_COLLECTION)
+        .bind(grant.curated())
+        .execute(&mut *conn)
+        .await?;
+    let ids: Vec<Uuid> = items.iter().map(|_| Uuid::new_v4()).collect();
+    let (item_ids, rest): (Vec<Uuid>, Vec<(String, bool)>) = items
+        .iter()
+        .map(|(id, hash, mapped)| (*id, (hash.clone(), *mapped)))
+        .unzip();
+    let (hashes, mapped): (Vec<String>, Vec<bool>) = rest.into_iter().unzip();
+    Ok(sqlx::query_as(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash, is_mapping_complete, created_at, updated_at) \
+         SELECT t.id, t.item, $2, t.hash, t.mapped, s.at, s.at \
+         FROM unnest($3::uuid[], $4::uuid[], $5::text[], $6::bool[]) AS t(id, item, hash, mapped) \
+         JOIN builder.items i ON i.id = t.item AND i.collection_id = $1 \
+         CROSS JOIN LATERAL (SELECT GREATEST(timezone('UTC', clock_timestamp()), \
+           (SELECT max(k.created_at) + interval '1 microsecond' FROM builder.item_curations k WHERE k.item_id = t.item)) AS at) s \
+         RETURNING id, item_id, status, created_at, updated_at, content_hash, is_mapping_complete",
+    )
+    .bind(grant.curated())
+    .bind(status)
+    .bind(&ids)
+    .bind(&item_ids)
+    .bind(&hashes)
+    .bind(&mapped)
+    .fetch_all(conn)
+    .await?)
+}
+
 /// Records a new curation of the collection `grant` names as its newest,
 /// inside the caller's transaction, with the collection locked until it
 /// ends; the curation's id.

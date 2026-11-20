@@ -19,9 +19,6 @@ import type { ItemCurationOut } from "@catalyst-api/builder/ItemCurationOut";
 import type { ItemsOut } from "@catalyst-api/builder/ItemsOut";
 import type { ItemsPageOut } from "@catalyst-api/builder/ItemsPageOut";
 import type { ItemStatusPatchOut } from "@catalyst-api/builder/ItemStatusPatchOut";
-import type { LinkedPublicationCheque } from "@catalyst-api/builder/LinkedPublicationCheque";
-import type { LinkedPublicationPreparation } from "@catalyst-api/builder/LinkedPublicationPreparation";
-import type { LinkedPublicationState } from "@catalyst-api/builder/LinkedPublicationState";
 import type { NewsletterSubscribeOut } from "@catalyst-api/builder/NewsletterSubscribeOut";
 import type { PublicationItem } from "@catalyst-api/builder/PublicationItem";
 import type { PublicationPreparation } from "@catalyst-api/builder/PublicationPreparation";
@@ -242,30 +239,6 @@ export const ItemsPageOutSchema = z.object({
 
 export const ItemsOutSchema = z.union([z.array(FullItemOutSchema), ItemsPageOutSchema]);
 
-export const LinkedPublicationChequeSchema = z.object({
-  qty: z.number(),
-  salt: z.string(),
-  signature: z.string(),
-});
-
-export const LinkedPublicationPreparationSchema = z.object({
-  id: z.string(),
-  revision: z.string(),
-  name: z.string(),
-  creator: z.string(),
-  urn: z.string(),
-  third_party_id: z.string(),
-  item_ids: z.array(z.string()),
-});
-
-export const LinkedPublicationStateSchema = z.object({
-  preparation: LinkedPublicationPreparationSchema,
-  salt: z.string(),
-  status: z.string(),
-  cheque: LinkedPublicationChequeSchema.nullable(),
-  forum_url: z.string().nullable(),
-});
-
 export const NewsletterSubscribeOutSchema = z.object({
   ok: z.boolean(),
 });
@@ -322,9 +295,6 @@ export type _AssertItemCurationOut = Assert<Mutual<ItemCurationOut, z.infer<type
 export type _AssertItemsOut = Assert<Mutual<ItemsOut, z.infer<typeof ItemsOutSchema>>>;
 export type _AssertItemsPageOut = Assert<Mutual<ItemsPageOut, z.infer<typeof ItemsPageOutSchema>>>;
 export type _AssertItemStatusPatchOut = Assert<Mutual<ItemStatusPatchOut, z.infer<typeof ItemStatusPatchOutSchema>>>;
-export type _AssertLinkedPublicationCheque = Assert<Mutual<LinkedPublicationCheque, z.infer<typeof LinkedPublicationChequeSchema>>>;
-export type _AssertLinkedPublicationPreparation = Assert<Mutual<LinkedPublicationPreparation, z.infer<typeof LinkedPublicationPreparationSchema>>>;
-export type _AssertLinkedPublicationState = Assert<Mutual<LinkedPublicationState, z.infer<typeof LinkedPublicationStateSchema>>>;
 export type _AssertNewsletterSubscribeOut = Assert<Mutual<NewsletterSubscribeOut, z.infer<typeof NewsletterSubscribeOutSchema>>>;
 export type _AssertPublicationItem = Assert<Mutual<PublicationItem, z.infer<typeof PublicationItemSchema>>>;
 export type _AssertPublicationPreparation = Assert<Mutual<PublicationPreparation, z.infer<typeof PublicationPreparationSchema>>>;

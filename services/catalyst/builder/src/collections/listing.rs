@@ -88,7 +88,6 @@ const STATUS: &str = "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
     WHEN chain.reviewed_at <> chain.created_at THEN 'disabled' \
     ELSE 'under_review' END)";
 const PUBLISHED_IDS: &str = "(SELECT m.collection_id AS id FROM builder.items m WHERE m.blockchain_item_id IS NOT NULL \
-    UNION SELECT l.collection_id FROM builder.linked_collection_publications l WHERE l.status = 'submitted' \
     UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id IS NOT NULL AND EXISTS (SELECT 1 \
     FROM builder.items ci JOIN builder.item_curations k ON k.item_id = ci.id WHERE ci.collection_id = t.id)) pub \
     CROSS JOIN LATERAL (SELECT * FROM builder.collections c0 WHERE c0.id = pub.id";
@@ -98,12 +97,10 @@ const ADDRESS_IDS: &str = "SELECT o.id FROM builder.collections o WHERE o.eth_ad
     WHERE s.network = 'matic' AND (s.creator = $1 OR EXISTS (SELECT 1 FROM unnest(s.managers || s.minters) r \
     WHERE lower(r) = $1))";
 const PUBLISHED: &str = "(EXISTS (SELECT 1 FROM builder.items m WHERE m.collection_id = c.id \
-    AND m.blockchain_item_id IS NOT NULL) OR EXISTS (SELECT 1 FROM builder.linked_collection_publications l \
-    WHERE l.collection_id = c.id AND l.status = 'submitted') OR EXISTS (SELECT 1 FROM builder.items m \
+    AND m.blockchain_item_id IS NOT NULL) OR EXISTS (SELECT 1 FROM builder.items m \
     JOIN builder.item_curations k ON k.item_id = m.id WHERE m.collection_id = c.id))";
 const UNPUBLISHED: &str = "NOT EXISTS (SELECT 1 FROM builder.items m WHERE m.collection_id = c.id \
-    AND m.blockchain_item_id IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM builder.linked_collection_publications l \
-    WHERE l.collection_id = c.id AND l.status = 'submitted') AND NOT EXISTS (SELECT 1 FROM builder.items m \
+    AND m.blockchain_item_id IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM builder.items m \
     JOIN builder.item_curations k ON k.item_id = m.id WHERE m.collection_id = c.id)";
 macro_rules! last_activity {
     () => {

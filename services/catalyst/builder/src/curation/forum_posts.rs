@@ -26,7 +26,7 @@ use super::forum::{Created, Failure, Forum, Topic};
 use super::forum_text::{self, PostCollection, PostItem};
 use super::slack::shorten;
 use crate::State;
-use crate::access::{self, CollectionManage, ForumReply};
+use crate::access::{self, CollectionManage, ForumReply, ThirdPartyPublish};
 use crate::chain_state;
 use crate::http::ApiError;
 
@@ -55,8 +55,38 @@ struct ClaimRow {
     fresh: Option<bool>,
 }
 
-async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiError> {
-    let id = manage.id();
+/// Who claims a topic: a manager of the collection asking for it, or the
+/// third-party publish of `items` that just committed.
+enum Recheck<'a> {
+    Manage(&'a CollectionManage),
+    Publish(&'a ThirdPartyPublish, &'a [Uuid]),
+}
+
+/// The first [`forum_text::MAX_ITEMS`] items of the collection `id` a post
+/// lists, of `only` when given, in creation order.
+async fn post_items(
+    conn: &mut sqlx::PgConnection,
+    id: Uuid,
+    only: Option<&[Uuid]>,
+) -> Result<Vec<PostItem>, ApiError> {
+    Ok(sqlx::query_as(
+        "SELECT i.id, i.name, i.description, i.rarity, i.data->>'category' AS category, \
+           (SELECT ic.hash FROM builder.item_contents ic WHERE ic.item_id = i.id AND ic.file = i.thumbnail) AS thumbnail_hash \
+         FROM builder.items i WHERE i.collection_id = $1 AND ($3::uuid[] IS NULL OR i.id = ANY($3)) \
+         ORDER BY i.created_at, i.id LIMIT $2",
+    )
+    .bind(id)
+    .bind(forum_text::MAX_ITEMS as i64)
+    .bind(only)
+    .fetch_all(conn)
+    .await?)
+}
+
+async fn claim(state: &State, recheck: Recheck<'_>) -> Result<Claim, ApiError> {
+    let id = match recheck {
+        Recheck::Manage(manage) => manage.id(),
+        Recheck::Publish(grant, _) => grant.id(),
+    };
     let mut tx = state.items.pool().begin().await?;
     let view = chain_state::for_decision(&mut tx).await?;
     let row: Option<ClaimRow> = sqlx::query_as(
@@ -67,7 +97,16 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
     .bind(CLAIM_HOLDS)
     .fetch_optional(&mut *tx)
     .await?;
-    let managed = access::confirm_collection_manage(&mut tx, &view, manage).await?;
+    let (published, contract, owner, only) = match recheck {
+        Recheck::Manage(manage) => {
+            let managed = access::confirm_collection_manage(&mut tx, &view, manage).await?;
+            (managed.published, managed.contract, managed.owner, None)
+        }
+        Recheck::Publish(grant, items) => {
+            access::confirm_third_party_publish(&mut tx, &view, grant).await?;
+            (true, None, None, Some(items))
+        }
+    };
     let Some(ClaimRow {
         name,
         third_party_id: third_party,
@@ -79,7 +118,7 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
             "collection {id} vanished under its lock"
         )));
     };
-    if third_party.is_none() && !managed.published {
+    if third_party.is_none() && !published {
         return Err(
             ApiError::conflict("The collection is not published").with_data(json!({ "id": id }))
         );
@@ -97,16 +136,7 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
         )
         .with_data(json!({ "id": id })));
     }
-    let items: Vec<PostItem> =
-        sqlx::query_as(
-            "SELECT i.id, i.name, i.description, i.rarity, i.data->>'category' AS category, \
-               (SELECT ic.hash FROM builder.item_contents ic WHERE ic.item_id = i.id AND ic.file = i.thumbnail) AS thumbnail_hash \
-             FROM builder.items i WHERE i.collection_id = $1 ORDER BY i.created_at, i.id LIMIT $2",
-        )
-        .bind(id)
-        .bind(forum_text::MAX_ITEMS as i64)
-        .fetch_all(&mut *tx)
-        .await?;
+    let items = post_items(&mut tx, id, only).await?;
     sqlx::query(
         "UPDATE builder.collections SET forum_claimed_at = timezone('UTC', clock_timestamp()) WHERE id = $1",
     )
@@ -118,11 +148,11 @@ async fn claim(state: &State, manage: &CollectionManage) -> Result<Claim, ApiErr
         collection: PostCollection {
             id,
             name,
-            contract: managed.contract,
+            contract,
             items,
         },
         third_party,
-        owner: managed.owner,
+        owner,
     })
 }
 
@@ -156,13 +186,13 @@ async fn make(
         &state.settings.builder_server_url,
     );
     let first = forum_text::remove_emojis(&title);
-    match forum.create(&state.foundation, &first, &raw).await? {
+    match forum.create(&state.guarded, &first, &raw).await? {
         Created::Topic(topic) => Ok(topic),
         Created::DuplicateTitle => match (&claim.third_party, &claim.collection.contract) {
             (None, Some(contract)) => {
                 let retried =
                     forum_text::remove_emojis(&forum_text::retried_title(&title, contract));
-                match forum.create(&state.foundation, &retried, &raw).await? {
+                match forum.create(&state.guarded, &retried, &raw).await? {
                     Created::Topic(topic) => Ok(topic),
                     Created::DuplicateTitle => {
                         Err(Failure::Refused(reqwest::StatusCode::UNPROCESSABLE_ENTITY))
@@ -195,12 +225,18 @@ async fn title(state: &State, claim: &Claim) -> Result<String, ApiError> {
 /// answers its link. The whole attempt, the creator's name included, ends
 /// within [`ATTEMPT`], before its claim lapses.
 pub async fn post(state: &State, manage: &CollectionManage) -> Result<String, ApiError> {
-    let claim = claim(state, manage).await?;
+    let claim = claim(state, Recheck::Manage(manage)).await?;
     let forum = state.settings.forum.as_ref().ok_or_else(unavailable)?;
+    make_topic(state, forum, &claim).await
+}
+
+/// Makes the claimed topic and stores its link and first post unless a
+/// link was stored meanwhile; the stored link.
+async fn make_topic(state: &State, forum: &Forum, claim: &Claim) -> Result<String, ApiError> {
     let id = claim.collection.id;
     let topic = tokio::time::timeout(ATTEMPT, async {
-        let title = title(state, &claim).await?;
-        make(state, forum, &claim, title)
+        let title = title(state, claim).await?;
+        make(state, forum, claim, title)
             .await
             .map_err(|failure| failure.api_error(id))
     })
@@ -227,6 +263,66 @@ pub async fn post(state: &State, manage: &CollectionManage) -> Result<String, Ap
             .fetch_optional(state.items.pool())
             .await?;
     Ok(stored.flatten().unwrap_or(link))
+}
+
+/// After a third-party publish of `items` commits: the collection's topic
+/// made, as [`post`] makes it, listing them, or, once the collection stores
+/// its topic's first post, that post's text with them appended. Within
+/// [`ATTEMPT`]; a failure is logged, the publish stands.
+pub async fn publish_topic(state: &State, grant: &ThirdPartyPublish, items: &[Uuid]) {
+    let Some(forum) = state.settings.forum.as_ref() else {
+        return;
+    };
+    let id = grant.id();
+    let attempt = async {
+        let stored: Option<(String, Option<String>, Option<i32>)> = sqlx::query_as(
+            "SELECT name, forum_link, forum_id FROM builder.collections WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(state.items.pool())
+        .await?;
+        match stored {
+            Some((name, Some(_), Some(post))) => {
+                let mut conn = state.items.pool().acquire().await?;
+                let collection = PostCollection {
+                    id,
+                    name,
+                    contract: None,
+                    items: post_items(&mut conn, id, Some(items)).await?,
+                };
+                drop(conn);
+                let old = forum
+                    .raw_of(&state.guarded, post)
+                    .await
+                    .map_err(|failure| failure.api_error(id))?;
+                let raw = forum_text::update(
+                    &old,
+                    &collection,
+                    &state.settings.links,
+                    &state.settings.builder_server_url,
+                    &(state.now)().format("%-m/%-d/%Y").to_string(),
+                );
+                forum
+                    .update(&state.guarded, post, &raw)
+                    .await
+                    .map_err(|failure| failure.api_error(id))
+            }
+            Some((_, None, _)) => {
+                let claim = claim(state, Recheck::Publish(grant, items)).await?;
+                make_topic(state, forum, &claim).await.map(|_| ())
+            }
+            _ => Ok(()),
+        }
+    };
+    match tokio::time::timeout(ATTEMPT, attempt).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(collection = %id, status = error.status(), "the forum topic of a third-party publish was not written")
+        }
+        Err(_) => {
+            tracing::warn!(collection = %id, "the forum topic of a third-party publish timed out")
+        }
+    }
 }
 
 fn reply_text(raw: Option<&str>, id: Uuid) -> Result<String, ApiError> {
@@ -261,10 +357,10 @@ pub async fn reply(state: &State, grant: &ForumReply, raw: Option<&str>) -> Resu
     let text = reply_text(raw, id)?;
     let forum = state.settings.forum.as_ref().ok_or_else(unavailable)?;
     let replied = tokio::time::timeout(ATTEMPT, async {
-        let Some(topic) = forum.topic_of(&state.foundation, post).await? else {
+        let Some(topic) = forum.topic_of(&state.guarded, post).await? else {
             return Ok(false);
         };
-        forum.reply(&state.foundation, topic, &text).await?;
+        forum.reply(&state.guarded, topic, &text).await?;
         Ok::<_, Failure>(true)
     })
     .await

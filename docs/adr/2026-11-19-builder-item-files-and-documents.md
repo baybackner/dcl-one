@@ -60,13 +60,14 @@ The builder answers items as `github.com/decentraland/builder-server` at
   `catalyst_content_hash`) are written by the node and the import, never
   by a save or an upload. So it may take the bytes once no record and
   nothing else names them.
-- **A publication takes only uploaded files.** Both publications refuse an
-  item with a name that doesn't count: a hash whose writer holds no upload
-  record for it. The
-  publication snapshot computes it (`missing_content` in `SNAPSHOT_QUERY`,
-  `services/catalyst/builder/src/publication.rs`); the tests
+- **A publication takes only uploaded files.** The standard publication and
+  the third-party publish refuse an item with a name that doesn't count: a
+  hash whose writer holds no upload record for it. The publication snapshot
+  computes it for the standard one (`missing_content` in `SNAPSHOT_QUERY`,
+  `services/catalyst/builder/src/publication.rs`) and the publish's item
+  read for the third-party one; the tests
   `a_standard_publication_takes_only_files_each_names_writer_uploaded` and
-  `a_linked_publication_takes_only_files_each_names_writer_uploaded` hold it.
+  `every_refusal_answers_before_anything_is_written` hold it.
 - **Imported records.** Builder-server keeps no uploader, so the import
   attributes every name to the item's owner and records that owner as an
   uploader of every hash the item names, with the blob's size from the blob
