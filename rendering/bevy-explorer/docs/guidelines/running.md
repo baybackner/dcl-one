@@ -285,6 +285,15 @@ State, in every build:
   (the same per format: `ktx2-bc`, `glb`, and `glb-br` on web), `fallbacks` (files that loaded
   their original instead), `fallbacksByFormat` (those whose chosen variant failed, per format)
   and `recentFallbacks` (the last 20, with the file, its entity and the reason).
+- `/item_purchase_state`: the scene item purchase (`openExplorerUi` with `EU_ITEM_PURCHASE`) as
+  JSON, the Scene item purchase debug section's source: `hudListeners` (HUDs subscribed to
+  requests; with none, a request is answered `REJECTED_FEATURE_DISABLED`), `active` (the request
+  in flight: `state` waiting for the HUD or confirmation open, `scene`, `item` as the parsed
+  `contract:id` or "not a collection item", `requestId`), `last` (the same for the last request
+  that ended, with its `outcome`) and `closedOwed` (the scenes whose verdict is written and whose
+  `closed` event is still to come; such a scene's next request is `WAS_ALREADY_OPEN`). No price,
+  balance, wallet or scene-written text appears. `/item_purchase_cancel` drops the request in flight: an open one reports
+  `Dismissed` to its scene, and the HUD's confirmation stays up with its later reports ignored.
 - `/ban_block_state [address]`: the ban and block status as JSON: the local user's address, the
   social blocks (`state` live or unavailable with its `reason`, `blocked`, `blockedBy`), the
   platform ban (`state` unknown, checked or failed, `isBanned`, `source`, `reason`,

@@ -1618,7 +1618,7 @@ impl PermissionStrings for PermissionType {
             PermissionType::Websocket => "Open Websocket",
             PermissionType::OpenUrl => "Open Url",
             PermissionType::CopyToClipboard => "Copy to Clipboard",
-            PermissionType::OpenExplorerUi => "Open Explorer Menu",
+            PermissionType::OpenExplorerUi => "Open Explorer Menu or Item Purchase",
         }
     }
 
@@ -1677,7 +1677,7 @@ impl PermissionStrings for PermissionType {
             PermissionType::OpenUrl => "open a url in your browser",
             PermissionType::CopyToClipboard => "copy text into the clipboard",
             PermissionType::OpenExplorerUi => {
-                "open an explorer menu panel (map, backpack, settings, ...)"
+                "open an explorer menu panel (map, backpack, settings, ...) or the purchase confirmation for an item"
             }
         }
     }
@@ -1701,7 +1701,9 @@ impl PermissionStrings for PermissionType {
             PermissionType::Websocket => "opening a websocket",
             PermissionType::OpenUrl => "opening a url in your browser",
             PermissionType::CopyToClipboard => "copying text into the clipboard",
-            PermissionType::OpenExplorerUi => "opening an explorer menu panel",
+            PermissionType::OpenExplorerUi => {
+                "opening an explorer menu panel or an item's purchase confirmation"
+            }
         }
     }
 }
