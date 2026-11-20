@@ -10,16 +10,22 @@ import { heroDownloads, loadLatestRelease } from "@/data/lib/download/creator-hu
 import { sidLoader } from "@/core/lib/telemetry/page-loader";
 import CreateLanding from "@/features/create-landing/CreateLanding";
 import { CREATOR_HUB_DOWNLOAD } from "@/features/create-landing/HeroDownload";
+import { SubNav } from "@/features/creators/components/SubNav";
 
+import { canonicalLink } from "../lib/canonical";
 import type { Route } from "./+types/create._index";
 
-export const meta = () => [
-  { title: "Create in Decentraland | Decentraland" },
-  {
-    name: "description",
-    content: "Download the Creator Hub to start building immersive scenes and interactive experiences in Decentraland.",
-  },
-];
+export function meta({ matches }: Route.MetaArgs) {
+  return [
+    { title: "Create in Decentraland | Wearables, Emotes, Scenes & Worlds" },
+    {
+      name: "description",
+      content:
+        "Everything you need to create in Decentraland: build Wearables, Emotes, Scenes and Worlds, manage your collections and join the creator community.",
+    },
+    ...canonicalLink(matches[0]?.loaderData?.publicPageBase, "/create"),
+  ];
+}
 
 // The landing never waits long for the release: without it the hero links to the download page, which does.
 const RELEASE_WAIT_MS = 300;
@@ -64,6 +70,7 @@ export default function CreateRoute({ loaderData }: Route.ComponentProps) {
   return (
     <HydrationBoundary state={loaderData?.dehydratedState}>
       <SitesChrome active="create" overlayNav>
+        <SubNav landing />
         <CreateLanding downloads={loaderData?.downloads} sid={loaderData?.sid} />
       </SitesChrome>
     </HydrationBoundary>
