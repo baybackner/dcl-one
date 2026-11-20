@@ -1571,11 +1571,15 @@ records what was removed in `revoked_credits` and the refunded USD in
 live pledges cannot cover it, queues the wallet's newest unexpired signed
 credits not queued yet that pledge beyond the balance in `credits.revocations`
 (reason `reversed:apple-iap:<transaction id>`) and records in `raised_block`
-whether it blocked the wallet, in one transaction. `REFUND_REVERSED` grants
+whether it blocked the wallet, in one transaction. An operator's block or
+unblock, or a later reversal the balance cannot cover, clears the wallet's
+`raised_block` flags, so the block is no longer lifted by a reversal. `REFUND_REVERSED` grants
 `revoked_credits` back (a `refund` ledger row), deletes its revocations still
-`pending` when `available` covers the unexpired credits that leaves unqueued
-(a sent one is final), lifts the block it raised when `available`
-covers the wallet's live pledges, and returns the row to `paid`, or deletes a `refunded` row never
+`pending` and unclaimed (`attempts = 0`; the revocation job counts the attempt
+before it broadcasts) when `available` covers the unexpired credits that leaves
+unqueued (a claimed or sent one is final), lifts the block it raised when `available`
+covers the wallet's live pledges (an `ops.admin_audit` `user.unblock` row, actor
+`apple`), and returns the row to `paid`, or deletes a `refunded` row never
 credited (not an imported upstream marker) so the purchase can be credited. Readers are the wallet's credit
 orders (`address, created_at DESC`, rows this node credited), the caps
 (`address` and `created_at` partial indexes; rows credited here or

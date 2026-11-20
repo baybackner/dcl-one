@@ -544,6 +544,13 @@ impl Credits {
         let blocked: bool = row.get("uncovered");
         if blocked {
             tracing::error!(address = %address, tx_ref = %tx_ref, "fiat reversal exceeds the unpledged balance: wallet blocked from spending credits");
+            // This reversal relies on the block too: an earlier App Store refund no longer lifts it alone.
+            sqlx::query(
+                "UPDATE credits.iap_transactions SET raised_block = false WHERE address = $1 AND raised_block",
+            )
+            .bind(address)
+            .execute(&mut **tx)
+            .await?;
         }
         let available: String = row.get("available");
         let removed: String = row.get("removed");

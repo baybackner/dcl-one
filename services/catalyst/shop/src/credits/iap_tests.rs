@@ -1627,3 +1627,143 @@ async fn a_reversed_refund_keeps_a_revocation_a_later_refund_relies_on() {
     assert!(queued(&pool, &newer).await);
     assert!(blocked(&pool, &w.address).await);
 }
+
+#[tokio::test]
+async fn a_reversed_refund_keeps_a_revocation_the_job_claimed() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+
+    // The job claimed the revocation before the reversal: it may be on chain.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let claimed = pledge(&pool, &w.address, 400, 0, 300).await;
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["revocations"], 1, "{out}");
+    assert!(
+        super::settlement::claim_revocation(&pool, &claimed, 0)
+            .await
+            .unwrap()
+    );
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert_eq!(out["revocationsWithdrawn"], 0, "{out}");
+    assert!(queued(&pool, &claimed).await);
+
+    // The reversal withdrew it first: the job's claim finds nothing to send.
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let withdrawn = pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["revocationsWithdrawn"], 1, "{out}");
+    assert!(
+        !super::settlement::claim_revocation(&pool, &withdrawn, 0)
+            .await
+            .unwrap()
+    );
+}
+
+async fn unblock_audits(pool: &PgPool, address: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM ops.admin_audit \
+         WHERE domain = 'credits' AND action = 'user.unblock' AND actor = 'apple' AND target = $1",
+    )
+    .bind(address)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_reversed_refund_audits_the_block_it_lifts() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert!(blocked(&pool, &w.address).await);
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert!(!blocked(&pool, &w.address).await);
+    assert_eq!(unblock_audits(&pool, &w.address).await, 1);
+}
+
+#[tokio::test]
+async fn a_reversed_refund_leaves_a_block_an_operator_set_again() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = app(state.clone());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert!(blocked(&pool, &w.address).await);
+    // The operator reviewed the refund and kept the block.
+    state
+        .credits
+        .admin_set_blocked(
+            &w.address,
+            true,
+            Some("review"),
+            Some("token:op"),
+            &json!({}),
+        )
+        .await
+        .unwrap();
+    let (_, out) = notify(
+        &app,
+        c.notification("REFUND_REVERSED", Some(bought[0].clone())),
+    )
+    .await;
+    assert_eq!(out["action"], "reinstated", "{out}");
+    assert!(blocked(&pool, &w.address).await);
+    assert_eq!(unblock_audits(&pool, &w.address).await, 0);
+}
+
+#[tokio::test]
+async fn a_reversed_refund_leaves_a_block_a_later_reversal_relies_on() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 2).await;
+    // 200 available, 150 pledged: each refund leaves the pledge uncovered.
+    pledge(&pool, &w.address, 1500, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    notify(&app, c.notification("REFUND", Some(bought[1].clone()))).await;
+    assert!(blocked(&pool, &w.address).await);
+    // Both reversed: the balance covers the pledge again, but the block is
+    // no longer the first refund's alone.
+    for signed in [&bought[1], &bought[0]] {
+        let (_, out) = notify(
+            &app,
+            c.notification("REFUND_REVERSED", Some(signed.clone())),
+        )
+        .await;
+        assert_eq!(out["action"], "reinstated", "{out}");
+    }
+    assert_eq!(available(&pool, &w.address).await, "200");
+    assert!(blocked(&pool, &w.address).await);
+}

@@ -658,10 +658,11 @@ impl Credits {
     }
 
     /// Undoes a refund Apple reversed (`REFUND_REVERSED`): a credited purchase
-    /// gets back what its refund charged back, its revocations not sent yet
-    /// are withdrawn while the balance covers the unexpired credits left
-    /// unqueued (a sent one is final), and a block it raised is lifted
-    /// once the balance covers the live pledges; a refund of a transaction
+    /// gets back what its refund charged back, its revocations the job has
+    /// not claimed yet are withdrawn while the balance covers the unexpired
+    /// credits left unqueued (a claimed one may be on chain), and a block it
+    /// raised, that no operator or later reversal took over, is lifted (and
+    /// audited) once the balance covers the live pledges; a refund of a transaction
     /// never credited is cleared so the purchase can be credited.
     pub async fn reinstate_iap(
         &self,
@@ -723,15 +724,16 @@ impl Credits {
             )
             .await?;
         }
-        // Only while the balance covers every unexpired credit the withdrawal leaves unqueued.
+        // Only unclaimed rows (a claimed one may be on chain), and only while
+        // the balance covers every unexpired credit the withdrawal leaves unqueued.
         let withdrawn = sqlx::query(
-            "DELETE FROM credits.revocations WHERE reason = $1 AND status = 'pending' \
+            "DELETE FROM credits.revocations WHERE reason = $1 AND status = 'pending' AND attempts = 0 \
                AND COALESCE((SELECT available FROM credits.wallets WHERE address = $2), 0) * $3::numeric >= ( \
                    SELECT COALESCE(SUM(usd_cents), 0) FROM credits.authorizations a \
                    WHERE address = $2 AND status IN ('authorized', 'retired') \
                      AND expires_at > timezone('UTC', now()) \
                      AND NOT EXISTS (SELECT 1 FROM credits.revocations r WHERE r.credit_hash = a.credit_hash \
-                                     AND NOT (r.reason = $1 AND r.status = 'pending')))",
+                                     AND NOT (r.reason = $1 AND r.status = 'pending' AND r.attempts = 0)))",
         )
         .bind(revocation_reason(transaction_id))
         .bind(&address)
@@ -740,16 +742,35 @@ impl Credits {
         .await?
         .rows_affected();
         if row.get::<bool, _>("raised_block") {
-            sqlx::query(
+            let lifted = sqlx::query(
                 "UPDATE credits.wallets SET is_blocked_for_claiming = false, updated_at = timezone('UTC', now()) \
-                 WHERE address = $1 AND available * $2::numeric >= ( \
+                 WHERE address = $1 AND is_blocked_for_claiming AND available * $2::numeric >= ( \
                      SELECT COALESCE(SUM(usd_cents), 0) FROM credits.authorizations \
                      WHERE address = $1 AND status IN ('authorized', 'retired'))",
             )
             .bind(&address)
             .bind(UsdCents::CENTS_PER_CREDIT)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+            if lifted == 1 {
+                let detail = json!({
+                    "source": "apple",
+                    "transactionId": transaction_id,
+                    "refundRef": refund_ref,
+                    "reason": "app store refund reversed",
+                });
+                Self::audit(
+                    &mut *tx,
+                    super::store::AuditEntry {
+                        action: "user.unblock",
+                        actor: IAP_ACTOR,
+                        target: Some(&address),
+                        detail: &detail,
+                    },
+                )
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(ReinstateOutcome::Reinstated {
