@@ -27,7 +27,8 @@ without it every client behind the gateway shares one `/contents` budget
 (1000 requests a minute by default) and gets 429s past it.
 
 The relay (`POST /v1/transactions`) allows 30 requests a minute per client
-address, before parsing, and only when the address names one client (a trusted
+address (IPv6 by /64) and 120 per IPv6 /48, before parsing, and only when the
+address names one client (a trusted
 proxy's `X-Real-IP` or a public peer). Behind an unlisted private gateway that
 limit does not apply, so set `HTTP_TRUSTED_PROXY_CIDRS` to keep it. Each API
 process counts its own requests, so N processes allow up to N times that.

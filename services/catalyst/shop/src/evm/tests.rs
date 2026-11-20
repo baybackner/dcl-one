@@ -617,6 +617,41 @@ async fn an_unlisted_gateway_does_not_put_every_client_in_one_relay_bucket() {
     }
 }
 
+/// An IPv6 client cycling /64s inside one /48 shares the /48's budget: past it a fresh /64 is
+/// refused, and the refusal leaves that /64's own budget untouched; another /48 is still served.
+#[tokio::test]
+async fn relay_requests_from_one_ipv6_48_share_one_budget() {
+    let relay = state(lazy_pool(), Settings::for_tests());
+    let app = crate::shared::client_ip::pin_client_headers(router(relay.clone()), Vec::new());
+    let per_64 = super::RELAY_REQUESTS_PER_WINDOW;
+    let subnets = super::RELAY_REQUESTS_PER_WINDOW_PER_48 / per_64;
+    for n in 0..subnets {
+        exhaust_relay_window(&app, &format!("2001:db8:7:{n:x}::1"), None).await;
+    }
+    let fresh = format!("2001:db8:7:{subnets:x}::1");
+    for _ in 0..3 {
+        assert_eq!(
+            post_from(&app, &fresh, None, "{}".into()).await.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "a fresh /64 of a spent /48"
+        );
+    }
+    let key = crate::shared::client_ip::source_key(&fresh);
+    assert!(
+        !relay.relay_limiter.is_rate_limited(&key)
+            && relay.relay_limiter.check_cost(&key, per_64)
+                == crate::shared::limits::RateLimitDecision::Allow,
+        "the /48 refusals spent none of the /64's own budget"
+    );
+    assert_eq!(
+        post_from(&app, "2001:db8:8::1", None, "{}".into())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST,
+        "another /48"
+    );
+}
+
 #[test]
 fn the_relay_retry_wait_rounds_up_and_is_never_zero() {
     use super::handlers::transactions::{RETRY_AFTER_SECS, retry_after_secs};

@@ -54,10 +54,10 @@ pub(crate) fn retry_at(now: chrono::DateTime<chrono::Utc>, wait: u64) -> i64 {
     ms.div_euclid(1000) + i64::from(ms.rem_euclid(1000) != 0)
 }
 
-/// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address spent
-/// its window, before the body is parsed or validated. Only an address naming one client
-/// ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's own
-/// address would put every client in one bucket. The limiter is per process.
+/// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address, or
+/// its IPv6 /48, spent its window, before the body is parsed or validated. Only an address naming
+/// one client ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's
+/// own address would put every client in one bucket. The limiters are per process.
 async fn refuse_over_client_limit(
     state: &SharedState,
     headers: &HeaderMap,
@@ -68,9 +68,15 @@ async fn refuse_over_client_limit(
         peer,
         &state.settings.trusted_proxy_cidrs,
     )?;
+    use crate::shared::limits::RateLimitDecision::Allow;
     let key = crate::shared::client_ip::source_key(&ip);
-    if state.relay_limiter.check(&key) == crate::shared::limits::RateLimitDecision::Allow {
-        return None;
+    if state.relay_limiter.check(&key) == Allow {
+        match crate::shared::client_ip::ipv6_48_key(&ip) {
+            None => return None,
+            Some(net) if state.relay_limiter_per_48.check(&net) == Allow => return None,
+            // Refused by the /48: the address's own token was not used.
+            Some(_) => state.relay_limiter.refund(&key, 1),
+        }
     }
     let mut response = not_sent(ApiError::RateLimited {
         message: format!("Too many requests. Retry in {RETRY_AFTER_SECS} seconds."),

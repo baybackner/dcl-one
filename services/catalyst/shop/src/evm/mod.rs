@@ -404,10 +404,15 @@ pub struct State {
     /// [`RELAY_RATE_WINDOW`]), checked before any validation. In memory: each API process
     /// counts its own requests, and a restart clears it.
     pub relay_limiter: RateLimiter,
+    /// The same requests per IPv6 /48 ([`RELAY_REQUESTS_PER_WINDOW_PER_48`]), so a client
+    /// cycling /64s inside its network still shares one budget.
+    pub relay_limiter_per_48: RateLimiter,
 }
 
 /// The relay requests one client address may make per [`RELAY_RATE_WINDOW`].
 pub const RELAY_REQUESTS_PER_WINDOW: u32 = 30;
+/// The relay requests every /64 of one IPv6 /48 may make together per [`RELAY_RATE_WINDOW`].
+pub const RELAY_REQUESTS_PER_WINDOW_PER_48: u32 = 120;
 pub const RELAY_RATE_WINDOW: Duration = Duration::from_secs(60);
 
 pub type SharedState = Arc<State>;
@@ -568,6 +573,11 @@ impl State {
             runtime,
             relay_limiter: RateLimiter::new(RELAY_REQUESTS_PER_WINDOW, RELAY_RATE_WINDOW)
                 .with_max_buckets(200_000),
+            relay_limiter_per_48: RateLimiter::new(
+                RELAY_REQUESTS_PER_WINDOW_PER_48,
+                RELAY_RATE_WINDOW,
+            )
+            .with_max_buckets(200_000),
         })
     }
 }

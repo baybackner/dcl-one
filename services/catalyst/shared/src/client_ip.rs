@@ -179,6 +179,22 @@ pub fn source_key(client_ip: &str) -> String {
     format!("{network}/{IPV6_SOURCE_PREFIX_BITS}")
 }
 
+/// The IPv6 /48 an address belongs to, the wider key a host cycling /64s still shares; `None`
+/// for IPv4 and IPv4-mapped addresses.
+pub fn ipv6_48_key(client_ip: &str) -> Option<String> {
+    use std::net::{IpAddr, Ipv6Addr};
+    let Ok(IpAddr::V6(v6)) = client_ip.parse::<IpAddr>() else {
+        return None;
+    };
+    if v6.to_ipv4_mapped().is_some() {
+        return None;
+    }
+    Some(format!(
+        "{}/48",
+        Ipv6Addr::from(u128::from(v6) & (u128::MAX << 80))
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +209,16 @@ mod tests {
             );
         }
         map
+    }
+
+    #[test]
+    fn ipv6_48_key_names_the_network_and_skips_ipv4() {
+        assert_eq!(
+            ipv6_48_key("2001:db8:7:2::1").as_deref(),
+            Some("2001:db8:7::/48")
+        );
+        assert_eq!(ipv6_48_key("203.0.113.7"), None);
+        assert_eq!(ipv6_48_key("::ffff:203.0.113.7"), None);
     }
 
     #[test]

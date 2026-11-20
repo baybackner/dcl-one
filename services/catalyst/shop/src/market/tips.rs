@@ -24,7 +24,7 @@
 //! uuid v5 of the transaction hash.
 
 use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -206,11 +206,8 @@ impl ForwardLimiter {
 /// The pre-auth keys of a client address and their budgets a minute.
 fn source_keys(ip: &str) -> Vec<(String, u32)> {
     let mut keys = vec![(crate::shared::client_ip::source_key(ip), PREAUTH_PER_MINUTE)];
-    if let Ok(IpAddr::V6(v6)) = ip.parse::<IpAddr>()
-        && v6.to_ipv4_mapped().is_none()
-    {
-        let net = Ipv6Addr::from(u128::from(v6) & (u128::MAX << 80));
-        keys.push((format!("{net}/48"), PREAUTH_PER_MINUTE_PER_48));
+    if let Some(net) = crate::shared::client_ip::ipv6_48_key(ip) {
+        keys.push((net, PREAUTH_PER_MINUTE_PER_48));
     }
     keys
 }
