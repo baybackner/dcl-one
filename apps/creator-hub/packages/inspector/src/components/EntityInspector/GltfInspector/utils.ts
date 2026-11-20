@@ -2,6 +2,7 @@ import type { PBGltfContainer } from '@dcl/ecs';
 import { ColliderLayer } from '@dcl/ecs';
 
 import { toNumber, toString } from '../utils';
+import { isColliderName, parseGltfJson } from '../../../lib/utils/gltf';
 import type { TreeNode } from '../../ProjectAssetExplorer/ProjectView';
 import { isAssetNode } from '../../ProjectAssetExplorer/utils';
 import type { AssetNodeItem } from '../../ProjectAssetExplorer/types';
@@ -94,11 +95,7 @@ export const COLLISION_LAYERS = [
 /** Above this many triangles, colliding against a model's visible geometry gets a warning. */
 export const VISIBLE_COLLIDER_TRIANGLE_LIMIT = 10000;
 
-const GLB_MAGIC = 0x46546c67;
-const GLB_JSON_CHUNK = 0x4e4f534a;
-const COLLIDER_NAME = /_collider/i;
-
-type GltfJson = {
+type GltfMeshes = {
   nodes?: { name?: string; mesh?: number }[];
   meshes?: {
     name?: string;
@@ -107,34 +104,23 @@ type GltfJson = {
   accessors?: { count?: number }[];
 };
 
-function readGltfJson(content: Uint8Array): GltfJson | null {
-  try {
-    const view = new DataView(content.buffer, content.byteOffset, content.byteLength);
-    const isGlb = content.byteLength >= 20 && view.getUint32(0, true) === GLB_MAGIC;
-    if (!isGlb) return JSON.parse(new TextDecoder().decode(content));
-    if (view.getUint32(16, true) !== GLB_JSON_CHUNK) return null;
-    const length = view.getUint32(12, true);
-    return JSON.parse(new TextDecoder().decode(content.subarray(20, 20 + length)));
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Triangles in the visible meshes of a .glb or .gltf file, counted once per node that uses a mesh.
- * Meshes named `*_collider` are the invisible layer and are left out. Returns null when the file
+ * Nodes and meshes with `collider` in their name are the invisible layer and are left out. Returns null when the file
  * can't be read as glTF.
  */
 export function countVisibleTriangles(content: Uint8Array): number | null {
-  const gltf = readGltfJson(content);
-  if (!gltf || typeof gltf !== 'object') return null;
-  const { nodes = [], meshes = [], accessors = [] } = gltf;
+  const gltf = parseGltfJson(content) as GltfMeshes | null;
+  if (!gltf) return null;
+  const nodes = Array.isArray(gltf.nodes) ? gltf.nodes : [];
+  const meshes = Array.isArray(gltf.meshes) ? gltf.meshes : [];
+  const accessors = Array.isArray(gltf.accessors) ? gltf.accessors : [];
 
   let triangles = 0;
   for (const node of nodes) {
     const mesh = node.mesh === undefined ? undefined : meshes[node.mesh];
     if (!mesh) continue;
-    if (COLLIDER_NAME.test(node.name ?? '') || COLLIDER_NAME.test(mesh.name ?? '')) continue;
+    if (isColliderName(node.name ?? '') || isColliderName(mesh.name ?? '')) continue;
     for (const primitive of mesh.primitives ?? []) {
       const accessor = primitive.indices ?? primitive.attributes?.POSITION;
       const count = (accessor === undefined ? undefined : accessors[accessor]?.count) ?? 0;

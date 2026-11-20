@@ -19,11 +19,27 @@ import type { Props } from './types';
 
 import './CleanAssets.css';
 
+/** The side note about files used by code, for the current selection and scan. */
+export function getCodeNote(usedFileSelected: boolean, codeScanned: boolean): string {
+  const selection = usedFileSelected
+    ? 'At least one of the files you marked for deletion is used by your scene or its code.'
+    : codeScanned
+      ? 'Files that your code names are kept.'
+      : '';
+  const limits = codeScanned
+    ? 'A file whose name the code builds while running (like "monster" + i + ".glb") or gets ' +
+      'from a server still shows as unused, so check the list before removing.'
+    : 'No scene code was read, so a file that only code uses may show as unused. Check the ' +
+      'list before removing.';
+  return [selection, limits].filter(Boolean).join(' ');
+}
+
 const CleanAssets: React.FC<Props> = ({
   isOpen,
   onClose,
   onScan,
   assets,
+  codeScanned,
   isScanning,
   selectedAssets,
   onSelect,
@@ -139,12 +155,10 @@ const CleanAssets: React.FC<Props> = ({
   const validateRemove = useCallback(() => {
     if (selectedAssets.size === 0) return;
 
-    const hasSelectedInUse = assets.some(asset => selectedAssets.has(asset.path) && !asset.unused);
-
     // Show remove confirmation modal if any selected asset is in use
-    if (hasSelectedInUse) setShowConfirmation(true);
+    if (usedFileSelected) setShowConfirmation(true);
     else handleRemoveSelected();
-  }, [assets, selectedAssets, handleRemoveSelected]);
+  }, [selectedAssets, usedFileSelected, handleRemoveSelected]);
 
   return (
     <Modal
@@ -178,13 +192,7 @@ const CleanAssets: React.FC<Props> = ({
             </div>
             <div>
               <FiAlertTriangle />
-              <p>
-                {usedFileSelected
-                  ? 'At least one of the files you marked for deletion is used by your scene or its code. '
-                  : 'Files that your code names are kept. '}{' '}
-                A file whose name the code builds while running (like "monster" + i + ".glb") or
-                gets from a server still shows as unused, so check the list before removing.
-              </p>
+              <p>{getCodeNote(usedFileSelected, codeScanned)}</p>
             </div>
           </div>
         </div>

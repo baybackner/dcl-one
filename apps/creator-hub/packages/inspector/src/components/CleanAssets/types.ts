@@ -11,9 +11,17 @@ export type AssetFile = {
   usedByCode?: boolean;
 };
 
+export type ScanResult = {
+  assets: AssetFile[];
+  /** The scene has code and all of it was read, so the files it names are marked as used. */
+  codeScanned: boolean;
+};
+
 export type Props = {
   isOpen: boolean;
   assets: AssetFile[];
+  /** Whether the scan read the scene's code; the note about code only holds when it did. */
+  codeScanned: boolean;
   isScanning: boolean;
   selectedAssets: Set<string>;
   onClose: () => void;

@@ -159,6 +159,30 @@ describe('GltfInspector/utils', () => {
       expect(utils.countVisibleTriangles(glb)).toBe(436);
     });
 
+    it('should count a triangle fan as its vertices minus two', () => {
+      const fan = {
+        nodes: [{ name: 'disc', mesh: 0 }],
+        meshes: [{ primitives: [{ mode: 6, attributes: { POSITION: 0 } }] }],
+        accessors: [{ count: 12 }],
+      };
+      expect(utils.countVisibleTriangles(new TextEncoder().encode(JSON.stringify(fan)))).toBe(10);
+    });
+
+    it('should leave out a collider named on the mesh, with any casing', () => {
+      const named = {
+        nodes: [{ name: 'body', mesh: 0 }, { name: 'wall', mesh: 1 }, { mesh: 2 }],
+        meshes: [
+          { primitives: [{ indices: 0 }] },
+          { name: 'wallCollider', primitives: [{ indices: 0 }] },
+          { name: 'floor_collider', primitives: [{ indices: 0 }] },
+        ],
+        accessors: [{ count: 300 }],
+      };
+      expect(utils.countVisibleTriangles(new TextEncoder().encode(JSON.stringify(named)))).toBe(
+        100,
+      );
+    });
+
     it('should return null for a file that is not glTF', () => {
       expect(utils.countVisibleTriangles(new Uint8Array([1, 2, 3]))).toBe(null);
     });

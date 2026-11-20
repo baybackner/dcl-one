@@ -129,7 +129,7 @@ export default withSdk<Props>(({ sdk, entity, initialOpen = true }) => {
               <>
                 Invisible layer{' '}
                 <InfoTooltip
-                  text="Collisions for the model's invisible collider meshes, the ones whose name ends in _collider. These are simple shapes made for collisions, so this is the cheap and recommended way to make a model solid or clickable."
+                  text="Collisions for the model's invisible collider meshes, the ones with “collider” in their name. These are simple shapes made for collisions, so this is the cheap and recommended way to make a model solid or clickable."
                   type="help"
                 />
               </>
@@ -143,7 +143,7 @@ export default withSdk<Props>(({ sdk, entity, initialOpen = true }) => {
           <Message
             className="GltfColliderWarning"
             type={MessageType.WARNING}
-            text={`This model has ${triangles.toLocaleString()} triangles, all duplicated as a collider by the Visible layer. Set it to None and use a simpler _collider mesh or a nested invisible wall entity.`}
+            text={`This model has ${triangles.toLocaleString()} triangles, all duplicated as a collider by the Visible layer. Set it to None and use a simpler collider mesh or a nested invisible wall entity.`}
           />
         )}
       </div>
