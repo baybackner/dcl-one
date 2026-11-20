@@ -295,7 +295,7 @@ library/ui/
 - **App-specific UI:** keep components used by a single app in
   `apps/<app>/`, built from the shared foundations and components; only that
   app imports them. See [App-specific UI](#app-specific-ui).
-- **Web chrome contracts:** `components/chrome/` contains the shared contexts, router link adapter and structural layout slots. These contracts are imported by path and have no Figma component mapping.
+- **Web chrome contracts:** `components/AppChrome/` contains the shared contexts, router link adapter and structural layout slots. These contracts are imported by path and have no Figma component mapping.
 - **Figma tooling:** keep the MCP server and CLI in `figma/` and outside browser
   exports. Component mappings connect Figma nodes to shared components.
 

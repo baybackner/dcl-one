@@ -28,7 +28,7 @@ import { reloadingForAccount } from "@/features/components/chrome/explorer-host"
 import NotFoundPage from "@/features/not-found/NotFoundPage";
 import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
-import { ThumbnailPublicBase } from "@dcl/one-ui/components/chrome/thumbnail-public-base";
+import { ThumbnailPublicBase } from "@dcl/one-ui/components/AppChrome/thumbnail-public-base";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { pageSid, parseCookies, publicResponseContext, sessionMiddleware } from "@/core/lib/telemetry/session";
 import { SitesLocaleContext, sitesLanguage, type SitesLocale, type SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-locale";

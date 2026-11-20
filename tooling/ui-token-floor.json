@@ -747,7 +747,7 @@
     "primitives": 0,
     "tokens": 11
   },
-  "library/ui/components/chrome/SiteLayout.module.css": {
+  "library/ui/components/AppChrome/SiteLayout.module.css": {
     "primitives": 0,
     "tokens": 6
   }

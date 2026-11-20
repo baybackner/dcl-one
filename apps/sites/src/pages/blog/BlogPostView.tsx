@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import SitesLayout from "../components/chrome/SitesLayout";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 import { BlogArticlePage, BlogNotFound, BlogRoutingProvider, BlogUnavailable } from "@dcl/one-ui/apps/sites/blog";
 
 import type { BlogPostPayload } from "@/data/lib/blog/types";

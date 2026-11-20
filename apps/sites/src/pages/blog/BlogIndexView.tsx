@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useLocation } from "react-router";
 
-import SitesLayout from "../components/chrome/SitesLayout";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
 import { BlogIndexPage, BlogNotFound, BlogRoutingProvider, BlogSearchForm, BlogUnavailable } from "@dcl/one-ui/apps/sites/blog";
 
 import type { BlogListPayload } from "@/data/lib/blog/types";

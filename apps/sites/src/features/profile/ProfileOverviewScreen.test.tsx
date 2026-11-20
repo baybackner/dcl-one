@@ -17,7 +17,7 @@ vi.mock("@/data/lib/catalyst/social/badges", async (original) => ({
   fetchUserBadges: net.fetchUserBadges,
 }));
 
-import { ChromeNavContext } from "@dcl/one-ui/components/chrome/chrome-nav";
+import { ChromeNavContext } from "@dcl/one-ui/components/AppChrome/chrome-nav";
 
 import { emptyProfile, type ProfileVM } from "@/data/lib/catalyst/social/profile";
 

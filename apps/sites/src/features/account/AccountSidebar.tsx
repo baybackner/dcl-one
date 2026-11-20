@@ -1,7 +1,7 @@
 import { useId, type ComponentType } from "react";
 import { Link } from "react-router";
 
-import { useChromeAuth } from "@dcl/one-ui/components/chrome/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/AppChrome/chrome-auth";
 
 import {
   GeneralGift,
