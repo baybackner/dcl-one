@@ -79,9 +79,9 @@ impl MovementTickTimes {
     }
 
     /// Records the movement scene's tick that just replied and tells whether to dispatch the
-    /// scene again now: its reply came in a later frame than its dispatch, the scene can run and,
-    /// unless the reply is seen at this loop's first poll, the time left before `loop_end` covers
-    /// its recent ticks.
+    /// scene again now: its reply came in a later frame than its dispatch, the scene is live and
+    /// can run and, unless the reply is seen at this loop's first poll, the time left before
+    /// `loop_end` covers its recent ticks.
     pub(crate) fn redispatch_due(
         &mut self,
         context: &RendererSceneContext,
@@ -103,6 +103,7 @@ impl MovementTickTimes {
         ));
         self.late_replies += u64::from(late);
         if !late
+            || context.sender().is_none()
             || context.last_sent >= now
             || !context.blocked.is_empty()
             || context.tick_number < SCENE_FIRST_UPDATE_TICK

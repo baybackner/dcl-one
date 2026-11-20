@@ -780,6 +780,14 @@ mod tests {
             false,
         );
         context.tick_number = SCENE_FIRST_UPDATE_TICK;
+        // a live scene: only it can be dispatched again
+        context.state = crate::renderer_context::SceneState::Live {
+            handle: crate::SceneThreadHandle {
+                sender: tokio::sync::mpsc::unbounded_channel().0,
+                kill_guard: None,
+            },
+            in_flight: false,
+        };
         let at = web_time::Instant::now();
         let reply = |sent, frame| SceneTickTiming {
             reply: Some(ReplyTiming {
@@ -823,6 +831,24 @@ mod tests {
         assert_eq!(report["stagedRotations"], 1);
         assert!((report["lastStagedYaw"].as_f64().unwrap() - 30.0).abs() < 1e-3);
         assert_eq!(report["samples"], 2);
+
+        // a late reply from a scene that has broken since is not dispatched again
+        let mut context = app
+            .world_mut()
+            .entity_mut(scene)
+            .take::<RendererSceneContext>()
+            .unwrap();
+        context.state = crate::renderer_context::SceneState::Broken;
+        let mut updates = app.world_mut().resource_mut::<SceneUpdates>();
+        assert!(!updates.movement_ticks.redispatch_due(
+            &context,
+            &reply(7, 8),
+            true,
+            2.0,
+            previous_loop_end,
+            loop_end
+        ));
+        assert_eq!(updates.movement_ticks.redispatches, 1);
     }
 
     #[test]

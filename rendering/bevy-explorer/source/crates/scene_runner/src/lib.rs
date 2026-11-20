@@ -1367,8 +1367,10 @@ fn send_scene_updates(
     let (_, mut context, mut tick_timing, scene_transform, is_super, traffic) =
         scenes.get_mut(ent).unwrap();
 
-    // only live scenes are queued, so this only fails if the scene broke this frame
+    // only live scenes are queued, so this only fails if the scene broke this frame. Its queue
+    // entry is spent, so the loop stops counting it as a job left to send
     let Some(sender) = context.sender().cloned() else {
+        updates.eligible_jobs -= 1;
         return;
     };
 
@@ -1376,8 +1378,8 @@ fn send_scene_updates(
 
     // generate updates for camera and player
     let mut player_transform = player.single().copied().unwrap_or_default();
-    if let Some(staged) = tick_timing.staged_rotation(engine_info.frame.0) {
-        updates.movement_ticks.record_staged_rotation(staged);
+    let staged_rotation = tick_timing.staged_rotation(engine_info.frame.0);
+    if let Some(staged) = staged_rotation {
         player_transform.rotation = staged;
     }
     for (mut affine, id, is_player) in [
@@ -1550,6 +1552,9 @@ fn send_scene_updates(
     } else {
         context.set_in_flight(true);
         context.last_sent = now;
+        if let Some(staged) = staged_rotation {
+            updates.movement_ticks.record_staged_rotation(staged);
+        }
         tick_timing.sent = Some(renderer_context::SentTiming {
             at: Instant::now(),
             frame: engine_info.frame.0,
