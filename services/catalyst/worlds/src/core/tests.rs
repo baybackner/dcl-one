@@ -2665,6 +2665,74 @@ async fn a_settings_rating_before_the_world_row_is_held_to_the_operators() {
 }
 
 #[tokio::test]
+async fn a_first_publish_is_held_to_the_operators_rating() {
+    let Some(f) = fixture().await else { return };
+    let owner = Wallet::random().address;
+    let operator = |world: &WorldName, rating: &'static str| {
+        sqlx::query(
+            "INSERT INTO explore.place_moderation (place_id, content_rating, set_by) \
+             VALUES ($1, $2, '0xmoderator')",
+        )
+        .bind(world.key().to_string())
+        .bind(rating)
+        .execute(&f.pool)
+    };
+    let ratings = |world: &WorldName| {
+        let (pool, key) = (f.pool.clone(), world.key().to_string());
+        async move {
+            let own: Option<String> =
+                sqlx::query_scalar("SELECT content_rating FROM worlds.worlds WHERE name = $1")
+                    .bind(&key)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let operator: Option<String> = sqlx::query_scalar(
+                "SELECT content_rating FROM explore.place_moderation WHERE place_id = $1",
+            )
+            .bind(&key)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let kinds: Vec<String> = sqlx::query_scalar(
+                "SELECT kind FROM explore.moderation_hooks \
+                 WHERE channel = 'places' AND subject = $1",
+            )
+            .bind(&key)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            (own, operator, kinds)
+        }
+    };
+
+    let laxer = world_name();
+    operator(&laxer, "A").await.unwrap();
+    publish_rated(&f, &laxer, &owner, "bafyfirst1", "T").await;
+    assert_eq!(
+        ratings(&laxer).await,
+        (
+            None,
+            Some("A".into()),
+            vec!["rating_downgrade_refused".into()]
+        ),
+        "a laxer rating is kept out"
+    );
+
+    let stricter = world_name();
+    operator(&stricter, "T").await.unwrap();
+    publish_rated(&f, &stricter, &owner, "bafyfirst2", "R").await;
+    assert_eq!(
+        ratings(&stricter).await,
+        (
+            Some("R".into()),
+            Some("R".into()),
+            vec!["rating_upgraded".into()]
+        ),
+        "a raise moves the operator's rating"
+    );
+}
+
+#[tokio::test]
 async fn settings_spawn_validation_runs_inside_the_update_transaction() {
     let Some(f) = fixture().await else { return };
     let owner = Wallet::random().address;

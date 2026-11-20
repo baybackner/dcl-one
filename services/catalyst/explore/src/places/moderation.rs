@@ -84,21 +84,28 @@ pub fn is_upgrading_rating(rating: &str, original: &str) -> bool {
 /// scale above with ingestion's reading of `E` as `T` and `M` as `A`;
 /// `None` off the scale.
 fn creator_rank(code: &str) -> Option<u8> {
-    match code {
-        "RP" | "PR" => Some(0),
+    match creator_code(code)? {
+        "RP" => Some(0),
         "T" | "E" => Some(1),
-        "A" | "M" => Some(2),
+        "A" => Some(2),
         "R" => Some(3),
         _ => None,
     }
 }
 
 /// The code a creator's rating is stored as: a [`RATINGS`] code, with `PR`
-/// as `RP` and `M` as `A`; `None` off the scale.
+/// as `RP` and `M` as `A`, read trimmed and in any case; `None` off the scale.
 pub fn creator_code(code: &str) -> Option<&'static str> {
-    match normalize_rating(code) {
+    let code = code.trim();
+    match RATINGS
+        .iter()
+        .chain(&["PR", "M"])
+        .copied()
+        .find(|r| r.eq_ignore_ascii_case(code))?
+    {
+        "PR" => Some("RP"),
         "M" => Some("A"),
-        c => RATINGS.iter().copied().find(|r| *r == c),
+        c => Some(c),
     }
 }
 
@@ -548,6 +555,8 @@ pub async fn capture_creator_rating(
     stored: &str,
     proposed: &str,
 ) -> Result<(), sqlx::Error> {
+    // A code stored before the rule (`M`, `r`) is shown on the scale.
+    let stored = creator_code(stored).unwrap_or(stored);
     let resolved = match row {
         RatedRow::Place { id, base_position } => Resolved {
             id: id.to_string(),
@@ -753,6 +762,11 @@ mod tests {
         assert_eq!(creator_code("PR"), Some("RP"));
         assert_eq!(creator_code("E"), Some("E"));
         assert_eq!(creator_code("X"), None);
+        assert_eq!(creator_code(" r "), Some("R"));
+        assert_eq!(creator_code("m"), Some("A"));
+        assert_eq!(creator_code("pr"), Some("RP"));
+        assert_eq!(CreatorRating::of(Some("r"), "A"), CreatorRating::Lower);
+        assert_eq!(CreatorRating::of(Some(" t"), "A"), CreatorRating::Raise);
         assert_eq!(strictest(["T", "R", "A"]), Some("R"));
         assert_eq!(strictest(["E", "T"]), Some("E"), "the first of a rank");
         assert_eq!(strictest(["X"]), None);

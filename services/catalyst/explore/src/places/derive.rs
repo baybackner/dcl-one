@@ -1706,6 +1706,78 @@ mod tests {
             .unwrap();
         assert_eq!(rating(&x).await.as_deref(), Some("T"));
         assert_eq!(recorded(&x).await.as_deref(), Some("T"));
+
+        // A legacy code is shown on the scale in the notices.
+        let payloads = |position: &String| {
+            let (pool, id) = (pool.clone(), id(position));
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT payload::text FROM explore.moderation_hooks \
+                     WHERE channel = 'places' AND subject = $1 ORDER BY created_at",
+                )
+                .bind(id)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let last = payloads(&m).await.pop().unwrap_or_default();
+        assert!(
+            last.contains("Actual rating: A - Proposed rating: T"),
+            "{last}"
+        );
+
+        // A predecessor holding `M` holds a new row on its parcels as `A`.
+        let (n, o) = (parcel(21), parcel(22));
+        upsert_page(&pool, deploy(&n, &[&n], "A", 0), site)
+            .await
+            .unwrap();
+        legacy(&n, "M").await;
+        upsert_page(&pool, deploy(&o, &[&n, &o], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&o).await.as_deref(), Some("A"));
+        assert_eq!(recorded(&o).await.as_deref(), Some("A"));
+        assert_eq!(kinds(&o).await, ["rating_downgrade_refused"]);
+
+        // An own `M` raised to `R` takes `R` and reports the raise from `A`.
+        let q = parcel(24);
+        upsert_page(&pool, deploy(&q, &[&q], "A", 0), site)
+            .await
+            .unwrap();
+        legacy(&q, "M").await;
+        upsert_page(&pool, deploy(&q, &[&q], "R", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&q).await.as_deref(), Some("R"));
+        assert_eq!(recorded(&q).await.as_deref(), Some("R"));
+        let last = payloads(&q).await.pop().unwrap_or_default();
+        assert!(last.contains("upgraded by Content Creator"), "{last}");
+        assert!(
+            last.contains("Previous rating: A - New rating: R"),
+            "{last}"
+        );
+
+        // A lowercase or padded code counts as its rating.
+        let (l, w) = (parcel(26), parcel(28));
+        for (position, code) in [(&l, "r"), (&w, " A")] {
+            upsert_page(&pool, deploy(position, &[position], "A", 0), site)
+                .await
+                .unwrap();
+            legacy(position, code).await;
+            upsert_page(&pool, deploy(position, &[position], "T", 1), site)
+                .await
+                .unwrap();
+        }
+        assert_eq!(rating(&l).await.as_deref(), Some("R"));
+        assert_eq!(recorded(&l).await.as_deref(), Some("R"));
+        let last = payloads(&l).await.pop().unwrap_or_default();
+        assert!(
+            last.contains("Actual rating: R - Proposed rating: T"),
+            "{last}"
+        );
+        assert_eq!(rating(&w).await.as_deref(), Some("A"));
+        assert_eq!(recorded(&w).await.as_deref(), Some("A"));
     }
 
     #[test]

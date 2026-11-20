@@ -166,13 +166,30 @@ pub async fn deploy_scene_with_on(
         .execute(&mut *tx)
         .await?;
     // Locks an existing row so the owner read is the one this write replaces.
-    let (previous_owner, stored_rating): (Option<String>, Option<String>) = sqlx::query_as(
+    let locked: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT owner, content_rating FROM worlds.worlds WHERE name = $1 FOR UPDATE",
     )
     .bind(world.key())
     .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or_default();
+    .await?;
+    // A first publish is held to an operator's rating of the name, as the
+    // settings are.
+    let insert_rating = match (&locked, s.content_rating.as_deref()) {
+        (None, Some(proposed)) => {
+            let held = world_rating_in_force(&mut tx, world.key(), None).await?;
+            let applies = CreatorRating::of(held.as_deref(), proposed).applies();
+            if applies {
+                follow_creator_world_rating(&mut tx, world.key(), proposed).await?;
+            }
+            if let (Some(base), Some(held)) = (places_notices, held.as_deref()) {
+                let row = RatedRow::World(world.key());
+                capture_creator_rating(&mut tx, base, row, held, proposed).await?;
+            }
+            applies.then_some(proposed)
+        }
+        _ => s.content_rating.as_deref(),
+    };
+    let (previous_owner, stored_rating) = locked.unwrap_or_default();
 
     let (is_insert, disabled): (bool, bool) = sqlx::query_as(
         r#"INSERT INTO worlds.worlds AS w (
@@ -194,7 +211,7 @@ pub async fn deploy_scene_with_on(
     .bind(&s.spawn_coordinates)
     .bind(&s.title)
     .bind(&s.description)
-    .bind(&s.content_rating)
+    .bind(insert_rating)
     .bind(s.skybox_time)
     .bind(&s.categories)
     .bind(s.single_player)
