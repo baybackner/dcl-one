@@ -94,11 +94,11 @@ impl Plugin for VisualsPlugin {
             .add_systems(Update, update_dof)
             .add_systems(Startup, setup.in_set(SetupSets::Main));
 
-        // Scene snapshots need the reflection source at the probe's resolution.
+        // The snapshot reflection source uses the smallest sky that the probe can downsample.
         let snapshots_only = app.world().resource::<TestingData>().test_scenes.is_some();
         app.insert_resource(AtmosphereSettings {
             resolution: if snapshots_only {
-                sky_envmap::SPECULAR_SIZE
+                2 * sky_envmap::SPECULAR_SIZE
             } else {
                 1024
             },
@@ -191,6 +191,7 @@ fn apply_global_light(
     )>,
     mut ambient: ResMut<AmbientLight>,
     time: Res<Time>,
+    testing: Option<Res<TestingData>>,
     mut fogs: Query<&mut DistanceFog, With<Camera3d>>,
     scene_light: (Res<SceneGlobalLight>, Res<environment::SceneEnvironment>),
     time_of_day: Res<TimeOfDay>,
@@ -266,10 +267,17 @@ fn apply_global_light(
     atmosphere.scene_rim = band(environment.rim);
     let procedural_clouds = environment.texture.is_none();
     atmosphere.scene_cloud_color = band(environment.cloud_color.filter(|_| procedural_clouds));
+    // The default cloud layer uses a daily seed and moves with wall time. Use a clear sky for
+    // its snapshot reflections while still honoring scene-authored cloud opacity.
+    let default_cloud_opacity = if testing.is_some_and(|data| data.test_scenes.is_some()) {
+        0.0
+    } else {
+        1.0
+    };
     atmosphere.scene_cloud_opacity = environment
         .cloud_opacity
         .filter(|_| procedural_clouds)
-        .unwrap_or(1.0);
+        .unwrap_or(default_cloud_opacity);
     atmosphere.scene_sun_visible = if next_light.sun_hidden { 0.0 } else { 1.0 };
     if let Some(speed) = environment.cloud_speed.filter(|_| procedural_clouds) {
         atmosphere.scene_cloud_rotation = (atmosphere.scene_cloud_rotation as f64
