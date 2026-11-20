@@ -315,7 +315,7 @@ pub enum RefundOutcome {
         revocations: usize,
     },
     AlreadyRefunded,
-    /// Signed before the transaction's latest refund decision (a later
+    /// Signed before the transaction's latest refund decision (a refund or
     /// reversal): applies nothing.
     Superseded,
     /// Not credited on this node: a `refunded` row now keeps it from being credited.
@@ -724,7 +724,7 @@ impl Credits {
             return Ok(RefundOutcome::AlreadyRefunded);
         }
         if !record_decision(&mut tx, transaction_id, Decision::Refund, notice).await? {
-            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund signed before the transaction's latest reversal: not applied");
+            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund signed before the transaction's latest refund decision: not applied");
             tx.commit().await?;
             return Ok(RefundOutcome::Superseded);
         }
@@ -896,9 +896,9 @@ impl Credits {
         .bind(transaction_id)
         .fetch_optional(&mut *tx)
         .await?;
-        // Signed before the latest decision (a later refund): it reverses an earlier one.
+        // Signed before the latest decision (a refund or reversal): it applies nothing.
         if !record_decision(&mut tx, transaction_id, Decision::Reversal, notice).await? {
-            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the transaction's latest refund: not applied");
+            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the transaction's latest refund decision: not applied");
             tx.commit().await?;
             return Ok(ReinstateOutcome::NotRefunded);
         }

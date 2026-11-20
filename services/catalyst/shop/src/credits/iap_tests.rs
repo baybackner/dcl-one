@@ -1987,7 +1987,14 @@ async fn a_refund_delivered_before_an_older_reversal_stays_charged_back() {
     let (_, out) = notify(&app, reversal).await;
     assert_eq!(out["action"], "not_refunded", "{out}");
     assert_eq!(standing(&pool, &id, &w, &hash).await, charged);
+}
 
+#[tokio::test]
+async fn a_second_refund_signed_after_a_reversal_keeps_that_reversal_from_applying() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let now_ms = chrono::Utc::now().timestamp_millis();
     // A second refund reference, signed after a reversal it is delivered
     // before, is the latest decision even though it charges nothing again.
     let w = scratch_wallet();

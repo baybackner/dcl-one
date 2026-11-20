@@ -150,7 +150,7 @@ pub async fn webhook(
                 RefundOutcome::AlreadyRefunded => {
                     Ok(Json(json!({ "ok": true, "action": "already_refunded" })))
                 }
-                // Apple reversed this refund in a later notification.
+                // Signed before the transaction's latest refund or reversal.
                 RefundOutcome::Superseded => {
                     Ok(Json(json!({ "ok": true, "action": "superseded" })))
                 }
