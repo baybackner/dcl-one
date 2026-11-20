@@ -804,6 +804,10 @@
           "kind": "regular"
         },
         {
+          "name": "cefNativeBridge.test.ts",
+          "kind": "regular"
+        },
+        {
           "name": "console.ts",
           "kind": "regular"
         },
@@ -6961,7 +6965,7 @@
     },
     {
       "path": "library/explorer-core/lib/cefNativeBridge.ts",
-      "sha256": "e70b6a5c87803a9c91c027f7a67a45d8abc0fe62e41e50bdb193f17ece39b7a0"
+      "sha256": "05f27b402e0aa328fb20d1bc587f61cfa7c9860c2f6c749c78f981a95dbaa4a2"
     },
     {
       "path": "library/explorer-core/lib/coiServiceWorker.ts",
@@ -7110,6 +7114,10 @@
     {
       "path": "library/explorer-core/test/bridgeClient.test.ts",
       "sha256": "f4c584203d049e36917180a532aaaef6501d80dfe6a82d70224045239564d7d0"
+    },
+    {
+      "path": "library/explorer-core/test/cefNativeBridge.test.ts",
+      "sha256": "edb4d7e9d437dbbd7efb041ece75aa22a69197cd11d89fc09f68baddd15f37b8"
     },
     {
       "path": "library/explorer-core/test/console.ts",
@@ -12983,6 +12991,21 @@
     {
       "from": "library/explorer-core/test/bridgeClient.test.ts",
       "to": "library/explorer-core/engine/bridge.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/cefNativeBridge.test.ts",
+      "to": "library/explorer-core/lib/cefNativeBridge.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/cefNativeBridge.test.ts",
+      "to": "library/explorer-core/lib/cefNativeBridge.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/explorer-core/test/cefNativeBridge.test.ts",
+      "to": "library/explorer-core/lib/cefNativeBridge.ts",
       "kind": "test:runtime"
     },
     {
@@ -46408,6 +46431,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/explorer-core/test/bridgeClient.test.ts",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/explorer-core/test/cefNativeBridge.test.ts",
       "kind": "type"
     },
     {

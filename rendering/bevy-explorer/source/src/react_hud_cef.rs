@@ -36,6 +36,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::tasks::IoTaskPool;
 use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, PrimaryWindow};
 use cef_offscreen::prelude::{
@@ -44,6 +45,7 @@ use cef_offscreen::prelude::{
 };
 use common::rpc::{RpcResultReceiver, RpcResultSender, RpcStreamSender};
 use common::structs::{OutOfWorld, PrimaryUser};
+use copypwasmta::{ClipboardContext, ClipboardProvider};
 use input_manager::{InputPriorities, MouseInteractionComponent};
 use scene_runner::update_scene::synthetic_pointer::SyntheticPointer;
 use std::collections::BTreeMap;
@@ -125,6 +127,9 @@ impl Plugin for ReactHudCefPlugin {
             hide_hud_for_photo_capture.in_set(common::sets::SceneSets::RestrictedActions),
         );
         app.add_observer(on_page_envelope);
+        // Linux only: a window on Wayland has the page copy and paste through the engine.
+        #[cfg(target_os = "linux")]
+        app.add_observer(offer_engine_clipboard);
     }
 }
 
@@ -167,6 +172,8 @@ struct ReactHudCef {
     pending_code: Vec<RpcResultReceiver<Result<Option<i32>, String>>>,
     // The page's `window.engine_console_command` calls awaiting the engine, paired with its call id.
     pending_console: Vec<(u64, RpcResultReceiver<Result<String, String>>)>,
+    // The page's pastes awaiting the clipboard's text.
+    pending_paste: Vec<RpcResultReceiver<String>>,
     // The page's stored values (react-web lib/prefs), kept in hud-prefs.json beside config.json.
     prefs: BTreeMap<String, String>,
     player_ready_sent: bool,
@@ -324,6 +331,7 @@ fn spawn_hud(
         pending_login: Vec::new(),
         pending_code: Vec::new(),
         pending_console: Vec::new(),
+        pending_paste: Vec::new(),
         prefs: read_prefs(),
         player_ready_sent: false,
         page_seen: false,
@@ -568,6 +576,31 @@ fn translate_edit_shortcuts(
     }
 }
 
+// A window on Wayland: the webview draws offscreen, and there a client with no focused surface
+// can neither set nor read the session's clipboard. Tells the page, each time it loads (its first
+// message is prefsLoad), to copy and paste through the engine: `copyToClipboard` and `paste` in
+// on_page_envelope. On X11 the webview's own clipboard works.
+#[cfg(target_os = "linux")]
+fn offer_engine_clipboard(
+    trigger: Trigger<PageEnvelope>,
+    state: Option<Res<ReactHudCef>>,
+    wayland: Option<Res<crate::wayland_clipboard::WaylandClipboard>>,
+    mut commands: Commands,
+) {
+    let (Some(state), Some(_)) = (state, wayland) else {
+        return;
+    };
+    if trigger.event().0.get("kind").and_then(|k| k.as_str()) == Some("prefsLoad") {
+        commands.trigger_targets(
+            HostEmitEvent {
+                id: "engineClipboard".to_string(),
+                payload: String::new(),
+            },
+            state.hud,
+        );
+    }
+}
+
 // Deliver a full Envelope (JSON string) to the page (the shim's cef.listen('bridge') feeds it to
 // the BroadcastChannel).
 fn to_page_raw(commands: &mut Commands, hud: Entity, envelope_json: String) {
@@ -670,6 +703,42 @@ fn on_page_envelope(
                         warn!("[react-hud-cef] could not open {}: {e}", dir.display());
                     }
                 }
+            }
+            // The page's copies and pastes, where offer_engine_clipboard asked for them.
+            Some("copyToClipboard") => {
+                if let Some(text) = env.get("text").and_then(|t| t.as_str()) {
+                    let text = text.to_owned();
+                    IoTaskPool::get()
+                        .spawn(async move {
+                            let copied = match ClipboardContext::new() {
+                                Ok(mut ctx) => {
+                                    ctx.set_contents(text).await.map_err(|e| e.to_string())
+                                }
+                                Err(e) => Err(e.to_string()),
+                            };
+                            if let Err(e) = copied {
+                                warn!("[react-hud-cef] could not copy to the clipboard: {e}");
+                            }
+                        })
+                        .detach();
+                }
+            }
+            Some("paste") => {
+                let (sx, rx) = RpcResultSender::channel();
+                IoTaskPool::get()
+                    .spawn(async move {
+                        let text = match ClipboardContext::new() {
+                            Ok(mut ctx) => ctx.get_contents().await.map_err(|e| e.to_string()),
+                            Err(e) => Err(e.to_string()),
+                        };
+                        match text {
+                            Ok(text) => sx.send(text),
+                            // an empty clipboard is an error on some platforms
+                            Err(e) => debug!("[react-hud-cef] nothing to paste: {e}"),
+                        }
+                    })
+                    .detach();
+                state.pending_paste.push(rx);
             }
             _ => {}
         }
@@ -827,6 +896,22 @@ fn pump_streams(state: Option<ResMut<ReactHudCef>>, mut commands: Commands) {
         };
         console_reply(&mut commands, hud, *id, result);
         false
+    });
+
+    // the shim types the text into the page's focused field
+    state.pending_paste.retain_mut(|rx| match rx.poll_once() {
+        Ok(None) => true,
+        Ok(Some(payload)) => {
+            commands.trigger_targets(
+                HostEmitEvent {
+                    id: "paste".to_string(),
+                    payload,
+                },
+                hud,
+            );
+            false
+        }
+        Err(()) => false,
     });
 
     // forward loginNew verification codes as they arrive (a code error also lands on the

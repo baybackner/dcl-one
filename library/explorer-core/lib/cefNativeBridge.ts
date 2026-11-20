@@ -39,7 +39,34 @@ export function installCefNativeBridge(): void {
   })
   // (HUD focus — including text focus — now flows through the bridge scene as a 'uiFocus'
   // message on every platform; see useEngineSession. The only engine-addressed messages are the
-  // console command below and the stored values further down.)
+  // clipboard and the console command below, and the stored values further down.)
+  // A window on Wayland (the engine says so, src/react_hud_cef.rs): this webview draws offscreen,
+  // and there a client with no focused surface can neither set nor read the session's clipboard.
+  // The engine can: every copy goes to it, and a paste asks it for the text, typed into the
+  // focused field when the answer comes.
+  cef.listen('engineClipboard', () => {
+    const copy = (text: string): void => cef.emit({ to: 'engine', kind: 'copyToClipboard', text })
+    const clipboard: Clipboard | undefined = navigator.clipboard
+    if (clipboard != null) {
+      clipboard.writeText = (text) => {
+        copy(text)
+        return Promise.resolve()
+      }
+    }
+    for (const type of ['copy', 'cut']) {
+      document.addEventListener(type, () => {
+        const text = document.getSelection()?.toString() ?? ''
+        if (text !== '') copy(text)
+      })
+    }
+    document.addEventListener('paste', (e) => {
+      e.preventDefault()
+      cef.emit({ to: 'engine', kind: 'paste' })
+    })
+    cef.listen('paste', (text) => {
+      document.execCommand('insertText', false, String(text))
+    })
+  })
   // Engine fps for the perf overlay (see useFps). HUD geometry does NOT come through here:
   // --ui-scale and the engine cutout rects are keyed off the scene's canvas report on every
   // platform (see lib/uiCanvasStore.ts).

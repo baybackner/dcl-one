@@ -497,6 +497,7 @@ dcl_deno = { workspace = true }
 dcl_deno_ipc = { workspace = true }
 mimalloc = { workspace = true }
 opener = { workspace = true }
+copypwasmta = { workspace = true }
 cef_offscreen = { workspace = true, optional = true }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
@@ -511,7 +512,6 @@ ash = { workspace = true }
 # loads it at run time instead, so each binary of this package starts where the library is absent.
 bevy = { workspace = true, features = ["wayland"] }
 winit = { workspace = true, features = ["wayland-dlopen", "rwh_06"] }
-copypwasmta = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }

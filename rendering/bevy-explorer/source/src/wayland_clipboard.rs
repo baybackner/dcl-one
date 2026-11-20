@@ -7,7 +7,7 @@ use winit::raw_window_handle::RawDisplayHandle;
 /// Present while the clipboard uses the primary window's Wayland display. The app drops its
 /// resources on exit while winit still holds that display open, and the drop ends the use.
 #[derive(Resource)]
-struct WaylandClipboard;
+pub(crate) struct WaylandClipboard;
 
 impl Drop for WaylandClipboard {
     fn drop(&mut self) {
