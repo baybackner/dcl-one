@@ -121,8 +121,10 @@ impl Default for StylizedSky {
 }
 
 mod uniform {
-    // the ShaderType derive's layout check function is never called
-    #![allow(dead_code)]
+    #![expect(
+        dead_code,
+        reason = "the ShaderType derive emits a never-called check fn per field"
+    )]
 
     use bevy::{prelude::*, render::render_resource::ShaderType};
 

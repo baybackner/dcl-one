@@ -115,8 +115,10 @@ impl Plugin for StarsPlugin {
 pub use settings::StarsSettings;
 
 mod settings {
-    // the ShaderType derive's layout check function is never called
-    #![allow(dead_code)]
+    #![expect(
+        dead_code,
+        reason = "the ShaderType derive emits a never-called check fn per field"
+    )]
 
     use super::*;
 
@@ -142,21 +144,21 @@ mod settings {
         /// seconds
         pub time: f32,
     }
+}
 
-    impl Default for StarsSettings {
-        fn default() -> Self {
-            Self {
-                brightness: 0.0,
-                twinkle: STARS_V2.twinkle,
-                patch_strength: STARS_V2.patch_strength,
-                shooting_rate: 0.0,
-                cells: STARS_V2.density,
-                radius: STARS_V2.size.to_radians(),
-                rotation_speed: STARS_V2.rotation_speed,
-                twinkle_speed: STARS_V2.twinkle_speed,
-                horizon_fade: STARS_V2.horizon_fade,
-                time: 0.0,
-            }
+impl Default for StarsSettings {
+    fn default() -> Self {
+        Self {
+            brightness: 0.0,
+            twinkle: STARS_V2.twinkle,
+            patch_strength: STARS_V2.patch_strength,
+            shooting_rate: 0.0,
+            cells: STARS_V2.density,
+            radius: STARS_V2.size.to_radians(),
+            rotation_speed: STARS_V2.rotation_speed,
+            twinkle_speed: STARS_V2.twinkle_speed,
+            horizon_fade: STARS_V2.horizon_fade,
+            time: 0.0,
         }
     }
 }
