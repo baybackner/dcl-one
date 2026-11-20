@@ -1054,24 +1054,25 @@ fn actual_velocity(from: DVec3, to: DVec3, delta: f64) -> DVec3 {
     }
 }
 
-/// The avatar capsule's nearest hit moving from `position` along `motion` for `span` (time when
-/// `motion` is a velocity, distance when it is a unit direction), over the colliders of the
-/// `scenes` around it: the span to the hit and the collider's normal there.
+/// The avatar capsule's nearest hit moving from `position` by up to `max_toi` times `motion` (a
+/// velocity for a time, or a unit direction for a distance), over the colliders of the `scenes`
+/// around it: the hit's time of impact, in the same multiples of `motion`, and the collider's
+/// normal there.
 fn cast_avatar(
     scenes: &mut Nearby,
     disabled: &HashMap<Entity, HashSet<ColliderId>>,
     position: DVec3,
     motion: DVec3,
-    span: f64,
+    max_toi: f64,
     skip_inside: bool,
 ) -> Option<(f64, DVec3)> {
     let mut nearest = None;
-    let mut span = span;
+    let mut max_toi = max_toi;
     scenes.for_each(|e, collider_data| {
         if let Some(hit) = collider_data.cast_avatar_nearest(
             position,
             motion,
-            span,
+            max_toi,
             ColliderLayer::ClPhysics as u32 | GROUND_COLLISION_MASK,
             skip_inside,
             false,
@@ -1081,8 +1082,8 @@ fn cast_avatar(
                 .unwrap_or_default(),
             -PLAYER_COLLIDER_OVERLAP,
         ) {
-            span = hit.toi as f64;
-            nearest = Some((span, hit.normal.as_dvec3()));
+            max_toi = hit.toi as f64;
+            nearest = Some((max_toi, hit.normal.as_dvec3()));
         }
     });
     nearest
@@ -1175,13 +1176,11 @@ fn step_reach() -> f64 {
 /// How far a move slower than [`step_push_speed`] pushes against a riser before it steps onto it:
 /// the default walk (1.5 m/s) pauses about 0.1 s at each riser, so climbing reads as stepping.
 const STEP_PUSH: f64 = 0.15;
-/// The frame the speed below which a move pushes against a riser is set for.
-const STEP_PUSH_FRAME: f64 = 1.0 / 60.0;
 /// Horizontal speed below which a move pushes against a riser for [`STEP_PUSH`] before it steps
-/// onto it: [`step_reach`] in a 60 Hz frame (about 5.5 m/s), so a walk pushes and a jog or a run
-/// steps at once, at any frame rate.
+/// onto it, about 5.5 m/s: a walk pushes, a jog or a run steps at once. It is a fixed speed, the
+/// same at every frame rate: the one that covers [`step_reach`] in a 60 fps frame.
 fn step_push_speed() -> f64 {
-    step_reach() / STEP_PUSH_FRAME
+    step_reach() * 60.0
 }
 
 /// How far across the ground [`apply_movement`] can carry the capsule in a frame of `delta`
