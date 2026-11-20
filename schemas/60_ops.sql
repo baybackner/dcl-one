@@ -556,7 +556,8 @@ CREATE INDEX usage_settlements_authorization_idx ON credits.usage_settlements (a
 -- indexed, and on a refund), drained by the `credits-revocations` job with
 -- the `CREDITS_REVOKER_KEY_FILE` signer when one is configured. The row is
 -- written in the transaction that decides the revocation; the job claims a
--- `pending` row (`attempts + 1`) before its broadcast, which runs outside it, `tx_hash` is stored before `eth_sendRawTransaction`
+-- `pending` row (`attempts + 1`, given back once it is sent; `attempts`
+-- counts failures) before its broadcast, which runs outside it, `tx_hash` is stored before `eth_sendRawTransaction`
 -- (a kill between the two leaves a pollable row; re-sending revokeCredits
 -- for an already revoked hash is a no-op on chain).
 CREATE TABLE credits.revocations (

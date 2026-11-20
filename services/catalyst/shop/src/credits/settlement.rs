@@ -54,7 +54,7 @@ pub const GATE_TTL: Duration = Duration::from_secs(60);
 pub const JOB_NAME: &str = "credits-settlement";
 /// Revocations one pass drives at most.
 const REVOCATIONS_PER_PASS: i64 = 20;
-const REVOCATION_MAX_ATTEMPTS: i32 = 10;
+pub(crate) const REVOCATION_MAX_ATTEMPTS: i32 = 10;
 const REVOCATION_GAS_CAP: u64 = 300_000;
 /// Logs one settlement statement lists (keyset over the log key).
 const SETTLE_BATCH: i64 = 200;
@@ -527,9 +527,10 @@ pub async fn enqueue_revocation(
 }
 
 /// Claims a `pending` revocation for its broadcast by counting the attempt,
-/// if it still has the `attempts` the pass read. A claimed row
-/// (`attempts > 0`) is never withdrawn, since its broadcast may have
-/// reached the chain; false when the row is gone or another pass took it.
+/// if it still has the `attempts` the pass read; a successful broadcast
+/// gives the attempt back, so `attempts` keeps counting failures. A pending
+/// row with `attempts > 0` is never withdrawn, since a broadcast of it may
+/// have reached the chain; false when the row is gone or another pass took it.
 pub(crate) async fn claim_revocation(
     pool: &sqlx::PgPool,
     credit_hash: &str,
@@ -544,6 +545,30 @@ pub(crate) async fn claim_revocation(
     .execute(pool)
     .await?;
     Ok(res.rows_affected() == 1)
+}
+
+/// Records a revocation's state; `attempts_delta` adjusts the count of failed attempts.
+pub(crate) async fn mark_revocation(
+    pool: &sqlx::PgPool,
+    credit_hash: &str,
+    status: &str,
+    tx_hash: Option<&str>,
+    error: Option<&str>,
+    attempts_delta: i32,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "UPDATE credits.revocations SET status = $2, tx_hash = COALESCE($3, tx_hash), last_error = $4, \
+             attempts = GREATEST(attempts + $5, 0), updated_at = timezone('UTC', now()) \
+         WHERE credit_hash = $1",
+    )
+    .bind(credit_hash)
+    .bind(status)
+    .bind(tx_hash)
+    .bind(error)
+    .bind(attempts_delta)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// What one revocation pass did.
@@ -610,21 +635,22 @@ impl Revoker {
             let status: String = r.get("status");
             let tx_hash: Option<String> = r.get("tx_hash");
             let attempts: i32 = r.get("attempts");
+            let pool = &self.credits.pool;
             match status.as_str() {
                 "pending" => {
                     // Withdrawn or taken by another pass since the read.
-                    if !claim_revocation(&self.credits.pool, &credit_hash, attempts).await? {
+                    if !claim_revocation(pool, &credit_hash, attempts).await? {
                         continue;
                     }
-                    // The claim counted this attempt.
+                    // The claim counted this attempt; a successful broadcast gives it back.
                     match self.broadcast(&credit_hash, &contract).await {
                         Ok(hash) => {
-                            self.mark(&credit_hash, "sent", Some(&hash), None, false)
+                            mark_revocation(pool, &credit_hash, "sent", Some(&hash), None, -1)
                                 .await?;
                             outcome.sent += 1;
                         }
                         Err(e) => {
-                            self.mark(&credit_hash, "pending", None, Some(&e), false)
+                            mark_revocation(pool, &credit_hash, "pending", None, Some(&e), 0)
                                 .await?;
                             outcome.errors += 1;
                         }
@@ -634,29 +660,31 @@ impl Revoker {
                     let Some(hash) = tx_hash else { continue };
                     match self.signer.fetch_receipt_once(&hash).await {
                         Ok((ReceiptOutcome::Confirmed, _)) => {
-                            self.mark(&credit_hash, "confirmed", Some(&hash), None, false)
+                            mark_revocation(pool, &credit_hash, "confirmed", Some(&hash), None, 0)
                                 .await?;
                             outcome.confirmed += 1;
                         }
                         Ok((ReceiptOutcome::Reverted, _)) => {
-                            self.mark(
+                            mark_revocation(
+                                pool,
                                 &credit_hash,
                                 "failed",
                                 Some(&hash),
                                 Some("revokeCredits reverted"),
-                                true,
+                                1,
                             )
                             .await?;
                             outcome.failed += 1;
                         }
                         Ok((ReceiptOutcome::Pending, _)) => {}
                         Err(e) => {
-                            self.mark(
+                            mark_revocation(
+                                pool,
                                 &credit_hash,
                                 "sent",
                                 Some(&hash),
                                 Some(&e.to_string()),
-                                true,
+                                1,
                             )
                             .await?;
                             outcome.errors += 1;
@@ -683,29 +711,6 @@ impl Revoker {
             .send_direct_call(to, revoke_calldata(hash))
             .await
             .map_err(|e| e.to_string())
-    }
-
-    async fn mark(
-        &self,
-        credit_hash: &str,
-        status: &str,
-        tx_hash: Option<&str>,
-        error: Option<&str>,
-        count_attempt: bool,
-    ) -> Result<(), ApiError> {
-        sqlx::query(
-            "UPDATE credits.revocations SET status = $2, tx_hash = COALESCE($3, tx_hash), last_error = $4, \
-                 attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END, updated_at = timezone('UTC', now()) \
-             WHERE credit_hash = $1",
-        )
-        .bind(credit_hash)
-        .bind(status)
-        .bind(tx_hash)
-        .bind(error)
-        .bind(count_attempt)
-        .execute(&self.credits.pool)
-        .await?;
-        Ok(())
     }
 }
 

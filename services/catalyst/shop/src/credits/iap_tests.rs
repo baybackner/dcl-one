@@ -1672,6 +1672,42 @@ async fn a_reversed_refund_keeps_a_revocation_the_job_claimed() {
     );
 }
 
+#[tokio::test]
+async fn a_sent_revocation_keeps_its_failure_budget_for_polling() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let hash = pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    let last = super::settlement::REVOCATION_MAX_ATTEMPTS - 1;
+    sqlx::query("UPDATE credits.revocations SET attempts = $2 WHERE credit_hash = $1")
+        .bind(&hash)
+        .bind(last)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // The last allowed broadcast succeeds: the row is still polled for its receipt.
+    assert!(
+        super::settlement::claim_revocation(&pool, &hash, last)
+            .await
+            .unwrap()
+    );
+    let tx = format!("0x{}", "ab".repeat(32));
+    super::settlement::mark_revocation(&pool, &hash, "sent", Some(&tx), None, -1)
+        .await
+        .unwrap();
+    let (status, attempts): (String, i32) =
+        sqlx::query_as("SELECT status, attempts FROM credits.revocations WHERE credit_hash = $1")
+            .bind(&hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), attempts), ("sent", last));
+    assert!(attempts < super::settlement::REVOCATION_MAX_ATTEMPTS);
+}
+
 async fn unblock_audits(pool: &PgPool, address: &str) -> i64 {
     sqlx::query_scalar(
         "SELECT count(*) FROM ops.admin_audit \
