@@ -985,6 +985,10 @@
           "kind": "directory"
         },
         {
+          "name": "gallery",
+          "kind": "directory"
+        },
+        {
           "name": "index.ts",
           "kind": "regular"
         },
@@ -6699,7 +6703,7 @@
     },
     {
       "path": "library/explorer-core/features/donate/tip.ts",
-      "sha256": "8d83e3410f013de8165e9d97a1d48b6745cb442a07a1da22026d2430004be463"
+      "sha256": "a50a5a09a90964f03e51e31499645c5dd5d9344c3a1014813338c264385e89b1"
     },
     {
       "path": "library/explorer-core/features/editorHost/config.ts",
@@ -7087,7 +7091,7 @@
     },
     {
       "path": "library/explorer-core/test/donateTip.test.ts",
-      "sha256": "920446a0dcf3b0ef15f1422b584a37ddc43df345eb2595210b9ab87934107e1e"
+      "sha256": "8ade0dcb99cd2df45f3acdd47a9f911d9deda4864de509fe72d44b33bc99331c"
     },
     {
       "path": "library/explorer-core/test/emailLogin.test.ts",

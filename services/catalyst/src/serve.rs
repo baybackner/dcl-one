@@ -562,6 +562,7 @@ pub async fn serve(
         Some(market.index.clone()),
     ));
     explore.places.set_land_authz(land.clone());
+    explorer_api.attach_land_authz(land.clone());
     // After the LAND authority attaches: the places derive pass records each
     // parcel's owner from it.
     explore.spawn_jobs(&jobs, http_client.clone());
