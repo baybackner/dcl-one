@@ -1134,9 +1134,10 @@ async fn settle_ratings(
                 .and_then(|(rating, _)| rating.as_deref())
                 .and_then(moderation::creator_code)
             {
+                let set = parcel_set(p);
                 for position in positions_of(p) {
                     if locked.binary_search(&position).is_ok() {
-                        missing.push(position, rating, p, owners);
+                        missing.push(position, rating, p, &set, owners);
                     }
                 }
             }
@@ -1179,8 +1180,9 @@ async fn settle_ratings(
             }
             continue;
         };
+        let set = parcel_set(p);
         for position in positions_of(p) {
-            recorded.push(position, &rating, p, owners);
+            recorded.push(position, &rating, p, &set, owners);
         }
         if fresh || Some(&rating) != own.as_ref() {
             ids.push(p.id.clone());
@@ -1234,15 +1236,16 @@ fn creator_of(p: &DerivedPlace) -> String {
         .unwrap_or_default()
 }
 
-/// A place's whole parcel set as its parcel records keep it: its distinct
-/// positions in byte order, joined by `;` (`moderation::OPERATOR_PARCEL_RATINGS`
-/// builds the same key). Two places with equal keys cover exactly the same
-/// parcels.
+/// A place's whole parcel set as its parcel records keep it: the hex SHA-256
+/// of its distinct positions in byte order, joined by `;`
+/// (`moderation::OPERATOR_PARCEL_RATINGS` builds the same key). Two places
+/// with equal keys cover exactly the same parcels.
 fn parcel_set(p: &DerivedPlace) -> String {
+    use sha2::{Digest, Sha256};
     let mut positions = positions_of(p);
     positions.sort();
     positions.dedup();
-    positions.join(";")
+    hex::encode(Sha256::digest(positions.join(";").as_bytes()))
 }
 
 /// Parcel records to write: each parcel's rating, place, creator, LAND
@@ -1263,6 +1266,7 @@ impl Records {
         position: String,
         rating: &str,
         place: &DerivedPlace,
+        set: &str,
         owners: &HashMap<String, String>,
     ) {
         self.owners
@@ -1271,7 +1275,7 @@ impl Records {
         self.ratings.push(rating.to_string());
         self.places.push(place.id.clone());
         self.creators.push(creator_of(place));
-        self.sets.push(parcel_set(place));
+        self.sets.push(set.to_string());
     }
 }
 
@@ -1767,7 +1771,7 @@ mod tests {
             .bind(vec!["0xauthor".to_string(); 2])
             .bind(true)
             .bind(vec![String::new(); 2])
-            .bind(vec![parcels.join(";"); 2])
+            .bind(vec!["test".to_string(); 2])
             .execute(&mut *page)
             .await
             .expect("the page is not chosen as a deadlock victim");
@@ -2730,7 +2734,7 @@ mod tests {
             }
         };
 
-        // The owner's places: a creator's raise, an operator's rating, and
+        // The owner's places: a creator's raise, two operator's ratings and
         // two more raises; then the LAND changes owner and the rows go.
         page(Ratings::deploy(owner, &p[0], &[&p[0], &p[1]], Some("A"), 0)).await;
         page(Ratings::deploy(owner, &p[2], &[&p[2], &p[3]], Some("T"), 0)).await;
@@ -2744,7 +2748,16 @@ mod tests {
             0,
         ))
         .await;
-        for base in [&p[0], &p[2], &p[4], &p[7]] {
+        page(Ratings::deploy(
+            owner,
+            &p[10],
+            &[&p[10], &p[11]],
+            Some("T"),
+            0,
+        ))
+        .await;
+        t.rate(&p[10], "R", Some(&land)).await;
+        for base in [&p[0], &p[2], &p[4], &p[7], &p[10]] {
             t.prune(base).await;
         }
         land_index(&pool, &all, buyer).await;
@@ -2781,6 +2794,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(place, super::super::parcel_place_id(&p[3]));
+
+        // So is an unrated one, which keeps the operator's records.
+        page(Ratings::deploy(wallet, &p[11], &[&p[11], &p[10]], None, 1)).await;
+        assert_eq!(t.rating(&p[11]).await.as_deref(), Some("R"));
+        assert!(t.kinds(&p[11]).await.is_empty());
+        assert_eq!(t.record(&p[10]).await, Some(("R".into(), true)));
+        assert_eq!(t.record(&p[11]).await, Some(("R".into(), true)));
 
         // One parcel more, or one fewer, starts fresh with no notice.
         page(Ratings::deploy(

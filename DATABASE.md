@@ -514,8 +514,8 @@ is unpublished or a parcel is unindexed, the owner is unknown and only the
 place and the creator match.
 
 `explore.place_parcel_rating` keeps the rating last held on each parcel by the
-derived place covering it, with that place's id, whole parcel set (its
-distinct positions in byte order, joined by `;`), creator and LAND owner, and
+derived place covering it, with that place's id, whole parcel set (the
+hex SHA-256 of its distinct positions in byte order, joined by `;`), creator and LAND owner, and
 whether an operator's rating set it, so the rating
 outlives a row the pass prunes (an unpublished scene, or one moved to another
 base parcel by the same creator). Workload: one row per rated parcel the

@@ -352,7 +352,7 @@ const OPERATOR_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
         (position, content_rating, place_id, parcels, creator_address, owner_address, operator)
     SELECT DISTINCT pos, $2, p.id,
-           (SELECT string_agg(e, ';' ORDER BY e COLLATE "C")
+           (SELECT encode(sha256(convert_to(string_agg(e, ';' ORDER BY e COLLATE "C"), 'UTF8')), 'hex')
             FROM (SELECT DISTINCT e FROM jsonb_array_elements_text(p.raw->'positions') AS e) AS s),
            NULLIF(lower(btrim(p.creator_address)), ''),
            NULLIF((SELECT o.owner FROM unnest($3::text[], $4::text[]) AS o(position, owner)
