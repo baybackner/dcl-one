@@ -118,8 +118,14 @@ export const myPlacesQuery = (identity: AuthIdentity) =>
       fetchDestinations({ owner: identity.signer.toLowerCase(), limit: MEMBER_LIMIT, order_by: undefined }, { identity, signal }),
   });
 
+/**
+ * Production's live threshold: its `dapps-places-live-min-user` flag, which it serves as 0, so the rail
+ * always shows the most active scenes (Genesis Plaza first on a quiet node) instead of an empty section.
+ */
+export const LIVE_MIN_USERS = 0;
+
 /** The four busiest scenes with at least `minUsers` people, from the live feed. */
-export function selectLiveRail(rows: readonly Destination[], minUsers = 1): Destination[] {
+export function selectLiveRail(rows: readonly Destination[], minUsers = LIVE_MIN_USERS): Destination[] {
   return rows
     .filter((place) => !hiddenFromBrowse(place) && (place.user_count ?? 0) >= minUsers)
     .sort((a, b) => (b.user_count ?? 0) - (a.user_count ?? 0))

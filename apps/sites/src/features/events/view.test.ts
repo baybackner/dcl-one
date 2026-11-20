@@ -45,6 +45,38 @@ describe("liveNowItems", () => {
     expect(items).toEqual([]);
   });
 
+  describe("when no place reaches the player threshold", () => {
+    it("should still open the rail with Genesis Plaza, with its real player count", () => {
+      const plaza = placeRecord({ id: "plaza", title: "Genesis Plaza", positions: ["0,0"], user_count: 0 });
+      const items = liveNowItems({
+        events: [eventRecord({ live: true, x: 5, y: 5 })],
+        places: [placeRecord({ id: "quiet", positions: ["5,5"], user_count: 2 }), plaza],
+      });
+      expect(items).toEqual([{ kind: "place", place: plaza, users: 0 }]);
+    });
+
+    it("should find Genesis Plaza by its parcel when its title differs", () => {
+      const plaza = placeRecord({ id: "spawn", title: "Spawn", positions: ["0,0", "0,1"], user_count: 1 });
+      expect(liveNowItems({ events: [], places: [plaza] }).map((item) => item.kind === "place" && item.place.id)).toEqual(["spawn"]);
+    });
+
+    it("should not take a World on 0,0 for Genesis Plaza", () => {
+      expect(liveNowItems({ events: [], places: [placeRecord({ world: true, world_name: "brai.dcl.eth", positions: ["0,0"], user_count: 0 })] })).toEqual([]);
+    });
+
+    it("should leave the rail empty when the feed has no Genesis Plaza", () => {
+      expect(liveNowItems({ events: [], places: [] })).toEqual([]);
+    });
+  });
+
+  it("should not add Genesis Plaza when a busy place already fills the rail", () => {
+    const items = liveNowItems({
+      events: [],
+      places: [placeRecord({ id: "busy", positions: ["9,9"], user_count: 30 }), placeRecord({ id: "plaza", title: "Genesis Plaza", positions: ["0,0"], user_count: 0 })],
+    });
+    expect(items.map((item) => item.kind === "place" && item.place.id)).toEqual(["busy"]);
+  });
+
   it("should honour a lower threshold from the page URL", () => {
     expect(liveNowItems({ events: [], places: [placeRecord({ user_count: 1 })] }, 1)).toHaveLength(1);
   });

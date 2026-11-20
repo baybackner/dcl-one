@@ -159,12 +159,25 @@ function placeOf(event: Event, places: readonly Place[]): Place | undefined {
   return places.find((place) => !place.world && place.positions.includes(parcel));
 }
 
+/** Genesis Plaza: the Genesis City scene source names so, else the one on parcel 0,0. */
+function genesisPlaza(places: readonly Place[]): Place | undefined {
+  const city = places.filter((place) => !place.world);
+  return city.find((place) => place.title?.toLowerCase().includes("genesis plaza")) ?? city.find((place) => place.positions.includes("0,0"));
+}
+
 /**
  * Source's Live Now: places with at least `minUsers` players, each shown as the live event running
  * there when there is one: events first, then the other places, each busiest first. A live event counts its place's players, so an event in an
- * empty scene does not make the rail.
+ * empty scene does not make the rail. When nothing qualifies, Genesis Plaza still opens the rail, as source does.
  */
 export function liveNowItems(data: LiveNowData, minUsers = DEFAULT_MIN_USERS): LiveNowItem[] {
+  const items = busyItems(data, minUsers);
+  if (items.length) return items;
+  const plaza = genesisPlaza(data.places);
+  return plaza ? [{ kind: "place", place: plaza, users: plaza.user_count ?? 0 }] : [];
+}
+
+function busyItems(data: LiveNowData, minUsers: number): LiveNowItem[] {
   const busy = data.places.filter((place) => (place.user_count ?? 0) >= minUsers);
   const used = new Set<string>();
   const events: LiveNowItem[] = [];

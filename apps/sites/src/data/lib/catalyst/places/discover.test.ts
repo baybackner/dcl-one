@@ -126,10 +126,18 @@ describe("when choosing Live Now", () => {
     expect(selectLiveRail(rows).map((row) => row.id)).toEqual(["p9", "p7", "p4", "p3"]);
   });
 
-  it("should exclude empty, missing and negative head counts by default", () => {
-    expect(selectLiveRail([destination({ user_count: 0 }), destination({ user_count: null }), destination({ user_count: -1 })])).toEqual(
-      [],
-    );
+  it("should keep empty scenes by default, so a quiet node still shows the most active ones", () => {
+    const plaza = destination({ id: "plaza", user_count: 0 });
+    const unknown = destination({ id: "unknown", user_count: null });
+    expect(selectLiveRail([plaza, unknown]).map((row) => row.id)).toEqual(["plaza", "unknown"]);
+  });
+
+  it("should exclude a negative head count", () => {
+    expect(selectLiveRail([destination({ user_count: -1 })])).toEqual([]);
+  });
+
+  it("should still hide entries the grid hides when every scene is empty", () => {
+    expect(selectLiveRail([destination({ title: "Empty", user_count: 0 })])).toEqual([]);
   });
 
   it("should leave out scenes under the minimum head count", () => {
