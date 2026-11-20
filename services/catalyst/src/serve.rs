@@ -990,15 +990,17 @@ pub async fn serve(
         None => tracing::info!("COMMS_FIXED_ADAPTER unset: /about carries no comms block"),
     }
 
-    let outfits = Arc::new(shop::outfits::State::new(
+    let outfits = shop::outfits::State::new(
         pool.clone(),
         storage.clone(),
         shop::outfits::Settings {
-            creators: shop::outfits::Settings::parse_creators(&config.shop.shop_outfit_creators),
+            creators: shop::outfits::Settings::creators_override(&config.shop.shop_outfit_creators),
             writes_enabled: config.writes.data_writes_enabled,
         },
         eip1654.clone(),
-    ));
+    )
+    .with_flags(market.clone());
+    let outfits = Arc::new(outfits);
     let mana = Arc::new(
         shop::mana::State::new(
             pool.clone(),
