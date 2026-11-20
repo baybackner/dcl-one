@@ -337,7 +337,8 @@ impl PeerAcks {
 /// inputs wait while traffic is in flight with no acknowledgement for [`STALL_AFTER`]. Only the
 /// latest frame of each kind waits; an input also waits behind a waiting teleport or emote, whose
 /// start carries an older pose. From a round trip of [`PACE_INPUTS_FROM`], inputs are also spaced
-/// by it (see [`UplinkGate::input_spacing`]).
+/// by it (see [`UplinkGate::input_spacing`]). A teleport that goes drops a held input, whose pose
+/// it supersedes, so the servers never get an older pose after it.
 #[derive(Default)]
 struct UplinkGate {
     /// Since when reliable traffic has been in flight with no acknowledgement arriving.
@@ -470,8 +471,19 @@ impl UplinkGate {
             _ => {}
         }
         match (was_holding, self.held.is_empty()) {
-            (false, false) => bevy::log::debug!("pulse: uplink unconfirmed, holding frames"),
-            (true, true) => bevy::log::debug!("pulse: uplink confirmed, held frames sent"),
+            (false, false) if stalled => {
+                bevy::log::debug!("pulse: uplink unconfirmed, holding frames")
+            }
+            (false, false)
+                if self
+                    .held
+                    .iter()
+                    .any(|held| DiscreteEventPacer::paces(held.kind)) =>
+            {
+                bevy::log::debug!("pulse: reliable messages unacknowledged, holding frames")
+            }
+            (false, false) => bevy::log::debug!("pulse: holding an input for its spacing"),
+            (true, true) => bevy::log::debug!("pulse: held frames sent"),
             _ => {}
         }
         out
@@ -522,6 +534,10 @@ impl UplinkGate {
                 }
                 if frame.kind == FrameKind::Input {
                     self.input_sent_at = Some(now);
+                }
+                if frame.kind == FrameKind::Teleport {
+                    // A held input is older than the teleport, which supersedes its pose.
+                    self.held.retain(|held| held.kind != FrameKind::Input);
                 }
                 out.push(frame);
             }

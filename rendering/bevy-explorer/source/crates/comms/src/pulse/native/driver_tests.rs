@@ -578,6 +578,89 @@ fn inputs_are_spaced_by_a_long_round_trip() {
     );
 }
 
+/// A teleport overtaking an input held for its spacing drops it: the servers would otherwise get
+/// the teleport and then the older pose. The next input still goes a spacing after the last one.
+#[test]
+fn a_teleport_drops_an_input_held_for_its_spacing() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, with_round_trip(settled(1), Duration::from_millis(800)));
+    assert_eq!(gate.input_spacing(), Duration::from_millis(175));
+    let at = |ms| now + Duration::from_millis(ms);
+    assert_eq!(gate.admit(vec![frame(FrameKind::Input, 1)], at(0)).len(), 1);
+    assert!(gate
+        .admit(vec![frame(FrameKind::Input, 2)], at(50))
+        .is_empty());
+
+    assert_eq!(
+        tags(&gate.admit(vec![frame(FrameKind::Teleport, 3)], at(80))),
+        [(FrameKind::Teleport, 3)]
+    );
+    assert!(gate.held.is_empty());
+    assert_eq!(gate.wake_within(at(80)), MAINTENANCE_INTERVAL);
+    assert!(gate.admit(Vec::new(), at(175)).is_empty());
+
+    assert!(gate
+        .admit(vec![frame(FrameKind::Input, 4)], at(120))
+        .is_empty());
+    assert_eq!(
+        tags(&gate.admit(Vec::new(), at(175))),
+        [(FrameKind::Input, 4)]
+    );
+}
+
+/// An emote carries no position, so an input held for its spacing still goes after it.
+#[test]
+fn an_emote_keeps_an_input_held_for_its_spacing() {
+    let mut gate = UplinkGate::default();
+    let now = Instant::now();
+    gate.observe(now, with_round_trip(settled(1), Duration::from_millis(800)));
+    let at = |ms| now + Duration::from_millis(ms);
+    assert_eq!(gate.admit(vec![frame(FrameKind::Input, 1)], at(0)).len(), 1);
+    assert!(gate
+        .admit(vec![frame(FrameKind::Input, 2)], at(50))
+        .is_empty());
+
+    assert_eq!(
+        tags(&gate.admit(vec![frame(FrameKind::Emote, 3)], at(80))),
+        [(FrameKind::Emote, 3)]
+    );
+    assert_eq!(
+        tags(&gate.admit(Vec::new(), at(175))),
+        [(FrameKind::Input, 2)]
+    );
+}
+
+/// An input and a newer teleport held behind a stall go in order when it ends; if the input must
+/// still wait for its spacing, the teleport goes and the input is dropped.
+#[test]
+fn an_input_held_with_a_teleport_never_goes_after_it() {
+    for (round_trip, expected) in [
+        (
+            Duration::from_millis(800),
+            vec![(FrameKind::Input, 2), (FrameKind::Teleport, 3)],
+        ),
+        // A spacing of 700 ms, not yet due when the stall ends.
+        (Duration::from_secs(5), vec![(FrameKind::Teleport, 3)]),
+    ] {
+        let mut gate = UplinkGate::default();
+        let now = Instant::now();
+        let at = |ms| now + Duration::from_millis(ms);
+        gate.observe(at(0), with_round_trip(in_flight(1, 1), round_trip));
+        assert_eq!(gate.admit(vec![frame(FrameKind::Input, 1)], at(0)).len(), 1);
+        assert!(gate
+            .admit(vec![frame(FrameKind::Input, 2)], at(600))
+            .is_empty());
+        assert!(gate
+            .admit(vec![frame(FrameKind::Teleport, 3)], at(610))
+            .is_empty());
+
+        gate.observe(at(650), with_round_trip(settled(2), round_trip));
+        assert_eq!(tags(&gate.admit(Vec::new(), at(650))), expected);
+        assert!(gate.held.is_empty());
+    }
+}
+
 /// The driver itself, against a loopback server: probes go out on an idle link, and an input held
 /// while the server stops answering goes on a later pass that no outbound frame woke, once the
 /// server answers again.
