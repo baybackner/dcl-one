@@ -11,8 +11,8 @@ name: Creator Hub / CI
 # label, and for Linux alone with the `ci:linux` label: add the label, then push or reopen. Main
 # builds all three; a manual run on another branch builds macOS and Windows.
 #
-# A pull request's test builds do not wait for the checks: its packages start after `changes`, and
-# its desktop build after its inspector package. Main and manual runs publish
+# A pull request's test builds do not wait for the checks: its packages start after `changes` and
+# the pending comment, and its desktop build after its inspector package. Main and manual runs publish
 # to npm and can release, so there the packages and the desktop build wait for the checks and the
 # pre-release drop. Job dependencies cannot change with the event, so each path has its own jobs.
 #
@@ -264,8 +264,10 @@ jobs:
   # the `ci:linux` label builds Linux alone.
   asset-packs-pr:
     name: asset-packs
-    needs: [ changes ]
-    if: github.event_name == 'pull_request' && needs.changes.outputs.creator-hub == 'true'
+    # After the pending comment, so that a fast build never writes its result under it. A pending
+    # job that was skipped or that failed does not stop the builds.
+    needs: [ changes, test_builds_pending ]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.creator-hub == 'true' }}
     uses: ./.github/workflows/creator-hub-asset-packs.yml
     secrets:
       SDK_TEAM_AWS_REGION: ${{ secrets.SDK_TEAM_AWS_REGION }}

@@ -456,6 +456,14 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         self.assertIn("      linux: ${{ github.ref == 'refs/heads/main' }}\n", found['creator-hub'])
         self.assertIn(f'      macos-windows: ${{{{ {label} }}}}\n', found['creator-hub-pr'])
         self.assertIn('      linux: true\n', found['creator-hub-pr'])
+        # Each event has its own package jobs: main and manual runs publish after the checks and the
+        # drop; a pull request builds after `changes` and the pending comment, without the checks.
+        self.assertIn("    if: github.event_name != 'pull_request'\n", found['asset-packs'])
+        self.assertIn('    needs: [ drop_pre_release ]\n', found['asset-packs'])
+        self.assertIn('    needs: [ changes, test_builds_pending ]\n', found['asset-packs-pr'])
+        self.assertIn("    if: ${{ !cancelled() && github.event_name == 'pull_request' "
+                      "&& needs.changes.outputs.creator-hub == 'true' }}\n", found['asset-packs-pr'])
+        self.assertIn('    needs: [ asset-packs-pr ]\n', found['inspector-pr'])
         self.assertIn('    needs: [ changes, creator-hub ]\n', found['prune_pre_releases'])
         self.assertIn('creator-hub, asset-packs-pr, inspector-pr, creator-hub-pr, prune_pre_releases ]', found['result'])
         self.assertIn('any(.value.result == "failure" or .value.result == "cancelled")', found['result'])
