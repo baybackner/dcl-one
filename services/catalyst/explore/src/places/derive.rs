@@ -986,12 +986,17 @@ async fn settle_ratings(
     for p in rows {
         let fresh = inserted.get(&p.id) == Some(&true);
         if !settled.iter().any(|s| s.id == p.id) {
-            if let Some((Some(rating), _)) =
-                before.get(&p.id).filter(|_| inserted.contains_key(&p.id))
+            // A row stored before the rule may hold any code: `M` is recorded
+            // as `A`, an off-scale code not at all.
+            if let Some(rating) = before
+                .get(&p.id)
+                .filter(|_| inserted.contains_key(&p.id))
+                .and_then(|(rating, _)| rating.as_deref())
+                .and_then(moderation::creator_code)
             {
                 for position in positions_of(p) {
                     missing.push(position);
-                    missing_ratings.push(rating.clone());
+                    missing_ratings.push(rating.to_string());
                 }
             }
             continue;
@@ -1020,7 +1025,14 @@ async fn settle_ratings(
             };
             moderation::capture_creator_rating(tx, base, row, stored, declared).await?;
         }
-        let Some(rating) = rating else { continue };
+        // A held `M` (stored before the rule) is taken as `A`.
+        let Some(rating) = rating
+            .as_deref()
+            .and_then(moderation::creator_code)
+            .map(str::to_string)
+        else {
+            continue;
+        };
         for position in positions_of(p) {
             recorded.push(position);
             recorded_ratings.push(rating.clone());
@@ -1640,6 +1652,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rating(&k).await.as_deref(), Some("A"));
+
+        // A row stored before the rule with `M`, or an off-scale code, is
+        // recorded on the scale (or not at all), and the pass goes on.
+        let recorded = |position: &String| {
+            let (pool, position) = (pool.clone(), position.clone());
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT content_rating FROM explore.place_parcel_rating WHERE position = $1",
+                )
+                .bind(position)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let legacy = |position: &String, code: &'static str| {
+            let (pool, position) = (pool.clone(), position.clone());
+            async move {
+                sqlx::query("UPDATE explore.place SET content_rating = $2 WHERE id = $1")
+                    .bind(super::super::parcel_place_id(&position))
+                    .bind(code)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = $1")
+                    .bind(&position)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        let (m, x) = (parcel(17), parcel(19));
+        for (position, code) in [(&m, "M"), (&x, "X")] {
+            upsert_page(&pool, deploy(position, &[position], "A", 0), site)
+                .await
+                .unwrap();
+            legacy(position, code).await;
+            upsert_page(&pool, deploy(position, &[position], "A", 0), site)
+                .await
+                .unwrap();
+        }
+        assert_eq!(recorded(&m).await.as_deref(), Some("A"));
+        assert_eq!(recorded(&x).await, None);
+        legacy(&m, "M").await;
+        upsert_page(&pool, deploy(&m, &[&m], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&m).await.as_deref(), Some("A"));
+        assert_eq!(recorded(&m).await.as_deref(), Some("A"));
+        upsert_page(&pool, deploy(&x, &[&x], "T", 1), site)
+            .await
+            .unwrap();
+        assert_eq!(rating(&x).await.as_deref(), Some("T"));
+        assert_eq!(recorded(&x).await.as_deref(), Some("T"));
     }
 
     #[test]
