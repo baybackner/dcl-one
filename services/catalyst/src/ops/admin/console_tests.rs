@@ -18,10 +18,8 @@ use super::router;
 use super::tests::{admin_state, audit_rows, cleanup, lazy_pool, send, session_cookie, wallet};
 use crate::content::{ContentState, Settings as ContentSettings};
 use crate::http::Outbound;
-use crate::shop::credits::ApiError;
-use crate::shop::credits::escrow::{
-    Broker, BrokerError, BuyRequest, ManaPaymentVerification, NoBroker, TransferBlock,
-};
+use crate::shop::credits::escrow::ManaPaymentVerification;
+use crate::shop::credits::test_support::{TopupBroker, fresh_tx_hash, mana_payment_from};
 use crate::storage::Storage;
 
 const TOKEN: &str = "console-test-bearer";
@@ -350,8 +348,7 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
     )
     .await;
     let (user, booked_user) = (random_address(), random_address());
-    let tx_hash = || format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
-    let (unbooked, booked) = (tx_hash(), tx_hash());
+    let (unbooked, booked) = (fresh_tx_hash(), fresh_tx_hash());
     let (status, body) = post(
         &app,
         &cookie,
@@ -423,74 +420,6 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
     cleanup(&pool, &actor).await;
 }
 
-/// A broker that confirms one top-up transfer, paid by `payer`; every other call is the unconfigured
-/// broker's answer.
-struct PaidTopup {
-    tx_hash: String,
-    payer: String,
-}
-
-#[async_trait::async_trait]
-impl Broker for PaidTopup {
-    fn configured(&self) -> bool {
-        true
-    }
-
-    fn escrow_address(&self) -> Option<String> {
-        None
-    }
-
-    async fn buy(&self, req: &BuyRequest) -> Result<String, BrokerError> {
-        NoBroker.buy(req).await
-    }
-
-    async fn resume(&self, key: &str) -> Result<String, BrokerError> {
-        NoBroker.resume(key).await
-    }
-
-    async fn released_buy_mined(&self, key: &str) -> Result<bool, ApiError> {
-        NoBroker.released_buy_mined(key).await
-    }
-
-    async fn reclaim(
-        &self,
-        collection: &str,
-        token_id: &str,
-        key: &str,
-    ) -> Result<String, ApiError> {
-        NoBroker.reclaim(collection, token_id, key).await
-    }
-
-    async fn release(
-        &self,
-        collection: &str,
-        token_id: &str,
-        buyer: &str,
-        key: &str,
-    ) -> Result<String, ApiError> {
-        NoBroker.release(collection, token_id, buyer, key).await
-    }
-
-    async fn verify_mana_payment(
-        &self,
-        tx_hash: &str,
-    ) -> Result<ManaPaymentVerification, ApiError> {
-        if !tx_hash.eq_ignore_ascii_case(&self.tx_hash) {
-            return Ok(ManaPaymentVerification::NoPayment);
-        }
-        Ok(ManaPaymentVerification::Confirmed {
-            from: self.payer.clone(),
-            to: "0x1111111111111111111111111111111111111111".into(),
-            value_wei: "100000000000000000000".into(),
-            block: TransferBlock {
-                number: 1_000,
-                timestamp: 978_307_210,
-                confirmations: 64,
-            },
-        })
-    }
-}
-
 /// A console recovery of a top-up the wallet paid is booked as a purchase, so it credits a flagged wallet
 /// the console refuses a plain grant; a key naming no payment is refused and moves nothing.
 #[tokio::test]
@@ -499,8 +428,7 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
         return;
     };
     let user = random_address();
-    let paid = format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
-    let unpaid = format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2));
+    let (paid, unpaid) = (fresh_tx_hash(), fresh_tx_hash());
     let settings = crate::shop::credits::Settings {
         writes_enabled: true,
         admin_token: Some("credits-tok".into()),
@@ -517,9 +445,12 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
         Outbound::for_tests(),
         settings,
         market,
-        Arc::new(PaidTopup {
-            tx_hash: paid.clone(),
-            payer: user.clone(),
+        Arc::new(TopupBroker {
+            verifications: [
+                (paid.clone(), mana_payment_from(&user, 64)),
+                (unpaid.clone(), ManaPaymentVerification::NoPayment),
+            ]
+            .into(),
         }),
         None,
     ));
@@ -555,6 +486,13 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
         status,
         StatusCode::CONFLICT,
         "a plain grant is refused: {body}"
+    );
+    assert!(
+        body["body"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("flagged (explorer_ip_multi_accounting)"),
+        "refused for the flag: {body}"
     );
     let (status, body) = post(
         &app,

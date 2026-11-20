@@ -30,6 +30,7 @@ use super::escrow::{Broker, BrokerError, BuyRequest, ManaPaymentVerification};
 use super::packs::{Charge, MarkPaidOutcome, PackRow, ReversalOutcome};
 use super::pricing::{ItemInfo, ListingRow, MARKETPLACE_V2_POLYGON, Market, TradeLookup};
 use super::store::Credits;
+use super::test_support::{TopupBroker, fresh_tx_hash, mana_payment_from};
 use super::{RawSettings, Settings, SharedState, State, router};
 use crate::auth::{AuthLink, AuthLinkType};
 use crate::http::Outbound;
@@ -176,7 +177,8 @@ pub(crate) struct MockBroker {
     pub resume_answer: Arc<parking_lot::Mutex<Result<(), BrokerError>>>,
     /// What [`Broker::released_buy_mined`] answers.
     pub released_mined: Arc<parking_lot::Mutex<Result<bool, String>>>,
-    pub verifications: HashMap<String, ManaPaymentVerification>,
+    /// Answers [`Broker::verify_mana_payment`].
+    pub topups: TopupBroker,
 }
 
 impl MockBroker {
@@ -189,7 +191,7 @@ impl MockBroker {
             resumes: Arc::new(parking_lot::Mutex::new(Vec::new())),
             resume_answer: Arc::new(parking_lot::Mutex::new(Ok(()))),
             released_mined: Arc::new(parking_lot::Mutex::new(Ok(false))),
-            verifications: HashMap::new(),
+            topups: TopupBroker::default(),
         }
     }
 
@@ -261,10 +263,7 @@ impl Broker for MockBroker {
         &self,
         tx_hash: &str,
     ) -> Result<ManaPaymentVerification, ApiError> {
-        self.verifications
-            .get(tx_hash)
-            .cloned()
-            .ok_or_else(|| ApiError::bad_request("economy rejected the txHash"))
+        self.topups.verify_mana_payment(tx_hash).await
     }
 }
 
@@ -2032,9 +2031,10 @@ async fn mana_topup_route_verifies_through_the_broker_and_grants_once() {
         (&cheaper_then, block(at_fifth, 64)),
         (&unpriced, block(at_nothing, 64)),
     ] {
-        broker.verifications.insert(hash.clone(), payment(b));
+        broker.topups.verifications.insert(hash.clone(), payment(b));
     }
     broker
+        .topups
         .verifications
         .insert(pending.clone(), ManaPaymentVerification::Pending);
     let state = state_with(
@@ -5550,24 +5550,6 @@ async fn checkout_skips_the_buyers_own_listing() {
     assert_eq!(order.price_wei, "2000000000000000000");
 }
 
-fn fresh_tx_hash() -> String {
-    format!("0x{}", uuid::Uuid::new_v4().simple().to_string().repeat(2))
-}
-
-/// A confirmed 100 MANA transfer from `from` to the top-up address, `confirmations` deep.
-fn mana_payment_from(from: &str, confirmations: u64) -> ManaPaymentVerification {
-    ManaPaymentVerification::Confirmed {
-        from: from.to_string(),
-        to: "0x1111111111111111111111111111111111111111".into(),
-        value_wei: "100000000000000000000".into(),
-        block: super::escrow::TransferBlock {
-            number: 1_000,
-            timestamp: 978_307_210,
-            confirmations,
-        },
-    }
-}
-
 /// An operator's recovery of a top-up (any case in the key) is booked as a
 /// purchase under the claim's own key, so the claim replays it.
 #[tokio::test]
@@ -5582,16 +5564,19 @@ async fn a_recovered_top_up_is_a_purchase_the_claim_replays() {
     );
     let mut broker = MockBroker::configured();
     broker
+        .topups
         .verifications
         .insert(hash.clone(), mana_payment_from(&wallet.address, 64));
     broker
+        .topups
         .verifications
         .insert(unpaid.clone(), ManaPaymentVerification::NoPayment);
-    broker.verifications.insert(
+    broker.topups.verifications.insert(
         foreign.clone(),
         mana_payment_from("0x2222222222222222222222222222222222222222", 64),
     );
     broker
+        .topups
         .verifications
         .insert(shallow.clone(), mana_payment_from(&wallet.address, 1));
     let state = state_with(
@@ -9936,9 +9921,11 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     let (paid, unpaid) = (fresh_tx_hash(), fresh_tx_hash());
     let mut broker = MockBroker::configured();
     broker
+        .topups
         .verifications
         .insert(paid.clone(), mana_payment_from(&addr, 64));
     broker
+        .topups
         .verifications
         .insert(unpaid.clone(), ManaPaymentVerification::NoPayment);
     let state = state_with(
