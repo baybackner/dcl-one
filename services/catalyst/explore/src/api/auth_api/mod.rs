@@ -312,12 +312,21 @@ pub struct OutcomeError {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct HttpOutcomeMessage {
     pub sender: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `Some(Value::Null)` when the body carries `"result": null`; `None` when the key is absent.
+    #[serde(
+        default,
+        deserialize_with = "present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OutcomeError>,
     #[serde(rename = "authChain", default, skip_serializing_if = "Option::is_none")]
     pub auth_chain: Option<AuthChain>,
+}
+
+fn present_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1317,6 +1326,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_present_null_result_is_kept_apart_from_a_missing_one() {
+        let addr = "0x1234567890123456789012345678901234567890";
+        let body: HttpOutcomeMessage =
+            serde_json::from_value(json!({ "sender": addr, "result": null })).unwrap();
+        assert_eq!(body.result, Some(Value::Null));
+        assert!(validate_outcome_body(&body).is_ok());
+        let missing: HttpOutcomeMessage =
+            serde_json::from_value(json!({ "sender": addr })).unwrap();
+        assert!(missing.result.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_outcome_without_result_or_error_is_rejected() {
+        let (status, body) = call(
+            &router().await,
+            json_post(
+                "/v2/requests/8c545b52-c08e-4c39-a854-46e2b5b03c48/outcome",
+                serde_json::to_vec(
+                    &json!({ "sender": "0x1234567890123456789012345678901234567890" }),
+                )
+                .unwrap(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            body["error"],
+            "Outcome must include either a result or an error"
+        );
+    }
+
     async fn router() -> Router {
         routes().with_state(crate::api::tests_support::state_without_db().await)
     }
@@ -1426,6 +1467,38 @@ mod tests {
             .header("x-real-ip", "203.0.113.9")
             .body(Body::empty())
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_null_result_is_delivered_as_null() {
+        let Some((_db, state)) = replica().await else {
+            return;
+        };
+        let app = app(&state);
+        let ephemeral = alloy_signer_local::PrivateKeySigner::random();
+        let chain = delegated(&format!("{:#x}", ephemeral.address()));
+        let body = serde_json::to_vec(
+            &json!({ "method": "eth_sendTransaction", "params": [{}], "authChain": chain }),
+        )
+        .unwrap();
+        let (status, created) = call(&app, json_post("/auth-api/requests", body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        let id = created["requestId"].as_str().unwrap().to_string();
+
+        let outcome = serde_json::to_vec(
+            &json!({ "sender": "0x1234567890123456789012345678901234567890", "result": null }),
+        )
+        .unwrap();
+        let (status, body) = call(
+            &app,
+            json_post(&format!("/auth-api/v2/requests/{id}/outcome"), outcome),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, answered) = call(&app, get_req(&format!("/auth-api/requests/{id}"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(answered.get("result"), Some(&Value::Null), "{answered}");
+        assert!(answered.get("error").is_none());
     }
 
     #[tokio::test]
