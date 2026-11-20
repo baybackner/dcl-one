@@ -1,9 +1,13 @@
-// The stylized sky, drawn into the atmosphere cube: the sky colour from a lookup by day phase
-// and elevation, with a scene's own sky colours blended over it, then the sun or the moon as a
+// The stylized sky: the sky colour from a lookup by day phase and elevation, with a scene's own sky colours blended over it, then the sun or the moon as a
 // disc in a halo, under three strips of cloud. The lookup follows Unity's SkyLut.hlsl, the disc
 // its SunDisc.hlsl, the halo its SunRadiance sub-graph and the clouds its CloudsV2.hlsl. Like
 // Unity's GenesisSky graph, everything is composited on the authored values and the result is
 // decoded from sRGB to linear as the last step.
+//
+// Two entry points share `sky_at`. The skybox material (`SKY_MATERIAL`) draws the sky on the
+// screen per pixel, as Unity's skybox does, so the clouds keep the strips' detail. The compute
+// entry draws the same sky into the atmosphere cube, which the reflections, the ambient and the
+// star pass read.
 
 struct StylizedSky {
     tick: u32,
@@ -45,20 +49,36 @@ struct StylizedSky {
     cloud_looks: array<vec4<f32>, 3>,
 }
 
+// the lookup's columns: elevation, the horizon to the zenith. Its rows: night, sunrise, day,
+// sunset, night; filtering between rows blends neighbouring phases. The cloud texture has one
+// layer a strip, back to front: each a turn of the sky wide, repeating around it. R the shaded
+// cloud, G its backlit look, B the growth order, A the mask
+#ifdef SKY_MATERIAL
+#import bevy_pbr::forward_io::VertexOutput
+
+@group(2) @binding(0) var<uniform> sky: StylizedSky;
+@group(2) @binding(1) var lut_texture: texture_2d<f32>;
+@group(2) @binding(2) var lut_sampler: sampler;
+@group(2) @binding(3) var noise_texture: texture_2d<f32>;
+@group(2) @binding(4) var noise_sampler: sampler;
+@group(2) @binding(5) var cloud_texture: texture_2d_array<f32>;
+@group(2) @binding(6) var cloud_sampler: sampler;
+// a scene's equirectangular image, shown instead of the sky. Its centre column faces -Z, its
+// top row is the zenith
+@group(2) @binding(7) var panorama_texture: texture_2d<f32>;
+@group(2) @binding(8) var panorama_sampler: sampler;
+#else
 @group(0) @binding(0) var<uniform> sky: StylizedSky;
-// columns: elevation, the horizon to the zenith. rows: night, sunrise, day, sunset, night;
-// filtering between rows blends neighbouring phases
 @group(0) @binding(1) var lut_texture: texture_2d<f32>;
 @group(0) @binding(2) var lut_sampler: sampler;
 @group(0) @binding(3) var noise_texture: texture_2d<f32>;
 @group(0) @binding(4) var noise_sampler: sampler;
-// one layer a strip, back to front: each a turn of the sky wide, repeating around it. R the
-// shaded cloud, G its backlit look, B the growth order, A the mask
 @group(0) @binding(5) var cloud_texture: texture_2d_array<f32>;
 @group(0) @binding(6) var cloud_sampler: sampler;
 
 @group(1) @binding(0)
 var image: texture_storage_2d_array<rgba16float, write>;
+#endif
 
 const TAU: f32 = 6.283185307179586;
 const LUT_ROWS: f32 = 5.0;
@@ -180,56 +200,9 @@ fn halo(dir: vec3<f32>) -> vec3<f32> {
     return saturate((1.0 - angle + sky.halo.x) * sky.halo.y) * normalize(vec4<f32>(sky.disc_color, 1.0)).rgb;
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
-    let size = textureDimensions(image).x;
-    let scale = f32(size) / 2f;
-
-    // dither pattern for updates
-    let tick = sky.tick & 63;
-
-    var UPDATE_OFFSETS_X: array<u32,64> = array<u32,64>(
-        0u, 4u, 4u, 0u, 2u, 6u, 6u, 2u, 2u, 6u, 6u, 2u, 0u, 4u, 4u, 0u,
-        1u, 5u, 5u, 1u, 3u, 7u, 7u, 3u, 3u, 7u, 7u, 3u, 1u, 5u, 5u, 1u,
-        1u, 5u, 5u, 1u, 3u, 7u, 7u, 3u, 3u, 7u, 7u, 3u, 1u, 5u, 5u, 1u,
-        0u, 4u, 4u, 0u, 2u, 6u, 6u, 2u, 2u, 6u, 6u, 2u, 0u, 4u, 4u, 0u
-    );
-
-    var UPDATE_OFFSETS_Y: array<u32,64> = array<u32,64>(
-        0u, 4u, 0u, 4u, 2u, 6u, 2u, 6u, 0u, 4u, 0u, 4u, 2u, 6u, 2u, 6u,
-        1u, 5u, 1u, 5u, 3u, 7u, 3u, 7u, 1u, 5u, 1u, 5u, 3u, 7u, 3u, 7u,
-        4u, 0u, 4u, 0u, 6u, 2u, 6u, 2u, 4u, 0u, 4u, 0u, 6u, 2u, 6u, 2u,
-        5u, 1u, 5u, 1u, 7u, 3u, 7u, 3u, 5u, 1u, 5u, 1u, 7u, 3u, 7u, 3u
-    );
-
-    let invocation_id = original_invocation_id * vec3(8, 8, 1) + vec3(UPDATE_OFFSETS_X[tick], UPDATE_OFFSETS_Y[tick], 0);
-
-    let dir = vec2<f32>((f32(invocation_id.x) / scale) - 1f, (f32(invocation_id.y) / scale) - 1f);
-
-    var ray: vec3<f32>;
-
-    switch invocation_id.z {
-        case 0u {
-            ray = vec3<f32>(1f, -dir.y, -dir.x); // +X
-        }
-        case 1u {
-            ray = vec3<f32>(-1f, -dir.y, dir.x);// -X
-        }
-        case 2u {
-            ray = vec3<f32>(dir.x, 1f, dir.y); // +Y
-        }
-        case 3u {
-            ray = vec3<f32>(dir.x, -1f, -dir.y);// -Y
-        }
-        case 4u {
-            ray = vec3<f32>(dir.x, -dir.y, 1f); // +Z
-        }
-        default: {
-            ray = vec3<f32>(-dir.x, -dir.y, -1f);// -Z
-        }
-    }
-
-    ray = normalize(ray);
+// The sky toward `ray`, a unit vector: its colour, and how much the clouds hide of what lies
+// behind them.
+fn sky_at(ray: vec3<f32>) -> vec4<f32> {
     // Unity's +Z is -Z here. Straight up and down have no azimuth, and atan2(0, 0) is undefined
     var azimuth = 0.0;
     if ray.x != 0.0 || ray.z != 0.0 {
@@ -281,10 +254,80 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
     // Linear). The rim it screens on before is off with the lookup
     color = rgb_to_linear(color);
 
-    textureStore(
-        image,
-        vec2<i32>(invocation_id.xy),
-        i32(invocation_id.z),
-        vec4<f32>(color, occlusion)
-    );
+    return vec4<f32>(color, occlusion);
 }
+
+#ifdef SKY_MATERIAL
+// From https://alex.vlachos.com/graphics/Alex_Vlachos_Advanced_VR_Rendering_GDC2015.pdf, as
+// bevy_atmosphere's skybox dithers: Iestyn's RGB dither, centred so it does not brighten
+fn dither(frag_coord: vec2<f32>) -> vec3<f32> {
+    let dither = fract(vec3<f32>(dot(vec2<f32>(171.0, 231.0), frag_coord)) / vec3<f32>(103.0, 71.0, 97.0));
+    return (dither - 0.5) / 255.0;
+}
+
+// The skybox mesh's normals run from the camera through each corner, so the interpolated normal
+// is the view direction
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    let ray = normalize(in.world_normal);
+#ifdef PANORAMA
+    let uv = vec2<f32>(atan2(ray.x, -ray.z) / TAU + 0.5, acos(clamp(ray.y, -1.0, 1.0)) / 3.14159265359);
+    let color = textureSample(panorama_texture, panorama_sampler, uv).rgb;
+#else
+    let color = sky_at(ray).rgb;
+#endif
+    return vec4<f32>(color + dither(in.position.xy), 1.0);
+}
+#else
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
+    let size = textureDimensions(image).x;
+    let scale = f32(size) / 2f;
+
+    // dither pattern for updates
+    let tick = sky.tick & 63;
+
+    var UPDATE_OFFSETS_X: array<u32,64> = array<u32,64>(
+        0u, 4u, 4u, 0u, 2u, 6u, 6u, 2u, 2u, 6u, 6u, 2u, 0u, 4u, 4u, 0u,
+        1u, 5u, 5u, 1u, 3u, 7u, 7u, 3u, 3u, 7u, 7u, 3u, 1u, 5u, 5u, 1u,
+        1u, 5u, 5u, 1u, 3u, 7u, 7u, 3u, 3u, 7u, 7u, 3u, 1u, 5u, 5u, 1u,
+        0u, 4u, 4u, 0u, 2u, 6u, 6u, 2u, 2u, 6u, 6u, 2u, 0u, 4u, 4u, 0u
+    );
+
+    var UPDATE_OFFSETS_Y: array<u32,64> = array<u32,64>(
+        0u, 4u, 0u, 4u, 2u, 6u, 2u, 6u, 0u, 4u, 0u, 4u, 2u, 6u, 2u, 6u,
+        1u, 5u, 1u, 5u, 3u, 7u, 3u, 7u, 1u, 5u, 1u, 5u, 3u, 7u, 3u, 7u,
+        4u, 0u, 4u, 0u, 6u, 2u, 6u, 2u, 4u, 0u, 4u, 0u, 6u, 2u, 6u, 2u,
+        5u, 1u, 5u, 1u, 7u, 3u, 7u, 3u, 5u, 1u, 5u, 1u, 7u, 3u, 7u, 3u
+    );
+
+    let invocation_id = original_invocation_id * vec3(8, 8, 1) + vec3(UPDATE_OFFSETS_X[tick], UPDATE_OFFSETS_Y[tick], 0);
+
+    let dir = vec2<f32>((f32(invocation_id.x) / scale) - 1f, (f32(invocation_id.y) / scale) - 1f);
+
+    var ray: vec3<f32>;
+
+    switch invocation_id.z {
+        case 0u {
+            ray = vec3<f32>(1f, -dir.y, -dir.x); // +X
+        }
+        case 1u {
+            ray = vec3<f32>(-1f, -dir.y, dir.x);// -X
+        }
+        case 2u {
+            ray = vec3<f32>(dir.x, 1f, dir.y); // +Y
+        }
+        case 3u {
+            ray = vec3<f32>(dir.x, -1f, -dir.y);// -Y
+        }
+        case 4u {
+            ray = vec3<f32>(dir.x, -dir.y, 1f); // +Z
+        }
+        default: {
+            ray = vec3<f32>(-dir.x, -dir.y, -1f);// -Z
+        }
+    }
+
+    textureStore(image, vec2<i32>(invocation_id.xy), i32(invocation_id.z), sky_at(normalize(ray)));
+}
+#endif

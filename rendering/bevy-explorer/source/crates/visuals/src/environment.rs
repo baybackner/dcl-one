@@ -6,7 +6,6 @@ use bevy::{
     prelude::*,
     render::render_asset::RenderAssetUsages,
 };
-use bevy_atmosphere::skybox::{AtmosphereSkyBoxMaterial, SkyBoxMaterial};
 use bevy_console::ConsoleCommand;
 use common::{
     sets::SceneSets,
@@ -267,8 +266,8 @@ fn update_environment(
 
 fn update_sky_panorama(
     state: Res<SceneEnvironment>,
-    material: Res<AtmosphereSkyBoxMaterial>,
-    mut materials: ResMut<Assets<SkyBoxMaterial>>,
+    material: Res<crate::stylized_sky::StylizedSkyMaterialHandle>,
+    mut materials: ResMut<Assets<crate::stylized_sky::StylizedSkyMaterial>>,
 ) {
     if materials
         .get(&material.0)
@@ -736,7 +735,8 @@ mod tests {
         assert_eq!(sky(&app).scene_zenith, Vec4::ZERO);
     }
 
-    /// Compiles the sky's compute shader and the panorama skybox on a GPU.
+    /// Compiles the sky's compute shader and the sky material, with and without a panorama, on
+    /// a GPU.
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn scene_environment_pipelines_compile() {
@@ -796,6 +796,7 @@ mod tests {
                 add_bevy_console: false,
             })
             .add_plugins(crate::sky_envmap::SkyEnvmapPlugin)
+            .add_plugins(crate::stylized_sky::StylizedSkyMaterialPlugin)
             .add_systems(Update, update_sky_panorama);
         let raw_sky = start_sky(&mut app);
         let maps = app

@@ -48,15 +48,22 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   the extension is not the fix; the long-term answer is still open.
 - **Sky preset curves are linear.** The fog colour, light colour, light intensity and Trilight
   ambient keys are interpolated linearly; Unity's curve tangents are not carried.
-- **The sky below the horizon is the horizon colour.** The sky cube is Unity's lookup by day
+- **The sky below the horizon is the horizon colour.** The sky is Unity's lookup by day
   phase and elevation (`stylized_sky.wgsl`), and as in Unity the elevation clamps at the
   horizon, so the sky holds the horizon colour from a few degrees below the horizon down; the
   horizon noise can lift directions just under it (direction y above about -0.1), as in Unity.
-  The cube does not fade to black there. A scene's authored sky colours blend over that colour,
+  The sky does not fade to black there. A scene's authored sky colours blend over that colour,
   not over black. The reflection map is unaffected: it reads directions under the horizon from
   their mirror image above it unless a scene authors a nadir. One difference from Unity: the
-  horizon noise is sampled at its full resolution, because the cube is drawn by a compute
-  shader, which has no screen derivatives to choose a mip from.
+  horizon noise is sampled at its full resolution: the image has no mip chain, and the cube's
+  compute shader has no screen derivatives to choose a mip from.
+- **The screen draws the sky per pixel; the cube serves the rest.** As Unity's skybox, the
+  sky material (`StylizedSkyMaterial`) evaluates the sky for every pixel, so the cloud strips
+  and the disc keep their detail; it replaces bevy_atmosphere's skybox material, which shows the
+  cube, on every skybox. The compute model draws the same sky into the 1024 cube, one texel in
+  64 a frame, for the reflections, the ambient and the stars' cloud cover: a cube texel is
+  coarser than a strip texel and its refresh smears scrolling cloud, which those uses do not
+  show.
 - **The stylized sky is the sky for every scene, `PBSkybox` ones included.** Unity switches a
   sky that a scene controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look; here the
   scene's values override the StylizedV1 lookup instead, and a scene with none sees the preset.
@@ -79,9 +86,9 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 
   Unity's environment profile at `0a8bafca9e62ced7f34ac182158b11edd0c842a4` writes the cloud
   values to the old cloud cubemap's material, which the strips do not read. The strips are
-  fixed art sampled at their full resolution, for the reason the horizon noise is. That loses
-  nothing near the horizon, where a strip texel is about the size of a cube texel, but the
-  overhead strip is seen to about 70 degrees up, where its U is minified about 3 times, and the
+  fixed art sampled at their full resolution: they have no mip chain. That loses nothing near
+  the horizon, where the screen magnifies the strips, but the overhead strip is seen to about
+  70 degrees up, where its U is minified about 3 times, and the
   horizon noise is minified about 8 times in V, with no mips; Unity samples both with gradients
   and mips, so they alias a little more here. The growth flow the preset switches off is not
   ported. `/cloud <cover> [speed]` is the user's own setting on top: cover multiplies every

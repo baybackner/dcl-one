@@ -6,20 +6,28 @@
 //!
 //! The authored colours go to the shader as Unity's sky shader receives them: the lookup and the
 //! cloud colours as authored, the disc colour linearised as `Material.SetColor` does. The shader
-//! decodes its result from sRGB to linear, as GenesisSky's last step does, and the skybox
-//! material writes the cube to the view unscaled, so the cube is in the units of Unity's sky
-//! output.
+//! decodes its result from sRGB to linear, as GenesisSky's last step does.
+//!
+//! The screen shows the sky per pixel through `StylizedSkyMaterial`, which takes the place of
+//! bevy_atmosphere's skybox material, as Unity samples its skybox per pixel: the cube's texels
+//! are too coarse for the cloud strips' detail. The compute model draws the same sky into the
+//! atmosphere cube for the reflections, the ambient and the star pass. Both are written
+//! unscaled, so they are in the units of Unity's sky output.
 
 use bevy::{
     image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
+    pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     render::{
+        mesh::MeshVertexBufferLayoutRef,
         render_asset::{RenderAssetUsages, RenderAssets},
         render_resource::{
             binding_types::{sampler, texture_2d, texture_2d_array, uniform_buffer},
-            encase, BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
-            BufferInitDescriptor, BufferUsages, ComputePipelineDescriptor, Extent3d, PipelineCache,
-            SamplerBindingType, ShaderStages, TextureDimension, TextureFormat, TextureSampleType,
+            encase, AsBindGroup, BindGroup, BindGroupEntries, BindGroupLayout,
+            BindGroupLayoutEntries, BufferInitDescriptor, BufferUsages, CompareFunction,
+            ComputePipelineDescriptor, Extent3d, PipelineCache, RenderPipelineDescriptor,
+            SamplerBindingType, ShaderRef, ShaderStages, SpecializedMeshPipelineError,
+            TextureDimension, TextureFormat, TextureSampleType,
         },
         renderer::RenderDevice,
         texture::{FallbackImage, GpuImage},
@@ -28,6 +36,7 @@ use bevy::{
 };
 use bevy_atmosphere::{
     model::AtmosphereModelMetadata, pipeline::AtmosphereImageBindGroupLayout,
+    plugin::AtmosphereSkyBox, prelude::AtmosphereModel, skybox::SkyBoxMaterial,
     system_param::AtmosphereMut,
 };
 
@@ -129,7 +138,7 @@ mod uniform {
     use bevy::{prelude::*, render::render_resource::ShaderType};
 
     /// `StylizedSky` as the shader reads it, plus the preset's constants.
-    #[derive(ShaderType)]
+    #[derive(ShaderType, Clone)]
     pub struct StylizedSkyUniform {
         pub tick: u32,
         pub time: f32,
@@ -462,6 +471,147 @@ impl bevy_atmosphere::model::RegisterAtmosphereModel for StylizedSky {
                 ),
             ),
         )
+    }
+}
+
+/// The sky on the screen: `stylized_sky.wgsl`'s fragment entry, per pixel, from the same model
+/// as the cube. A scene's panorama replaces it.
+#[derive(Asset, AsBindGroup, TypePath, Clone)]
+#[bind_group_data(StylizedSkyMaterialKey)]
+pub struct StylizedSkyMaterial {
+    #[uniform(0)]
+    sky: StylizedSkyUniform,
+    #[texture(1)]
+    #[sampler(2)]
+    lut: Handle<Image>,
+    /// Until it loads, the stand-in: no lift at the horizon.
+    #[texture(3)]
+    #[sampler(4)]
+    noise: Option<Handle<Image>>,
+    /// Until the strips are stacked, the stand-in, with the clouds' opacity at 0.
+    #[texture(5, dimension = "2d_array")]
+    #[sampler(6)]
+    clouds: Option<Handle<Image>>,
+    /// An equirectangular image shown instead of the sky. Its centre column faces -Z, its top
+    /// row is the zenith.
+    #[texture(7)]
+    #[sampler(8)]
+    pub panorama: Option<Handle<Image>>,
+}
+
+impl Default for StylizedSkyMaterial {
+    fn default() -> Self {
+        Self {
+            sky: StylizedSkyUniform::from(&StylizedSky::default()),
+            lut: Handle::default(),
+            noise: None,
+            clouds: None,
+            panorama: None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Hash, Eq, PartialEq)]
+pub struct StylizedSkyMaterialKey {
+    panorama: bool,
+}
+
+impl From<&StylizedSkyMaterial> for StylizedSkyMaterialKey {
+    fn from(material: &StylizedSkyMaterial) -> Self {
+        Self {
+            panorama: material.panorama.is_some(),
+        }
+    }
+}
+
+impl Material for StylizedSkyMaterial {
+    fn fragment_shader() -> ShaderRef {
+        SHADER_PATH.into()
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline<Self>,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // as bevy_atmosphere's skybox: the sky's pixels keep the cleared depth, so post effects
+        // (depth of field, the stars) can tell the sky from geometry, while the main pass still
+        // tests it against the geometry
+        if let Some(depth_stencil) = &mut descriptor.depth_stencil {
+            depth_stencil.depth_write_enabled = false;
+            depth_stencil.depth_compare = CompareFunction::GreaterEqual;
+        }
+        if let Some(fragment) = &mut descriptor.fragment {
+            fragment.shader_defs.push("SKY_MATERIAL".into());
+            if key.bind_group_data.panorama {
+                fragment.shader_defs.push("PANORAMA".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The one `StylizedSkyMaterial` every skybox shows.
+#[derive(Resource, Clone)]
+pub struct StylizedSkyMaterialHandle(pub Handle<StylizedSkyMaterial>);
+
+/// Draws the sky on the screen per pixel: the material, on every skybox bevy_atmosphere spawns,
+/// kept in step with the model.
+pub struct StylizedSkyMaterialPlugin;
+
+impl Plugin for StylizedSkyMaterialPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<StylizedSkyMaterial> {
+            prepass_enabled: false,
+            ..default()
+        });
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StylizedSkyMaterial>>()
+            .add(StylizedSkyMaterial::default());
+        app.insert_resource(StylizedSkyMaterialHandle(handle))
+            .add_systems(Update, use_stylized_skybox)
+            .add_systems(PostUpdate, update_sky_material);
+    }
+}
+
+/// Gives the skyboxes bevy_atmosphere spawns, which show the cube, the per-pixel sky instead.
+fn use_stylized_skybox(
+    mut commands: Commands,
+    skyboxes: Query<Entity, (With<AtmosphereSkyBox>, With<MeshMaterial3d<SkyBoxMaterial>>)>,
+    material: Res<StylizedSkyMaterialHandle>,
+) {
+    for skybox in &skyboxes {
+        commands
+            .entity(skybox)
+            .remove::<MeshMaterial3d<SkyBoxMaterial>>()
+            .insert(MeshMaterial3d(material.0.clone()));
+    }
+}
+
+/// Copies the model into the material: what the compute model reads, so the screen and the cube
+/// show one sky.
+fn update_sky_material(
+    atmosphere: Res<AtmosphereModel>,
+    images: Res<Assets<Image>>,
+    handle: Res<StylizedSkyMaterialHandle>,
+    mut materials: ResMut<Assets<StylizedSkyMaterial>>,
+) {
+    let Some(sky) = atmosphere.to_ref::<StylizedSky>() else {
+        return;
+    };
+    let Some(material) = materials.get_mut(&handle.0) else {
+        return;
+    };
+    material.lut = sky.lut.clone();
+    material.noise = images.contains(&sky.noise).then(|| sky.noise.clone());
+    // the stacked strips live on the GPU only, so they are known by their handle
+    material.clouds = (sky.clouds != Handle::default()).then(|| sky.clouds.clone());
+    material.sky = StylizedSkyUniform::from(sky);
+    if material.clouds.is_none() {
+        // the stand-in is opaque white, which would be cloud all over
+        material.sky.cloud_opacity = 0.0;
     }
 }
 
@@ -1164,6 +1314,96 @@ mod tests {
         assert!(
             unmasked > middle + 3.0,
             "the mask hides nothing: {middle} with it, {unmasked} without"
+        );
+    }
+
+    /// The screen shows the sky per pixel, not the cube: a camera ten degrees tall, 64 pixels,
+    /// looks up at the noon sun over a cube of 64 texels a side (1.4 degrees, nine pixels, a
+    /// texel). The disc, dimmed so it does not saturate, is 0.03 radians in radius: 11 pixels
+    /// either side of the middle, its edge one step. Drawn from the cube, the edge ramps over
+    /// about a texel.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn the_screen_draws_the_sky_per_pixel() {
+        use bevy::{
+            core_pipeline::tonemapping::Tonemapping,
+            render::{
+                camera::RenderTarget,
+                view::screenshot::{Screenshot, ScreenshotCaptured},
+            },
+        };
+        use bevy_atmosphere::prelude::AtmosphereCamera;
+        use pipeline_test::render_target;
+
+        #[derive(Resource, Default)]
+        struct Captured(Option<Image>);
+
+        let mut app = sky_test_app(64);
+        app.add_plugins(StylizedSkyMaterialPlugin)
+            .init_resource::<Captured>();
+        start_sky(&mut app);
+        let target = render_target(&mut app);
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Tonemapping::None,
+            Camera {
+                target: RenderTarget::Image(target.clone().into()),
+                ..default()
+            },
+            Projection::Perspective(PerspectiveProjection {
+                fov: 10f32.to_radians(),
+                ..default()
+            }),
+            Msaa::Off,
+            AtmosphereCamera::default(),
+            Transform::default().looking_at(Vec3::Y, Vec3::Z),
+        ));
+        let noon = day_fraction(12.0);
+        draw_sky(&mut app, |sky| {
+            let disc = disc_params(noon, false);
+            sky.phase = time_to_phase(noon);
+            sky.body_direction = Vec3::Y;
+            sky.set_disc(&disc);
+            sky.disc_color = Vec3::splat(0.3);
+        });
+        assert!((disc_params(noon, false).size * 0.3 - 0.03).abs() < 1e-6);
+
+        app.world_mut()
+            .spawn(Screenshot::image(target.clone()))
+            .observe(
+                |event: Trigger<ScreenshotCaptured>, mut captured: ResMut<Captured>| {
+                    captured.0 = Some(event.event().0.clone())
+                },
+            );
+        let start = std::time::Instant::now();
+        let image = loop {
+            app.update();
+            if let Some(image) = app.world_mut().resource_mut::<Captured>().0.take() {
+                break image;
+            }
+            assert!(start.elapsed().as_secs() < 30, "GPU screenshot timed out");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let rgba = image.try_into_dynamic().unwrap().to_rgba8();
+        let row: Vec<u8> = (0..64).map(|x| rgba.get_pixel(x, 32).0[0]).collect();
+        // the two largest steps between neighbours are the disc's edges
+        let mut steps: Vec<(i32, usize)> = (0..63)
+            .map(|x| ((row[x + 1] as i32 - row[x] as i32).abs(), x))
+            .collect();
+        steps.sort_unstable_by(|a, b| b.cmp(a));
+        let (mut left, mut right) = (steps[0].1, steps[1].1);
+        if left > right {
+            std::mem::swap(&mut left, &mut right);
+        }
+        assert!(
+            steps[1].0 > 40,
+            "the disc's edge ramps: the steps are {:?}; row {row:?}",
+            &steps[..4]
+        );
+        // between pixels 20 and 21, and 42 and 43
+        assert!(
+            left.abs_diff(20) <= 1 && right.abs_diff(42) <= 1,
+            "the disc's edges are after pixels {left} and {right}, not 20 and 42; row {row:?}"
         );
     }
 }

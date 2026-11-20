@@ -33,6 +33,7 @@ use scene_runner::update_world::lights::Sun;
 use stylized_sky::{
     cloud_colors, cloud_scroll_rates, disc_color, disc_params, load_cloud_strips,
     load_horizon_noise, sky_lut_image, stack_cloud_strips, CloudStrips, StylizedSky,
+    StylizedSkyMaterialPlugin,
 };
 
 use bevy_console::ConsoleCommand;
@@ -99,6 +100,7 @@ impl Plugin for VisualsPlugin {
         })
         .insert_resource(AtmosphereModel::new(StylizedSky::default()))
         .add_plugins(AtmospherePlugin)
+        .add_plugins(StylizedSkyMaterialPlugin)
         .add_plugins(environment::SceneEnvironmentPlugin)
         .add_plugins(SkyEnvmapPlugin)
         .add_plugins(stars::StarsPlugin)
