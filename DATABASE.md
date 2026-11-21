@@ -509,7 +509,10 @@ deploys it; the new id keeps the place's rating and its operator's record
 (the id stays the UUIDv5 of the base parcel, so links keep resolving and a
 later scene on the old base gets its own id). A place by another creator on
 another owner's LAND and another parcel set starts fresh. The owner is the parcel's (or its estate's) owner in the
-published `land_authz` index, read on the page's connection; while that index
+published `land_authz` index, read on the page's connection; a token the
+Rentals contract holds counts as its lessor's (the recipient of its latest
+transfer to another address, one more indexed probe per rented token), so a
+rental does not change the owner; while that index
 is unpublished, a parcel is unindexed or the lookup fails (logged), the owner
 is unknown and only the place and the creator match. A later pass over the
 same place fills a record's unknown owner once the index knows it; a record of

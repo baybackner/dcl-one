@@ -2918,6 +2918,62 @@ mod tests {
         assert_eq!(t.rating(&c).await.as_deref(), Some("R"));
     }
 
+    /// Renting the LAND out does not change its owner: a tenant's place on a
+    /// shifted parcel set is held to the operator's rating of the lessor's.
+    #[tokio::test]
+    async fn a_rented_parcel_keeps_its_lessor_as_owner() {
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let parcel = |n: i32| format!("60,{n}");
+        let site = Some("https://decentraland.org/places");
+        let (owner, tenant) = (
+            "0x00000000000000000000000000000000000000a1",
+            "0x00000000000000000000000000000000000000e5",
+        );
+        let (a, b, c) = (parcel(0), parcel(1), parcel(2));
+        let land = land_index(&pool, &[&a, &b, &c], owner).await;
+        super::upsert_page(
+            &pool,
+            Ratings::deploy(owner, &a, &[&a, &b], None, 0),
+            site,
+            Some(&land),
+        )
+        .await
+        .unwrap();
+        t.rate(&a, "R", Some(&land)).await;
+        t.prune(&a).await;
+
+        let rentals = crate::land_authz::RENTALS_MAINNET;
+        sqlx::query(
+            "INSERT INTO land_authz.authz_event (block_number, log_index, block_time, token_address, kind, token_id, account) \
+             SELECT 90 + n, y, 1, token_address, 'transfer', token_id, CASE n WHEN 0 THEN $1 ELSE $2 END \
+             FROM land_authz.token_right, generate_series(0, 1) AS n WHERE x = 60",
+        )
+        .bind(owner)
+        .bind(rentals)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE land_authz.token_right SET owner = $1 WHERE x = 60")
+            .bind(rentals)
+            .execute(&pool)
+            .await
+            .unwrap();
+        super::upsert_page(
+            &pool,
+            Ratings::deploy(tenant, &c, &[&b, &c], Some("T"), 1),
+            site,
+            Some(&land),
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&c).await.as_deref(), Some("R"));
+        assert_eq!(t.record(&b).await, Some(("R".into(), true)));
+        assert_eq!(t.owner(&c).await.as_deref(), Some(owner));
+    }
+
     /// A LAND index that cannot be read leaves owners unknown: the derive page
     /// and an operator's rating still commit, as with an unpublished index.
     #[tokio::test]
