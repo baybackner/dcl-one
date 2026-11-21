@@ -52,6 +52,10 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 - Timestamps: upstream `timestamp without time zone`, read as UTC.
 - A collection or item the node wrote after upstream's last save (its
   `updated_at` is newer) is kept on re-runs.
+- A collection or item id the node holds with another creation time is a
+  row the import didn't write, such as an id a wallet took on the node
+  before the import: `collection` and `item` stop the batch and name the
+  first ten such ids for the operator, attaching nothing to them.
 
 ## Virtual third parties
 
@@ -111,13 +115,17 @@ name an item holds to the item's owner and records that owner as an
 uploader of every hash the item names, whoever first sent the bytes;
 upstream served those files to anyone. A re-import that changes an entry's
 hash attributes it to the owner again; one that only moves the entry keeps
-its writer. An item's `video` is a name too: `item` writes
+its writer. `item_content` carries each item's upstream `updated_at` and
+writes names and records only for items whose node row still has it: an
+item the node saved since keeps its own contents on re-runs. An item's `video` is a name too: `item` writes
 `video_named_by`, the owner, and keeps the stored writer while the video is
 unchanged; `item_content` records the owner as an uploader of each staged
 item's video as well, and stops the batch when the video's hash is not in the
 blob inventory either. What an imported name and record let a wallet read is the file
 routes' decision, the same as for a save and an upload on the node. The blob copy (out of
-scope) must record each hash in `dcl_migration.blob_inventory (source,
+scope) copies the bytes into the blob store's builder tree
+(`<STORAGE_ROOT_FOLDER>/builder`, where the node keeps item files apart from
+the content tree) and must record each hash in `dcl_migration.blob_inventory (source,
 object_key, hash, size)` with `source = 'builder-server'` and
 `object_key = hash`; `item_content` stops the batch on any missing hash, and on any
 hash whose inventory size is over 250,000,000 bytes, the largest file the node keeps

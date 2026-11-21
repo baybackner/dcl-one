@@ -56,6 +56,12 @@ const BODY_SHAPES: &[&str] = &[
     "urn:decentraland:off-chain:base-avatars:BaseFemale",
 ];
 const URN_NETWORKS: &[&str] = &["mainnet", "goerli", "sepolia", "matic", "mumbai", "amoy"];
+/// Mapping entries one item may hold: upstream's largest has one.
+pub const MAX_MAPPINGS: usize = 100;
+/// Token ids one item's mappings may name, `single` and `multiple` entries
+/// together: upstream's largest names 2,232.
+pub const MAX_MAPPING_IDS: usize = 10_000;
+
 const MAPPING_NETWORKS: &[&str] = &[
     "mainnet",
     "base_mainnet",
@@ -706,13 +712,43 @@ fn mappings(value: &mut JsJson) -> bool {
     let JsJson::Array(list) = list else {
         return false;
     };
+    if list.len() > MAX_MAPPINGS {
+        return false;
+    }
     let Some(parsed) = list.iter_mut().map(mapping).collect::<Option<Vec<_>>>() else {
         return false;
     };
-    parsed
-        .iter()
-        .enumerate()
-        .all(|(at, m)| parsed[..at].iter().all(|earlier| !overlaps(earlier, m)))
+    disjoint(&parsed)
+}
+
+fn disjoint(mappings: &[Mapping]) -> bool {
+    use Mapping::*;
+    if mappings.len() > 1 && mappings.iter().any(|m| matches!(m, Any)) {
+        return false;
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut ranges = Vec::new();
+    for m in mappings {
+        let named = match m {
+            Single(id) => std::slice::from_ref(id),
+            Multiple(list) => list.as_slice(),
+            Range(from, to) => {
+                ranges.push((from, to));
+                &[]
+            }
+            Any => &[],
+        };
+        for id in named {
+            if !ids.insert(id.as_str()) || ids.len() > MAX_MAPPING_IDS {
+                return false;
+            }
+        }
+    }
+    ranges.iter().enumerate().all(|(at, (f1, t1))| {
+        ranges[..at].iter().all(|(f2, t2)| {
+            decimal_cmp(f1, t2) == Ordering::Greater || decimal_cmp(t1, f2) == Ordering::Less
+        }) && ids.iter().all(|id| !in_range(id, f1, t1))
+    })
 }
 
 fn mapping(value: &mut JsJson) -> Option<Mapping> {
@@ -753,6 +789,9 @@ fn mapping(value: &mut JsJson) -> Option<Mapping> {
             let JsJson::Array(ids) = &fields.iter().find(|(k, _)| k == "ids")?.1 else {
                 return None;
             };
+            if ids.is_empty() || ids.len() > MAX_MAPPING_IDS {
+                return None;
+            }
             let ids = ids
                 .iter()
                 .map(|id| match id {
@@ -760,11 +799,7 @@ fn mapping(value: &mut JsJson) -> Option<Mapping> {
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
-            let distinct = ids
-                .iter()
-                .enumerate()
-                .all(|(at, id)| !ids[..at].contains(id));
-            (!ids.is_empty() && distinct).then_some(Mapping::Multiple(ids))
+            Some(Mapping::Multiple(ids))
         }
         _ => None,
     }
@@ -777,23 +812,6 @@ fn decimal_cmp(a: &str, b: &str) -> Ordering {
 
 fn in_range(id: &str, from: &str, to: &str) -> bool {
     decimal_cmp(id, from) != Ordering::Less && decimal_cmp(id, to) != Ordering::Greater
-}
-
-fn overlaps(a: &Mapping, b: &Mapping) -> bool {
-    use Mapping::*;
-    match (a, b) {
-        (Any, _) | (_, Any) => true,
-        (Single(x), Single(y)) => x == y,
-        (Single(x), Multiple(ids)) | (Multiple(ids), Single(x)) => ids.contains(x),
-        (Single(x), Range(f, t)) | (Range(f, t), Single(x)) => in_range(x, f, t),
-        (Multiple(xs), Multiple(ys)) => xs.iter().any(|x| ys.contains(x)),
-        (Multiple(ids), Range(f, t)) | (Range(f, t), Multiple(ids)) => {
-            ids.iter().any(|id| in_range(id, f, t))
-        }
-        (Range(f1, t1), Range(f2, t2)) => {
-            decimal_cmp(f1, t2) != Ordering::Greater && decimal_cmp(t1, f2) != Ordering::Less
-        }
-    }
 }
 
 #[cfg(test)]
@@ -903,6 +921,73 @@ mod tests {
             wrong.len(),
             wrong.join("\n")
         );
+    }
+
+    fn with_mappings(entries: Vec<serde_json::Value>) -> Vec<u8> {
+        serde_json::json!({"item": {
+            "id": "00000000-0000-4000-8000-0000000000a2", "name": "Linked", "description": null,
+            "eth_address": "0x1111111111111111111111111111111111111111", "type": "wearable",
+            "metrics": {"meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1},
+            "contents": {"model.glb": format!("bafkrei{}", "b".repeat(52))},
+            "data": {"category": "hat", "replaces": [], "hides": [], "tags": [], "representations": [{
+                "bodyShapes": [], "mainFile": "model.glb", "overrideReplaces": [], "overrideHides": [],
+                "contents": ["model.glb"]}]},
+            "mappings": {"mainnet": {"0x2222222222222222222222222222222222222222": entries}}
+        }})
+        .to_string()
+        .into_bytes()
+    }
+
+    fn ids(from: usize, to: usize) -> Vec<String> {
+        (from..to).map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn mappings_as_large_as_the_largest_real_ones_parse() {
+        let multiple = serde_json::json!({"type": "multiple", "ids": ids(0, MAX_MAPPING_IDS - 98)});
+        let mut entries = vec![multiple];
+        entries.extend(
+            (0..98).map(|n| serde_json::json!({"type": "single", "id": (20_000 + n).to_string()})),
+        );
+        entries.push(serde_json::json!({"type": "range", "from": "30000", "to": "40000"}));
+        assert_eq!(entries.len(), MAX_MAPPINGS);
+        assert!(parse(&with_mappings(entries)).is_ok());
+    }
+
+    #[test]
+    fn mappings_past_their_bounds_or_naming_an_id_twice_are_refused() {
+        let multiple = |ids: Vec<String>| serde_json::json!({"type": "multiple", "ids": ids});
+        let single = |id: usize| serde_json::json!({"type": "single", "id": id.to_string()});
+        let mut repeated = ids(0, 5_000);
+        repeated.push("17".to_string());
+        for (what, entries) in [
+            (
+                "one id past the bound",
+                vec![multiple(ids(0, MAX_MAPPING_IDS + 1))],
+            ),
+            (
+                "the bound spread over two entries",
+                vec![multiple(ids(0, MAX_MAPPING_IDS)), single(MAX_MAPPING_IDS)],
+            ),
+            (
+                "one entry past the bound",
+                (0..=MAX_MAPPINGS).map(single).collect(),
+            ),
+            ("an id twice in one list", vec![multiple(repeated)]),
+            (
+                "an id in a list and alone",
+                vec![multiple(ids(0, 5_000)), single(4_999)],
+            ),
+            (
+                "an id in a range",
+                vec![
+                    multiple(ids(0, 5_000)),
+                    serde_json::json!({"type": "range", "from": "4999", "to": "6000"}),
+                ],
+            ),
+        ] {
+            assert!(parse(&with_mappings(entries)).is_err(), "{what}");
+        }
     }
 
     #[test]

@@ -178,7 +178,7 @@
       "anchors": []
     },
     "item-upload-named-files": {
-      "text": "POST /v1/items/:id/files: the node reads each part's field name as the content hash of the part's bytes and stores the file only when the bytes hash to it and the item names that hash in its contents, and refuses any other part with 400 before it stores anything. Upstream stores every file under the hash it computes, whatever the field name, and ties no file to the item. The old builder web saves the item first and sends each file under the hash the item names.",
+      "text": "POST /v1/items/:id/files: the node reads each part's field name as the content hash of the part's bytes and stores the file only when the bytes hash to it and the item names that hash in its contents, and refuses any other part with 400 before it stores anything, as well as a part whose hash the item names only at video.mp4 (400 The video is uploaded through the videos route), which comes through POST /v1/items/:id/videos and its container check. Upstream stores every file under the hash it computes, whatever the field name, and ties no file to the item. The old builder web saves the item first and sends each file under the hash the item names.",
       "captures": [
         "source/233-item-files-hash-mismatch.json",
         "source/234-item-files-not-named.json"
@@ -188,7 +188,7 @@
       ]
     },
     "item-upload-bounds": {
-      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
+      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same source address has eight. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
       "captures": [],
       "anchors": []
     },
@@ -198,7 +198,7 @@
       "anchors": []
     },
     "item-save-input": {
-      "text": "PUT /v1/items/:idOrURN: beyond builder-server's schema, the node refuses with 400 Invalid request body a contents value that is not a content hash, a contents key that is not a relative file path, more than 256 contents entries, mappings under a network the schema doesn't name or for a contract key that is not an address, an empty price or beneficiary, and a name blank once trimmed. Upstream stores them (mappings it can't name as an empty object).",
+      "text": "PUT /v1/items/:idOrURN: beyond builder-server's schema, the node refuses with 400 Invalid request body a contents value that is not a content hash, a contents key that is not a relative file path, more than 256 contents entries, mappings under a network the schema doesn't name or for a contract key that is not an address, more than 100 mapping entries or more than 10,000 token ids in them, an empty price or beneficiary, and a name blank once trimmed. Upstream stores them (mappings it can't name as an empty object).",
       "captures": [],
       "anchors": []
     },
@@ -457,7 +457,7 @@
       ]
     },
     "item-video-bounds": {
-      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 when the body hasn't arrived 20 minutes after the upload was admitted or no byte came for 30 seconds. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
+      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 when the body hasn't arrived 20 minutes after the upload was admitted or when a 30-second window, from the upload's admission or from the last window that did, brought less than 512 KiB of the video (so also when no byte came for 30 seconds). Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
       "captures": [],
       "anchors": []
     },
@@ -499,7 +499,7 @@
       "anchors": []
     },
     "newsletter-email-checked": {
-      "text": "POST /v1/newsletter: the node refuses a body without an email, an email that is no address (at most 254 characters, no space, control character, comma, semicolon or angle bracket, a local part of at most 64 characters and a domain of two or more labels), a source of more than 100 characters or with a control character, or a body that is not JSON, with 400 and a fixed message that repeats nothing of the body, and a body over 4 KiB with 413; it forwards nothing then. It stores and forwards the email trimmed and lowercased. Upstream forwards whatever the body holds and answers {ok:true}.",
+      "text": "POST /v1/newsletter: the node refuses a body without an email, an email that is no address (at most 254 characters, no space, control character, comma, semicolon or angle bracket, a local part of at most 64 characters and a domain of two or more labels), a source of more than 100 characters or with a control character, or a body that is not JSON, with 400 and a fixed message that repeats nothing of the body, and a body over 4 KiB with 413; it forwards nothing then. It forwards the email trimmed and lowercased and stores none. Upstream forwards whatever the body holds and answers {ok:true}.",
       "captures": [
         "source/514-newsletter-malformed-email.json"
       ],
@@ -552,12 +552,12 @@
       ]
     },
     "request-budgets": {
-      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items, curations or an address's collections spends one more read per 20 rows it answers once answered, and GET /v1/addresses 50 more; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes.",
+      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items, curations or an address's collections spends one more read per 20 rows it answers once answered, and GET /v1/addresses and the public collection search 50 more; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes.",
       "captures": [],
       "anchors": []
     },
     "wallet-storage-bound": {
-      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload that could take the bytes its signer's uploads hold in the store, apart from files a published item names, past 5,000,000,000: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes}, error:\"The wallet's unpublished files reached their limit\"}. Upstream bounds no wallet's storage.",
+      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload that could take the bytes its signer's uploads hold in the store, apart from files a published item names, past 5,000,000,000: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes}, error:\"The wallet's unpublished files reached their limit\"}. Past the plain sum of the wallet's upload records, its unpublished bytes are counted at most once a minute and moved meanwhile by what its records gained or lost, so a publication frees bytes within a minute. Both routes also spend, from the request's source address, its declared length in MiB (else the route's largest body) from 20 GiB a day; beyond, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After. Upstream bounds no wallet's or address's storage.",
       "captures": [],
       "anchors": []
     },
@@ -573,6 +573,11 @@
       "captures": [
         "source/302-third-parties-virtual-manager.json"
       ],
+      "anchors": []
+    },
+    "terms-acceptance-bounds": {
+      "text": "POST /v1/collections/:id/tos: the node refuses with 400 Invalid request body a hash that is longer than 64 characters or holds anything but ASCII letters and digits, and more hashes than the collection has items; it keeps one acceptance per collection, signer and event, the newest, in place of the earlier one. Upstream takes any strings, up to 40,000 of them, and stores nothing.",
+      "captures": [],
       "anchors": []
     }
   },
@@ -2756,7 +2761,7 @@
       "id": "api_http:POST:/v1/collections/:id/tos",
       "owner": "collections",
       "status": "reviewed",
-      "result": "Acceptances by the owner of a draft and by the provider manager of a third-party collection with its items' hashes, an email the schema refuses and a stranger were compared and match, but the schema refusal's detail. The node also keeps each acceptance, which no route answers.",
+      "result": "Acceptances by the owner of a draft and by the provider manager of a third-party collection with its items' hashes, an email the schema refuses and a stranger were compared and match, but the schema refusal's detail. The node also keeps a signer's newest acceptance per collection and event, which no route answers.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/286-collection-tos-owner.json",
@@ -2787,7 +2792,8 @@
       "gaps": [
         "deliberate:invalid-body-detail",
         "deliberate:access-checks-never-write",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:terms-acceptance-bounds"
       ],
       "remaining_verification": "What the warehouse receives is not part of a capture; the node's forward is held to upstream's body by its own tests."
     },

@@ -141,8 +141,8 @@ class ContentMigrationCases:
                      "('builder-server', 'bafkzthumb', 'bafkzthumb', 3, 'image/png'),"
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
         self.content_load(db, 'builder-server', 'item_content', [
-            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 0",
-            f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1",
+            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 0, '2026-02-01Z'",
+            f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1, '2026-02-01Z'",
         ])
         self.assertEqual(self.sql(db, f"SELECT string_agg(file, ',' ORDER BY position) FROM builder.item_contents "
                                       f"WHERE item_id = '{ITEM}';\n").strip(), 'thumbnail.png,model.glb')
@@ -159,16 +159,16 @@ class ContentMigrationCases:
                      "('builder-server', 'bafkzthumb', 'bafkzthumb', 3, 'image/png'),"
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
                      "('builder-server', 'bafkbmodel', 'bafkbmodel', 5, 'model/gltf-binary');\n")
-        rows = [f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER.upper().replace('0X', '0x')}', 0",
-                f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1"]
+        rows = [f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER.upper().replace('0X', '0x')}', 0, '2026-02-01Z'",
+                f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 1, '2026-02-01Z'"]
         self.content_load(db, 'builder-server', 'item_content', rows)
         writers = f"SELECT string_agg(file || ' ' || named_by, ',' ORDER BY file) FROM builder.item_contents WHERE item_id = '{ITEM}';\n"
         self.assertEqual(self.sql(db, writers).strip(), f'model.glb {OWNER.lower()},thumbnail.png {OWNER.lower()}')
         other = '0x' + 'b' * 40
         self.sql(db, f"UPDATE builder.item_contents SET named_by = '{other}' WHERE item_id = '{ITEM}';\n")
         self.content_load(db, 'builder-server', 'item_content', [
-            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 1",
-            f"'{ITEM}', 'model.glb', 'bafkbmodel', '{OWNER}', 0"])
+            f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 1, '2026-02-01Z'",
+            f"'{ITEM}', 'model.glb', 'bafkbmodel', '{OWNER}', 0, '2026-02-01Z'"])
         self.assertEqual(self.sql(db, writers).strip(), f'model.glb {OWNER.lower()},thumbnail.png {other}')
 
     def test_when_importing_an_items_video_it_should_attribute_it_to_the_items_owner_with_its_bytes(self):
@@ -186,7 +186,7 @@ class ContentMigrationCases:
         self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
                      "('builder-server', 'bafkvideo', 'bafkvideo', 7, 'video/mp4');\n")
-        self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0"])
+        self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'"])
         self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || uploaded_by || ' ' || size, ',' ORDER BY hash) "
                                       "FROM builder.uploaded_contents;\n").strip(),
                          f'bafkamodel {OWNER} 5,bafkvideo {OWNER} 7')
@@ -197,7 +197,7 @@ class ContentMigrationCases:
         self.content_load(db, 'builder-server', 'item', [item("'bafkother'", '2026-04-01Z')])
         self.assertEqual(self.sql(db, writer).strip(), f'bafkother {OWNER}', 'another video is the owner\'s again')
         with self.assertRaisesRegex(harness.migrate.MigrationError, 'not in dcl_migration.blob_inventory'):
-            self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0"])
+            self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'"])
 
     def test_when_an_items_video_is_over_the_nodes_largest_file_it_should_stop_the_batch(self):
         db = self.content_db('content_builder_video_size')
@@ -209,7 +209,7 @@ class ContentMigrationCases:
         self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
                      "('builder-server', 'bafkvideo', 'bafkvideo', 250000001, 'video/mp4');\n")
-        rows = [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0", f"'{ITEM}', 'video.mp4', 'bafkvideo', '{OWNER}', 1"]
+        rows = [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'", f"'{ITEM}', 'video.mp4', 'bafkvideo', '{OWNER}', 1, '2026-02-01Z'"]
         with self.assertRaisesRegex(harness.migrate.MigrationError, '1 content hashes are over 250,000,000 bytes'):
             self.content_load(db, 'builder-server', 'item_content', rows)
         self.assertEqual(self.sql(db, "SELECT count(*) FROM builder.uploaded_contents;\n").strip(), '0')
@@ -240,6 +240,43 @@ class ContentMigrationCases:
         self.assertEqual(self.builder_names(db), 'Node\tNode')
         self.import_builder(db, 'Upstream later', '2026-04-01Z')
         self.assertEqual(self.builder_names(db), 'Upstream later\tUpstream later')
+
+    def test_when_the_node_changed_an_items_contents_it_should_keep_them_on_reimport(self):
+        db = self.content_db('content_builder_node_contents')
+        self.import_builder(db, 'Upstream', '2026-02-01Z')
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
+                     "('builder-server', 'bafkzthumb', 'bafkzthumb', 3, 'image/png');\n")
+        upstream = [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'",
+                    f"'{ITEM}', 'thumbnail.png', 'bafkzthumb', '{OWNER}', 1, '2026-02-01Z'"]
+        self.content_load(db, 'builder-server', 'item_content', upstream)
+        self.sql(db, f"""DELETE FROM builder.item_contents WHERE item_id = '{ITEM}';
+                         DELETE FROM builder.uploaded_contents;
+                         INSERT INTO builder.item_contents (item_id, file, hash, position, named_by)
+                              VALUES ('{ITEM}', 'model.glb', 'bafknodemodel', 0, '{OWNER}');
+                         UPDATE builder.items SET updated_at = '2026-03-01' WHERE id = '{ITEM}';\n""")
+        self.import_builder(db, 'Upstream again', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'item_content', upstream)
+        self.assertEqual(self.sql(db, f"SELECT string_agg(file || ' ' || hash, ',' ORDER BY file) "
+                                      f"FROM builder.item_contents WHERE item_id = '{ITEM}';\n").strip(),
+                         'model.glb bafknodemodel')
+        self.assertEqual(self.sql(db, "SELECT count(*) FROM builder.uploaded_contents;\n").strip(), '0')
+
+    def test_when_the_node_holds_an_id_the_import_did_not_write_it_should_stop_the_batch(self):
+        db = self.content_db('content_builder_taken_ids')
+        squatter = '0x' + 'c' * 40
+        self.sql(db, f"""INSERT INTO builder.collections (id, name, eth_address, salt)
+                              VALUES ('{COLLECTION}', 'Taken', '{squatter}', '');
+                         INSERT INTO builder.items (id, collection_id, eth_address, name, type)
+                              VALUES ('{ITEM}', '{COLLECTION}', '{squatter}', 'Taken', 'wearable');\n""")
+        collection, item = self.builder_rows('Upstream', '2026-02-01Z')
+        with self.assertRaisesRegex(harness.migrate.MigrationError, f'did not write.*{COLLECTION}'):
+            self.content_load(db, 'builder-server', 'collection', [collection])
+        with self.assertRaisesRegex(harness.migrate.MigrationError, f'did not write.*{ITEM}'):
+            self.content_load(db, 'builder-server', 'item', [item])
+        self.assertEqual(self.builder_names(db), 'Taken\tTaken')
+        self.assertEqual(self.sql(db, f"SELECT eth_address FROM builder.items WHERE id = '{ITEM}';\n").strip(),
+                         squatter)
 
     PROVIDER = 'urn:decentraland:matic:collections-thirdparty:curated'
     LINKED = '33333333-3333-4333-8333-333333333333'

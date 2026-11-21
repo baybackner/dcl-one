@@ -98,7 +98,7 @@ pub(crate) mod tests;
 
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{Context as _, bail};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, patch, post};
@@ -109,11 +109,17 @@ use crate::storage::Storage;
 use dcl_auth::eip1654::Eip1654Validator;
 use dcl_http::{HttpClientCfg, Outbound};
 
-use items::{ItemsComponent, NewsletterComponent};
+use items::ItemsComponent;
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_BUILDER_ADMIN_TOKEN";
 /// One 20 MiB upload with its framing.
 pub const UPLOAD_BODY_LIMIT: usize = 21 * 1024 * 1024;
+/// File uploads the node reads at once, each up to [`UPLOAD_BODY_LIMIT`]
+/// in memory; of them per wallet (the `/create` dApp sends one item's files
+/// at a time) and per source address.
+pub const FILE_UPLOADS: usize = 16;
+pub const FILE_UPLOADS_PER_SIGNER: usize = 4;
+pub const FILE_UPLOADS_PER_SOURCE: usize = 8;
 
 /// The newsletter SaaS forward (`NEWSLETTER_SERVICE_URL`,
 /// `NEWSLETTER_PUBLICATION_ID`, `NEWSLETTER_SERVICE_API_KEY`), configured
@@ -374,7 +380,6 @@ impl Settings {
 
 pub struct State {
     pub items: ItemsComponent,
-    pub newsletter: NewsletterComponent,
     /// The marketplace readers the on-chain routes read; `None` (or one
     /// without a collections subgraph) answers 503 there.
     pub market: Option<Arc<ChainIndex>>,
@@ -405,6 +410,10 @@ pub struct State {
     pub validator_calls: crate::shared::limits::RateLimiter,
     /// The item video uploads' bounds and those in flight.
     pub videos: items::video::Videos,
+    /// The item file uploads in flight, each holding its body in memory:
+    /// [`FILE_UPLOADS`] on the node, [`FILE_UPLOADS_PER_SIGNER`] of a wallet,
+    /// [`FILE_UPLOADS_PER_SOURCE`] of a source address.
+    pub file_uploads: items::places::Places,
     /// The request budgets per source, signer and route ([`limits`]).
     pub limits: limits::Limits,
 }
@@ -419,6 +428,8 @@ pub fn guarded_client() -> Outbound {
 }
 
 impl State {
+    /// `blobs` is the node's blob store; the builder keeps its item files in
+    /// its [`Storage::builder`] tree, which the content routes never read.
     pub fn new(
         pool: PgPool,
         blobs: Arc<Storage>,
@@ -429,9 +440,12 @@ impl State {
         settings: Settings,
     ) -> anyhow::Result<Self> {
         let notices = curation::slack::Notices::new(settings.slack.clone(), settings.links.clone());
+        let blobs = blobs
+            .builder()
+            .cloned()
+            .context("the builder keeps its files in the blob store's builder tree")?;
         Ok(Self {
             items: ItemsComponent::new(pool.clone(), blobs).with_denylist(denylist.clone()),
-            newsletter: NewsletterComponent::new(pool),
             market,
             settings,
             http,
@@ -446,6 +460,12 @@ impl State {
             content_sync: Arc::default(),
             validator_calls: validator::calls_limiter(),
             videos: items::video::Videos::default(),
+            file_uploads: items::places::Places::new(
+                "file uploads",
+                FILE_UPLOADS,
+                FILE_UPLOADS_PER_SIGNER,
+                FILE_UPLOADS_PER_SOURCE,
+            ),
             limits: limits::Limits::default(),
         })
     }

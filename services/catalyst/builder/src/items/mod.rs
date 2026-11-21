@@ -5,8 +5,8 @@
 //! ([`listing`]), third-party item URNs ([`urn`]), the content hash a
 //! published item's body carries ([`hash`]) and a minted item's public facts
 //! by contract ([`minted`]). Also the collection projection
-//! the drafts listing reads ([`CollectionMetaOut`]), the committee's
-//! curation status writes and the newsletter opt-in ([`NewsletterComponent`]).
+//! the drafts listing reads ([`CollectionMetaOut`]) and the committee's
+//! curation status writes.
 //! Every timestamp column is `timestamp without time zone` in UTC (the
 //! schema convention), written as [`crate::http::iso`] writes it.
 
@@ -16,6 +16,7 @@ mod catalyst_state_tests;
 pub mod hash;
 pub mod listing;
 pub mod minted;
+pub mod places;
 pub mod save;
 pub mod schema;
 pub mod upload;
@@ -182,29 +183,6 @@ impl From<&CollectionMetaRow> for CollectionMetaOut {
             created_at: r.created_at.and_utc(),
             updated_at: r.updated_at.and_utc(),
         }
-    }
-}
-
-pub struct NewsletterComponent {
-    pool: PgPool,
-}
-
-impl NewsletterComponent {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn subscribe(&self, email: &str, source: &str) -> Result<(), ApiError> {
-        sqlx::query(
-            "INSERT INTO builder.newsletter_subscriptions (email, source) \
-             VALUES ($1, $2) \
-             ON CONFLICT (email) DO UPDATE SET source = EXCLUDED.source",
-        )
-        .bind(email)
-        .bind(source)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 }
 

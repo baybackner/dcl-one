@@ -364,6 +364,9 @@ CREATE TABLE builder.terms_acceptances (
 CREATE INDEX terms_acceptances_due_idx ON builder.terms_acceptances (next_attempt_at)
     WHERE forwarded_at IS NULL AND attempts < 6;
 
+CREATE INDEX terms_acceptances_collection_signer_event_idx
+    ON builder.terms_acceptances (collection_id, signer, event);
+
 CREATE TABLE builder.collection_curations (
     id uuid NOT NULL,
     collection_id uuid NOT NULL,

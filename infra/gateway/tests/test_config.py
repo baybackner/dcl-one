@@ -407,6 +407,15 @@ class ConfigurationTest(unittest.TestCase):
                 self.assertFalse(any(gateway.BUILDER_VIDEO_CAP in body or "proxy_request_buffering" in body
                                      for regex, body in regexes if regex.search(path)))
 
+    def test_item_files_are_capped_per_address_like_every_upload(self):
+        _, regexes = self.worlds_locations()
+        for path in ["/v1/items/6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55/files",
+                     "/builder-api/v1/items/6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55/files"]:
+            with self.subTest(path=path):
+                body = next(body for regex, body in regexes if regex.search(path))
+                self.assertIn("client_max_body_size 21m;", body)
+                self.assertIn("limit_conn deploy_uploads", body)
+
     def test_camera_reel_upload_cap_admits_the_multipart_limit(self):
         root = Path(__file__).parents[3] / "services/catalyst"
         source = (root / "camera-reel/src/handlers/images.rs").read_text()

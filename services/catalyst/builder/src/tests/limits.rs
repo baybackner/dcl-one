@@ -517,6 +517,34 @@ async fn a_collections_item_curations_cost_their_reader_by_the_row() {
 }
 
 #[tokio::test]
+async fn the_public_collection_search_costs_its_source_as_fifty_reads() {
+    let Some(pool) = super::validator::own_pool().await else {
+        return;
+    };
+    let app = app_over(pool, |state| state.limits.source_reads = per_minute(102)).await;
+    let search = |query: &str| Call {
+        source: Some(SOURCE),
+        ..Call::get(format!("/v1/collections?is_published=true&q=a{query}"))
+    };
+    assert_eq!(send(&app, &search("")).await.0, 200);
+    assert_eq!(send(&app, &search("&tag=hat")).await.0, 200);
+    let (status, _, retry) = send(&app, &search("&tag=other")).await;
+    assert_eq!((status, retry.as_deref()), (429, Some("1")));
+    assert_eq!(
+        send(
+            &app,
+            &Call {
+                source: Some(OTHER_SOURCE),
+                ..Call::get("/v1/collections?is_published=true&q=a")
+            }
+        )
+        .await
+        .0,
+        200
+    );
+}
+
+#[tokio::test]
 async fn the_addresses_listing_costs_its_source_as_fifty_reads() {
     let Some(pool) = super::validator::own_pool().await else {
         return;

@@ -217,7 +217,7 @@ async fn db() -> Option<Db> {
     Some(Db {
         pool,
         app,
-        store,
+        store: store.builder().unwrap().clone(),
         state,
     })
 }

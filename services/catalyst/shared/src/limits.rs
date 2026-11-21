@@ -29,7 +29,8 @@ struct Bucket {
 /// Token bucket per key. Keys are attacker-chosen, so the map is pruned: a
 /// fully refilled bucket is dropped on a periodic sweep, and the map is
 /// hard-capped so a burst of distinct keys cannot grow the process without
-/// bound.
+/// bound: at the cap the fullest buckets go first, so the keys that spent
+/// most (a caller being refused, a bucket in debt) are the last forgiven.
 pub struct RateLimiter {
     capacity: f64,
     refill_per_sec: f64,
@@ -73,13 +74,22 @@ impl RateLimiter {
         let now = Instant::now();
         let capacity = self.capacity;
         let refill_per_sec = self.refill_per_sec;
-        self.buckets.retain(|_, bucket| {
-            let b = bucket.get_mut();
-            let elapsed = now.saturating_duration_since(b.last).as_secs_f64();
-            b.tokens + elapsed * refill_per_sec < capacity
-        });
+        let level = |b: &Bucket| {
+            b.tokens + now.saturating_duration_since(b.last).as_secs_f64() * refill_per_sec
+        };
+        self.buckets
+            .retain(|_, bucket| level(bucket.get_mut()) < capacity);
         if self.buckets.len() >= self.max_buckets {
-            self.buckets.clear();
+            let mut levels: Vec<(f64, String)> = self
+                .buckets
+                .iter()
+                .map(|entry| (level(&entry.value().lock()), entry.key().clone()))
+                .collect();
+            levels.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let keep = self.max_buckets - self.max_buckets.div_ceil(10);
+            for (_, key) in levels.into_iter().skip(keep) {
+                self.buckets.remove(&key);
+            }
         }
     }
 
@@ -222,6 +232,22 @@ mod tests {
             limiter.len() <= 64,
             "attacker-keyed buckets grew to {}",
             limiter.len()
+        );
+    }
+
+    #[test]
+    fn a_flood_of_new_keys_never_forgives_a_key_in_debt() {
+        let limiter = RateLimiter::new(3, Duration::from_secs(60)).with_max_buckets(8);
+        let now = Instant::now();
+        limiter.charge_at("refused caller", 30, now);
+        assert!(limiter.take_at("refused caller", 1, now).is_err());
+        for i in 0..1_000 {
+            let _ = limiter.take_at(&format!("flood-{i}"), 1, now);
+        }
+        assert!(limiter.len() <= 8);
+        assert!(
+            limiter.take_at("refused caller", 1, now).is_err(),
+            "the flood reset the refused caller's budget"
         );
     }
 

@@ -263,7 +263,7 @@ const NAMED_CONTENTS: &str = "INSERT INTO builder.item_contents (item_id, file, 
 /// Drops the upload records of `hashes` that no item names any more, in its
 /// contents or as its video.
 pub(crate) async fn forget_unnamed(
-    tx: &mut Transaction<'_, Postgres>,
+    conn: &mut sqlx::PgConnection,
     hashes: &[String],
 ) -> Result<(), ApiError> {
     if hashes.is_empty() {
@@ -275,7 +275,7 @@ pub(crate) async fn forget_unnamed(
          AND NOT EXISTS (SELECT 1 FROM builder.items v WHERE v.video = u.hash)",
     )
     .bind(hashes)
-    .execute(&mut **tx)
+    .execute(conn)
     .await?;
     Ok(())
 }

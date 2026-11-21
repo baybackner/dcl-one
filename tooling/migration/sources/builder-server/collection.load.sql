@@ -1,3 +1,12 @@
+DO $taken$ DECLARE n bigint; ids text; BEGIN
+  SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
+    FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
+            FROM stage s JOIN builder.collections x ON x.id = s.id
+           WHERE x.created_at IS DISTINCT FROM s.created_at AT TIME ZONE 'UTC') t;
+  IF n > 0 THEN RAISE EXCEPTION
+    'builder-server/collection: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
+  ELSE NULL; END IF; END $taken$;
+
 INSERT INTO builder.collections AS c
     (id, name, eth_address, salt, contract_address, urn_suffix, third_party_id,
      publication_pending, created_at, updated_at, linked_contract_address, linked_contract_network, lock,

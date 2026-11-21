@@ -232,18 +232,14 @@ async fn a_visitor_subscribes_and_the_service_receives_builder_servers_request()
             expected("john.doe@example.com", "Builder"),
         ]
     );
-    let stored: Vec<(String, String)> =
-        sqlx::query_as("SELECT email, source FROM builder.newsletter_subscriptions ORDER BY email")
-            .fetch_all(&node.pool)
-            .await
-            .unwrap();
-    assert_eq!(
-        stored,
-        vec![
-            ("jane.doe@example.com".into(), "auth".into()),
-            ("john.doe@example.com".into(), "Builder".into()),
-        ]
-    );
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM builder.newsletter_subscriptions \
+         WHERE email IN ('jane.doe@example.com', 'john.doe@example.com')",
+    )
+    .fetch_one(&node.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, 0, "the node keeps no subscriber's email");
 }
 
 #[tokio::test]
@@ -282,11 +278,6 @@ async fn a_malformed_or_oversized_subscription_is_refused_without_echoing_it() {
     assert!(!answer.contains("example.com"), "{answer}");
 
     assert_eq!(fake.received(), vec![]);
-    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM builder.newsletter_subscriptions")
-        .fetch_one(&node.pool)
-        .await
-        .unwrap();
-    assert_eq!(stored, 0);
 }
 
 #[tokio::test]

@@ -11,7 +11,8 @@
 //! - A listing whose rows a request can't bound spends one more read token
 //!   per [`ROWS_PER_TOKEN`] rows it answered, from both, once answered
 //!   ([`charge_rows`]): a bucket may run into debt that later requests wait out.
-//!   `GET /v1/addresses` spends [`ADDRESSES_TOKENS`] more ([`charge`]).
+//!   `GET /v1/addresses` and the public collection search spend
+//!   [`ADDRESSES_TOKENS`] more ([`charge`]).
 //! - The review routes also spend from a per-wallet budget of their own
 //!   ([`spend_review`]); the newsletter from a per-source
 //!   ([`spend_newsletter_source`]), per-email and node-wide
@@ -19,9 +20,12 @@
 //!
 //! A spent budget answers 429 with `Retry-After`, the seconds until it
 //! holds a token again. Apart from the budgets, a wallet's uploads may hold
-//! at most [`WALLET_BYTES`] that no published item names
+//! at most [`WALLET_BYTES`] that no published item names, and a source
+//! address may send at most [`SOURCE_UPLOAD_MIB`] of uploads a day
 //! ([`within_storage`]).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Request, State};
@@ -57,14 +61,21 @@ pub const NEWSLETTER_PER_SOURCE: u32 = 10;
 pub const NEWSLETTER_PER_EMAIL: u32 = 3;
 /// Newsletter subscriptions through the node an hour.
 pub const NEWSLETTER_PER_NODE: u32 = 1_000;
-/// Read tokens `GET /v1/addresses` spends beyond its first: its query takes
-/// some 50 times the database time of a common read.
+/// Read tokens `GET /v1/addresses` and the public collection search spend
+/// beyond their first: their query takes some 50 times the database time of
+/// a common read.
 pub const ADDRESSES_TOKENS: u32 = 50;
 /// Rows of an unbounded listing one read token pays for.
 pub const ROWS_PER_TOKEN: usize = 20;
 /// The bytes one wallet's uploads may hold in the store while no published
 /// item names them.
 pub const WALLET_BYTES: u64 = 5_000_000_000;
+/// MiB of item files and videos one source address may send a day: four
+/// wallets' unpublished bound.
+pub const SOURCE_UPLOAD_MIB: u32 = 20 * 1024;
+/// How long a wallet's unpublished bytes, once counted, answer for it.
+pub const UNPUBLISHED_KEPT: Duration = MINUTE;
+const MIB: u64 = 1024 * 1024;
 const KEYS: usize = 50_000;
 
 /// Every budget, each a pub field so a test can set its own.
@@ -81,6 +92,15 @@ pub struct Limits {
     pub newsletter_node: RateLimiter,
     /// [`WALLET_BYTES`], or a test's own.
     pub wallet_bytes: u64,
+    /// [`SOURCE_UPLOAD_MIB`] a day, or a test's own.
+    pub source_upload_mib: RateLimiter,
+    unpublished: Mutex<HashMap<String, Unpublished>>,
+}
+
+struct Unpublished {
+    at: Instant,
+    bytes: i64,
+    uploaded: i64,
 }
 
 /// `per` tokens every `window`, refilled continuously.
@@ -102,6 +122,8 @@ impl Default for Limits {
             newsletter_emails: budget(NEWSLETTER_PER_EMAIL, DAY),
             newsletter_node: budget(NEWSLETTER_PER_NODE, HOUR),
             wallet_bytes: WALLET_BYTES,
+            source_upload_mib: budget(SOURCE_UPLOAD_MIB, DAY),
+            unpublished: Mutex::default(),
         }
     }
 }
@@ -122,6 +144,8 @@ impl Limits {
             newsletter_emails: all(),
             newsletter_node: all(),
             wallet_bytes: u64::MAX,
+            source_upload_mib: all(),
+            unpublished: Mutex::default(),
         }
     }
 
@@ -138,8 +162,18 @@ impl Limits {
     }
 
     fn take(&self, budget: &RateLimiter, key: &str, now: DateTime<Utc>) -> Result<(), ApiError> {
+        self.take_cost(budget, key, 1, now)
+    }
+
+    fn take_cost(
+        &self,
+        budget: &RateLimiter,
+        key: &str,
+        cost: u32,
+        now: DateTime<Utc>,
+    ) -> Result<(), ApiError> {
         budget
-            .take_at(key, 1, self.instant(now))
+            .take_at(key, cost, self.instant(now))
             .map_err(ApiError::Limited)
     }
 }
@@ -210,10 +244,14 @@ pub fn spend_newsletter_email(state: &SharedState, email: &str) -> Result<(), Ap
     limits.take(&limits.newsletter_node, "node", now)
 }
 
-/// Refuses, with 413 and `maxBytes`, an upload by `wallet` that could take
-/// the bytes its unpublished uploads hold past its bound: the body's
-/// declared length, else `most`, the route's largest body, counts as
-/// stored. Asked before the body is read.
+/// Refuses an upload by `wallet` before its body is read: the body's
+/// declared length, else `most`, the route's largest body, counts as sent.
+/// 429 once its source address sent [`SOURCE_UPLOAD_MIB`] today; 413 with
+/// `maxBytes` when it could take the bytes the wallet's unpublished uploads
+/// hold past its bound. Past the bound by the cheap sum of its records, the
+/// wallet's unpublished bytes are counted at most once every
+/// [`UNPUBLISHED_KEPT`], and moved meanwhile by what its records gained or
+/// lost.
 pub async fn within_storage(
     state: &SharedState,
     wallet: &str,
@@ -224,17 +262,50 @@ pub async fn within_storage(
         .get(axum::http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
         .unwrap_or(most);
-    let bound = state.limits.wallet_bytes;
+    let limits = &state.limits;
+    let now = (state.now)();
+    if let Some(source) = source(headers) {
+        let mib = u32::try_from(incoming.div_ceil(MIB)).unwrap_or(u32::MAX);
+        limits.take_cost(&limits.source_upload_mib, &source, mib, now)?;
+    }
+    let bound = limits.wallet_bytes;
     let fits = |stored: i64| {
         u64::try_from(stored)
             .unwrap_or(u64::MAX)
             .saturating_add(incoming)
             <= bound
     };
-    if fits(crate::access::uploaded_bytes(state.items.pool(), wallet).await?) {
+    let uploaded = crate::access::uploaded_bytes(state.items.pool(), wallet).await?;
+    if fits(uploaded) {
         return Ok(());
     }
-    if !fits(crate::access::unpublished_bytes(state.items.pool(), wallet).await?) {
+    let at = limits.instant(now);
+    let fresh = |kept: &Unpublished| at.saturating_duration_since(kept.at) < UNPUBLISHED_KEPT;
+    let kept = limits
+        .unpublished
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(wallet)
+        .filter(|kept| fresh(kept))
+        .map(|kept| kept.bytes + (uploaded - kept.uploaded));
+    let unpublished = match kept {
+        Some(bytes) => bytes,
+        None => {
+            let bytes = crate::access::unpublished_bytes(state.items.pool(), wallet).await?;
+            let mut map = limits.unpublished.lock().unwrap_or_else(|e| e.into_inner());
+            map.retain(|_, kept| fresh(kept));
+            map.insert(
+                wallet.to_string(),
+                Unpublished {
+                    at,
+                    bytes,
+                    uploaded,
+                },
+            );
+            bytes
+        }
+    };
+    if !fits(unpublished) {
         return Err(
             ApiError::http(413, "The wallet's unpublished files reached their limit")
                 .with_data(serde_json::json!({ "maxBytes": bound })),

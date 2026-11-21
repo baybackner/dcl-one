@@ -23,6 +23,21 @@ use crate::storage::Storage;
 /// fixtures' key.
 pub const OWNER_KEY: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
+/// Whether a request of this database waits for the blob store's lock
+/// ([`crate::storage::gc::STORE_LOCK_KEY`]), held by a collector's unlink
+/// batch.
+pub async fn waiting_for_the_store(pool: &sqlx::PgPool) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database \
+         WHERE l.locktype = 'advisory' AND NOT l.granted AND d.datname = current_database() \
+           AND l.objsubid = 1 AND ((l.classid::bigint << 32) | l.objid::bigint) = $1)",
+    )
+    .bind(crate::storage::gc::STORE_LOCK_KEY)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 pub async fn temp_storage() -> Arc<Storage> {
     let dir = std::env::temp_dir().join(format!("catalyst-builder-test-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -247,26 +262,46 @@ pub fn contents_of(files: &[(&str, &[u8])]) -> serde_json::Value {
         .into()
 }
 
-/// Uploads each of `files` for item `id` as `signer`, under its content hash.
+/// Uploads each of `files` for item `id` as `signer`, under its content
+/// hash; a file the item names only as its `video.mp4` is left as a video
+/// upload leaves it (its bytes stored and recorded), whatever its bytes.
 pub async fn upload(
     store: &ItemsComponent,
     signer: &str,
     id: Uuid,
     files: &[&[u8]],
 ) -> Result<(), crate::http::ApiError> {
-    store
-        .save_item_files(
-            &crate::access::granted::change(signer, id),
-            files
-                .iter()
-                .map(|bytes| {
-                    (
-                        dcl_auth::hash_bytes_v1(bytes),
-                        bytes::Bytes::copy_from_slice(bytes),
-                    )
-                })
-                .collect(),
+    let videos: Vec<String> = sqlx::query_scalar(
+        "SELECT hash FROM builder.item_contents WHERE item_id = $1 GROUP BY hash \
+         HAVING bool_and(file = 'video.mp4')",
+    )
+    .bind(id)
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    let mut others = Vec::new();
+    for bytes in files {
+        let hash = dcl_auth::hash_bytes_v1(bytes);
+        let bytes = bytes::Bytes::copy_from_slice(bytes);
+        if !videos.contains(&hash) {
+            others.push((hash, bytes));
+            continue;
+        }
+        let size = bytes.len() as i64;
+        store.blobs.store(&hash, bytes).await.unwrap();
+        sqlx::query(
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
         )
+        .bind(&hash)
+        .bind(size)
+        .bind(signer)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    }
+    store
+        .save_item_files(&crate::access::granted::change(signer, id), others)
         .await
 }
 

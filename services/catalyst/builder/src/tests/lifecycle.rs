@@ -1123,6 +1123,65 @@ async fn an_acceptance_is_stored_without_a_warehouse_and_attempts_are_bounded() 
 }
 
 #[tokio::test]
+async fn a_creators_acceptances_keep_one_row_no_larger_than_its_collections_items() {
+    let Some(node) = node(Options::default()).await else {
+        return;
+    };
+    let (id, _, _) = draft(&node, 2).await;
+    let path = format!("/v1/collections/{id}/tos");
+    let hash = |c: char| c.to_string().repeat(64);
+    let accept = |hashes: Vec<String>| json!({ "email": "jane.doe@example.com", "event": "publish_third_party_items_tos", "hashes": hashes });
+    for _ in 0..3 {
+        let (status, body) = call(
+            &node.app,
+            Some(OWNER_KEY),
+            "POST",
+            &path,
+            Some(accept(vec![hash('a'), hash('b')])),
+        )
+        .await;
+        assert_eq!((status, body), (200, json!({ "ok": true })));
+    }
+    let (status, _) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "POST",
+        &path,
+        Some(json!({ "email": "jane.doe@example.com" })),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        pending_terms(&node.pool, id).await.len(),
+        2,
+        "one row per event, the newest acceptance"
+    );
+    for (what, hashes) in [
+        (
+            "more hashes than items",
+            vec![hash('a'), hash('b'), hash('c')],
+        ),
+        ("a hash longer than any content hash", vec!["a".repeat(65)]),
+        ("a hash that is not one", vec!["../../etc".to_string()]),
+    ] {
+        let (status, body) = call(
+            &node.app,
+            Some(OWNER_KEY),
+            "POST",
+            &path,
+            Some(accept(hashes)),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"].clone()),
+            (400, json!("Invalid request body")),
+            "{what}"
+        );
+    }
+    assert_eq!(pending_terms(&node.pool, id).await.len(), 2);
+}
+
+#[tokio::test]
 async fn the_terms_route_takes_upstreams_schema_after_the_role_check() {
     let Some(node) = node(Options::default()).await else {
         return;

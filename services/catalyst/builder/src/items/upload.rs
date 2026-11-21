@@ -5,10 +5,14 @@
 //! file is hashed and compared with the hash it was sent under before
 //! anything is stored. File names and part content types are never read.
 //! Then, in one transaction with the item locked, the decision runs again,
-//! every hash must be one the item names, and the bytes go to the blob store
-//! with a record of who uploaded them (`builder.uploaded_contents`, one row
-//! per hash and uploader). A file no item names is never stored, and a
-//! file's records go once no item names it ([`super::save::forget_unnamed`]).
+//! every hash must be one the item names under a name other than its
+//! video's (the video comes through `/videos` and its MP4 check), and the
+//! bytes go to the blob store with a record of who uploaded them
+//! (`builder.uploaded_contents`, one row per hash and uploader), under the
+//! store's shared lock, so a collector's unlink batch either sees the record
+//! or leaves the upload to store again. A file no item names is never
+//! stored, and a file's records go once no item names it
+//! ([`super::save::forget_unnamed`]).
 
 use axum::extract::Multipart;
 use axum::extract::multipart::MultipartError;
@@ -24,6 +28,7 @@ use dcl_auth::{hash_bytes_v1, is_canonical_cid};
 use super::ItemsComponent;
 use super::save::lock_item;
 use super::schema::EMPTY_CONTENT_HASH;
+use super::video::VIDEO_FILE;
 
 /// Parts in one upload, empty ones included: above the most files one item
 /// names in the reference data (198).
@@ -96,17 +101,26 @@ impl ItemsComponent {
         let view = chain_state::for_decision(&mut tx).await?;
         lock_item(&mut tx, id, None).await?;
         access::confirm_item_change(&mut tx, &view, change).await?;
+        crate::storage::gc::lock_store_shared(&mut tx).await?;
         for (hash, bytes) in files {
-            let named: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM builder.item_contents WHERE item_id = $1 AND hash = $2)",
+            let (named, as_file): (bool, bool) = sqlx::query_as(
+                "SELECT count(*) > 0, count(*) FILTER (WHERE file <> $3) > 0 \
+                 FROM builder.item_contents WHERE item_id = $1 AND hash = $2",
             )
             .bind(id)
             .bind(&hash)
+            .bind(VIDEO_FILE)
             .fetch_one(&mut *tx)
             .await?;
             if !named {
                 return Err(ApiError::bad_request("The item does not name this file")
                     .with_data(json!({ "hash": hash })));
+            }
+            if !as_file {
+                return Err(ApiError::bad_request(
+                    "The video is uploaded through the videos route",
+                )
+                .with_data(json!({ "hash": hash })));
             }
             let size = bytes.len() as i64;
             if !self

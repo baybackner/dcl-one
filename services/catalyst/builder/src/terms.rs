@@ -8,7 +8,9 @@
 //! job) at most [`MAX_ATTEMPTS`] times, doubling the wait from a minute. A
 //! delivery the warehouse answers with a non-2xx status is retried; one it
 //! received but whose answer was lost is sent again. No route answers the
-//! stored rows.
+//! stored rows, and a signer's acceptance replaces its earlier one of the
+//! same collection and event, so they stay one per collection, signer and
+//! event, each naming at most as many hashes as the collection has items.
 
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -25,6 +27,9 @@ pub const MAX_ATTEMPTS: i32 = 6;
 pub const PASS_LIMIT: i64 = 50;
 /// The most hashes an acceptance names (builder-server's bound).
 pub const MAX_HASHES: usize = 40_000;
+/// The longest hash an acceptance names: a third-party item's keccak-256
+/// in hex; a CID is shorter.
+pub const MAX_HASH_LEN: usize = 64;
 
 const COLLECTION_EVENT: &str = "publish_collection_tos";
 const THIRD_PARTY_EVENT: &str = "publish_third_party_items_tos";
@@ -43,7 +48,8 @@ fn invalid_body() -> ApiError {
 
 /// builder-server's `saveTOSSchema`: `email` required and an email,
 /// `collection_address` a string, `event` one of the two, `hashes` 1 to
-/// [`MAX_HASHES`] strings; other keys are dropped, as its validator drops
+/// [`MAX_HASHES`] strings, each a content hash (ASCII letters and digits, at
+/// most [`MAX_HASH_LEN`]); other keys are dropped, as its validator drops
 /// them.
 pub fn parse(body: &Value) -> Result<Acceptance, ApiError> {
     let fields: &Map<String, Value> = body.as_object().ok_or_else(invalid_body)?;
@@ -74,7 +80,14 @@ pub fn parse(body: &Value) -> Result<Acceptance, ApiError> {
             Some(
                 hashes
                     .iter()
-                    .map(|h| h.as_str().map(str::to_string))
+                    .map(|h| {
+                        h.as_str()
+                            .filter(|h| {
+                                h.len() <= MAX_HASH_LEN
+                                    && h.bytes().all(|b| b.is_ascii_alphanumeric())
+                            })
+                            .map(str::to_string)
+                    })
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(invalid_body)?,
             )
@@ -87,10 +100,11 @@ pub fn parse(body: &Value) -> Result<Acceptance, ApiError> {
     })
 }
 
-/// Stores `acceptance` for the collection `manage` names, in one
-/// transaction that locks the collection and decides again
-/// ([`access::confirm_collection_manage`]), then tries its forward once
-/// when a warehouse is configured.
+/// Stores `acceptance` for the collection `manage` names, in place of the
+/// signer's earlier one of the same event, in one transaction that locks
+/// the collection and decides again ([`access::confirm_collection_manage`]);
+/// more hashes than the collection has items is a 400. Then tries its
+/// forward once when a warehouse is configured.
 pub async fn accept(
     state: &State,
     manage: &CollectionManage,
@@ -107,6 +121,24 @@ pub async fn accept(
     .ok_or_else(|| ApiError::not_found("Collection not found"))?;
     let view = chain_state::for_decision(&mut tx).await?;
     access::confirm_collection_manage(&mut tx, &view, manage).await?;
+    if let Some(hashes) = &acceptance.hashes {
+        let items: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM builder.items WHERE collection_id = $1")
+                .bind(manage.id())
+                .fetch_one(&mut *tx)
+                .await?;
+        if hashes.len() as i64 > items {
+            return Err(invalid_body());
+        }
+    }
+    sqlx::query(
+        "DELETE FROM builder.terms_acceptances WHERE collection_id = $1 AND signer = $2 AND event = $3",
+    )
+    .bind(manage.id())
+    .bind(manage.signer())
+    .bind(acceptance.event)
+    .execute(&mut *tx)
+    .await?;
     let body = match acceptance.event {
         THIRD_PARTY_EVENT => json!({
             "email": acceptance.email,

@@ -150,7 +150,12 @@ async fn world() -> Option<World> {
     let storage = temp_storage().await;
     let bytes = unique("third-party-file");
     let hash = dcl_auth::hash_bytes_v1(&bytes);
-    storage.store(&hash, bytes.clone().into()).await.unwrap();
+    storage
+        .builder()
+        .unwrap()
+        .store(&hash, bytes.clone().into())
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO explore_api.feature_flags (app, document, fetched_at) \
          VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true,\"builder-auto-curation-review-flow\":true},\"variants\":{}}', timezone('UTC', now())) \
@@ -180,7 +185,7 @@ async fn world() -> Option<World> {
         pool,
         app,
         registry,
-        storage,
+        storage: storage.builder().unwrap().clone(),
         state,
         hash,
         bytes,

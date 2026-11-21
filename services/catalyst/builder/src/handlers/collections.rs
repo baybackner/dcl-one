@@ -125,7 +125,14 @@ async fn list_collections(
         }
         None => {
             let search = PublicSearch::new(&q, review_flow)?.ok_or_else(|| unauthorized_for(""))?;
-            state.items.public_collections(&search).await?
+            let found = state.items.public_collections(&search).await?;
+            crate::limits::charge(
+                state,
+                headers,
+                signer.as_ref().map(|s| s.as_str()),
+                crate::limits::ADDRESSES_TOKENS,
+            );
+            found
         }
     };
     Ok(Json(ApiData::ok(data)).into_response())

@@ -161,6 +161,12 @@ impl Rig {
         ));
         let storage = Arc::new(Storage::from_config(&dir).await.unwrap());
         storage.store(&corpus.hash, blob.clone()).await.unwrap();
+        storage
+            .builder()
+            .unwrap()
+            .store(&corpus.hash, blob.clone())
+            .await
+            .unwrap();
 
         let content = Arc::new(crate::content::ContentState::new(
             pool.clone(),

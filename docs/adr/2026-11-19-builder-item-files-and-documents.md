@@ -34,29 +34,45 @@ The builder answers items as `github.com/decentraland/builder-server` at
   owner and the on-chain managers save an existing item's metadata and
   contents; a new item, a move in or out and a rarity change are refused.
 - **Uploads are named and verified.** Each uploaded part is sent under the
-  content hash its item names. The node reads the body within its bounds,
-  hashes each file, refuses a file whose bytes don't match the hash or whose
-  item doesn't name it, and only then stores it.
+  content hash its item names. Before it reads the body, the node takes one
+  of 16 places for file uploads in flight, at most four for each wallet and
+  eight for each source address (a refused place answers 429 with
+  `Retry-After` at once). It reads the body within its bounds, hashes each
+  file, refuses a file whose bytes don't match the hash, whose item doesn't
+  name it or that the item names only as its `video.mp4` (a video comes
+  through `/videos` and its container check), and only then stores it.
+- **Uploads have budgets.** A source address sends at most 20 GiB of item
+  files and videos a day, counted by each body's declared length before the
+  body is read. A wallet's uploads hold at most 5,000,000,000 bytes that no
+  published item names; once the plain sum of its upload records passes
+  that, the node counts its unpublished bytes at most once a minute and
+  moves that count by what its records gained or lost since, so a
+  publication frees bytes within a minute. An address the node can't tell
+  apart, an internal one behind a gateway it doesn't trust, counts toward
+  no source.
 - **A video streams to the store.** `POST /v1/items/{id}/videos` takes a
   smart wearable's preview video, one file part named `video.mp4`, of up to
   250,000,000 bytes. The node decides access, checks that the item names a
   video and takes one of eight places for uploads in flight, at most two for
   each wallet and two for each source address, before it reads a byte of
-  the body; it never waits for a place, and a refused one answers 429 with
+  the body (the places work as the file uploads' do); it never waits for a place, and a refused one answers 429 with
   `Retry-After` at once, so two wallets can't hold every place.
   The body then streams into one spool file beside the blob store, hashed as
   it arrives, holding no database connection or row lock. The multipart
   parser may hold at most 64 KiB beyond the bytes it has handed on, the
   whole body must arrive within 20 minutes (about 1.7 Mbit/s for the
-  largest video), 30 seconds without a byte ends the upload, and the node
-  stops reading the moment a bound is passed. The video must be an MP4 container (an `ftyp`
+  largest video), each 30-second window must bring at least 512 KiB of the
+  video (about 140 kbit/s; so 30 seconds without a byte also ends the
+  upload, and a sender that trickles frees its place), and the node stops
+  reading the moment a bound is passed. The video must be an MP4 container (an `ftyp`
   box first, a `moov` box, boxes that end where the file does), whatever
   its part's name or content type says. Only then, in one transaction with
   the item locked, the node decides access again, checks that the item
   still names the hash at `video.mp4`, stores the file and records the
   upload; that store runs in a task of its own, so a client that leaves
   can't cut it short. A refused or abandoned upload leaves no spool file,
-  and a spool file a crash left is removed once an hour old.
+  and a spool file a crash left is removed by the first video upload after
+  it is an hour old.
 - **Naming grants nothing.** An item may name any hash. What proves a wallet
   holds a file is its own upload record (`builder.uploaded_contents`, one row
   per hash and uploader), never a name in an item.
@@ -97,9 +113,16 @@ The builder answers items as `github.com/decentraland/builder-server` at
   it protects the bytes from the collector, it satisfies a publication's
   check, and it opens the file to that wallet as the file routes below
   decide.
-- **Files are private until published.** The node serves item files from
-  its own blob store, at `GET` and `HEAD /v1/storage/contents/{hash}` and
-  the `exists` probe, and never redirects to a bucket. A request without a
+- **Files are private until published.** The node keeps item files in the
+  builder's own tree of the blob store, `<STORAGE_ROOT_FOLDER>/builder`,
+  which no content or worlds route reads: `/contents/{hash}`,
+  `/available-content` and a deployment's check for files already stored
+  never find an item file. The collector walks both trees. An upload checks
+  for the stored file and records it under the store's shared lock, as a
+  local deploy does, so the collector never removes a file an upload has
+  just recorded. The node serves item files at `GET` and `HEAD
+  /v1/storage/contents/{hash}` and the `exists` probe, and never redirects
+  to a bucket. A request without a
   signature reads a file only while a published item names it in a name
   that counts. A standard item is published once its collection is; a
   third-party item once it has an item curation. A signed request also reads a

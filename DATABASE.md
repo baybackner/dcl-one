@@ -1312,7 +1312,9 @@ Tables and what they hold:
   order saved). An item may name any content hash; nothing references
   `builder.uploaded_contents` by key.
 - `builder.uploaded_contents`: one row per hash and uploader, the record that
-  this wallet sent the bytes and the node stored them in the ONE blob store.
+  this wallet sent the bytes and the node stored them in the blob store's
+  builder tree (`<STORAGE_ROOT_FOLDER>/builder`), which no content or worlds
+  route reads.
   An upload stores only a hash its item names, verified against the bytes.
   `size` is at most 250,000,000 bytes, the largest item video
   (`uploaded_contents_size_check`; step `0064_builder_uploaded_video_size`
@@ -1414,7 +1416,8 @@ reference data's size without secondary indexes and longer with them.
 
 ## Builder item files workload
 
-The builder serves item files from the ONE blob store at `GET` and `HEAD
+The builder serves item files from the blob store's builder tree
+(`<STORAGE_ROOT_FOLDER>/builder`) at `GET` and `HEAD
 /v1/storage/contents/{hash}` and answers `GET .../exists`
 (`services/catalyst/builder/src/handlers/storage.rs`). One statement,
 `FILE_READ` in `services/catalyst/builder/src/access.rs`, decides each
@@ -1512,15 +1515,18 @@ only when it holds an upload record for the name's hash. The index
 A wallet's uploads may hold at most 5,000,000,000 bytes that no published
 item names (`builder::limits::within_storage`). `POST /v1/items/{id}/files`
 and `POST /v1/items/{id}/videos` ask once each, after the access decision and
-before the body is read; the body's declared length, else the route's largest
-body, counts as stored.
+the upload's place and before the body is read; the body's declared length,
+else the route's largest body, counts as stored.
 
 - First, the wallet's whole total, from
   `uploaded_contents_uploaded_by_idx (uploaded_by) INCLUDE (size)` alone (an
   index-only scan). Most wallets stop here.
 - Only when that total could pass the bound, the bytes of the wallet's records
   that no published item names: the same index, then the public-file probe
-  above for each record.
+  above for each record. The node keeps that count a minute per wallet, in
+  process memory, and moves it by how much the wallet's total changed since,
+  so a wallet past its bound runs the count at most once a minute however
+  often it asks, and a publication frees its bytes within a minute.
 
 Measured on a scratch copy of the fresh schema with 323,928 upload records,
 107,976 items and 8,298 collections, half of them on chain (PostgreSQL 18):
@@ -1535,18 +1541,18 @@ Invariants:
 - A published item's files never count, so publishing frees a wallet's
   bound; deleting an item frees it once no item names the hash (the delete
   removes the upload records in its transaction).
-- Uploads in flight at once can each pass the check: two videos and a file
-  per wallet can overshoot the bound by their sizes.
+- Uploads in flight at once can each pass the check: a wallet's two videos
+  and four file uploads in flight can overshoot the bound by their sizes.
 
 `schema migrate` builds the index from `schemas/50_create.sql`.
 
 ## Builder newsletter workload
 
-`POST /v1/newsletter` upserts one row of `builder.newsletter_subscriptions`
-(`email` key, `source`) per accepted subscription, then forwards it to the
-newsletter service. Its budgets bound the writes: 10 an hour per source
-address, 3 a day per email, 1,000 an hour per node. No statement reads the
-table.
+`POST /v1/newsletter` forwards each accepted subscription to the
+newsletter service and stores nothing: no statement reads or writes
+`builder.newsletter_subscriptions`, which stays in the schema. Its budgets,
+in process memory, bound the forwards: 10 an hour per source address, 3 a
+day per email, 1,000 an hour per node.
 
 ## Builder small reads workload
 
@@ -1614,10 +1620,13 @@ Tables and what they hold:
   holds for a day from that instant; while it holds, saves of the
   collection, item saves and creations in it, item deletes and the
   collection's delete answer 423. Uploads are never locked.
-- `builder.terms_acceptances`: one row per acceptance, with the body the
-  warehouse receives, the email address included. Only the terms route
-  inserts into it and only its forward reads and updates it; no other
-  statement reads it, no route answers it, and an operator reads it with SQL.
+- `builder.terms_acceptances`: one row per collection, signer and event,
+  the newest acceptance, with the body the warehouse receives, the email
+  address included; an acceptance names at most as many hashes as its
+  collection has items, each at most 64 ASCII letters and digits. Only the
+  terms route inserts into it and deletes the row it replaces, and only its
+  forward reads and updates it; no other statement reads it, no route
+  answers it, and an operator reads it with SQL.
   A delete of the collection keeps the rows (no foreign key). The schema has
   no role that narrows who reads it beyond those statements.
 
@@ -1628,7 +1637,7 @@ Statements:
 | lock | the collection row `FOR UPDATE`, the decision, one update | `collections_pkey` |
 | delete | the collection row, then its items `FOR UPDATE ORDER BY id`; the decision; the items' contents, the items and the row deleted; the upload records no item names any more | `collections_pkey`, `items_collection_created_idx`, `item_contents_pkey`, `item_contents_hash_idx` |
 | publish | the collection's items in creation order, the copy's row and item ids for its contract; to assign ids, the rows locked as for a delete and one update per item | `items_collection_created_idx`, `shop.collections` and `shop.items` primary keys |
-| terms | one insert; one update when the forward succeeds | `terms_acceptances_pkey` |
+| terms | the collection's item count; one delete of the signer's earlier row of the event; one insert; one update when the forward succeeds | `items_collection_created_idx`, `terms_acceptances_collection_signer_event_idx`, `terms_acceptances_pkey` |
 | terms forward pass | claims at most 50 due rows `FOR UPDATE SKIP LOCKED`, one update per delivered row | `terms_acceptances_due_idx` |
 
 Invariants:
@@ -1645,7 +1654,7 @@ Invariants:
   a minute; a row the warehouse took is never claimed again.
 
 Upgrade: step `0060_builder_collection_lock` adds `collections.lock`; the
-schema's object pass creates `builder.terms_acceptances` and its index.
+schema's object pass creates `builder.terms_acceptances` and its indexes.
 
 ## Builder third parties workload
 

@@ -67,8 +67,14 @@ from the shop's committee index, on the same node.
 - `CREATE_WRITES_ENABLED=true` opens the writes; off, each answers 503, and
   the builder's jobs (the terms forward to the warehouse and the
   validation-request sweep) change no row and call no outside service.
-- `STORAGE_ROOT_FOLDER` holds item files and videos; a wallet's uploads may
-  hold at most 5,000,000,000 bytes that no published item names.
+- `STORAGE_ROOT_FOLDER/builder` holds item files and videos, apart from
+  the content tree, so no content or worlds route serves them. A wallet's
+  uploads may hold at most 5,000,000,000 bytes that no published item
+  names, and a source address may send at most 20 GiB of uploads a day.
+- At most 16 file uploads and 8 video uploads run at once, each kind at
+  most 4 and 2 per wallet and 8 and 2 per source address; behind the
+  gateway, set `HTTP_TRUSTED_PROXY_CIDRS` so the node sees each client's
+  address.
 - The `builder` flags document, which Explore's flags mirror stores, turns
   the automated review on (`builder-auto-curation`) and the review flow
   (`builder-auto-curation-review-flow`); both also need
@@ -84,5 +90,5 @@ Each secret may also be given as `<NAME>_FILE`; none is printed.
 | Curators' Slack | `SLACK_BOT_TOKEN`, `SLACK_CURATION_CHANNEL`, `CREATORS_URL` (else `BUILDER_URL`) | No notice is posted |
 | Curators' forum | `FORUM_URL`, `FORUM_API_KEY`, `FORUM_API_USERNAME`, `FORUM_CATEGORY`, `BUILDER_SERVER_URL` | Forum posts and replies answer 503 |
 | Terms of service warehouse | `WAREHOUSE_URL`, `WAREHOUSE_TOKEN`, `WAREHOUSE_CONTEXT_PREFIX` | Acceptances are stored and forwarded later |
-| Newsletter service | `NEWSLETTER_SERVICE_URL`, `NEWSLETTER_PUBLICATION_ID`, `NEWSLETTER_SERVICE_API_KEY` | Subscriptions are stored only |
+| Newsletter service | `NEWSLETTER_SERVICE_URL`, `NEWSLETTER_PUBLICATION_ID`, `NEWSLETTER_SERVICE_API_KEY` | Subscriptions are answered `{ok:true}` and go nowhere; the node never stores one |
 | Curation console | `CATALYRST_BUILDER_ADMIN_TOKEN` (at least 32 bytes), `BUILDER_ADMIN_ADDRESSES` | The console refuses |

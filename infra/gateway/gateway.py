@@ -365,7 +365,7 @@ def render(table, cfg, mime):
         f"client_max_body_size {BADGES_ASSET_CAP}; "
         f"limit_conn badge_asset_uploads {DEPLOY_CONNECTIONS_PER_ADDRESS};"))
     locations += location("~ ^(/builder-api)?/v1/items/[^/]+/files/*$",
-                          proxy("apis", "client_max_body_size 21m;"))
+                          proxy("apis", f"client_max_body_size 21m; {uploads}"))
     locations += location("~ ^(/builder-api)?/v1/items/[^/]+/videos/*$", proxy("apis",
         f"client_max_body_size {BUILDER_VIDEO_CAP}; proxy_request_buffering off; client_body_timeout 30s; "
         f"proxy_send_timeout 30s; {uploads}"))

@@ -178,7 +178,7 @@ async fn node_over(
         pool,
         app,
         state,
-        storage,
+        storage: storage.builder().unwrap().clone(),
     })
 }
 
@@ -453,6 +453,63 @@ async fn a_creator_uploads_the_video_their_smart_wearable_names_and_plays_it_bac
 }
 
 #[tokio::test]
+async fn a_forgotten_video_uploaded_again_while_the_collector_unlinks_it_keeps_its_bytes() {
+    let Some(node) = node().await else { return };
+    let video = mp4("forgotten then sent again");
+    let (collection, item) = smart_wearable(&node, &video).await;
+    assert_eq!(
+        upload(&node, Some(OWNER_KEY), item, video_form(&video))
+            .await
+            .0,
+        200
+    );
+    sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = $1")
+        .bind(hash(&video))
+        .execute(&node.pool)
+        .await
+        .unwrap();
+
+    let batch = crate::storage::gc::lock_store_exclusive(&node.pool)
+        .await
+        .unwrap();
+    let again = tokio::spawn({
+        let app = node.app.clone();
+        let body = video_form(&video);
+        async move {
+            send(
+                &app,
+                Some(OWNER_KEY),
+                &format!("/v1/items/{item}/videos"),
+                Body::from(body),
+            )
+            .await
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !super::support::waiting_for_the_store(&node.pool).await {
+        assert!(
+            !again.is_finished(),
+            "the upload committed while the collector's unlink batch held the store"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the upload never asked for the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    node.storage.delete_strict(&hash(&video)).await.unwrap();
+    batch.commit().await.unwrap();
+
+    assert_eq!(again.await.unwrap().0, 200);
+    assert_eq!(
+        records(&node.pool, &hash(&video)).await,
+        vec![(video.len() as i64, address(OWNER_KEY))]
+    );
+    assert!(stored(&node, &hash(&video)).await);
+    cleanup(&node.pool, &[collection], &[hash(&video)]).await;
+}
+
+#[tokio::test]
 async fn after_publication_and_approval_the_video_opens_unsigned_as_the_marketplace_reads_it() {
     let Some(node) = node().await else { return };
     let video = mp4("approved");
@@ -680,6 +737,24 @@ async fn a_file_that_is_not_a_playable_mp4_is_refused_and_not_stored() {
         assert!(!stored(&node, &hash(bytes)).await, "{what}");
         assert!(records(&node.pool, &hash(bytes)).await.is_empty(), "{what}");
     }
+    name_video(&node, collection, item, &page).await;
+    let (status, answer) = send(
+        &node.app,
+        Some(OWNER_KEY),
+        &format!("/v1/items/{item}/files"),
+        Body::from(form(&[(&hash(&page), Some("blob"), &page)])),
+    )
+    .await;
+    assert_eq!(
+        (status, answer),
+        (
+            400,
+            json!({ "ok": false, "data": { "hash": hash(&page) }, "error": "The video is uploaded through the videos route" })
+        ),
+        "the item's video sent as a file"
+    );
+    assert!(!stored(&node, &hash(&page)).await);
+    assert!(records(&node.pool, &hash(&page)).await.is_empty());
     let head = form(&[(VIDEO_FILE, Some("video.mp4"), &page)]);
     let head = head[..head.len() - format!("\r\n--{BOUNDARY}--\r\n").len()].to_vec();
     let (body, pulled) = counted(
@@ -925,13 +1000,15 @@ async fn pulled_to(pulled: &AtomicU64, bytes: usize, ended: impl Fn() -> bool) {
 }
 
 /// An upload of `item`'s `video` whose body the test feeds in steps of
-/// `step` paused seconds, `rounds` times, a few bytes each; then the rest.
+/// `step` paused seconds, `rounds` times, `per_step` bytes each; then the
+/// rest.
 async fn fed_upload(
     node: &Node,
     item: Uuid,
     video: &[u8],
     step: u64,
     rounds: usize,
+    per_step: usize,
 ) -> (u16, Value) {
     let (body, tx, pulled) = fed();
     let uploading = tokio::spawn({
@@ -947,12 +1024,12 @@ async fn fed_upload(
     for _ in 0..rounds {
         tokio::time::advance(Duration::from_secs(step)).await;
         if tx
-            .send(Bytes::copy_from_slice(&whole[sent..sent + 1]))
+            .send(Bytes::copy_from_slice(&whole[sent..sent + per_step]))
             .is_err()
         {
             break;
         }
-        sent += 1;
+        sent += per_step;
         pulled_to(&pulled, sent, || uploading.is_finished()).await;
     }
     tokio::time::resume();
@@ -1007,11 +1084,13 @@ async fn a_sender_that_stalls_is_cut_at_the_idle_bound_and_leaves_nothing() {
 
 #[tokio::test]
 async fn a_slow_steady_sender_inside_the_total_finishes() {
-    let Some(node) = node().await else { return };
+    let Some(node) = node_with(|state| state.videos.min_window_bytes = 1, true).await else {
+        return;
+    };
     let video = mp4("slow and steady");
     let (collection, item) = smart_wearable(&node, &video).await;
     assert_eq!(
-        fed_upload(&node, item, &video, 20, 6).await,
+        fed_upload(&node, item, &video, 20, 6, 1).await,
         (200, json!({ "ok": true }))
     );
     assert_eq!(records(&node.pool, &hash(&video)).await.len(), 1);
@@ -1021,7 +1100,10 @@ async fn a_slow_steady_sender_inside_the_total_finishes() {
 #[tokio::test]
 async fn a_steady_sender_past_the_total_is_cut_and_frees_its_place() {
     let Some(node) = node_with(
-        |state| state.videos.deadline = Duration::from_secs(90),
+        |state| {
+            state.videos.deadline = Duration::from_secs(90);
+            state.videos.min_window_bytes = 1;
+        },
         true,
     )
     .await
@@ -1030,7 +1112,7 @@ async fn a_steady_sender_past_the_total_is_cut_and_frees_its_place() {
     };
     let video = mp4("too slow");
     let (collection, item) = smart_wearable(&node, &video).await;
-    let (status, answer) = fed_upload(&node, item, &video, 20, 6).await;
+    let (status, answer) = fed_upload(&node, item, &video, 20, 6, 1).await;
     assert_eq!(
         (status, answer["error"].as_str()),
         (408, Some("The upload timed out"))
@@ -1039,6 +1121,37 @@ async fn a_steady_sender_past_the_total_is_cut_and_frees_its_place() {
     assert!(records(&node.pool, &hash(&video)).await.is_empty());
     assert!(node.state.videos.idle(), "the place was kept");
     cleanup(&node.pool, &[collection], &[]).await;
+}
+
+#[tokio::test]
+async fn a_sender_that_trickles_below_the_minimum_rate_is_cut_and_frees_its_place() {
+    let Some(node) = node().await else { return };
+    assert_eq!(node.state.videos.min_window_bytes, 512 * 1024);
+    let video = mp4("trickled");
+    let (collection, item) = smart_wearable(&node, &video).await;
+    let (status, answer) = fed_upload(&node, item, &video, 20, 6, 1).await;
+    assert_eq!(
+        (status, answer["error"].as_str()),
+        (408, Some("The upload timed out"))
+    );
+    assert_eq!(spool_entries(&node), 0);
+    assert!(records(&node.pool, &hash(&video)).await.is_empty());
+    assert!(node.state.videos.idle(), "the place was kept");
+    cleanup(&node.pool, &[collection], &[]).await;
+}
+
+#[tokio::test]
+async fn a_sender_at_the_minimum_rate_keeps_its_place_until_it_finishes() {
+    let Some(node) = node().await else { return };
+    let per_window = node.state.videos.min_window_bytes as usize;
+    let video = mp4_of(4 * per_window);
+    let (collection, item) = smart_wearable(&node, &video).await;
+    assert_eq!(
+        fed_upload(&node, item, &video, 29, 3, per_window).await,
+        (200, json!({ "ok": true }))
+    );
+    assert_eq!(records(&node.pool, &hash(&video)).await.len(), 1);
+    cleanup(&node.pool, &[collection], &[hash(&video)]).await;
 }
 
 #[tokio::test]
@@ -1231,6 +1344,87 @@ async fn two_wallets_holding_every_place_they_may_leave_another_creator_room() {
 }
 
 #[tokio::test]
+async fn behind_a_gateway_the_node_does_not_trust_every_creator_shares_no_source_place() {
+    let Some(node) = node().await else { return };
+    let mut held = Vec::new();
+    for key in &WALLET_KEYS[..3] {
+        held.push(hold(&node, key, "10.0.0.7").await);
+    }
+    assert_eq!(node.state.videos.in_flight(), 3);
+    let collections = release(&node, held).await;
+    cleanup(&node.pool, &collections, &[]).await;
+}
+
+async fn hold_files(node: &Node, key: &str, ip: &str) -> (tokio::task::JoinHandle<()>, Uuid) {
+    let collection = smart_wearable_of(node, key, &mp4("held files")).await;
+    let item = item_of(node, collection).await;
+    let before = node.state.file_uploads.in_flight();
+    let (body, _) = counted(b"--videoboundary\r\n".to_vec(), 0, vec![], true);
+    let app = node.app.clone();
+    let (key, ip) = (key.to_string(), ip.to_string());
+    let task = tokio::spawn(async move {
+        let request = post(
+            Some(&key),
+            &format!("/v1/items/{item}/files"),
+            Some(&ip),
+            body,
+        )
+        .await;
+        let _ = app.oneshot(request).await;
+    });
+    until("a held file upload", || {
+        node.state.file_uploads.in_flight() == before + 1
+    })
+    .await;
+    (task, collection)
+}
+
+#[tokio::test]
+async fn file_uploads_in_flight_are_bounded_per_wallet_and_refused_before_their_body() {
+    let Some(node) = node().await else { return };
+    let mut held = Vec::new();
+    for n in 0..crate::FILE_UPLOADS_PER_SIGNER {
+        held.push(hold_files(&node, WALLET_KEYS[0], &format!("198.51.100.{}", n + 1)).await);
+    }
+    let collection = smart_wearable_of(&node, WALLET_KEYS[0], &mp4("one more")).await;
+    let item = item_of(&node, collection).await;
+    let (body, polled) = untouchable();
+    let (status, answer, retry) = send_from(
+        &node.app,
+        Some(WALLET_KEYS[0]),
+        &format!("/v1/items/{item}/files"),
+        Some("198.51.100.9"),
+        body,
+    )
+    .await;
+    assert_eq!(
+        (status, answer["error"].as_str(), retry.as_deref()),
+        (
+            429,
+            Some("Too many file uploads of this wallet in progress"),
+            Some("30")
+        )
+    );
+    assert_eq!(
+        polled.load(Ordering::SeqCst),
+        0,
+        "the refused body was read"
+    );
+    held.push(hold_files(&node, WALLET_KEYS[1], "198.51.100.9").await);
+    let mut collections = vec![collection];
+    for (task, held_collection) in held {
+        task.abort();
+        let _ = task.await;
+        collections.push(held_collection);
+    }
+    until("every file upload's release", || {
+        node.state.file_uploads.in_flight() == 0
+    })
+    .await;
+    cleanup(&node.pool, &collections, &[]).await;
+}
+
+#[tokio::test]
 async fn the_node_reads_at_most_eight_videos_at_once_and_refuses_the_ninth_at_once() {
     let Some(node) = node().await else { return };
     let mut held = Vec::new();
@@ -1279,7 +1473,7 @@ async fn the_node_reads_at_most_eight_videos_at_once_and_refuses_the_ninth_at_on
 }
 
 #[tokio::test]
-async fn a_spool_left_by_a_crash_is_removed_once_older_than_the_longest_upload() {
+async fn a_spool_left_by_a_crash_is_removed_by_the_first_upload_after_it_ages() {
     let Some(node) = node().await else { return };
     let root = video::spool_root(&node.storage);
     std::fs::create_dir_all(&root).unwrap();
@@ -1305,7 +1499,28 @@ async fn a_spool_left_by_a_crash_is_removed_once_older_than_the_longest_upload()
     assert!(!old.exists(), "the orphan stays");
     assert!(fresh.exists(), "a live upload's spool was removed");
     assert!(node.state.videos.deadline < video::SPOOL_ORPHAN_AGE);
-    cleanup(&node.pool, &[collection], &[hash(&video)]).await;
+
+    std::fs::File::options()
+        .write(true)
+        .open(&fresh)
+        .unwrap()
+        .set_modified(
+            std::time::SystemTime::now() - video::SPOOL_ORPHAN_AGE - Duration::from_secs(1),
+        )
+        .unwrap();
+    let later = mp4("a later upload");
+    name_video(&node, collection, item, &later).await;
+    assert_eq!(
+        upload(&node, Some(OWNER_KEY), item, video_form(&later))
+            .await
+            .0,
+        200
+    );
+    assert!(
+        !fresh.exists(),
+        "a leftover too young at the first sweep stays once it has aged"
+    );
+    cleanup(&node.pool, &[collection], &[hash(&video), hash(&later)]).await;
 }
 
 #[tokio::test]
@@ -1499,9 +1714,10 @@ async fn a_client_that_leaves_once_its_video_arrived_cannot_cut_the_store_short(
 }
 
 const BOUNDED_KEY: &str = "0x8505050505050505050505050505050505050505050505050505050505050505";
+const KEPT_COUNT_KEY: &str = "0x8606060606060606060606060606060606060606060606060606060606060606";
 
-async fn declared(node: &Node, path: &str, length: usize, body: Body) -> (u16, Value) {
-    let mut request = post(Some(BOUNDED_KEY), path, None, body).await;
+async fn declared(node: &Node, key: &str, path: &str, length: usize, body: Body) -> (u16, Value) {
+    let mut request = post(Some(key), path, None, body).await;
     request
         .headers_mut()
         .insert(header::CONTENT_LENGTH, length.into());
@@ -1513,8 +1729,8 @@ async fn declared(node: &Node, path: &str, length: usize, body: Body) -> (u16, V
     (status, body)
 }
 
-async fn bounded_wearable(node: &Node, video: &[u8]) -> (Uuid, Uuid) {
-    let owner = address(BOUNDED_KEY);
+async fn bounded_wearable(node: &Node, key: &str, video: &[u8]) -> (Uuid, Uuid) {
+    let owner = address(key);
     let collection = Uuid::new_v4();
     save_collection(
         &node.state.items,
@@ -1538,8 +1754,121 @@ async fn bounded_wearable(node: &Node, video: &[u8]) -> (Uuid, Uuid) {
 }
 
 #[tokio::test]
+async fn one_address_sends_at_most_its_daily_upload_bytes_whatever_its_wallets() {
+    let Some(node) = node_with(
+        |state| {
+            state.limits.source_upload_mib =
+                crate::limits::budget(2, std::time::Duration::from_secs(86_400));
+        },
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    let mut collections = Vec::new();
+    let mut hashes = Vec::new();
+    for (n, (key, ip, expected)) in [
+        (WALLET_KEYS[0], "198.51.100.20", 200),
+        (WALLET_KEYS[1], "198.51.100.20", 200),
+        (WALLET_KEYS[2], "198.51.100.20", 429),
+        (WALLET_KEYS[2], "198.51.100.21", 200),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut video = mp4_of(900 * 1024);
+        video[900 * 1024 - 1] = n as u8;
+        let collection = smart_wearable_of(&node, key, &video).await;
+        let item = item_of(&node, collection).await;
+        let form = video_form(&video);
+        let mut request = post(
+            Some(key),
+            &format!("/v1/items/{item}/videos"),
+            Some(ip),
+            Body::from(form.clone()),
+        )
+        .await;
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, form.len().into());
+        let (status, body, retry) = answer(node.app.clone().oneshot(request).await.unwrap()).await;
+        assert_eq!(status, expected, "upload {n} from {ip}: {body}");
+        if expected == 429 {
+            assert!(retry.is_some(), "a refusal says when to come back");
+        }
+        collections.push(collection);
+        hashes.push(hash(&video));
+    }
+    cleanup(&node.pool, &collections, &hashes).await;
+}
+
+#[tokio::test]
+async fn uploads_within_the_minute_a_count_answers_still_count_toward_the_bound() {
+    super::validator::set_clock(chrono::Utc::now());
+    let Some(node) = node_with(
+        |state| {
+            state.limits.wallet_bytes = 4_000;
+            state.now = super::validator::clock;
+        },
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    let videos = |item: Uuid| format!("/v1/items/{item}/videos");
+    let mut published = mp4_of(3_000);
+    published[2_999] = 9;
+    let (published_collection, item) = bounded_wearable(&node, KEPT_COUNT_KEY, &published).await;
+    let form = video_form(&published);
+    assert_eq!(
+        declared(
+            &node,
+            KEPT_COUNT_KEY,
+            &videos(item),
+            form.len(),
+            Body::from(form)
+        )
+        .await
+        .0,
+        200
+    );
+    let contract = on_chain(&node.pool, published_collection, false).await;
+    for (n, expected) in [(1u8, 200), (2, 200), (3, 200), (4, 413)] {
+        let mut video = mp4_of(1_000);
+        video[999] = n;
+        let (_, item) = bounded_wearable(&node, KEPT_COUNT_KEY, &video).await;
+        let form = video_form(&video);
+        assert_eq!(
+            declared(
+                &node,
+                KEPT_COUNT_KEY,
+                &videos(item),
+                form.len(),
+                Body::from(form)
+            )
+            .await
+            .0,
+            expected,
+            "draft video {n}"
+        );
+    }
+    super::support::off_chain(&node.pool, &contract).await;
+}
+
+#[tokio::test]
 async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_deletes_or_publishes() {
-    let Some(node) = node_with(|state| state.limits.wallet_bytes = 4_000, true).await else {
+    super::validator::set_clock(chrono::Utc::now());
+    let Some(node) = node_with(
+        |state| {
+            state.limits.wallet_bytes = 4_000;
+            state.now = super::validator::clock;
+        },
+        true,
+    )
+    .await
+    else {
         return;
     };
     let [first, second, third] = [1u8, 2, 3].map(|n| {
@@ -1547,9 +1876,9 @@ async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_delet
         video[2_999] = n;
         video
     });
-    let (_, a) = bounded_wearable(&node, &first).await;
-    let (b_collection, b) = bounded_wearable(&node, &second).await;
-    let (_, c) = bounded_wearable(&node, &third).await;
+    let (_, a) = bounded_wearable(&node, BOUNDED_KEY, &first).await;
+    let (b_collection, b) = bounded_wearable(&node, BOUNDED_KEY, &second).await;
+    let (_, c) = bounded_wearable(&node, BOUNDED_KEY, &third).await;
     let videos = |item: Uuid| format!("/v1/items/{item}/videos");
     let refused = json!({
         "ok": false,
@@ -1559,7 +1888,7 @@ async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_delet
 
     let form = video_form(&first);
     assert_eq!(
-        declared(&node, &videos(a), form.len(), Body::from(form))
+        declared(&node, BOUNDED_KEY, &videos(a), form.len(), Body::from(form))
             .await
             .0,
         200
@@ -1568,7 +1897,7 @@ async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_delet
     for path in [videos(b), format!("/builder-api/v1/items/{b}/files")] {
         let (body, polled) = untouchable();
         assert_eq!(
-            declared(&node, &path, 1_200, body).await,
+            declared(&node, BOUNDED_KEY, &path, 1_200, body).await,
             (413, refused.clone()),
             "{path}"
         );
@@ -1604,17 +1933,17 @@ async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_delet
     assert_eq!(deleted.0, 200, "{:?}", deleted.1);
     let form = video_form(&second);
     assert_eq!(
-        declared(&node, &videos(b), form.len(), Body::from(form))
+        declared(&node, BOUNDED_KEY, &videos(b), form.len(), Body::from(form))
             .await
             .0,
         200
     );
 
     let small = mp4("published elsewhere");
-    let (d_collection, d) = bounded_wearable(&node, &small).await;
+    let (d_collection, d) = bounded_wearable(&node, BOUNDED_KEY, &small).await;
     let form = video_form(&small);
     assert_eq!(
-        declared(&node, &videos(d), form.len(), Body::from(form))
+        declared(&node, BOUNDED_KEY, &videos(d), form.len(), Body::from(form))
             .await
             .0,
         200
@@ -1624,17 +1953,29 @@ async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_delet
     let form = video_form(&third);
     let (body, _) = untouchable();
     assert_eq!(
-        declared(&node, &videos(c), form.len(), body).await.0,
+        declared(&node, BOUNDED_KEY, &videos(c), form.len(), body)
+            .await
+            .0,
         413,
         "another item's publication frees nothing of this one's"
     );
     let contract = on_chain(&node.pool, b_collection, false).await;
+    let (body, polled) = untouchable();
     assert_eq!(
-        declared(&node, &videos(c), form.len(), Body::from(form))
+        declared(&node, BOUNDED_KEY, &videos(c), form.len(), body)
+            .await
+            .0,
+        413,
+        "the wallet's count answers for a minute, whatever the rate of its uploads"
+    );
+    assert_eq!(polled.load(Ordering::SeqCst), 0);
+    super::validator::advance(chrono::Duration::seconds(61));
+    assert_eq!(
+        declared(&node, BOUNDED_KEY, &videos(c), form.len(), Body::from(form))
             .await
             .0,
         200,
-        "a published item's files no longer count"
+        "a published item's files no longer count once the minute is over"
     );
     super::support::off_chain(&node.pool, &contract).await;
     super::support::off_chain(&node.pool, &elsewhere).await;

@@ -6,23 +6,23 @@
 //! parser may hold beside the video's own bytes, into one spool file beside
 //! the blob store, hashed as it arrives and walked as an MP4 container
 //! ([`Mp4`]); every read waits at most until the upload's deadline, and
-//! never longer than its idle timeout for the next byte. Only
+//! each idle-timeout window must deliver a minimum of the video, so a
+//! sender that stalls or trickles is cut and frees its place. Only
 //! then, in one transaction with the item locked, the decision runs again,
 //! the item must still name the hash at `video.mp4`, and the file goes to
 //! the blob store with its upload record, as [`super::upload`] stores files.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
 use axum::body::{Body, BodyDataStream, Bytes};
 use axum::extract::{FromRequest, Multipart, Request};
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::response::Response;
 use dcl_auth::hash::HashV1Writer;
 use futures::Stream;
 use serde_json::json;
@@ -35,6 +35,7 @@ use crate::http::ApiError;
 use crate::storage::{StagingGuard, Storage, create_staging_file};
 
 use super::ItemsComponent;
+use super::places::{Admission, Places};
 use super::save::lock_item;
 
 /// The file name an item gives its preview video, and the upload's one field.
@@ -50,17 +51,21 @@ pub const BODY_LIMIT: usize = DEFAULT_MAX_BYTES as usize + 1024 * 1024;
 /// about 1.7 Mbit/s.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(20 * 60);
 
-/// The longest the body may go without a byte before the upload ends.
+/// The window in which the body must deliver [`DEFAULT_MIN_WINDOW_BYTES`],
+/// and so the longest it may go without a byte, before the upload ends.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The video bytes each [`DEFAULT_IDLE_TIMEOUT`] window must deliver: about
+/// 140 kbit/s, far below what a 250 MB video needs within
+/// [`DEFAULT_DEADLINE`], so a sender that trickles can't hold a place for
+/// the whole deadline.
+pub const DEFAULT_MIN_WINDOW_BYTES: u64 = 512 * 1024;
 
 /// Videos the node reads at once, and of them per wallet and per source
 /// address, so filling the node takes four wallets on four addresses.
 pub const MAX_UPLOADS: usize = 8;
 pub const MAX_UPLOADS_PER_SIGNER: usize = 2;
 pub const MAX_UPLOADS_PER_SOURCE: usize = 2;
-
-/// The `Retry-After` of a refused place, in seconds.
-pub const RETRY_AFTER_SECS: u32 = 30;
 
 /// Bytes the multipart parser may have taken from the body beyond the
 /// video's bytes it handed on: the part headers, boundaries and look-ahead.
@@ -84,14 +89,8 @@ pub struct Videos {
     pub max_bytes: u64,
     pub deadline: Duration,
     pub idle_timeout: Duration,
-    in_flight: Arc<Mutex<InFlight>>,
-    swept: AtomicBool,
-}
-
-#[derive(Default)]
-struct InFlight {
-    total: usize,
-    by_key: HashMap<String, usize>,
+    pub min_window_bytes: u64,
+    places: Places,
 }
 
 impl Default for Videos {
@@ -100,88 +99,37 @@ impl Default for Videos {
             max_bytes: DEFAULT_MAX_BYTES,
             deadline: DEFAULT_DEADLINE,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            in_flight: Arc::default(),
-            swept: AtomicBool::new(false),
+            min_window_bytes: DEFAULT_MIN_WINDOW_BYTES,
+            places: Places::new(
+                "video uploads",
+                MAX_UPLOADS,
+                MAX_UPLOADS_PER_SIGNER,
+                MAX_UPLOADS_PER_SOURCE,
+            ),
         }
     }
-}
-
-/// One admitted upload's place, given back when dropped.
-pub struct Admission {
-    in_flight: Arc<Mutex<InFlight>>,
-    keys: [String; 2],
-}
-
-impl Drop for Admission {
-    fn drop(&mut self) {
-        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-        in_flight.total -= 1;
-        for key in &self.keys {
-            if let Some(count) = in_flight.by_key.get_mut(key) {
-                *count -= 1;
-                if *count == 0 {
-                    in_flight.by_key.remove(key);
-                }
-            }
-        }
-    }
-}
-
-/// A refused place: 429 at once, with a `Retry-After`.
-pub fn busy(error: &str) -> Response {
-    let mut response = ApiError::http(429, error).into_response();
-    response
-        .headers_mut()
-        .insert(header::RETRY_AFTER, HeaderValue::from(RETRY_AFTER_SECS));
-    response
 }
 
 impl Videos {
-    /// A place for `signer`'s upload from `source` (its
-    /// [`crate::shared::client_ip::source_key`]), or the refusal ([`busy`])
-    /// while [`MAX_UPLOADS`] are in flight, or the wallet has
-    /// [`MAX_UPLOADS_PER_SIGNER`], or the source [`MAX_UPLOADS_PER_SOURCE`].
-    /// Never waits.
-    pub fn admit(&self, signer: &str, source: &str) -> Result<Admission, Response> {
-        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-        if in_flight.total >= MAX_UPLOADS {
-            return Err(busy("Too many video uploads in progress, try again later"));
-        }
-        let keys = [format!("wallet:{signer}"), format!("source:{source}")];
-        let count = |key: &String| in_flight.by_key.get(key).copied().unwrap_or(0);
-        if count(&keys[0]) >= MAX_UPLOADS_PER_SIGNER {
-            return Err(busy("Too many video uploads of this wallet in progress"));
-        }
-        if count(&keys[1]) >= MAX_UPLOADS_PER_SOURCE {
-            return Err(busy("Too many video uploads from this address in progress"));
-        }
-        for key in &keys {
-            *in_flight.by_key.entry(key.clone()).or_default() += 1;
-        }
-        in_flight.total += 1;
-        Ok(Admission {
-            in_flight: self.in_flight.clone(),
-            keys,
-        })
+    /// A place for `signer`'s upload from `source` ([`Places::admit`]) among
+    /// [`MAX_UPLOADS`], [`MAX_UPLOADS_PER_SIGNER`] and
+    /// [`MAX_UPLOADS_PER_SOURCE`]. Never waits.
+    pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<Admission, Response> {
+        self.places.admit(signer, source)
     }
 
     /// Uploads holding a place.
     pub fn in_flight(&self) -> usize {
-        self.in_flight
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total
+        self.places.in_flight()
     }
 
     pub fn idle(&self) -> bool {
         self.in_flight() == 0
     }
 
-    /// Removes, once per process, the spool files of uploads a crash left.
-    pub async fn sweep_once(&self, root: &Path) {
-        if self.swept.swap(true, Ordering::SeqCst) {
-            return;
-        }
+    /// Removes the spool files at least [`SPOOL_ORPHAN_AGE`] old, which only
+    /// an upload a crash or restart cut short leaves.
+    pub async fn sweep(&self, root: &Path) {
         let Ok(mut entries) = tokio::fs::read_dir(root).await else {
             return;
         };
@@ -226,11 +174,13 @@ fn io(e: std::io::Error) -> ApiError {
 
 /// Reads `request`'s form into a spool file under `root`: one file part
 /// named [`VIDEO_FILE`], at most `videos.max_bytes`, an MP4 container, all
-/// by `videos.deadline`, with no wait for a byte longer than
-/// `videos.idle_timeout`.
+/// by `videos.deadline`, each `videos.idle_timeout` window from the start
+/// (and from each window that delivered `videos.min_window_bytes` of the
+/// video) delivering that much before it ends.
 pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<Spooled, ApiError> {
     let deadline = Instant::now() + videos.deadline;
-    let until = || deadline.min(Instant::now() + videos.idle_timeout);
+    let (mut window_start, mut window_bytes) = (Instant::now(), 0u64);
+    let until = |window_start: Instant| deadline.min(window_start + videos.idle_timeout);
     let too_large = || {
         ApiError::http(413, "The video is too large")
             .with_data(json!({ "maxBytes": videos.max_bytes }))
@@ -254,7 +204,7 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
             invalid()
         }
     };
-    let mut field = timeout_at(until(), multipart.next_field())
+    let mut field = timeout_at(until(window_start), multipart.next_field())
         .await
         .map_err(|_| timed_out())?
         .map_err(failed)?
@@ -275,12 +225,16 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut file = BufWriter::with_capacity(256 * 1024, file);
     let (mut hasher, mut container, mut size) = (HashV1Writer::new(), Mp4::default(), 0u64);
-    while let Some(chunk) = timeout_at(until(), field.chunk())
+    while let Some(chunk) = timeout_at(until(window_start), field.chunk())
         .await
         .map_err(|_| timed_out())?
         .map_err(failed)?
     {
         delivered.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+        window_bytes += chunk.len() as u64;
+        if window_bytes >= videos.min_window_bytes {
+            (window_start, window_bytes) = (Instant::now(), 0);
+        }
         size += chunk.len() as u64;
         if size > videos.max_bytes {
             return Err(too_large());
@@ -293,7 +247,7 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
         file.write_all(&chunk).await.map_err(io)?;
     }
     drop(field);
-    if timeout_at(until(), multipart.next_field())
+    if timeout_at(until(window_start), multipart.next_field())
         .await
         .map_err(|_| timed_out())?
         .map_err(failed)?
@@ -456,6 +410,7 @@ impl ItemsComponent {
             return Err(ApiError::bad_request("The item does not name this video")
                 .with_data(json!({ "hash": video.hash })));
         }
+        crate::storage::gc::lock_store_shared(&mut tx).await?;
         let held = self
             .blobs
             .exist(&video.hash)

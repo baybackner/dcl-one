@@ -336,17 +336,7 @@ async fn pin_videos(conn: &mut PgConnection, collection: Uuid) -> Result<(), Api
     .fetch_all(&mut *conn)
     .await?;
     let before: Vec<String> = replaced.into_iter().flatten().collect();
-    if !before.is_empty() {
-        sqlx::query(
-            "DELETE FROM builder.uploaded_contents u WHERE u.hash = ANY($1) \
-             AND NOT EXISTS (SELECT 1 FROM builder.item_contents f WHERE f.hash = u.hash) \
-             AND NOT EXISTS (SELECT 1 FROM builder.items v WHERE v.video = u.hash)",
-        )
-        .bind(&before)
-        .execute(&mut *conn)
-        .await?;
-    }
-    Ok(())
+    crate::items::save::forget_unnamed(conn, &before).await
 }
 
 /// `PATCH /v1/collections/:id/curation`.

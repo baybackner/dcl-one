@@ -25,6 +25,7 @@ struct App {
     pool: PgPool,
     state: crate::SharedState,
     router: Router,
+    content: Router,
 }
 
 async fn app() -> Option<App> {
@@ -48,10 +49,16 @@ async fn app() -> Option<App> {
 }
 
 async fn over(pool: PgPool) -> App {
+    let storage = temp_storage().await;
+    let content = crate::content::build_router(Arc::new(crate::content::ContentState::new(
+        pool.clone(),
+        crate::content::Settings::for_tests(),
+        storage.clone(),
+    )));
     let state = Arc::new(
         crate::State::new(
             pool.clone(),
-            temp_storage().await,
+            storage,
             Arc::default(),
             dcl_http::Outbound::for_tests(),
             Some(super::support::registry_only_index().await),
@@ -67,6 +74,7 @@ async fn over(pool: PgPool) -> App {
     App {
         pool,
         router: crate::router(state.clone()),
+        content,
         state,
     }
 }
@@ -280,6 +288,158 @@ async fn an_upload_past_a_bound_or_unlike_its_item_stores_nothing() {
     assert_eq!((got, &body), (200, &json!({ "ok": true })));
     assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
     assert!(app.state.items.blobs.exist(&hash).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_draft_file_is_not_served_or_announced_by_the_content_server() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let model = format!("a draft model {}", Uuid::new_v4()).into_bytes();
+    let hash = dcl_auth::hash_bytes_v1(&model);
+    let id = Uuid::new_v4();
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{id}"),
+        &item(id, OWNER_KEY, None, &[("model.glb", &hash)], None),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+    assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await.0, 200);
+
+    let ask = async |method: &str, path: String| {
+        let response = app
+            .content
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, bytes)
+    };
+    for mount in ["", "/content"] {
+        for method in ["GET", "HEAD"] {
+            let (status, bytes) = ask(method, format!("{mount}/contents/{hash}")).await;
+            assert_eq!(status, 404, "{method} {mount}/contents");
+            assert_ne!(&bytes[..], &model[..]);
+        }
+        let (status, bytes) = ask("GET", format!("{mount}/available-content?cid={hash}")).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!([{ "cid": hash, "available": false }]),
+            "{mount}/available-content"
+        );
+    }
+    let (status, bytes) = send(
+        &app,
+        OWNER_KEY,
+        "GET",
+        &format!("/v1/storage/contents/{hash}"),
+        Body::empty(),
+        "application/json",
+    )
+    .await;
+    assert_eq!((status, bytes), (200, Value::Null));
+}
+
+#[tokio::test]
+async fn a_forgotten_file_uploaded_again_while_the_collector_unlinks_it_keeps_its_bytes() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let model = format!("a model forgotten then sent again {}", Uuid::new_v4()).into_bytes();
+    let hash = dcl_auth::hash_bytes_v1(&model);
+    let id = Uuid::new_v4();
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{id}"),
+        &item(id, OWNER_KEY, None, &[("model.glb", &hash)], None),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+    assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await.0, 200);
+    sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = $1")
+        .bind(&hash)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let batch = crate::storage::gc::lock_store_exclusive(&app.pool)
+        .await
+        .unwrap();
+    let again = tokio::spawn({
+        let router = app.router.clone();
+        let (pool, state) = (app.pool.clone(), app.state.clone());
+        let model = model.clone();
+        let hash = hash.clone();
+        async move {
+            let app = App {
+                pool,
+                state,
+                router,
+                content: Router::new(),
+            };
+            upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !super::support::waiting_for_the_store(&app.pool).await {
+        assert!(
+            !again.is_finished(),
+            "the upload committed while the collector's unlink batch held the store"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the upload never asked for the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    app.state.items.blobs.delete_strict(&hash).await.unwrap();
+    batch.commit().await.unwrap();
+
+    assert_eq!(again.await.unwrap().0, 200);
+    assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
+    assert!(app.state.items.blobs.exist(&hash).await.unwrap());
+}
+
+#[tokio::test]
+async fn mappings_past_their_bounds_are_refused_before_anything_is_decided() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    let model = dcl_auth::hash_bytes_v1(b"a linked model");
+    let mut body = item(id, STRANGER_KEY, None, &[("model.glb", &model)], None);
+    let ids: Vec<String> = (0..crate::items::schema::MAX_MAPPING_IDS + 1)
+        .map(|n| n.to_string())
+        .collect();
+    body["item"]["mappings"] = json!({ "mainnet": {
+        "0x2222222222222222222222222222222222222222": [{ "type": "multiple", "ids": ids }]
+    } });
+    let (status, answer) = put(&app, STRANGER_KEY, &format!("/v1/items/{id}"), &body).await;
+    assert_eq!(
+        (status, answer["error"].as_str()),
+        (400, Some("Invalid request body"))
+    );
+    let stored: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.items WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(!stored);
 }
 
 #[tokio::test]

@@ -5,6 +5,15 @@ DO $release$ BEGIN
     RAISE EXCEPTION 'builder-server/item: builder.items.data is jsonb, which loses the saved key order; run schemas/releases/builder-item-documents-and-uploaders.sql first';
   END IF; END $release$;
 
+DO $taken$ DECLARE n bigint; ids text; BEGIN
+  SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
+    FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
+            FROM stage s JOIN builder.items x ON x.id = s.id
+           WHERE x.created_at IS DISTINCT FROM s.created_at AT TIME ZONE 'UTC') t;
+  IF n > 0 THEN RAISE EXCEPTION
+    'builder-server/item: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
+  ELSE NULL; END IF; END $taken$;
+
 INSERT INTO builder.items AS i
     (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
      price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,

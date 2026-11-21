@@ -1022,8 +1022,6 @@ async fn without_slack_nothing_is_sent_and_nothing_fails() {
     assert!(slack.texts().is_empty());
 }
 
-/// An approval pins each smart wearable's kept video to the `video.mp4` its
-/// saved contents name; a wearable without a script keeps its video.
 #[tokio::test]
 async fn an_approval_pins_each_smart_wearables_video() {
     let Some(n) = node(Options::default()).await else {
@@ -1033,18 +1031,30 @@ async fn an_approval_pins_each_smart_wearables_video() {
     collection_curation(&n.pool, id, "pending").await;
     let owner = address(OWNER_KEY);
     let mut items = Vec::new();
+    let mut olds = Vec::new();
     for smart in [true, false] {
         let item = Uuid::new_v4();
+        let old = format!("bafkreiold{}", item.simple());
         sqlx::query(
             "INSERT INTO builder.items (id, collection_id, eth_address, name, type, video, video_named_by) \
-             VALUES ($1, $2, $3, 'Smart', 'wearable', 'bafkreiold', $3)",
+             VALUES ($1, $2, $3, 'Smart', 'wearable', $4, $3)",
         )
         .bind(item)
         .bind(id)
         .bind(&owner)
+        .bind(&old)
         .execute(&n.pool)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 1, $2)",
+        )
+        .bind(&old)
+        .bind(&owner)
+        .execute(&n.pool)
+        .await
+        .unwrap();
+        olds.push(old);
         let files: &[(&str, &str)] = if smart {
             &[("game.js", "bafkreiscript"), ("video.mp4", "bafkreinew")]
         } else {
@@ -1081,10 +1091,20 @@ async fn an_approval_pins_each_smart_wearables_video() {
     .fetch_all(&n.pool)
     .await
     .unwrap();
-    assert_eq!(
-        videos,
-        [Some("bafkreinew".into()), Some("bafkreiold".into())]
-    );
+    assert_eq!(videos, [Some("bafkreinew".into()), Some(olds[1].clone())]);
+    let recorded: Vec<String> = sqlx::query_scalar(
+        "SELECT hash FROM builder.uploaded_contents WHERE hash = ANY($1) ORDER BY hash",
+    )
+    .bind(&olds)
+    .fetch_all(&n.pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, [olds[1].clone()]);
+    sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = ANY($1)")
+        .bind(&olds)
+        .execute(&n.pool)
+        .await
+        .unwrap();
 }
 
 /// Input that is not upstream's is refused before anything is read or

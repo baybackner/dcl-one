@@ -1,10 +1,11 @@
 //! `POST /v1/newsletter`: builder-server's newsletter opt-in. Anyone may
 //! subscribe an email, as there; what the node adds: the source address's
 //! budget is spent before the body is read, the email is checked and
-//! lowercased, each email and the node have a budget too ([`limits`]), the
-//! opt-in is stored, and the forward to the newsletter service goes through
-//! the client that follows no redirect, so its key never reaches another
-//! host. The email is never logged nor written into an answer.
+//! lowercased, each email and the node have a budget too ([`limits`]), and
+//! the forward to the newsletter service goes through the client that
+//! follows no redirect, so its key never reaches another host. The node
+//! keeps no subscription: the email is never stored, logged nor written
+//! into an answer.
 
 use axum::Json;
 use axum::extract::{Request, State};
@@ -103,8 +104,6 @@ pub async fn post_newsletter(
         return Err(ApiError::bad_request("invalid source"));
     }
     limits::spend_newsletter_email(&state, &email)?;
-
-    state.newsletter.subscribe(&email, &source).await?;
 
     if let Some(forward) = &state.settings.newsletter {
         let target = format!(
