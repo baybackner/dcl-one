@@ -15,6 +15,9 @@ pub enum RpcError {
     Transport(String),
     #[error("rpc returned an error that carries no usable block range: {0}")]
     Rpc(String),
+    /// An answer whose result is not the shape the method returns.
+    #[error("rpc returned a malformed answer: {0}")]
+    Malformed(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +83,7 @@ pub struct BlockHeader {
 }
 
 /// Ethereum logs and headers over the shared outbound client.
+#[derive(Clone, Copy)]
 pub struct Rpc<'a> {
     http: &'a crate::http::Outbound,
     url: &'a str,
