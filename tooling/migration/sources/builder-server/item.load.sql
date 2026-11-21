@@ -40,6 +40,21 @@ LANGUAGE plpgsql AS $$ BEGIN
     ORDER BY i.id FOR UPDATE;
 END $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.builder_unit_reviewed(unit_collection uuid, unit_item uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+            SELECT 1 FROM builder.collection_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
+             WHERE k.collection_id = unit_collection
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
+      OR EXISTS (
+            SELECT 1 FROM builder.item_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
+             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
+                                 UNION ALL SELECT unit_item)
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.builder_unit_untouched(unit_collection uuid, unit_item uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT (unit_collection IS NULL OR EXISTS (
@@ -52,17 +67,7 @@ LANGUAGE sql STABLE AS $$
              WHERE i.id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
                             UNION ALL SELECT unit_item)
                AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_fingerprint(i))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.collection_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
-             WHERE k.collection_id = unit_collection
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.item_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
-             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
-                                 UNION ALL SELECT unit_item)
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+     AND NOT pg_temp.builder_unit_reviewed(unit_collection, unit_item)
 $$;
 
 CREATE OR REPLACE FUNCTION pg_temp.builder_item_urn_fits(urn text, collection uuid) RETURNS boolean
@@ -80,18 +85,28 @@ SELECT s.id, c.id AS collection_id, lower(s.eth_address) AS eth_address, btrim(s
        s.blockchain_item_id, s.is_published, s.total_supply, s.local_content_hash, s.content_hash,
        s.created_at AT TIME ZONE 'UTC' AS created_at, s.updated_at AT TIME ZONE 'UTC' AS updated_at,
        CASE WHEN s.video IS NOT NULL THEN lower(s.eth_address) END AS video_named_by,
-       m.id IS NOT NULL AS imported
+       m.id IS NOT NULL AS imported,
+       c.id IS NULL AND d.id IS NOT NULL AS collection_deleted
 FROM stage s
 LEFT JOIN builder.collections c ON c.id = s.collection_id
+LEFT JOIN dcl_migration.builder_imported d ON d.step = 'collection' AND d.id = s.collection_id::text
 LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item' AND m.id = s.id::text;
+
+DO $first_run$ BEGIN
+  IF current_setting('dcl_migration.builder_node_rows', true) IS DISTINCT FROM 'on'
+     AND NOT EXISTS (SELECT 1 FROM dcl_migration.builder_imported)
+     AND (EXISTS (SELECT 1 FROM builder.collections) OR EXISTS (SELECT 1 FROM builder.items)) THEN
+    RAISE EXCEPTION
+      'builder-server/item: the node already holds collections or items and nothing was imported yet; import with creator writes closed (CREATE_WRITES_ENABLED=false), or pass --accept-builder-node-rows to keep those rows as the node''s';
+  ELSE NULL; END IF; END $first_run$;
 
 DO $taken$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
     FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
             FROM incoming_item s JOIN builder.items x ON x.id = s.id
-           WHERE NOT s.imported AND x.created_at IS DISTINCT FROM s.created_at) t;
+           WHERE NOT s.imported) t;
   IF n > 0 THEN RAISE EXCEPTION
-    'builder-server/item: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
+    'builder-server/item: the node holds % ids the import did not write, first: %; resolve them before importing', n, ids;
   ELSE NULL; END IF; END $taken$;
 
 CREATE TEMP TABLE changed_item ON COMMIT DROP AS
@@ -112,21 +127,38 @@ DO $lock$ BEGIN
           UNION SELECT s.collection_id FROM incoming_item s
                  WHERE s.collection_id IS NOT NULL AND (NOT s.imported OR s.id IN (SELECT id FROM changed_item))),
     ARRAY(SELECT id FROM changed_item));
+  PERFORM pg_advisory_xact_lock(hashtextextended('builder item urn ' || u.part, 0))
+     FROM (SELECT DISTINCT lower(substring(s.urn_suffix FROM '[^:]*$')) AS part
+             FROM incoming_item s JOIN builder.collections c ON c.id = s.collection_id
+            WHERE c.third_party_id IS NOT NULL AND s.urn_suffix IS NOT NULL
+              AND (NOT s.imported OR s.id IN (SELECT id FROM changed_item))) u
+    ORDER BY u.part;
 END $lock$;
 
-CREATE TEMP TABLE kept_unit ON COMMIT DROP AS
+CREATE TEMP TABLE item_kept_unit ON COMMIT DROP AS
 WITH u AS MATERIALIZED (SELECT DISTINCT unit_collection, unit_item FROM changed_item)
 SELECT u.unit_collection, u.unit_item FROM u
 WHERE NOT pg_temp.builder_unit_untouched(u.unit_collection, u.unit_item);
 
+CREATE TEMP TABLE item_urn_taken ON COMMIT DROP AS
+WITH asked AS MATERIALIZED (
+  SELECT s.id, lower(s.urn_suffix) AS urn FROM incoming_item s
+   WHERE s.urn_suffix IS NOT NULL AND (NOT s.imported OR s.id IN (SELECT id FROM changed_item)))
+SELECT a.id FROM asked a JOIN builder.items x ON lower(x.urn_suffix) = a.urn AND x.id <> a.id
+UNION
+SELECT a.id FROM asked a JOIN incoming_item y ON lower(y.urn_suffix) = a.urn AND y.id <> a.id;
+
 CREATE TEMP TABLE item_plan ON COMMIT DROP AS
-SELECT s.id, s.imported,
-       EXISTS (SELECT 1 FROM kept_unit k
-                WHERE k.unit_collection IS NOT DISTINCT FROM ch.unit_collection
-                  AND k.unit_item IS NOT DISTINCT FROM ch.unit_item) AS kept,
-       pg_temp.builder_item_urn_fits(s.urn_suffix, s.collection_id) AS fits
-FROM incoming_item s LEFT JOIN changed_item ch ON ch.id = s.id
-WHERE NOT s.imported OR ch.id IS NOT NULL;
+SELECT p.*, p.prefix_fits AND p.collection_kept AND p.urn_free AS fits
+FROM (SELECT s.id, s.imported,
+             EXISTS (SELECT 1 FROM item_kept_unit k
+                      WHERE k.unit_collection IS NOT DISTINCT FROM ch.unit_collection
+                        AND k.unit_item IS NOT DISTINCT FROM ch.unit_item) AS kept,
+             pg_temp.builder_item_urn_fits(s.urn_suffix, s.collection_id) AS prefix_fits,
+             NOT s.collection_deleted AS collection_kept,
+             s.id NOT IN (SELECT id FROM item_urn_taken) AS urn_free
+        FROM incoming_item s LEFT JOIN changed_item ch ON ch.id = s.id
+       WHERE NOT s.imported OR ch.id IS NOT NULL) p;
 
 DO $kept$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
@@ -135,14 +167,24 @@ DO $kept$ DECLARE n bigint; ids text; BEGIN
     'builder-server/item: % items changed upstream are left as the node holds them (the node changed their collection, an item or a curation of it), first: %', n, ids;
   END IF;
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
-    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE NOT imported AND NOT fits) k;
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE NOT imported AND NOT prefix_fits) k;
   IF n > 0 THEN RAISE NOTICE
     'builder-server/item: % new items whose URN differs from their collection''s on the node are left out, first: %', n, ids;
   END IF;
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
-    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE imported AND NOT kept AND NOT fits) k;
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE imported AND NOT kept AND NOT prefix_fits) k;
   IF n > 0 THEN RAISE NOTICE
     'builder-server/item: % items changed upstream whose URN differs from their collection''s on the node are left as the node holds them, first: %', n, ids;
+  END IF;
+  SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE NOT (imported AND kept) AND NOT urn_free) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/item: % items whose URN another item holds are left out, first: %', n, ids;
+  END IF;
+  SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE NOT (imported AND kept) AND NOT collection_kept) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/item: % items of collections the node deleted are left out, first: %', n, ids;
   END IF; END $kept$;
 
 WITH refreshed AS (
@@ -160,21 +202,20 @@ INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
 SELECT 'item', id::text, fingerprint FROM refreshed
 ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.items
-    (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
-     price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,
-     is_published, total_supply, local_content_hash, content_hash,
-     created_at, updated_at, video_named_by)
-SELECT s.id, s.collection_id, s.eth_address, s.name, s.description, s.thumbnail, s.video, s.type, s.rarity,
-       s.price, s.beneficiary, s.data, s.metrics, s.utility, s.mappings, s.urn_suffix, s.blockchain_item_id,
-       s.is_published, s.total_supply, s.local_content_hash, s.content_hash,
-       s.created_at, s.updated_at, s.video_named_by
-FROM incoming_item s JOIN item_plan p ON p.id = s.id
-WHERE NOT s.imported AND p.fits
-ON CONFLICT (id) DO NOTHING;
-
+WITH inserted AS (
+  INSERT INTO builder.items AS i
+      (id, collection_id, eth_address, name, description, thumbnail, video, type, rarity,
+       price, beneficiary, data, metrics, utility, mappings, urn_suffix, blockchain_item_id,
+       is_published, total_supply, local_content_hash, content_hash,
+       created_at, updated_at, video_named_by)
+  SELECT s.id, s.collection_id, s.eth_address, s.name, s.description, s.thumbnail, s.video, s.type, s.rarity,
+         s.price, s.beneficiary, s.data, s.metrics, s.utility, s.mappings, s.urn_suffix, s.blockchain_item_id,
+         s.is_published, s.total_supply, s.local_content_hash, s.content_hash,
+         s.created_at, s.updated_at, s.video_named_by
+  FROM incoming_item s JOIN item_plan p ON p.id = s.id
+  WHERE NOT s.imported AND p.fits
+  ON CONFLICT (id) DO NOTHING
+  RETURNING i.id, pg_temp.builder_item_fingerprint(i) AS fingerprint)
 INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
-SELECT 'item', i.id::text, pg_temp.builder_item_fingerprint(i)
-FROM incoming_item s JOIN builder.items i ON i.id = s.id JOIN item_plan p ON p.id = s.id
-WHERE NOT s.imported AND p.fits
+SELECT 'item', id::text, fingerprint FROM inserted
 ON CONFLICT DO NOTHING;

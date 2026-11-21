@@ -1,6 +1,6 @@
 //! Root HTTP server settings.
 use crate::social::communities;
-use crate::{comms, config::Config, explore, shared, shop};
+use crate::{builder, comms, config::Config, explore, shared, shop};
 use anyhow::Context;
 use std::time::Duration;
 
@@ -131,6 +131,39 @@ pub(super) fn comms_settings(config: &Config) -> anyhow::Result<comms::gatekeepe
     .context("LIVEKIT_* / COMMS_* configuration")
 }
 
+/// The builder's settings: its own `CREATE_*`/`BUILDER_*` settings and the Slack bot token social
+/// is configured with.
+pub(super) fn builder_settings(config: &Config) -> anyhow::Result<builder::Settings> {
+    builder::Settings::parse(builder::RawSettings {
+        writes_enabled: config.create.create_writes_enabled,
+        polygon_rpc_url: config.create.builder_polygon_rpc_url.clone(),
+        admin_addresses: config.create.builder_admin_addresses.clone(),
+        admin_token: config.create.catalyrst_builder_admin_token.clone(),
+        newsletter_service_url: config.create.newsletter_service_url.clone(),
+        newsletter_publication_id: config.create.newsletter_publication_id.clone(),
+        newsletter_api_key: config.create.newsletter_service_api_key.clone(),
+        warehouse_url: config.create.warehouse_url.clone(),
+        warehouse_token: config.create.warehouse_token.clone(),
+        warehouse_context_prefix: config.create.warehouse_context_prefix.clone(),
+        slack_bot_token: config.social.referral_slack_token.clone(),
+        slack_curation_channel: config.create.slack_curation_channel.clone(),
+        creators_url: config.create.creators_url.clone(),
+        builder_url: Some(config.worlds.builder_url.clone()),
+        forum_url: config.create.forum_url.clone(),
+        forum_api_key: config.create.forum_api_key.clone(),
+        forum_api_username: config.create.forum_api_username.clone(),
+        forum_category: config.create.forum_category.clone(),
+        builder_server_url: config.create.builder_server_url.clone(),
+        validator_secret: config.create.wearable_validator_callback_secret.clone(),
+        cors_origin: config.create.cors_origin.clone(),
+        cors_method: config.create.cors_method.clone(),
+        unpublished_max_bytes: config.create.builder_unpublished_max_bytes,
+        unpublished_max_files: config.create.builder_unpublished_max_files,
+        video_uploads_max: config.create.builder_video_uploads_max,
+    })
+    .context("BUILDER_* / NEWSLETTER_* / CORS_* configuration")
+}
+
 /// The referral settings `social_states` passes on, including the backend
 /// proxies trusted to supply `X-Real-IP` for referral quotas.
 pub(super) fn referral_settings(config: &Config) -> communities::referral::Settings {
@@ -189,8 +222,34 @@ pub(super) fn referral_settings(config: &Config) -> communities::referral::Setti
 
 #[cfg(test)]
 mod tests {
-    use super::comms_settings;
+    use super::{builder_settings, comms_settings};
     use crate::config::Config;
+
+    #[test]
+    fn a_node_running_socials_slack_bot_starts_with_the_curation_notices_off_until_their_channel_is_set()
+     {
+        let settings = |extra: &[(&'static str, &'static str)]| {
+            let mut vars = vec![("DATABASE_URL", "postgres:///catalyst")];
+            vars.extend_from_slice(extra);
+            builder_settings(&Config::parse_env_for_tests(vars).unwrap())
+        };
+        let social_only = settings(&[("SLACK_BOT_TOKEN", "xoxb-example")]).unwrap();
+        assert!(social_only.slack.is_none());
+        let both = settings(&[
+            ("SLACK_BOT_TOKEN", "xoxb-example"),
+            ("SLACK_CURATION_CHANNEL", "curation"),
+        ])
+        .unwrap();
+        assert_eq!(
+            both.slack.map(|slack| slack.channel).as_deref(),
+            Some("curation")
+        );
+        let err = format!(
+            "{:#}",
+            settings(&[("SLACK_CURATION_CHANNEL", "curation")]).unwrap_err()
+        );
+        assert!(err.contains("SLACK_BOT_TOKEN"), "{err}");
+    }
 
     #[test]
     fn dev_only_lease_entries_count_only_on_a_test_network() {

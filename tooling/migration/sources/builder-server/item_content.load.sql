@@ -7,7 +7,8 @@ END $lock$;
 
 CREATE TEMP TABLE current_stage ON COMMIT DROP AS
 SELECT s.* FROM stage s
-JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
+JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC'
+JOIN dcl_migration.builder_imported m ON m.step = 'item' AND m.id = s.item_id::text;
 
 DO $missing$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT h.hash) INTO n

@@ -2199,14 +2199,20 @@ pub(crate) async fn confirm_curator(
             .with_data(json!({ "id": curator.collection, "ethAddress": s })));
     }
     keeps_role(curator, role)?;
-    keeps_committee(conn, curator).await?;
+    keeps_committee(conn, curator, false).await?;
     curated_state(conn, curator, c).await
 }
 
-/// 401 when the committee admitted `curator` and the index no longer lists
-/// it, read again on the write's connection.
-async fn keeps_committee(conn: &mut PgConnection, curator: &Curator) -> Result<(), ApiError> {
+/// 401 when the committee admitted `curator`, no `role` on the collection
+/// still admits it, and the index no longer lists it, read again on the
+/// write's connection.
+async fn keeps_committee(
+    conn: &mut PgConnection,
+    curator: &Curator,
+    role: bool,
+) -> Result<(), ApiError> {
     if curator.committee
+        && !role
         && !crate::committee::is_member(&mut *conn, curator.signer.as_str()).await?
     {
         return Err(ApiError::unauthorized("Unauthorized").with_data(
@@ -2236,7 +2242,7 @@ pub(crate) async fn confirm_reviewer(
 ) -> Result<CuratedState, ApiError> {
     let (c, role) = curated(conn, view, curator).await?;
     keeps_role(curator, role)?;
-    keeps_committee(conn, curator).await?;
+    keeps_committee(conn, curator, role).await?;
     curated_state(conn, curator, c).await
 }
 

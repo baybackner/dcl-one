@@ -621,6 +621,55 @@ async fn an_abandoned_review_with_the_flow_on_tells_the_timeline_it_needs_a_cura
 }
 
 #[tokio::test]
+async fn a_sweep_meeting_a_verdict_on_the_same_collection_waits_for_it_without_a_deadlock() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let (id, _) = published(&node, "Crossed", 1).await;
+    for _ in 0..3 {
+        assert_eq!(claim(&node).await.0, 200);
+        advance(Duration::minutes(30) + Duration::milliseconds(1));
+    }
+    let request = requests(&node.pool, id).await[0].0;
+    let mut verdict_tx = node.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *verdict_tx)
+        .await
+        .unwrap();
+    let verdict_side = async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+                 WHERE NOT l.granted AND a.datname = current_database()",
+            )
+            .fetch_one(&node.pool)
+            .await
+            .unwrap();
+            if waiting > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let locked =
+            sqlx::query("SELECT id FROM builder.validation_requests WHERE id = $1 FOR UPDATE")
+                .bind(request)
+                .execute(&mut *verdict_tx)
+                .await
+                .map(|_| ());
+        verdict_tx.commit().await.unwrap();
+        locked
+    };
+    let (swept, locked) = tokio::join!(crate::validator::sweep(&node.state), verdict_side);
+    assert!(locked.is_ok(), "the verdict's request lock: {locked:?}");
+    assert!(swept.is_ok(), "the sweep: {swept:?}");
+    assert_eq!(
+        requests(&node.pool, id).await[0].4.as_deref(),
+        Some("abandoned")
+    );
+}
+
+#[tokio::test]
 async fn a_creator_appeals_a_rejection_and_the_curators_see_it() {
     let Some(node) = flow_node().await else {
         return;

@@ -969,9 +969,11 @@ release drops their stored statuses, its notice counts them, and they read
 as unpublished until the import's `collection_curation`, `item_curation` and
 `slot_usage_cheque` steps copy their curations from builder-server. Run those
 steps (`migrate.py run builder-server`, which also needs `FORUM_URL`) after
-step 3 of the rollout, before or after the release: the curation rows don't
-depend on the dropped columns, and the release records nothing for an item
-that already has a curation.
+step 3 of the rollout, before or after the release, while creator writes
+are still closed: the curation rows don't depend on the dropped columns, and
+the release records nothing for an item that already has a curation. A run
+after creator writes reopen is a catch-up run
+(`tooling/migration/sources/builder-server/MAPPING.md`, "Re-runs").
 
 Rollout, in order:
 
@@ -1034,7 +1036,7 @@ row into `builder.slot_usage_cheques` (lowercased, `v` stored as 27 or 28,
 `created_at` the row's `updated_at`, a salt its provider already used
 skipped), clears `publication_pending` on third-party collections again and
 drops the table, in one transaction with a 10 s lock timeout. It refuses,
-changing nothing, a database without step 0063, one that still holds the
+changing nothing, a database without step 0064, one that still holds the
 linked forum column, and one with a submitted row whose cheque a cheque row
 can't keep. A second run notes the table is gone. Until it runs,
 `approvalData` answers 401 for a collection whose only cheque is in that
@@ -1406,7 +1408,7 @@ and drops the key from `item_contents.hash` to `uploaded_contents`. A step
 can't retype a column or change a primary key, so the release
 `schemas/releases/builder-item-documents-and-uploaders.sql` turns `data` and
 `metrics` into `json` and keys `uploaded_contents` by hash and uploader. It
-refuses a database without step 0057, one where a table still references
+refuses a database without step 0058, one where a table still references
 `builder.uploaded_contents` by key (run `builder-scenes-retired.sql` first)
 and one where only one of the two documents is `json`; a second run notes
 it's done. Until it runs, item saves and uploads answer 503 naming the
@@ -1418,7 +1420,7 @@ Rollout, in order:
 
 1. Deploy the binary on every replica with creator writes closed
    (`CREATE_WRITES_ENABLED=false`) and run its `catalyst schema migrate`,
-   which records step 0057. Confirm no `serve` of an older build is left.
+   which records step 0058. Confirm no `serve` of an older build is left.
    Once the release has run, an older binary answers 500 to every item file
    upload (its upload record names a key the release replaces) and to a
    collection listing filtered by tag, and its item saves store documents in
@@ -1430,8 +1432,16 @@ Rollout, in order:
    psql "$DATABASE_URL" -X -f schemas/releases/builder-item-documents-and-uploaders.sql
    ```
 
-3. Open creator writes, then run the item import if the node takes upstream's
-   items.
+3. If the node takes upstream's items, run the `builder-server` import while
+   creator writes are still closed, and check its log for the rows it left
+   out (`tooling/migration/sources/builder-server/MAPPING.md`). Its first
+   run refuses a node that already holds collections or items.
+4. Open creator writes (`CREATE_WRITES_ENABLED=true`).
+
+A catch-up run after creator writes are open is supported only under the
+rules in that mapping's "Re-runs": it leaves every unit the node changed as
+the node holds it, and it stops on any id the node created that upstream
+also holds.
 
 The retype holds an exclusive lock on `builder.items` and
 `builder.uploaded_contents` while it rewrites them, about ten seconds at the

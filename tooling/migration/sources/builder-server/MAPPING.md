@@ -55,10 +55,26 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 - A re-run updates a collection or item only while its unit, the
   collection with its items and their curations, is as the import left it
   (see "Re-runs").
-- A collection or item id the node holds with another creation time is a
-  row the import didn't write, such as an id a wallet took on the node
-  before the import: `collection` and `item` stop the batch and name the
+- A collection, item or virtual third party id the node holds that
+  `dcl_migration.builder_imported` doesn't record is a row the import didn't
+  write, such as an id a wallet took on the node before the import:
+  `collection`, `item` and `virtual_third_party` stop the batch and name the
   first ten such ids for the operator, attaching nothing to them.
+- No two items hold one URN, compared lowercased, and no two third-party
+  collections either: a new or changed item, or third-party collection,
+  whose URN another row on the node or in the same batch holds is left out
+  and reported. Upstream deletions are not detected (see "Re-runs"), so an
+  item upstream deleted and created again under its URN keeps its first
+  copy on the node, and the new one is reported.
+
+## Before the first run
+
+Run the import before the node opens creator writes
+(`CREATE_WRITES_ENABLED=false`), check the rows each step reports it left
+out, then open them. While the ledger is empty, `collection` and `item`
+refuse a node that already holds collections or items, since those rows
+would stay the node's; pass `--accept-builder-node-rows` to keep them so and
+import the rest.
 
 ## Virtual third parties
 
@@ -80,15 +96,15 @@ the reference dump of May 2025 (migrations through `1727096280687`).
 | Rows | Rule | Count |
 | --- | --- | --- |
 | Collection curations | Import; assignee and reviewer lowercased, an assignee that is not an address and a reviewer that is neither an address nor `validator` become NULL, an empty reason list and a blank message become NULL | 4,755 of 4,755 |
-| Collection curations of a collection the node lacks, or with a status outside builder-server's | Skip | 0 |
+| Collection curations of a collection the import didn't write or the node lacks, or with a status outside builder-server's | Skip | 0 |
 | Rejection reasons outside builder-server's twelve, or a message over 3,000 characters after trimming | Import the curation; clear the reasons or the message | 0 (the dump predates both columns; builder-server bounds both) |
 | Item curations | Import; content hash lowercased | 38,211 of 38,337 |
 | Item curations of one item created at the same instant | Keep the one updated last, then the highest id | 126 skipped (122 instants; 19 an untouched pending twin of an approved row) |
-| Item curations of an item the node lacks, or whose content hash is not 64 hex digits | Skip | 0 |
+| Item curations of an item the import didn't write or the node lacks, or whose content hash is not 64 hex digits | Skip | 0 |
 | Collection events | Import; actor address lowercased, NULL when not an address | 0 (the dump predates the table) |
-| Events of a collection the node lacks, or with a type, actor or payload outside builder-server's | Skip | 0 |
+| Events of a collection the import didn't write or the node lacks, or with a type, actor or payload outside builder-server's | Skip | 0 |
 | Slot cheques | Import; salt and signature lowercased | 34 of 34 |
-| Cheques of a collection the node lacks (builder-server keeps a deleted collection's cheques) | Skip; a cheque of a collection the node deletes stays with no collection | 0 |
+| Cheques of a collection the import didn't write or the node lacks (builder-server keeps a deleted collection's cheques) | Skip; a cheque of a collection the node deletes stays with no collection | 0 |
 | Cheques whose provider is not their collection's, whose salt or signature is malformed, whose quantity is not positive, or whose salt the provider already used | Skip | 0 |
 | Forum links that are not an `http(s)` URL without spaces of at most 2,048 characters under the forum origin (`FORUM_URL`) | Clear, with the forum id | 5 (scripts, plain text and one foreign host; no forum id) |
 
@@ -120,7 +136,7 @@ upstream served those files to anyone. A record of a hash an item names at
 (`uploaded_contents.video`), since upstream accepted it as one; publication
 takes no other record for a `video.mp4` entry. `item_content` carries each
 item's upstream `updated_at` and writes names and records only for items
-whose node row still has it: an item the node saved since keeps its own
+the import wrote whose node row still has it: an item the node saved since keeps its own
 contents on re-runs, and its hashes and video are not checked against the
 blob inventory. An item's `video` is a name too: `item` writes
 `video_named_by`, the owner; `item_content` records the owner as an uploader
@@ -166,11 +182,15 @@ pinned video, a linked collection's new URN, a refreshed curation hash), a row
 the node created in it, or a row recorded without a fingerprint makes the unit
 the node's. On a later run:
 
-- An id the table doesn't record is inserted, as on the first run, with two
-  exceptions. A new third-party item whose URN doesn't start with its
-  collection's URN on the node is left out. A new curation of a unit the node
-  holds is left out, because the newest curation decides the review state the
-  node owns.
+- An id the table doesn't record is inserted, as on the first run, with
+  these exceptions. A new third-party item whose URN doesn't start with its
+  collection's URN on the node is left out, and so is a new item of a
+  collection the import wrote and the node deleted. A new curation, event or
+  cheque is left out when its unit holds review state of the node's: a
+  curation the node created, or one it changed since the import wrote it.
+  The newest curation decides that review state, which the node owns once it
+  reviewed the unit. Any other change the node made to a unit, such as an
+  item edit, doesn't keep upstream's new curations out.
 - The rows of a unit that is still the import's take upstream's current
   values when they differ, and the table records their new fingerprints. A
   third-party collection that takes a new URN moves its items' URNs with it in
@@ -190,15 +210,24 @@ locks before it chooses the items still at upstream's time. Each step reports
 in its log the rows it left out, by count and first ids.
 
 After any run, every third-party item's URN starts with its collection's URN
-and `:`.
+and `:`, and no two items, nor two third-party collections, hold one URN.
+
+A run stopped and resumed inside `item_content` resumes its walk after the
+last item it finished, so an item that `item` inserted on the resumed run
+with an id before that point gets its contents on the next run: run the
+import once more after a resumed run.
 
 Each fingerprint lists every column of its table, so a column added to
 `builder.collections`, `builder.items`, `builder.virtual_third_parties`,
 `builder.collection_curations` or `builder.item_curations` joins its
-fingerprint in the same change. The `collection`, `item`,
-`collection_curation` and `item_curation` loads each carry the same copy of
-the four unit fingerprints and the unit rule, which a migration test holds
-identical.
+fingerprint in the same change, and that change recomputes the recorded
+fingerprint of every row whose other columns still match the one recorded:
+without it, every row stops matching and every unit becomes the node's. The
+`collection`, `item`, `collection_curation`, `item_curation`,
+`collection_event` and `slot_usage_cheque` loads each carry the same copy of
+the four unit fingerprints and the unit rules, which a migration test holds
+identical. The table records only rows a step inserted or refreshed, never a
+node row that holds the same id.
 
 An item saved upstream between a run's `item` and `item_content` walks keeps
 the contents it had (none, for an item new to that run) until the next run,

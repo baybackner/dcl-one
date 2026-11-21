@@ -128,7 +128,8 @@ source is down.
   inside its transaction, with the collection row locked. There it also
   reads the committee index again on its own connection: a curator the
   committee admitted, and the assignee a write names, must still be members
-  (401 otherwise).
+  (401 otherwise). A review comment, appeal or retry asks the committee
+  again only when no role on the collection still admits its signer.
 - **Admins.** The operator's routes, the item status routes and the
   console's under-review listing (`GET /v1/collections/curation`), admit
   the curation console's bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`) and a

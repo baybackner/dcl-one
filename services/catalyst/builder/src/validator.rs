@@ -555,15 +555,39 @@ pub(crate) async fn changed(
 }
 
 /// Settles with `outcome` the open requests `due` selects (`$1` now, `$3`
-/// its bound) and, when `$2` (the review flow is on), records on
-/// each one's timeline that the automated review gave up; the collections
-/// and their names.
-fn settle_without_verdict(outcome: &str, due: &str) -> String {
-    format!(
+/// its bound) and, when `flow` (the review flow is on), records on each
+/// one's timeline that the automated review gave up; the collections and
+/// their names. The requests' collections are locked first, in id order, as
+/// a verdict, a publication and a delete take them, and only requests of
+/// collections held are settled.
+async fn settle_without_verdict<T>(
+    pool: &sqlx::PgPool,
+    outcome: &str,
+    due: &str,
+    now: chrono::NaiveDateTime,
+    flow: bool,
+    bound: T,
+) -> sqlx::Result<Vec<(Uuid, String)>>
+where
+    T: for<'q> sqlx::Encode<'q, sqlx::Postgres> + sqlx::Type<sqlx::Postgres> + Copy + Send,
+{
+    let mut tx = pool.begin().await?;
+    let held: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT c.id FROM builder.collections c WHERE c.id IN ( \
+           SELECT r.collection_id FROM builder.validation_requests r \
+           WHERE r.settled_at IS NULL AND {due}) \
+         ORDER BY c.id FOR KEY SHARE"
+    )))
+    .bind(now)
+    .bind(flow)
+    .bind(bound)
+    .fetch_all(&mut *tx)
+    .await?;
+    let settled = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "WITH settled AS ( \
            UPDATE builder.validation_requests r SET settled_at = $1, outcome = '{outcome}' \
            FROM builder.collections c \
-           WHERE c.id = r.collection_id AND r.settled_at IS NULL AND {due} \
+           WHERE c.id = r.collection_id AND r.collection_id = ANY($4) AND r.settled_at IS NULL AND {due} \
            RETURNING r.id, r.collection_id, c.name), \
          noted AS ( \
            INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at) \
@@ -576,7 +600,15 @@ fn settle_without_verdict(outcome: &str, due: &str) -> String {
              WHERE type IN {} DO NOTHING) \
          SELECT collection_id, name FROM settled",
         events::VERDICT_TYPES
-    )
+    )))
+    .bind(now)
+    .bind(flow)
+    .bind(bound)
+    .bind(held)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(settled)
 }
 
 /// One pass of the `builder-validation-requests` job: abandons the requests
@@ -594,22 +626,23 @@ pub async fn sweep(state: &State) -> anyhow::Result<()> {
         let mut conn = pool.acquire().await?;
         crate::review::enabled(&mut conn, state).await?
     };
-    let abandoned: Vec<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(
-        settle_without_verdict("abandoned", "r.claims >= $3 AND r.lease_until < $1"),
-    ))
-    .bind(now)
-    .bind(flow)
-    .bind(MAX_CLAIMS)
-    .fetch_all(pool)
+    let abandoned = settle_without_verdict(
+        pool,
+        "abandoned",
+        "r.claims >= $3 AND r.lease_until < $1",
+        now,
+        flow,
+        MAX_CLAIMS,
+    )
     .await?;
-    let expired: Vec<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(settle_without_verdict(
+    let expired = settle_without_verdict(
+        pool,
         "expired",
         "r.created_at <= $3 AND (r.lease_until IS NULL OR r.lease_until < $1)",
-    )))
-    .bind(now)
-    .bind(flow)
-    .bind(now - UNSETTLED_FOR)
-    .fetch_all(pool)
+        now,
+        flow,
+        now - UNSETTLED_FOR,
+    )
     .await?;
     let deleted = sqlx::query("DELETE FROM builder.validation_requests WHERE settled_at <= $1")
         .bind(now - KEPT_FOR)

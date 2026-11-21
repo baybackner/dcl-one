@@ -27,6 +27,12 @@ fingerprint of the node row. A collection with its items and their curations
 is one unit: a re-run updates a unit from upstream only while every row of it
 still matches its fingerprint, under the node's locks, and never re-creates a
 row the node deleted. Deletions upstream are not detected.
+
+Run the import with creator writes closed (CREATE_WRITES_ENABLED=false),
+then open them. A first run refuses a node that already holds collections or
+items unless --accept-builder-node-rows is passed; every run stops on an id
+the node holds that the import didn't write. A run after writes are open is
+a catch-up run, under MAPPING.md "Re-runs".
 """
 
 [[step]]

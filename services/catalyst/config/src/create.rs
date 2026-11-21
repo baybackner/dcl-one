@@ -81,7 +81,8 @@ pub struct CreateConfig {
     pub warehouse_context_prefix: Option<String>,
 
     /// The curators' Slack channel (name or id) the `SLACK_BOT_TOKEN` bot
-    /// posts curation notices to; no notice is sent without both.
+    /// posts curation notices to; unset, no notice is sent. Set without
+    /// `SLACK_BOT_TOKEN`, the node refuses to start.
     #[arg(long, env = "SLACK_CURATION_CHANNEL")]
     pub slack_curation_channel: Option<String>,
 

@@ -273,6 +273,7 @@ class Step:
     notes: str = ''
     whole: bool = False  # one batch holding the whole extract, so the load sees the full upstream set
     allow_empty: bool = False  # --allow-empty: an empty upstream set may delete every imported row
+    accept_node_rows: bool = False
     requires: str | None = None  # a source relation; without it the step reads nothing
 
     @property
@@ -1074,6 +1075,9 @@ def step_vars(step, dry_run):
                  ' \\g /dev/null']
     if step.source == CAMERA:
         variables.append(f'\\set camera_api_url {literal(camera_api_url())}')
+    if step.source == 'builder-server':
+        variables.append(f"SELECT set_config('dcl_migration.builder_node_rows', "
+                         f"'{'on' if step.accept_node_rows else 'off'}', false) \\g /dev/null")
     if step.source == 'builder-server' and step.name == 'collection':
         variables.append(f'\\set forum_url {literal(forum_url())}')
     return variables
@@ -1410,6 +1414,9 @@ def allow_empty_steps(selected, names):
 
 def cmd_run(args, sources):
     selected = allow_empty_steps(run_sources(sources, args.sources, args.step), args.allow_empty)
+    if args.accept_builder_node_rows:
+        selected = [dataclasses.replace(src, steps=[dataclasses.replace(step, accept_node_rows=True)
+                                                    for step in src.steps]) for src in selected]
     if args.sources == ['all']:
         print('run all: excluding credits-server, shop-server and both marketplace sources; explicitly name the source at cutover',
               flush=True)
@@ -2148,6 +2155,9 @@ def parser():
     run.add_argument('--allow-empty', action='append', metavar='SOURCE/STEP',
                      help='let this step apply an empty upstream set, deleting every row it imported'
                           ' (repeatable; only when upstream really is empty)')
+    run.add_argument('--accept-builder-node-rows', action='store_true',
+                     help='let a first builder-server run start although the node already holds collections or'
+                          ' items (they stay the node\'s); import before opening creator writes instead')
     run.add_argument('--batch-size', type=int, default=5000)
     run.add_argument('--lock-timeout', type=parse_duration, default=datetime.timedelta(minutes=1),
                      help='give up waiting for a lock after this long, on both sides (default 1m; 0s: never)')

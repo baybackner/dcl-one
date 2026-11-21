@@ -11,6 +11,15 @@ FROM stage s
 LEFT JOIN dcl_migration.builder_imported m ON m.step = 'virtual_third_party' AND m.id = s.id::text
 WHERE char_length(s.id) <= 512;
 
+DO $taken$ DECLARE n bigint; ids text; BEGIN
+  SELECT count(*), string_agg(t.id, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
+    FROM (SELECT v.id, row_number() OVER (ORDER BY v.id) AS rn
+            FROM incoming_virtual_third_party s JOIN builder.virtual_third_parties v ON v.id = s.id
+           WHERE NOT s.imported) t;
+  IF n > 0 THEN RAISE EXCEPTION
+    'builder-server/virtual_third_party: the node holds % ids the import did not write, first: %; resolve them before importing', n, ids;
+  ELSE NULL; END IF; END $taken$;
+
 WITH refreshed AS (
   UPDATE builder.virtual_third_parties AS v
      SET (managers, raw_metadata, is_programmatic, updated_at) = (s.managers, s.raw_metadata, s.is_programmatic, s.updated_at)
@@ -25,14 +34,13 @@ INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
 SELECT 'virtual_third_party', id, fingerprint FROM refreshed
 ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.virtual_third_parties (id, managers, raw_metadata, is_programmatic, created_at, updated_at)
-SELECT id, managers, raw_metadata, is_programmatic, created_at, updated_at
-FROM incoming_virtual_third_party
-WHERE NOT imported
-ON CONFLICT (id) DO NOTHING;
-
+WITH inserted AS (
+  INSERT INTO builder.virtual_third_parties AS v (id, managers, raw_metadata, is_programmatic, created_at, updated_at)
+  SELECT id, managers, raw_metadata, is_programmatic, created_at, updated_at
+  FROM incoming_virtual_third_party
+  WHERE NOT imported
+  ON CONFLICT (id) DO NOTHING
+  RETURNING v.id, pg_temp.builder_virtual_third_party_fingerprint(v) AS fingerprint)
 INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
-SELECT 'virtual_third_party', v.id, pg_temp.builder_virtual_third_party_fingerprint(v)
-FROM incoming_virtual_third_party s JOIN builder.virtual_third_parties v ON v.id = s.id
-WHERE NOT s.imported
+SELECT 'virtual_third_party', id, fingerprint FROM inserted
 ON CONFLICT DO NOTHING;

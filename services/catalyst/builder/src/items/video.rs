@@ -760,6 +760,24 @@ mod admission_tests {
         assert!(held.iter().all(|h| !h.gave_way()));
     }
 
+    /// A finished upload counts its time once toward its wallet's day: the
+    /// route calls `received` when the body has arrived, then drops the
+    /// admission after storing.
+    #[tokio::test(start_paused = true)]
+    async fn a_finished_upload_counts_its_time_once_toward_its_wallets_day() {
+        let videos = Videos::default();
+        for n in 0..2 {
+            let upload = hold(&videos, "0xcreator", &site(n));
+            tokio::time::advance(Duration::from_secs(2 * 3_600 - 60)).await;
+            upload.received();
+            drop(upload);
+        }
+        assert!(
+            videos.admit("0xcreator", Some(&site(2))).is_ok(),
+            "two finished uploads of under two hours each leave time in a four-hour day"
+        );
+    }
+
     /// One video at a time per wallet, and at most its hours of uploading a
     /// day per wallet and per address.
     #[tokio::test(start_paused = true)]

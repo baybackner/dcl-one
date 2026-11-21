@@ -33,6 +33,21 @@ LANGUAGE plpgsql AS $$ BEGIN
     ORDER BY i.id FOR UPDATE;
 END $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.builder_unit_reviewed(unit_collection uuid, unit_item uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+            SELECT 1 FROM builder.collection_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
+             WHERE k.collection_id = unit_collection
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
+      OR EXISTS (
+            SELECT 1 FROM builder.item_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
+             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
+                                 UNION ALL SELECT unit_item)
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.builder_unit_untouched(unit_collection uuid, unit_item uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT (unit_collection IS NULL OR EXISTS (
@@ -45,17 +60,7 @@ LANGUAGE sql STABLE AS $$
              WHERE i.id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
                             UNION ALL SELECT unit_item)
                AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_fingerprint(i))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.collection_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
-             WHERE k.collection_id = unit_collection
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.item_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
-             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
-                                 UNION ALL SELECT unit_item)
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+     AND NOT pg_temp.builder_unit_reviewed(unit_collection, unit_item)
 $$;
 
 CREATE TEMP TABLE incoming_collection ON COMMIT DROP AS
@@ -70,13 +75,21 @@ FROM (SELECT *, COALESCE(forum_link ~ '^https?://[^[:space:]]+$' AND char_length
       FROM stage) s
 LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection' AND m.id = s.id::text;
 
+DO $first_run$ BEGIN
+  IF current_setting('dcl_migration.builder_node_rows', true) IS DISTINCT FROM 'on'
+     AND NOT EXISTS (SELECT 1 FROM dcl_migration.builder_imported)
+     AND (EXISTS (SELECT 1 FROM builder.collections) OR EXISTS (SELECT 1 FROM builder.items)) THEN
+    RAISE EXCEPTION
+      'builder-server/collection: the node already holds collections or items and nothing was imported yet; import with creator writes closed (CREATE_WRITES_ENABLED=false), or pass --accept-builder-node-rows to keep those rows as the node''s';
+  ELSE NULL; END IF; END $first_run$;
+
 DO $taken$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
     FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
             FROM incoming_collection s JOIN builder.collections x ON x.id = s.id
-           WHERE NOT s.imported AND x.created_at IS DISTINCT FROM s.created_at) t;
+           WHERE NOT s.imported) t;
   IF n > 0 THEN RAISE EXCEPTION
-    'builder-server/collection: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
+    'builder-server/collection: the node holds % ids the import did not write, first: %; resolve them before importing', n, ids;
   ELSE NULL; END IF; END $taken$;
 
 CREATE TEMP TABLE changed_collection ON COMMIT DROP AS
@@ -93,19 +106,44 @@ DO $lock$ BEGIN PERFORM pg_temp.builder_lock_units(ARRAY(SELECT id FROM changed_
 CREATE TEMP TABLE kept_collection ON COMMIT DROP AS
 SELECT id FROM changed_collection WHERE NOT pg_temp.builder_unit_untouched(id, NULL);
 
+DO $urn_lock$ BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('builder.collections urn:' || u.urn_suffix, 0))
+     FROM (SELECT DISTINCT s.urn_suffix FROM incoming_collection s
+            WHERE s.third_party_id IS NOT NULL AND s.urn_suffix IS NOT NULL
+              AND (NOT s.imported OR s.id IN (SELECT id FROM changed_collection))) u
+    ORDER BY u.urn_suffix;
+END $urn_lock$;
+
+CREATE TEMP TABLE collection_urn_taken ON COMMIT DROP AS
+WITH asked AS MATERIALIZED (
+  SELECT s.id, lower(s.urn_suffix) AS urn FROM incoming_collection s
+   WHERE s.third_party_id IS NOT NULL AND s.urn_suffix IS NOT NULL
+     AND (NOT s.imported OR s.id IN (SELECT id FROM changed_collection EXCEPT SELECT id FROM kept_collection)))
+SELECT a.id FROM asked a JOIN builder.collections x ON lower(x.urn_suffix) = a.urn AND x.id <> a.id
+UNION
+SELECT a.id FROM asked a JOIN incoming_collection y ON lower(y.urn_suffix) = a.urn AND y.id <> a.id;
+
 DO $kept$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
     FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM kept_collection) k;
   IF n > 0 THEN RAISE NOTICE
     'builder-server/collection: % collections changed upstream are left as the node holds them (the node changed the collection, an item or a curation of it), first: %', n, ids;
-  ELSE NULL; END IF; END $kept$;
+  END IF;
+  SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM collection_urn_taken) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/collection: % third-party collections whose URN another collection holds are left out, first: %', n, ids;
+  END IF; END $kept$;
+
+CREATE TEMP TABLE refreshed_collection ON COMMIT DROP AS
+SELECT id FROM changed_collection EXCEPT SELECT id FROM kept_collection EXCEPT SELECT id FROM collection_urn_taken;
 
 WITH moved AS (
   UPDATE builder.items AS i
      SET urn_suffix = s.urn_suffix || substr(i.urn_suffix, char_length(c.urn_suffix) + 1)
     FROM incoming_collection s JOIN builder.collections c ON c.id = s.id
    WHERE i.collection_id = s.id
-     AND s.id IN (SELECT id FROM changed_collection EXCEPT SELECT id FROM kept_collection)
+     AND s.id IN (SELECT id FROM refreshed_collection)
      AND c.third_party_id IS NOT NULL AND s.urn_suffix IS NOT NULL AND c.urn_suffix <> s.urn_suffix
      AND left(i.urn_suffix, char_length(c.urn_suffix) + 1) = c.urn_suffix || ':'
   RETURNING i.id, pg_temp.builder_item_fingerprint(i) AS fingerprint)
@@ -120,25 +158,24 @@ WITH refreshed AS (
        = (s.name, s.eth_address, s.salt, s.contract_address, s.urn_suffix, s.third_party_id, s.updated_at,
           s.linked_contract_address, s.linked_contract_network, s.lock, s.forum_link, s.forum_id)
     FROM incoming_collection s
-   WHERE c.id = s.id AND s.id IN (SELECT id FROM changed_collection EXCEPT SELECT id FROM kept_collection)
+   WHERE c.id = s.id AND s.id IN (SELECT id FROM refreshed_collection)
   RETURNING c.id, pg_temp.builder_collection_fingerprint(c) AS fingerprint)
 INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
 SELECT 'collection', id::text, fingerprint FROM refreshed
 ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.collections
-    (id, name, eth_address, salt, contract_address, urn_suffix, third_party_id,
-     publication_pending, created_at, updated_at, linked_contract_address, linked_contract_network, lock,
-     forum_link, forum_id)
-SELECT id, name, eth_address, salt, contract_address, urn_suffix, third_party_id,
-       false, created_at, updated_at, linked_contract_address, linked_contract_network, lock,
-       forum_link, forum_id
-FROM incoming_collection
-WHERE NOT imported
-ON CONFLICT (id) DO NOTHING;
-
+WITH inserted AS (
+  INSERT INTO builder.collections AS c
+      (id, name, eth_address, salt, contract_address, urn_suffix, third_party_id,
+       publication_pending, created_at, updated_at, linked_contract_address, linked_contract_network, lock,
+       forum_link, forum_id)
+  SELECT id, name, eth_address, salt, contract_address, urn_suffix, third_party_id,
+         false, created_at, updated_at, linked_contract_address, linked_contract_network, lock,
+         forum_link, forum_id
+  FROM incoming_collection
+  WHERE NOT imported AND id NOT IN (SELECT id FROM collection_urn_taken)
+  ON CONFLICT (id) DO NOTHING
+  RETURNING c.id, pg_temp.builder_collection_fingerprint(c) AS fingerprint)
 INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
-SELECT 'collection', c.id::text, pg_temp.builder_collection_fingerprint(c)
-FROM incoming_collection s JOIN builder.collections c ON c.id = s.id
-WHERE NOT s.imported
+SELECT 'collection', id::text, fingerprint FROM inserted
 ON CONFLICT DO NOTHING;

@@ -253,12 +253,15 @@ refuses a service given some of its settings without the others
 (`WAREHOUSE_CONTEXT_PREFIX`, `CREATORS_URL`, `BUILDER_URL` and
 `BUILDER_SERVER_URL` stay optional), and a `WAREHOUSE_URL` or
 `NEWSLETTER_SERVICE_URL` that is not a public `https://` URL, because each
-carries a token.
+carries a token. `SLACK_BOT_TOKEN` is also the bot social's Slack notices
+use: set alone, it leaves the curators' notices off.
+`SLACK_CURATION_CHANNEL` turns them on; set without the token, the node
+refuses to start.
 
 | Service | Settings | Without them |
 | --- | --- | --- |
 | Wearable validator | `WEARABLE_VALIDATOR_CALLBACK_SECRET` (at least 32 bytes) | No validation is requested; the validator routes refuse |
-| Curators' Slack | `SLACK_BOT_TOKEN`, `SLACK_CURATION_CHANNEL`, `CREATORS_URL` (else `BUILDER_URL`) | No notice is posted |
+| Curators' Slack | `SLACK_CURATION_CHANNEL`, with `SLACK_BOT_TOKEN` (shared with social), `CREATORS_URL` (else `BUILDER_URL`) | No notice is posted |
 | Curators' forum | `FORUM_URL`, `FORUM_API_KEY`, `FORUM_API_USERNAME`, `FORUM_CATEGORY`, `BUILDER_SERVER_URL` | Forum posts and replies answer 503 |
 | Terms of service warehouse | `WAREHOUSE_URL`, `WAREHOUSE_TOKEN`, `WAREHOUSE_CONTEXT_PREFIX` | Acceptances are stored and forwarded later |
 | Newsletter service | `NEWSLETTER_SERVICE_URL`, `NEWSLETTER_PUBLICATION_ID`, `NEWSLETTER_SERVICE_API_KEY` | Subscriptions are answered `{ok:true}` and go nowhere; the node never stores one |

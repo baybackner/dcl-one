@@ -186,9 +186,11 @@ pub struct RawSettings {
     pub warehouse_url: Option<String>,
     pub warehouse_token: Option<String>,
     pub warehouse_context_prefix: Option<String>,
-    /// `SLACK_BOT_TOKEN`: the bot the curation notices are posted as.
+    /// `SLACK_BOT_TOKEN`: the bot the curation notices are posted as, the
+    /// one social's Slack notices use.
     pub slack_bot_token: Option<String>,
-    /// `SLACK_CURATION_CHANNEL`: the curators' channel; notices need both.
+    /// `SLACK_CURATION_CHANNEL`: the curators' channel; notices are posted
+    /// only when it is set, and it needs `SLACK_BOT_TOKEN`.
     pub slack_curation_channel: Option<String>,
     /// `CREATORS_URL`: the creators site a notice links to.
     pub creators_url: Option<String>,
@@ -358,15 +360,22 @@ impl Settings {
             })
         })
         .transpose()?;
-        let slack = all_or_none([
-            ("SLACK_BOT_TOKEN", &raw.slack_bot_token),
-            ("SLACK_CURATION_CHANNEL", &raw.slack_curation_channel),
-        ])?
-        .map(|[token, channel]| curation::slack::Slack {
-            token,
-            channel,
-            api: curation::slack::API.to_string(),
-        });
+        let slack = match (
+            non_empty(&raw.slack_bot_token),
+            non_empty(&raw.slack_curation_channel),
+        ) {
+            (Some(token), Some(channel)) => Some(curation::slack::Slack {
+                token,
+                channel,
+                api: curation::slack::API.to_string(),
+            }),
+            (None, Some(_)) => {
+                bail!(
+                    "SLACK_CURATION_CHANNEL is set without SLACK_BOT_TOKEN, the bot that posts to it"
+                )
+            }
+            _ => None,
+        };
         let links = curation::slack::Links {
             creators_url: non_empty(&raw.creators_url),
             builder_url: non_empty(&raw.builder_url),
@@ -821,10 +830,10 @@ mod router_tests {
             ),
             (
                 RawSettings {
-                    slack_bot_token: some("xoxb-example"),
+                    slack_curation_channel: some("curation"),
                     ..RawSettings::default()
                 },
-                "SLACK_CURATION_CHANNEL",
+                "SLACK_BOT_TOKEN",
             ),
             (
                 RawSettings {

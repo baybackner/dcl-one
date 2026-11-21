@@ -1409,6 +1409,7 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
         &address(COMMITTEE_KEY),
         &address(FORMER_KEY),
         &address(ADMIN_KEY),
+        &address(OWNER_KEY),
     ]);
     let n = node_over(
         pool,
@@ -1454,6 +1455,13 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     )
     .await
     .unwrap();
+    let owner_commenting = crate::access::review_member(
+        &n.state,
+        &signer_of(OWNER_KEY, &comments).await,
+        &id.to_string(),
+    )
+    .await
+    .unwrap();
     let assign = || crate::curation::writes::Update {
         assignee: Some(Some(address(ADMIN_KEY))),
         ..Default::default()
@@ -1462,10 +1470,23 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
         status: Some(crate::curation::transitions::Status::Rejected),
         ..Default::default()
     };
+    drop_member(OWNER_KEY, 9).await;
     drop_member(FORMER_KEY, 10).await;
     let rejected = crate::curation::writes::update_collection(&n.state, rejecting, reject()).await;
     let commented =
         crate::review::comment(&n.state, commenting, "Too late".to_string(), None).await;
+    let owner_commented = crate::review::comment(
+        &n.state,
+        owner_commenting,
+        "Still the creator".to_string(),
+        None,
+    )
+    .await;
+    assert!(
+        owner_commented.is_ok(),
+        "the creator leaving the committee still comments: {:?}",
+        owner_commented.err().map(|e| e.status())
+    );
     let mut holder = n.pool.begin().await.unwrap();
     sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
         .bind(id)

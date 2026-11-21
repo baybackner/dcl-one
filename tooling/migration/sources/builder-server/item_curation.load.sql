@@ -33,6 +33,21 @@ LANGUAGE plpgsql AS $$ BEGIN
     ORDER BY i.id FOR UPDATE;
 END $$;
 
+CREATE OR REPLACE FUNCTION pg_temp.builder_unit_reviewed(unit_collection uuid, unit_item uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+            SELECT 1 FROM builder.collection_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
+             WHERE k.collection_id = unit_collection
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
+      OR EXISTS (
+            SELECT 1 FROM builder.item_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
+             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
+                                 UNION ALL SELECT unit_item)
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.builder_unit_untouched(unit_collection uuid, unit_item uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT (unit_collection IS NULL OR EXISTS (
@@ -45,17 +60,7 @@ LANGUAGE sql STABLE AS $$
              WHERE i.id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
                             UNION ALL SELECT unit_item)
                AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_fingerprint(i))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.collection_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
-             WHERE k.collection_id = unit_collection
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
-     AND NOT EXISTS (
-            SELECT 1 FROM builder.item_curations k
-              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
-             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
-                                 UNION ALL SELECT unit_item)
-               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+     AND NOT pg_temp.builder_unit_reviewed(unit_collection, unit_item)
 $$;
 
 CREATE TEMP TABLE incoming_item_curation ON COMMIT DROP AS
@@ -78,7 +83,8 @@ JOIN builder.items i ON i.id = COALESCE(k.item_id, s.item_id)
 WHERE (s.imported AND k.id IS NOT NULL
        AND (k.status, k.content_hash, k.is_mapping_complete, k.updated_at)
            IS DISTINCT FROM (s.status, s.content_hash, s.is_mapping_complete, s.updated_at))
-   OR NOT s.imported;
+   OR (NOT s.imported
+       AND EXISTS (SELECT 1 FROM dcl_migration.builder_imported m WHERE m.step = 'item' AND m.id = i.id::text));
 
 DO $lock$ BEGIN
   PERFORM pg_temp.builder_lock_units(
@@ -86,22 +92,30 @@ DO $lock$ BEGIN
     ARRAY(SELECT DISTINCT unit_item FROM item_curation_units WHERE unit_item IS NOT NULL));
 END $lock$;
 
-CREATE TEMP TABLE kept_unit ON COMMIT DROP AS
-WITH u AS MATERIALIZED (SELECT DISTINCT unit_collection, unit_item FROM item_curation_units)
-SELECT u.unit_collection, u.unit_item FROM u
-WHERE NOT pg_temp.builder_unit_untouched(u.unit_collection, u.unit_item);
+CREATE TEMP TABLE item_curation_unit_state ON COMMIT DROP AS
+WITH u AS MATERIALIZED (SELECT unit_collection, unit_item, bool_or(imported) AS refreshes, bool_or(NOT imported) AS adds
+                          FROM item_curation_units GROUP BY unit_collection, unit_item)
+SELECT u.unit_collection, u.unit_item,
+       u.refreshes AND NOT pg_temp.builder_unit_untouched(u.unit_collection, u.unit_item) AS kept,
+       u.adds AND pg_temp.builder_unit_reviewed(u.unit_collection, u.unit_item) AS reviewed
+FROM u;
 
 CREATE TEMP TABLE item_curation_plan ON COMMIT DROP AS
-SELECT u.id, u.imported, EXISTS (
-  SELECT 1 FROM kept_unit k WHERE k.unit_collection IS NOT DISTINCT FROM u.unit_collection
-                              AND k.unit_item IS NOT DISTINCT FROM u.unit_item) AS kept
-FROM item_curation_units u;
+SELECT u.id, u.imported, st.kept, st.reviewed
+FROM item_curation_units u
+JOIN item_curation_unit_state st ON st.unit_collection IS NOT DISTINCT FROM u.unit_collection
+                                AND st.unit_item IS NOT DISTINCT FROM u.unit_item;
 
 DO $kept$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
-    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_curation_plan WHERE kept) k;
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_curation_plan WHERE imported AND kept) k;
   IF n > 0 THEN RAISE NOTICE
-    'builder-server/item_curation: % curations, changed or new upstream, of items whose collection or item the node changed are left out, first: %', n, ids;
+    'builder-server/item_curation: % curations changed upstream, of items whose collection or item the node changed, are left as the node holds them, first: %', n, ids;
+  END IF;
+  SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_curation_plan WHERE NOT imported AND reviewed) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/item_curation: % new curations of items whose collection or item the node reviewed are left out, first: %', n, ids;
   END IF; END $kept$;
 
 WITH refreshed AS (
@@ -115,19 +129,18 @@ INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
 SELECT 'item_curation', id::text, fingerprint FROM refreshed
 ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.item_curations (id, item_id, status, content_hash, is_mapping_complete, created_at, updated_at)
-SELECT DISTINCT ON (s.item_id, s.created_at)
-       s.id, s.item_id, s.status, s.content_hash, s.is_mapping_complete, s.created_at, s.updated_at
-FROM incoming_item_curation s
-JOIN item_curation_plan p ON p.id = s.id
-WHERE NOT s.imported AND NOT p.kept
-  AND NOT EXISTS (SELECT 1 FROM builder.item_curations o
-                  WHERE o.item_id = s.item_id AND o.created_at = s.created_at AND o.id <> s.id)
-ORDER BY s.item_id, s.created_at, s.upstream_updated_at DESC, s.id DESC
-ON CONFLICT (id) DO NOTHING;
-
+WITH inserted AS (
+  INSERT INTO builder.item_curations AS k (id, item_id, status, content_hash, is_mapping_complete, created_at, updated_at)
+  SELECT DISTINCT ON (s.item_id, s.created_at)
+         s.id, s.item_id, s.status, s.content_hash, s.is_mapping_complete, s.created_at, s.updated_at
+  FROM incoming_item_curation s
+  JOIN item_curation_plan p ON p.id = s.id
+  WHERE NOT s.imported AND NOT p.reviewed
+    AND NOT EXISTS (SELECT 1 FROM builder.item_curations o
+                    WHERE o.item_id = s.item_id AND o.created_at = s.created_at AND o.id <> s.id)
+  ORDER BY s.item_id, s.created_at, s.upstream_updated_at DESC, s.id DESC
+  ON CONFLICT (id) DO NOTHING
+  RETURNING k.id, pg_temp.builder_item_curation_fingerprint(k) AS fingerprint)
 INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
-SELECT 'item_curation', k.id::text, pg_temp.builder_item_curation_fingerprint(k)
-FROM incoming_item_curation s JOIN builder.item_curations k ON k.id = s.id
-WHERE NOT s.imported
+SELECT 'item_curation', id::text, fingerprint FROM inserted
 ON CONFLICT DO NOTHING;

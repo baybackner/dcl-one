@@ -1,13 +1,101 @@
-INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at)
+CREATE OR REPLACE FUNCTION pg_temp.builder_collection_fingerprint(c builder.collections) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT md5(json_build_array(c.name, c.eth_address, c.salt, c.contract_address, c.urn_suffix, c.third_party_id,
+                              c.publication_pending, c.created_at, c.updated_at, c.linked_contract_address,
+                              c.linked_contract_network, c.lock, c.forum_link, c.forum_id, c.forum_claimed_at)::text)
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_item_fingerprint(i builder.items) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT md5(json_build_array(i.collection_id, i.eth_address, i.name, i.description, i.thumbnail, i.video, i.type,
+                              i.rarity, i.price, i.beneficiary, i.data, i.metrics, i.utility, i.mappings, i.urn_suffix,
+                              i.blockchain_item_id, i.is_published, i.in_catalyst, i.total_supply,
+                              i.local_content_hash, i.content_hash, i.catalyst_content_hash, i.created_at,
+                              i.updated_at, i.video_named_by)::text)
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_collection_curation_fingerprint(k builder.collection_curations) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT md5(json_build_array(k.collection_id, k.status, k.assignee, k.reviewed_by, k.rejection_reasons,
+                              k.rejection_message, k.created_at, k.updated_at)::text)
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_item_curation_fingerprint(k builder.item_curations) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT md5(json_build_array(k.item_id, k.status, k.content_hash, k.is_mapping_complete, k.created_at,
+                              k.updated_at)::text)
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_lock_units(unit_collections uuid[], unit_items uuid[]) RETURNS void
+LANGUAGE plpgsql AS $$ BEGIN
+  PERFORM 1 FROM builder.collections c WHERE c.id = ANY(unit_collections) ORDER BY c.id FOR UPDATE;
+  PERFORM 1 FROM builder.items i WHERE i.collection_id = ANY(unit_collections) OR i.id = ANY(unit_items)
+    ORDER BY i.id FOR UPDATE;
+END $$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_unit_reviewed(unit_collection uuid, unit_item uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+            SELECT 1 FROM builder.collection_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = k.id::text
+             WHERE k.collection_id = unit_collection
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_collection_curation_fingerprint(k))
+      OR EXISTS (
+            SELECT 1 FROM builder.item_curations k
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = k.id::text
+             WHERE k.item_id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
+                                 UNION ALL SELECT unit_item)
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_curation_fingerprint(k))
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.builder_unit_untouched(unit_collection uuid, unit_item uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT (unit_collection IS NULL OR EXISTS (
+            SELECT 1 FROM builder.collections c
+              JOIN dcl_migration.builder_imported m ON m.step = 'collection' AND m.id = c.id::text
+             WHERE c.id = unit_collection AND m.fingerprint = pg_temp.builder_collection_fingerprint(c)))
+     AND NOT EXISTS (
+            SELECT 1 FROM builder.items i
+              LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item' AND m.id = i.id::text
+             WHERE i.id IN (SELECT x.id FROM builder.items x WHERE x.collection_id = unit_collection
+                            UNION ALL SELECT unit_item)
+               AND m.fingerprint IS DISTINCT FROM pg_temp.builder_item_fingerprint(i))
+     AND NOT pg_temp.builder_unit_reviewed(unit_collection, unit_item)
+$$;
+
+CREATE TEMP TABLE incoming_collection_event ON COMMIT DROP AS
 SELECT s.id, s.collection_id, s.type, s.actor,
-       CASE WHEN lower(s.actor_address) ~ '^0x[0-9a-f]{40}$' THEN lower(s.actor_address) END,
-       s.payload, s.created_at AT TIME ZONE 'UTC'
+       CASE WHEN lower(s.actor_address) ~ '^0x[0-9a-f]{40}$' THEN lower(s.actor_address) END AS actor_address,
+       s.payload, s.created_at AT TIME ZONE 'UTC' AS created_at
 FROM stage s
 JOIN builder.collections c ON c.id = s.collection_id
+JOIN dcl_migration.builder_imported m ON m.step = 'collection' AND m.id = c.id::text
 WHERE s.type IN ('collection.published', 'review.human_required', 'review.automated_started',
                  'review.automated_passed', 'review.automated_rejected', 'review.automated_error',
                  'review.appeal_requested', 'review.assigned', 'review.approved', 'review.rejected',
                  'changes.submitted', 'review.comment')
   AND s.actor IN ('creator', 'curator', 'validator', 'system')
   AND jsonb_typeof(s.payload) = 'object'
+  AND NOT EXISTS (SELECT 1 FROM builder.collection_events e WHERE e.id = s.id);
+
+DO $lock$ BEGIN
+  PERFORM pg_temp.builder_lock_units(ARRAY(SELECT DISTINCT collection_id FROM incoming_collection_event), '{}');
+END $lock$;
+
+CREATE TEMP TABLE collection_event_reviewed ON COMMIT DROP AS
+WITH u AS MATERIALIZED (SELECT DISTINCT collection_id FROM incoming_collection_event)
+SELECT u.collection_id FROM u WHERE pg_temp.builder_unit_reviewed(u.collection_id, NULL);
+
+DO $kept$ DECLARE n bigint; ids text; BEGIN
+  SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM incoming_collection_event
+           WHERE collection_id IN (SELECT collection_id FROM collection_event_reviewed)) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/collection_event: % new events of collections the node reviewed are left out, first: %', n, ids;
+  END IF; END $kept$;
+
+INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at)
+SELECT id, collection_id, type, actor, actor_address, payload, created_at
+FROM incoming_collection_event
+WHERE collection_id NOT IN (SELECT collection_id FROM collection_event_reviewed)
 ON CONFLICT DO NOTHING;
