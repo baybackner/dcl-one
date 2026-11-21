@@ -38,7 +38,7 @@ async fn cleanup(
     event: &RemovedPlace,
 ) -> Result<(), ApiError> {
     let mut tx = state.pool.begin().await?;
-    // Serialize safety cleanup and local-recipient capture for this event.
+    // Serialize safety cleanup for this event.
     let Some(mut event): Option<RemovedPlace> =
         sqlx::query_as("SELECT * FROM explore.place_removal_pending WHERE event_id=$1 FOR UPDATE")
             .bind(event.event_id)
@@ -61,15 +61,6 @@ async fn cleanup(
             .bind(&event.world_name).fetch_all(&mut *tx).await?;
         admin_keys.extend(current);
     }
-    if event.notify && !event.recipients_resolved {
-        event
-            .recipients
-            .extend(scene_admins(&mut *tx, &context, event.removed_at, &admin_keys).await?);
-        event.recipients.sort();
-        event.recipients.dedup();
-        sqlx::query("UPDATE explore.place_removal_pending SET recipients=$2 WHERE event_id=$1 AND NOT recipients_resolved")
-            .bind(event.event_id).bind(&event.recipients).execute(&mut *tx).await?;
-    }
     let mut ended = None;
     if event.cleaned_at.is_none() {
         let ingress:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM social.scene_stream_access WHERE place_id=$1 AND active AND ingress_id <> '')")
@@ -83,7 +74,7 @@ async fn cleanup(
             .await?;
         // Include exact retired namespaces saved before catalogue removal.
         // A shared Genesis base keeps its live grant, but its affected admin
-        // was captured above regardless of whether revocation is appropriate.
+        // remains eligible for notification regardless of whether revocation is appropriate.
         sqlx::query("UPDATE social.scene_admins SET active=false,removed_at=$2 WHERE active AND added_at <= $2 AND (($3 AND place_id=ANY($4::text[])) OR (NOT $3 AND place_id=$1 AND NOT EXISTS (SELECT 1 FROM explore.place WHERE disabled IS FALSE AND world IS FALSE AND base_position=$1)))")
             .bind(&event.base_position).bind(event.removed_at).bind(event.world).bind(&admin_keys)
             .execute(&mut *tx).await?;
@@ -99,6 +90,15 @@ async fn cleanup(
         return Ok(());
     }
     if !event.recipients_resolved {
+        // The event trigger freezes recipients and exact keys; retained grants also
+        // cover older events after the safety transaction revokes those grants.
+        event
+            .recipients
+            .extend(scene_admins(&state.pool, &context, event.removed_at, &admin_keys).await?);
+        event.recipients.sort();
+        event.recipients.dedup();
+        sqlx::query("UPDATE explore.place_removal_pending SET recipients=$2 WHERE event_id=$1 AND NOT recipients_resolved")
+            .bind(event.event_id).bind(&event.recipients).execute(&state.pool).await?;
         // External calls occur only after the safety transaction has committed.
         let (resolved_owner, resolved) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -1164,6 +1164,40 @@ mod tests {
             json!(["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
         );
         assert_eq!(metadata["presenters"], json!(["retained"]));
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_removal_enrichment_failure_follows_safety_commit() {
+        let Some(pool) = crate::db::scratch::isolated_pool(4).await else {
+            return;
+        };
+        let (state, _, event) = setup(pool.clone()).await;
+        sqlx::query("INSERT INTO social.scene_admins(place_id,admin_address,added_by,added_at) VALUES ('0,0','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','owner',$1)")
+            .bind(event.removed_at-chrono::Duration::seconds(1)).execute(&pool).await.unwrap();
+        sqlx::raw_sql("ALTER TABLE social.scene_admins RENAME TO test_scene_admins; \
+            CREATE FUNCTION social.fail_admin_read(text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'notification read unavailable'; END $$; \
+            CREATE VIEW social.scene_admins AS SELECT place_id,social.fail_admin_read(admin_address) AS admin_address,added_by,added_at,active,removed_at FROM social.test_scene_admins")
+            .execute(&pool).await.unwrap();
+        let state = Arc::new(state);
+        let feed = RemovedPlaces::new(pool.clone());
+        assert!(cleanup(&state, &feed, &event).await.is_err());
+        let cleaned: bool = sqlx::query_scalar(
+            "SELECT cleaned_at IS NOT NULL FROM explore.place_removal_pending WHERE event_id=$1",
+        )
+        .bind(event.event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            cleaned,
+            "a notification-only SQL error must follow the safety commit"
+        );
+        let active: bool =
+            sqlx::query_scalar("SELECT active FROM social.test_scene_admins WHERE place_id='0,0'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!active);
     }
 
     #[tokio::test]

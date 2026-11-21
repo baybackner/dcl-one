@@ -87,10 +87,10 @@ presenter control. A scene on a different place starts without them.
 Streaming notices retain one normalized recipient snapshot: owner, applicable
 LAND/World permission holders and explicit scene admins. Explore captures local
 admins in the catalogue removal event before a pre-maintenance re-grant can
-overwrite grant timing; safety cleanup retains fallback capture before revoking
-grants. External lookup outages leave
-notification resolution pending. Each accepted recipient has a durable cursor
-so bounded retries resume without starving later wallets. Credential issuance
+overwrite grant timing; fallback enrichment reads retained grants after safety
+cleanup commits. External lookup outages leave notification resolution pending.
+Each accepted recipient has a durable cursor so bounded retries resume without
+starving later wallets. Credential issuance
 saves the bound `admin_place_key`; Explore freezes exact active/retiring world
 keys into removal events before delayed catalogue cleanup. Scene insertion
 clears catalogue evidence, while queued events and their recipients stay fixed.

@@ -2539,7 +2539,8 @@ the catalogue removal transaction, using exact World keys or the Genesis base.
 Its plain MVCC read of `social.scene_admins` (`place_id`, `admin_address`,
 `active`) takes no Social row locks and performs no Social writes. This preserves
 recipients if a re-grant overwrites `added_at` before the first maintenance pass.
-Safety cleanup and fallback capture for older events commit before external
+Safety cleanup commits before notification enrichment. The fallback for older
+events reads retained grants and saves local recipients before external
 owner/permission lookups. Missing external authority leaves
 `recipients_resolved=false`; a saved owner alone is never a complete set.
 Retries reuse the complete set and original event time. Initial historical
@@ -2672,7 +2673,10 @@ approved-for-all wallets, or World owner and footprint-scoped grantees, plus
 scene admins. Wallets are normalized and deduplicated. Invalid historical
 admin strings are excluded from delivery without preventing safety cleanup.
 Each credential stores its bound `admin_place_key` at issuance/reset/Cast;
-the cleanup context preserves it for later resolution. `scene_stream_cleanup`
+the cleanup context preserves it for later resolution. Notification preparation
+is bounded to five seconds, retains partial evidence on failure and never takes
+publication row locks. An unresolved native binding blocks recipient completion,
+including retries after credential deactivation. `scene_stream_cleanup`
 keeps the complete `recipients`, `recipients_resolved` bit and guarded
 `recipient_cursor`. Each Social acceptance advances one cursor under the
 current claim token, so a bounded pass resumes after its accepted prefix.
@@ -2686,6 +2690,16 @@ applicable identity. Already retired pre-cutover scenes and overwritten
 pre-cutover grant history have no exact recovery evidence. Existing scalar
 cleanup recipients are preserved while remaining authority classes resolve;
 an existing scalar value alone never marks the snapshot complete.
+
+Credential issuance uses retained `scene_stream_access` rows as rolling quota
+facts: six new credentials per place per hour, including reset and Cast. A
+transaction advisory lock keyed by place precedes credential writes, and the
+`scene_stream_access_place_created_idx` index bounds the recent-row probe to
+six matches. Reuse and deletion do not consume issuance. Quota refusal rolls
+back replacement and returns 429. Historical imports preserve creation times.
+The schema object pass installs the index on existing databases; it builds in
+the migration transaction, so writes wait for the build. This is a configured
+policy; production query and index-write cost are unmeasured.
 
 ## Stream state reconciliation
 

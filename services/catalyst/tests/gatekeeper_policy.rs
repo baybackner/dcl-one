@@ -1058,6 +1058,7 @@ mod stream_access {
         STREAM_ACCESS_NOT_FOUND_MSG,
     };
     use catalyst::comms::gatekeeper::{CommsState, LiveKit, Settings, SharedState, router};
+    use catalyst::comms::interfaces::StreamingNotificationKind;
     use catalyst::http::Outbound;
     use catalyst::shared::test_keys::{address_of, random_key, signed};
     use catalyst::worlds::policy::{PersonalWorldsPolicy, Policy};
@@ -1251,7 +1252,7 @@ mod stream_access {
         ));
         let app = axum::Router::new().nest("/comms-gatekeeper", router(state.clone()));
         let place_id = Uuid::new_v4().to_string();
-        // The signer administers the scene, but LAND determines reset/revoke recipients.
+        // LAND determines ownership; local admins also receive reset/revoke notices.
         // Self-declared catalogue ownership must not redirect those notifications.
         sqlx::query(
             "INSERT INTO explore.place (id, base_position, raw) VALUES ($1, $2, $3::jsonb)",
@@ -1448,8 +1449,24 @@ mod stream_access {
         assert_eq!(rows, 2, "the replaced credential is kept, inactive");
         {
             let notifications = directory.streaming_notifications.lock().unwrap();
-            assert_eq!(notifications.len(), 1);
-            assert_eq!(notifications[0].recipient, land_owner);
+            let expected = std::collections::BTreeSet::from([
+                land_owner.clone(),
+                admin.clone(),
+                Address::parse(&address_of(&granted_key)).unwrap(),
+            ]);
+            assert_eq!(notifications.len(), expected.len());
+            assert_eq!(
+                notifications
+                    .iter()
+                    .map(|event| event.recipient.clone())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected
+            );
+            assert!(
+                notifications
+                    .iter()
+                    .all(|event| event.kind == StreamingNotificationKind::KeyReset)
+            );
         }
 
         let stranger = random_key();
@@ -1567,12 +1584,25 @@ mod stream_access {
         );
         {
             let notifications = directory.streaming_notifications.lock().unwrap();
-            assert_eq!(notifications.len(), 2);
-            assert!(
-                notifications
-                    .iter()
-                    .all(|event| event.recipient == land_owner)
-            );
+            let expected = std::collections::BTreeSet::from([
+                land_owner.clone(),
+                admin.clone(),
+                Address::parse(&address_of(&granted_key)).unwrap(),
+            ]);
+            assert_eq!(notifications.len(), expected.len() * 2);
+            for kind in [
+                StreamingNotificationKind::KeyReset,
+                StreamingNotificationKind::KeyRevoke,
+            ] {
+                assert_eq!(
+                    notifications
+                        .iter()
+                        .filter(|event| event.kind == kind)
+                        .map(|event| event.recipient.clone())
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    expected
+                );
+            }
         }
         let (status, _) = call(&app, &admin_key, "DELETE", &metadata).await;
         assert_eq!(status, StatusCode::NOT_FOUND);

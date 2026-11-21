@@ -222,57 +222,73 @@ pub(super) async fn prepare(
     let Some((place_id, version, mut admin_place_key, room)) = snapshot else {
         return Ok(None);
     };
-    if admin_place_key.is_none()
-        && let Some(room) = room
-    {
-        admin_place_key = super::recover_admin_place_key(&state.pool, id, &room).await?;
-    }
-    let context = RemovedPlaces::new(state.pool.clone())
-        .place(&place_id)
-        .await?;
     let at = chrono::Utc::now().naive_utc();
+    let mut context = None;
     let mut recipients = Vec::new();
     let mut recipients_resolved = false;
-    let event = if let (Some(kind), Some(context)) = (command.notification(), context.as_ref()) {
-        recipients = super::notifications::scene_admins(
-            &state.pool,
-            context,
-            at,
-            &admin_place_key.iter().cloned().collect::<Vec<_>>(),
-        )
-        .await?;
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            super::notifications::recipients(state, context, &recipients),
-        )
-        .await
-        {
-            Ok(Ok((owner, resolved))) => {
-                recipients = resolved;
-                recipients_resolved = true;
-                Some(super::notifications::notification(
-                    context,
-                    owner,
-                    &format!("{}-{id}", kind.as_str()),
-                    kind,
-                    at,
-                ))
+    let mut binding_pending = admin_place_key.is_none()
+        && room
+            .as_deref()
+            .and_then(crate::rooms::decode_world_scene_room)
+            .is_some();
+    let event = if let Some(kind) = command.notification() {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            if binding_pending {
+                admin_place_key = notification_admin_key(&state.pool, id, room.as_deref()).await?;
+                binding_pending = admin_place_key.is_none();
+                if binding_pending {
+                    return Err(ApiError::http(
+                        503,
+                        "stream notification binding unavailable",
+                    ));
+                }
             }
+            context = RemovedPlaces::new(state.pool.clone())
+                .place(&place_id)
+                .await?;
+            let context = context
+                .as_ref()
+                .ok_or_else(|| ApiError::http(503, "stream notification context unavailable"))?;
+            recipients = super::notifications::scene_admins(
+                &state.pool,
+                context,
+                at,
+                &admin_place_key.iter().cloned().collect::<Vec<_>>(),
+            )
+            .await?;
+            let (owner, resolved) =
+                super::notifications::recipients(state, context, &recipients).await?;
+            recipients = resolved;
+            recipients_resolved = true;
+            Ok(super::notifications::notification(
+                context,
+                owner,
+                &format!("{}-{id}", kind.as_str()),
+                kind,
+                at,
+            ))
+        })
+        .await;
+        match result {
+            Ok(Ok(event)) => Some(event),
             failure => {
-                tracing::warn!(access_id=%id,error=?failure,"stream notification authority pending; cleanup will proceed");
+                tracing::warn!(access_id=%id,error=?failure,"stream notification preparation pending; cleanup will proceed");
                 None
             }
         }
     } else {
         None
     };
-    let mut context = context
+    let mut evidence = context
         .map(serde_json::to_value)
         .transpose()
-        .map_err(|_| ApiError::internal("stream context serialization failed"))?;
-    if let Some(context) = context.as_mut() {
-        context["admin_place_key"] = serde_json::json!(admin_place_key);
-    }
+        .map_err(|_| ApiError::internal("stream context serialization failed"))?
+        .unwrap_or_else(|| serde_json::json!({}));
+    evidence["admin_place_key"] = serde_json::json!(admin_place_key);
+    evidence["admin_binding_pending"] = serde_json::json!(binding_pending);
+    evidence["binding_room"] = serde_json::json!(room);
+    evidence["notification_at"] = serde_json::json!(at);
+    let context = Some(evidence);
     Ok(Some(Prepared {
         id,
         command,
@@ -282,6 +298,22 @@ pub(super) async fn prepare(
         recipients,
         recipients_resolved,
     }))
+}
+
+/// Runtime notification lookup takes no publication locks and never writes a credential.
+/// Startup backfill preserves legacy bindings before writers can retire their identities.
+async fn notification_admin_key(
+    pool: &PgPool,
+    id: Uuid,
+    room: Option<&str>,
+) -> Result<Option<String>, sqlx::Error> {
+    let binding = room.and_then(crate::rooms::decode_world_scene_room);
+    let (world, scene) = binding
+        .as_ref()
+        .map(|(world, scene)| (Some(world.key()), Some(scene.as_str())))
+        .unwrap_or((None, None));
+    sqlx::query_scalar("SELECT COALESCE(admin_place_key,(SELECT identity::text FROM explore.world_scene_place WHERE world_name=$2 AND entity_id=$3 AND active)) FROM social.scene_stream_access WHERE id=$1")
+        .bind(id).bind(world).bind(scene).fetch_optional(pool).await.map(Option::flatten)
 }
 
 fn notification_kind(kind: &str) -> Result<StreamingNotificationKind, ApiError> {
@@ -314,7 +346,7 @@ pub(super) async fn enqueue_prepared<'e, E: sqlx::PgExecutor<'e>>(
          AND ($2::text IS DISTINCT FROM 'streaming_time_exceeded' OR (streaming AND streaming_start_time<=timezone('UTC',now())-interval '4 hours')) \
          RETURNING id,place_id,ingress_id) \
          INSERT INTO social.scene_stream_cleanup(access_id,place_id,ingress_id,notification_kind,occurred_at,due_at,recipient,metadata,source_context,recipients,recipients_resolved) \
-         SELECT id,place_id,ingress_id,$2,COALESCE($5,timezone('UTC',now())),timezone('UTC',now()),$6,$7,$8,$9,$10 FROM removed \
+         SELECT id,place_id,ingress_id,$2,COALESCE($5,($8->>'notification_at')::timestamp,timezone('UTC',now())),timezone('UTC',now()),$6,$7,$8,$9,$10 FROM removed \
          ON CONFLICT(access_id) DO NOTHING RETURNING access_id")
         .bind(id).bind(kind).bind(force).bind(version).bind(event.map(|e| e.occurred_at))
         .bind(event.map(|e| &e.recipient)).bind(event.map(|e| &e.metadata)).bind(context)
@@ -526,7 +558,15 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
     let mut recipients = row.recipients.clone();
     let mut metadata = row.metadata.clone();
     if !row.recipients_resolved || metadata.is_none() {
-        let context = if let Some(context) = &row.source_context {
+        let mut saved_context = row
+            .source_context
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let context = if let Some(context) = row
+            .source_context
+            .as_ref()
+            .filter(|value| value.get("place_id").is_some())
+        {
             serde_json::from_value::<PlaceContext>(context.clone())
                 .map_err(|_| ApiError::internal("stream context snapshot invalid"))?
         } else {
@@ -535,26 +575,86 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
                 .await?
                 .ok_or_else(|| ApiError::http(503, "stream notification context unavailable"))?
         };
+        let fields = serde_json::to_value(&context)
+            .map_err(|_| ApiError::internal("stream context serialization failed"))?;
+        saved_context
+            .as_object_mut()
+            .ok_or_else(|| ApiError::internal("stream context snapshot invalid"))?
+            .extend(
+                fields
+                    .as_object()
+                    .expect("place context is an object")
+                    .clone(),
+            );
         if !row.recipients_resolved {
             // Expand scalar-era intents; a saved owner is not a complete set.
             if let Some(recipient) = &row.recipient {
                 recipients.push(recipient.clone());
+            }
+            let mut admin_key = row
+                .source_context
+                .as_ref()
+                .and_then(|value| value.get("admin_place_key"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if admin_key.is_none() {
+                let room: Option<String> = sqlx::query_scalar(
+                    "SELECT room_id FROM social.scene_stream_access WHERE id=$1",
+                )
+                .bind(row.access_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .flatten();
+                let room = row
+                    .source_context
+                    .as_ref()
+                    .and_then(|value| value.get("binding_room"))
+                    .and_then(serde_json::Value::as_str)
+                    .or(room.as_deref());
+                admin_key = notification_admin_key(&state.pool, row.access_id, room).await?;
+                if admin_key.is_none()
+                    && (room
+                        .and_then(crate::rooms::decode_world_scene_room)
+                        .is_some()
+                        || row
+                            .source_context
+                            .as_ref()
+                            .and_then(|value| value.get("admin_binding_pending"))
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true))
+                {
+                    return Err(ApiError::http(
+                        503,
+                        "stream notification binding unavailable",
+                    ));
+                }
+            }
+            if let Some(key) = &admin_key {
+                saved_context["admin_place_key"] = serde_json::json!(key);
+                saved_context["admin_binding_pending"] = serde_json::json!(false);
+            }
+            // Save exact evidence before another authority lookup can fail or retire.
+            let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET source_context=$3 WHERE access_id=$1 AND claim_token=$2 AND NOT recipients_resolved")
+                .bind(row.access_id).bind(token).bind(&saved_context).execute(&state.pool).await?;
+            if changed.rows_affected() == 0 {
+                return Err(ApiError::internal("stream cleanup lease lost"));
             }
             recipients.extend(
                 super::notifications::scene_admins(
                     &state.pool,
                     &context,
                     row.occurred_at,
-                    &row.source_context
-                        .as_ref()
-                        .and_then(|value| value.get("admin_place_key"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .into_iter()
-                        .collect::<Vec<_>>(),
+                    &admin_key.into_iter().collect::<Vec<_>>(),
                 )
                 .await?,
             );
+            recipients.sort();
+            recipients.dedup();
+            let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET recipients=$3 WHERE access_id=$1 AND claim_token=$2 AND NOT recipients_resolved")
+                .bind(row.access_id).bind(token).bind(&recipients).execute(&state.pool).await?;
+            if changed.rows_affected() == 0 {
+                return Err(ApiError::internal("stream cleanup lease lost"));
+            }
             let (_, resolved) = tokio::time::timeout(
                 Duration::from_secs(5),
                 super::notifications::recipients(state, &context, &recipients),
@@ -577,10 +677,8 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
             )
             .metadata
         };
-        let context = serde_json::to_value(context)
-            .map_err(|_| ApiError::internal("stream context serialization failed"))?;
         let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET recipients=$3,recipients_resolved=true,metadata=$4,source_context=$5 WHERE access_id=$1 AND claim_token=$2 AND recipient_cursor=$6")
-            .bind(row.access_id).bind(token).bind(&recipients).bind(&template).bind(&context).bind(row.recipient_cursor)
+            .bind(row.access_id).bind(token).bind(&recipients).bind(&template).bind(&saved_context).bind(row.recipient_cursor)
             .execute(&state.pool).await?;
         if changed.rows_affected() == 0 {
             return Err(ApiError::internal("stream cleanup lease lost"));
@@ -810,6 +908,177 @@ mod tests {
                 .bind(place).execute(&state.pool).await.unwrap();
         }
         id
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_deferred_binding_recovery_reads_inactive_credentials_and_keeps_evidence()
+     {
+        let Some((mut state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        let mut locked = state.pool.begin().await.unwrap();
+        sqlx::query("LOCK explore.world_scene_place IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locked)
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(7),
+            enqueue(&state, id, CleanupCommand::Revoke),
+        )
+        .await;
+        locked.rollback().await.unwrap();
+        assert!(
+            result
+                .expect("failed binding lookup must not prevent revocation")
+                .unwrap()
+        );
+        let facts:(bool,bool,bool)=sqlx::query_as("SELECT a.active,c.recipients_resolved,(c.source_context->>'admin_binding_pending')::boolean FROM social.scene_stream_access a JOIN social.scene_stream_cleanup c ON c.access_id=a.id WHERE a.id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(facts, (false, false, true));
+        let policy = state.policy.clone();
+        state.policy = Arc::new(crate::interfaces::test_support::StubPolicy {
+            grantees: Err(crate::AuthorityNotEstablished::store_unavailable(
+                "test",
+                &sqlx::Error::PoolClosed,
+            )),
+            ..Default::default()
+        });
+        assert!(cleanup_access(&state, id).await.is_err());
+        let evidence:(Option<String>,bool)=sqlx::query_as("SELECT source_context->>'admin_place_key',recipients_resolved FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert!(evidence.0.is_some());
+        assert!(!evidence.1);
+        assert!(directory.streaming_notifications.lock().unwrap().is_empty());
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        state.policy = policy;
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|n| n.recipient.clone())
+            .collect();
+        assert_eq!(actual, (1..=4).map(wallet).collect());
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_revocation_does_not_wait_for_publication_locks() {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        sqlx::query("INSERT INTO worlds.worlds(name) VALUES ($1)")
+            .bind(&name)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        let mut publication = state.pool.begin().await.unwrap();
+        sqlx::query("SELECT name FROM worlds.worlds WHERE name=$1 FOR UPDATE")
+            .bind(&name)
+            .execute(&mut *publication)
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            enqueue(&state, id, CleanupCommand::Revoke),
+        )
+        .await;
+        publication.rollback().await.unwrap();
+        assert!(
+            result
+                .expect("notification binding must not wait for publication")
+                .unwrap()
+        );
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.recipient.clone())
+            .collect();
+        assert_eq!(actual, (1..=4).map(wallet).collect());
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_failed_local_capture_commits_revocation_and_retries_retired_binding()
+    {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        sqlx::query("INSERT INTO worlds.worlds(name) VALUES ($1)")
+            .bind(&name)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        let mut locked = state.pool.begin().await.unwrap();
+        sqlx::query("LOCK social.scene_admins IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locked)
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(7),
+            enqueue(&state, id, CleanupCommand::Revoke),
+        )
+        .await;
+        locked.rollback().await.unwrap();
+        assert!(
+            result
+                .expect("notification-only reads must have a deadline")
+                .unwrap()
+        );
+        let facts: (bool, bool, Option<String>) = sqlx::query_as("SELECT a.active,c.recipients_resolved,c.source_context->>'admin_place_key' FROM social.scene_stream_access a JOIN social.scene_stream_cleanup c ON c.access_id=a.id WHERE a.id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert!(!facts.0);
+        assert!(!facts.1);
+        assert!(
+            facts.2.is_some(),
+            "exact binding evidence must survive failed admin capture"
+        );
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.recipient.clone())
+            .collect();
+        assert_eq!(
+            actual,
+            (1..=4).map(wallet).collect(),
+            "retain bound admins and exclude sibling admins"
+        );
     }
 
     #[tokio::test]

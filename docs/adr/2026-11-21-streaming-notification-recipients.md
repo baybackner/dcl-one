@@ -11,13 +11,21 @@ through a recipient list.
 Use the existing cleanup and removal outboxes for normalized recipient arrays,
 a resolution bit and a durable delivery cursor. Capture valid active local
 scene admins at removal-event creation through a plain MVCC read of Social
-grants, without Social row locks or writes. This
-prevents a pre-maintenance re-grant from erasing the earlier recipient. Retain
-safety-transaction capture as a fallback for older events, and resolve all
-external authority classes before marking the snapshot complete, and checkpoint each Social acceptance. Retries
-keep the event identity, original context and complete recipient set. Social's
-existing recipient/kind/event deduplication covers replay after acceptance but
-before the cursor write. A delivery failure does not undo revocation.
+grants, without Social row locks or writes. This prevents a pre-maintenance
+re-grant from erasing the earlier recipient. Retained grants supply fallback
+recipients for older events after the safety transaction commits.
+Notification-only enrichment runs after that commit. Resolve all external
+authority classes before marking the snapshot complete, and checkpoint each
+Social acceptance. Retries keep the event identity, original context and
+complete recipient set. Social's existing recipient/kind/event deduplication
+covers replay after acceptance but before the cursor write. A delivery failure
+does not undo revocation.
+
+Key cleanup bounds all notification preparation to five seconds and saves
+partial recipients, exact keys and unresolved binding obligations. Runtime
+binding reads use MVCC without publication locks; deferred resolution also
+reads inactive credentials and cannot complete while an exact native binding
+is required but unavailable.
 
 Credentials save the exact bound scene admin namespace at issuance. Explore
 keeps exact current identity keys in both catalogue legs before final scene
@@ -44,3 +52,15 @@ The upgrade requires stopping old writers and finishing offline imports before
 the coordinated startup, so identities cannot retire before this backfill.
 Noncanonical imported rooms and scenes already retired before the upgrade
 remain outside exact recovery; pending authority stays retryable where available.
+
+## Credential issuance bound
+
+REST creation, reset and Cast issuance share a rolling limit of six new
+credentials per place per hour. Reusing an existing credential consumes no
+issuance. Retained active and inactive credentials supply the count through
+`(place_id, created_at DESC)`; a transaction advisory lock per place serializes
+admission before deactivation and insertion. Refused issuance returns HTTP 429
+and preserves the previous credential. Revocation remains available. Six allows
+an initial key and five replacements in an hour; this is a configured budget,
+not a measured production workload. A separate quota table is unnecessary
+because credential history is already retained.

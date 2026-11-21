@@ -1931,6 +1931,87 @@ async fn an_expired_credential_does_not_promote_admins_on_join() {
     assert!(!promoted);
 }
 
+#[tokio::test]
+async fn streaming_generation_limit_serializes_concurrent_resets() {
+    let Some(pool) = scratch().await else { return };
+    let scene = genesis_scene();
+    seed_genesis_place(&pool, &scene, None).await;
+    let room = resolved_room(RealmId::Shared("main".into()), &scene.id, &scene.parcel);
+    let h = harness(pool.clone(), Some(room), PermissionDecision::Allowed, None).await;
+    let metadata = scene_metadata(&scene);
+    for method in ["POST", "PUT", "PUT", "PUT", "PUT"] {
+        let (status, body) = h
+            .signed(KEY, method, "/scene-stream-access", &metadata, None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (first, second) = tokio::join!(
+        h.signed(KEY, "PUT", "/scene-stream-access", &metadata, None),
+        h.signed(KEY, "PUT", "/scene-stream-access", &metadata, None),
+    );
+    assert_eq!(
+        [first.0, second.0]
+            .iter()
+            .filter(|&&status| status == StatusCode::OK)
+            .count(),
+        1
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM social.scene_stream_access WHERE place_id=$1")
+            .bind(&scene.place_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 6);
+}
+
+#[tokio::test]
+async fn streaming_generation_limit_covers_reset_create_delete_and_cast() {
+    let Some(pool) = scratch().await else { return };
+    let scene = genesis_scene();
+    seed_genesis_place(&pool, &scene, None).await;
+    let room = resolved_room(RealmId::Shared("main".into()), &scene.id, &scene.parcel);
+    let h = harness(pool.clone(), Some(room), PermissionDecision::Allowed, None).await;
+    let metadata = scene_metadata(&scene);
+    let access = "/scene-stream-access";
+    let (status, body) = h.signed(KEY, "POST", access, &metadata, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for _ in 0..5 {
+        let (status, body) = h.signed(KEY, "PUT", access, &metadata, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let previous: Uuid = sqlx::query_scalar(
+        "SELECT id FROM social.scene_stream_access WHERE place_id=$1 AND active",
+    )
+    .bind(&scene.place_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (status, body) = h.signed(KEY, "PUT", access, &metadata, None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    let retained: Uuid = sqlx::query_scalar(
+        "SELECT id FROM social.scene_stream_access WHERE place_id=$1 AND active",
+    )
+    .bind(&scene.place_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        retained, previous,
+        "a limited reset must preserve the active credential"
+    );
+    let (status, body) = h.signed(KEY, "DELETE", access, &metadata, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    for (method, path) in [("POST", access), ("GET", "/cast/generate-stream-link")] {
+        let (status, body) = h.signed(KEY, method, path, &metadata, None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    }
+    sqlx::query("UPDATE social.scene_stream_access SET created_at=timezone('UTC',now())-interval '61 minutes' WHERE place_id=$1")
+        .bind(&scene.place_id).execute(&pool).await.unwrap();
+    let (status, body) = h.signed(KEY, "POST", access, &metadata, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 /// A reset whose new credential cannot be stored: the old key stays in
 /// force, no cleanup is recorded for it, and the new ingress is deleted.
 #[tokio::test]

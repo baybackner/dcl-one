@@ -750,11 +750,12 @@ async fn replace_access(
             return Ok(None);
         };
         let mut tx = state.pool.begin().await?;
+        lock_generation_place(&mut tx, place_id).await?;
         if !prepared.record(&mut *tx).await? {
             return Ok(None);
         }
         let Some(row) =
-            insert_access(&mut *tx, place_id, room, signer, admin_place_key, &info).await?
+            insert_access(&mut tx, place_id, room, signer, admin_place_key, &info).await?
         else {
             return Ok(None);
         };
@@ -829,10 +830,23 @@ async fn discard_ingress(
     }
 }
 
+/// Every issuance takes this lock before touching the active credential, so
+/// concurrent reset/create requests observe committed per-place quota facts.
+async fn lock_generation_place(
+    tx: &mut sqlx::PgConnection,
+    place_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,1571))")
+        .bind(place_id)
+        .execute(tx)
+        .await?;
+    Ok(())
+}
+
 /// Inserts the place's active credential for `info`'s ingress; `None` when
 /// the place already has one.
-async fn insert_access<'e, E: sqlx::PgExecutor<'e>>(
-    executor: E,
+async fn insert_access(
+    executor: &mut sqlx::PgConnection,
     place_id: &str,
     room: &str,
     signer: &Address,
@@ -844,6 +858,24 @@ async fn insert_access<'e, E: sqlx::PgExecutor<'e>>(
             "livekit ingress response missing url or stream key",
         ));
     };
+    lock_generation_place(executor, place_id).await?;
+    let active: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM social.scene_stream_access WHERE place_id=$1 AND active)",
+    )
+    .bind(place_id)
+    .fetch_one(&mut *executor)
+    .await?;
+    if active {
+        return Ok(None);
+    }
+    let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM social.scene_stream_access WHERE place_id=$1 AND created_at>timezone('UTC',statement_timestamp())-interval '1 hour' LIMIT 6) recent")
+        .bind(place_id).fetch_one(&mut *executor).await?;
+    if recent >= 6 {
+        return Err(ApiError::http(
+            429,
+            "Stream keys can be generated at most six times per hour for this place. Please try again later.",
+        ));
+    }
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "INSERT INTO social.scene_stream_access \
              (place_id, streaming_url, streaming_key, ingress_id, room_id, generated_by, created_at, expiration_time, active, admin_place_key) \
@@ -873,7 +905,21 @@ async fn store_access(
     admin_place_key: &str,
     info: crate::shared::livekit::IngressInfo,
 ) -> Result<SceneStreamAccessResponse, ApiError> {
-    let inserted = insert_access(pool, place_id, room, signer, admin_place_key, &info).await?;
+    let stored = async {
+        let mut tx = pool.begin().await?;
+        let inserted =
+            insert_access(&mut tx, place_id, room, signer, admin_place_key, &info).await?;
+        tx.commit().await?;
+        Ok::<_, ApiError>(inserted)
+    }
+    .await;
+    let inserted = match stored {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            discard_ingress(ingress, &info, place_id).await;
+            return Err(error);
+        }
+    };
     if let Some(row) = inserted {
         return Ok(row.response());
     }
@@ -957,9 +1003,8 @@ async fn reset_access(
     }
     .await;
     result.map_err(|error: ApiError| {
-        // Upstream's reset answers its `StreamingAccessNotFoundError` as 404
-        // and any other failure of the swap as this 500.
-        if error.code == 404 {
+        // Preserve not-found and issuance-limit responses; swap failures use the reset error.
+        if error.code == 404 || error.code == 429 {
             return error;
         }
         tracing::error!(place_id, error = %error, "scene stream access reset failed");
