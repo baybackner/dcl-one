@@ -10108,13 +10108,11 @@ async fn a_flag_refuses_only_free_grants() {
 
     // A refund runs through `Credits::refund`, on a spend made before the flag.
     seed_wallet(&pool, &addr, "0", "10").await;
-    credits
-        .spend(&addr, "4", "test:flagged-refund", None)
-        .await
-        .unwrap();
+    let spend_key = unique("test:flagged-refund");
+    credits.spend(&addr, "4", &spend_key, None).await.unwrap();
     flag().await.unwrap();
     let refund = credits
-        .refund(&addr, "4", "test:flagged-refund", None)
+        .refund(&addr, "4", &spend_key, None)
         .await
         .unwrap_or_else(|e| panic!("a refund credits a flagged wallet: {e:?}"));
     assert_eq!(refund.applied.parse::<f64>().unwrap(), 4.0);
