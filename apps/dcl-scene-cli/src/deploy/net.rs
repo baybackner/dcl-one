@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -67,6 +67,15 @@ pub(crate) fn refusal(u: UserError, body: &str) -> anyhow::Error {
     } else {
         u.why(body).into()
     }
+}
+
+/// A fresh, owner-only staging folder per upload: two uploads of one entity id
+/// (same content and timestamp) must not share or delete each other's files.
+fn upload_dir(kind: &str, entity_id: &str) -> std::io::Result<PathBuf> {
+    Ok(tempfile::Builder::new()
+        .prefix(&format!("dcl-scene-cli-{kind}-{entity_id}-"))
+        .tempdir()?
+        .keep())
 }
 
 fn stage_entity(dir: &Path, entity_id: &str, entity_bytes: &[u8]) -> std::io::Result<()> {
@@ -391,7 +400,9 @@ async fn node_upload(
     progress: &UploadProgress,
 ) -> Option<Result<(u16, String)>> {
     let node = crate::build::find_node()?;
-    let dir = std::env::temp_dir().join(format!("dcl-scene-cli-nodeup-{entity_id}"));
+    let Ok(dir) = upload_dir("nodeup", entity_id) else {
+        return Some(Err(anyhow::anyhow!("could not stage the upload")));
+    };
     let stage = || -> std::io::Result<()> {
         stage_entity(&dir, entity_id, entity_bytes)?;
         for (_, hash, bytes) in files {
@@ -569,8 +580,11 @@ async fn curl_upload(
     auth_chain: &Value,
     progress: &UploadProgress,
 ) -> Option<Result<(u16, String)>> {
-    let dir = std::env::temp_dir().join(format!("dcl-scene-cli-upload-{entity_id}"));
+    let Ok(dir) = upload_dir("upload", entity_id) else {
+        return Some(Err(anyhow::anyhow!("could not stage the upload")));
+    };
     if stage_entity(&dir, entity_id, entity_bytes).is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
         return Some(Err(anyhow::anyhow!("could not stage the upload")));
     }
     let part = |name: &str, mime: &str| {
