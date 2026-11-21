@@ -241,3 +241,79 @@ mod tests {
         assert!(!wake.update_waits(SceneLoopMode::Legacy, || None));
     }
 }
+
+// In headless Chrome (the Bevy Explorer CI job "Relay wake in the browser"), as a worker waits:
+// the notify on the engine's send ends the worker's `Atomics.waitAsync` with "ok". The wait's
+// timeout is long, so only a missing notify reaches it; nothing here measures time.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser {
+    use std::task::Waker;
+
+    use js_sys::{Atomics, Int32Array, Object, Promise, Reflect, WebAssembly};
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_dedicated_worker);
+
+    // under the test runner's own 20 s limit, so a missing notify fails the assertion
+    const WAIT_MS: f64 = 5_000.0;
+
+    // the worker's view of the word (sandbox_worker.js `wakeView`), over the shared memory
+    fn word_view(wake: &RelayWake) -> Int32Array {
+        let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+        let address = wake.word() as *const AtomicI32 as usize as u32;
+        Int32Array::new_with_byte_offset_and_length(&memory.buffer(), address, 1)
+    }
+
+    fn field(wait: &Object, name: &str) -> JsValue {
+        Reflect::get(wait, &JsValue::from_str(name)).unwrap()
+    }
+
+    // a relay step as the worker takes it: decide, load the word, pump (the empty channel
+    // registers the waker)
+    fn step(wake: &Arc<RelayWake>, rx: &mut mpsc::UnboundedReceiver<u32>) -> i32 {
+        assert!(wake.update_waits(SceneLoopMode::Both, || Some(true)));
+        let seen = wake.word().load(Ordering::SeqCst);
+        let waker = Waker::from(wake.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(next(rx, wake.waits(), &mut cx), None);
+        seen
+    }
+
+    #[wasm_bindgen_test]
+    async fn the_engine_send_ends_the_workers_wait_with_ok() {
+        let wake = RelayWake::new(Box::new(engine_notify));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let seen = step(&wake, &mut rx);
+
+        let wait = Atomics::wait_async_with_timeout(&word_view(&wake), 0, seen, WAIT_MS).unwrap();
+        assert_eq!(field(&wait, "async"), JsValue::TRUE);
+        tx.send(7).unwrap();
+        let outcome = JsFuture::from(field(&wait, "value").unchecked_into::<Promise>())
+            .await
+            .unwrap();
+        assert_eq!(outcome.as_string().as_deref(), Some("ok"));
+        assert_eq!(
+            next(&mut rx, false, &mut Context::from_waker(Waker::noop())),
+            Some(7)
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_send_between_the_load_and_the_wait_is_not_missed() {
+        let wake = RelayWake::new(Box::new(engine_notify));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let seen = step(&wake, &mut rx);
+
+        tx.send(7).unwrap();
+        let wait = Atomics::wait_async_with_timeout(&word_view(&wake), 0, seen, WAIT_MS).unwrap();
+        assert_eq!(field(&wait, "async"), JsValue::FALSE);
+        assert_eq!(
+            field(&wait, "value").as_string().as_deref(),
+            Some("not-equal")
+        );
+    }
+}
