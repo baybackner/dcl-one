@@ -86,6 +86,39 @@
           "reviewed_by": null,
           "rejection_reasons": null,
           "rejection_message": null
+        },
+        {
+          "id": "<<VOLATILE>>",
+          "collection_id": "c011ec71-0000-4000-8000-000000000502",
+          "status": "pending",
+          "created_at": "<<VOLATILE>>",
+          "updated_at": "<<VOLATILE>>",
+          "assignee": "0x01eba3f0e992f53debaf51ed3738dc2f23e09aee",
+          "reviewed_by": null,
+          "rejection_reasons": null,
+          "rejection_message": null
+        },
+        {
+          "id": "<<VOLATILE>>",
+          "collection_id": "c011ec71-0000-4000-8000-000000000503",
+          "status": "approved",
+          "created_at": "<<VOLATILE>>",
+          "updated_at": "<<VOLATILE>>",
+          "assignee": null,
+          "reviewed_by": null,
+          "rejection_reasons": null,
+          "rejection_message": null
+        },
+        {
+          "id": "<<VOLATILE>>",
+          "collection_id": "c011ec71-0000-4000-8000-000000000504",
+          "status": "rejected",
+          "created_at": "<<VOLATILE>>",
+          "updated_at": "<<VOLATILE>>",
+          "assignee": null,
+          "reviewed_by": null,
+          "rejection_reasons": null,
+          "rejection_message": null
         }
       ]
     }

@@ -447,7 +447,7 @@ CREATE UNIQUE INDEX collection_events_verdict_validation_idx
 
 CREATE TABLE builder.slot_usage_cheques (
     id uuid NOT NULL,
-    collection_id uuid NOT NULL,
+    collection_id uuid,
     third_party_id text NOT NULL,
     signature text NOT NULL,
     salt text NOT NULL,
@@ -456,7 +456,7 @@ CREATE TABLE builder.slot_usage_cheques (
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     CONSTRAINT slot_usage_cheques_pkey PRIMARY KEY (id),
     CONSTRAINT slot_usage_cheques_collection_id_fkey FOREIGN KEY (collection_id)
-        REFERENCES builder.collections (id),
+        REFERENCES builder.collections (id) ON DELETE SET NULL,
     CONSTRAINT slot_usage_cheques_third_party_salt_key UNIQUE (third_party_id, salt),
     CONSTRAINT slot_usage_cheques_third_party_id_check CHECK (char_length(third_party_id) <= 512),
     CONSTRAINT slot_usage_cheques_salt_check CHECK (salt ~ '^0x[0-9a-f]{64}$'),

@@ -411,12 +411,22 @@ async fn a_deleted_collection_takes_its_curations_and_events_and_keeps_a_cheque(
         ),
     )
     .await;
-    refused(
+    accepted(
         &pool,
         &format!("DELETE FROM builder.collections WHERE id = '{cheque}'"),
-        "slot_usage_cheques_collection_id_fkey",
     )
     .await;
+    let kept: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT collection_id FROM builder.slot_usage_cheques WHERE third_party_id = $1",
+    )
+    .bind(PROVIDER)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        kept.contains(&None),
+        "a deleted collection's cheque stays, with no collection: {kept:?}"
+    );
 }
 
 #[tokio::test]
@@ -859,6 +869,12 @@ async fn the_operators_status_patch_decides_the_newest_curation_of_a_submitted_i
     let app = crate::router(state);
     let c = collection(&pool, true).await;
     let (submitted, unsubmitted) = (item(&pool, c).await, item(&pool, c).await);
+    sqlx::query("UPDATE builder.items SET local_content_hash = $2 WHERE collection_id = $1")
+        .bind(c)
+        .bind(content_hash())
+        .execute(&pool)
+        .await
+        .unwrap();
     curate(&pool, submitted, "approved", "2025-01-01").await;
     curate(&pool, submitted, "pending", "2025-01-02").await;
 
@@ -902,6 +918,8 @@ async fn the_operators_status_patch_decides_the_newest_curation_of_a_submitted_i
     assert_eq!(statuses(&pool, unsubmitted).await, Vec::<String>::new());
 
     let other = collection(&pool, true).await;
+    let anchor = item(&pool, other).await;
+    curate(&pool, anchor, "approved", "2025-01-01").await;
     let (status, _) = admin_patch(
         &app,
         format!("/v1/collections/{other}/items/{submitted}/status"),
@@ -1117,16 +1135,6 @@ async fn every_read_of_an_items_newest_curation_takes_the_last_created_one() {
         (serde_json::json!(false), Some(false)),
         "the collection and the item read the same newest curation"
     );
-    let decided = crate::curation::decide_newest_item_curations(
-        &mut pool.acquire().await.unwrap(),
-        c,
-        &[i],
-        "rejected",
-    )
-    .await
-    .unwrap();
-    assert_eq!(decided, 1);
-    assert_eq!(statuses(&pool, i).await, ["approved", "rejected"]);
 }
 
 async fn created(pool: &PgPool, table: &str, key: &str, id: Uuid) -> Vec<chrono::NaiveDateTime> {

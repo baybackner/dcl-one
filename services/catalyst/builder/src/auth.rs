@@ -91,7 +91,9 @@ pub fn signed_path(original: &Uri, local: &Uri) -> SignedPath {
 /// The curation gate: the configured bearer (timing-safe, an unset or empty
 /// token matches nothing) or a signed-fetch request from an admin address.
 /// A request whose signature does not verify is [`unauthenticated`]; a
-/// verified signer that is not an admin is refused with 403.
+/// verified signer that is not an admin is refused with 403. Answers who
+/// acts: the admin address, or for the bearer the console's operator wallet
+/// (`x-catalyrst-admin`, an address) or `admin-token`.
 pub async fn authorize_admin(
     admin_token: Option<&str>,
     admin_addresses: &[String],
@@ -99,13 +101,18 @@ pub async fn authorize_admin(
     headers: &HeaderMap,
     method: &str,
     path: &SignedPath,
-) -> Result<(), ApiError> {
+) -> Result<String, ApiError> {
     if admin_bearer_matches(admin_token, headers) {
-        return Ok(());
+        return Ok(headers
+            .get("x-catalyrst-admin")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_ascii_lowercase)
+            .filter(|a| dcl_auth::is_eth_address(a))
+            .unwrap_or_else(|| "admin-token".to_string()));
     }
     let signer = require_signer(headers, method, path, validator).await?;
     if admin_addresses.iter().any(|a| a == signer.as_str()) {
-        return Ok(());
+        return Ok(signer.as_str().to_string());
     }
     Err(ApiError::forbidden(
         "Not authorized: curation requires the admin token or a committee-address signed request",
@@ -154,7 +161,7 @@ impl FromRequestParts<SharedState> for MaybeSigned {
 
 /// Proof that [`authorize_admin`] admitted the request over the node's admin
 /// settings; extracted before the route's path parameters and body.
-pub struct Admin(());
+pub struct Admin(String);
 
 impl Admin {
     /// [`authorize_admin`] with `state`'s token, admin addresses and validator.
@@ -173,7 +180,12 @@ impl Admin {
             path,
         )
         .await
-        .map(|()| Admin(()))
+        .map(Admin)
+    }
+
+    /// Who acts, for the audit row.
+    pub fn actor(&self) -> &str {
+        &self.0
     }
 }
 
@@ -382,7 +394,7 @@ mod tests {
         admins: &[String],
         h: &HeaderMap,
         path: &SignedPath,
-    ) -> Result<(), ApiError> {
+    ) -> Result<String, ApiError> {
         authorize_admin(token, admins, None, h, "get", path).await
     }
 

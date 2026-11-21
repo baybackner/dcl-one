@@ -48,7 +48,12 @@ source is down.
 - **One owner.** A standard collection's owner is its chain creator once the
   copy holds it, and its stored `eth_address` before. The owner is derived on
   each request, so `POST /v1/collections/{id}/owner/sync` stores nothing and
-  answers the collection's body.
+  answers the collection's body. An item in a collection is decided by its
+  collection: its owner, an on-chain manager or the provider's manager. The
+  item row's stored `eth_address` decides only for an item with no
+  collection, so after a transfer the chain creator holds the roles on the
+  collection's items and the wallet stored before holds none, and the wallet
+  that last saved a third-party item decides nothing.
 - **The lifecycle routes.** Only the owner of a standard collection sets its
   lock. The owner, an on-chain manager or the provider's manager deletes a
   collection and accepts its terms of service. Those, or a current committee
@@ -80,8 +85,7 @@ source is down.
   third-party collection has no owner. A provider's managers read, save,
   delete and accept the terms of every collection and item of the provider,
   and read the files those items name in a name whose writer holds the
-  bytes. The node's own publication of a third-party collection also
-  requires its stored creator.
+  bytes.
 - **Third-party creates.** A save that creates a third-party collection
   under a provider the registry or a virtual third party has is a
   provider manager's. Under a provider neither has, any signer creates it,
@@ -106,8 +110,7 @@ source is down.
 - **Access checks never write.** A decision reads its sources and changes no
   row, also when it refuses.
 - **Curations.** A collection's curations, and an item's, are read and
-  written by a wallet with a role on the collection (for an item's, the
-  item's own owner instead of the collection's owner) or by a current
+  written by a wallet with a role on the collection or by a current
   committee member. The collection must exist (404) and be published: a
   standard one on chain, a third-party one with an item curation (409);
   only then are the roles asked, so a stranger gets 401. The committee is
@@ -118,7 +121,12 @@ source is down.
   inside its transaction, with the collection row locked.
 - **Admins.** `BUILDER_ADMIN_ADDRESSES` and the admin bearer open the
   operator's item status routes only; they grant no role on collections,
-  items or their curations.
+  items or their curations. On those routes the operator sets the status of
+  an item curation of a published collection (404 when the collection is
+  absent, 409 when it isn't published) with the moves the committee has on
+  an item's status, asked of the same table as the operator, in one
+  transaction that locks the collection and decides again, each move
+  recorded in `ops.admin_audit`.
 
 ## Consequences
 

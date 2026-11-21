@@ -63,6 +63,7 @@ struct Options {
     committee: Option<FakeCommittee>,
     now: fn() -> DateTime<Utc>,
     warehouse: Option<String>,
+    writes: bool,
 }
 
 impl Default for Options {
@@ -72,6 +73,7 @@ impl Default for Options {
             committee: None,
             now: Utc::now,
             warehouse: None,
+            writes: true,
         }
     }
 }
@@ -101,7 +103,7 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
         market,
         None,
         crate::Settings {
-            writes_enabled: true,
+            writes_enabled: options.writes,
             polygon_rpc_url: options.rpc,
             warehouse: options.warehouse.map(|url| crate::WarehouseForward {
                 url,
@@ -805,6 +807,57 @@ async fn a_submitted_third_party_collection_is_never_deleted() {
     );
 }
 
+/// A third-party collection that holds a slot cheque but no submitted item
+/// (a cheque carried over from before the node) is deleted as builder-server
+/// deletes it; the cheque stays, so its salt is still spent.
+#[tokio::test]
+async fn a_third_party_collection_with_a_cheque_but_no_submission_is_deleted_and_its_cheque_kept() {
+    let Some(node) = node(Options::default()).await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address, third_party_id, urn_suffix) VALUES ($1, 'TP', $2, $3, $4)",
+    )
+    .bind(id)
+    .bind(address(OWNER_KEY))
+    .bind(PROVIDER)
+    .bind(format!("{PROVIDER}:{}", id.simple()))
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    let salt = format!("0x{}", "5a".repeat(32));
+    let cheque = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO builder.slot_usage_cheques (id, collection_id, third_party_id, signature, salt, qty) \
+         VALUES ($1, $2, $3, $4, $5, 1)",
+    )
+    .bind(cheque)
+    .bind(id)
+    .bind(PROVIDER)
+    .bind(format!("0x{}1b", "cd".repeat(64)))
+    .bind(&salt)
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "DELETE",
+        &format!("/v1/collections/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!((status, body), (200, json!({ "ok": true, "data": true })));
+    let kept: Vec<(Option<Uuid>, String)> =
+        sqlx::query_as("SELECT collection_id, salt FROM builder.slot_usage_cheques WHERE id = $1")
+            .bind(cheque)
+            .fetch_all(&node.pool)
+            .await
+            .unwrap();
+    assert_eq!(kept, vec![(None, salt)]);
+}
+
 #[tokio::test]
 async fn the_owner_sync_answers_the_chain_creator_and_stores_nothing() {
     let committee = FakeCommittee::with(&[&address(COMMITTEE_KEY)]);
@@ -1201,6 +1254,112 @@ async fn publish_refuses_while_the_chain_lacks_an_item_and_writes_nothing() {
     assert_eq!(chain_ids(&node.pool, id).await, vec![None, None]);
 }
 
+/// The collections copy can hold a deployment before the items copy holds
+/// its items: then the copy can't tell, and the publish answers from the
+/// chain itself, or keeps the client retrying while the chain can't tell
+/// either; only the chain's own count refuses an item for good.
+#[tokio::test]
+async fn publish_waits_for_the_items_copy_to_catch_up_with_the_collections_copy() {
+    let oracle = FakeOracle::default();
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let with_rpc = node_over(
+        pool.clone(),
+        Options {
+            rpc: Some(oracle.url().await),
+            ..Options::default()
+        },
+    )
+    .await;
+    let without_rpc = node_over(pool.clone(), Options::default()).await;
+    let owner = address(OWNER_KEY);
+    let (waiting, _, _) = draft(&with_rpc, 2).await;
+    let contract = contract_of(&pool, waiting).await;
+    copy_holds(&pool, &contract, &owner, &[], &[0]).await;
+    assert_eq!(
+        call(
+            &without_rpc.app,
+            Some(OWNER_KEY),
+            "POST",
+            &format!("/v1/collections/{waiting}/publish"),
+            None
+        )
+        .await,
+        (
+            401,
+            json!({ "ok": false, "data": { "id": waiting }, "error": "The collection is not published." })
+        ),
+        "neither the copy nor a chain read can tell yet"
+    );
+    assert_eq!(chain_ids(&pool, waiting).await, vec![None, None]);
+    oracle.deploy(&contract, 2);
+    let (status, body) = call(
+        &with_rpc.app,
+        Some(OWNER_KEY),
+        "POST",
+        &format!("/v1/collections/{waiting}/publish"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        chain_ids(&pool, waiting).await,
+        vec![Some("0".into()), Some("1".into())]
+    );
+    let (short, items, _) = draft(&with_rpc, 2).await;
+    let contract = contract_of(&pool, short).await;
+    copy_holds(&pool, &contract, &owner, &[], &[0]).await;
+    oracle.deploy(&contract, 1);
+    assert_eq!(
+        call(
+            &with_rpc.app,
+            Some(OWNER_KEY),
+            "POST",
+            &format!("/v1/collections/{short}/publish"),
+            None
+        )
+        .await,
+        (
+            409,
+            json!({ "ok": false, "data": { "id": items[1] }, "error": "The item is not published." })
+        ),
+        "the chain itself holds one item"
+    );
+    assert_eq!(chain_ids(&pool, short).await, vec![None, None]);
+}
+
+/// An RPC that answers an absurd item count costs the publish no more than
+/// its own items.
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_reads_the_chains_item_count_as_a_bound() {
+    let oracle = FakeOracle::default();
+    let Some(node) = node(Options {
+        rpc: Some(oracle.url().await),
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let (id, _, _) = draft(&node, 2).await;
+    oracle.deploy(&contract_of(&node.pool, id).await, u64::MAX);
+    let app = node.app.clone();
+    let path = format!("/v1/collections/{id}/publish");
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::spawn(async move { call(&app, Some(OWNER_KEY), "POST", &path, None).await }),
+    )
+    .await
+    .expect("answered promptly")
+    .unwrap();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(
+        chain_ids(&node.pool, id).await,
+        vec![Some("0".into()), Some("1".into())]
+    );
+}
+
 #[tokio::test]
 async fn publish_assigns_on_chain_ids_in_creation_order_once_the_rpc_shows_the_deployment() {
     let oracle = FakeOracle::default();
@@ -1454,4 +1613,105 @@ async fn publish_waits_while_the_node_publishes_the_collection_itself() {
         vec![None],
         "the node's own publication assigns the ids"
     );
+}
+
+/// A wallet that loses its role between the decision and the write stores
+/// and forwards no acceptance in its name.
+#[tokio::test]
+async fn a_terms_acceptance_rechecks_the_signers_role_when_it_writes() {
+    let Some(node) = node(Options::default()).await else {
+        return;
+    };
+    let (id, _, _) = draft(&node, 0).await;
+    let path = format!("/v1/collections/{id}/tos");
+    let now = chrono::Utc::now().timestamp_millis().to_string();
+    let headers = crate::shared::signed_fetch::test_support::signed_headers_by(
+        &super::support::wallet(OWNER_KEY),
+        "post",
+        &path,
+        "{}",
+        true,
+        &now,
+    )
+    .await;
+    let signer = crate::auth::require_signer(
+        &headers,
+        "post",
+        &crate::auth::SignedPath::local(&path),
+        None,
+    )
+    .await
+    .unwrap();
+    let grant = crate::access::manage_collection(&node.state, &signer, &id.to_string())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE builder.collections SET eth_address = $2 WHERE id = $1")
+        .bind(id)
+        .bind(address(STRANGER_KEY))
+        .execute(&node.pool)
+        .await
+        .unwrap();
+    let acceptance = crate::terms::parse(&json!({ "email": "jane.doe@example.com" })).unwrap();
+    let error = crate::terms::accept(&node.state, &grant, acceptance)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), 401);
+    assert_eq!(pending_terms(&node.pool, id).await, Vec::new());
+}
+
+/// While creator writes are off the terms forward neither calls the
+/// warehouse nor touches a row; once they are on again it delivers.
+#[tokio::test]
+async fn the_terms_forward_waits_while_creator_writes_are_off() {
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let warehouse = FakeWarehouse::default();
+    warehouse
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let on = |writes: bool| {
+        let (pool, url) = (pool.clone(), warehouse.url());
+        async move {
+            node_over(
+                pool,
+                Options {
+                    warehouse: Some(url.await),
+                    writes,
+                    ..Options::default()
+                },
+            )
+            .await
+        }
+    };
+    let open = on(true).await;
+    let (id, _, _) = draft(&open, 0).await;
+    let (status, _) = call(
+        &open.app,
+        Some(OWNER_KEY),
+        "POST",
+        &format!("/v1/collections/{id}/tos"),
+        Some(json!({ "email": "jane.doe@example.com" })),
+    )
+    .await;
+    assert_eq!(status, 200);
+    warehouse
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let sent = warehouse.received().len();
+    sqlx::query("UPDATE builder.terms_acceptances SET next_attempt_at = timezone('UTC', now()) - interval '1 second' WHERE collection_id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let closed = on(false).await;
+    assert_eq!(crate::terms::forward_due(&closed.state).await.unwrap(), 0);
+    assert_eq!(
+        warehouse.received().len(),
+        sent,
+        "no call while writes are off"
+    );
+    assert_eq!(pending_terms(&pool, id).await, vec![(false, 1)]);
+    assert_eq!(crate::terms::forward_due(&open.state).await.unwrap(), 1);
+    assert_eq!(pending_terms(&pool, id).await, vec![(true, 2)]);
 }

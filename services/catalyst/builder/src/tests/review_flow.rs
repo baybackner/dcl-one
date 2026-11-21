@@ -679,7 +679,7 @@ async fn a_creator_appeals_a_rejection_and_the_curators_see_it() {
     node.state.notices.settled().await;
     assert!(
         node.slack.texts().contains(&format!(
-            "Human review requested for collection {}.\n> &lt;!channel&gt; look *here* second line &amp; more",
+            "Human review requested for collection {}.\n> &lt;!channel&gt; look \u{200b}*\u{200b}here\u{200b}*\u{200b} second line &amp; more",
             described(id, "Appealed")
         )),
         "{:?}",
@@ -767,7 +767,7 @@ async fn comments_are_written_by_role_holders_and_the_committee_and_stored_as_te
     assert_eq!(
         comments,
         vec![format!(
-            "💬 New comment on {} by {}: &lt;script&gt;alert(1)&lt;/script&gt;'; DROP TABLE x; -- @here",
+            "💬 New comment on {} by {}: &lt;script&gt;alert(1)&lt;/script&gt;'; DROP TABLE x; -- @\u{200b}here",
             link(id, "Talk"),
             creator(OWNER_KEY)
         )],
@@ -1531,4 +1531,296 @@ async fn the_committee_filters_by_each_collections_newest_curation() {
     assert_eq!(listed(&node, "status=to_review").await, ["Fresh"]);
     assert_eq!(listed(&node, "status=pending").await, ["Fresh"]);
     assert_eq!(listed(&node, "status=approved").await, Vec::<String>::new());
+}
+
+/// A standard collection of the owner's named `name`, created at `created`
+/// (`YYYY-MM-DD`); on chain when `chain` is `Some((approved, reviewed))`,
+/// `reviewed` meaning the chain touched it after its creation.
+async fn listed_collection(
+    pool: &PgPool,
+    name: &str,
+    created: &str,
+    chain: Option<(bool, bool)>,
+) -> Uuid {
+    let id = Uuid::new_v4();
+    let contract = format!("0x{}", Uuid::new_v4().simple().to_string()[..20].repeat(2));
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address, contract_address, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5::date, $5::date)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(address(OWNER_KEY))
+    .bind(&contract)
+    .bind(created)
+    .execute(pool)
+    .await
+    .unwrap();
+    if let Some((approved, reviewed)) = chain {
+        sqlx::query(
+            "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
+               is_completed, is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) \
+             VALUES ('matic', $1, 137, $2, $3, $3, 'urn:listed', true, $4, true, '{}', '{}', 1, 1, $5, timezone('UTC', now()))",
+        )
+        .bind(&contract)
+        .bind(name)
+        .bind(address(OWNER_KEY))
+        .bind(approved)
+        .bind(if reviewed { 2_i64 } else { 1 })
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    id
+}
+
+/// A curation of `collection` with `status` created at `at`, assigned to
+/// `assignee`.
+async fn curation_at(
+    pool: &PgPool,
+    collection: Uuid,
+    status: &str,
+    at: &str,
+    assignee: Option<&str>,
+) {
+    sqlx::query(
+        "INSERT INTO builder.collection_curations (id, collection_id, status, assignee, created_at, updated_at) \
+         VALUES (gen_random_uuid(), $1, $2, $3, $4::timestamp, $4::timestamp)",
+    )
+    .bind(collection)
+    .bind(status)
+    .bind(assignee)
+    .bind(at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// An item of `collection` with a curation of `status` created at `at`.
+async fn item_curation_at(pool: &PgPool, collection: Uuid, status: &str, at: &str) {
+    let item = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type) VALUES ($1, $2, $3, 'Hat', 'wearable')",
+    )
+    .bind(item)
+    .bind(collection)
+    .bind(address(OWNER_KEY))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash, created_at, updated_at) \
+         VALUES (gen_random_uuid(), $1, $2, repeat('ab', 32), $3::timestamp, $3::timestamp)",
+    )
+    .bind(item)
+    .bind(status)
+    .bind(at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The names `GET {path}?{query}` answers `key`, in the order answered, and
+/// the body.
+async fn ordered(node: &Node, key: &str, path: &str, query: &str) -> (Vec<String>, Value) {
+    let mut request = Request::builder().uri(format!("{path}?{query}"));
+    for (name, value) in signed_map(key, "get", path, "{}", false).await {
+        request = request.header(name, value);
+    }
+    let (status, body) = send(&node.app, request.body(Body::empty()).unwrap()).await;
+    assert_eq!(status, 200, "{query}: {body}");
+    let answer = json_of(&body);
+    let rows = answer["data"].get("results").unwrap_or(&answer["data"]);
+    let names = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    (names, answer)
+}
+
+/// An owner's listing names each standard collection's status as
+/// builder-server does, from its newest curation and the chain: a rejection
+/// wins, an approved collection with changes under review is under review,
+/// an approval the chain doesn't show is disabled; the counts agree.
+#[tokio::test]
+async fn an_address_lists_and_counts_each_collection_by_its_newest_curation_and_the_chain() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let pool = &node.pool;
+    let rejected = listed_collection(pool, "Rejected", "2025-01-01", Some((false, true))).await;
+    curation_at(pool, rejected, "rejected", "2025-02-01", None).await;
+    let changes = listed_collection(pool, "Changes", "2025-01-02", Some((true, true))).await;
+    curation_at(pool, changes, "approved", "2025-02-01", None).await;
+    curation_at(pool, changes, "pending", "2025-03-01", None).await;
+    let live = listed_collection(pool, "Live", "2025-01-03", Some((true, true))).await;
+    curation_at(pool, live, "approved", "2025-02-01", None).await;
+    let unshown = listed_collection(pool, "Unshown", "2025-01-04", Some((false, false))).await;
+    curation_at(pool, unshown, "approved", "2025-02-01", None).await;
+    listed_collection(pool, "Disabled", "2025-01-05", Some((false, true))).await;
+    listed_collection(pool, "Waiting", "2025-01-06", Some((false, false))).await;
+    let first = listed_collection(pool, "First", "2025-01-07", Some((false, false))).await;
+    curation_at(pool, first, "pending", "2025-02-01", None).await;
+    listed_collection(pool, "Draft", "2025-01-08", None).await;
+    let owner = address(OWNER_KEY);
+    let path = format!("/v1/{owner}/collections");
+    for (status, names) in [
+        ("rejected", vec!["Rejected"]),
+        ("under_review", vec!["First", "Waiting", "Changes"]),
+        ("published", vec!["Live"]),
+        ("disabled", vec!["Disabled", "Unshown"]),
+        ("draft", vec!["Draft"]),
+    ] {
+        let (got, answer) = ordered(
+            &node,
+            OWNER_KEY,
+            &path,
+            &format!("status={status}&page=1&limit=20"),
+        )
+        .await;
+        assert_eq!(got, names, "{status}");
+        assert_eq!(
+            answer["data"]["counts"],
+            json!({ "draft": 1, "under_review": 3, "published": 1, "rejected": 1, "disabled": 2 }),
+            "{status}"
+        );
+    }
+}
+
+/// The committee's REQUESTED_AT sort orders by when a review was last asked
+/// for: an item's pending request, else any item request, else the
+/// collection's request, else its creation.
+#[tokio::test]
+async fn the_committee_sorts_collections_by_when_their_review_was_requested() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let pool = &node.pool;
+    let items = listed_collection(pool, "Item asked", "2025-01-01", Some((false, false))).await;
+    item_curation_at(pool, items, "approved", "2025-04-15").await;
+    item_curation_at(pool, items, "pending", "2025-06-01").await;
+    let asked =
+        listed_collection(pool, "Collection asked", "2025-02-01", Some((false, false))).await;
+    curation_at(pool, asked, "pending", "2025-05-01", None).await;
+    let decided = listed_collection(pool, "Item decided", "2025-01-15", Some((false, false))).await;
+    item_curation_at(pool, decided, "approved", "2025-04-01").await;
+    curation_at(pool, decided, "pending", "2025-07-01", None).await;
+    listed_collection(pool, "Never asked", "2025-03-01", Some((false, false))).await;
+    let desc = vec![
+        "Item asked",
+        "Collection asked",
+        "Item decided",
+        "Never asked",
+    ];
+    let (got, _) = ordered(
+        &node,
+        CURATOR_KEY,
+        "/v1/collections",
+        "sort=REQUESTED_AT_DESC",
+    )
+    .await;
+    assert_eq!(got, desc);
+    let (got, _) = ordered(
+        &node,
+        CURATOR_KEY,
+        "/v1/collections",
+        "sort=REQUESTED_AT_ASC",
+    )
+    .await;
+    assert_eq!(got, desc.into_iter().rev().collect::<Vec<_>>());
+}
+
+/// The committee's MOST_RELEVANT sort lists what is to review first, then
+/// what is under review, approved, rejected and the rest, newest first
+/// within each.
+#[tokio::test]
+async fn the_committee_sorts_the_most_relevant_collections_first() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    set_flags(&node.pool, json!(false)).await;
+    let pool = &node.pool;
+    let curator = address(CURATOR_KEY);
+    listed_collection(pool, "To review", "2025-01-01", Some((false, false))).await;
+    let assigned =
+        listed_collection(pool, "Under review", "2025-01-02", Some((false, false))).await;
+    curation_at(pool, assigned, "pending", "2025-02-01", Some(&curator)).await;
+    let approved = listed_collection(pool, "Approved", "2025-01-03", Some((true, true))).await;
+    curation_at(pool, approved, "approved", "2025-02-01", None).await;
+    let rejected = listed_collection(pool, "Rejected", "2025-01-04", Some((false, true))).await;
+    curation_at(pool, rejected, "rejected", "2025-02-01", None).await;
+    listed_collection(pool, "Draft", "2025-01-05", None).await;
+    listed_collection(pool, "Also to review", "2024-12-01", Some((false, false))).await;
+    let (got, _) = ordered(&node, CURATOR_KEY, "/v1/collections", "sort=MOST_RELEVANT").await;
+    assert_eq!(
+        got,
+        [
+            "To review",
+            "Also to review",
+            "Under review",
+            "Approved",
+            "Rejected",
+            "Draft"
+        ]
+    );
+}
+
+/// A review a curator rejected with reasons and put back to pending before
+/// the automated review started keeps those reasons on its row; the
+/// validator's rejection of it reads as the validator's own, with none of
+/// the curator's reasons.
+#[tokio::test]
+async fn the_validators_rejection_carries_no_reasons_a_curator_gave_before() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let (id, _) = published(&node, "Twice judged", 1).await;
+    collection_curation(&node.pool, id, "pending").await;
+    sqlx::query(
+        "UPDATE builder.collection_curations SET reviewed_by = $2, rejection_reasons = ARRAY['clipping'], \
+           rejection_message = 'Fix the hat' WHERE collection_id = $1",
+    )
+    .bind(id)
+    .bind(address(CURATOR_KEY))
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    let (_, claimed) = claim(&node).await;
+    assert_eq!(
+        verdict(&node, id, &result_of(&claimed, "rejected")).await,
+        (204, Value::Null)
+    );
+    let row: (String, Option<String>, Option<Vec<String>>, Option<String>) = sqlx::query_as(
+        "SELECT status, reviewed_by, rejection_reasons, rejection_message FROM builder.collection_curations \
+         WHERE collection_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_one(&node.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row,
+        ("rejected".into(), Some("validator".into()), None, None)
+    );
+}
+
+/// While the review flow is on, MOST_RELEVANT ranks a collection in an
+/// automated review neither to review nor under review, as the committee's
+/// status filters don't.
+#[tokio::test]
+async fn the_most_relevant_sort_leaves_an_automated_review_out_of_the_queue_while_the_flow_is_on() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let pool = &node.pool;
+    let (running, _) = published(&node, "Running", 1).await;
+    collection_curation(pool, running, "pending").await;
+    on_chain_unapproved(pool, &[running]).await;
+    listed_collection(pool, "To review", "2025-01-01", Some((false, false))).await;
+    let approved = listed_collection(pool, "Approved", "2025-01-02", Some((true, true))).await;
+    curation_at(pool, approved, "approved", "2025-02-01", None).await;
+    let (got, _) = ordered(&node, CURATOR_KEY, "/v1/collections", "sort=MOST_RELEVANT").await;
+    assert_eq!(got, ["To review", "Approved", "Running"]);
 }

@@ -2,7 +2,8 @@
 //! third-party collection, its items and its files, and the `/v1/thirdParties`
 //! routes, called by a manager of the collection's provider, a manager of
 //! another provider, the holder of a virtual third party, the wallet that
-//! created the collection, a stranger, a committee member and anonymously,
+//! created the collection and last saved its item and uploaded its file but
+//! manages its provider no longer, a stranger, a committee member and anonymously,
 //! against each state of the provider in the registry and among the virtual
 //! third parties. The registry-down column answers 503 and writes nothing; a
 //! manager the registry stops listing is refused on the next request.
@@ -117,6 +118,7 @@ struct World {
     storage: Arc<Storage>,
     state: crate::SharedState,
     hash: String,
+    bytes: Vec<u8>,
 }
 
 struct Fixture {
@@ -148,7 +150,15 @@ async fn world() -> Option<World> {
     let storage = temp_storage().await;
     let bytes = unique("third-party-file");
     let hash = dcl_auth::hash_bytes_v1(&bytes);
-    storage.store(&hash, bytes.into()).await.unwrap();
+    storage.store(&hash, bytes.clone().into()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO explore_api.feature_flags (app, document, fetched_at) \
+         VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true,\"builder-auto-curation-review-flow\":true},\"variants\":{}}', timezone('UTC', now())) \
+         ON CONFLICT (app) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let mut state = crate::State::new(
         pool.clone(),
         storage.clone(),
@@ -158,6 +168,7 @@ async fn world() -> Option<World> {
         None,
         crate::Settings {
             writes_enabled: true,
+            validator_secret: Some("example-validator-secret-0123456789abcdef".into()),
             ..crate::Settings::default()
         },
     )
@@ -172,6 +183,7 @@ async fn world() -> Option<World> {
         storage,
         state,
         hash,
+        bytes,
     })
 }
 
@@ -180,6 +192,7 @@ async fn world() -> Option<World> {
 async fn reset(w: &World, f: &Fixture) {
     sqlx::raw_sql(
         "DELETE FROM builder.slot_usage_cheques; \
+         DELETE FROM builder.collection_events; \
          DELETE FROM builder.items; \
          DELETE FROM builder.collections; \
          DELETE FROM builder.virtual_third_parties; \
@@ -280,6 +293,57 @@ async fn call(
     path: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    let body = body.map(|value| {
+        (
+            "application/json".to_string(),
+            value.to_string().into_bytes(),
+        )
+    });
+    call_with(app, caller, method, path, body).await
+}
+
+/// Gives the fixture's item the curation `op` needs.
+async fn prepare(w: &World, op: Op, f: &Fixture) {
+    if let Some(status) = op.curated() {
+        sqlx::query(
+            "INSERT INTO builder.item_curations (id, item_id, status, content_hash) \
+             VALUES (gen_random_uuid(), $1, $2, repeat('ab', 32))",
+        )
+        .bind(f.item)
+        .bind(status)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// `op`'s request on `f` as `caller`; an upload sends the world's file as
+/// its one part.
+async fn send_op(w: &World, op: Op, f: &Fixture, caller: Caller) -> (StatusCode, Value) {
+    let (method, path, body) = op.request(f, caller);
+    if op != UploadFiles {
+        return call(&w.app, caller, method, &path, body).await;
+    }
+    let boundary = "third-party-matrix";
+    let mut bytes = format!(
+        "--{boundary}\r\ncontent-disposition: form-data; name=\"{}\"; filename=\"blob\"\r\n\
+         content-type: application/octet-stream\r\n\r\n",
+        f.hash
+    )
+    .into_bytes();
+    bytes.extend_from_slice(&w.bytes);
+    bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let kind = format!("multipart/form-data; boundary={boundary}");
+    call_with(&w.app, caller, method, &path, Some((kind, bytes))).await
+}
+
+async fn call_with(
+    app: &Router,
+    caller: Caller,
+    method: &str,
+    path: &str,
+    body: Option<(String, Vec<u8>)>,
+) -> (StatusCode, Value) {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(key) = caller.key() {
         let now = Utc::now().timestamp_millis().to_string();
@@ -298,9 +362,9 @@ async fn call(
         }
     }
     let body = match body {
-        Some(value) => {
-            request = request.header(header::CONTENT_TYPE, "application/json");
-            Body::from(value.to_string())
+        Some((kind, bytes)) => {
+            request = request.header(header::CONTENT_TYPE, kind);
+            Body::from(bytes)
         }
         None => Body::empty(),
     };
@@ -354,10 +418,15 @@ enum Op {
     Publish,
     DraftCollections,
     ForumPost,
+    ItemCurationRequest,
+    ItemCurationUpdate,
+    ReviewEvents,
+    SaveItem,
+    UploadFiles,
 }
 use Op::*;
 
-const OPS: [Op; 17] = [
+const OPS: [Op; 22] = [
     ReadCollection,
     CollectionItems,
     ReadItem,
@@ -375,6 +444,11 @@ const OPS: [Op; 17] = [
     Publish,
     DraftCollections,
     ForumPost,
+    ItemCurationRequest,
+    ItemCurationUpdate,
+    ReviewEvents,
+    SaveItem,
+    UploadFiles,
 ];
 
 impl Op {
@@ -388,7 +462,21 @@ impl Op {
                 | Terms
                 | ForumPost
                 | Publish
+                | ItemCurationRequest
+                | ItemCurationUpdate
+                | SaveItem
+                | UploadFiles
         )
+    }
+
+    /// The newest item curation the fixture's item holds for this
+    /// operation: an approved one to reopen, a pending one to refresh.
+    fn curated(self) -> Option<&'static str> {
+        match self {
+            ItemCurationRequest => Some("approved"),
+            ItemCurationUpdate => Some("pending"),
+            _ => None,
+        }
     }
 
     fn request(self, f: &Fixture, caller: Caller) -> (&'static str, String, Option<Value>) {
@@ -447,6 +535,36 @@ impl Op {
                 None,
             ),
             ThirdParty => ("GET", format!("/v1/thirdParties/{}", f.provider), None),
+            ItemCurationRequest => ("POST", format!("/v1/items/{}/curation", f.item), None),
+            ItemCurationUpdate => (
+                "PATCH",
+                format!("/v1/items/{}/curation", f.item),
+                Some(json!({ "curation": { "status": "pending" } })),
+            ),
+            ReviewEvents => (
+                "GET",
+                format!("/v1/collections/{}/events", f.collection),
+                None,
+            ),
+            SaveItem => (
+                "PUT",
+                format!("/v1/items/{}", f.item),
+                Some(json!({ "item": {
+                    "id": f.item, "name": "Hat", "description": null, "type": "wearable",
+                    "eth_address": me, "collection_id": f.collection,
+                    "urn": format!("{}:hat", f.collection_urn),
+                    "contents": { "model.glb": f.hash },
+                    "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+                    "data": {
+                        "category": "hat", "replaces": [], "hides": [], "tags": [],
+                        "representations": [{
+                            "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"],
+                            "mainFile": "model.glb", "contents": ["model.glb"], "overrideHides": [], "overrideReplaces": []
+                        }]
+                    }
+                } })),
+            ),
+            UploadFiles => ("POST", format!("/v1/items/{}/files", f.item), None),
             ThirdParties => ("GET", "/v1/thirdParties".to_string(), None),
             Publish => {
                 let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -482,7 +600,14 @@ impl Op {
         };
         match self {
             ReadCollection | CollectionItems => allowed(manages || caller == Committee),
-            ReadItem => allowed(manages || caller == Committee || caller == Creator),
+            ItemCurationRequest | ItemCurationUpdate => allowed(manages || caller == Committee),
+            ReviewEvents => Expect::Status(match (signed, manages || caller == Committee) {
+                (false, _) => 401,
+                (true, true) => 200,
+                (true, false) => 404,
+            }),
+            SaveItem | UploadFiles => allowed(manages),
+            ReadItem => allowed(manages || caller == Committee),
             SaveCollection | DeleteItem | DeleteCollection | Terms => allowed(manages),
             CreateCollection => allowed(manages || p == Unknown),
             ReadFile => Expect::Status(if manages || caller == Creator {
@@ -528,18 +653,11 @@ impl Op {
     }
 }
 
-/// Whether `GET /v1/thirdParties` lists the fixture's provider to `caller`,
-/// as builder-server's `getThirdParties(manager)` builds the list: the
-/// registry's record to its managers (to the virtual third party's, before
-/// approval), and a virtual third party to its managers when the record
-/// isn't listed to them.
+/// Whether `GET /v1/thirdParties` lists the fixture's provider to `caller`:
+/// exactly when the caller manages it, so a wallet a virtual third party
+/// lists is never shown a provider the registry holds for others.
 fn listed(p: Provider, caller: Caller) -> bool {
-    match p {
-        Approved => matches!(caller, Manager | Holder),
-        Unapproved => caller == Manager,
-        Claimed | Squatted | Virtual => caller == Holder,
-        Unknown => false,
-    }
+    p.manages(caller)
 }
 
 #[derive(Debug, PartialEq)]
@@ -562,13 +680,13 @@ fn holds(body: &Value, f: &Fixture, op: Op) -> bool {
 
 async fn cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> {
     let f = fixture(w, p).await;
+    prepare(w, op, &f).await;
     let expected = op.expect(p, caller);
-    let (method, path, body) = op.request(&f, caller);
     let before = match op.writes() {
         true => Some(snapshot(&w.pool).await),
         false => None,
     };
-    let (status, answer) = call(&w.app, caller, method, &path, body).await;
+    let (status, answer) = send_op(w, op, &f, caller).await;
     let got = match expected {
         Expect::Lists(_) if status.is_success() => Expect::Lists(holds(&answer, &f, op)),
         _ => Expect::Status(status.as_u16()),
@@ -681,15 +799,110 @@ async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
     assert_eq!(snapshot(&w.pool).await, before);
 }
 
+/// A manager the registry stops listing loses the third-party item it last
+/// saved: its body, a file another manager adds to it, its place in the
+/// wallet's item listings and its curations.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manager_the_registry_stops_listing_loses_the_item_it_saved() {
+    let Some(w) = world().await else { return };
+    let f = fixture(&w, Approved).await;
+    w.registry.set(
+        &f.provider,
+        "managers",
+        json!([Manager.address(), Creator.address()]),
+    );
+    let bytes = unique("added by the remaining manager");
+    let added = dcl_auth::hash_bytes_v1(&bytes);
+    w.storage.store(&added, bytes.into()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 16, $2)",
+    )
+    .bind(&added)
+    .bind(Manager.address())
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'texture.png', $2, $3)",
+    )
+    .bind(f.item)
+    .bind(&added)
+    .bind(Manager.address())
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let item = f.item.to_string();
+    let sees = |caller: Caller| {
+        let (w, added, item) = (&w, added.clone(), item.clone());
+        async move {
+            let read = call(&w.app, caller, "GET", &format!("/v1/items/{item}"), None)
+                .await
+                .0;
+            let file = call(
+                &w.app,
+                caller,
+                "GET",
+                &format!("/v1/storage/contents/{added}"),
+                None,
+            )
+            .await
+            .0;
+            let me = caller.address();
+            let (_, listed) = call(&w.app, caller, "GET", &format!("/v1/{me}/items"), None).await;
+            let (_, drafts) = call(&w.app, caller, "GET", "/v1/drafts/items", None).await;
+            let holds = |body: &Value| {
+                body["data"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|r| r["id"] == item.as_str()))
+            };
+            (read.as_u16(), file.as_u16(), holds(&listed), holds(&drafts))
+        }
+    };
+    assert_eq!(sees(Creator).await, (200, 200, true, true), "while listed");
+    w.registry
+        .set(&f.provider, "managers", json!([Manager.address()]));
+    assert_eq!(
+        sees(Creator).await,
+        (401, 404, false, false),
+        "once dropped"
+    );
+    assert_eq!(
+        sees(Manager).await,
+        (200, 200, true, true),
+        "the remaining manager"
+    );
+    sqlx::query(
+        "INSERT INTO builder.item_curations (id, item_id, status, content_hash, created_at, updated_at) \
+         VALUES (gen_random_uuid(), $1, 'approved', repeat('ab', 32), timezone('UTC', now()), timezone('UTC', now()))",
+    )
+    .bind(f.item)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let before = snapshot(&w.pool).await;
+    let curation = format!("/v1/items/{item}/curation");
+    for (method, body) in [
+        ("POST", None),
+        (
+            "PATCH",
+            Some(json!({ "curation": { "status": "pending" } })),
+        ),
+    ] {
+        let (status, answer) = call(&w.app, Creator, method, &curation, body).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}: {answer}");
+    }
+    assert_eq!(snapshot(&w.pool).await, before);
+}
+
 /// One cell of the registry-down column: `op` on a fresh fixture of `p`
 /// as `caller` while the registry answers an error.
 async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> {
     let mut failures = Vec::new();
     let f = fixture(w, p).await;
+    prepare(w, op, &f).await;
     w.registry.fail(true);
-    let (method, path, body) = op.request(&f, caller);
     let before = snapshot(&w.pool).await;
-    let (status, answer) = call(&w.app, caller, method, &path, body).await;
+    let (status, answer) = send_op(w, op, &f, caller).await;
     w.registry.fail(false);
     w.registry.put(
         "urn:decentraland:matic:collections-thirdparty:other",
@@ -697,7 +910,7 @@ async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> O
         true,
         false,
     );
-    let readable_anyway = matches!(op, ReadItem | ReadFile) && caller == Creator;
+    let readable_anyway = op == ReadFile && caller == Creator;
     let changed = snapshot(&w.pool).await != before;
     super::cells::record(|| {
         format!(

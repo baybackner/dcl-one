@@ -201,14 +201,20 @@ pub async fn prepare(
     })
 }
 
-/// The item's collections (the one it is in and the one it moves to), then
-/// the item, `FOR UPDATE`: publication's parent-then-item order. 409 when
-/// another request moved the item in between.
+/// The item's id (an advisory lock, so two requests that create one new
+/// item queue and the second decides on the first's row), its collections
+/// (the one it is in and the one it moves to), then the item, `FOR UPDATE`:
+/// publication's parent-then-item order. 409 when another request moved the
+/// item in between.
 pub(crate) async fn lock_item(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     next_collection: Option<Uuid>,
 ) -> Result<(), ApiError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('builder item ' || $1::text, 0))")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
     let previous: Option<Option<Uuid>> =
         sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id=$1")
             .bind(id)
@@ -285,7 +291,8 @@ fn named<T: Clone>(field: &Option<Option<T>>) -> (bool, Option<T>) {
 
 impl ItemsComponent {
     /// Saves the item `save` was decided for, as `input` and `intent` ask, and
-    /// answers its body.
+    /// answers its body. A third-party item's pending curation takes the
+    /// saved content hash, so a review always sees what it would approve.
     pub async fn save_item(
         &self,
         save: &ItemSave,
@@ -307,7 +314,7 @@ impl ItemsComponent {
         lock_item(&mut tx, id, intent.collection).await?;
         if let UrnField::ThirdParty(urn) = &intent.urn {
             sqlx::query(
-                "SELECT pg_advisory_xact_lock(hashtextextended('builder item urn ' || $1, 0))",
+                "SELECT pg_advisory_xact_lock(hashtextextended('builder item urn ' || lower($1), 0))",
             )
             .bind(&urn.item)
             .execute(&mut *tx)
@@ -418,6 +425,16 @@ impl ItemsComponent {
         .bind(save.signer())
         .fetch_one(&mut *tx)
         .await?;
+        if let (SavePlan::ThirdParty { .. }, Some(hash)) = (&plan, &local_hash) {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE builder.item_curations SET content_hash = $2 WHERE id = {} AND status = 'pending'",
+                crate::curation::newest_item_curation("$1", "k.id")
+            )))
+            .bind(id)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        }
         let previous: Vec<(String, String, String)> = sqlx::query_as(
             "DELETE FROM builder.item_contents WHERE item_id = $1 RETURNING file, hash, named_by",
         )

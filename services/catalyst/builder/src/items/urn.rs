@@ -2,7 +2,9 @@
 //! accepts them: `urn:decentraland:<network>:collections-thirdparty:
 //! <provider>:<collection>:<item>`, the network one of the six it names and
 //! each named part one or more characters that are neither `:`, `|` nor
-//! JavaScript whitespace. Every part is compared exactly, case included.
+//! JavaScript whitespace. Parts keep their case; whether another item of the
+//! provider holds an item part is decided lowercased, as content pointers
+//! are, and an item is looked up by its URN exactly.
 
 /// A third-party item URN, by its parts.
 #[derive(Debug, Clone, PartialEq, Eq)]

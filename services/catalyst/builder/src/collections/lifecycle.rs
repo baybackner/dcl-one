@@ -238,11 +238,12 @@ async fn snapshot(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Snapshot, A
 }
 
 /// `POST /v1/collections/:id/publish` for a standard collection: once the
-/// chain holds the collection (the copy, or else the Polygon RPC at the
-/// stored address) every item is given the on-chain id of its place in
-/// creation order, which the client deployed it at; 401 until then (the
-/// client retries), 409 for an item the chain doesn't hold. A collection
-/// whose items all hold their ids answers as it is.
+/// chain holds the collection every item is given the on-chain id of its
+/// place in creation order, which the client deployed it at. The copy
+/// tells when it holds the collection and an item at every place; else the
+/// Polygon RPC's item count at the stored address does. 401 while neither
+/// can tell (the client retries), 409 for a place at or past the chain's
+/// count. A collection whose items all hold their ids answers as it is.
 pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, ApiError> {
     let id = sync.id();
     let before = {
@@ -254,19 +255,22 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
     }
     let contract = before.contract.clone().ok_or_else(|| not_published(id))?;
     let missing = before.items.iter().any(|(_, chain_id)| chain_id.is_none());
-    let on_chain: BTreeSet<u64> = match &before.copy {
-        Some(ids) => ids.clone(),
-        None if !missing && before.published => BTreeSet::new(),
-        None => match state.deployments.of(state, &contract).await {
-            Onchain::Deployed(items) => (0..items).collect(),
+    let in_copy = |place: u64| before.copy.as_ref().is_some_and(|ids| ids.contains(&place));
+    let copy_tells = (0..before.items.len() as u64).all(in_copy);
+    let chain_count = if (missing && !copy_tells) || (before.copy.is_none() && !before.published) {
+        match state.deployments.of(state, &contract).await {
+            Onchain::Deployed(items) => Some(items),
             _ => return Err(not_published(id)),
-        },
+        }
+    } else {
+        None
     };
     let mut first_publication = false;
     let mut validation = None;
     if missing {
         for (place, (item, _)) in before.items.iter().enumerate() {
-            if !on_chain.contains(&(place as u64)) {
+            let place = place as u64;
+            if !in_copy(place) && chain_count.is_none_or(|items| place >= items) {
                 return Err(ApiError::conflict("The item is not published.")
                     .with_data(json!({ "id": item })));
             }

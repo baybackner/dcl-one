@@ -259,6 +259,50 @@
       "urn_suffix": "reused",
       "created_at": "2025-12-26T00:00:00.000Z",
       "updated_at": "2025-12-26T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000501",
+      "name": "Requested old",
+      "owner": "admin",
+      "salt": "0x5015015015015015015015015015015015015015015015010000000000000000",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:requested",
+      "urn_suffix": "requested-a",
+      "created_at": "2026-01-02T00:00:00.000Z",
+      "updated_at": "2026-01-02T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000502",
+      "name": "Requested assigned",
+      "owner": "admin",
+      "salt": "0x5025025025025025025025025025025025025025025025020000000000000000",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:requested",
+      "urn_suffix": "requested-b",
+      "created_at": "2026-01-03T00:00:00.000Z",
+      "updated_at": "2026-01-03T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000503",
+      "name": "Requested approved",
+      "owner": "admin",
+      "salt": "0x5035035035035035035035035035035035035035035035030000000000000000",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:requested",
+      "urn_suffix": "requested-c",
+      "created_at": "2026-01-04T00:00:00.000Z",
+      "updated_at": "2026-01-04T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-000000000504",
+      "name": "Requested rejected",
+      "owner": "admin",
+      "salt": "0x5045045045045045045045045045045045045045045045040000000000000000",
+      "contract_address": null,
+      "third_party_id": "urn:decentraland:matic:collections-thirdparty:requested",
+      "urn_suffix": "requested-d",
+      "created_at": "2026-01-05T00:00:00.000Z",
+      "updated_at": "2026-01-05T00:00:00.000Z"
     }
   ],
   "items": [
@@ -1003,6 +1047,90 @@
       "metrics": {},
       "urn_suffix": "hat-1",
       "local_content_hash": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005aa",
+      "name": "Requested old hat",
+      "owner": "admin",
+      "collection_id": "c011ec71-0000-4000-8000-000000000501",
+      "blockchain_item_id": null,
+      "created_at": "2026-01-02T00:00:00.000Z",
+      "updated_at": "2026-01-02T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "hat-a",
+      "local_content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005ab",
+      "name": "Requested assigned hat",
+      "owner": "admin",
+      "collection_id": "c011ec71-0000-4000-8000-000000000502",
+      "blockchain_item_id": null,
+      "created_at": "2026-01-03T00:00:00.000Z",
+      "updated_at": "2026-01-03T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "hat-b",
+      "local_content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005ac",
+      "name": "Requested approved hat",
+      "owner": "admin",
+      "collection_id": "c011ec71-0000-4000-8000-000000000503",
+      "blockchain_item_id": null,
+      "created_at": "2026-01-04T00:00:00.000Z",
+      "updated_at": "2026-01-04T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "hat-c",
+      "local_content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005ad",
+      "name": "Requested rejected hat",
+      "owner": "admin",
+      "collection_id": "c011ec71-0000-4000-8000-000000000504",
+      "blockchain_item_id": null,
+      "created_at": "2026-01-05T00:00:00.000Z",
+      "updated_at": "2026-01-05T00:00:00.000Z",
+      "thumbnail": "thumbnail.png",
+      "rarity": null,
+      "data": {
+        "category": "hat",
+        "hides": [],
+        "replaces": [],
+        "representations": [],
+        "tags": []
+      },
+      "metrics": {},
+      "urn_suffix": "hat-d",
+      "local_content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   ],
   "chain": {
@@ -1249,6 +1377,13 @@
         "manager"
       ],
       "max_items": "1"
+    },
+    {
+      "id": "urn:decentraland:matic:collections-thirdparty:requested",
+      "name": "Requested provider",
+      "managers": [
+        "admin"
+      ]
     }
   ],
   "collection_curations": [
@@ -1267,6 +1402,30 @@
       "assignee": null,
       "created_at": "2025-12-24T01:00:00.000Z",
       "updated_at": "2025-12-24T02:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005cb",
+      "collection_id": "c011ec71-0000-4000-8000-000000000502",
+      "status": "pending",
+      "assignee": "committee",
+      "created_at": "2026-02-02T00:00:00.000Z",
+      "updated_at": "2026-02-02T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005cc",
+      "collection_id": "c011ec71-0000-4000-8000-000000000503",
+      "status": "approved",
+      "assignee": null,
+      "created_at": "2026-01-21T00:00:00.000Z",
+      "updated_at": "2026-01-21T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005cd",
+      "collection_id": "c011ec71-0000-4000-8000-000000000504",
+      "status": "rejected",
+      "assignee": null,
+      "created_at": "2026-02-11T00:00:00.000Z",
+      "updated_at": "2026-02-11T00:00:00.000Z"
     }
   ],
   "item_curations": [
@@ -1296,6 +1455,51 @@
       "is_mapping_complete": false,
       "created_at": "2025-12-23T00:00:00.000Z",
       "updated_at": "2025-12-23T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005e1",
+      "item_id": "c011ec71-0000-4000-8000-0000000005aa",
+      "status": "approved",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": true,
+      "created_at": "2026-01-10T00:00:00.000Z",
+      "updated_at": "2026-01-10T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005e2",
+      "item_id": "c011ec71-0000-4000-8000-0000000005aa",
+      "status": "pending",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": true,
+      "created_at": "2026-02-20T00:00:00.000Z",
+      "updated_at": "2026-02-20T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005e3",
+      "item_id": "c011ec71-0000-4000-8000-0000000005ab",
+      "status": "pending",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": true,
+      "created_at": "2026-02-01T00:00:00.000Z",
+      "updated_at": "2026-02-01T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005e4",
+      "item_id": "c011ec71-0000-4000-8000-0000000005ac",
+      "status": "approved",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": true,
+      "created_at": "2026-01-20T00:00:00.000Z",
+      "updated_at": "2026-01-20T00:00:00.000Z"
+    },
+    {
+      "id": "c011ec71-0000-4000-8000-0000000005e5",
+      "item_id": "c011ec71-0000-4000-8000-0000000005ad",
+      "status": "rejected",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "is_mapping_complete": true,
+      "created_at": "2026-02-10T00:00:00.000Z",
+      "updated_at": "2026-02-10T00:00:00.000Z"
     }
   ],
   "receipts": [

@@ -43,13 +43,14 @@ pub async fn get_collection_items(
     Ok(Json(ApiData::ok(items)))
 }
 
-/// Whether a listing's `status` filter reads the review flow as on: only a
-/// listing that filters by status asks.
+/// Whether a listing's `status` filter and MOST_RELEVANT sort read the
+/// review flow as on: only a listing that filters by status or sorts by
+/// relevance asks.
 pub(crate) async fn review_flow_asked(
     state: &SharedState,
     q: &ListQuery,
 ) -> Result<bool, ApiError> {
-    if q.all("status").is_empty() {
+    if q.all("status").is_empty() && q.all("sort") != ["MOST_RELEVANT"] {
         return Ok(false);
     }
     let mut conn = state.items.pool().acquire().await?;

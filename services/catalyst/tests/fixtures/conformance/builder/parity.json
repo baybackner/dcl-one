@@ -318,7 +318,8 @@
         "source/417-collection-curation-reopen.json",
         "source/429-curations-committee-after.json",
         "source/508-review-curation-after-rejection.json",
-        "source/511-review-appeal-again.json"
+        "source/511-review-appeal-again.json",
+        "source/523-collection-curation-reject-approved.json"
       ],
       "anchors": []
     },
@@ -558,6 +559,20 @@
     "wallet-storage-bound": {
       "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload that could take the bytes its signer's uploads hold in the store, apart from files a published item names, past 5,000,000,000: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes}, error:\"The wallet's unpublished files reached their limit\"}. Upstream bounds no wallet's storage.",
       "captures": [],
+      "anchors": []
+    },
+    "curation-notice-inert-text": {
+      "text": "Creator text in the curators' Slack notices (a collection's name, a comment, an appeal note) carries a zero-width space around each formatting mark (*, _, ~, `) and after each :, . and @, so Slack shows it as written and turns none of it into a link, a mention, an emoji or formatting; upstream escapes only &, < and >.",
+      "captures": [
+        "source/510-review-appeal-owner.json"
+      ],
+      "anchors": []
+    },
+    "third-parties-listed-to-their-managers": {
+      "text": "GET /v1/thirdParties lists a provider only to the wallets that manage it: a virtual third party is listed only while the registry holds no record of its provider. Upstream also lists a wallet's virtual third party whose provider the registry holds unapproved for other managers, though that wallet manages nothing of it.",
+      "captures": [
+        "source/302-third-parties-virtual-manager.json"
+      ],
       "anchors": []
     }
   },
@@ -1616,7 +1631,7 @@
       "id": "api_http:GET:/v1/collections",
       "owner": "collections",
       "status": "reviewed",
-      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches, a registered provider's collection and a programmatic provider's collection on the committee's listing included. The curation page shows a third-party collection with curated items with its newest collection curation's status and activity, as upstream does.",
+      "result": "The committee's listing with and without pagination, an empty page, every sort with a defined order, each review filter (status, repeated status, review type, assignee), the type, published, unpublished and item tag filters and their refusals; the public search unsigned, as the marketplace sends it and signed by the committee; and the refusals of a signer off the committee and of an anonymous request without a search were compared. Every one matches. Also compared: the curation page's own request (no search, published only, by relevance) and its second page, third-party only, new reviews, every other sort, an assignee, the rejected, under-review and auto-reviewing statuses, and the public search paginated, with an item tag and standard only. Every one matches, a registered provider's collection and a programmatic provider's collection on the committee's listing included. The curation page shows a third-party collection with curated items with its newest collection curation's status and activity, as upstream does. The relevance and request sorts over collections to review, under review, approved and rejected whose reviews were requested in another order than they were created match too.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/01-collections-public-search.json",
@@ -1837,6 +1852,26 @@
           "path": "services/catalyst/builder/src/tests/review_flow.rs",
           "test": "the_committee_filters_by_each_collections_newest_curation",
           "scope": "rejected, to_review, pending and approved from each collection newest curation."
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/525-collections-committee-requested-at-curated.json",
+          "scope": "GET /collections by a committee member, four collections whose reviews were requested in another order than they were created, by REQUESTED_AT_DESC.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/526-collections-committee-most-relevant-curated.json",
+          "scope": "GET /collections by a committee member, collections to review, under review, approved and rejected, created in another order, by MOST_RELEVANT.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/review_flow.rs",
+          "test": "the_committee_sorts_collections_by_when_their_review_was_requested",
+          "scope": "REQUESTED_AT in both directions: a pending item request, any item request, the collection's request, the creation."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/review_flow.rs",
+          "test": "the_committee_sorts_the_most_relevant_collections_first",
+          "scope": "MOST_RELEVANT: to review, under review, approved, rejected, the rest, newest first within each."
         }
       ],
       "gaps": [
@@ -1847,13 +1882,13 @@
         "deliberate:polygon-mainnet-collections",
         "deliberate:review-running-is-an-open-request"
       ],
-      "remaining_verification": "The review filters and the relevance and request sorts over collections with curations."
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:GET:/v1/:address/collections",
       "owner": "collections",
       "status": "reviewed",
-      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names. Also compared: a registry manager's and a programmatic provider's manager's listings of their providers' third-party collections, and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap). Also compared: an address's listing whose rows carry their newest collection curation's status and count its last change as activity.",
+      "result": "An address's own listing as its stored owner, as an on-chain manager, as an on-chain minter and as the chain creator of a collection another wallet stored; with pagination and its status counts; each status, the unpublished, third-party, contract address and name filters and a name sort; and the refusals of another wallet, an unknown status, a contract that is not an address and an unsigned request were compared. Also compared: published only alone, with a search, with no match and paginated with its counts; unpublished with a search; standard only; a second page; oldest first; an address with no collections; a committee member asking about another address. Every difference is one a deliberate gap names. Also compared: a registry manager's and a programmatic provider's manager's listings of their providers' third-party collections, and an address query parameter naming another wallet or the signer (upstream decides by the query, the node by the path: a deliberate gap). Also compared: an address's listing whose rows carry their newest collection curation's status and count its last change as activity. The status filter reads the newest curation as upstream does: a collection approved on chain with changes under review is under review, and a rejection wins over the chain's approval.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/62-address-collections-creator.json",
@@ -2087,6 +2122,21 @@
           "path": "services/catalyst/builder/src/tests/limits.rs",
           "test": "an_addresss_collections_cost_their_reader_by_the_row",
           "scope": "60 rows charged to the signer and to the source."
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/522-address-collections-under-review.json",
+          "scope": "GET /{address}/collections by the owner, status under_review after the run requested reviews, a collection approved on chain whose newest curation is pending included.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/524-address-collections-rejected.json",
+          "scope": "GET /{address}/collections by the owner, status rejected at the contract of a collection approved on chain whose newest curation is a rejection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/review_flow.rs",
+          "test": "an_address_lists_and_counts_each_collection_by_its_newest_curation_and_the_chain",
+          "scope": "each status and the counts from the newest curation and the chain: rejected, approved with changes under review, approved off chain, never curated and reviewed, waiting, first review, draft."
         }
       ],
       "gaps": [
@@ -2102,7 +2152,7 @@
         "deliberate:query-never-overrides",
         "deliberate:request-budgets"
       ],
-      "remaining_verification": "The status filter over collections with curations."
+      "remaining_verification": "None for the cases its captures cover."
     },
     {
       "id": "api_http:GET:/v1/collections/:id",
@@ -3867,6 +3917,16 @@
           "explained_by": {
             "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
           }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/523-collection-curation-reject-approved.json",
+          "scope": "PATCH /collections/{id}/curation by a committee member, rejecting the changes requested on a collection approved on chain.",
+          "replay": [
+            "data.created_at and data.updated_at differ"
+          ],
+          "explained_by": {
+            "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
+          }
         }
       ],
       "gaps": [
@@ -4263,7 +4323,7 @@
       "id": "api_http:POST:/v1/collections/:id/curation/appeal",
       "owner": "curation",
       "status": "reviewed",
-      "result": "With the review flow off the owner's appeal answers 404 Not found. With it on, an appeal of a pending review answers 409, and the owner's appeal after the validator's rejection opens a pending review and posts upstream's curators' notice with the note on one line, escaped. A second appeal while it is open answers 409 on the node; upstream accepted it only because of the capture's fixed clock.",
+      "result": "With the review flow off the owner's appeal answers 404 Not found. With it on, an appeal of a pending review answers 409, and the owner's appeal after the validator's rejection opens a pending review and posts upstream's curators' notice with the note on one line, made inert. A second appeal while it is open answers 409 on the node; upstream accepted it only because of the capture's fixed clock.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/493-review-appeal-flag-off.json",
@@ -4278,7 +4338,12 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/510-review-appeal-owner.json",
           "scope": "POST /collections/{id}/curation/appeal by the owner after the validator's rejection.",
-          "replay": []
+          "replay": [
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\\n> The clipping is intended: see &lt;the&gt; reference.\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\\n> The clipping is intended:​ see &lt;the&gt; reference.​\",\"unfurl_links\":false,\"unfurl_media\":false}]"
+          ],
+          "explained_by": {
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\\n> The clipping is intended: see &lt;the&gt; reference.\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\\n> The clipping is intended:​ see &lt;the&gt; reference.​\",\"unfurl_links\":false,\"unfurl_media\":false}]": "deliberate:curation-notice-inert-text"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/511-review-appeal-again.json",
@@ -4314,6 +4379,7 @@
         }
       ],
       "gaps": [
+        "deliberate:curation-notice-inert-text",
         "deliberate:fixed-capture-clock",
         "deliberate:review-flow-switch",
         "deliberate:review-text-bounds"
@@ -4551,7 +4617,18 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/302-third-parties-virtual-manager.json",
           "scope": "GET /thirdParties signed by a wallet that a virtual third party lists, for an unapproved provider of both, a provider with no record and an unapproved provider the registry lists another wallet for. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
-          "replay": []
+          "replay": [
+            "data.length value",
+            "data[].contracts.length value",
+            "data[].id value",
+            "data[].name value"
+          ],
+          "explained_by": {
+            "data.length value": "deliberate:third-parties-listed-to-their-managers",
+            "data[].contracts.length value": "deliberate:third-parties-listed-to-their-managers",
+            "data[].id value": "deliberate:third-parties-listed-to-their-managers",
+            "data[].name value": "deliberate:third-parties-listed-to-their-managers"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/303-third-parties-stranger.json",
@@ -4575,6 +4652,7 @@
         }
       ],
       "gaps": [
+        "deliberate:third-parties-listed-to-their-managers",
         "deliberate:unauthenticated-message"
       ],
       "remaining_verification": "Providers with linked contracts in the registry's metadata."

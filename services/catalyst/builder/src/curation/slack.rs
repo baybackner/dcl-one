@@ -8,9 +8,9 @@
 //! A notice is a side effect of a committed write: [`Notices::send`] runs it
 //! after the transaction, in its own task, through the guarded client that
 //! follows no redirect, under [`TIMEOUT`]; a failure is logged without the
-//! token and never reaches the request. Untrusted text (a collection's name)
-//! is put on one line, cut to [`MAX_NAME`] characters and escaped, so it can't
-//! mention, link or format. Without a token or a channel nothing is sent.
+//! token and never reaches the request. Untrusted text (a collection's name,
+//! a comment, an appeal note) is put on one line, cut and made inert
+//! ([`escape`]), so it can't mention, link or format. Without a token or a channel nothing is sent.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -108,12 +108,34 @@ pub fn one_line(text: &str) -> String {
         .join(" ")
 }
 
-/// Builder-server's `escapeSlackText`: the characters Slack parses as markup.
+/// Untrusted text made inert in a `mrkdwn` message: builder-server's
+/// `escapeSlackText` (`&`, `<`, `>` as entities, so no mention or link
+/// markup), a zero-width space around each formatting mark (`*`, `_`, `~`,
+/// `` ` ``) so no span forms, and after each `:`, `.` and `@` so no URL,
+/// domain, address or emoji code is recognized.
 pub fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut out = String::with_capacity(text.len() * 2);
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '*' | '_' | '~' | '`' => {
+                out.push(ZERO_WIDTH_SPACE);
+                out.push(c);
+                out.push(ZERO_WIDTH_SPACE);
+            }
+            ':' | '.' | '@' => {
+                out.push(c);
+                out.push(ZERO_WIDTH_SPACE);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
+
+const ZERO_WIDTH_SPACE: char = '\u{200B}';
 
 fn base(url: &Option<String>) -> Option<&str> {
     url.as_deref()
@@ -457,21 +479,62 @@ mod tests {
 
     #[test]
     fn a_hostile_name_cannot_mention_link_format_or_forge_a_line() {
-        let text = links().text(
-            ID,
-            "<!channel> <https://evil.example|click> & *bold*\n✅ forged line",
-            CURATOR,
-            &Notice::Verdict { approved: true },
-        );
-        assert!(
-            text.contains(
-                "|&lt;!channel&gt; &lt;https://evil.example|click&gt; &amp; *bold* ✅ forged line>"
+        let hostile = "<!channel> <https://evil.example|click> & *bold* _it_ ~gone~ `code` \
+                       ```block``` https://evil.example/login www.evil.example jane.doe@example.com \
+                       :rotating_light: <@U123> <#C123>\n✅ forged line\n> quoted";
+        assert!(hostile.chars().count() < MAX_QUOTE);
+        let inert = escape(&one_line(hostile));
+        for form in [
+            "<",
+            ">",
+            "*bold*",
+            "_it_",
+            "~gone~",
+            "`code`",
+            "```",
+            "https://",
+            "www.evil",
+            "evil.example",
+            "example.com",
+            ":rotating_light:",
+            "\n",
+        ] {
+            assert!(!inert.contains(form), "{form:?} in {inert}");
+        }
+        let l = links();
+        for (notice, name) in [
+            (Notice::Verdict { approved: true }, hostile),
+            (
+                Notice::CommentPosted {
+                    message: hostile.into(),
+                },
+                "Hats",
             ),
-            "{text}"
+            (
+                Notice::AppealRequested {
+                    note: hostile.into(),
+                },
+                hostile,
+            ),
+        ] {
+            let text = l.text(ID, name, CREATOR, &notice);
+            assert!(text.contains(&inert), "{text}");
+            assert_eq!(
+                text.matches('\n').count(),
+                usize::from(matches!(notice, Notice::AppealRequested { .. })),
+                "{text}"
+            );
+        }
+        let link = l.text(ID, "Hats", CURATOR, &Notice::Verdict { approved: true });
+        assert!(
+            link.starts_with("✅ <https://creators.example.org/")
+                && link.contains(
+                    "reviewing=true|Hats> was approved by <https://creators.example.org/profile/"
+                ),
+            "the node's own links stay links: {link}"
         );
-        assert!(!text.contains('\n'));
         let long = "x".repeat(MAX_NAME + 50);
-        let text = links().text(ID, &long, CURATOR, &Notice::Verdict { approved: true });
+        let text = l.text(ID, &long, CURATOR, &Notice::Verdict { approved: true });
         assert!(
             text.contains(&format!("|{}…>", "x".repeat(MAX_NAME))),
             "{text}"

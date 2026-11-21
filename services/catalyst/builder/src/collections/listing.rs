@@ -6,8 +6,9 @@
 //! list and pushing a constant fragment; values reach the statement only as
 //! bound parameters. A row carries the status of the collection's newest
 //! curation, and its last activity counts that curation's last change; the
-//! review filters and the relevance and request sorts read the chain copy
-//! alone, as builder-server reads a collection without a curation.
+//! review filters, an address's status filter and counts, and the relevance
+//! and request sorts read that curation with the chain copy, as
+//! builder-server does.
 //!
 //! A listing is a value only its constructor builds from a grant or from a
 //! request that is a public search, and each store function takes its own
@@ -34,7 +35,7 @@
 //! 64 characters.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -105,11 +106,24 @@ const AUTO_REVIEWING: &str = "(COALESCE((SELECT cc.status FROM builder.collectio
     WHERE d.collection_id = c.id AND d.type IN ('review.approved', 'review.rejected') AND d.created_at > \
     COALESCE((SELECT max(s.created_at) FROM builder.collection_events s WHERE s.collection_id = c.id \
     AND s.type = 'review.automated_started' AND s.payload->>'validationId' = r.id::text), r.created_at))))";
-const STATUS: &str = "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
-    WHEN chain.contract_address IS NULL THEN 'draft' \
-    WHEN chain.is_approved THEN 'published' \
-    WHEN chain.reviewed_at <> chain.created_at THEN 'disabled' \
-    ELSE 'under_review' END)";
+static STATUS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
+         WHEN chain.contract_address IS NULL THEN 'draft' \
+         WHEN {NEWEST_STATUS} = 'rejected' THEN 'rejected' \
+         WHEN chain.is_approved THEN CASE WHEN {NEWEST_STATUS} = 'pending' THEN 'under_review' ELSE 'published' END \
+         WHEN {NEWEST_STATUS} = 'approved' OR ({NO_CURATION} AND {REVIEWED_ON_CHAIN}) THEN 'disabled' \
+         ELSE 'under_review' END)"
+    )
+});
+const REQUESTED_AT: &str = concat!(
+    "COALESCE((SELECT max(rk.created_at) FROM builder.items ri JOIN builder.item_curations rk \
+     ON rk.item_id = ri.id WHERE ri.collection_id = c.id AND rk.status = 'pending'), \
+     (SELECT max(rk.created_at) FROM builder.items ri JOIN builder.item_curations rk \
+     ON rk.item_id = ri.id WHERE ri.collection_id = c.id), ",
+    newest_curation!("created_at"),
+    ", c.created_at)"
+);
 const PUBLISHED_IDS: &str = "(SELECT m.collection_id AS id FROM builder.items m WHERE m.blockchain_item_id IS NOT NULL \
     UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id IS NOT NULL AND EXISTS (SELECT 1 \
     FROM builder.items ci JOIN builder.item_curations k ON k.item_id = ci.id WHERE ci.collection_id = t.id)) pub \
@@ -270,22 +284,25 @@ impl Sort {
         }
     }
 
-    fn order_by(self) -> &'static str {
+    fn order_by(self, review_flow: bool) -> String {
         match self {
-            Self::MostRelevant => {
-                " ORDER BY CASE WHEN (c.third_party_id IS NOT NULL OR (chain.contract_address IS NOT NULL \
-                 AND NOT chain.is_approved AND chain.reviewed_at = chain.created_at)) THEN 0 ELSE 4 END, \
-                 c.created_at DESC, c.id"
-            }
-            Self::CreatedAtDesc | Self::RequestedAtDesc => " ORDER BY c.created_at DESC, c.id",
-            Self::CreatedAtAsc | Self::RequestedAtAsc => " ORDER BY c.created_at ASC, c.id",
-            Self::NameDesc => " ORDER BY c.name DESC, c.id",
-            Self::NameAsc => " ORDER BY c.name ASC, c.id",
-            Self::UpdatedAtDesc => " ORDER BY c.updated_at DESC, c.id",
-            Self::UpdatedAtAsc => " ORDER BY c.updated_at ASC, c.id",
-            Self::LastActivityDesc => concat!(" ORDER BY ", last_activity!(), " DESC, c.id"),
-            Self::LastActivityAsc => concat!(" ORDER BY ", last_activity!(), " ASC, c.id"),
-            Self::Unordered => " ORDER BY c.id",
+            Self::MostRelevant => format!(
+                " ORDER BY CASE WHEN {} THEN 0 WHEN {} THEN 1 WHEN {NEWEST_STATUS} = 'approved' THEN 2 \
+                 WHEN {NEWEST_STATUS} = 'rejected' THEN 3 ELSE 4 END, c.created_at DESC, c.id",
+                curation_condition("to_review", review_flow),
+                curation_condition("under_review", review_flow),
+            ),
+            Self::CreatedAtDesc => " ORDER BY c.created_at DESC, c.id".into(),
+            Self::CreatedAtAsc => " ORDER BY c.created_at ASC, c.id".into(),
+            Self::NameDesc => " ORDER BY c.name DESC, c.id".into(),
+            Self::NameAsc => " ORDER BY c.name ASC, c.id".into(),
+            Self::UpdatedAtDesc => " ORDER BY c.updated_at DESC, c.id".into(),
+            Self::UpdatedAtAsc => " ORDER BY c.updated_at ASC, c.id".into(),
+            Self::LastActivityDesc => concat!(" ORDER BY ", last_activity!(), " DESC, c.id").into(),
+            Self::LastActivityAsc => concat!(" ORDER BY ", last_activity!(), " ASC, c.id").into(),
+            Self::RequestedAtDesc => format!(" ORDER BY {REQUESTED_AT} DESC, c.id"),
+            Self::RequestedAtAsc => format!(" ORDER BY {REQUESTED_AT} ASC, c.id"),
+            Self::Unordered => " ORDER BY c.id".into(),
         }
     }
 }
@@ -337,6 +354,7 @@ pub struct Listing {
     providers: Vec<String>,
     status: Option<&'static str>,
     sort: Sort,
+    review_flow: bool,
     page: Page,
 }
 
@@ -476,6 +494,7 @@ impl Listing {
             providers: Vec::new(),
             status: None,
             sort: q.non_empty("sort")?.map_or(Sort::Unordered, Sort::named),
+            review_flow,
             page: page(q, COMMITTEE_CAP)?,
         })
     }
@@ -526,6 +545,7 @@ impl Listing {
             sort: q
                 .non_empty("sort")?
                 .map_or(Sort::CreatedAtDesc, Sort::named),
+            review_flow: false,
             page: page(q, ADDRESS_CAP)?,
         })
     }
@@ -616,7 +636,10 @@ impl Listing {
             }
         }
         if with_status && let Some(status) = self.status {
-            sql.push(" AND ").push(STATUS).push(" = ").push_bind(status);
+            sql.push(" AND ")
+                .push(STATUS.as_str())
+                .push(" = ")
+                .push_bind(status);
         }
     }
 }
@@ -758,13 +781,14 @@ impl ItemsComponent {
             .push(" WHERE c.id = ANY(ARRAY(SELECT c.id FROM ")
             .push(view.collections());
         listing.push_where(&mut sql, ids, true);
-        sql.push(listing.sort.order_by())
+        let order = listing.sort.order_by(listing.review_flow);
+        sql.push(order.as_str())
             .push(" LIMIT ")
             .push_bind(listing.page.limit)
             .push(" OFFSET ")
             .push_bind(listing.page.offset)
             .push("))")
-            .push(listing.sort.order_by());
+            .push(order.as_str());
         let rows: Vec<ListedRow> = sql.build_query_as().fetch_all(&mut *tx).await?;
         let mut total = rows.len() as i64;
         let mut counts = None;
@@ -775,7 +799,9 @@ impl ItemsComponent {
             total = count.build_query_scalar().fetch_one(&mut *tx).await?;
             if !view_only {
                 let mut by_status = QueryBuilder::new("SELECT ");
-                by_status.push(STATUS).push(" AS status, count(*) FROM ");
+                by_status
+                    .push(STATUS.as_str())
+                    .push(" AS status, count(*) FROM ");
                 by_status.push(view.collections());
                 listing.push_where(&mut by_status, ids, false);
                 by_status.push(" GROUP BY 1");
@@ -985,7 +1011,7 @@ mod tests {
         assert_eq!(listing.sort, Sort::Unordered);
         let mut sql = QueryBuilder::<Postgres>::new("SELECT 1 FROM x");
         listing.push_where(&mut sql, None, true);
-        sql.push(listing.sort.order_by());
+        sql.push(listing.sort.order_by(false).as_str());
         let text = sql.sql().as_str().to_string();
         assert!(!text.contains("DROP"), "{text}");
         assert!(text.contains("ILIKE '%' || $1 || '%'"), "{text}");

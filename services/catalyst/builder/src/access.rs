@@ -25,8 +25,9 @@
 //!   held, and accepts only a read that started after it began
 //!   ([`crate::third_parties`]); the wallet stored as a third-party
 //!   collection's creator decides nothing.
-//! - **Item owner**: the item row's `eth_address`, which decides for an item
-//!   with no collection and for item reads.
+//! - **Item owner**: an item in a collection is its collection's: the
+//!   collection's owner, on-chain manager or provider's manager decide; the
+//!   item row's `eth_address` decides only for an item with no collection.
 //!
 //! A grant is a value only this module builds; the store functions that read
 //! or change a collection or item take it. A write's value is confirmed again
@@ -332,7 +333,7 @@ impl ReviewRead {
 
 /// May read the curations of a published collection, or of an item of one,
 /// and ask the transition table ([`crate::curation::transitions`]) for a
-/// write: as a creator (a role on the collection, or the item's owner) or as
+/// write: as a creator (a role on the collection) or as
 /// the committee.
 #[derive(Debug)]
 pub struct Curator {
@@ -1068,8 +1069,9 @@ pub async fn collection_items(
 
 /// `GET /v1/items/:id`: any signer reads a minted item of a published
 /// standard collection and any item of a published third-party collection
-/// (one with an item curation); the item's owner, the provider's manager and
-/// the committee read any. `full` is false for a caller who reads only what
+/// (one with an item curation); the collection's owner, the provider's
+/// manager (the item's owner for an item with no collection) and the
+/// committee read any. `full` is false for a caller who reads only what
 /// any signer may; for a published item the committee only widens the view,
 /// without waiting, as in [`collection_items`].
 pub async fn read_item(
@@ -1089,7 +1091,11 @@ pub async fn read_item(
     };
     drop(conn);
     let s = signer.as_str();
-    if i.owner == s || parent.as_ref().is_some_and(|c| c.provider_manager(s)) {
+    let owns = match &parent {
+        Some(c) => c.owner(s) || c.provider_manager(s),
+        None => i.owner == s,
+    };
+    if owns {
         return Ok(ItemRead { id, full: true });
     }
     if let Some(c) = parent.filter(|c| c.published && (c.third_party || i.minted)) {
@@ -1293,8 +1299,6 @@ async fn third_party_urn(
     .await?)
 }
 
-/// Whether another item of any collection of `third_party_id` holds the
-/// item part `item` (builder-server's `isURNRepeated`).
 async fn urn_in_use(
     conn: &mut PgConnection,
     id: Uuid,
@@ -1303,7 +1307,7 @@ async fn urn_in_use(
 ) -> Result<bool, ApiError> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
-         WHERE i.id <> $1 AND c.third_party_id = $2 AND i.urn_suffix = c.urn_suffix || ':' || $3)",
+         WHERE i.id <> $1 AND c.third_party_id = $2 AND lower(i.urn_suffix) = lower(c.urn_suffix || ':' || $3))",
     )
     .bind(id)
     .bind(third_party_id)
@@ -1899,8 +1903,8 @@ pub async fn curate_collection(
 }
 
 /// The curation routes of the item `raw`: its collection must exist (404)
-/// and be published (409), then the signer must own the item, hold a
-/// manager's role on its collection or be on the committee (401).
+/// and be published (409), then the signer must hold a role on its
+/// collection or be on the committee (401).
 pub async fn curate_item(
     state: &SharedState,
     signer: &Signer,
@@ -1914,8 +1918,7 @@ pub async fn curate_item(
     let parent_id = i.collection.ok_or_else(not_found)?;
     let c = parent(&mut conn, &view, parent_id, providers(&registry)).await?;
     drop(conn);
-    let s = signer.as_str();
-    let role = i.owner == s || c.manager(s) || c.provider_manager(s);
+    let role = c.role(signer.as_str());
     admit(state, signer, &c, parent_id, Some(id), role, registry).await
 }
 
@@ -2063,6 +2066,70 @@ pub async fn assignable(state: &SharedState, address: &str) -> Result<bool, ApiE
     on_committee(state, &address.to_ascii_lowercase()).await
 }
 
+/// May set the status of item curations of one published collection
+/// through the operator's item status routes: made only from an [`Admin`]
+/// proof; it grants no other role.
+#[derive(Debug)]
+pub struct Operator {
+    collection: Uuid,
+    actor: String,
+}
+
+impl Operator {
+    pub fn collection(&self) -> Uuid {
+        self.collection
+    }
+    /// Who acts, for the audit row.
+    pub fn actor(&self) -> &str {
+        &self.actor
+    }
+}
+
+/// The operator's item status routes over `collection`: it must exist (404)
+/// and be published (409).
+pub async fn operate(
+    state: &SharedState,
+    admin: &crate::auth::Admin,
+    collection: Uuid,
+) -> Result<Operator, ApiError> {
+    let (mut conn, view) = decision(state).await?;
+    operated(&mut conn, &view, collection).await?;
+    Ok(Operator {
+        collection,
+        actor: admin.actor().to_string(),
+    })
+}
+
+/// [`operate`]'s decision again, inside the write's transaction.
+pub(crate) async fn confirm_operator(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    operator: &Operator,
+) -> Result<(), ApiError> {
+    operated(conn, view, operator.collection).await
+}
+
+async fn operated(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    collection: Uuid,
+) -> Result<(), ApiError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM builder.collections WHERE id = $1)")
+            .bind(collection)
+            .fetch_one(&mut *conn)
+            .await?;
+    if !exists {
+        return Err(ApiError::not_found("Not found"));
+    }
+    if !chain_state::published(conn, view, collection).await? {
+        return Err(
+            ApiError::conflict("Unpublished collection").with_data(json!({ "id": collection }))
+        );
+    }
+    Ok(())
+}
+
 /// Whether the signer is on the committee by the index, false when it
 /// can't tell: for a notice, never for a grant.
 pub async fn known_curator(state: &SharedState, curator: &Curator) -> bool {
@@ -2120,17 +2187,13 @@ async fn curated(
     let c = collection(conn, view, curator.collection, providers(&curator.registry))
         .await?
         .ok_or_else(gone)?;
-    let s = curator.signer.as_str();
-    let role = match curator.item {
-        Some(id) => {
-            let i = item(conn, id).await?.ok_or_else(gone)?;
-            if i.collection != Some(curator.collection) {
-                return Err(gone());
-            }
-            i.owner == s || c.manager(s) || c.provider_manager(s)
+    if let Some(id) = curator.item {
+        let i = item(conn, id).await?.ok_or_else(gone)?;
+        if i.collection != Some(curator.collection) {
+            return Err(gone());
         }
-        None => c.role(s),
-    };
+    }
+    let role = c.role(&curator.signer);
     Ok((c, role))
 }
 
@@ -2219,13 +2282,6 @@ type FileAnswer = (
 /// The most providers a file read checks the signer against.
 const FILE_PROVIDERS: i64 = 20;
 
-/// [`PUBLIC_FILE`] for the hash `$1` and, for a signer `$2`, whether the
-/// signer holds an upload record for it itself or owns an item with an
-/// entry naming it whose writer holds one, and, when neither, the providers
-/// (at most `$3`, each with its virtual third party's managers) of the
-/// third-party items with such an entry. Each branch starts from the hash's
-/// upload records; the signer's branches run only when the public answer
-/// is false.
 const FILE_READ: &str = "SELECT p.public, o.own, CASE WHEN p.public OR o.own OR $2::text IS NULL THEN '[]'::jsonb \
        ELSE COALESCE((SELECT jsonb_agg(jsonb_build_array(t.id, v.managers)) FROM ( \
          SELECT DISTINCT c.third_party_id AS id FROM builder.uploaded_contents u \
@@ -2240,7 +2296,9 @@ const FILE_READ: &str = "SELECT p.public, o.own, CASE WHEN p.public OR o.own OR 
          OR EXISTS (SELECT 1 FROM builder.uploaded_contents u \
            JOIN builder.item_contents ic ON ic.hash = u.hash AND ic.named_by = u.uploaded_by \
            JOIN builder.items i ON i.id = ic.item_id \
-           WHERE u.hash = $1 AND i.eth_address = $2)) END AS own) o";
+           LEFT JOIN builder.collections c ON c.id = i.collection_id \
+           WHERE u.hash = $1 AND c.third_party_id IS NULL \
+             AND COALESCE(c.eth_address, i.eth_address) = $2)) END AS own) o";
 
 /// [`PUBLIC_FILE`] for the hash `hash` (a bound parameter or a column), with
 /// the published rule of [`chain_state::published_by_any_pass`].
@@ -2289,7 +2347,8 @@ pub(crate) fn file_read_sql() -> String {
 /// in an entry, or as its video, whose writer holds an upload record for it (a standard item is
 /// published once its collection is; a third-party item once it has an item
 /// curation, [`ITEM_CURATED`]). A signer also reads a file it uploaded itself, and a file
-/// that an item it owns, or a third-party item whose collection it manages,
+/// that an item it owns (the owner of its standard collection, or of an
+/// item with no collection), or a third-party item whose collection it manages,
 /// names in such an entry. A name opens a file only for the wallet that
 /// wrote it holding the bytes; the committee and on-chain managers read what
 /// anyone reads. Whether the signer manages a provider is the registry's

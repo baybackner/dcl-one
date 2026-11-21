@@ -1258,6 +1258,25 @@ collections and 89,043 items copied from a production-shaped database and
 No index on the copy is added: a GIN index on its role lists would cost a
 write on every mirror pass for 16 to 22 ms on a signed request.
 
+An address listing's `status` filter and status counts, and the committee
+listing's REQUESTED_AT and MOST_RELEVANT sorts, read each collection's newest
+curation as well: a status is a rejection first, then the chain's approval
+(under review while the newest curation is pending), then an approval the
+chain doesn't show (disabled); REQUESTED_AT is the newest pending item
+curation, else the newest item curation, else the newest collection
+curation, else the creation; MOST_RELEVANT ranks to review, under review,
+approved, rejected, then the rest. Each is a per-row probe of
+`collection_curations_collection_created_key`, and REQUESTED_AT also of
+`items_collection_created_idx` and `item_curations_item_created_key`.
+Measured on a scratch copy of the fresh schema at the reference scale
+(51,742 collections, 89,043 items, 38,211 item curations, 4,755 collection
+curations, 52,000 copy rows), JIT off: curation page of 12 by relevance,
+published only, 44 ms and its count 2 ms; a page of 12 by REQUESTED_AT_DESC
+over every collection 178 ms, published only 48 ms; by relevance over every
+collection 133 ms; the status counts of the owner of 1,542 collections
+27 ms and its `status=rejected` page 26 ms. The sort over every collection
+probes each row once; no index serves the ordering.
+
 The committee listing's `status` and `assignee` filters read each
 collection's newest curation (`collection_curations_collection_created_key`),
 its pending item curations and, for `auto_reviewing` while the review flow is
@@ -1266,7 +1285,7 @@ timeline events since that request started
 (`collection_events_collection_created_idx`). A collection is in an automated
 review while its newest curation is pending and it has an open request no
 curator decided after; the flow's switch is read only for a listing that
-filters by status. Measured on a scratch copy of the fresh schema with 8,298
+filters by status or sorts by relevance. Measured on a scratch copy of the fresh schema with 8,298
 collections, 4,149 on chain, two curations each and 794 open requests (count;
 a page of 12 by creation, JIT off): `to_review` 18 ms, `pending` 15 ms,
 `under_review` 6 ms, `auto_reviewing` 6 ms. The cost grows with the
@@ -1305,7 +1324,7 @@ Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
 | Statement | Index | Measured |
 | --- | --- | --- |
 | a collection's items, ids then bodies (largest collection 12,665 items) | `items_collection_created_idx` | ids 3 ms; a page of 50 under 1 ms; all 12,665 bodies about 110 to 160 ms |
-| an address's items (largest owner 12,669) | `items_owner_updated_idx`, `items_collection_created_idx` | about 45 ms for a page of 60 |
+| an address's items: its items with no collection, the items of the standard collections it owns (stored owner while the copy lacks the collection, the copy's `creator` once it holds it) and of its providers' collections | `items_owner_updated_idx`, `collections_owner_idx`, the copy's primary key and `collections_creator_idx`, `items_collection_created_idx` | 28 ms for a page of 60 with its total, for the owner of 1,542 collections at the reference scale (a hash join over the copy's 52,000 rows) |
 | `GET /v1/items`, the 1,000 oldest | `items_created_idx`, then primary keys | ids under 1 ms; their 1,000 bodies about 10 ms |
 | one item by id with its chain merge | primary keys | under 0.3 ms |
 | a save's contents for 198 files, and the upload record cleanup | `item_contents_pkey`, `item_contents_hash_idx` | under 10 ms warm |
@@ -1722,7 +1741,12 @@ Tables and what they hold:
 - `builder.slot_usage_cheques`: one row per signed slot cheque of a
   third-party publication: `third_party_id`, `signature` (0x and 130 hex
   digits, `v` 27 or 28), `salt` (0x and 64 hex digits, unique per
-  provider), `qty` (positive). Never updated.
+  provider), `qty` (positive). Never updated by a route. A deleted
+  collection's cheques stay with `collection_id` NULL (the foreign key sets
+  it), so a spent salt stays spent; step
+  `0066_builder_slot_cheques_outlive_collections` drops the column's
+  `NOT NULL` and recreates the key with `ON DELETE SET NULL` on a database
+  that has the table.
 - `builder.collections.forum_link` (an `http(s)` URL without spaces, at
   most 2,048 characters) and `forum_id` (the forum post, only with a
   link). These columns are the one source of a collection's forum link.

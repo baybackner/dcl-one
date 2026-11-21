@@ -621,7 +621,7 @@ test('a seeded item\'s local content hash reaches upstream\'s items table', asyn
   assert.match(queries[0][0], /local_content_hash/)
   assert.deepEqual(queries.map(([, values]) => values.at(-1)), [null, hash])
   const seeded = readSeed().items.filter(row => row.local_content_hash)
-  assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3', '4b1', '4b2', '4c1', '4d1', '4d2', '4e1'])
+  assert.deepEqual(seeded.map(row => row.id.slice(-3)), ['4a1', '4a2', '4a3', '4b1', '4b2', '4c1', '4d1', '4d2', '4e1', '5aa', '5ab', '5ac', '5ad'])
   assert.ok(seeded.every(row => /^[0-9a-f]{64}$/.test(row.local_content_hash)))
 })
 

@@ -64,7 +64,9 @@ from the shop's committee index, on the same node.
 
 ## Writes, files and flags
 
-- `CREATE_WRITES_ENABLED=true` opens the writes; off, each answers 503.
+- `CREATE_WRITES_ENABLED=true` opens the writes; off, each answers 503, and
+  the builder's jobs (the terms forward to the warehouse and the
+  validation-request sweep) change no row and call no outside service.
 - `STORAGE_ROOT_FOLDER` holds item files and videos; a wallet's uploads may
   hold at most 5,000,000,000 bytes that no published item names.
 - The `builder` flags document, which Explore's flags mirror stores, turns

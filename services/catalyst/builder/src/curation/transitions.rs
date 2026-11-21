@@ -32,10 +32,21 @@
 //! Every other request of the validator, and a verdict sent by anyone else,
 //! is refused. The caller asks to reopen only the validator's own rejection.
 //!
+//! The operator (the node's admin bearer or an admin address, through the
+//! operator's item status routes) only sets an item curation's status, as
+//! the committee does:
+//!
+//! | From | Request | Operator |
+//! | --- | --- | --- |
+//! | none | `PATCH` status | 404 |
+//! | pending, approved, rejected | `PATCH` status | the newest row, to that status |
+//!
+//! Every other request of the operator is refused.
+//!
 //! A creator is any wallet with a role on the collection (its owner, an
-//! on-chain manager, its provider's manager; for an item's curation, the
-//! item's owner) that the committee did not admit. Every write the committee
-//! makes is recorded in `ops.admin_audit`.
+//! on-chain manager, its provider's manager) that the committee did not
+//! admit. Every write the committee
+//! or the operator makes is recorded in `ops.admin_audit`.
 
 /// A curation's status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +86,8 @@ pub enum Actor {
     Creator,
     /// The wearable validator, by a verdict on its current claim.
     Validator,
+    /// The node's operator, by the item status routes.
+    Operator,
 }
 
 /// What the request asks.
@@ -127,6 +140,8 @@ pub enum Refusal {
     VerdictOnly,
     /// The curation is decided: the validator leaves it alone.
     Decided,
+    /// The operator only sets an item curation's status.
+    ItemStatusOnly,
 }
 
 /// The table: what `actor` may do to a curation whose newest row is `from`.
@@ -140,6 +155,19 @@ pub fn decide(
     let verdict = matches!(request, Request::Reject | Request::Reopen);
     if verdict != (actor == Actor::Validator) || (verdict && curation == Curation::Item) {
         return Err(Refusal::VerdictOnly);
+    }
+    let item_status = matches!(
+        (curation, request),
+        (
+            Curation::Item,
+            Request::Update {
+                status: Some(_),
+                assignee: false
+            }
+        )
+    );
+    if actor == Actor::Operator && !item_status {
+        return Err(Refusal::ItemStatusOnly);
     }
     match (curation, request) {
         (_, Request::Reject) => match from {
@@ -193,7 +221,7 @@ pub fn decide(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use Actor::{Committee, Creator, Validator};
+    use Actor::{Committee, Creator, Operator, Validator};
     use Curation::{Collection, Item};
     use Refusal::*;
     use Status::{Approved, Pending, Rejected};
@@ -214,6 +242,22 @@ pub(crate) mod tests {
     ) -> Result<Change, Refusal> {
         let decided = matches!(from, Some(Approved | Rejected));
         match (curation, request, actor) {
+            (_, Request::Reject | Request::Reopen, Operator) => Err(VerdictOnly),
+            (
+                Item,
+                Request::Update {
+                    status: Some(status),
+                    assignee: false,
+                },
+                Operator,
+            ) => match from {
+                None => Err(NoCuration),
+                Some(_) => Ok(Change::Update {
+                    status: Some(status),
+                    assignee: false,
+                }),
+            },
+            (_, _, Operator) => Err(ItemStatusOnly),
             (Item, _, Validator) | (Item, Request::Reject | Request::Reopen, _) => Err(VerdictOnly),
             (_, Request::Reject | Request::Reopen, Committee | Creator) => Err(VerdictOnly),
             (_, Request::Update { .. } | Request::Open { .. }, Validator) => Err(VerdictOnly),
@@ -283,7 +327,7 @@ pub(crate) mod tests {
         for curation in [Collection, Item] {
             for from in FROM {
                 for &request in &requests {
-                    for actor in [Committee, Creator, Validator] {
+                    for actor in [Committee, Creator, Validator, Operator] {
                         assert_eq!(
                             decide(curation, from, request, actor),
                             expected(curation, from, request, actor),
@@ -294,7 +338,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert_eq!(cells, 2 * 4 * 11 * 3);
+        assert_eq!(cells, 2 * 4 * 11 * 4);
     }
 
     #[test]

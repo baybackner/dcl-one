@@ -3,8 +3,10 @@
 //! approve a third-party collection's submitted items. The newest cheque,
 //! each item's newest curation's content hash (the client builds the
 //! merkle tree over them), the provider's registry root and whether the
-//! registry already consumed the cheque. The rows are read first; the
-//! registry is read holding no connection, and 503 when it can't tell.
+//! registry already consumed the cheque. An item whose content differs from
+//! its pending curation's is refused (409) rather than attested. The rows
+//! are read first; the registry is read holding no connection, and 503 when
+//! it can't tell.
 
 use std::collections::BTreeMap;
 
@@ -73,6 +75,21 @@ pub async fn approval_data(state: &State, read: &ApprovalRead) -> Result<Approva
         return Err(ApiError::unauthorized("The collection is not published.")
             .with_data(json!({ "id": id })));
     };
+    let changed: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT i.id FROM builder.items i WHERE i.collection_id = $1 \
+           AND {} = 'pending' AND {} IS DISTINCT FROM i.local_content_hash ORDER BY i.id",
+        crate::curation::newest_item_curation("i.id", "k.status"),
+        crate::curation::newest_item_curation("i.id", "k.content_hash"),
+    )))
+    .bind(id)
+    .fetch_all(state.items.pool())
+    .await?;
+    if !changed.is_empty() {
+        return Err(
+            ApiError::conflict("The items changed since they were submitted for review")
+                .with_data(json!({ "id": id, "itemIds": changed })),
+        );
+    }
     let virtual_party: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM builder.virtual_third_parties WHERE id = $1)",
     )

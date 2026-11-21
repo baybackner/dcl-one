@@ -20,7 +20,7 @@ use crate::content::{ContentState, Settings as ContentSettings};
 use crate::http::Outbound;
 use crate::storage::Storage;
 
-const TOKEN: &str = "console-test-bearer";
+const TOKEN: &str = "console-test-bearer-0123456789abcdef";
 
 async fn storage() -> Arc<Storage> {
     let tmp = std::env::temp_dir().join(format!(
@@ -1145,8 +1145,11 @@ async fn creator_calls_follow_the_create_gate() {
     )
     .await;
     assert!(
-        status.is_success() || status == StatusCode::NOT_FOUND,
-        "{status} {body}"
+        matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+        ),
+        "the builder's own answer for an unknown collection, or while its copy can't tell: {status} {body}"
     );
     let rows = console_rows(&pool, &actor).await;
     assert_eq!(

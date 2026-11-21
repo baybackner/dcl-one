@@ -13,6 +13,7 @@ use crate::chain_state;
 use crate::curation::rows::{
     self, CollectionCurationOpened, CollectionCurationOut, ItemCurationOpened, ItemCurationOut,
 };
+use crate::curation::transitions::Status;
 use crate::curation::writes;
 use crate::http::{ApiData, ApiError};
 use crate::onchain::{self, CommitteeMemberOut, ReviewRowOut};
@@ -48,15 +49,10 @@ pub struct BulkItemStatusPatchOut {
     pub updated: u64,
 }
 
-const CURATION_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
 const MAX_BULK_ITEMS: usize = 1000;
 
-fn validate_status(status: &str) -> Result<(), ApiError> {
-    if CURATION_STATUSES.contains(&status) {
-        Ok(())
-    } else {
-        Err(ApiError::bad_request("Invalid Status provided"))
-    }
+fn parse_status(status: &str) -> Result<Status, ApiError> {
+    Status::parse(status).ok_or_else(|| ApiError::bad_request("Invalid Status provided"))
 }
 
 fn parse_uuid(raw: &str) -> Result<Uuid, ApiError> {
@@ -115,15 +111,11 @@ pub async fn patch_item_status(
     Path((id, item)): Path<(String, String)>,
     Json(body): Json<ItemStatusBody>,
 ) -> Result<Json<ApiData<ItemStatusPatchOut>>, ApiError> {
-    validate_status(&body.status)?;
-
+    let status = parse_status(&body.status)?;
     let collection_id = parse_uuid(&id)?;
     let item_id = parse_uuid(&item)?;
-
-    let updated = state
-        .items
-        .set_item_curation_status(&admin, &collection_id, &item_id, &body.status)
-        .await?;
+    let operator = access::operate(&state, &admin, collection_id).await?;
+    let updated = writes::operate_items(&state, operator, &[item_id], status).await?;
 
     if updated == 0 {
         return Err(ApiError::not_found("Not found"));
@@ -150,8 +142,7 @@ pub async fn patch_items_status_bulk(
     Path(id): Path<String>,
     Json(body): Json<BulkItemStatusBody>,
 ) -> Result<Json<ApiData<BulkItemStatusPatchOut>>, ApiError> {
-    validate_status(&body.status)?;
-
+    let status = parse_status(&body.status)?;
     if body.item_ids.is_empty() {
         return Err(ApiError::bad_request("itemIds must not be empty"));
     }
@@ -165,10 +156,8 @@ pub async fn patch_items_status_bulk(
         item_ids.push(parse_uuid(raw)?);
     }
 
-    let updated = state
-        .items
-        .set_items_curation_status(&admin, &collection_id, &item_ids, &body.status)
-        .await?;
+    let operator = access::operate(&state, &admin, collection_id).await?;
+    let updated = writes::operate_items(&state, operator, &item_ids, status).await?;
 
     Ok(Json(ApiData::ok(BulkItemStatusPatchOut {
         collection_id: id,
@@ -394,14 +383,6 @@ mod tests {
             .map(|_| format!("itemIds[]={a}"))
             .collect();
         assert!(item_ids(Some(&most.join("&"))).is_ok());
-    }
-
-    #[test]
-    fn validate_status_accepts_known_and_rejects_unknown() {
-        assert!(validate_status("approved").is_ok());
-        assert!(validate_status("rejected").is_ok());
-        assert!(validate_status("pending").is_ok());
-        assert!(validate_status("bogus").is_err());
     }
 
     /// Compared as parsed JSON: object key order is not part of the contract and flips

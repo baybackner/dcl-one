@@ -243,6 +243,9 @@ impl std::fmt::Debug for Settings {
     }
 }
 
+/// The shortest admin token or validator secret startup accepts.
+pub const MIN_SECRET_BYTES: usize = 32;
+
 fn non_empty(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -342,17 +345,27 @@ impl Settings {
             }
         }
         let cors = cors::Cors::parse(raw.cors_origin.as_deref(), raw.cors_method.as_deref())?;
+        let validator_secret = non_empty(&raw.validator_secret);
+        let admin_token = non_empty(&raw.admin_token);
+        for (name, secret) in [
+            ("WEARABLE_VALIDATOR_CALLBACK_SECRET", &validator_secret),
+            ("CATALYRST_BUILDER_ADMIN_TOKEN", &admin_token),
+        ] {
+            if secret.as_ref().is_some_and(|s| s.len() < MIN_SECRET_BYTES) {
+                bail!("{name} must be at least {MIN_SECRET_BYTES} bytes");
+            }
+        }
         Ok(Self {
             cors,
             slack,
             links,
             forum,
             builder_server_url: builder_server_url.unwrap_or_default(),
-            validator_secret: non_empty(&raw.validator_secret).map(validator::Secret::from),
+            validator_secret: validator_secret.map(validator::Secret::from),
             writes_enabled: raw.writes_enabled,
             polygon_rpc_url,
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
-            admin_token: non_empty(&raw.admin_token),
+            admin_token,
             newsletter,
             warehouse,
         })
@@ -697,10 +710,36 @@ mod router_tests {
     }
 
     #[test]
+    fn a_short_admin_token_or_validator_secret_stops_startup_without_showing_it() {
+        let short = "sk-example-31-bytes-long-secret";
+        let long = "sk-example-32-bytes-long-secret!";
+        assert_eq!((short.len(), long.len()), (31, 32));
+        for (name, raw) in [
+            (
+                "CATALYRST_BUILDER_ADMIN_TOKEN",
+                (|v: &str| RawSettings {
+                    admin_token: Some(v.into()),
+                    ..RawSettings::default()
+                }) as fn(&str) -> RawSettings,
+            ),
+            ("WEARABLE_VALIDATOR_CALLBACK_SECRET", |v: &str| {
+                RawSettings {
+                    validator_secret: Some(v.into()),
+                    ..RawSettings::default()
+                }
+            }),
+        ] {
+            let err = Settings::parse(raw(short)).unwrap_err().to_string();
+            assert!(err.contains(name) && !err.contains(short), "{err}");
+            assert!(Settings::parse(raw(long)).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
     fn no_secret_reaches_the_settings_printout() {
         let settings = Settings::parse(RawSettings {
             polygon_rpc_url: Some("https://rpc.example/v3/sk-example-rpc".into()),
-            admin_token: Some("sk-example-admin".into()),
+            admin_token: Some("sk-example-admin-0123456789abcdef".into()),
             newsletter_service_url: Some("https://newsletter.example/v2".into()),
             newsletter_publication_id: Some("pub-example".into()),
             newsletter_api_key: Some("sk-example-newsletter".into()),

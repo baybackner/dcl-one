@@ -620,6 +620,18 @@ const EDGE_CASES = [
   { name: '521-review-writes-per-minute', description: 'POST /collections/{id}/validations signed by a wallet with no role, after 30 such requests within the minute, with the review flow off', method: 'POST', path: reviewOf('302', 'validations'), signer: 'stranger', repeat: 30, keep: ['retry-after', 'ratelimit', 'ratelimit-policy'] }
 ]
 
+const OWNER_COLLECTIONS = '/v1/0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e/collections'
+
+const LISTED_TIMES = ['data.updated_at', 'data.last_activity_at']
+
+const LISTING_CASES = [
+  { name: '522-address-collections-under-review', description: 'GET /{address}/collections signed by that address, filtered to collections under review after the run requested reviews, one approved on chain with changes under review included', method: 'GET', path: OWNER_COLLECTIONS, query: { status: 'under_review' }, signer: 'owner', volatile: LISTED_TIMES },
+  { name: '523-collection-curation-reject-approved', description: 'PATCH /collections/{id}/curation signed by a committee member, rejecting the changes requested on a collection the chain shows approved', method: 'PATCH', path: collectionCuration('007'), signer: 'committee', body: curation({ rejectionMessage: 'Conformance rejection', rejectionReasons: ['other'], status: 'rejected' }), volatile: CREATED_ROW },
+  { name: '524-address-collections-rejected', description: 'GET /{address}/collections signed by that address, filtered to rejected collections at the contract of one approved on chain whose newest curation is a rejection', method: 'GET', path: OWNER_COLLECTIONS, query: { status: 'rejected', contract_address: '0x5eed000000000000000000000000000000000007' }, signer: 'owner', volatile: LISTED_TIMES },
+  { name: '525-collections-committee-requested-at-curated', description: 'GET /collections signed by a committee member, collections whose reviews were requested in another order than they were created, sorted by REQUESTED_AT_DESC', method: 'GET', path: '/v1/collections', query: { q: 'requested', sort: 'REQUESTED_AT_DESC' }, signer: 'committee' },
+  { name: '526-collections-committee-most-relevant-curated', description: 'GET /collections signed by a committee member, collections to review, under review, approved and rejected, created in another order, sorted by MOST_RELEVANT', method: 'GET', path: '/v1/collections', query: { q: 'requested', sort: 'MOST_RELEVANT' }, signer: 'committee' }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2529,7 +2541,8 @@ const CASES = [
   ...VALIDATION_CASES,
   ...VIDEO_CASES,
   ...REVIEW_CASES,
-  ...EDGE_CASES
+  ...EDGE_CASES,
+  ...LISTING_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */

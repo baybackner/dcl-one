@@ -17,7 +17,7 @@ use super::rows::{
 use super::slack::Notice;
 use super::transitions::{self, Actor, Change, Curation, Refusal, Request, Status};
 use crate::SharedState;
-use crate::access::{self, Curator};
+use crate::access::{self, Curator, Operator};
 use crate::chain_state;
 use crate::http::ApiError;
 use crate::shared::audit;
@@ -168,7 +168,7 @@ fn refused(refusal: Refusal, id: Uuid) -> ApiError {
             "Item curations can't be created for items that weren't curated before",
         ),
         Refusal::ItemAssignee => return invalid_schema(),
-        Refusal::VerdictOnly | Refusal::Decided => {
+        Refusal::VerdictOnly | Refusal::Decided | Refusal::ItemStatusOnly => {
             return ApiError::internal(format!("a curation request refused as {refusal:?}"));
         }
     }
@@ -683,25 +683,8 @@ pub async fn update_item(
         return Err(refused(Refusal::NoCuration, item));
     };
     let previous = previous.ok_or_else(|| refused(Refusal::NoCuration, item))?;
-    let (hash, mapped) = submitted(&mut tx, item).await?;
-    let updated: ItemCurationOut = sqlx::query_as(
-        "UPDATE builder.item_curations SET status = COALESCE($2, status), content_hash = $3, \
-           is_mapping_complete = $4, updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) \
-         WHERE id = $1 RETURNING id, item_id, status, created_at, updated_at, content_hash, is_mapping_complete",
-    )
-    .bind(previous.id)
-    .bind(status.map(Status::as_str))
-    .bind(&hash)
-    .bind(mapped)
-    .fetch_one(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE builder.collection_curations SET \
-           updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) WHERE collection_id = $1",
-    )
-    .bind(curator.collection())
-    .execute(&mut *tx)
-    .await?;
+    let (updated, hash) =
+        set_item_curation(&mut tx, curator.collection(), item, previous.id, status).await?;
     if curator.committee() {
         audited(
             &mut tx,
@@ -713,6 +696,94 @@ pub async fn update_item(
     }
     tx.commit().await?;
     Ok(updated)
+}
+
+async fn set_item_curation(
+    conn: &mut PgConnection,
+    collection: Uuid,
+    item: Uuid,
+    id: Uuid,
+    status: Option<Status>,
+) -> Result<(ItemCurationOut, String), ApiError> {
+    let (hash, mapped) = submitted(&mut *conn, item).await?;
+    let updated: ItemCurationOut = sqlx::query_as(
+        "UPDATE builder.item_curations SET status = COALESCE($2, status), content_hash = $3, \
+           is_mapping_complete = $4, updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) \
+         WHERE id = $1 RETURNING id, item_id, status, created_at, updated_at, content_hash, is_mapping_complete",
+    )
+    .bind(id)
+    .bind(status.map(Status::as_str))
+    .bind(&hash)
+    .bind(mapped)
+    .fetch_one(&mut *conn)
+    .await?;
+    sqlx::query(
+        "UPDATE builder.collection_curations SET \
+           updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) WHERE collection_id = $1",
+    )
+    .bind(collection)
+    .execute(&mut *conn)
+    .await?;
+    Ok((updated, hash))
+}
+
+/// The operator's item status routes: the newest curation of each of
+/// `items` in the operator's collection set to `status`, in one transaction
+/// that locks the collection and decides again, each move asked of the table
+/// as [`Actor::Operator`] and recorded in `ops.admin_audit`. An item with no
+/// curation, or of another collection, is left alone. Answers how many were
+/// set.
+pub async fn operate_items(
+    state: &SharedState,
+    operator: Operator,
+    items: &[Uuid],
+    status: Status,
+) -> Result<u64, ApiError> {
+    let request = Request::Update {
+        status: Some(status),
+        assignee: false,
+    };
+    let collection = operator.collection();
+    let mut tx = state.items.pool().begin().await?;
+    lock(&mut tx, collection).await?;
+    let view = chain_state::for_decision(&mut tx).await?;
+    access::confirm_operator(&mut tx, &view, &operator).await?;
+    let members: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM builder.items WHERE collection_id = $1 AND id = ANY($2) ORDER BY id",
+    )
+    .bind(collection)
+    .bind(items)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut set = 0;
+    for item in members {
+        let Some(previous) = rows::newest_of_item(&mut tx, item).await? else {
+            continue;
+        };
+        let from = Status::parse(&previous.status);
+        let Change::Update { status, .. } =
+            transitions::decide(Curation::Item, from, request, Actor::Operator)
+                .map_err(|r| refused(r, item))?
+        else {
+            return Err(refused(Refusal::ItemStatusOnly, item));
+        };
+        let (_, hash) = set_item_curation(&mut tx, collection, item, previous.id, status).await?;
+        let target = item.to_string();
+        audit::record(
+            &mut *tx,
+            &audit::Entry::new(operator.actor(), "create", "builder.item_curation.update")
+                .target(Some(&target))
+                .detail(json!({
+                    "from": previous.status,
+                    "status": status.map(Status::as_str),
+                    "content_hash": hash,
+                })),
+        )
+        .await?;
+        set += 1;
+    }
+    tx.commit().await?;
+    Ok(set)
 }
 
 /// `POST /v1/items/:id/curation`.

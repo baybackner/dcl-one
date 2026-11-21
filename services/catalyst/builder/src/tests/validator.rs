@@ -1275,6 +1275,44 @@ async fn a_verdict_from_the_current_claim_settles_the_request_and_changes_no_cur
     );
 }
 
+/// A verdict names its request by the id the claim gave, in that one
+/// spelling: any other form of the same id is a bad body and settles
+/// nothing.
+#[tokio::test]
+async fn a_verdict_naming_its_request_in_another_spelling_is_refused_and_settles_nothing() {
+    let Some(node) = node().await else {
+        return;
+    };
+    let (id, _) = published(&node, "Spelled", 1).await;
+    let (_, claimed) = claim(&node).await;
+    let result = result_of(&claimed, "rejected");
+    let canonical = result["validationId"].as_str().unwrap().to_string();
+    let simple = canonical.replace('-', "");
+    for spelling in [
+        canonical.to_uppercase(),
+        simple,
+        format!("urn:uuid:{canonical}"),
+        format!("{{{canonical}}}"),
+    ] {
+        let mut body = result.clone();
+        body["validationId"] = json!(spelling);
+        assert_eq!(
+            verdict(&node, id, &body).await,
+            (
+                400,
+                json!({ "ok": false, "data": {}, "error": "Invalid request body" })
+            ),
+            "{spelling}"
+        );
+        assert_eq!(requests(&node.pool, id).await[0].4, None, "{spelling}");
+    }
+    assert_eq!(verdict(&node, id, &result).await, (204, Value::Null));
+    assert_eq!(
+        requests(&node.pool, id).await[0].4.as_deref(),
+        Some("rejected")
+    );
+}
+
 #[tokio::test]
 async fn a_validator_that_dies_lets_its_lease_lapse_and_the_third_lapse_abandons_with_one_notice() {
     let Some(node) = node().await else {
@@ -1746,7 +1784,7 @@ async fn what_a_creator_names_reaches_the_validator_as_data_and_slack_escaped() 
         .expect("the notice");
     assert!(
         warning.contains(
-            "|&lt;!channel&gt; *Hats* ✅ &lt;https://evil.example|forged&gt;>: it is too large"
+            "|&lt;!channel&gt; \u{200b}*\u{200b}Hats\u{200b}*\u{200b} ✅ &lt;https:\u{200b}//evil.\u{200b}example|forged&gt;>: it is too large"
         ),
         "{warning}"
     );

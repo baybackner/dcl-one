@@ -203,8 +203,9 @@ pub struct Listed {
 
 /// builder-server's `getThirdParties(manager)`: the registry's providers
 /// that list `manager`, less an unapproved one whose virtual third party
-/// doesn't list it, then the virtual third parties that list it and aren't
-/// among those, least recently written first.
+/// doesn't list it, then the virtual third parties that list it whose
+/// provider the registry doesn't hold, least recently written first. So a
+/// provider is listed exactly to the wallets that manage it.
 pub async fn managed_by(
     conn: &mut PgConnection,
     registry: &[Provider],
@@ -236,7 +237,10 @@ pub async fn managed_by(
         })
         .collect();
     for v in &virtuals {
-        if has_manager(&v.managers, manager) && !out.iter().any(|l| l.id == v.id) {
+        if has_manager(&v.managers, manager)
+            && provider(registry, &v.id).is_none()
+            && !out.iter().any(|l| l.id == v.id)
+        {
             out.push(Listed {
                 id: v.id.clone(),
                 view: virtual_view(v),

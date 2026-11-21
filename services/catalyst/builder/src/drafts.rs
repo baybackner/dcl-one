@@ -258,15 +258,22 @@ impl ItemsComponent {
         Ok(listing_out(&rows))
     }
 
-    /// "My item drafts" (`items_owner_updated_idx`).
+    /// "My item drafts": the wallet's unpublished items with no collection
+    /// (`items_owner_updated_idx`), and those of the draft standard
+    /// collections it owns (`collections_owner_idx`) and of the providers it
+    /// manages.
     pub async fn item_drafts(&self, wallet: &Wallet) -> Result<Vec<Value>, ApiError> {
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_read(&mut conn).await?;
         Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "{ITEM_DRAFT_LISTING} WHERE eth_address = $1 AND NOT is_published AND {} ORDER BY updated_at DESC",
+            "{ITEM_DRAFT_LISTING} WHERE NOT is_published AND {} \
+             AND ((collection_id IS NULL AND eth_address = $1) OR collection_id IN (SELECT c.id \
+               FROM builder.collections c WHERE (c.eth_address = $1 AND c.third_party_id IS NULL) \
+               OR c.third_party_id = ANY($2))) ORDER BY updated_at DESC",
             item_draft_predicate(&view)
         )))
         .bind(wallet.address())
+        .bind(wallet.provider_ids())
         .fetch_all(&mut *conn)
         .await?)
     }

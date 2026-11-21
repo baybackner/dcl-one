@@ -348,8 +348,8 @@ fn refusal_status(refusal: Refusal) -> u16 {
         Refusal::StatusIsCommittees | Refusal::AssigneeIsCommittees => 401,
         Refusal::NoCuration => 404,
         Refusal::Ongoing | Refusal::NeverCurated | Refusal::ItemAssignee => 400,
-        Refusal::VerdictOnly | Refusal::Decided => {
-            unreachable!("no curation route sends a verdict")
+        Refusal::VerdictOnly | Refusal::Decided | Refusal::ItemStatusOnly => {
+            unreachable!("no curation route sends a verdict or an operator's request")
         }
     }
 }
@@ -434,7 +434,9 @@ async fn every_cell_of_the_transition_table_answers_and_writes_as_the_table_says
                     let key = match actor {
                         Actor::Committee => COMMITTEE_KEY,
                         Actor::Creator => OWNER_KEY,
-                        Actor::Validator => unreachable!("the validator signs no wallet request"),
+                        Actor::Validator | Actor::Operator => {
+                            unreachable!("the validator and the operator use other routes")
+                        }
                     };
                     let before = statuses(&n.pool, curation, subject).await;
                     let audited = audits(&n.pool, subject).await;
@@ -492,6 +494,190 @@ async fn every_cell_of_the_transition_table_answers_and_writes_as_the_table_says
         failures.len(),
         failures.join("\n")
     );
+}
+
+/// The operator's item status route, signed by an admin address, for every
+/// status from every newest curation: the answer, the rows and the audit row
+/// the table gives the operator, the content hash taken again on a write.
+#[tokio::test]
+async fn the_operator_sets_an_item_status_only_as_the_table_gives_it_and_every_write_is_audited() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let admin = address(ADMIN_KEY);
+    let mut failures = Vec::new();
+    for from in [
+        None,
+        Some(Status::Pending),
+        Some(Status::Approved),
+        Some(Status::Rejected),
+    ] {
+        for to in Status::ALL {
+            let (collection, item) = third_party(&n.pool, true).await;
+            if let Some(from) = from {
+                item_curation(&n.pool, item, from.as_str()).await;
+            }
+            let label = format!("from {from:?} to {to:?}");
+            let request = Asked::Update {
+                status: Some(to),
+                assignee: false,
+            };
+            let before = statuses(&n.pool, Curation::Item, item).await;
+            let (status, answer) = call(
+                &n.app,
+                Some(ADMIN_KEY),
+                "PATCH",
+                &format!("/v1/collections/{collection}/items/{item}/status"),
+                Some(json!({ "status": to.as_str() })),
+            )
+            .await;
+            let after = statuses(&n.pool, Curation::Item, item).await;
+            let audited: Vec<(String, String)> = sqlx::query_as(
+                "SELECT actor, action FROM ops.admin_audit WHERE domain = 'create' AND target = $1",
+            )
+            .bind(item.to_string())
+            .fetch_all(&n.pool)
+            .await
+            .unwrap();
+            let hashes: Vec<String> = sqlx::query_scalar(
+                "SELECT content_hash FROM builder.item_curations WHERE item_id = $1 ORDER BY created_at",
+            )
+            .bind(item)
+            .fetch_all(&n.pool)
+            .await
+            .unwrap();
+            match transitions::tests::expected(Curation::Item, from, request, Actor::Operator) {
+                Err(Refusal::NoCuration) => {
+                    if status != 404 || after != before || !audited.is_empty() {
+                        failures.push(format!("{label}: {status} {answer} {after:?} {audited:?}"));
+                    }
+                }
+                Ok(Change::Update {
+                    status: Some(s), ..
+                }) => {
+                    let mut rows = before.clone();
+                    *rows.last_mut().unwrap() = s.as_str().to_string();
+                    if status != 200
+                        || after != rows
+                        || hashes.last() != Some(&hash(1))
+                        || audited != [(admin.clone(), "builder.item_curation.update".to_string())]
+                    {
+                        failures.push(format!(
+                            "{label}: {status} {answer} {after:?} {hashes:?} {audited:?}"
+                        ));
+                    }
+                }
+                other => failures.push(format!("{label}: the table answered {other:?}")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// An operator's write waits for a curator holding the collection and then
+/// decides the newest curation that curator left, never the one it replaced.
+#[tokio::test]
+async fn an_operator_write_waits_for_the_collection_lock_and_decides_the_newest_curation() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let (collection, item) = third_party(&n.pool, true).await;
+    item_curation(&n.pool, item, "rejected").await;
+    let mut holder = n.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(collection)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let app = n.app.clone();
+    let path = format!("/v1/collections/{collection}/items/{item}/status");
+    let operator = tokio::spawn(async move {
+        call(
+            &app,
+            Some(ADMIN_KEY),
+            "PATCH",
+            &path,
+            Some(json!({ "status": "approved" })),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!operator.is_finished(), "the operator waits for the lock");
+    crate::curation::record_item_curation(&mut holder, item, "pending", &hash(1), false)
+        .await
+        .unwrap();
+    holder.commit().await.unwrap();
+    let (status, answer) = operator.await.unwrap();
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(
+        statuses(&n.pool, Curation::Item, item).await,
+        ["rejected", "approved"]
+    );
+}
+
+/// A collection deleted while an operator's bulk write waits for it is
+/// decided again: the operator is told it is gone.
+#[tokio::test]
+async fn an_operator_bulk_write_on_a_collection_deleted_meanwhile_answers_not_found() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let (collection, item) = third_party(&n.pool, true).await;
+    item_curation(&n.pool, item, "pending").await;
+    let mut holder = n.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(collection)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let app = n.app.clone();
+    let path = format!("/v1/collections/{collection}/items/status");
+    let operator = tokio::spawn(async move {
+        call(
+            &app,
+            Some(ADMIN_KEY),
+            "PATCH",
+            &path,
+            Some(json!({ "status": "approved", "itemIds": [item] })),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sqlx::query("DELETE FROM builder.collections WHERE id = $1")
+        .bind(collection)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    holder.commit().await.unwrap();
+    let (status, answer) = operator.await.unwrap();
+    assert_eq!(status, 404, "{answer}");
+}
+
+/// The operator decides items of a published collection only.
+#[tokio::test]
+async fn the_operator_cannot_set_the_status_of_an_item_of_an_unpublished_collection() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let (collection, item) = third_party(&n.pool, false).await;
+    for (path, body) in [
+        (
+            format!("/v1/collections/{collection}/items/{item}/status"),
+            json!({ "status": "approved" }),
+        ),
+        (
+            format!("/v1/collections/{collection}/items/status"),
+            json!({ "status": "approved", "itemIds": [item] }),
+        ),
+    ] {
+        let (status, answer) = call(&n.app, Some(ADMIN_KEY), "PATCH", &path, Some(body)).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("Unpublished collection")),
+            "{path}: {answer}"
+        );
+    }
+    assert_eq!(audits(&n.pool, item).await, 0);
 }
 
 /// A curator's decisions on the timeline: an assignee change, a new
@@ -789,7 +975,7 @@ async fn slack_hears_of_a_decision_only_after_it_is_committed() {
     );
     assert!(
         text.contains(
-            "|&lt;!channel&gt; *Hats* ✅ &lt;https://evil.example|forged&gt;> was approved by"
+            "|&lt;!channel&gt; \u{200b}*\u{200b}Hats\u{200b}*\u{200b} ✅ &lt;https:\u{200b}//evil.\u{200b}example|forged&gt;> was approved by"
         ),
         "{text}"
     );

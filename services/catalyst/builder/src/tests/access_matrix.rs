@@ -41,6 +41,10 @@ const COMMITTEE_KEY: &str = "0x3333333333333333333333333333333333333333333333333
 const MANAGER_KEY: &str = "0x4444444444444444444444444444444444444444444444444444444444444444";
 const CREATOR_KEY: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
 const SIBLING_KEY: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
+const ADMIN_KEY: &str = "0x7777777777777777777777777777777777777777777777777777777777777777";
+const FORMER_COMMITTEE_KEY: &str =
+    "0x8888888888888888888888888888888888888888888888888888888888888888";
+const MINTER_KEY: &str = "0x9999999999999999999999999999999999999999999999999999999999999999";
 const PROVIDER: &str = "urn:decentraland:matic:collections-thirdparty:matrix";
 const MOUNTS: [&str; 2] = ["", "/builder-api"];
 const VALIDATOR_SECRET: &str = "example-validator-secret-0123456789abcdef";
@@ -55,11 +59,27 @@ enum Caller {
     Creator,
     Sibling,
     Validator,
+    /// A wallet `BUILDER_ADMIN_ADDRESSES` lists.
+    Admin,
+    /// A wallet the committee index added and then removed.
+    FormerCommittee,
+    /// A minter the copy lists for an on-chain collection.
+    Minter,
 }
 use Caller::*;
 
-const CALLERS: [Caller; 8] = [
-    Anonymous, Owner, Stranger, Manager, Committee, Creator, Sibling, Validator,
+const CALLERS: [Caller; 11] = [
+    Anonymous,
+    Owner,
+    Stranger,
+    Manager,
+    Committee,
+    Creator,
+    Sibling,
+    Validator,
+    Admin,
+    FormerCommittee,
+    Minter,
 ];
 
 impl Caller {
@@ -72,6 +92,9 @@ impl Caller {
             Committee => Some(COMMITTEE_KEY),
             Creator => Some(CREATOR_KEY),
             Sibling => Some(SIBLING_KEY),
+            Admin => Some(ADMIN_KEY),
+            FormerCommittee => Some(FORMER_COMMITTEE_KEY),
+            Minter => Some(MINTER_KEY),
         }
     }
 
@@ -171,8 +194,10 @@ impl Kind {
         self.on_chain() && caller == Manager
     }
 
+    /// The item's owner: its collection's owner, or the wallet the node
+    /// stored for an item with no collection.
     fn item_owner(self, caller: Caller) -> bool {
-        !matches!(self, Missing | Malformed) && caller == Owner
+        self.owner(caller)
     }
 }
 
@@ -214,7 +239,7 @@ fn collection_keys(full: bool, third_party: bool) -> std::collections::BTreeSet<
 }
 
 /// The role is admitted: whatever the route answers next, it is not a 401,
-/// 403 or 404.
+/// 403, 404 or a 5xx.
 fn admitted() -> Option<Expect> {
     Some(Expect(0, String::new()))
 }
@@ -351,12 +376,13 @@ async fn copy_row(pool: &PgPool, contract: &str, creator: Caller, approved: bool
     sqlx::query(
         "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
            is_completed, is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) \
-         VALUES ('matic', $1, 137, 'Matrix', $2, $2, 'urn:matrix', true, $3, true, $4, '{}', 1, 1, 1, timezone('UTC', now()))",
+         VALUES ('matic', $1, 137, 'Matrix', $2, $2, 'urn:matrix', true, $3, true, $4, $5, 1, 1, 1, timezone('UTC', now()))",
     )
     .bind(contract)
     .bind(creator.address())
     .bind(approved)
     .bind(vec![Manager.address().to_uppercase().replace("0X", "0x")])
+    .bind(vec![Minter.address().to_uppercase().replace("0X", "0x")])
     .execute(pool)
     .await
     .unwrap();
@@ -1358,6 +1384,17 @@ impl Op {
         }
         match self {
             Op::DraftCollections | Op::DraftItems => return ok(),
+            Op::CurationQueue if caller == Admin => return ok(),
+            Op::ItemStatus | Op::ItemsStatus if caller == Admin => {
+                return match kind {
+                    Missing | Malformed | Orphan => refused(404, "Not found"),
+                    _ if !kind.published() => refused(409, "Unpublished collection"),
+                    _ if self == Op::ItemStatus && kind != ThirdPartySubmitted => {
+                        refused(404, "Not found")
+                    }
+                    _ => ok(),
+                };
+            }
             Op::CurationQueue | Op::ItemStatus | Op::ItemsStatus => return refused(403, NOT_ADMIN),
             _ => {}
         }
@@ -1457,7 +1494,6 @@ impl Op {
             }
             Op::OwnerSync => ok(),
             Op::Publish if kind.third_party() => ok(),
-            Op::Publish if kind.on_chain() => refused(409, "The item is not published."),
             Op::Publish => refused(401, NOT_PUBLISHED),
             Op::CollectionItems => match kind {
                 Missing => not_found(&collection, "collections"),
@@ -1702,10 +1738,23 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
                 &forum.start().await,
             )),
             validator_secret: Some(VALIDATOR_SECRET.into()),
+            admin_addresses: vec![Admin.address()],
             ..crate::Settings::default()
         },
     )
     .unwrap();
+    for (log_index, is_member) in [(1, true), (2, false)] {
+        sqlx::query(
+            "INSERT INTO shop.committee_event (network, block_number, log_index, block_time, contract_address, member, is_member) \
+             VALUES ('matic', 1, $1, 1, '0xaeec95a8aa671a6d3fec56594827d7804964fa70', $2, $3) ON CONFLICT DO NOTHING",
+        )
+        .bind(log_index)
+        .bind(FormerCommittee.address())
+        .bind(is_member)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     state.guarded = dcl_http::Outbound::for_tests();
     state.validator_calls =
         crate::shared::limits::RateLimiter::new(1_000_000, std::time::Duration::from_secs(60));
@@ -1844,7 +1893,7 @@ async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Optio
         },
     );
     let mut problems = Vec::new();
-    let refusal = matches!(got.0, 401 | 403 | 404);
+    let refusal = matches!(got.0, 401 | 403 | 404) || got.0 >= 500;
     if (expected.0 == 0 && refusal) || (expected.0 != 0 && got != expected) {
         problems.push(format!("answered {got:?}, expected {expected:?}"));
     }
@@ -1854,6 +1903,7 @@ async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Optio
     let sees_all = (op == Op::ReadItem && kind.item_owner(caller))
         || kind.owner(caller)
         || kind.manager(caller)
+        || (caller == Minter && kind.on_chain())
         || (committee_up && caller == Committee);
     let items: Vec<&Value> = match op {
         Op::ReadItem if status.is_success() => vec![&body["data"]],
@@ -1921,8 +1971,10 @@ async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Optio
                     .collect()
             })
             .unwrap_or_default();
-        let full =
-            kind.owner(caller) || kind.manager(caller) || (committee_up && caller == Committee);
+        let full = kind.owner(caller)
+            || kind.manager(caller)
+            || (caller == Minter && kind.on_chain())
+            || (committee_up && caller == Committee);
         let expected: Vec<String> = match (full, f.minted) {
             (false, Some(minted)) => vec![minted.to_string()],
             (false, None) if kind == ThirdPartySubmitted => {

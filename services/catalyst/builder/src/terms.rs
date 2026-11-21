@@ -14,7 +14,8 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::State;
-use crate::access::CollectionManage;
+use crate::access::{self, CollectionManage};
+use crate::chain_state;
 use crate::handlers::newsletter::is_valid_email;
 use crate::http::ApiError;
 
@@ -86,21 +87,26 @@ pub fn parse(body: &Value) -> Result<Acceptance, ApiError> {
     })
 }
 
-/// Stores `acceptance` for the collection `manage` names, then tries its
-/// forward once when a warehouse is configured.
+/// Stores `acceptance` for the collection `manage` names, in one
+/// transaction that locks the collection and decides again
+/// ([`access::confirm_collection_manage`]), then tries its forward once
+/// when a warehouse is configured.
 pub async fn accept(
     state: &State,
     manage: &CollectionManage,
     acceptance: Acceptance,
 ) -> Result<(), ApiError> {
+    let mut tx = state.items.pool().begin().await?;
     let (contract, urn): (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT contract_address, CASE WHEN third_party_id IS NOT NULL THEN urn_suffix END \
-         FROM builder.collections WHERE id = $1",
+         FROM builder.collections WHERE id = $1 FOR UPDATE",
     )
     .bind(manage.id())
-    .fetch_optional(state.items.pool())
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+    let view = chain_state::for_decision(&mut tx).await?;
+    access::confirm_collection_manage(&mut tx, &view, manage).await?;
     let body = match acceptance.event {
         THIRD_PARTY_EVENT => json!({
             "email": acceptance.email,
@@ -125,8 +131,9 @@ pub async fn accept(
     .bind(acceptance.event)
     .bind(&body)
     .bind(i32::from(configured))
-    .execute(state.items.pool())
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     if configured && send(state, acceptance.event, &body).await {
         delivered(state, id).await?;
     }
@@ -177,9 +184,10 @@ async fn send(state: &State, event: &str, body: &Value) -> bool {
 
 /// One pass of the forward: claims up to [`PASS_LIMIT`] due acceptances,
 /// counting the attempt and setting the next one before sending, and
-/// answers how many the warehouse took. Nothing without a warehouse.
+/// answers how many the warehouse took. Nothing without a warehouse or
+/// while creator writes are off.
 pub async fn forward_due(state: &State) -> anyhow::Result<u64> {
-    if state.settings.warehouse.is_none() {
+    if state.settings.warehouse.is_none() || !state.settings.writes_enabled {
         return Ok(0);
     }
     let due: Vec<(Uuid, String, Value)> = sqlx::query_as(

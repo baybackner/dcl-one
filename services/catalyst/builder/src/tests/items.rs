@@ -399,26 +399,36 @@ async fn a_third_party_urn_in_the_path_reaches_exactly_one_item() {
     let lower = format!("{collection_urn}:hat");
     let upper = format!("{collection_urn}:HAT");
     let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
-    for (id, urn) in [(first, &lower), (second, &upper)] {
-        let saved = put(
-            &app,
-            OWNER_KEY,
-            &format!("/v1/items/{id}"),
-            &item(id, OWNER_KEY, Some(collection), &contents, Some(urn)),
-        )
-        .await;
-        assert_eq!(
-            saved.0, 200,
-            "items whose URNs differ in case are two items: {saved:?}"
-        );
-    }
-    let mut by_urn = item(first, OWNER_KEY, Some(collection), &contents, Some(&upper));
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{first}"),
+        &item(first, OWNER_KEY, Some(collection), &contents, Some(&lower)),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+    let (got, body) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{second}"),
+        &item(second, OWNER_KEY, Some(collection), &contents, Some(&upper)),
+    )
+    .await;
+    assert_eq!(
+        (got, body["error"].as_str()),
+        (
+            409,
+            Some("The URN provided already belong to another item. The item can't be inserted.")
+        ),
+        "an item part that differs only in case names the same content pointer"
+    );
+    let mut by_urn = item(first, OWNER_KEY, Some(collection), &contents, Some(&lower));
     by_urn["item"].as_object_mut().unwrap().remove("id");
     by_urn["item"]["name"] = "Shouted".into();
-    let (got, body) = put(&app, OWNER_KEY, &format!("/v1/items/{upper}"), &by_urn).await;
+    let (got, body) = put(&app, OWNER_KEY, &format!("/v1/items/{lower}"), &by_urn).await;
     assert_eq!(
         (got, body["data"]["id"].as_str()),
-        (200, Some(second.to_string().as_str()))
+        (200, Some(first.to_string().as_str()))
     );
     let names: Vec<(Uuid, String)> =
         sqlx::query_as("SELECT id, name FROM builder.items WHERE collection_id = $1 ORDER BY name")
@@ -426,13 +436,7 @@ async fn a_third_party_urn_in_the_path_reaches_exactly_one_item() {
             .fetch_all(&app.pool)
             .await
             .unwrap();
-    assert_eq!(
-        names,
-        vec![
-            (first, "Items test".to_string()),
-            (second, "Shouted".to_string())
-        ]
-    );
+    assert_eq!(names, vec![(first, "Shouted".to_string())]);
 
     let mixed = format!("{collection_urn}:Hat");
     let mut unknown = by_urn.clone();
@@ -498,6 +502,49 @@ async fn a_third_party_urn_in_the_path_reaches_exactly_one_item() {
             Some("The URN provided already belong to another item. The item can't be inserted.")
         ),
         "the waiting save sees the committed item of the provider's other collection"
+    );
+
+    let mut in_flight = app.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('builder item urn ' || 'hood', 0))")
+        .execute(&mut *in_flight)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, urn_suffix) \
+         VALUES ($1, $2, $3, 'In flight', 'wearable', $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(sibling)
+    .bind(address(OWNER_KEY))
+    .bind(format!("{sibling_urn}:hood"))
+    .execute(&mut *in_flight)
+    .await
+    .unwrap();
+    let recased = Uuid::new_v4();
+    let body = item(
+        recased,
+        OWNER_KEY,
+        Some(collection),
+        &contents,
+        Some(&format!("{collection_urn}:Hood")),
+    );
+    let path = format!("/v1/items/{recased}");
+    let save = put(&app, OWNER_KEY, &path, &body);
+    tokio::pin!(save);
+    tokio::select! {
+        biased;
+        answer = &mut save => panic!("the save took a re-cased item part another save holds: {answer:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+    }
+    in_flight.commit().await.unwrap();
+    let (got, body) = save.await;
+    assert_eq!(
+        (got, body["error"].as_str()),
+        (
+            409,
+            Some("The URN provided already belong to another item. The item can't be inserted.")
+        ),
+        "the waiting save sees the committed item whose part differs only in case"
     );
 }
 
@@ -1002,4 +1049,123 @@ async fn an_item_save_takes_its_item_from_the_typed_body_alone() {
     .unwrap();
     assert_ne!(columns.0.as_deref(), Some(chosen.as_str()));
     assert_ne!(columns.1.as_deref(), Some(chosen.as_str()));
+}
+
+/// After a collection's creatorship moves on chain, its items are the chain
+/// creator's: `GET /v1/{address}/items` lists them under the new creator and
+/// no longer under the wallet the node stored, which keeps its items with no
+/// collection.
+#[tokio::test]
+async fn a_transferred_collections_items_list_under_the_chain_creator_not_the_former_owner() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let (former, creator) = (address(OWNER_KEY), address(STRANGER_KEY));
+    let (collection, inside, loose) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO builder.collections (id, name, eth_address) VALUES ($1, 'Moved', $2)")
+        .bind(collection)
+        .bind(&former)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    for (id, parent) in [(inside, Some(collection)), (loose, None)] {
+        sqlx::query(
+            "INSERT INTO builder.items (id, collection_id, eth_address, name, type, blockchain_item_id) \
+             VALUES ($1, $2, $3, 'Hat', 'wearable', $4)",
+        )
+        .bind(id)
+        .bind(parent)
+        .bind(&former)
+        .bind(parent.map(|_| "0"))
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    }
+    let contract = super::support::on_chain(&app.pool, collection, true).await;
+    sqlx::query("UPDATE shop.collections SET creator = $2, owner = $2 WHERE contract_address = $1")
+        .bind(&contract)
+        .bind(&creator)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let listed = |key: &'static str, wallet: String| {
+        let app = &app;
+        async move {
+            let (status, body) = send(
+                app,
+                key,
+                "GET",
+                &format!("/v1/{wallet}/items"),
+                Body::empty(),
+                "application/json",
+            )
+            .await;
+            assert_eq!(status, 200, "{body}");
+            let mut ids: Vec<String> = body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        }
+    };
+    assert_eq!(listed(OWNER_KEY, former).await, vec![loose.to_string()]);
+    assert_eq!(
+        listed(STRANGER_KEY, creator).await,
+        vec![inside.to_string()]
+    );
+}
+
+/// Two wallets that create the same new item id at once: the second waits
+/// for the first and is then refused as a stranger to the item; the stored
+/// item stays the first wallet's.
+#[tokio::test]
+async fn the_second_wallet_creating_an_item_id_at_once_is_refused() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    let hash = dcl_auth::hash_bytes_v1(b"raced model");
+    let mut first = app.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('builder item ' || $1::text, 0))")
+        .bind(id)
+        .execute(&mut *first)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.items (id, eth_address, name, type) VALUES ($1, $2, 'First', 'wearable')",
+    )
+    .bind(id)
+    .bind(address(OWNER_KEY))
+    .execute(&mut *first)
+    .await
+    .unwrap();
+    let body = item(id, STRANGER_KEY, None, &[("model.glb", &hash)], None);
+    let path = format!("/v1/items/{id}");
+    let second = put(&app, STRANGER_KEY, &path, &body);
+    tokio::pin!(second);
+    tokio::select! {
+        biased;
+        answer = &mut second => panic!("the second save did not wait: {answer:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+    }
+    first.commit().await.unwrap();
+    let (status, answer) = second.await;
+    assert_eq!(
+        (status, answer["error"].as_str()),
+        (
+            401,
+            Some("The user is unauthorized to upsert the collection.")
+        ),
+        "{answer}"
+    );
+    let stored: (String, String) =
+        sqlx::query_as("SELECT eth_address, name FROM builder.items WHERE id = $1")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, (address(OWNER_KEY), "First".to_string()));
 }

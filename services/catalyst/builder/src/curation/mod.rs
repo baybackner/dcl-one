@@ -180,26 +180,3 @@ pub async fn record_collection_curation(
     .await?;
     Ok(id)
 }
-
-/// Sets `status` on the newest curation of each of `items` that belongs to
-/// `collection`; an item never submitted has none and is not counted.
-pub async fn decide_newest_item_curations(
-    conn: &mut PgConnection,
-    collection: Uuid,
-    items: &[Uuid],
-    status: &str,
-) -> Result<u64, ApiError> {
-    Ok(sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE builder.item_curations target SET status = $3, \
-           updated_at = GREATEST(target.updated_at, timezone('UTC', clock_timestamp())) \
-         WHERE target.id IN (SELECT {} FROM builder.items i \
-           WHERE i.collection_id = $1 AND i.id = ANY($2))",
-        newest_item_curation("i.id", "k.id")
-    )))
-    .bind(collection)
-    .bind(items)
-    .bind(status)
-    .execute(conn)
-    .await?
-    .rows_affected())
-}

@@ -240,14 +240,16 @@ fn within(value: &Option<String>, max: usize) -> bool {
 }
 
 impl Verdict {
-    /// builder-server's `validationResultSchema` with `claimId`; 400
+    /// builder-server's `validationResultSchema` with `claimId`, its
+    /// `validationId` a UUID in the canonical form a claim answers; 400
     /// `Invalid request body` otherwise.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refused = || ApiError::bad_request("Invalid request body");
         let mut verdict: Self = serde_json::from_slice(body).map_err(|_| refused())?;
         verdict.result = serde_json::from_slice(body).map_err(|_| refused())?;
         verdict.result.remove("claimId");
-        let valid = token(&verdict.validation_id)
+        let valid = Uuid::parse_str(&verdict.validation_id)
+            .is_ok_and(|id| id.to_string() == verdict.validation_id)
             && token(&verdict.collection_id)
             && token(&verdict.rules_version)
             && within(&verdict.reason, SHORT_TEXT)

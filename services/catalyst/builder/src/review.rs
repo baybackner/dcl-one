@@ -857,6 +857,7 @@ async fn decide(
             };
             sqlx::query(
                 "UPDATE builder.collection_curations SET status = 'rejected', reviewed_by = $2, \
+                   rejection_reasons = NULL, rejection_message = NULL, \
                    updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) WHERE id = $1",
             )
             .bind(newest.id)

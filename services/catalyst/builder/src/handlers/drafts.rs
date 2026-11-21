@@ -32,7 +32,10 @@ pub async fn get_item_drafts(
     Signed(signer): Signed,
 ) -> Result<Json<ApiData<Vec<Value>>>, ApiError> {
     Ok(Json(ApiData::ok(
-        state.items.item_drafts(&access::wallet(&signer)).await?,
+        state
+            .items
+            .item_drafts(&access::managing(&state, &signer).await?)
+            .await?,
     )))
 }
 

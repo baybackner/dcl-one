@@ -293,10 +293,11 @@ impl ItemsComponent {
         Ok(answer(&page, total, results, Some(0)))
     }
 
-    /// `GET /v1/{address}/items`: the wallet's own items that are not
-    /// third-party items, and the items of the collections of the providers
-    /// it manages; `collectionId` narrows them to one collection, `null` to
-    /// items with none.
+    /// `GET /v1/{address}/items`: the wallet's items with no collection, the
+    /// items of the standard collections it owns (the chain creator once the
+    /// copy holds the collection, the stored owner before), and the items of
+    /// the collections of the providers it manages; `collectionId` narrows
+    /// them to one collection, `null` to items with none.
     pub async fn address_items(
         &self,
         wallet: &Wallet,
@@ -320,19 +321,32 @@ impl ItemsComponent {
                 sql.push(" AND i.collection_id = ").push_bind(id);
             }
         };
+        let address = wallet.address().to_string();
         let mut scope = scope();
         scope.push(
             "SELECT i.id, i.created_at, false AS tp FROM builder.items i \
-             LEFT JOIN builder.collections c ON c.id = i.collection_id WHERE i.eth_address = ",
+             WHERE i.collection_id IS NULL AND i.eth_address = ",
         );
-        scope
-            .push_bind(wallet.address().to_string())
-            .push(" AND (c.third_party_id IS NULL OR i.urn_suffix IS NULL)");
+        scope.push_bind(address.clone());
         narrow(&mut scope);
         scope.push(
-            " UNION ALL SELECT i.id, i.created_at, true FROM builder.collections c \
-             JOIN builder.items i ON i.collection_id = c.id \
-             WHERE i.urn_suffix IS NOT NULL AND c.third_party_id = ANY(",
+            " UNION ALL SELECT i.id, i.created_at, false FROM (SELECT o.id FROM builder.collections o \
+             WHERE o.third_party_id IS NULL AND o.eth_address = ",
+        );
+        scope.push_bind(address.clone()).push(
+            " AND NOT EXISTS (SELECT 1 FROM shop.collections s WHERE s.network = 'matic' \
+             AND s.contract_address = lower(o.contract_address)) \
+             UNION SELECT b.id FROM shop.collections s JOIN builder.collections b \
+             ON b.contract_address = s.contract_address \
+             WHERE s.network = 'matic' AND b.third_party_id IS NULL AND s.creator = ",
+        );
+        scope
+            .push_bind(address)
+            .push(") owned JOIN builder.items i ON i.collection_id = owned.id WHERE true");
+        narrow(&mut scope);
+        scope.push(
+            " UNION ALL SELECT i.id, i.created_at, i.urn_suffix IS NOT NULL FROM builder.collections c \
+             JOIN builder.items i ON i.collection_id = c.id WHERE c.third_party_id = ANY(",
         );
         scope.push_bind(wallet.provider_ids()).push(")");
         narrow(&mut scope);

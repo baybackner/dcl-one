@@ -31,7 +31,6 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::access::{CollectionGrant, CollectionRead};
-use crate::auth::Admin;
 use crate::chain_state::{self, ReadView};
 use crate::storage::Storage;
 
@@ -104,31 +103,6 @@ impl ItemsComponent {
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_read(&mut conn).await?;
         collection_meta(&mut conn, &view, read).await
-    }
-
-    /// The operator's decision on a submitted item: [`crate::curation::decide_newest_item_curations`].
-    pub async fn set_item_curation_status(
-        &self,
-        admin: &Admin,
-        collection_id: &Uuid,
-        item_id: &Uuid,
-        status: &str,
-    ) -> Result<u64, ApiError> {
-        self.set_items_curation_status(admin, collection_id, std::slice::from_ref(item_id), status)
-            .await
-    }
-
-    /// The operator's decision on submitted items: [`crate::curation::decide_newest_item_curations`].
-    pub async fn set_items_curation_status(
-        &self,
-        _admin: &Admin,
-        collection_id: &Uuid,
-        item_ids: &[Uuid],
-        status: &str,
-    ) -> Result<u64, ApiError> {
-        let mut conn = self.pool.acquire().await?;
-        crate::curation::decide_newest_item_curations(&mut conn, *collection_id, item_ids, status)
-            .await
     }
 }
 

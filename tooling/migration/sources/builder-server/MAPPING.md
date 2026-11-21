@@ -81,6 +81,7 @@ the reference dump of May 2025 (migrations through `1727096280687`).
 | Collection events | Import; actor address lowercased, NULL when not an address | 0 (the dump predates the table) |
 | Events of a collection the node lacks, or with a type, actor or payload outside builder-server's | Skip | 0 |
 | Slot cheques | Import; salt and signature lowercased | 34 of 34 |
+| Cheques of a collection the node lacks (builder-server keeps a deleted collection's cheques) | Skip; a cheque of a collection the node deletes stays with no collection | 0 |
 | Cheques whose provider is not their collection's, whose salt or signature is malformed, whose quantity is not positive, or whose salt the provider already used | Skip | 0 |
 | Forum links that are not an `http(s)` URL without spaces of at most 2,048 characters under the forum origin (`FORUM_URL`) | Clear, with the forum id | 5 (scripts, plain text and one foreign host; no forum id) |
 

@@ -1159,3 +1159,192 @@ async fn with_the_review_flow_on_a_third_party_publication_hands_its_review_to_a
         "one hand-off however many batches"
     );
 }
+
+async fn send(app: &Router, key: &str, method: &str, path: &str, body: Value) -> (u16, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json");
+    let now = Utc::now().timestamp_millis().to_string();
+    for (name, value) in
+        signed_headers_by(&wallet(key), &method.to_lowercase(), path, "{}", true, &now)
+            .await
+            .iter()
+    {
+        request = request.header(name, value);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// The manager's save of `item` of `collection` at `urn` with a model of
+/// `model`'s bytes; answers the item's new content hash.
+async fn edit(w: &World, collection: Uuid, item: Uuid, urn: &str, model: &str) -> String {
+    let main = dcl_auth::hash_bytes_v1(model.as_bytes());
+    let body = json!({ "item": {
+        "id": item, "name": "Hat", "description": null, "type": "wearable",
+        "eth_address": address(MANAGER_KEY), "collection_id": collection, "urn": urn,
+        "contents": { "model.glb": main },
+        "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+        "data": {
+            "category": "hat", "replaces": [], "hides": [], "tags": [],
+            "representations": [{
+                "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"],
+                "mainFile": "model.glb", "contents": ["model.glb"], "overrideHides": [], "overrideReplaces": []
+            }]
+        }
+    } });
+    let (status, answer) = send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/items/{item}"),
+        body,
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    sqlx::query_scalar("SELECT local_content_hash FROM builder.items WHERE id = $1")
+        .bind(item)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap()
+}
+
+async fn newest_curation(w: &World, item: Uuid) -> (String, String) {
+    sqlx::query_as(
+        "SELECT status, content_hash FROM builder.item_curations WHERE item_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(item)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap()
+}
+
+async fn submitted(w: &World) -> (Uuid, Uuid, String) {
+    let manager = address(MANAGER_KEY);
+    let provider = listed(w, &[&manager], "10");
+    let (id, items) = collection(w, &provider, 1).await;
+    let (status, answer) = call(
+        &w.app,
+        Some(MANAGER_KEY),
+        publish(id),
+        Some(json!({ "itemIds": items, "cheque": cheque(MANAGER_KEY, &provider, 1, &salt()) })),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    let urn: String = sqlx::query_scalar("SELECT urn_suffix FROM builder.items WHERE id = $1")
+        .bind(items[0])
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    (id, items[0], urn)
+}
+
+/// A manager edits an item after submitting it: the pending curation holds
+/// the new content, the committee's approval data attests it and the
+/// approval records it.
+#[tokio::test]
+async fn an_edit_after_submission_is_what_the_committee_attests_and_approves() {
+    let Some(w) = world().await else { return };
+    let (id, item, urn) = submitted(&w).await;
+    let edited = edit(&w, id, item, &urn, "edited model").await;
+    assert_ne!(edited, format!("{:064x}", 0));
+    assert_eq!(
+        newest_curation(&w, item).await,
+        ("pending".into(), edited.clone())
+    );
+    let (status, body) = get(&w.app, Some(COMMITTEE_KEY), approval(id)).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["data"]["content_hashes"][item.to_string()],
+        json!(edited)
+    );
+    let (status, answer) = send(
+        &w.app,
+        COMMITTEE_KEY,
+        "PATCH",
+        &format!("/v1/items/{item}/curation"),
+        json!({ "curation": { "status": "approved" } }),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(newest_curation(&w, item).await, ("approved".into(), edited));
+}
+
+/// Approval data never attests content the committee did not see: an item
+/// whose content differs from its pending curation's is refused by name.
+#[tokio::test]
+async fn approval_data_refuses_an_item_whose_content_left_its_pending_curation() {
+    let Some(w) = world().await else { return };
+    let (id, item, _) = submitted(&w).await;
+    sqlx::query("UPDATE builder.items SET local_content_hash = $2 WHERE id = $1")
+        .bind(item)
+        .bind("e".repeat(64))
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, body) = get(&w.app, Some(COMMITTEE_KEY), approval(id)).await;
+    assert_eq!(
+        (status, &body["data"]),
+        (409, &json!({ "id": id, "itemIds": [item] })),
+        "{body}"
+    );
+}
+
+/// A save that waits behind an approval leaves the approved curation as
+/// approved: the change is new content for a later review.
+#[tokio::test]
+async fn a_save_queued_behind_the_approval_leaves_the_approved_content() {
+    let Some(w) = world().await else { return };
+    let (id, item, urn) = submitted(&w).await;
+    let reviewed = newest_curation(&w, item).await.1;
+    let mut holder = w.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let app = w.app.clone();
+    let approve = tokio::spawn(async move {
+        send(
+            &app,
+            COMMITTEE_KEY,
+            "PATCH",
+            &format!("/v1/items/{item}/curation"),
+            json!({ "curation": { "status": "approved" } }),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let w = Arc::new(w);
+    let saving = {
+        let w = w.clone();
+        tokio::spawn(async move { edit(&w, id, item, &urn, "edited while approving").await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    holder.commit().await.unwrap();
+    assert_eq!(approve.await.unwrap().0, 200);
+    let edited = saving.await.unwrap();
+    assert_ne!(edited, reviewed);
+    assert_eq!(
+        newest_curation(&w, item).await,
+        ("approved".into(), reviewed.clone())
+    );
+    let (status, body) = get(&w.app, Some(COMMITTEE_KEY), approval(id)).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["data"]["content_hashes"][item.to_string()],
+        json!(reviewed)
+    );
+}
