@@ -297,6 +297,9 @@ pub async fn update_collection_curation(
     let curation = curation_of(&body)?;
     let curator = access::curate_collection(&state, &signer, &id).await?;
     let update = writes::parse_update(&curation)?;
+    if update.content_hash.is_some() {
+        return Err(ApiError::bad_request("Invalid schema"));
+    }
     Ok(Json(ApiData::ok(
         writes::update_collection(&state, curator, update).await?,
     )))

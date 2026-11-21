@@ -348,6 +348,51 @@ async fn every_refusal_answers_before_anything_is_written() {
     .execute(&w.pool)
     .await
     .unwrap();
+    let unchecked = item(
+        &w,
+        id,
+        &format!("{provider}:c{}:video", id.simple()),
+        Some(9),
+    )
+    .await;
+    let page = dcl_auth::hash_bytes_v1(b"<p>not a video</p>");
+    sqlx::query(
+        "WITH named AS (UPDATE builder.items SET name = 'Unchecked' WHERE id = $1) \
+         INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'video.mp4', $2, $3)",
+    )
+    .bind(unchecked)
+    .bind(&page)
+    .bind(address(MANAGER_KEY))
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, 1, $2)",
+    )
+    .bind(&page)
+    .bind(address(MANAGER_KEY))
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let lost = item(
+        &w,
+        id,
+        &format!("{provider}:c{}:lost", id.simple()),
+        Some(10),
+    )
+    .await;
+    let gone = dcl_auth::hash_bytes_v1(b"recorded, never stored");
+    sqlx::query(
+        "WITH named AS (UPDATE builder.items SET name = 'Lost' WHERE id = $1), \
+           recorded AS (INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($2, 1, $3)) \
+         INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
+    )
+    .bind(lost)
+    .bind(&gone)
+    .bind(address(MANAGER_KEY))
+    .execute(&w.pool)
+    .await
+    .unwrap();
     let used = salt();
     let (status, _) = call(
         &w.app,
@@ -513,6 +558,21 @@ async fn every_refusal_answers_before_anything_is_written() {
             (
                 400,
                 "Unuploaded: upload missing content before publishing".into(),
+            ),
+        ),
+        (
+            "an item naming a recorded file the store doesn't hold",
+            Some(MANAGER_KEY),
+            json!({ "itemIds": [items[0], lost], "cheque": good(2) }),
+            (400, "Lost: upload missing content before publishing".into()),
+        ),
+        (
+            "an item whose video the videos route never took",
+            Some(MANAGER_KEY),
+            json!({ "itemIds": [items[0], unchecked], "cheque": good(2) }),
+            (
+                400,
+                "Unchecked: upload missing content before publishing".into(),
             ),
         ),
         (
@@ -1275,7 +1335,65 @@ async fn an_edit_after_submission_is_what_the_committee_attests_and_approves() {
         COMMITTEE_KEY,
         "PATCH",
         &format!("/v1/items/{item}/curation"),
-        json!({ "curation": { "status": "approved" } }),
+        json!({ "curation": { "status": "approved", "contentHash": edited } }),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(newest_curation(&w, item).await, ("approved".into(), edited));
+}
+
+/// A committee approval names the content it approves: content saved after
+/// the committee read it is refused by name and stays pending, an approval
+/// that names nothing is refused, and the content the item holds is approved.
+#[tokio::test]
+async fn an_approval_records_only_the_content_the_committee_names() {
+    let Some(w) = world().await else { return };
+    let (id, item, urn) = submitted(&w).await;
+    let (status, body) = get(&w.app, Some(COMMITTEE_KEY), approval(id)).await;
+    assert_eq!(status, 200, "{body}");
+    let reviewed = body["data"]["content_hashes"][item.to_string()]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let edited = edit(&w, id, item, &urn, "swapped after review").await;
+    assert_ne!(edited, reviewed);
+    let approve = |hash: Option<&str>| {
+        let mut curation = json!({ "status": "approved" });
+        if let Some(hash) = hash {
+            curation["contentHash"] = json!(hash);
+        }
+        json!({ "curation": curation })
+    };
+    let path = format!("/v1/items/{item}/curation");
+    let (status, answer) = send(
+        &w.app,
+        COMMITTEE_KEY,
+        "PATCH",
+        &path,
+        approve(Some(&reviewed)),
+    )
+    .await;
+    assert_eq!(
+        (status, &answer["data"]),
+        (409, &json!({ "id": item, "contentHash": edited })),
+        "{answer}"
+    );
+    assert_eq!(
+        newest_curation(&w, item).await,
+        ("pending".into(), edited.clone())
+    );
+    let (status, answer) = send(&w.app, COMMITTEE_KEY, "PATCH", &path, approve(None)).await;
+    assert_eq!(status, 400, "{answer}");
+    assert_eq!(
+        newest_curation(&w, item).await,
+        ("pending".into(), edited.clone())
+    );
+    let (status, answer) = send(
+        &w.app,
+        COMMITTEE_KEY,
+        "PATCH",
+        &path,
+        approve(Some(&edited)),
     )
     .await;
     assert_eq!(status, 200, "{answer}");
@@ -1316,13 +1434,14 @@ async fn a_save_queued_behind_the_approval_leaves_the_approved_content() {
         .await
         .unwrap();
     let app = w.app.clone();
+    let approved = reviewed.clone();
     let approve = tokio::spawn(async move {
         send(
             &app,
             COMMITTEE_KEY,
             "PATCH",
             &format!("/v1/items/{item}/curation"),
-            json!({ "curation": { "status": "approved" } }),
+            json!({ "curation": { "status": "approved", "contentHash": approved } }),
         )
         .await
     });
@@ -1347,4 +1466,101 @@ async fn a_save_queued_behind_the_approval_leaves_the_approved_content() {
         body["data"]["content_hashes"][item.to_string()],
         json!(reviewed)
     );
+}
+
+async fn save_hat(w: &World, collection: Uuid, item: Option<Uuid>, urn: &str) -> (u16, Value) {
+    let main = dcl_auth::hash_bytes_v1(urn.as_bytes());
+    let mut fields = json!({
+        "name": "Hat", "description": null, "type": "wearable",
+        "eth_address": address(MANAGER_KEY), "collection_id": collection, "urn": urn,
+        "contents": { "model.glb": main },
+        "metrics": { "meshes": 1, "bodies": 1, "materials": 1, "textures": 1, "triangles": 1, "entities": 1 },
+        "data": {
+            "category": "hat", "replaces": [], "hides": [], "tags": [],
+            "representations": [{
+                "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"],
+                "mainFile": "model.glb", "contents": ["model.glb"], "overrideHides": [], "overrideReplaces": []
+            }]
+        }
+    });
+    let path = match item {
+        Some(item) => {
+            fields["id"] = json!(item);
+            item.to_string()
+        }
+        None => urn.to_string(),
+    };
+    send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/items/{path}"),
+        json!({ "item": fields }),
+    )
+    .await
+}
+
+/// A linked collection renamed before anything was submitted takes its
+/// items' URNs with it: each answers and is found at the new URN, and the
+/// old one can't be claimed by an item of another collection while the
+/// provider already holds that item.
+#[tokio::test]
+async fn a_renamed_linked_collection_takes_its_items_urns_with_it() {
+    let Some(w) = world().await else { return };
+    w.state.content_sync.set_own_content_authority(true);
+    let manager = address(MANAGER_KEY);
+    let provider = listed(&w, &[&manager], "10");
+    let (a, _) = collection(&w, &provider, 0).await;
+    let old: String =
+        sqlx::query_scalar("SELECT urn_suffix FROM builder.collections WHERE id = $1")
+            .bind(a)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    let hat = Uuid::new_v4();
+    let (status, answer) = save_hat(&w, a, Some(hat), &format!("{old}:hat")).await;
+    assert_eq!(status, 200, "{answer}");
+    let renamed = format!("{provider}:renamed");
+    let rename = |id: Uuid, name: &str, urn: &str| json!({ "collection": { "id": id, "name": name, "urn": urn, "eth_address": manager, "salt": null, "contract_address": null } });
+    let (status, answer) = send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/collections/{a}"),
+        rename(a, "Renamed", &renamed),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    let (status, body) = get(&w.app, Some(MANAGER_KEY), format!("/v1/items/{hat}")).await;
+    assert_eq!(
+        (status, &body["data"]["urn"]),
+        (200, &json!(format!("{renamed}:hat"))),
+        "{body}"
+    );
+    let (status, answer) = save_hat(&w, a, None, &format!("{renamed}:hat")).await;
+    assert_eq!(
+        (status, &answer["data"]["id"]),
+        (200, &json!(hat)),
+        "{answer}"
+    );
+    let b = Uuid::new_v4();
+    let (status, answer) = send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/collections/{b}"),
+        rename(b, "Takes the old urn", &old),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    let (status, answer) = save_hat(&w, b, Some(Uuid::new_v4()), &format!("{old}:hat")).await;
+    assert_eq!(status, 409, "{answer}");
+    let holders: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM builder.items WHERE lower(urn_suffix) = lower($1)",
+    )
+    .bind(format!("{old}:hat"))
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(holders, 0);
 }

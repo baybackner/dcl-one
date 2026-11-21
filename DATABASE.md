@@ -1289,7 +1289,15 @@ filters by status or sorts by relevance. Measured on a scratch copy of the fresh
 collections, 4,149 on chain, two curations each and 794 open requests (count;
 a page of 12 by creation, JIT off): `to_review` 18 ms, `pending` 15 ms,
 `under_review` 6 ms, `auto_reviewing` 6 ms. The cost grows with the
-collections the other filters leave.
+collections the other filters leave. At the reference scale (51,745
+collections, 38,211 item curations and 4,755 collection curations imported, 5,575
+collections in the copy, JIT off) a committee page reads every collection in a
+sequential scan: 110 to 475 ms without filters, 160 ms to 1.4 s by last
+activity, 33 to 850 ms per status, 1.1 to 2.9 s with five tags, and 3 to
+545 ms for its count. No index is added: the page takes the newest curation
+of every collection and sorts on values derived per row, so no index reaches
+the rows a page answers without changing its answers; the listing is signed
+and committee-only.
 
 ## Builder items workload
 
@@ -1318,7 +1326,11 @@ Tables and what they hold:
   An upload stores only a hash its item names, verified against the bytes.
   `size` is at most 250,000,000 bytes, the largest item video
   (`uploaded_contents_size_check`; step `0064_builder_uploaded_video_size`
-  sets it on an applied database).
+  sets it on an applied database). `video` is true only on a record the
+  videos route wrote after its MP4 check (step
+  `0067_builder_uploaded_video_checked` adds it, false, to an applied
+  database); both publications and the approval's video pin take no other
+  record for a `video.mp4` entry.
 
 Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
 (the reference data; measured on a scratch copy):
@@ -1328,6 +1340,8 @@ Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
 | a collection's items, ids then bodies (largest collection 12,665 items) | `items_collection_created_idx` | ids 3 ms; a page of 50 under 1 ms; all 12,665 bodies about 110 to 160 ms |
 | an address's items: its items with no collection, the items of the standard collections it owns (stored owner while the copy lacks the collection, the copy's `creator` once it holds it) and of its providers' collections | `items_owner_updated_idx`, `collections_owner_idx`, the copy's primary key and `collections_creator_idx`, `items_collection_created_idx` | 28 ms for a page of 60 with its total, for the owner of 1,542 collections at the reference scale (a hash join over the copy's 52,000 rows) |
 | `GET /v1/items`, the 1,000 oldest | `items_created_idx`, then primary keys | ids under 1 ms; their 1,000 bodies about 10 ms |
+| a listing's document bytes, before its bodies (data, metrics, mappings and each file name and hash of the page's items) | primary key, `item_contents_pkey` | read with the bodies' transaction; a listing over 64 MiB is refused before its bodies |
+| an item save by URN, before its access decision: the item at the path's full URN in one of the provider's collections | `items_urn_idx` (partial, `urn_suffix IS NOT NULL`), then `collections_pkey` | 0.28 ms on 115,000 synthetic items in 500 collections, against a 12 ms scan without the index |
 | one item by id with its chain merge | primary keys | under 0.3 ms |
 | a save's contents for 198 files, and the upload record cleanup | `item_contents_pkey`, `item_contents_hash_idx` | under 10 ms warm |
 | the catalyst's entity at each listed item's URN (12,665 items, 1,500,000 synthetic deployments, 6,000 at the items' URNs, cold cache) | `active_pointers_pointer_ops_idx` per item, `deployments_entity_id_key` per hit | about 1.6 s for the whole collection; one item 0.5 ms |
@@ -1510,23 +1524,28 @@ only when it holds an upload record for the name's hash. The index
 `item_contents_hash_named_by_idx` is created by `schema migrate` from
 `schemas/50_create.sql`.
 
-### Storage held per wallet
+### Storage held per wallet and per node
 
-A wallet's uploads may hold at most 5,000,000,000 bytes that no published
-item names (`builder::limits::within_storage`). `POST /v1/items/{id}/files`
-and `POST /v1/items/{id}/videos` ask once each, after the access decision and
-the upload's place and before the body is read; the body's declared length,
-else the route's largest body, counts as stored.
+A wallet's uploads may hold at most 5,000,000,000 bytes and 100,000 files
+that no published item names, and every wallet's together
+`BUILDER_UNPUBLISHED_MAX_BYTES` (1,000,000,000,000 unset) and
+`BUILDER_UNPUBLISHED_MAX_FILES` (10,000,000 unset)
+(`builder::limits::within_storage`). `POST /v1/items/{id}/files` and `POST
+/v1/items/{id}/videos` ask once each, after the access decision and the
+upload's place and before the body is read; the body's declared length, else
+the route's largest body, counts as stored.
 
-- First, the wallet's whole total, from
+- First, the wallet's whole total and count, from
   `uploaded_contents_uploaded_by_idx (uploaded_by) INCLUDE (size)` alone (an
-  index-only scan). Most wallets stop here.
-- Only when that total could pass the bound, the bytes of the wallet's records
-  that no published item names: the same index, then the public-file probe
-  above for each record. The node keeps that count a minute per wallet, in
-  process memory, and moves it by how much the wallet's total changed since,
-  so a wallet past its bound runs the count at most once a minute however
-  often it asks, and a publication frees its bytes within a minute.
+  index-only scan), then the node's, a scan of the table. Most uploads stop
+  here.
+- Only when a total could pass its bound, the bytes and files of the records
+  that no published item names: the same index (the whole table for the
+  node), then the public-file probe above for each record. The node keeps
+  that count a minute per wallet and for the node, in process memory, and
+  moves it by how much the total changed since, so the count runs at most
+  once a minute however often uploads ask, and a publication frees its bytes
+  within a minute.
 
 Measured on a scratch copy of the fresh schema with 323,928 upload records,
 107,976 items and 8,298 collections, half of them on chain (PostgreSQL 18):
@@ -1535,6 +1554,9 @@ Measured on a scratch copy of the fresh schema with 323,928 upload records,
 | --- | --- | --- |
 | The total | 0.1 ms | 2.7 ms |
 | The unpublished bytes | 1.4 ms | 548 ms |
+
+The node's total over 302,172 records takes 18 to 24 ms (a parallel scan,
+`jit` off, PostgreSQL 18, scratch table of that size).
 
 Invariants:
 
@@ -1621,12 +1643,16 @@ Tables and what they hold:
   collection, item saves and creations in it, item deletes and the
   collection's delete answer 423. Uploads are never locked.
 - `builder.terms_acceptances`: one row per collection, signer and event,
-  the newest acceptance, with the body the warehouse receives, the email
-  address included; an acceptance names at most as many hashes as its
-  collection has items, each at most 64 ASCII letters and digits. Only the
-  terms route inserts into it and deletes the row it replaces, and only its
-  forward reads and updates it; no other statement reads it, no route
-  answers it, and an operator reads it with SQL.
+  with the body the warehouse receives, the email address included; an
+  acceptance names at most as many hashes as its collection has items, each
+  at most 64 ASCII letters and digits. A new acceptance deletes the row the
+  warehouse already took and merges into the one it hasn't (its hashes, then
+  the new ones it lacks, the newest 40,000 kept), so no acceptance is lost
+  before it is forwarded. A delivery marks the row forwarded only while its
+  body is still the one sent. Only the terms route inserts, updates and
+  deletes its rows, and only its forward reads and updates them; no other
+  statement reads it, no route answers it, and an operator reads it with
+  SQL.
   A delete of the collection keeps the rows (no foreign key). The schema has
   no role that narrows who reads it beyond those statements.
 
@@ -1637,7 +1663,7 @@ Statements:
 | lock | the collection row `FOR UPDATE`, the decision, one update | `collections_pkey` |
 | delete | the collection row, then its items `FOR UPDATE ORDER BY id`; the decision; the items' contents, the items and the row deleted; the upload records no item names any more | `collections_pkey`, `items_collection_created_idx`, `item_contents_pkey`, `item_contents_hash_idx` |
 | publish | the collection's items in creation order, the copy's row and item ids for its contract; to assign ids, the rows locked as for a delete and one update per item | `items_collection_created_idx`, `shop.collections` and `shop.items` primary keys |
-| terms | the collection's item count; one delete of the signer's earlier row of the event; one insert; one update when the forward succeeds | `items_collection_created_idx`, `terms_acceptances_collection_signer_event_idx`, `terms_acceptances_pkey` |
+| terms | the collection's item count; one delete of the signer's forwarded row of the event; one read of its waiting row; one insert or update of it; one update when the forward succeeds | `items_collection_created_idx`, `terms_acceptances_collection_signer_event_idx`, `terms_acceptances_pkey` |
 | terms forward pass | claims at most 50 due rows `FOR UPDATE SKIP LOCKED`, one update per delivered row | `terms_acceptances_due_idx` |
 
 Invariants:

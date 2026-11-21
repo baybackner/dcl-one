@@ -808,6 +808,8 @@ pub async fn serve(
             validator_secret: config.create.wearable_validator_callback_secret.clone(),
             cors_origin: config.create.cors_origin.clone(),
             cors_method: config.create.cors_method.clone(),
+            unpublished_max_bytes: config.create.builder_unpublished_max_bytes,
+            unpublished_max_files: config.create.builder_unpublished_max_files,
         })
         .context("BUILDER_* / NEWSLETTER_* / CORS_* configuration")?,
     )

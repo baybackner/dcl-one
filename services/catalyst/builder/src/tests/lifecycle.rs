@@ -1774,3 +1774,104 @@ async fn the_terms_forward_waits_while_creator_writes_are_off() {
     assert_eq!(crate::terms::forward_due(&open.state).await.unwrap(), 1);
     assert_eq!(pending_terms(&pool, id).await, vec![(true, 2)]);
 }
+
+/// Acceptances the warehouse hasn't taken yet are never lost to a newer one:
+/// a manager who accepts for two batches of items while the warehouse
+/// refuses has both batches' hashes delivered once it answers.
+#[tokio::test]
+async fn an_acceptance_waiting_for_the_warehouse_keeps_every_batch_it_covers() {
+    let warehouse = FakeWarehouse::default();
+    warehouse
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let node = node_over(
+        pool,
+        Options {
+            warehouse: Some(warehouse.url().await),
+            ..Options::default()
+        },
+    )
+    .await;
+    let (id, _, _) = draft(&node, 3).await;
+    let path = format!("/v1/collections/{id}/tos");
+    let hash = |c: char| c.to_string().repeat(64);
+    for batch in [vec![hash('a'), hash('b')], vec![hash('b'), hash('c')]] {
+        let (status, _) = call(
+            &node.app,
+            Some(OWNER_KEY),
+            "POST",
+            &path,
+            Some(json!({ "email": "jane.doe@example.com", "event": "publish_third_party_items_tos", "hashes": batch })),
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
+    warehouse
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("UPDATE builder.terms_acceptances SET next_attempt_at = timezone('UTC', now()) - interval '1 second' WHERE collection_id = $1")
+        .bind(id)
+        .execute(&node.pool)
+        .await
+        .unwrap();
+    crate::terms::forward_due(&node.state).await.unwrap();
+    let delivered: std::collections::BTreeSet<String> = warehouse
+        .received()
+        .iter()
+        .skip(2)
+        .flat_map(|(_, body)| {
+            body["body"]["hashes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|h| h.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        delivered,
+        [hash('a'), hash('b'), hash('c')].into_iter().collect()
+    );
+    assert!(
+        pending_terms(&node.pool, id)
+            .await
+            .iter()
+            .all(|(forwarded, _)| *forwarded)
+    );
+}
+
+/// A delivery of an acceptance a newer one merged into after it was sent
+/// leaves the merged acceptance waiting for its own delivery.
+#[tokio::test]
+async fn a_delivery_that_predates_a_merge_leaves_the_merged_acceptance_waiting() {
+    let Some(node) = node(Options::default()).await else {
+        return;
+    };
+    let (id, _, _) = draft(&node, 2).await;
+    let path = format!("/v1/collections/{id}/tos");
+    let accept = |hash: char| json!({ "email": "jane.doe@example.com", "event": "publish_third_party_items_tos", "hashes": [hash.to_string().repeat(64)] });
+    assert_eq!(
+        call(&node.app, Some(OWNER_KEY), "POST", &path, Some(accept('a')))
+            .await
+            .0,
+        200
+    );
+    let (row, sent): (Uuid, Value) =
+        sqlx::query_as("SELECT id, body FROM builder.terms_acceptances WHERE collection_id = $1")
+            .bind(id)
+            .fetch_one(&node.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        call(&node.app, Some(OWNER_KEY), "POST", &path, Some(accept('b')))
+            .await
+            .0,
+        200
+    );
+    crate::terms::delivered(&node.state, row, &sent)
+        .await
+        .unwrap();
+    assert_eq!(pending_terms(&node.pool, id).await, vec![(false, 0)]);
+}

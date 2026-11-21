@@ -25,7 +25,6 @@ use uuid::Uuid;
 use crate::SharedState;
 use crate::auth::{SignedPath, signed_path};
 use crate::http::{ApiData, ApiError, iso};
-use crate::shared::client_ip::{client_ip, source_key};
 use crate::shared::limits::RateLimitDecision;
 use crate::shared::signed_fetch::{candidate_paths, header_str};
 use crate::shared::validator_signature::{
@@ -50,8 +49,9 @@ impl FromRequestParts<SharedState> for Called {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &SharedState) -> Result<Self, ApiError> {
-        let source = source_key(&client_ip(&parts.headers));
-        if state.validator_calls.check(&source) == RateLimitDecision::Deny {
+        if let Some(source) = crate::limits::source(&parts.headers)
+            && state.validator_calls.check(&source) == RateLimitDecision::Deny
+        {
             return Err(ApiError::http(
                 429,
                 "Too many requests, try again in a minute",

@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS dcl_migration.blob_missing (
     reason text NOT NULL,
     PRIMARY KEY (source, object_key)
 );
+CREATE TABLE IF NOT EXISTS dcl_migration.builder_imported (
+    step text NOT NULL,
+    id text NOT NULL,
+    PRIMARY KEY (step, id)
+);
 -- The worlds.world_limit_overrides values `worlds-limits` last wrote; a row that no longer
 -- matches them was changed on the node and is left alone.
 CREATE TABLE IF NOT EXISTS dcl_migration.world_limit_seeded (

@@ -1275,9 +1275,9 @@ async fn a_verdict_from_the_current_claim_settles_the_request_and_changes_no_cur
     );
 }
 
-/// A verdict names its request by the id the claim gave, in that one
-/// spelling: any other form of the same id is a bad body and settles
-/// nothing.
+/// A verdict names its request and its items by the ids the claim gave, in
+/// that one spelling: any other form of the same id is a bad body and
+/// settles nothing.
 #[tokio::test]
 async fn a_verdict_naming_its_request_in_another_spelling_is_refused_and_settles_nothing() {
     let Some(node) = node().await else {
@@ -1296,6 +1296,24 @@ async fn a_verdict_naming_its_request_in_another_spelling_is_refused_and_settles
     ] {
         let mut body = result.clone();
         body["validationId"] = json!(spelling);
+        assert_eq!(
+            verdict(&node, id, &body).await,
+            (
+                400,
+                json!({ "ok": false, "data": {}, "error": "Invalid request body" })
+            ),
+            "{spelling}"
+        );
+        assert_eq!(requests(&node.pool, id).await[0].4, None, "{spelling}");
+    }
+    let item = result["items"][0]["itemId"].as_str().unwrap().to_string();
+    for spelling in [
+        item.to_uppercase(),
+        item.replace('-', ""),
+        format!("urn:uuid:{item}"),
+    ] {
+        let mut body = result.clone();
+        body["items"][0]["itemId"] = json!(spelling);
         assert_eq!(
             verdict(&node, id, &body).await,
             (
@@ -1592,6 +1610,23 @@ async fn every_forgery_fails_before_anything_is_read_or_written() {
         401,
         "another source has its own budget"
     );
+    let internal = Signing {
+        secret: OTHER_SECRET,
+        source: "10.1.2.3",
+        ..Signing::default()
+    };
+    for n in 0..=60 {
+        assert_eq!(
+            send(
+                &limited.app,
+                validator_request("POST", CLAIMS, "{}", &internal)
+            )
+            .await
+            .0,
+            401,
+            "a call that names no single client spends no shared budget: call {n}"
+        );
+    }
 }
 
 #[tokio::test]

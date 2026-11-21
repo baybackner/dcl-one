@@ -78,10 +78,6 @@ class ContentMigrationCases:
         self.content_load(db, 'builder-server', 'collection', [collection])
         self.assertEqual(self.sql(db, f"SELECT lock FROM builder.collections WHERE id = '{COLLECTION}';\n").strip(),
                          '2025-05-04 10:10:48.005')
-        unlocked, _ = self.builder_rows('Locked', '2026-03-01Z')
-        self.content_load(db, 'builder-server', 'collection', [unlocked])
-        self.assertEqual(self.sql(db, f"SELECT lock IS NULL FROM builder.collections WHERE id = '{COLLECTION}';\n").strip(),
-                         't')
 
     @staticmethod
     def virtual_third_party_row(provider, managers, raw, programmatic, updated):
@@ -109,14 +105,10 @@ class ContentMigrationCases:
         provider = 'urn:decentraland:matic:collections-thirdparty:virtual'
         self.content_load(db, 'builder-server', 'virtual_third_party', [
             self.virtual_third_party_row(provider, [OWNER], 'tp:1:First:', 'false', '2026-02-01Z')])
+        self.sql(db, "UPDATE builder.virtual_third_parties SET is_programmatic = true;\n")
         self.content_load(db, 'builder-server', 'virtual_third_party', [
-            self.virtual_third_party_row(provider, [OWNER], 'tp:1:Second:', 'true', '2026-03-01Z')])
-        self.assertEqual(self.virtual_third_parties(db), f"{provider}\t{{{OWNER}}}\ttp:1:Second:\tt")
-        self.sql(db, "UPDATE builder.virtual_third_parties SET is_programmatic = false, "
-                     "updated_at = '2026-05-01';\n")
-        self.content_load(db, 'builder-server', 'virtual_third_party', [
-            self.virtual_third_party_row(provider, [OWNER], 'tp:1:Third:', 'true', '2026-04-01Z')])
-        self.assertEqual(self.virtual_third_parties(db), f"{provider}\t{{{OWNER}}}\ttp:1:Second:\tf")
+            self.virtual_third_party_row(provider, [OWNER], 'tp:1:Second:', 'false', '2026-03-01Z')])
+        self.assertEqual(self.virtual_third_parties(db), f"{provider}\t{{{OWNER}}}\ttp:1:First:\tt")
 
     def test_when_importing_a_third_party_collection_it_should_keep_its_linked_contract(self):
         db = self.content_db('content_builder_linked')
@@ -186,18 +178,15 @@ class ContentMigrationCases:
         self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
                      "('builder-server', 'bafkvideo', 'bafkvideo', 7, 'video/mp4');\n")
-        self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'"])
-        self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || uploaded_by || ' ' || size, ',' ORDER BY hash) "
-                                      "FROM builder.uploaded_contents;\n").strip(),
-                         f'bafkamodel {OWNER} 5,bafkvideo {OWNER} 7')
-        other = '0x' + 'b' * 40
-        self.sql(db, f"UPDATE builder.items SET video_named_by = '{other}' WHERE id = '{ITEM}';\n")
-        self.content_load(db, 'builder-server', 'item', [item("'bafkvideo'", '2026-03-01Z')])
-        self.assertEqual(self.sql(db, writer).strip(), f'bafkvideo {other}', 'the same video keeps its writer')
-        self.content_load(db, 'builder-server', 'item', [item("'bafkother'", '2026-04-01Z')])
-        self.assertEqual(self.sql(db, writer).strip(), f'bafkother {OWNER}', 'another video is the owner\'s again')
+        self.content_load(db, 'builder-server', 'item_content', [
+            f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'",
+            f"'{ITEM}', 'video.mp4', 'bafkvideo', '{OWNER}', 1, '2026-02-01Z'"])
+        self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || uploaded_by || ' ' || size || ' ' || video, ',' "
+                                      "ORDER BY hash) FROM builder.uploaded_contents;\n").strip(),
+                         f'bafkamodel {OWNER} 5 false,bafkvideo {OWNER} 7 true')
         with self.assertRaisesRegex(harness.migrate.MigrationError, 'not in dcl_migration.blob_inventory'):
-            self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'"])
+            self.content_load(db, 'builder-server', 'item_content', [
+                f"'{ITEM}', 'model.glb', 'bafkmissing', '{OWNER}', 0, '2026-02-01Z'"])
 
     def test_when_an_items_video_is_over_the_nodes_largest_file_it_should_stop_the_batch(self):
         db = self.content_db('content_builder_video_size')
@@ -231,15 +220,60 @@ class ContentMigrationCases:
             self.content_load(db, 'builder-server', 'item', [item])
         self.assertEqual(self.sql(db, 'SELECT count(*) FROM builder.items;\n').strip(), '0')
 
-    def test_when_the_node_wrote_builder_rows_after_upstream_it_should_keep_them_on_reimport(self):
+    def test_when_reimporting_it_should_write_each_upstream_row_once_and_keep_what_the_node_wrote(self):
         db = self.content_db('content_builder_node_wins')
         self.import_builder(db, 'Upstream', '2026-02-01Z')
         self.sql(db, f"""UPDATE builder.collections SET name = 'Node', updated_at = '2026-03-01' WHERE id = '{COLLECTION}';
                          UPDATE builder.items SET name = 'Node', updated_at = '2026-03-01' WHERE id = '{ITEM}';\n""")
-        self.import_builder(db, 'Upstream again', '2026-02-15Z')
-        self.assertEqual(self.builder_names(db), 'Node\tNode')
         self.import_builder(db, 'Upstream later', '2026-04-01Z')
-        self.assertEqual(self.builder_names(db), 'Upstream later\tUpstream later')
+        self.assertEqual(self.builder_names(db), 'Node\tNode')
+
+    def test_when_the_node_deleted_imported_rows_it_should_not_bring_them_back_on_reimport(self):
+        db = self.curated_world('content_builder_node_deletes')
+        provider = 'urn:decentraland:matic:collections-thirdparty:virtual'
+        virtual = self.virtual_third_party_row(provider, [OWNER], 'tp:1:First:', 'false', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'virtual_third_party', [virtual])
+        curation = self.collection_curation('c0000000-0000-4000-8000-000000000001', COLLECTION, 'pending')
+        self.content_load(db, 'builder-server', 'collection_curation', [curation])
+        self.sql(db, f"""DELETE FROM builder.collections WHERE id = '{COLLECTION}';
+                         DELETE FROM builder.virtual_third_parties;\n""")
+        self.import_builder(db, 'Upstream again', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'virtual_third_party', [virtual])
+        self.content_load(db, 'builder-server', 'collection_curation', [curation])
+        self.assertEqual(self.sql(db, f"""SELECT (SELECT count(*) FROM builder.collections WHERE id = '{COLLECTION}'),
+                                                 (SELECT count(*) FROM builder.items WHERE id = '{ITEM}'),
+                                                 (SELECT count(*) FROM builder.collection_curations),
+                                                 (SELECT count(*) FROM builder.virtual_third_parties);\n""").strip(),
+                         '0\t0\t0\t0')
+
+    def test_when_the_node_wrote_imported_rows_without_moving_their_time_it_should_keep_them_on_reimport(self):
+        db = self.curated_world('content_builder_node_quiet_writes')
+        item = '66666666-6666-4666-8666-666666666666'
+        self.linked_item(db, item)
+        row = 'd0000000-0000-4000-8000-000000000001'
+        self.content_load(db, 'builder-server', 'item_curation', [
+            f"'{row}', '{item}', 'pending', '{self.HASH}', false, '2026-01-01Z', '2026-01-02Z'"])
+        self.sql(db, f"""UPDATE builder.collections SET forum_link = 'https://forum.example.test/t/1', forum_id = 1
+                          WHERE id = '{COLLECTION}';
+                         UPDATE builder.items SET video = 'bafknodevideo', video_named_by = '{OWNER}' WHERE id = '{ITEM}';
+                         UPDATE builder.item_curations SET content_hash = '{'cd' * 32}' WHERE id = '{row}';\n""")
+        self.import_builder(db, 'Curated', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'item_curation', [
+            f"'{row}', '{item}', 'pending', '{self.HASH}', false, '2026-01-01Z', '2026-01-02Z'"])
+        self.assertEqual(self.sql(db, f"""SELECT (SELECT forum_link FROM builder.collections WHERE id = '{COLLECTION}'),
+                                                 (SELECT video FROM builder.items WHERE id = '{ITEM}'),
+                                                 (SELECT content_hash FROM builder.item_curations WHERE id = '{row}');\n""").strip(),
+                         f"https://forum.example.test/t/1\tbafknodevideo\t{'cd' * 32}")
+
+    def test_when_reimporting_it_should_import_the_rows_it_has_not_imported_yet(self):
+        db = self.content_db('content_builder_catch_up')
+        self.import_builder(db, 'Upstream', '2026-02-01Z')
+        other = '77777777-7777-4777-8777-777777777777'
+        collection, _ = self.builder_rows('Upstream', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [
+            collection, collection.replace(COLLECTION, other).replace("'Upstream'", "'Later'")])
+        self.assertEqual(self.sql(db, "SELECT string_agg(name, ',' ORDER BY name) FROM builder.collections;\n").strip(),
+                         'Later,Upstream')
 
     def test_when_the_node_changed_an_items_contents_it_should_keep_them_on_reimport(self):
         db = self.content_db('content_builder_node_contents')
@@ -399,28 +433,18 @@ class ContentMigrationCases:
 
     def test_when_importing_forum_columns_it_should_keep_a_link_only_when_it_is_a_web_url(self):
         db = self.content_db('content_builder_forum')
-
-        def with_forum(updated, link, forum_id):
-            collection, _ = self.builder_rows('Forum', updated)
-            return collection.rsplit('NULL, NULL', 1)[0] + f"{link}, {forum_id}"
-        forum = f"SELECT forum_link, forum_id FROM builder.collections WHERE id = '{COLLECTION}';\n"
-        self.import_builder(db, 'Forum', '2026-01-01Z')
-        self.sql(db, f"UPDATE builder.collections SET forum_claimed_at = now() WHERE id = '{COLLECTION}';\n")
-        self.content_load(db, 'builder-server', 'collection', [
-            with_forum('2026-02-01Z', "'https://forum.example.test/t/hat/41395'", 41395)])
-        self.assertEqual(self.sql(db, forum).strip(), 'https://forum.example.test/t/hat/41395\t41395')
-        self.content_load(db, 'builder-server', 'collection', [
-            with_forum('2026-03-01Z', "'javascript:alert(1)'", 7)])
-        self.assertEqual(self.sql(db, forum).strip(), '')
-        for elsewhere in ('https://elsewhere.example.test/t/hat/1', 'https://forum.example.test.elsewhere.test/t/1',
-                          'http://forum.example.test/t/hat/1', 'https://forum.example.test'):
-            self.content_load(db, 'builder-server', 'collection', [
-                with_forum('2026-03-01Z', "'https://forum.example.test/t/hat/41395'", 41395)
-                .replace("'2026-03-01Z'", "'2026-03-02Z'")])
-            self.content_load(db, 'builder-server', 'collection', [
-                with_forum('2026-03-03Z', f"'{elsewhere}'", 8).replace("'2026-03-03Z'", "'2026-03-04Z'")])
-            self.assertEqual(self.sql(db, forum).strip(), '', elsewhere)
-            self.sql(db, f"UPDATE builder.collections SET updated_at = '2026-01-01' WHERE id = '{COLLECTION}';\n")
+        cases = [("'https://forum.example.test/t/hat/41395'", 41395, 'https://forum.example.test/t/hat/41395\t41395'),
+                 ("'javascript:alert(1)'", 7, ''),
+                 *((f"'{elsewhere}'", 8, '') for elsewhere in (
+                     'https://elsewhere.example.test/t/hat/1', 'https://forum.example.test.elsewhere.test/t/1',
+                     'http://forum.example.test/t/hat/1', 'https://forum.example.test'))]
+        for n, (link, forum_id, expected) in enumerate(cases):
+            id = f'f{n:07d}-0000-4000-8000-000000000000'
+            collection, _ = self.builder_rows('Forum', '2026-02-01Z')
+            row = collection.replace(COLLECTION, id).rsplit('NULL, NULL', 1)[0] + f"{link}, {forum_id}"
+            self.content_load(db, 'builder-server', 'collection', [row])
+            self.assertEqual(self.sql(db, f"SELECT forum_link, forum_id FROM builder.collections WHERE id = '{id}';\n")
+                             .strip(), expected, link)
 
     def test_when_the_source_predates_the_review_columns_and_events_it_should_extract_without_them(self):
         db = self.fresh_db('content_builder_old_source')

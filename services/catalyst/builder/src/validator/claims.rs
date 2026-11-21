@@ -241,21 +241,21 @@ fn within(value: &Option<String>, max: usize) -> bool {
 
 impl Verdict {
     /// builder-server's `validationResultSchema` with `claimId`, its
-    /// `validationId` a UUID in the canonical form a claim answers; 400
-    /// `Invalid request body` otherwise.
+    /// `validationId` and each `itemId` a UUID in the canonical form a claim
+    /// answers; 400 `Invalid request body` otherwise.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refused = || ApiError::bad_request("Invalid request body");
         let mut verdict: Self = serde_json::from_slice(body).map_err(|_| refused())?;
         verdict.result = serde_json::from_slice(body).map_err(|_| refused())?;
         verdict.result.remove("claimId");
-        let valid = Uuid::parse_str(&verdict.validation_id)
-            .is_ok_and(|id| id.to_string() == verdict.validation_id)
+        let canonical = |id: &str| Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id);
+        let valid = canonical(&verdict.validation_id)
             && token(&verdict.collection_id)
             && token(&verdict.rules_version)
             && within(&verdict.reason, SHORT_TEXT)
             && verdict.items.len() <= MAX_ITEMS
             && verdict.items.iter().all(|item| {
-                token(&item.item_id)
+                canonical(&item.item_id)
                     && item.content_hash.chars().count() <= SHORT_TEXT
                     && within(&item.error, LONG_TEXT)
                     && within(&item.visual_summary, 50_000)

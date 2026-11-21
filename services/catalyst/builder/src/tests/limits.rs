@@ -81,8 +81,14 @@ impl Call<'_> {
 pub(super) async fn send(app: &Router, call: &Call<'_>) -> (u16, String, Option<String>) {
     let mut request = Request::builder().method(call.method).uri(&call.path);
     if let Some(key) = call.key {
-        for (name, value) in
-            signed_map(key, &call.method.to_lowercase(), &call.path, "{}", false).await
+        for (name, value) in signed_map(
+            key,
+            &call.method.to_lowercase(),
+            call.path.split('?').next().unwrap_or_default(),
+            "{}",
+            false,
+        )
+        .await
         {
             request = request.header(name, value);
         }
@@ -334,6 +340,63 @@ async fn an_item_save_larger_than_the_body_cap_is_refused_before_its_keys_are_re
 }
 
 #[tokio::test]
+async fn each_route_takes_the_body_its_clients_send_and_refuses_more_unread() {
+    let app = app_over(lazy_pool(), |_| ()).await;
+    let padded = |len: usize| {
+        let mut body = br#"{"item":{"id":""#.to_vec();
+        body.resize(len - 3, b'x');
+        body.extend_from_slice(br#""}}"#);
+        body
+    };
+    for mount in ["", "/builder-api"] {
+        let id = Uuid::new_v4();
+        for (method, path, bound) in [
+            (
+                "PUT",
+                format!("{mount}/v1/items/{id}"),
+                crate::ITEM_BODY_LIMIT,
+            ),
+            (
+                "PATCH",
+                format!("{mount}/v1/items/{id}/curation"),
+                crate::BODY_LIMIT,
+            ),
+            (
+                "POST",
+                format!("{mount}/v1/collections/{id}/comments"),
+                crate::BODY_LIMIT,
+            ),
+        ] {
+            for (len, refused) in [(bound, false), (bound + 1, true)] {
+                let call = Call {
+                    method,
+                    path: path.clone(),
+                    key: Some(OWNER_KEY),
+                    source: None,
+                    body: padded(len),
+                };
+                let status = send(&app, &call).await.0;
+                assert_eq!(status == 413, refused, "{method} {path} {len}: {status}");
+            }
+        }
+        for (method, path) in [
+            ("PUT", format!("{mount}/v1/collections/{id}")),
+            ("POST", format!("{mount}/v1/collections/{id}/tos")),
+            ("POST", format!("{mount}/v1/collections/{id}/publish")),
+        ] {
+            let call = Call {
+                method,
+                path: path.clone(),
+                key: Some(OWNER_KEY),
+                source: None,
+                body: padded(crate::LARGE_BODY_LIMIT),
+            };
+            assert_ne!(send(&app, &call).await.0, 413, "{method} {path}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_review_caller_over_its_minute_waits_even_with_the_flow_off() {
     let Some(pool) = super::validator::own_pool().await else {
         return;
@@ -570,4 +633,107 @@ async fn the_addresses_listing_costs_its_source_as_fifty_reads() {
         .0,
         200
     );
+}
+
+#[tokio::test]
+async fn a_listing_past_its_bytes_or_its_readers_budget_is_refused_before_its_items_load() {
+    let Some(pool) = super::validator::own_pool().await else {
+        return;
+    };
+    let (_, state) = node_over(pool.clone(), |state| {
+        state.limits = crate::limits::Limits::unbounded();
+    })
+    .await;
+    let collection = seeded(&state, 60).await;
+    let ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM builder.items WHERE collection_id = $1")
+            .bind(collection)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let bytes: i64 = sqlx::query_scalar(crate::items::listing::DOCUMENT_BYTES)
+        .bind(&ids)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let items = |query: &str| Call {
+        key: Some(OWNER_KEY),
+        ..Call::get(format!("/v1/collections/{collection}/items{query}"))
+    };
+    for (bound, query, expected) in [
+        (bytes, "", 200),
+        (bytes - 1, "", 413),
+        (bytes - 1, "?page=1&limit=59", 200),
+    ] {
+        let app = app_over(pool.clone(), |state| {
+            state.limits = crate::limits::Limits::unbounded();
+            state.limits.listing_bytes = bound;
+        })
+        .await;
+        let (status, body, _) = send(&app, &items(query)).await;
+        assert_eq!(status, expected, "{bound} {query}: {body}");
+    }
+    let app = app_over(pool.clone(), |state| {
+        state.limits = crate::limits::Limits::unbounded();
+        state.limits.wallet_reads = per_minute(3);
+    })
+    .await;
+    let (status, _, retry) = send(&app, &items("")).await;
+    assert_eq!((status, retry.is_some()), (429, true));
+    let (status, _, _) = send(&app, &items("?page=1&limit=19")).await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn a_wallets_drafts_answer_at_most_their_cap_and_cost_it_by_the_row() {
+    let Some(pool) = super::validator::own_pool().await else {
+        return;
+    };
+    let owner = super::validator::address(OWNER_KEY);
+    sqlx::query(
+        "INSERT INTO builder.items (id, name, eth_address, type) \
+         SELECT gen_random_uuid(), 'Draft ' || g, $1, 'wearable' \
+         FROM generate_series(1, $2) g",
+    )
+    .bind(&owner)
+    .bind(crate::drafts::DRAFTS_CAP as i32 + 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reads = crate::limits::WALLET_READS;
+    let registry = super::support::registry_only_index().await;
+    let app = app_over(pool, |state| {
+        state.market = Some(registry);
+        state.limits = crate::limits::Limits::unbounded();
+        state.limits.wallet_reads = per_minute(reads);
+    })
+    .await;
+    let drafts = Call {
+        key: Some(OWNER_KEY),
+        ..Call::get("/v1/drafts/items")
+    };
+    let (status, body, _) = send(&app, &drafts).await;
+    assert_eq!(status, 200);
+    let answered: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        answered["data"].as_array().unwrap().len(),
+        crate::drafts::DRAFTS_CAP as usize
+    );
+    let spent = 1 + crate::drafts::DRAFTS_CAP as u32 / crate::limits::ROWS_PER_TOKEN as u32;
+    for _ in spent..reads {
+        assert_eq!(
+            send(
+                &app,
+                &Call {
+                    key: Some(OWNER_KEY),
+                    ..Call::get(format!("/v1/storage/contents/{NOT_A_CID}"))
+                }
+            )
+            .await
+            .0,
+            404
+        );
+    }
+    let (status, _, _) = send(&app, &drafts).await;
+    assert_eq!(status, 429);
 }

@@ -462,6 +462,19 @@ impl ItemsComponent {
                 "collection {id} changed under its row lock"
             )));
         }
+        if let (Some((_, Some(old))), Some(new)) = (&stored, save.urn.as_deref())
+            && old != new
+        {
+            sqlx::query(
+                "UPDATE builder.items SET urn_suffix = $2 || substr(urn_suffix, length($3) + 1) \
+                 WHERE collection_id = $1 AND lower(left(urn_suffix, length($3) + 1)) = lower($3 || ':')",
+            )
+            .bind(id)
+            .bind(new)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+        }
         if let Some((provider, _)) = provider {
             let next = save
                 .linked_contract_address

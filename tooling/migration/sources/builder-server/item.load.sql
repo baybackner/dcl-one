@@ -5,10 +5,14 @@ DO $release$ BEGIN
     RAISE EXCEPTION 'builder-server/item: builder.items.data is jsonb, which loses the saved key order; run schemas/releases/builder-item-documents-and-uploaders.sql first';
   END IF; END $release$;
 
+CREATE TEMP TABLE fresh_item ON COMMIT DROP AS
+SELECT s.* FROM stage s
+WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.builder_imported m WHERE m.step = 'item' AND m.id = s.id::text);
+
 DO $taken$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
     FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
-            FROM stage s JOIN builder.items x ON x.id = s.id
+            FROM fresh_item s JOIN builder.items x ON x.id = s.id
            WHERE x.created_at IS DISTINCT FROM s.created_at AT TIME ZONE 'UTC') t;
   IF n > 0 THEN RAISE EXCEPTION
     'builder-server/item: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
@@ -43,42 +47,10 @@ SELECT s.id,
        s.created_at AT TIME ZONE 'UTC',
        s.updated_at AT TIME ZONE 'UTC',
        CASE WHEN s.video IS NOT NULL THEN lower(s.eth_address) END
-FROM stage s
+FROM fresh_item s
 LEFT JOIN builder.collections c ON c.id = s.collection_id
-ON CONFLICT (id) DO UPDATE SET
-    collection_id = EXCLUDED.collection_id,
-    eth_address = EXCLUDED.eth_address,
-    name = EXCLUDED.name,
-    description = EXCLUDED.description,
-    thumbnail = EXCLUDED.thumbnail,
-    video = EXCLUDED.video,
-    video_named_by = CASE WHEN i.video IS NOT DISTINCT FROM EXCLUDED.video THEN i.video_named_by
-                          ELSE EXCLUDED.video_named_by END,
-    type = EXCLUDED.type,
-    rarity = EXCLUDED.rarity,
-    price = EXCLUDED.price,
-    beneficiary = EXCLUDED.beneficiary,
-    data = EXCLUDED.data,
-    metrics = EXCLUDED.metrics,
-    utility = EXCLUDED.utility,
-    mappings = EXCLUDED.mappings,
-    urn_suffix = EXCLUDED.urn_suffix,
-    blockchain_item_id = EXCLUDED.blockchain_item_id,
-    is_published = EXCLUDED.is_published,
-    total_supply = EXCLUDED.total_supply,
-    local_content_hash = EXCLUDED.local_content_hash,
-    content_hash = EXCLUDED.content_hash,
-    created_at = EXCLUDED.created_at,
-    updated_at = EXCLUDED.updated_at
-WHERE (i.collection_id, i.eth_address, i.name, i.description, i.thumbnail, i.video, i.type, i.rarity,
-       i.price, i.beneficiary, i.data::text, i.metrics::text, i.utility, i.mappings, i.urn_suffix,
-       i.blockchain_item_id, i.is_published, i.total_supply,
-       i.local_content_hash, i.content_hash, i.created_at, i.updated_at)
-      IS DISTINCT FROM
-      (EXCLUDED.collection_id, EXCLUDED.eth_address, EXCLUDED.name, EXCLUDED.description,
-       EXCLUDED.thumbnail, EXCLUDED.video, EXCLUDED.type, EXCLUDED.rarity, EXCLUDED.price,
-       EXCLUDED.beneficiary, EXCLUDED.data::text, EXCLUDED.metrics::text, EXCLUDED.utility, EXCLUDED.mappings,
-       EXCLUDED.urn_suffix, EXCLUDED.blockchain_item_id, EXCLUDED.is_published,
-       EXCLUDED.total_supply, EXCLUDED.local_content_hash,
-       EXCLUDED.content_hash, EXCLUDED.created_at, EXCLUDED.updated_at)
-  AND i.updated_at <= EXCLUDED.updated_at;
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO dcl_migration.builder_imported (step, id)
+SELECT 'item', f.id::text FROM fresh_item f JOIN builder.items t ON t.id = f.id
+ON CONFLICT DO NOTHING;

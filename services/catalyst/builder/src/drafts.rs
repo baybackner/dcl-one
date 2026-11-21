@@ -216,6 +216,9 @@ fn draft_predicate(view: &ReadView) -> String {
     format!("(NOT {} OR c.third_party_id IS NOT NULL)", view.published())
 }
 
+/// The newest drafts one listing answers, of collections or of items.
+pub const DRAFTS_CAP: i64 = 5_000;
+
 const ITEM_DRAFT_LISTING: &str = "SELECT jsonb_build_object('id', id, 'name', name, 'type', type, 'collection_id', collection_id) FROM builder.items";
 
 fn item_draft_predicate(view: &ReadView) -> String {
@@ -236,7 +239,7 @@ fn listing_out(rows: &[CollectionListingRow]) -> Vec<CollectionListingOut> {
 }
 
 impl ItemsComponent {
-    /// "My collections": the owner's unpublished standard collections
+    /// "My collections", the newest [`DRAFTS_CAP`]: the owner's unpublished standard collections
     /// (`collections_owner_idx`), and the unpublished and published linked
     /// collections of the providers it manages.
     pub async fn collection_drafts(
@@ -247,18 +250,19 @@ impl ItemsComponent {
         let view = chain_state::for_read(&mut conn).await?;
         let rows = sqlx::query_as::<_, CollectionListingRow>(sqlx::AssertSqlSafe(format!(
             "{} WHERE ((c.eth_address = $1 AND c.third_party_id IS NULL) OR c.third_party_id = ANY($2)) \
-             AND {} ORDER BY c.updated_at DESC",
+             AND {} ORDER BY c.updated_at DESC LIMIT $3",
             collection_listing(&view),
             draft_predicate(&view)
         )))
         .bind(wallet.address())
         .bind(wallet.provider_ids())
+        .bind(DRAFTS_CAP)
         .fetch_all(&mut *conn)
         .await?;
         Ok(listing_out(&rows))
     }
 
-    /// "My item drafts": the wallet's unpublished items with no collection
+    /// "My item drafts", the newest [`DRAFTS_CAP`]: the wallet's unpublished items with no collection
     /// (`items_owner_updated_idx`), and those of the draft standard
     /// collections it owns (`collections_owner_idx`) and of the providers it
     /// manages.
@@ -269,11 +273,12 @@ impl ItemsComponent {
             "{ITEM_DRAFT_LISTING} WHERE NOT is_published AND {} \
              AND ((collection_id IS NULL AND eth_address = $1) OR collection_id IN (SELECT c.id \
                FROM builder.collections c WHERE (c.eth_address = $1 AND c.third_party_id IS NULL) \
-               OR c.third_party_id = ANY($2))) ORDER BY updated_at DESC",
+               OR c.third_party_id = ANY($2))) ORDER BY updated_at DESC LIMIT $3",
             item_draft_predicate(&view)
         )))
         .bind(wallet.address())
         .bind(wallet.provider_ids())
+        .bind(DRAFTS_CAP)
         .fetch_all(&mut *conn)
         .await?)
     }

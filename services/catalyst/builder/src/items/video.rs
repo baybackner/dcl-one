@@ -5,17 +5,20 @@
 //! The body then streams through [`Framed`], which bounds what the multipart
 //! parser may hold beside the video's own bytes, into one spool file beside
 //! the blob store, hashed as it arrives and walked as an MP4 container
-//! ([`Mp4`]); every read waits at most until the upload's deadline, and
-//! each idle-timeout window must deliver a minimum of the video, so a
-//! sender that stalls or trickles is cut and frees its place. Only
+//! ([`Mp4`]); every read waits at most until the upload's deadline and the
+//! idle timeout after the last bytes, so a sender that stalls is cut and
+//! frees its place. While the node's places are all held, a newcomer takes
+//! the place of the slowest upload past its first idle-timeout window that
+//! runs below the rate a largest video needs to arrive within the deadline
+//! ([`Videos::admit`]). Only
 //! then, in one transaction with the item locked, the decision runs again,
 //! the item must still name the hash at `video.mp4`, and the file goes to
 //! the blob store with its upload record, as [`super::upload`] stores files.
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
@@ -51,15 +54,14 @@ pub const BODY_LIMIT: usize = DEFAULT_MAX_BYTES as usize + 1024 * 1024;
 /// about 1.7 Mbit/s.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(20 * 60);
 
-/// The window in which the body must deliver [`DEFAULT_MIN_WINDOW_BYTES`],
-/// and so the longest it may go without a byte, before the upload ends.
+/// The longest the body may go without a byte before the upload ends, and
+/// the time an upload runs before a newcomer may take its place.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The video bytes each [`DEFAULT_IDLE_TIMEOUT`] window must deliver: about
-/// 140 kbit/s, far below what a 250 MB video needs within
-/// [`DEFAULT_DEADLINE`], so a sender that trickles can't hold a place for
-/// the whole deadline.
-pub const DEFAULT_MIN_WINDOW_BYTES: u64 = 512 * 1024;
+/// Bytes a second below which an upload gives its place to a newcomer
+/// while the node is full: what [`DEFAULT_MAX_BYTES`] needs to arrive
+/// within [`DEFAULT_DEADLINE`], about 1.7 Mbit/s.
+pub const DEFAULT_YIELD_RATE: u64 = DEFAULT_MAX_BYTES / DEFAULT_DEADLINE.as_secs();
 
 /// Videos the node reads at once, and of them per wallet and per source
 /// address, so filling the node takes four wallets on four addresses.
@@ -89,8 +91,9 @@ pub struct Videos {
     pub max_bytes: u64,
     pub deadline: Duration,
     pub idle_timeout: Duration,
-    pub min_window_bytes: u64,
-    places: Places,
+    pub yield_rate: u64,
+    pub places: Places,
+    holders: Arc<Mutex<Vec<Arc<Progress>>>>,
 }
 
 impl Default for Videos {
@@ -99,23 +102,107 @@ impl Default for Videos {
             max_bytes: DEFAULT_MAX_BYTES,
             deadline: DEFAULT_DEADLINE,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            min_window_bytes: DEFAULT_MIN_WINDOW_BYTES,
+            yield_rate: DEFAULT_YIELD_RATE,
             places: Places::new(
                 "video uploads",
                 MAX_UPLOADS,
                 MAX_UPLOADS_PER_SIGNER,
                 MAX_UPLOADS_PER_SOURCE,
             ),
+            holders: Arc::default(),
         }
+    }
+}
+
+/// What an admitted upload has received since it started, and whether a
+/// newcomer took its place.
+pub struct Progress {
+    started: Instant,
+    received: AtomicU64,
+    cut: AtomicBool,
+    cut_now: tokio::sync::Notify,
+}
+
+/// An admitted video upload: its place and its [`Progress`].
+pub struct VideoAdmission {
+    _place: Admission,
+    progress: Arc<Progress>,
+    holders: Arc<Mutex<Vec<Arc<Progress>>>>,
+}
+
+impl VideoAdmission {
+    pub fn progress(&self) -> &Progress {
+        &self.progress
+    }
+
+    /// Its body has arrived: no newcomer takes its place while it stores.
+    pub fn received(&self) {
+        self.holders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|held| !Arc::ptr_eq(held, &self.progress));
+    }
+}
+
+impl Drop for VideoAdmission {
+    fn drop(&mut self) {
+        self.received();
     }
 }
 
 impl Videos {
     /// A place for `signer`'s upload from `source` ([`Places::admit`]) among
     /// [`MAX_UPLOADS`], [`MAX_UPLOADS_PER_SIGNER`] and
-    /// [`MAX_UPLOADS_PER_SOURCE`]. Never waits.
-    pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<Admission, Response> {
-        self.places.admit(signer, source)
+    /// [`MAX_UPLOADS_PER_SOURCE`]. Never waits: while the node's places are
+    /// all held, it takes the place of the slowest upload that has run an
+    /// idle-timeout window below `yield_rate` bytes a second, which ends
+    /// with 408; else the refusal.
+    pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<VideoAdmission, Response> {
+        let mut holders = self.holders.lock().unwrap_or_else(|e| e.into_inner());
+        let yielding = holders
+            .iter()
+            .filter(|h| h.cut.load(Ordering::SeqCst))
+            .count();
+        let place = match self.places.admit_beyond(signer, source, yielding) {
+            Ok(place) => place,
+            Err((false, busy)) => return Err(busy),
+            Err((true, busy)) => {
+                let now = Instant::now();
+                let rate = |h: &Progress| {
+                    h.received.load(Ordering::SeqCst) as f64
+                        / now.saturating_duration_since(h.started).as_secs_f64()
+                };
+                let slowest = holders
+                    .iter()
+                    .filter(|h| !h.cut.load(Ordering::SeqCst))
+                    .filter(|h| now.saturating_duration_since(h.started) >= self.idle_timeout)
+                    .filter(|h| rate(h) < self.yield_rate as f64)
+                    .min_by(|a, b| rate(a).total_cmp(&rate(b)))
+                    .cloned();
+                let Some(slowest) = slowest else {
+                    return Err(busy);
+                };
+                let place = self
+                    .places
+                    .admit_beyond(signer, source, yielding + 1)
+                    .map_err(|(_, busy)| busy)?;
+                slowest.cut.store(true, Ordering::SeqCst);
+                slowest.cut_now.notify_one();
+                place
+            }
+        };
+        let progress = Arc::new(Progress {
+            started: Instant::now(),
+            received: AtomicU64::new(0),
+            cut: AtomicBool::new(false),
+            cut_now: tokio::sync::Notify::new(),
+        });
+        holders.push(progress.clone());
+        Ok(VideoAdmission {
+            _place: place,
+            progress,
+            holders: self.holders.clone(),
+        })
     }
 
     /// Uploads holding a place.
@@ -168,18 +255,38 @@ fn timed_out() -> ApiError {
     ApiError::http(408, "The upload timed out")
 }
 
+fn yielded() -> ApiError {
+    ApiError::http(408, "The upload was too slow while the node was busy")
+}
+
+async fn within<T>(
+    progress: &Progress,
+    until: Instant,
+    read: impl std::future::Future<Output = T>,
+) -> Result<T, ApiError> {
+    tokio::select! {
+        read = timeout_at(until, read) => read.map_err(|_| timed_out()),
+        () = progress.cut_now.notified() => Err(yielded()),
+    }
+}
+
 fn io(e: std::io::Error) -> ApiError {
     ApiError::internal(format!("spooling a video: {e}"))
 }
 
 /// Reads `request`'s form into a spool file under `root`: one file part
 /// named [`VIDEO_FILE`], at most `videos.max_bytes`, an MP4 container, all
-/// by `videos.deadline`, each `videos.idle_timeout` window from the start
-/// (and from each window that delivered `videos.min_window_bytes` of the
-/// video) delivering that much before it ends.
-pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<Spooled, ApiError> {
+/// by `videos.deadline`, never `videos.idle_timeout` without a byte, and
+/// ended when a newcomer takes its place ([`Videos::admit`]); `progress`
+/// counts the video's bytes as they arrive.
+pub async fn receive(
+    videos: &Videos,
+    root: &Path,
+    request: Request,
+    progress: &Progress,
+) -> Result<Spooled, ApiError> {
     let deadline = Instant::now() + videos.deadline;
-    let (mut window_start, mut window_bytes) = (Instant::now(), 0u64);
+    let mut window_start = Instant::now();
     let until = |window_start: Instant| deadline.min(window_start + videos.idle_timeout);
     let too_large = || {
         ApiError::http(413, "The video is too large")
@@ -204,9 +311,8 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
             invalid()
         }
     };
-    let mut field = timeout_at(until(window_start), multipart.next_field())
-        .await
-        .map_err(|_| timed_out())?
+    let mut field = within(progress, until(window_start), multipart.next_field())
+        .await?
         .map_err(failed)?
         .ok_or_else(|| ApiError::bad_request("The upload carries no video"))?;
     if field.name() != Some(VIDEO_FILE) || field.file_name().is_none() {
@@ -225,16 +331,15 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut file = BufWriter::with_capacity(256 * 1024, file);
     let (mut hasher, mut container, mut size) = (HashV1Writer::new(), Mp4::default(), 0u64);
-    while let Some(chunk) = timeout_at(until(window_start), field.chunk())
-        .await
-        .map_err(|_| timed_out())?
+    while let Some(chunk) = within(progress, until(window_start), field.chunk())
+        .await?
         .map_err(failed)?
     {
         delivered.fetch_add(chunk.len() as u64, Ordering::SeqCst);
-        window_bytes += chunk.len() as u64;
-        if window_bytes >= videos.min_window_bytes {
-            (window_start, window_bytes) = (Instant::now(), 0);
-        }
+        progress
+            .received
+            .fetch_add(chunk.len() as u64, Ordering::SeqCst);
+        window_start = Instant::now();
         size += chunk.len() as u64;
         if size > videos.max_bytes {
             return Err(too_large());
@@ -247,9 +352,8 @@ pub async fn receive(videos: &Videos, root: &Path, request: Request) -> Result<S
         file.write_all(&chunk).await.map_err(io)?;
     }
     drop(field);
-    if timeout_at(until(window_start), multipart.next_field())
-        .await
-        .map_err(|_| timed_out())?
+    if within(progress, until(window_start), multipart.next_field())
+        .await?
         .map_err(failed)?
         .is_some()
     {
@@ -423,8 +527,8 @@ impl ItemsComponent {
                 .map_err(|e| ApiError::internal(format!("storing {}: {e}", video.hash)))?;
         }
         sqlx::query(
-            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, $2, $3) \
-             ON CONFLICT (hash, uploaded_by) DO NOTHING",
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by, video) VALUES ($1, $2, $3, true) \
+             ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true",
         )
         .bind(&video.hash)
         .bind(video.size as i64)

@@ -290,8 +290,8 @@ pub async fn upload(
         let size = bytes.len() as i64;
         store.blobs.store(&hash, bytes).await.unwrap();
         sqlx::query(
-            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, $2, $3) \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by, video) VALUES ($1, $2, $3, true) \
+             ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true",
         )
         .bind(&hash)
         .bind(size)

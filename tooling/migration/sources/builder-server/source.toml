@@ -21,7 +21,9 @@ minters and reviewed_at columns (no target column). collection_publications
 stays the node's.
 
 No step has a watermark: published/curation state is derived from other
-tables, so every run re-scans. Deletions upstream are not detected.
+tables, so every run re-scans; collections, items, virtual third parties and
+curations are imported once each (dcl_migration.builder_imported), never
+updated or re-created. Deletions upstream are not detected.
 """
 
 [[step]]

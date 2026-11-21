@@ -1092,7 +1092,7 @@ pub async fn read_item(
     drop(conn);
     let s = signer.as_str();
     let owns = match &parent {
-        Some(c) => c.owner(s) || c.provider_manager(s),
+        Some(c) => c.role(s),
         None => i.owner == s,
     };
     if owns {
@@ -2141,7 +2141,9 @@ pub async fn known_curator(state: &SharedState, curator: &Curator) -> bool {
 #[derive(Debug)]
 pub struct CuratedState {
     pub name: String,
-    pub stored_owner: bool,
+    /// The signer is the collection's creator: the chain's once the copy
+    /// holds it, the stored owner before.
+    pub creator: bool,
     pub third_party: bool,
     pub contract: Option<String>,
     pub published: bool,
@@ -2217,7 +2219,7 @@ async fn curated_state(
         .await?;
     Ok(CuratedState {
         name,
-        stored_owner: c.stored_owner == curator.signer,
+        creator: c.creator.as_deref().unwrap_or(&c.stored_owner) == curator.signer,
         third_party: c.third_party,
         contract: c.contract,
         published: c.published,
@@ -2311,30 +2313,45 @@ fn public_file_sql(hash: &str) -> String {
         .replace("{hash}", hash)
 }
 
-/// The bytes of every upload record of `wallet`'s, from
-/// `uploaded_contents_uploaded_by_idx` alone.
-pub(crate) async fn uploaded_bytes(pool: &sqlx::PgPool, wallet: &str) -> Result<i64, ApiError> {
-    Ok(sqlx::query_scalar(
-        "SELECT COALESCE(sum(size), 0)::bigint FROM builder.uploaded_contents WHERE uploaded_by = $1",
-    )
-    .bind(wallet)
-    .fetch_one(pool)
-    .await?)
+/// The bytes and files of every upload record of `wallet`'s
+/// (`uploaded_contents_uploaded_by_idx` alone), or of every wallet's.
+pub(crate) async fn uploaded(
+    pool: &sqlx::PgPool,
+    wallet: Option<&str>,
+) -> Result<crate::limits::Held<i64>, ApiError> {
+    let sql = match wallet {
+        Some(_) => {
+            "SELECT COALESCE(sum(size), 0)::bigint, count(*) FROM builder.uploaded_contents WHERE uploaded_by = $1"
+        }
+        None => {
+            "SELECT COALESCE(sum(size), 0)::bigint, count(*) FROM builder.uploaded_contents WHERE $1::text IS NULL"
+        }
+    };
+    let (bytes, files): (i64, i64) = sqlx::query_as(sql).bind(wallet).fetch_one(pool).await?;
+    Ok(crate::limits::Held { bytes, files })
 }
 
-/// The bytes of `wallet`'s upload records whose hash no published item
-/// names ([`PUBLIC_FILE`]): what its uploads hold in the store that nobody
-/// else may read. Starts from the wallet's records
-/// (`uploaded_contents_uploaded_by_idx`).
-pub(crate) async fn unpublished_bytes(pool: &sqlx::PgPool, wallet: &str) -> Result<i64, ApiError> {
-    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT COALESCE(sum(own.size), 0)::bigint FROM builder.uploaded_contents own \
-         WHERE own.uploaded_by = $1 AND NOT {}",
+/// The bytes and files of `wallet`'s upload records (every wallet's with
+/// `None`) whose hash no published item names ([`PUBLIC_FILE`]): what the
+/// uploads hold in the store that nobody else may read. A wallet's starts
+/// from its records (`uploaded_contents_uploaded_by_idx`).
+pub(crate) async fn unpublished(
+    pool: &sqlx::PgPool,
+    wallet: Option<&str>,
+) -> Result<crate::limits::Held<i64>, ApiError> {
+    let scope = match wallet {
+        Some(_) => "own.uploaded_by = $1",
+        None => "$1::text IS NULL",
+    };
+    let (bytes, files): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT COALESCE(sum(own.size), 0)::bigint, count(*) FROM builder.uploaded_contents own \
+         WHERE {scope} AND NOT {}",
         public_file_sql("own.hash")
     )))
     .bind(wallet)
     .fetch_one(pool)
-    .await?)
+    .await?;
+    Ok(crate::limits::Held { bytes, files })
 }
 
 /// [`FILE_READ`] with the published rule of [`chain_state::published_by_any_pass`].

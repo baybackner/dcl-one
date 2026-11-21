@@ -114,6 +114,13 @@ use items::ItemsComponent;
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_BUILDER_ADMIN_TOKEN";
 /// One 20 MiB upload with its framing.
 pub const UPLOAD_BODY_LIMIT: usize = 21 * 1024 * 1024;
+/// A request body on a route that takes none of the larger ones below.
+pub const BODY_LIMIT: usize = 64 * 1024;
+/// An item save: ten times the largest item document builder-server holds.
+pub const ITEM_BODY_LIMIT: usize = 256 * 1024;
+/// A collection save (its `data`), a terms acceptance (its hashes) and a
+/// publication (its item ids).
+pub const LARGE_BODY_LIMIT: usize = 2 * 1024 * 1024;
 /// File uploads the node reads at once, each up to [`UPLOAD_BODY_LIMIT`]
 /// in memory; of them per wallet (the `/create` dApp sends one item's files
 /// at a time) and per source address.
@@ -207,6 +214,10 @@ pub struct RawSettings {
     pub cors_origin: Option<String>,
     /// `CORS_METHOD`: the methods a preflight allows ([`cors`]).
     pub cors_method: Option<String>,
+    /// `BUILDER_UNPUBLISHED_MAX_BYTES` ([`limits::NODE_BYTES`] unset).
+    pub unpublished_max_bytes: Option<u64>,
+    /// `BUILDER_UNPUBLISHED_MAX_FILES` ([`limits::NODE_FILES`] unset).
+    pub unpublished_max_files: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -228,6 +239,10 @@ pub struct Settings {
     pub validator_secret: Option<validator::Secret>,
     /// Who may read the answers from another origin.
     pub cors: cors::Cors,
+    /// The node's bound of unpublished upload bytes, if not the default.
+    pub unpublished_max_bytes: Option<u64>,
+    /// The node's bound of unpublished upload files, if not the default.
+    pub unpublished_max_files: Option<u64>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -245,6 +260,8 @@ impl std::fmt::Debug for Settings {
             .field("builder_server_url", &self.builder_server_url)
             .field("validator_secret", &self.validator_secret)
             .field("cors", &self.cors)
+            .field("unpublished_max_bytes", &self.unpublished_max_bytes)
+            .field("unpublished_max_files", &self.unpublished_max_files)
             .finish()
     }
 }
@@ -363,6 +380,8 @@ impl Settings {
         }
         Ok(Self {
             cors,
+            unpublished_max_bytes: raw.unpublished_max_bytes,
+            unpublished_max_files: raw.unpublished_max_files,
             slack,
             links,
             forum,
@@ -444,6 +463,9 @@ impl State {
             .builder()
             .cloned()
             .context("the builder keeps its files in the blob store's builder tree")?;
+        let mut limits = limits::Limits::default();
+        limits.node_bytes = settings.unpublished_max_bytes.unwrap_or(limits.node_bytes);
+        limits.node_files = settings.unpublished_max_files.unwrap_or(limits.node_files);
         Ok(Self {
             items: ItemsComponent::new(pool.clone(), blobs).with_denylist(denylist.clone()),
             market,
@@ -466,7 +488,7 @@ impl State {
                 FILE_UPLOADS_PER_SIGNER,
                 FILE_UPLOADS_PER_SOURCE,
             ),
-            limits: limits::Limits::default(),
+            limits,
         })
     }
 
@@ -519,7 +541,8 @@ fn api_routes() -> Router<SharedState> {
             "/v1/items/{id}",
             get(handlers::drafts::get_item)
                 .put(handlers::drafts::put_item)
-                .delete(handlers::drafts::delete_item),
+                .delete(handlers::drafts::delete_item)
+                .layer(DefaultBodyLimit::max(ITEM_BODY_LIMIT)),
         )
         .route(
             "/v1/collections/{id}/items",
@@ -529,17 +552,21 @@ fn api_routes() -> Router<SharedState> {
             "/v1/collections/{id}",
             get(handlers::collections::get_collection)
                 .put(handlers::drafts::put_collection)
-                .delete(handlers::lifecycle::delete),
+                .delete(handlers::lifecycle::delete)
+                .layer(DefaultBodyLimit::max(LARGE_BODY_LIMIT)),
         )
         .route("/v1/collections/{id}/lock", post(handlers::lifecycle::lock))
         .route(
             "/v1/collections/{id}/owner/sync",
             post(handlers::lifecycle::owner_sync),
         )
-        .route("/v1/collections/{id}/tos", post(handlers::lifecycle::terms))
+        .route(
+            "/v1/collections/{id}/tos",
+            post(handlers::lifecycle::terms).layer(DefaultBodyLimit::max(LARGE_BODY_LIMIT)),
+        )
         .route(
             "/v1/collections/{id}/publish",
-            post(handlers::lifecycle::publish),
+            post(handlers::lifecycle::publish).layer(DefaultBodyLimit::max(LARGE_BODY_LIMIT)),
         )
         .route(
             "/v1/collections/{id}/approvalData",
@@ -660,6 +687,7 @@ fn api_routes() -> Router<SharedState> {
             "/v1/newsletter",
             post(handlers::newsletter::post_newsletter),
         )
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
 
 fn finish(routes: Router<SharedState>, state: SharedState) -> Router {

@@ -11,6 +11,17 @@ use crate::http::ApiError;
 type Fields = Vec<(String, JsJson)>;
 
 const MAX_CONTENTS: usize = 256;
+/// Tags or required permissions of one item: builder-server's largest has 117.
+const LIST_MAX: usize = 1_000;
+/// Characters of a tag, permission, file name or spring bone name: the
+/// longest builder-server holds has 208.
+const TEXT_MAX: usize = 1_000;
+/// Representations of one item: builder-server's items have at most 2.
+const REPRESENTATIONS_MAX: usize = 10;
+/// Categories one list hides or replaces: builder-server's longest has 15.
+const HIDDEN_MAX: usize = 100;
+/// Spring bones of one model.
+const BONES_MAX: usize = 1_000;
 const RARITIES: &[&str] = &[
     "unique",
     "mythic",
@@ -374,19 +385,26 @@ fn hideable(value: &JsJson) -> bool {
     })
 }
 
-fn array_of(value: &JsJson, check: impl Fn(&JsJson) -> bool) -> bool {
-    matches!(value, JsJson::Array(items) if items.iter().all(check))
+fn array_of(value: &JsJson, max: usize, check: impl Fn(&JsJson) -> bool) -> bool {
+    matches!(value, JsJson::Array(items) if items.len() <= max && items.iter().all(check))
 }
 
 fn array_of_mut(
     value: &mut JsJson,
     min: usize,
+    max: usize,
     mut check: impl FnMut(&mut JsJson) -> bool,
 ) -> bool {
     match value {
-        JsJson::Array(items) => items.len() >= min && items.iter_mut().all(&mut check),
+        JsJson::Array(items) => {
+            (min..=max).contains(&items.len()) && items.iter_mut().all(&mut check)
+        }
         _ => false,
     }
+}
+
+fn short(value: &JsJson) -> bool {
+    string(value, |s| s.chars().count() <= TEXT_MAX)
 }
 
 fn hex(s: &str, len: usize) -> bool {
@@ -539,10 +557,12 @@ fn representation(value: &mut JsJson, wearable: bool) -> bool {
     };
     closed(fields, keys, keys)
         && fields.iter().all(|(k, v)| match k.as_str() {
-            "bodyShapes" => array_of(v, |s| string(s, one_of(BODY_SHAPES))),
-            "mainFile" => any_string(v),
-            "contents" => array_of(v, any_string) && matches!(v, JsJson::Array(a) if !a.is_empty()),
-            _ => array_of(v, hideable),
+            "bodyShapes" => array_of(v, HIDDEN_MAX, |s| string(s, one_of(BODY_SHAPES))),
+            "mainFile" => short(v),
+            "contents" => {
+                array_of(v, MAX_CONTENTS, short) && matches!(v, JsJson::Array(a) if !a.is_empty())
+            }
+            _ => array_of(v, HIDDEN_MAX, hideable),
         })
 }
 
@@ -558,9 +578,11 @@ fn wearable_data(value: &mut JsJson) -> bool {
     for (key, value) in fields.iter_mut() {
         ok &= match key.as_str() {
             "category" => string(value, one_of(WEARABLE_CATEGORIES)),
-            "representations" => array_of_mut(value, 1, |r| representation(r, true)),
-            "replaces" | "hides" | "removesDefaultHiding" => array_of(value, hideable),
-            "tags" | "requiredPermissions" => array_of(value, any_string),
+            "representations" => {
+                array_of_mut(value, 1, REPRESENTATIONS_MAX, |r| representation(r, true))
+            }
+            "replaces" | "hides" | "removesDefaultHiding" => array_of(value, HIDDEN_MAX, hideable),
+            "tags" | "requiredPermissions" => array_of(value, LIST_MAX, short),
             "blockVrmExport" | "outlineCompatible" => null_or(value, boolean),
             _ => matches!(value, JsJson::Null) || spring_bones(value),
         };
@@ -576,10 +598,19 @@ fn spring_bones(value: &mut JsJson) -> bool {
         && fields.iter().all(|(k, v)| match k.as_str() {
             "version" => number(v) == Some(1.0),
             _ => match v {
-                JsJson::Object(models) => models.iter().all(|(_, bones)| match bones {
-                    JsJson::Object(bones) => bones.iter().all(|(_, bone)| spring_bone(bone)),
-                    _ => false,
-                }),
+                JsJson::Object(models) => {
+                    models.len() <= MAX_CONTENTS
+                        && models.iter().all(|(model, bones)| match bones {
+                            JsJson::Object(bones) => {
+                                model.chars().count() <= TEXT_MAX
+                                    && bones.len() <= BONES_MAX
+                                    && bones.iter().all(|(name, bone)| {
+                                        name.chars().count() <= TEXT_MAX && spring_bone(bone)
+                                    })
+                            }
+                            _ => false,
+                        })
+                }
                 _ => false,
             },
         })
@@ -616,11 +647,13 @@ fn emote_data(value: &mut JsJson) -> bool {
         ok &= match key.as_str() {
             "category" => string(value, one_of(EMOTE_CATEGORIES)),
             "loop" => boolean(value),
-            "representations" => array_of_mut(value, 1, |r| representation(r, false)),
-            "tags" => array_of(value, any_string),
+            "representations" => {
+                array_of_mut(value, 1, REPRESENTATIONS_MAX, |r| representation(r, false))
+            }
+            "tags" => array_of(value, LIST_MAX, short),
             "randomizeOutcomes" => null_or(value, boolean),
             "startAnimation" => matches!(value, JsJson::Null) || start_animation(value),
-            _ => matches!(value, JsJson::Null) || array_of_mut(value, 0, outcome),
+            _ => matches!(value, JsJson::Null) || array_of_mut(value, 0, usize::MAX, outcome),
         };
     }
     ok
@@ -987,6 +1020,114 @@ mod tests {
             ),
         ] {
             assert!(parse(&with_mappings(entries)).is_err(), "{what}");
+        }
+    }
+
+    fn wearable_with(tune: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+        let mut body: serde_json::Value = serde_json::from_slice(&with_mappings(vec![])).unwrap();
+        body["item"].as_object_mut().unwrap().remove("mappings");
+        tune(&mut body["item"]["data"]);
+        body.to_string().into_bytes()
+    }
+
+    fn texts(count: usize, len: usize) -> serde_json::Value {
+        (0..count)
+            .map(|n| format!("{n:0len$}"))
+            .collect::<Vec<_>>()
+            .into()
+    }
+
+    fn bones(models: usize, bones: usize, name_len: usize) -> serde_json::Value {
+        let bone = serde_json::json!({"stiffness": 1, "gravityPower": 0, "gravityDir": [0, -1, 0], "drag": 0.4});
+        let model = |m: usize| {
+            let bones: serde_json::Map<String, serde_json::Value> = (0..bones)
+                .map(|b| (format!("{b:0name_len$}"), bone.clone()))
+                .collect();
+            (
+                format!("{m:0name_len$}.glb"),
+                serde_json::Value::Object(bones),
+            )
+        };
+        serde_json::json!({"version": 1, "models": (0..models).map(model).collect::<serde_json::Map<_, _>>()})
+    }
+
+    #[test]
+    fn an_item_document_up_to_each_bound_parses_and_one_past_it_is_refused() {
+        type Tune = fn(&mut serde_json::Value, usize, usize);
+        let cases: [(&str, Tune, usize, usize); 9] = [
+            (
+                "tags",
+                |d, n, l| d["tags"] = texts(n, l),
+                LIST_MAX,
+                TEXT_MAX,
+            ),
+            ("a tag", |d, n, l| d["tags"] = texts(n, l), 1, TEXT_MAX),
+            (
+                "required permissions",
+                |d, n, l| d["requiredPermissions"] = texts(n, l),
+                LIST_MAX,
+                TEXT_MAX,
+            ),
+            (
+                "representations",
+                |d, n, _| {
+                    let one = d["representations"][0].clone();
+                    d["representations"] = vec![one; n].into();
+                },
+                REPRESENTATIONS_MAX,
+                0,
+            ),
+            (
+                "a representation's files",
+                |d, n, l| d["representations"][0]["contents"] = texts(n, l),
+                MAX_CONTENTS,
+                TEXT_MAX,
+            ),
+            (
+                "a main file",
+                |d, _, l| d["representations"][0]["mainFile"] = "m".repeat(l).into(),
+                1,
+                TEXT_MAX,
+            ),
+            (
+                "hidden categories",
+                |d, n, _| {
+                    d["hides"] = vec!["hat"; n].into();
+                    d["representations"][0]["overrideHides"] = vec!["hat"; n].into();
+                },
+                HIDDEN_MAX,
+                0,
+            ),
+            (
+                "spring bone models",
+                |d, n, l| d["springBones"] = bones(n, 1, l),
+                MAX_CONTENTS,
+                TEXT_MAX - 4,
+            ),
+            (
+                "spring bones of a model",
+                |d, n, l| d["springBones"] = bones(1, n, l),
+                BONES_MAX,
+                TEXT_MAX - 4,
+            ),
+        ];
+        for (what, tune, count, len) in cases {
+            assert!(
+                parse(&wearable_with(|d| tune(d, count, len))).is_ok(),
+                "{what} at the bound"
+            );
+            if count > 1 {
+                assert!(
+                    parse(&wearable_with(|d| tune(d, count + 1, len))).is_err(),
+                    "one more of {what}"
+                );
+            }
+            if len > 0 {
+                assert!(
+                    parse(&wearable_with(|d| tune(d, count, len + 1))).is_err(),
+                    "{what} one character longer"
+                );
+            }
         }
     }
 

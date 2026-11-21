@@ -132,18 +132,28 @@ pub async fn accept(
         }
     }
     sqlx::query(
-        "DELETE FROM builder.terms_acceptances WHERE collection_id = $1 AND signer = $2 AND event = $3",
+        "DELETE FROM builder.terms_acceptances \
+         WHERE collection_id = $1 AND signer = $2 AND event = $3 AND forwarded_at IS NOT NULL",
     )
     .bind(manage.id())
     .bind(manage.signer())
     .bind(acceptance.event)
     .execute(&mut *tx)
     .await?;
+    let waiting: Option<(Uuid, Value)> = sqlx::query_as(
+        "SELECT id, body FROM builder.terms_acceptances \
+         WHERE collection_id = $1 AND signer = $2 AND event = $3 AND forwarded_at IS NULL",
+    )
+    .bind(manage.id())
+    .bind(manage.signer())
+    .bind(acceptance.event)
+    .fetch_optional(&mut *tx)
+    .await?;
     let body = match acceptance.event {
         THIRD_PARTY_EVENT => json!({
             "email": acceptance.email,
             "urn": urn.unwrap_or_else(|| "Unknown urn".into()),
-            "hashes": acceptance.hashes,
+            "hashes": merged(waiting.as_ref().map(|(_, body)| &body["hashes"]), acceptance.hashes),
         }),
         _ => json!({
             "email": acceptance.email,
@@ -151,11 +161,13 @@ pub async fn accept(
             "collection_address": contract.unwrap_or_else(|| "Unknown address".into()),
         }),
     };
-    let id = Uuid::new_v4();
+    let id = waiting.map_or_else(Uuid::new_v4, |(id, _)| id);
     let configured = state.settings.warehouse.is_some();
     sqlx::query(
         "INSERT INTO builder.terms_acceptances (id, collection_id, signer, event, body, attempts, next_attempt_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, timezone('UTC', now()) + make_interval(mins => $6))",
+         VALUES ($1, $2, $3, $4, $5, $6, timezone('UTC', now()) + make_interval(mins => $6)) \
+         ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, attempts = EXCLUDED.attempts, \
+           next_attempt_at = EXCLUDED.next_attempt_at",
     )
     .bind(id)
     .bind(manage.id())
@@ -167,16 +179,41 @@ pub async fn accept(
     .await?;
     tx.commit().await?;
     if configured && send(state, acceptance.event, &body).await {
-        delivered(state, id).await?;
+        delivered(state, id, &body).await?;
     }
     Ok(())
 }
 
-async fn delivered(state: &State, id: Uuid) -> Result<(), sqlx::Error> {
+/// The hashes of an acceptance still waiting for the warehouse, then the
+/// new ones it doesn't hold, at most [`MAX_HASHES`], the newest kept.
+fn merged(waiting: Option<&Value>, new: Option<Vec<String>>) -> Option<Vec<String>> {
+    let mut hashes: Vec<String> = waiting
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|h| h.as_str().map(str::to_string))
+        .collect();
+    if hashes.is_empty() {
+        return new;
+    }
+    let mut held: std::collections::HashSet<String> = hashes.iter().cloned().collect();
+    for hash in new.unwrap_or_default() {
+        if held.insert(hash.clone()) {
+            hashes.push(hash);
+        }
+    }
+    let excess = hashes.len().saturating_sub(MAX_HASHES);
+    Some(hashes.split_off(excess))
+}
+
+/// Marks acceptance `id` forwarded, unless a newer acceptance merged into
+/// it after `body` was sent.
+pub(crate) async fn delivered(state: &State, id: Uuid, body: &Value) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE builder.terms_acceptances SET forwarded_at = timezone('UTC', now()) WHERE id = $1",
+        "UPDATE builder.terms_acceptances SET forwarded_at = timezone('UTC', now()) WHERE id = $1 AND body = $2",
     )
     .bind(id)
+    .bind(body)
     .execute(state.items.pool())
     .await?;
     Ok(())
@@ -237,7 +274,7 @@ pub async fn forward_due(state: &State) -> anyhow::Result<u64> {
     let mut forwarded = 0;
     for (id, event, body) in due {
         if send(state, &event, &body).await {
-            delivered(state, id).await?;
+            delivered(state, id, &body).await?;
             forwarded += 1;
         }
     }

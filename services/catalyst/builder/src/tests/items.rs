@@ -1329,3 +1329,58 @@ async fn the_second_wallet_creating_an_item_id_at_once_is_refused() {
             .unwrap();
     assert_eq!(stored, (address(OWNER_KEY), "First".to_string()));
 }
+
+/// A wallet the chain names among a published collection's managers reads
+/// its items in full by id, minted or not, as the collection's listing
+/// answers them to it.
+#[tokio::test]
+async fn an_on_chain_manager_reads_an_unminted_item_of_a_published_collection_in_full() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let owner = address(OWNER_KEY);
+    let (collection, item) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address) VALUES ($1, 'Managed', $2)",
+    )
+    .bind(collection)
+    .bind(&owner)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.items (id, collection_id, eth_address, name, type, local_content_hash) \
+         VALUES ($1, $2, $3, 'Hat', 'wearable', repeat('ab', 32))",
+    )
+    .bind(item)
+    .bind(collection)
+    .bind(&owner)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    super::support::FakeCommittee::with(&[])
+        .publish(&app.pool)
+        .await;
+    let contract = super::support::on_chain(&app.pool, collection, false).await;
+    sqlx::query("UPDATE shop.collections SET managers = ARRAY[$2] WHERE contract_address = $1")
+        .bind(&contract)
+        .bind(address(STRANGER_KEY))
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = send(
+        &app,
+        STRANGER_KEY,
+        "GET",
+        &format!("/v1/items/{item}"),
+        Body::empty(),
+        "application/json",
+    )
+    .await;
+    super::support::off_chain(&app.pool, &contract).await;
+    assert_eq!(
+        (status, &body["data"]["local_content_hash"]),
+        (200, &json!("ab".repeat(32))),
+        "{body}"
+    );
+}

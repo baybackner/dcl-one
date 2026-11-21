@@ -56,6 +56,8 @@ pub struct Update {
     pub reasons: Option<Vec<String>>,
     pub message: Option<String>,
     pub note: Option<String>,
+    /// The item content an item approval approves.
+    pub content_hash: Option<String>,
 }
 
 /// A `POST` body's `curation`.
@@ -120,6 +122,15 @@ pub fn parse_update(curation: &Value) -> Result<Update, ApiError> {
             }
             "rejectionMessage" => update.message = Some(bounded(value, MAX_MESSAGE, 1)?),
             "note" => update.note = Some(bounded(value, MAX_NOTE, 0)?),
+            "contentHash" => {
+                update.content_hash = Some(
+                    value
+                        .as_str()
+                        .filter(|h| super::content_hash(h))
+                        .ok_or_else(invalid_schema)?
+                        .to_string(),
+                )
+            }
             _ => return Err(invalid_schema()),
         }
     }
@@ -328,7 +339,9 @@ async fn pin_videos(conn: &mut PgConnection, collection: Uuid) -> Result<(), Api
            SELECT i.id, v.hash, v.named_by, i.video AS before FROM builder.items i \
            JOIN builder.item_contents v ON v.item_id = i.id AND v.file = 'video.mp4' \
            WHERE i.collection_id = $1 AND i.type = 'wearable' AND i.video IS DISTINCT FROM v.hash \
-             AND EXISTS (SELECT 1 FROM builder.item_contents s WHERE s.item_id = i.id AND s.file LIKE '%.js')) \
+             AND EXISTS (SELECT 1 FROM builder.item_contents s WHERE s.item_id = i.id AND s.file LIKE '%.js') \
+             AND EXISTS (SELECT 1 FROM builder.uploaded_contents u \
+               WHERE u.hash = v.hash AND u.uploaded_by = v.named_by AND u.video)) \
          UPDATE builder.items i SET video = named.hash, video_named_by = named.named_by \
          FROM named WHERE i.id = named.id RETURNING named.before",
     )
@@ -533,7 +546,7 @@ pub async fn open_collection(
         Some(assignee) => Some(Notice::Assigned {
             assignee: Some(assignee.clone()),
         }),
-        None if !curated.stored_owner && known_committee => None,
+        None if !curated.creator && known_committee => None,
         None => {
             let submission = match (&previous, &curated.contract) {
                 (Some(_), _) => true,
@@ -660,6 +673,13 @@ pub async fn update_item(
     let item = subject(&curator);
     transitions::decide(Curation::Item, from, request, actor(&curator))
         .map_err(|r| refused(r, item))?;
+    let approved = update.status == Some(Status::Approved);
+    if approved && update.content_hash.is_none() {
+        return Err(
+            ApiError::bad_request("An item approval names the content hash it approves")
+                .with_data(json!({ "id": item })),
+        );
+    }
     let mut tx = state.items.pool().begin().await?;
     lock(&mut tx, curator.collection()).await?;
     let view = chain_state::for_decision(&mut tx).await?;
@@ -673,8 +693,16 @@ pub async fn update_item(
         return Err(refused(Refusal::NoCuration, item));
     };
     let previous = previous.ok_or_else(|| refused(Refusal::NoCuration, item))?;
-    let (updated, hash) =
-        set_item_curation(&mut tx, curator.collection(), item, previous.id, status).await?;
+    let approves = update.content_hash.as_deref().filter(|_| approved);
+    let (updated, hash) = set_item_curation(
+        &mut tx,
+        curator.collection(),
+        item,
+        previous.id,
+        status,
+        approves,
+    )
+    .await?;
     if curator.committee() {
         audited(
             &mut tx,
@@ -694,8 +722,13 @@ async fn set_item_curation(
     item: Uuid,
     id: Uuid,
     status: Option<Status>,
+    approves: Option<&str>,
 ) -> Result<(ItemCurationOut, String), ApiError> {
     let (hash, mapped) = submitted(&mut *conn, item).await?;
+    if approves.is_some_and(|approved| approved != hash) {
+        return Err(ApiError::conflict("The item changed since it was reviewed")
+            .with_data(json!({ "id": item, "contentHash": hash })));
+    }
     let updated: ItemCurationOut = sqlx::query_as(
         "UPDATE builder.item_curations SET status = COALESCE($2, status), content_hash = $3, \
            is_mapping_complete = $4, updated_at = GREATEST(updated_at, timezone('UTC', clock_timestamp())) \
@@ -757,7 +790,8 @@ pub async fn operate_items(
         else {
             return Err(refused(Refusal::ItemStatusOnly, item));
         };
-        let (_, hash) = set_item_curation(&mut tx, collection, item, previous.id, status).await?;
+        let (_, hash) =
+            set_item_curation(&mut tx, collection, item, previous.id, status, None).await?;
         let target = item.to_string();
         audit::record(
             &mut *tx,

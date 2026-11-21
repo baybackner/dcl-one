@@ -23,6 +23,7 @@ use crate::access::{CollectionRead, ItemRead, OnCommittee, Wallet};
 use crate::chain_state;
 use crate::collections::listing::{ListQuery, Page, page};
 use crate::http::ApiError;
+use crate::limits::Listing;
 
 use super::ItemsComponent;
 use super::body::{FullItemOut, ItemRow, Reached, by_id_columns, columns, from};
@@ -31,6 +32,12 @@ use super::body::{FullItemOut, ItemRow, Reached, by_id_columns, columns, from};
 /// the largest collection (12,665 items) and the largest owner (12,669) in
 /// the reference data.
 pub const ROWS_CAP: i64 = 20_000;
+
+/// The bytes of the documents of the items `$1`, as a listing loads them.
+pub const DOCUMENT_BYTES: &str = "SELECT coalesce(sum(octet_length(i.data::text) \
+     + coalesce(octet_length(i.metrics::text), 0) + coalesce(octet_length(i.mappings::text), 0) \
+     + coalesce((SELECT sum(octet_length(c.file) + octet_length(c.hash)) FROM builder.item_contents c \
+       WHERE c.item_id = i.id), 0)), 0)::bigint FROM builder.items i WHERE i.id = ANY($1)";
 
 /// The rows `GET /v1/items` answers, oldest first.
 pub const EVERY_ITEM_CAP: i64 = 1_000;
@@ -105,12 +112,14 @@ pub(crate) fn list_statement(view: &chain_state::ReadView) -> String {
 }
 
 /// The bodies of `ids`, in that order, read in one read-only transaction
-/// without JIT (a page's bodies are a few thousand rows at most).
+/// without JIT (a page's bodies are a few thousand rows at most), once
+/// `listing`, if any, admits their documents' size.
 pub(crate) async fn bodies(
     store: &ItemsComponent,
     ids: &[Uuid],
     reached: Reached,
     full: bool,
+    listing: Option<&Listing<'_>>,
 ) -> Result<Vec<FullItemOut>, ApiError> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -120,6 +129,13 @@ pub(crate) async fn bodies(
         .execute(&mut *tx)
         .await?;
     sqlx::query("SET LOCAL jit = off").execute(&mut *tx).await?;
+    if let Some(listing) = listing {
+        let bytes: i64 = sqlx::query_scalar(DOCUMENT_BYTES)
+            .bind(ids)
+            .fetch_one(&mut *tx)
+            .await?;
+        listing.admit(ids.len(), bytes)?;
+    }
     let view = chain_state::for_read(&mut tx).await?;
     let rows = sqlx::query_as::<_, ItemRow>(sqlx::AssertSqlSafe(list_statement(&view)))
         .bind(ids)
@@ -232,6 +248,7 @@ impl ItemsComponent {
         &self,
         read: &CollectionRead,
         q: &ListQuery,
+        listing: Option<&Listing<'_>>,
     ) -> Result<ItemsOut, ApiError> {
         let filters = CollectionFilters::of(q)?;
         let page = page(q, ROWS_CAP)?;
@@ -289,7 +306,7 @@ impl ItemsComponent {
         }
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
         let ids: Vec<Uuid> = ids.into_iter().map(|(id, _)| id).collect();
-        let results = bodies(self, &ids, Reached::InList, read.full()).await?;
+        let results = bodies(self, &ids, Reached::InList, read.full(), listing).await?;
         Ok(answer(&page, total, results, Some(0)))
     }
 
@@ -302,6 +319,7 @@ impl ItemsComponent {
         &self,
         wallet: &Wallet,
         q: &ListQuery,
+        listing: &Listing<'_>,
     ) -> Result<ItemsOut, ApiError> {
         let page = page(q, ROWS_CAP)?;
         let collection = match q.non_empty("collectionId")? {
@@ -351,13 +369,24 @@ impl ItemsComponent {
         scope.push_bind(wallet.provider_ids()).push(")");
         narrow(&mut scope);
         let (ids, total) = page_ids(&self.pool, scope, &page, true).await?;
-        let results = bodies(self, &standard_first(ids), Reached::InList, true).await?;
+        let results = bodies(
+            self,
+            &standard_first(ids),
+            Reached::InList,
+            true,
+            Some(listing),
+        )
+        .await?;
         Ok(answer(&page, total, results, None))
     }
 
     /// `GET /v1/items`: every item, at most [`EVERY_ITEM_CAP`], standard ones
     /// first.
-    pub async fn every_item(&self, _committee: &OnCommittee) -> Result<Vec<FullItemOut>, ApiError> {
+    pub async fn every_item(
+        &self,
+        _committee: &OnCommittee,
+        listing: &Listing<'_>,
+    ) -> Result<Vec<FullItemOut>, ApiError> {
         let page = Page {
             limit: EVERY_ITEM_CAP,
             offset: 0,
@@ -369,6 +398,13 @@ impl ItemsComponent {
              FROM builder.items i LEFT JOIN builder.collections c ON c.id = i.collection_id",
         );
         let (ids, _) = page_ids(&self.pool, sql, &page, false).await?;
-        bodies(self, &standard_first(ids), Reached::InList, true).await
+        bodies(
+            self,
+            &standard_first(ids),
+            Reached::InList,
+            true,
+            Some(listing),
+        )
+        .await
     }
 }

@@ -50,8 +50,7 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   NULL; addresses are lowercased. An item whose collection is missing
   upstream becomes a loose draft (`collection_id` NULL).
 - Timestamps: upstream `timestamp without time zone`, read as UTC.
-- A collection or item the node wrote after upstream's last save (its
-  `updated_at` is newer) is kept on re-runs.
+- Each collection and item is imported once (see "Re-runs").
 - A collection or item id the node holds with another creation time is a
   row the import didn't write, such as an id a wallet took on the node
   before the import: `collection` and `item` stop the batch and name the
@@ -63,8 +62,8 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 provider id, its managers (lowercased; the node's CHECK requires it),
 `raw_metadata` as upstream writes it (`tp:1:<name>:<description>[:<contracts>]`)
 and `"isProgrammatic"` as `is_programmatic`. A row whose id is longer than
-512 characters, the node's bound, is skipped. A row the node wrote after
-upstream's last save (its `updated_at` is newer) is kept on re-runs. Whether
+512 characters, the node's bound, is skipped. Each row is imported once
+(see "Re-runs"). Whether
 a virtual third party's managers manage the provider is decided on read,
 with the registry: see the builder's access rules.
 
@@ -94,16 +93,13 @@ and host, no path or trailing slash, as its deployment sets it): the
 `collection` step refuses to run without it and keeps a forum link only when
 it starts with that origin and `/`.
 
-An imported forum link clears any local pending forum claim in the same
-update. The import never imports a claim timestamp; an existing claim is
-preserved when the imported row has no forum link.
+The import never imports a forum claim timestamp.
 
 A source older than builder-server's last two migrations has no review
 columns on `collection_curations` and no `collection_events` table: the
 extracts read the review columns when present and no events when the table
-is absent. `updated_at` is never older than `created_at`. A curation the
-node changed after upstream's last change (its `updated_at` is newer) is
-kept on re-runs; events and cheques are never updated.
+is absent. `updated_at` is never older than `created_at`. Each curation is
+imported once (see "Re-runs"); events and cheques are never updated.
 
 ## Blobs
 
@@ -113,14 +109,16 @@ name. `uploaded_contents` records, per hash and uploader, a blob the node
 holds and its size. Upstream keeps neither, so the import attributes every
 name an item holds to the item's owner and records that owner as an
 uploader of every hash the item names, whoever first sent the bytes;
-upstream served those files to anyone. A re-import that changes an entry's
-hash attributes it to the owner again; one that only moves the entry keeps
-its writer. `item_content` carries each item's upstream `updated_at` and
-writes names and records only for items whose node row still has it: an
-item the node saved since keeps its own contents on re-runs. An item's `video` is a name too: `item` writes
-`video_named_by`, the owner, and keeps the stored writer while the video is
-unchanged; `item_content` records the owner as an uploader of each staged
-item's video as well, and stops the batch when the video's hash is not in the
+upstream served those files to anyone. A record of a hash an item names at
+`video.mp4`, or as its `video`, is marked as a video the videos route took
+(`uploaded_contents.video`), since upstream accepted it as one; publication
+takes no other record for a `video.mp4` entry. `item_content` carries each
+item's upstream `updated_at` and writes names and records only for items
+whose node row still has it: an item the node saved since keeps its own
+contents on re-runs. An item's `video` is a name too: `item` writes
+`video_named_by`, the owner; `item_content` records the owner as an uploader
+of each staged item's video as well, and stops the batch when the video's
+hash is not in the
 blob inventory either. What an imported name and record let a wallet read is the file
 routes' decision, the same as for a save and an upload on the node. The blob copy (out of
 scope) copies the bytes into the blob store's builder tree
@@ -144,5 +142,15 @@ hash whose inventory size is over 250,000,000 bytes, the largest file the node k
   `items.in_catalyst`, `items.catalyst_content_hash`,
   `newsletter_subscriptions` (upstream forwards opt-ins and stores none).
 
-No watermarks (state is derived across tables); every run re-scans. Upstream
-deletions, including files removed from an item's `contents`, are not detected.
+## Re-runs
+
+Every run re-scans upstream, with no watermark, and imports only what it
+hasn't imported yet. `dcl_migration.builder_imported (step, id)` records each
+collection, item, virtual third party, collection curation and item curation
+id once the node holds it; a later run skips every id the table records and
+inserts the others, never updating a row that exists. So a row the node
+changed after the import keeps its change, whether or not it moved
+`updated_at` (a forum link, a pinned video, a refreshed curation hash), a row
+the node deleted stays deleted, and an upstream change to a row already
+imported is not carried. Upstream deletions, including files removed from an
+item's `contents`, are not detected.

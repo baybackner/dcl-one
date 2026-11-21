@@ -16,7 +16,9 @@ use crate::access::Publisher;
 use super::chain_state;
 use super::http::ApiError;
 use super::items::ItemsComponent;
-use super::publication::{PublicationPreparation, SNAPSHOT_QUERY, already_published, prepare};
+use super::publication::{
+    PublicationPreparation, SNAPSHOT_QUERY, already_published, mark_missing_bytes, prepare,
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
@@ -90,7 +92,7 @@ impl ItemsComponent {
             .bind(id)
             .fetch_all(&mut *tx)
             .await?;
-        let snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
+        let mut snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
             .bind(id)
             .bind(signer)
             .fetch_one(&mut *tx)
@@ -98,6 +100,7 @@ impl ItemsComponent {
         if chain_state::published(&mut tx, &view, id).await? {
             return Err(already_published());
         }
+        mark_missing_bytes(&self.blobs, &mut snapshot).await?;
         let preparation = prepare(snapshot, signer)?;
         if preparation.revision != revision {
             return Err(ApiError::http(

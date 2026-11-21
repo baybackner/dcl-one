@@ -113,11 +113,12 @@ pub async fn prepare(
     let stored_id: Option<Uuid> = match (&by_urn, &input.id) {
         (Some(urn), _) => sqlx::query_scalar(
             "SELECT i.id FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
-             WHERE c.third_party_id = $1 AND i.urn_suffix = c.urn_suffix || ':' || $2 \
+             WHERE i.urn_suffix = $3 AND c.third_party_id = $1 AND i.urn_suffix = c.urn_suffix || ':' || $2 \
              ORDER BY i.created_at, i.id LIMIT 1",
         )
         .bind(&urn.third_party_id)
         .bind(&urn.item)
+        .bind(path)
         .fetch_optional(pool)
         .await?,
         (None, Some(id)) => {

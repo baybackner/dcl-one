@@ -24,18 +24,21 @@ CREATE TEMP TABLE current_stage ON COMMIT DROP AS
 SELECT s.* FROM stage s
 JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
 
-INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
-SELECT DISTINCT s.hash, b.size, lower(s.owner)
+INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
+SELECT s.hash, b.size, lower(s.owner), bool_or(s.file = 'video.mp4')
 FROM current_stage s
 JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
-ON CONFLICT (hash, uploaded_by) DO NOTHING;
+GROUP BY s.hash, b.size, lower(s.owner)
+ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
+WHERE EXCLUDED.video AND NOT u.video;
 
-INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
-SELECT DISTINCT i.video, b.size, i.video_named_by
+INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
+SELECT DISTINCT i.video, b.size, i.video_named_by, true
 FROM builder.items i
 JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = i.video
 WHERE i.video_named_by IS NOT NULL AND i.id IN (SELECT item_id FROM current_stage)
-ON CONFLICT (hash, uploaded_by) DO NOTHING;
+ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
+WHERE NOT u.video;
 
 INSERT INTO builder.item_contents AS c (item_id, file, hash, position, named_by)
 SELECT s.item_id, s.file, s.hash, s.position, lower(s.owner)

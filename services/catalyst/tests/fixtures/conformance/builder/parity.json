@@ -193,12 +193,12 @@
       "anchors": []
     },
     "item-list-bounds": {
-      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60.",
+      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60. Each of those listings answers at most 64 MiB of item documents; past it 413 {ok:false, data:{maxBytes}, error:'The listing is too large, ask for it in pages'} before any item is read (the largest collection in the reference data holds 19.8 MB).",
       "captures": [],
       "anchors": []
     },
     "item-save-input": {
-      "text": "PUT /v1/items/:idOrURN: beyond builder-server's schema, the node refuses with 400 Invalid request body a contents value that is not a content hash, a contents key that is not a relative file path, more than 256 contents entries, mappings under a network the schema doesn't name or for a contract key that is not an address, more than 100 mapping entries or more than 10,000 token ids in them, an empty price or beneficiary, and a name blank once trimmed. Upstream stores them (mappings it can't name as an empty object).",
+      "text": "PUT /v1/items/:idOrURN: beyond builder-server's schema, the node refuses with 400 Invalid request body a contents value that is not a content hash, a contents key that is not a relative file path, more than 256 contents entries, mappings under a network the schema doesn't name or for a contract key that is not an address, more than 100 mapping entries or more than 10,000 token ids in them, an empty price or beneficiary, a name blank once trimmed, more than 1,000 tags or required permissions, a tag, required permission, file name or spring bone name longer than 1,000 characters, more than 10 representations, more than 256 files in a representation, more than 100 entries in a list of hidden or replaced categories or of body shapes, and more than 256 spring bone models or 1,000 bones in one; a body over 256 KiB answers 413 unread. Upstream stores them (mappings it can't name as an empty object) and takes bodies of up to 5 MB. The largest item document in the reference data is 27,136 bytes, with 117 tags of up to 208 characters and 98 files in a representation.",
       "captures": [],
       "anchors": []
     },
@@ -433,7 +433,7 @@
       "anchors": []
     },
     "validator-call-bounds": {
-      "text": "The validator's three routes take at most 60 calls a minute per source address (429 {ok:false, data:{}, error:'Too many requests, try again in a minute'}), a claim or lease body of at most 4 KiB and a result body of at most 5 MiB (413). A result's request must belong to the path's collection and name every item the result names (400), its validationId must be a UUID, and nothing of it is stored but its outcome.",
+      "text": "The validator's three routes take at most 60 calls a minute per source address that names a single client (none behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) (429 {ok:false, data:{}, error:'Too many requests, try again in a minute'}), a claim or lease body of at most 4 KiB and a result body of at most 5 MiB (413). A result's request must belong to the path's collection and name every item the result names (400), its validationId and each itemId must be a UUID in its canonical text, and nothing of it is stored but its outcome.",
       "captures": [],
       "anchors": []
     },
@@ -448,7 +448,7 @@
       ]
     },
     "item-video-container": {
-      "text": "POST /v1/items/:id/videos: the node walks the video's top-level MP4 boxes as they arrive and refuses with 400 The video is not an MP4 file, storing nothing, a file that doesn't begin with an ftyp box, has no moov box, or whose boxes don't end where the file does. Upstream stores any bytes under the content type the client sends; the node serves a stored file under the type its bytes show.",
+      "text": "POST /v1/items/:id/videos: the node walks the video's top-level MP4 boxes as they arrive and refuses with 400 The video is not an MP4 file, storing nothing, a file that doesn't begin with an ftyp box, has no moov box, or whose boxes don't end where the file does. Upstream stores any bytes under the content type the client sends; the node serves a stored file under the type its bytes show. Both publications take a file named video.mp4 as uploaded only when the videos route stored it, and an approval pins only such a video as a smart wearable's.",
       "captures": [
         "source/489-item-videos-not-mp4.json"
       ],
@@ -457,7 +457,7 @@
       ]
     },
     "item-video-bounds": {
-      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 when the body hasn't arrived 20 minutes after the upload was admitted or when a 30-second window, from the upload's admission or from the last window that did, brought less than 512 KiB of the video (so also when no byte came for 30 seconds). Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
+      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 The upload timed out when the body hasn't arrived 20 minutes after the upload was admitted or no byte came for 30 seconds. While all eight places are held, a new upload takes the place of the slowest one that has run 30 seconds at an average below 208,333 bytes a second (what 250,000,000 bytes need to arrive within 20 minutes, about 1.7 Mbit/s), which ends with 408 The upload was too slow while the node was busy. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
       "captures": [],
       "anchors": []
     },
@@ -552,12 +552,12 @@
       ]
     },
     "request-budgets": {
-      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items, curations or an address's collections spends one more read per 20 rows it answers once answered, and GET /v1/addresses and the public collection search 50 more; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes.",
+      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items spends one more read per 20 rows and per 64 KiB of item documents before it reads them, and is refused when its budgets can't pay that at once; a listing of curations or of an address's collections, or of a wallet's drafts (its newest 5,000), spends one more read per 20 rows once answered; and GET /v1/addresses and the public collection search 50 more; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes. A request body is bounded to what its route takes: 256 KiB for an item save, 2 MiB for a collection save, a terms acceptance and a publication, the upload routes their own, and 64 KiB elsewhere (413 unread).",
       "captures": [],
       "anchors": []
     },
     "wallet-storage-bound": {
-      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload that could take the bytes its signer's uploads hold in the store, apart from files a published item names, past 5,000,000,000: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes}, error:\"The wallet's unpublished files reached their limit\"}. Past the plain sum of the wallet's upload records, its unpublished bytes are counted at most once a minute and moved meanwhile by what its records gained or lost, so a publication frees bytes within a minute. Both routes also spend, from the request's source address, its declared length in MiB (else the route's largest body) from 20 GiB a day; beyond, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After. Upstream bounds no wallet's or address's storage.",
+      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload whose signer's uploads hold, apart from files a published item names, 100,000 files, or could hold past 5,000,000,000 bytes with it: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The wallet's unpublished files reached their limit\"}. Every wallet's together are bounded the same way by BUILDER_UNPUBLISHED_MAX_BYTES (1,000,000,000,000 unset) and BUILDER_UNPUBLISHED_MAX_FILES (10,000,000 unset); past either, 507 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The node's unpublished files reached their limit\"}. Past the plain sum of the upload records, the unpublished ones are counted at most once a minute and moved meanwhile by what the records gained or lost, so a publication frees them within a minute. A request's source address may send 20 GiB of uploads a day, charged with the bytes each upload actually sent once it ends, whatever its outcome; while the day's are spent, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After. Upstream bounds no wallet's, address's or node's storage.",
       "captures": [],
       "anchors": []
     },
@@ -576,9 +576,28 @@
       "anchors": []
     },
     "terms-acceptance-bounds": {
-      "text": "POST /v1/collections/:id/tos: the node refuses with 400 Invalid request body a hash that is longer than 64 characters or holds anything but ASCII letters and digits, and more hashes than the collection has items; it keeps one acceptance per collection, signer and event, the newest, in place of the earlier one. Upstream takes any strings, up to 40,000 of them, and stores nothing.",
+      "text": "POST /v1/collections/:id/tos: the node refuses with 400 Invalid request body a hash that is longer than 64 characters or holds anything but ASCII letters and digits, and more hashes than the collection has items; it keeps one acceptance per collection, signer and event: a new one replaces one already forwarded, and merges into one the warehouse hasn't taken yet (its hashes, then the new ones it lacks, the newest 40,000 kept), which is then forwarded whole. Upstream takes any strings, up to 40,000 of them, and stores nothing.",
       "captures": [],
       "anchors": []
+    },
+    "item-approval-names-content": {
+      "text": "PATCH /v1/items/:id/curation: a committee approval names the content it approves in curation.contentHash, the item's current content hash. Without it the node answers 400 {ok:false, data:{id}, error:'An item approval names the content hash it approves'}, and with another hash 409 {ok:false, data:{id, contentHash}, error:'The item changed since it was reviewed'}, contentHash being the item's current one; either way it writes nothing. Upstream takes an approval without a hash and records the content the item holds at that moment, so content saved after the committee read approvalData is approved unseen. A capture's approval names no hash, so the node refuses it, and the submission after it finds the item's curation still pending.",
+      "captures": [
+        "source/423-item-curation-approve.json",
+        "source/424-item-curation-request-decided.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "item-read-on-chain-manager": {
+      "text": "GET /v1/items/:id: a wallet the chain names among a published standard collection's managers reads each of its items in full, minted or not, as GET /v1/collections/:id/items answers them to it. Upstream refuses it an item that isn't minted yet with 401, because the collection it decides on there isn't merged with the chain.",
+      "captures": [
+        "source/155-item-unminted-published-manager.json"
+      ],
+      "anchors": [
+        "status: fixture=401 candidate=200"
+      ]
     }
   },
   "operations": [
@@ -706,7 +725,7 @@
       "id": "api_http:GET:/v1/items/:id",
       "owner": "items",
       "status": "reviewed",
-      "result": "Reads by the owner, a stranger, the committee, an on-chain manager and minter, and an admin wallet of draft, unminted, minted, approved, third-party and orphan items, and an unknown and a malformed id, were compared. Each caller is admitted or refused as upstream decides and gets upstream's body for it, the chain's values merged into a minted item and a third-party item's URN and values; the admin wallet gets the public body. The provider's manager reading a curated third-party item gets upstream's body: published, with the mapping flag of the newest curation of the collection's first curated item by id. A signer with no role reading a third-party item of a collection with item curations, curated or not, gets upstream's public body.",
+      "result": "Reads by the owner, a stranger, the committee, an on-chain manager and minter, and an admin wallet of draft, unminted, minted, approved, third-party and orphan items, and an unknown and a malformed id, were compared. Each caller is admitted or refused as upstream decides and gets upstream's body for it, the chain's values merged into a minted item and a third-party item's URN and values; the admin wallet gets the public body. The provider's manager reading a curated third-party item gets upstream's body: published, with the mapping flag of the newest curation of the collection's first curated item by id. A signer with no role reading a third-party item of a collection with item curations, curated or not, gets upstream's public body. An on-chain manager of a published collection reads an unminted item in full, a deliberate gap.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/36-item-published-stranger.json",
@@ -741,7 +760,68 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/155-item-unminted-published-manager.json",
           "scope": "GET /items/{id} signed by an on-chain manager of a collection on chain, on an item it holds that is not minted.",
-          "replay": []
+          "replay": [
+            "status: fixture=401 candidate=200",
+            "data.beneficiary extra",
+            "data.blockchain_item_id extra",
+            "data.catalyst_content_hash extra",
+            "data.collection_id extra",
+            "data.content_hash extra",
+            "data.contents extra",
+            "data.created_at extra",
+            "data.data extra",
+            "data.description extra",
+            "data.eth_address value",
+            "data.in_catalyst extra",
+            "data.is_approved extra",
+            "data.is_published extra",
+            "data.local_content_hash extra",
+            "data.mappings extra",
+            "data.metrics extra",
+            "data.name extra",
+            "data.price extra",
+            "data.rarity extra",
+            "data.thumbnail extra",
+            "data.total_supply extra",
+            "data.type extra",
+            "data.updated_at extra",
+            "data.urn extra",
+            "data.utility extra",
+            "data.video extra",
+            "error missing",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=401 candidate=200": "deliberate:item-read-on-chain-manager",
+            "data.beneficiary extra": "deliberate:item-read-on-chain-manager",
+            "data.blockchain_item_id extra": "deliberate:item-read-on-chain-manager",
+            "data.catalyst_content_hash extra": "deliberate:item-read-on-chain-manager",
+            "data.collection_id extra": "deliberate:item-read-on-chain-manager",
+            "data.content_hash extra": "deliberate:item-read-on-chain-manager",
+            "data.contents extra": "deliberate:item-read-on-chain-manager",
+            "data.created_at extra": "deliberate:item-read-on-chain-manager",
+            "data.data extra": "deliberate:item-read-on-chain-manager",
+            "data.description extra": "deliberate:item-read-on-chain-manager",
+            "data.eth_address value": "deliberate:item-read-on-chain-manager",
+            "data.in_catalyst extra": "deliberate:item-read-on-chain-manager",
+            "data.is_approved extra": "deliberate:item-read-on-chain-manager",
+            "data.is_published extra": "deliberate:item-read-on-chain-manager",
+            "data.local_content_hash extra": "deliberate:item-read-on-chain-manager",
+            "data.mappings extra": "deliberate:item-read-on-chain-manager",
+            "data.metrics extra": "deliberate:item-read-on-chain-manager",
+            "data.name extra": "deliberate:item-read-on-chain-manager",
+            "data.price extra": "deliberate:item-read-on-chain-manager",
+            "data.rarity extra": "deliberate:item-read-on-chain-manager",
+            "data.thumbnail extra": "deliberate:item-read-on-chain-manager",
+            "data.total_supply extra": "deliberate:item-read-on-chain-manager",
+            "data.type extra": "deliberate:item-read-on-chain-manager",
+            "data.updated_at extra": "deliberate:item-read-on-chain-manager",
+            "data.urn extra": "deliberate:item-read-on-chain-manager",
+            "data.utility extra": "deliberate:item-read-on-chain-manager",
+            "data.video extra": "deliberate:item-read-on-chain-manager",
+            "error missing": "deliberate:item-read-on-chain-manager",
+            "ok value": "deliberate:item-read-on-chain-manager"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/156-item-minted-manager.json",
@@ -876,7 +956,8 @@
         "deliberate:chain-copy-lag",
         "deliberate:unauthenticated-message",
         "deliberate:catalyst-is-this-node",
-        "deliberate:item-curation-reopen-later-reads"
+        "deliberate:item-curation-reopen-later-reads",
+        "deliberate:item-read-on-chain-manager"
       ],
       "remaining_verification": "None for the catalyst state; the bodies of items the catalyst holds were compared for a third-party item never curated, a curated one and a minted standard one."
     },
@@ -4164,7 +4245,7 @@
       "id": "api_http:PATCH:/v1/items/:id/curation",
       "owner": "curation",
       "status": "reviewed",
-      "result": "The provider's manager refreshing a pending item curation's content hash, the committee's approval, and the refusals of a creator's approval, a stranger, an item never curated and an assignee, were compared and match; a creator setting a decided item curation back to pending is refused, a deliberate gap.",
+      "result": "The provider's manager refreshing a pending item curation's content hash, the committee's approval, and the refusals of a creator's approval, a stranger, an item never curated and an assignee, were compared and match; a creator setting a decided item curation back to pending is refused, a deliberate gap. A committee approval names the content hash it approves and is refused without it or for content saved since, a deliberate gap.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/418-item-curation-refresh-pending.json",
@@ -4201,7 +4282,30 @@
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/423-item-curation-approve.json",
           "scope": "PATCH /items/{id}/curation signed by a committee member, approving an item whose newest curation is pending.",
-          "replay": []
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data.content_hash missing",
+            "data.created_at missing",
+            "data.id value",
+            "data.is_mapping_complete missing",
+            "data.item_id missing",
+            "data.status missing",
+            "data.updated_at missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:item-approval-names-content",
+            "data.content_hash missing": "deliberate:item-approval-names-content",
+            "data.created_at missing": "deliberate:item-approval-names-content",
+            "data.id value": "deliberate:item-approval-names-content",
+            "data.is_mapping_complete missing": "deliberate:item-approval-names-content",
+            "data.item_id missing": "deliberate:item-approval-names-content",
+            "data.status missing": "deliberate:item-approval-names-content",
+            "data.updated_at missing": "deliberate:item-approval-names-content",
+            "error extra": "deliberate:item-approval-names-content",
+            "ok value": "deliberate:item-approval-names-content"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/428-item-curation-reopen-manager.json",
@@ -4237,7 +4341,8 @@
         "deliberate:committee-unavailable",
         "deliberate:curation-input",
         "deliberate:item-curation-reopened-by-the-committee",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:item-approval-names-content"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4245,12 +4350,33 @@
       "id": "api_http:POST:/v1/items/:id/curation",
       "owner": "curation",
       "status": "reviewed",
-      "result": "A new submission of an item whose newest curation is decided, and the refusals of a pending one, a never-curated item and a stranger, were compared and match.",
+      "result": "A new submission of an item whose newest curation is decided, and the refusals of a pending one, a never-curated item and a stranger, were compared and match. Its capture follows an approval the node refuses (deliberate:item-approval-names-content), so the item is still pending.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/424-item-curation-request-decided.json",
           "scope": "POST /items/{id}/curation signed by the provider's manager, an item whose newest curation is approved: a new pending curation.",
-          "replay": []
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data.content_hash missing",
+            "data.created_at missing",
+            "data.is_mapping_complete missing",
+            "data.item_id missing",
+            "data.status missing",
+            "data.updated_at missing",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:item-approval-names-content",
+            "data.content_hash missing": "deliberate:item-approval-names-content",
+            "data.created_at missing": "deliberate:item-approval-names-content",
+            "data.is_mapping_complete missing": "deliberate:item-approval-names-content",
+            "data.item_id missing": "deliberate:item-approval-names-content",
+            "data.status missing": "deliberate:item-approval-names-content",
+            "data.updated_at missing": "deliberate:item-approval-names-content",
+            "error extra": "deliberate:item-approval-names-content",
+            "ok value": "deliberate:item-approval-names-content"
+          }
         },
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/425-item-curation-request-pending.json",
@@ -4271,7 +4397,8 @@
       "gaps": [
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:item-approval-names-content"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },

@@ -187,6 +187,8 @@ CREATE INDEX items_created_idx ON builder.items (created_at, id);
 
 CREATE INDEX items_video_idx ON builder.items (video, video_named_by) WHERE video IS NOT NULL;
 
+CREATE INDEX items_urn_idx ON builder.items (urn_suffix) WHERE urn_suffix IS NOT NULL;
+
 -- ── uploads ────────────────────────────────────────────────────────────────
 
 CREATE TABLE builder.uploaded_contents (
@@ -194,6 +196,7 @@ CREATE TABLE builder.uploaded_contents (
     size bigint NOT NULL,
     uploaded_by text NOT NULL,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    video boolean NOT NULL DEFAULT false,
     CONSTRAINT uploaded_contents_pkey PRIMARY KEY (hash, uploaded_by),
     CONSTRAINT uploaded_contents_size_check CHECK (size >= 0 AND size <= 250000000),
     CONSTRAINT uploaded_contents_uploaded_by_lowercase_check CHECK (uploaded_by = lower(uploaded_by))

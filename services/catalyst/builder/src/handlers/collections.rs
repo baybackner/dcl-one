@@ -38,9 +38,17 @@ pub async fn get_collection_items(
     let q = ListQuery::parse(raw.as_deref());
     let status = q.non_empty("status")?.map(str::to_string);
     let read = access::collection_items(&state, &signer, &id, status.as_deref()).await?;
-    let items = state.items.collection_items(&read, &q).await?;
-    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
-    Ok(Json(ApiData::ok(items)))
+    let listing = crate::limits::Listing {
+        state: &state,
+        headers: &headers,
+        signer: signer.as_str(),
+    };
+    Ok(Json(ApiData::ok(
+        state
+            .items
+            .collection_items(&read, &q, Some(&listing))
+            .await?,
+    )))
 }
 
 /// Whether a listing's `status` filter and MOST_RELEVANT sort read the
@@ -146,8 +154,12 @@ pub async fn get_items(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let committee = access::committee(&state, &signer).await?;
-    let items = state.items.every_item(&committee).await?;
-    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
+    let listing = crate::limits::Listing {
+        state: &state,
+        headers: &headers,
+        signer: signer.as_str(),
+    };
+    let items = state.items.every_item(&committee, &listing).await?;
     Ok(Json(ApiData::ok(items)).into_response())
 }
 
@@ -185,11 +197,15 @@ pub async fn get_address_items(
     headers: HeaderMap,
 ) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
     let wallet = access::own_address(&state, &signer, &address).await?;
+    let listing = crate::limits::Listing {
+        state: &state,
+        headers: &headers,
+        signer: signer.as_str(),
+    };
     let items = state
         .items
-        .address_items(&wallet, &ListQuery::parse(raw.as_deref()))
+        .address_items(&wallet, &ListQuery::parse(raw.as_deref()), &listing)
         .await?;
-    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
     Ok(Json(ApiData::ok(items)))
 }
 

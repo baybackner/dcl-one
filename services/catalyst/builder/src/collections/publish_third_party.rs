@@ -148,7 +148,8 @@ pub async fn publish(
     let named: Vec<Named> = sqlx::query_as(
         "SELECT i.id, i.name, i.collection_id, i.local_content_hash, i.mappings IS NOT NULL AS mapped, \
            EXISTS (SELECT 1 FROM builder.item_contents ic WHERE ic.item_id = i.id AND NOT EXISTS ( \
-             SELECT 1 FROM builder.uploaded_contents u WHERE u.hash = ic.hash AND u.uploaded_by = ic.named_by)) \
+             SELECT 1 FROM builder.uploaded_contents u WHERE u.hash = ic.hash AND u.uploaded_by = ic.named_by \
+             AND (u.video OR ic.file <> 'video.mp4'))) \
            AS missing_content \
          FROM builder.items i WHERE i.id = ANY($1) ORDER BY i.created_at, i.id FOR UPDATE OF i",
     )
@@ -157,6 +158,31 @@ pub async fn publish(
     .await?;
     if named.is_empty() {
         return Err(refused(400, "Tried to publish no TP items", id));
+    }
+    let named_hashes: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT item_id, hash FROM builder.item_contents WHERE item_id = ANY($1)")
+            .bind(&request.items)
+            .fetch_all(&mut *tx)
+            .await?;
+    let mut held = std::collections::HashMap::new();
+    let mut lost = std::collections::HashSet::new();
+    for (item, hash) in named_hashes {
+        let stored = match held.get(&hash) {
+            Some(stored) => *stored,
+            None => {
+                let stored = state
+                    .items
+                    .blobs
+                    .exist(&hash)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                held.insert(hash, stored);
+                stored
+            }
+        };
+        if !stored {
+            lost.insert(item);
+        }
     }
     if request.cheque.qty.and_then(|q| usize::try_from(q).ok()) != Some(named.len()) {
         return Err(refused(
@@ -215,7 +241,7 @@ pub async fn publish(
                 );
             }
         }
-        if item.missing_content {
+        if item.missing_content || lost.contains(&item.id) {
             return Err(ApiError::bad_request(format!(
                 "{}: upload missing content before publishing",
                 item.name
@@ -259,6 +285,7 @@ pub async fn publish(
             &ids,
             crate::items::body::Reached::InList,
             true,
+            None,
         )
         .await?,
         item_curations,

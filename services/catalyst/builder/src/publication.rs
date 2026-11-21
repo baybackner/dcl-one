@@ -68,7 +68,7 @@ impl ItemsComponent {
         }
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_decision(&mut conn).await?;
-        let snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
+        let mut snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
             .bind(id)
             .bind(signer)
             .fetch_optional(&mut *conn)
@@ -77,8 +77,44 @@ impl ItemsComponent {
         if chain_state::published(&mut conn, &view, id).await? {
             return Err(already_published());
         }
+        mark_missing_bytes(&self.blobs, &mut snapshot).await?;
         prepare(snapshot, signer)
     }
+}
+
+/// Marks `missing_content` on each item of `snapshot` that names a hash
+/// the store holds no bytes for.
+pub(super) async fn mark_missing_bytes(
+    blobs: &crate::storage::Storage,
+    snapshot: &mut Value,
+) -> Result<(), ApiError> {
+    let mut held = std::collections::HashMap::new();
+    for item in snapshot["items"].as_array_mut().into_iter().flatten() {
+        let hashes: Vec<String> = item["contents"]
+            .as_object()
+            .into_iter()
+            .flat_map(|contents| contents.values())
+            .filter_map(|hash| hash.as_str().map(str::to_string))
+            .collect();
+        for hash in hashes {
+            let stored = match held.get(&hash) {
+                Some(stored) => *stored,
+                None => {
+                    let stored = blobs
+                        .exist(&hash)
+                        .await
+                        .map_err(|e| ApiError::internal(e.to_string()))?;
+                    held.insert(hash, stored);
+                    stored
+                }
+            };
+            if !stored {
+                item["missing_content"] = Value::Bool(true);
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn already_published() -> ApiError {
@@ -321,14 +357,16 @@ mod tests;
 /// each with its `contents` map (`items_collection_created_idx`) and
 /// `missing_content`: whether it names a file whose name's writer never
 /// uploaded it (no `uploaded_contents` row for that hash by the entry's
-/// `named_by`, the attribution the file routes read), which every
-/// preparation and begin of both publications refuses.
+/// `named_by`, the attribution the file routes read; for `video.mp4`, none
+/// the videos route wrote), which every preparation and begin of both
+/// publications refuses.
 pub(super) const SNAPSHOT_QUERY: &str = "SELECT jsonb_build_object('collection', to_jsonb(c), 'items', \
              COALESCE((SELECT jsonb_agg(to_jsonb(i) || jsonb_build_object('contents', \
                COALESCE((SELECT jsonb_object_agg(ic.file, ic.hash) FROM builder.item_contents ic \
                  WHERE ic.item_id=i.id), '{}'::jsonb), 'missing_content', EXISTS (SELECT 1 \
                  FROM builder.item_contents ic WHERE ic.item_id=i.id AND NOT EXISTS (SELECT 1 \
-                 FROM builder.uploaded_contents u WHERE u.hash=ic.hash AND u.uploaded_by=ic.named_by))) \
+                 FROM builder.uploaded_contents u WHERE u.hash=ic.hash AND u.uploaded_by=ic.named_by \
+                 AND (u.video OR ic.file <> 'video.mp4')))) \
                  ORDER BY i.created_at, i.id) \
                FROM builder.items i WHERE i.collection_id=c.id), '[]'::jsonb)) \
              FROM builder.collections c WHERE c.id=$1 AND c.eth_address=$2";

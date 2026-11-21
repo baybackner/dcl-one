@@ -76,31 +76,52 @@ impl Places {
     /// when the request names no single client, which counts toward no
     /// source), or the refusal ([`busy`]).
     pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<Admission, Response> {
+        self.admit_beyond(signer, source, 0)
+            .map_err(|(_, busy)| busy)
+    }
+
+    /// [`Self::admit`] with `extra` places beyond the node's; a refusal says
+    /// whether the node's places were what refused it.
+    pub(crate) fn admit_beyond(
+        &self,
+        signer: &str,
+        source: Option<&str>,
+        extra: usize,
+    ) -> Result<Admission, (bool, Response)> {
         let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-        if in_flight.total >= self.total {
-            return Err(busy(&format!(
-                "Too many {} in progress, try again later",
-                self.what
-            )));
-        }
         let wallet = format!("wallet:{signer}");
         let count = |key: &str| in_flight.by_key.get(key).copied().unwrap_or(0);
         if count(&wallet) >= self.per_signer {
-            return Err(busy(&format!(
-                "Too many {} of this wallet in progress",
-                self.what
-            )));
+            return Err((
+                false,
+                busy(&format!(
+                    "Too many {} of this wallet in progress",
+                    self.what
+                )),
+            ));
         }
         let mut keys = vec![wallet];
         if let Some(source) = source {
             let source = format!("source:{source}");
             if count(&source) >= self.per_source {
-                return Err(busy(&format!(
-                    "Too many {} from this address in progress",
-                    self.what
-                )));
+                return Err((
+                    false,
+                    busy(&format!(
+                        "Too many {} from this address in progress",
+                        self.what
+                    )),
+                ));
             }
             keys.push(source);
+        }
+        if in_flight.total >= self.total + extra {
+            return Err((
+                true,
+                busy(&format!(
+                    "Too many {} in progress, try again later",
+                    self.what
+                )),
+            ));
         }
         for key in &keys {
             *in_flight.by_key.entry(key.clone()).or_default() += 1;

@@ -325,7 +325,7 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         collection: state.items.collection(&read).await?,
         items: state
             .items
-            .collection_items(&read, &ListQuery::parse(None))
+            .collection_items(&read, &ListQuery::parse(None), None)
             .await?,
     };
     if first_publication && published.collection.get("is_approved") != Some(&Value::Bool(true)) {

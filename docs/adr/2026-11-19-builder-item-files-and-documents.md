@@ -40,16 +40,24 @@ The builder answers items as `github.com/decentraland/builder-server` at
   `Retry-After` at once). It reads the body within its bounds, hashes each
   file, refuses a file whose bytes don't match the hash, whose item doesn't
   name it or that the item names only as its `video.mp4` (a video comes
-  through `/videos` and its container check), and only then stores it.
+  through `/videos` and its container check), and only then stores it. A
+  record the videos route writes is marked as a video
+  (`builder.uploaded_contents.video`); both publications take, for an item's
+  `video.mp4`, no other record, and an approval pins only such a video, so
+  bytes that reached the store another way never become an item's video.
 - **Uploads have budgets.** A source address sends at most 20 GiB of item
-  files and videos a day, counted by each body's declared length before the
-  body is read. A wallet's uploads hold at most 5,000,000,000 bytes that no
-  published item names; once the plain sum of its upload records passes
-  that, the node counts its unpublished bytes at most once a minute and
-  moves that count by what its records gained or lost since, so a
-  publication frees bytes within a minute. An address the node can't tell
-  apart, an internal one behind a gateway it doesn't trust, counts toward
-  no source.
+  files and videos a day, charged with the bytes each upload actually sent
+  once it ends; an upload waits only while the address's day is spent. A
+  wallet's uploads hold at most 5,000,000,000 bytes and 100,000 files that no
+  published item names, and every wallet's together
+  `BUILDER_UNPUBLISHED_MAX_BYTES` and `BUILDER_UNPUBLISHED_MAX_FILES`; once
+  the plain sum of the upload records passes a bound, the node counts the
+  unpublished ones at most once a minute and moves that count by what the
+  records gained or lost since, so a publication frees them within a minute.
+  An address the node can't tell apart, an internal one behind a gateway it
+  doesn't trust, counts toward no source. Publication refuses an item that
+  names a hash the store holds no bytes for, as it refuses an unuploaded
+  one.
 - **A video streams to the store.** `POST /v1/items/{id}/videos` takes a
   smart wearable's preview video, one file part named `video.mp4`, of up to
   250,000,000 bytes. The node decides access, checks that the item names a
@@ -61,10 +69,12 @@ The builder answers items as `github.com/decentraland/builder-server` at
   it arrives, holding no database connection or row lock. The multipart
   parser may hold at most 64 KiB beyond the bytes it has handed on, the
   whole body must arrive within 20 minutes (about 1.7 Mbit/s for the
-  largest video), each 30-second window must bring at least 512 KiB of the
-  video (about 140 kbit/s; so 30 seconds without a byte also ends the
-  upload, and a sender that trickles frees its place), and the node stops
-  reading the moment a bound is passed. The video must be an MP4 container (an `ftyp`
+  largest video), 30 seconds without a byte ends the upload, and the node
+  stops reading the moment a bound is passed. While all eight places are
+  held, a new upload takes the place of the slowest one that has run 30
+  seconds below the rate the largest video needs (about 1.7 Mbit/s), which
+  ends; a small video on a slow link finishes while places are free, and
+  holding every place costs a sender that rate per place. The video must be an MP4 container (an `ftyp`
   box first, a `moov` box, boxes that end where the file does), whatever
   its part's name or content type says. Only then, in one transaction with
   the item locked, the node decides access again, checks that the item

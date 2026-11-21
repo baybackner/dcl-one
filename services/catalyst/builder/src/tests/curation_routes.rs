@@ -425,6 +425,9 @@ async fn every_cell_of_the_transition_table_answers_and_writes_as_the_table_says
                             if assignee {
                                 c.insert("assignee".into(), committee.clone().into());
                             }
+                            if curation == Curation::Item && status == Some(Status::Approved) {
+                                c.insert("contentHash".into(), hash(1).into());
+                            }
                             ("PATCH", Some(json!({ "curation": c })))
                         }
                         Asked::Reject | Asked::Reopen => {
@@ -1032,7 +1035,11 @@ async fn an_approval_pins_each_smart_wearables_video() {
     let owner = address(OWNER_KEY);
     let mut items = Vec::new();
     let mut olds = Vec::new();
-    for smart in [true, false] {
+    for (smart, new) in [
+        (true, "bafkreinew"),
+        (false, "bafkreinew"),
+        (true, "bafkreiplain"),
+    ] {
         let item = Uuid::new_v4();
         let old = format!("bafkreiold{}", item.simple());
         sqlx::query(
@@ -1056,9 +1063,9 @@ async fn an_approval_pins_each_smart_wearables_video() {
         .unwrap();
         olds.push(old);
         let files: &[(&str, &str)] = if smart {
-            &[("game.js", "bafkreiscript"), ("video.mp4", "bafkreinew")]
+            &[("game.js", "bafkreiscript"), ("video.mp4", new)]
         } else {
-            &[("video.mp4", "bafkreinew")]
+            &[("video.mp4", new)]
         };
         for (position, (file, hash)) in files.iter().enumerate() {
             sqlx::query(
@@ -1075,6 +1082,14 @@ async fn an_approval_pins_each_smart_wearables_video() {
         }
         items.push(item);
     }
+    sqlx::query(
+        "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by, video) \
+         VALUES ('bafkreinew', 1, $1, true), ('bafkreiplain', 1, $1, false)",
+    )
+    .bind(&owner)
+    .execute(&n.pool)
+    .await
+    .unwrap();
     let (status, _) = call(
         &n.app,
         Some(COMMITTEE_KEY),
@@ -1091,7 +1106,14 @@ async fn an_approval_pins_each_smart_wearables_video() {
     .fetch_all(&n.pool)
     .await
     .unwrap();
-    assert_eq!(videos, [Some("bafkreinew".into()), Some(olds[1].clone())]);
+    assert_eq!(
+        videos,
+        [
+            Some("bafkreinew".into()),
+            Some(olds[1].clone()),
+            Some(olds[2].clone())
+        ]
+    );
     let recorded: Vec<String> = sqlx::query_scalar(
         "SELECT hash FROM builder.uploaded_contents WHERE hash = ANY($1) ORDER BY hash",
     )
@@ -1099,7 +1121,9 @@ async fn an_approval_pins_each_smart_wearables_video() {
     .fetch_all(&n.pool)
     .await
     .unwrap();
-    assert_eq!(recorded, [olds[1].clone()]);
+    let mut kept = vec![olds[1].clone(), olds[2].clone()];
+    kept.sort();
+    assert_eq!(recorded, kept);
     sqlx::query("DELETE FROM builder.uploaded_contents WHERE hash = ANY($1)")
         .bind(&olds)
         .execute(&n.pool)
@@ -1286,4 +1310,47 @@ async fn a_role_lost_after_the_decision_writes_nothing() {
         statuses(&n.pool, Curation::Collection, id).await,
         ["approved"]
     );
+}
+
+/// A collection the chain moved to a committee member: its new creator's
+/// request for a review is a creator's request, which the curators hear
+/// of, whoever the row first named.
+#[tokio::test]
+async fn the_chains_creator_on_the_committee_asks_for_a_review_as_its_creator() {
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let slack = FakeSlack::default();
+    let api = slack.start(pool.clone()).await;
+    let n = node_over(
+        pool,
+        Options {
+            slack: Some(api),
+            ..Options::default()
+        },
+    )
+    .await;
+    let id = standard(&n.pool, "Moved").await;
+    collection_curation(&n.pool, id, "rejected").await;
+    sqlx::query(
+        "UPDATE shop.collections s SET creator = $2, owner = $2 FROM builder.collections b \
+         WHERE b.id = $1 AND s.contract_address = b.contract_address",
+    )
+    .bind(id)
+    .bind(address(COMMITTEE_KEY))
+    .execute(&n.pool)
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &n.app,
+        Some(COMMITTEE_KEY),
+        "POST",
+        &format!("/v1/collections/{id}/curation"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    n.state.notices.settled().await;
+    let texts = slack.texts();
+    assert_eq!(texts.len(), 1, "{texts:?}");
 }

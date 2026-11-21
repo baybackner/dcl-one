@@ -373,3 +373,58 @@ async fn a_standard_publication_takes_only_files_each_names_writer_uploaded() {
         cleanup(&store, &[id], &hashes).await;
     }
 }
+
+/// A file whose upload is recorded but whose bytes the store no longer
+/// holds keeps the collection from publishing, as an unuploaded one does,
+/// until it is uploaded again.
+#[tokio::test]
+async fn a_recorded_file_without_its_bytes_keeps_the_collection_from_publishing() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let id = Uuid::new_v4();
+    super::support::save_collection(
+        &store,
+        OWNER,
+        json!({"id": id, "name": format!("Lost {}", &id.simple().to_string()[..8])}),
+    )
+    .await
+    .unwrap();
+    let mut item = json!({
+        "id": Uuid::new_v4(), "name": "Hat", "type": "wearable", "collection_id": id,
+        "data": {"category": "hat", "representations": [{"mainFile": "model.glb", "contents": ["model.glb"],
+        "bodyShapes": ["urn:decentraland:off-chain:base-avatars:BaseMale"]}]},
+        "price": "0", "rarity": "rare", "thumbnail": "thumbnail.png"
+    });
+    let (model, image) = (unique("lost model"), unique("lost image"));
+    name_files(
+        &store,
+        OWNER,
+        OTHER,
+        &mut item,
+        [("model.glb", &model), ("thumbnail.png", &image)],
+        Uploader::Owner,
+    )
+    .await;
+    let publisher = granted::publisher(OWNER, id);
+    assert!(store.prepare_publication(&publisher).await.is_ok());
+    store
+        .blobs
+        .delete(&dcl_auth::hash_bytes_v1(&model))
+        .await
+        .unwrap();
+    let refused = store.prepare_publication(&publisher).await.unwrap_err();
+    assert!(
+        refused.to_string().contains("upload missing content"),
+        "{refused}"
+    );
+    let begun = store
+        .begin_publication(&publisher, "any revision")
+        .await
+        .unwrap_err();
+    assert!(
+        begun.to_string().contains("upload missing content"),
+        "{begun}"
+    );
+    cleanup(&store, &[id], &[]).await;
+}

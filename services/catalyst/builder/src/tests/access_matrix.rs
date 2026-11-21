@@ -1244,10 +1244,17 @@ impl Op {
                     Op::ItemCurationUpdate => "PATCH",
                     _ => "POST",
                 };
+                let body = match approval(method) {
+                    Payload::Json(mut body) => {
+                        body["curation"]["contentHash"] = json!("ab".repeat(32));
+                        Payload::Json(body)
+                    }
+                    other => other,
+                };
                 (
                     method,
                     format!("/v1/items/{}/curation", f.item_id(kind)),
-                    approval(method),
+                    body,
                 )
             }
             Op::Ping => ("GET", "/ping".into(), Payload::None),
@@ -1508,7 +1515,7 @@ impl Op {
                 Missing => not_found(&item, "items"),
                 Malformed => invalid_uuid(&item),
                 Published | Approved | Transferred | ThirdPartySubmitted => ok(),
-                _ if kind.item_owner(caller) || committee => ok(),
+                _ if kind.item_owner(caller) || manager || committee => ok(),
                 _ => unauthorized(),
             },
             Op::SaveItem => match kind {
@@ -2292,6 +2299,7 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                                 | Transferred
                                 | ThirdPartySubmitted
                         ) && !kind.item_owner(caller)
+                            && !kind.manager(caller)
                     }
                     Op::OwnerSync | Op::Publish => {
                         !matches!(kind, Missing | Malformed)

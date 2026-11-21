@@ -1,7 +1,11 @@
+CREATE TEMP TABLE fresh_collection ON COMMIT DROP AS
+SELECT s.* FROM stage s
+WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.builder_imported m WHERE m.step = 'collection' AND m.id = s.id::text);
+
 DO $taken$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(t.id::text, ', ' ORDER BY t.id) FILTER (WHERE t.rn <= 10) INTO n, ids
     FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
-            FROM stage s JOIN builder.collections x ON x.id = s.id
+            FROM fresh_collection s JOIN builder.collections x ON x.id = s.id
            WHERE x.created_at IS DISTINCT FROM s.created_at AT TIME ZONE 'UTC') t;
   IF n > 0 THEN RAISE EXCEPTION
     'builder-server/collection: the node holds % ids the import did not write (another creation time), first: %; resolve them before importing', n, ids;
@@ -19,28 +23,9 @@ SELECT id, btrim(name), lower(eth_address), salt, contract_address, urn_suffix, 
        CASE WHEN web_link AND forum_id > 0 THEN forum_id END
 FROM (SELECT *, COALESCE(forum_link ~ '^https?://[^[:space:]]+$' AND char_length(forum_link) <= 2048
                          AND left(forum_link, char_length(:'forum_url') + 1) = :'forum_url' || '/', false) AS web_link
-      FROM stage) s
-ON CONFLICT (id) DO UPDATE SET
-    name = EXCLUDED.name,
-    eth_address = EXCLUDED.eth_address,
-    salt = EXCLUDED.salt,
-    contract_address = EXCLUDED.contract_address,
-    urn_suffix = EXCLUDED.urn_suffix,
-    third_party_id = EXCLUDED.third_party_id,
-    created_at = EXCLUDED.created_at,
-    updated_at = EXCLUDED.updated_at,
-    linked_contract_address = EXCLUDED.linked_contract_address,
-    linked_contract_network = EXCLUDED.linked_contract_network,
-    lock = EXCLUDED.lock,
-    forum_link = EXCLUDED.forum_link,
-    forum_id = EXCLUDED.forum_id,
-    forum_claimed_at = CASE WHEN EXCLUDED.forum_link IS NOT NULL THEN NULL ELSE c.forum_claimed_at END
-WHERE (c.name, c.eth_address, c.salt, c.contract_address, c.urn_suffix, c.third_party_id,
-       c.created_at, c.updated_at, c.linked_contract_address, c.linked_contract_network, c.lock,
-       c.forum_link, c.forum_id)
-      IS DISTINCT FROM
-      (EXCLUDED.name, EXCLUDED.eth_address, EXCLUDED.salt, EXCLUDED.contract_address, EXCLUDED.urn_suffix,
-       EXCLUDED.third_party_id, EXCLUDED.created_at, EXCLUDED.updated_at,
-       EXCLUDED.linked_contract_address, EXCLUDED.linked_contract_network, EXCLUDED.lock,
-       EXCLUDED.forum_link, EXCLUDED.forum_id)
-  AND c.updated_at <= EXCLUDED.updated_at;
+      FROM fresh_collection) s
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO dcl_migration.builder_imported (step, id)
+SELECT 'collection', f.id::text FROM fresh_collection f JOIN builder.collections t ON t.id = f.id
+ON CONFLICT DO NOTHING;

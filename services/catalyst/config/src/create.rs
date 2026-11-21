@@ -50,6 +50,17 @@ pub struct CreateConfig {
     #[arg(long, env = "CORS_METHOD")]
     pub cors_method: Option<String>,
 
+    /// The bytes every wallet's builder uploads together may hold while no
+    /// published item names them; past it uploads answer 507. Unset, 1 TB.
+    #[arg(long, env = "BUILDER_UNPUBLISHED_MAX_BYTES")]
+    pub builder_unpublished_max_bytes: Option<u64>,
+
+    /// The files every wallet's builder uploads together may hold while no
+    /// published item names them; past it uploads answer 507. Unset, 10
+    /// million.
+    #[arg(long, env = "BUILDER_UNPUBLISHED_MAX_FILES")]
+    pub builder_unpublished_max_files: Option<u64>,
+
     /// The warehouse a terms-of-service acceptance is forwarded to; the
     /// forward is configured only when the token is set too. Without it the
     /// acceptance is stored and kept for a later forward.
