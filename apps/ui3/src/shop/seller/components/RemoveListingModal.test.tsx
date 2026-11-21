@@ -43,28 +43,28 @@ describe("when the free cancellation of a listing is refused", () => {
   });
 
   describe("and the refusal is the relay's request limit", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       relay.cancelTrade.mockRejectedValueOnce(
         new GaslessCancelFailedError(new MetaTransactionError("Too many requests", "api_limit_reached", 429, true, { error: "api_limit_reached" })),
       );
+      await confirm();
     });
 
     it("should report the limit and not offer the paid cancellation", async () => {
-      await confirm();
       expect(await screen.findByText("Too many requests from your connection. Wait a few seconds and try again.")).toBeInTheDocument();
       expect(screen.queryByTestId("shop-gasless-failed")).toBeNull();
     });
   });
 
   describe("and the refusal is the account's daily quota", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       relay.cancelTrade.mockRejectedValueOnce(
         new GaslessCancelFailedError(new MetaTransactionError("Quota reached", "quota_reached", 429, true, { error: "quota_reached", quota: 5 })),
       );
+      await confirm();
     });
 
     it("should show the quota and offer the paid cancellation", async () => {
-      await confirm();
       expect(await screen.findByTestId("shop-gasless-failed")).toBeInTheDocument();
       expect(screen.getByText(/You've used all 5 fee-free transactions this account gets in 24 hours\./)).toBeInTheDocument();
     });
