@@ -6,7 +6,7 @@ DECLARE
     unfit bigint;
 BEGIN
     IF to_regclass('meta.schema_steps') IS NULL OR NOT EXISTS (
-        SELECT 1 FROM meta.schema_steps WHERE step = '0063_builder_linked_publications_retired'
+        SELECT 1 FROM meta.schema_steps WHERE step = '0064_builder_linked_publications_retired'
     ) THEN
         RAISE EXCEPTION 'run catalyst schema migrate with third-party publish before retiring the linked publications';
     END IF;
