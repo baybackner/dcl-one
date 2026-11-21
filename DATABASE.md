@@ -514,9 +514,13 @@ Rentals contract holds counts as its lessor's (the recipient of its latest
 transfer to another address, one more indexed probe per rented token), so a
 rental does not change the owner; while that index
 is unpublished, a parcel is unindexed or the lookup fails (logged), the owner
-is unknown and only the place and the creator match. A later pass over the
-same place fills a record's unknown owner once the index knows it; a record of
-a pruned place keeps it unknown.
+is unknown and only the place and the creator match; another place with an
+unknown owner then replaces no record whose owner is known. A later pass over
+a place settled while an owner was unknown (its own record of a parcel with
+no owner, or another place's record with a known owner on its parcels)
+settles it again once the index knows the owner: it fills the owner and takes
+a rating it is now held to by owner, with a notice only when its rating
+changes. A record of a pruned place keeps an unknown owner.
 
 `explore.place_parcel_rating` keeps the rating last held on each parcel by the
 derived place covering it, with that place's id, whole parcel set
@@ -526,13 +530,16 @@ whether an operator's rating set it, so the rating
 outlives a row the pass prunes (an unpublished scene, or one moved to another
 base parcel by the same creator). Workload: one row per rated parcel the
 catalogue derives (at most the deployed parcels); written in the derive page's
-transaction, one batched upsert for the rows whose rating the page settles, one
-delete for the parcels of settled rows left with no rating, and one insert of
-missing parcels and one owner fill for the others (an existing catalogue fills
-on its first pass),
-and one row per parcel for an operator's rating of a derived place; read by
-primary key for each settled row's parcels, plus one indexed `land_authz`
-owner lookup per page and per operator place rating. Invariant: a parcel's row
+transaction, one batched upsert for the rows whose rating the page settles
+(new deployments, new rows and rows settled again), one delete for the parcels
+of settled rows left with no rating, and one insert of the missing parcels of
+the other rated rows (an existing catalogue fills on its first pass), and one
+row per parcel for an operator's rating of a derived place; read by primary
+key for each settled row's parcels and, once per pass, for the parcels of
+every unchanged row (rated rows only without a LAND index), plus one batched
+indexed `land_authz` owner lookup per page (the parcels it writes and those of
+rows it may settle again; a parcel the index never knows is looked up on every
+pass) and one per operator place rating. Invariant: a parcel's row
 equals the rating, id, parcel set, creator and owner of the rated derived
 place covering it, or of the last one; an operator's row is replaced or
 cleared only by a place held to it (a place with the same parcel set always
@@ -541,8 +548,8 @@ row's known one; only the derive pass and the operator's place rating write it. 
 writers first take transaction advisory locks on the hash buckets (at most 128)
 of the parcels they write, in one sorted order, so a page that inserts a missing
 parcel after locking the recorded ones cannot deadlock with an operator's
-rating; a page locks only the parcels of its new rows and new deployments and
-the unrecorded parcels and unknown owners it fills, so a page of unchanged rows does not delay an
+rating; a page locks only the parcels of its new rows and new deployments, the
+unrecorded parcels it fills and the parcels of rows it settles again, so a page of unchanged rows does not delay an
 operator's rating of another place (the page's own rows stay locked). The table is a new object: the object pass of
 `catalyst schema migrate` creates it, so no step exists.
 
