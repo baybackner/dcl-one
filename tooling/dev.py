@@ -616,13 +616,17 @@ def runtime_env(config, refuse_exposed_relayer=True):
             'SHOP_RENTALS_INDEX_ENABLED': 'true',
             # Builder's curation committee: the Polygon Committee contracts over RPC_ENDPOINT_POLYGON.
             'MARKETPLACE_COMMITTEE_INDEX_ENABLED': 'true',
-            'ETH_RPC_URL': 'https://rpc.decentraland.org/mainnet',
+            # The mirror posture's pause between index passes: a pass makes its eth_getLogs calls whether or not a
+            # block held an event.
+            'MARKETPLACE_INDEX_INTERVAL_SECS': '30',
+            # The tag names development stacks in rpc.decentraland.org's request logs.
+            'ETH_RPC_URL': 'https://rpc.decentraland.org/mainnet?project=dcl-one-dev',
             # Credit prices need a MANA spot; the map (Places, the HUD's map, estate images) its grid.
             'PRICE_POLL_ENABLED': 'true', 'COINGECKO_URL': 'https://api.coingecko.com/api/v3',
             'PRICE_FALLBACK_SOURCES': 'coinbase=https://api.coinbase.com,binance=https://api.binance.com,'
                                       'kraken=https://api.kraken.com',
             'EXPLORER_MAP_SOURCE_URL': 'https://api.decentraland.org',
-            'RPC_ENDPOINT_POLYGON': 'https://rpc.decentraland.org/polygon',
+            'RPC_ENDPOINT_POLYGON': 'https://rpc.decentraland.org/polygon?project=dcl-one-dev',
         })
     if config['profile'] == 'testnet':
         env.update(testnet_env(config, refuse_exposed_relayer))
@@ -661,6 +665,8 @@ def testnet_env(config, refuse_exposed_relayer=True):
         # Cancels and executions on chain close local trades: the trade-events index on the testnets,
         # through TRADE_RPC_URLS' 80002 and 11155111 entries (it checks each endpoint's eth_chainId).
         'MARKETPLACE_TRADE_EVENTS_INDEX_ENABLED': 'true',
+        # A trade signed into this stack closes within seconds of its cancel or execution on the testnet.
+        'MARKETPLACE_INDEX_INTERVAL_SECS': '5',
         'MARKETPLACE_INDEX_CHAIN_ID_MATIC': '80002',
         'MARKETPLACE_INDEX_CHAIN_ID_ETHEREUM': '11155111',
         # The NFT index walks chains 1/137 only, with no chain-id check: Matic has no endpoint here, and Ethereum
