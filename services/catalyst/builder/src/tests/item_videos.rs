@@ -1497,3 +1497,145 @@ async fn a_client_that_leaves_once_its_video_arrived_cannot_cut_the_store_short(
     assert_eq!(spool_entries(&node), 0);
     cleanup(&node.pool, &[collection], &[hash(&video)]).await;
 }
+
+const BOUNDED_KEY: &str = "0x8505050505050505050505050505050505050505050505050505050505050505";
+
+async fn declared(node: &Node, path: &str, length: usize, body: Body) -> (u16, Value) {
+    let mut request = post(Some(BOUNDED_KEY), path, None, body).await;
+    request
+        .headers_mut()
+        .insert(header::CONTENT_LENGTH, length.into());
+    let response = tokio::time::timeout(Duration::from_secs(60), node.app.clone().oneshot(request))
+        .await
+        .expect("the node answers within a minute")
+        .unwrap();
+    let (status, body, _) = answer(response).await;
+    (status, body)
+}
+
+async fn bounded_wearable(node: &Node, video: &[u8]) -> (Uuid, Uuid) {
+    let owner = address(BOUNDED_KEY);
+    let collection = Uuid::new_v4();
+    save_collection(
+        &node.state.items,
+        &owner,
+        json!({ "id": collection, "name": format!("Bounded {}", &collection.simple().to_string()[..12]) }),
+    )
+    .await
+    .unwrap();
+    let item = Uuid::new_v4();
+    saved_item(
+        &node.state.items,
+        &owner,
+        &json!({
+            "id": item, "name": "Smart hat", "collection_id": collection, "rarity": "common",
+            "video": hash(video),
+            "contents": { "model.glb": hash(&unique("model")), VIDEO_FILE: hash(video) },
+        }),
+    )
+    .await;
+    (collection, item)
+}
+
+#[tokio::test]
+async fn a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_deletes_or_publishes() {
+    let Some(node) = node_with(|state| state.limits.wallet_bytes = 4_000, true).await else {
+        return;
+    };
+    let [first, second, third] = [1u8, 2, 3].map(|n| {
+        let mut video = mp4_of(3_000);
+        video[2_999] = n;
+        video
+    });
+    let (_, a) = bounded_wearable(&node, &first).await;
+    let (b_collection, b) = bounded_wearable(&node, &second).await;
+    let (_, c) = bounded_wearable(&node, &third).await;
+    let videos = |item: Uuid| format!("/v1/items/{item}/videos");
+    let refused = json!({
+        "ok": false,
+        "data": { "maxBytes": 4_000 },
+        "error": "The wallet's unpublished files reached their limit"
+    });
+
+    let form = video_form(&first);
+    assert_eq!(
+        declared(&node, &videos(a), form.len(), Body::from(form))
+            .await
+            .0,
+        200
+    );
+
+    for path in [videos(b), format!("/builder-api/v1/items/{b}/files")] {
+        let (body, polled) = untouchable();
+        assert_eq!(
+            declared(&node, &path, 1_200, body).await,
+            (413, refused.clone()),
+            "{path}"
+        );
+        assert_eq!(
+            polled.load(Ordering::SeqCst),
+            0,
+            "{path}: the body was read"
+        );
+    }
+
+    let mut request = Request::builder()
+        .method("DELETE")
+        .uri(format!("/v1/items/{a}"));
+    for (name, value) in signed_map(
+        BOUNDED_KEY,
+        "delete",
+        &format!("/v1/items/{a}"),
+        "{}",
+        false,
+    )
+    .await
+    {
+        request = request.header(name, value);
+    }
+    let deleted = answer(
+        node.app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(deleted.0, 200, "{:?}", deleted.1);
+    let form = video_form(&second);
+    assert_eq!(
+        declared(&node, &videos(b), form.len(), Body::from(form))
+            .await
+            .0,
+        200
+    );
+
+    let small = mp4("published elsewhere");
+    let (d_collection, d) = bounded_wearable(&node, &small).await;
+    let form = video_form(&small);
+    assert_eq!(
+        declared(&node, &videos(d), form.len(), Body::from(form))
+            .await
+            .0,
+        200
+    );
+    let elsewhere = on_chain(&node.pool, d_collection, false).await;
+
+    let form = video_form(&third);
+    let (body, _) = untouchable();
+    assert_eq!(
+        declared(&node, &videos(c), form.len(), body).await.0,
+        413,
+        "another item's publication frees nothing of this one's"
+    );
+    let contract = on_chain(&node.pool, b_collection, false).await;
+    assert_eq!(
+        declared(&node, &videos(c), form.len(), Body::from(form))
+            .await
+            .0,
+        200,
+        "a published item's files no longer count"
+    );
+    super::support::off_chain(&node.pool, &contract).await;
+    super::support::off_chain(&node.pool, &elsewhere).await;
+}

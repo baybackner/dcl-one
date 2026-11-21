@@ -1179,8 +1179,9 @@ The builder answers a collection's body and its two listings from
   members only; the curation page asks 12 rows at a time, sorted by
   relevance, published only. At most 1,000 rows per response.
 - `GET /v1/collections?q=..&is_published=true`, the public search: anyone,
-  unbounded rate until rate limits arrive; the marketplace sends
-  `status=approved&limit=5` per keystroke. At most 1,000 rows.
+  within its source address's read budget (`builder::limits`); the
+  marketplace sends `status=approved&limit=5` per keystroke. At most 1,000
+  rows.
 - `GET /v1/{address}/collections`: signed by that address; pages of 20, or
   the address's unpublished collections unpaginated. At most 5,000 rows (the
   largest owner holds 1,542 collections).
@@ -1256,6 +1257,20 @@ collections and 89,043 items copied from a production-shaped database and
 
 No index on the copy is added: a GIN index on its role lists would cost a
 write on every mirror pass for 16 to 22 ms on a signed request.
+
+The committee listing's `status` and `assignee` filters read each
+collection's newest curation (`collection_curations_collection_created_key`),
+its pending item curations and, for `auto_reviewing` while the review flow is
+on, its open validation request (`validation_requests_open_key`) and the
+timeline events since that request started
+(`collection_events_collection_created_idx`). A collection is in an automated
+review while its newest curation is pending and it has an open request no
+curator decided after; the flow's switch is read only for a listing that
+filters by status. Measured on a scratch copy of the fresh schema with 8,298
+collections, 4,149 on chain, two curations each and 794 open requests (count;
+a page of 12 by creation, JIT off): `to_review` 18 ms, `pending` 15 ms,
+`under_review` 6 ms, `auto_reviewing` 6 ms. The cost grows with the
+collections the other filters leave.
 
 ## Builder items workload
 
@@ -1472,6 +1487,47 @@ collection's chain creator (else its stored owner), a chain manager, each
 only when it holds an upload record for the name's hash. The index
 `item_contents_hash_named_by_idx` is created by `schema migrate` from
 `schemas/50_create.sql`.
+
+### Storage held per wallet
+
+A wallet's uploads may hold at most 5,000,000,000 bytes that no published
+item names (`builder::limits::within_storage`). `POST /v1/items/{id}/files`
+and `POST /v1/items/{id}/videos` ask once each, after the access decision and
+before the body is read; the body's declared length, else the route's largest
+body, counts as stored.
+
+- First, the wallet's whole total, from
+  `uploaded_contents_uploaded_by_idx (uploaded_by) INCLUDE (size)` alone (an
+  index-only scan). Most wallets stop here.
+- Only when that total could pass the bound, the bytes of the wallet's records
+  that no published item names: the same index, then the public-file probe
+  above for each record.
+
+Measured on a scratch copy of the fresh schema with 323,928 upload records,
+107,976 items and 8,298 collections, half of them on chain (PostgreSQL 18):
+
+| Statement | A wallet of 72 records | A wallet of 36,000 records |
+| --- | --- | --- |
+| The total | 0.1 ms | 2.7 ms |
+| The unpublished bytes | 1.4 ms | 548 ms |
+
+Invariants:
+
+- A published item's files never count, so publishing frees a wallet's
+  bound; deleting an item frees it once no item names the hash (the delete
+  removes the upload records in its transaction).
+- Uploads in flight at once can each pass the check: two videos and a file
+  per wallet can overshoot the bound by their sizes.
+
+`schema migrate` builds the index from `schemas/50_create.sql`.
+
+## Builder newsletter workload
+
+`POST /v1/newsletter` upserts one row of `builder.newsletter_subscriptions`
+(`email` key, `source`) per accepted subscription, then forwards it to the
+newsletter service. Its budgets bound the writes: 10 an hour per source
+address, 3 a day per email, 1,000 an hour per node. No statement reads the
+table.
 
 ## Builder small reads workload
 

@@ -114,21 +114,23 @@ pub async fn authorize_admin(
 
 /// The verified signer of a route that requires one, extracted before the
 /// route's path parameters and body so an unauthenticated request learns
-/// nothing from their validation; any failure is [`unauthenticated`].
+/// nothing from their validation; any failure is [`unauthenticated`]. A
+/// verified signer then spends from its budget ([`crate::limits::spend_wallet`]).
 pub struct Signed(pub Signer);
 
 impl FromRequestParts<SharedState> for Signed {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &SharedState) -> Result<Self, ApiError> {
-        require_signer(
+        let signer = require_signer(
             &parts.headers,
             parts.method.as_str(),
             &request_path(parts),
             state.eip1654.as_deref(),
         )
-        .await
-        .map(Signed)
+        .await?;
+        crate::limits::spend_wallet(state, signer.as_str(), &parts.method)?;
+        Ok(Signed(signer))
     }
 }
 

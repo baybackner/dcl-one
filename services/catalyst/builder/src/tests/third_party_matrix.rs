@@ -149,21 +149,21 @@ async fn world() -> Option<World> {
     let bytes = unique("third-party-file");
     let hash = dcl_auth::hash_bytes_v1(&bytes);
     storage.store(&hash, bytes.into()).await.unwrap();
-    let state = Arc::new(
-        crate::State::new(
-            pool.clone(),
-            storage.clone(),
-            Arc::default(),
-            dcl_http::Outbound::for_tests(),
-            Some(registry_index(&committee, &registry).await),
-            None,
-            crate::Settings {
-                writes_enabled: true,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap(),
-    );
+    let mut state = crate::State::new(
+        pool.clone(),
+        storage.clone(),
+        Arc::default(),
+        dcl_http::Outbound::for_tests(),
+        Some(registry_index(&committee, &registry).await),
+        None,
+        crate::Settings {
+            writes_enabled: true,
+            ..crate::Settings::default()
+        },
+    )
+    .unwrap();
+    state.limits = crate::limits::Limits::unbounded();
+    let state = Arc::new(state);
     let app = crate::root_router(state.clone());
     Some(World {
         pool,

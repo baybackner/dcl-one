@@ -96,9 +96,13 @@ pub async fn get_item_contents(
 pub async fn get_addresses(
     State(state): State<SharedState>,
     RawQuery(raw): RawQuery,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let request = PublishedAddresses::new(&ListQuery::parse(raw.as_deref()))?;
+    let q = ListQuery::parse(raw.as_deref());
+    let review_flow = crate::handlers::collections::review_flow_asked(&state, &q).await?;
+    let request = PublishedAddresses::new(&q, review_flow)?;
     let data = state.items.published_addresses(&request).await?;
+    crate::limits::charge(&state, &headers, None, crate::limits::ADDRESSES_TOKENS);
     let mut response = Json(ApiData::ok(data)).into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,

@@ -363,7 +363,7 @@ pub async fn signed_map(
     map
 }
 
-fn lazy_pool() -> sqlx::PgPool {
+pub(crate) fn lazy_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
         .acquire_timeout(std::time::Duration::from_millis(250))
         .connect_lazy("postgres://nobody:nothing@127.0.0.1:9/none")

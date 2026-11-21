@@ -806,8 +806,10 @@ pub async fn serve(
             forum_category: config.create.forum_category.clone(),
             builder_server_url: config.create.builder_server_url.clone(),
             validator_secret: config.create.wearable_validator_callback_secret.clone(),
+            cors_origin: config.create.cors_origin.clone(),
+            cors_method: config.create.cors_method.clone(),
         })
-        .context("BUILDER_* / NEWSLETTER_* configuration")?,
+        .context("BUILDER_* / NEWSLETTER_* / CORS_* configuration")?,
     )
     .context("builder state")?;
     builder_state.content_sync = sync_status.clone();

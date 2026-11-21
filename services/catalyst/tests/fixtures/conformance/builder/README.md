@@ -45,7 +45,20 @@ capture that answers a running review carries `validation_of`, the
 collection whose review it answers: the capture sends that collection's
 newest start's `validationId` and records the body as written, with its
 signature over that body, and the replay sends the node's open request of
-that collection and the claim it holds instead. A volatile leaf is recorded as
+that collection and the claim it holds instead. A capture whose request made upstream
+forward a subscription to the newsletter service carries `newsletter`: each
+call's `method`, `path`, `authorization`, `accept`, `content_type` and JSON
+`body`, in arrival order; the replay forwards the node's to a fake newsletter
+service that, as the capture's, answers 500 to `fail@example.com`. A
+capture's request may carry headers other than `x-identity-` ones, such as an
+`origin` or a preflight's `access-control-request-*`, which the replay sends
+as recorded; a preflight (`OPTIONS` with `access-control-request-method`)
+exercises the operation of the method it asks for. Upstream and the replay
+run with the same `CORS_ORIGIN`. A capture's response records
+`content-type`, `cache-control` and `location`, and the other headers its case
+is about. A capture with `repeat` was the last of that many plus one equal
+requests in a row; the replay sends it as many times first, with the signer's
+review budgets fresh before and after. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a
@@ -120,7 +133,7 @@ request matches more than one in-scope operation is refused. A capture's
 names), and the recorded value there must be
 `<<VOLATILE>>`. A note is `status: ...`,
 `header ...`, a body path with `missing`, `extra` or `value`, `body bytes
-differ: ...`, `candidate body is not JSON: ...` or `slack: ...`, as
+differ: ...`, `candidate body is not JSON: ...`, `slack: ...` or `newsletter: ...`, as
 `social::test_fixtures::replay_signed` words them.
 
 ## Tests

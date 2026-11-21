@@ -595,6 +595,31 @@ const REVIEW_CASES = [
   { name: '511-review-appeal-again', description: 'POST /collections/{id}/curation/appeal signed by the owner with the review flow on, while its appeal is open', method: 'POST', path: reviewOf('302', 'curation/appeal'), signer: 'owner', body: {}, volatile: CURATION, ...flowOn }
 ]
 
+const NEWSLETTER_KEY = 'example-newsletter-key'
+const NEWSLETTER_PUBLICATION = 'pub-example'
+const NEWSLETTER_FAILING_EMAIL = 'fail@example.com'
+
+const LISTED_ORIGIN = 'https://create.decentraland.example'
+const CAPTURE_CORS_ORIGIN = 'regex:^https://(.{1,50}\\.)?decentraland\\.example$;https://partner.example'
+const FOREIGN_ORIGIN = 'https://attacker.example'
+const CORS_KEPT = ['access-control-allow-origin', 'access-control-allow-credentials', 'access-control-expose-headers', 'vary']
+const PREFLIGHT_KEPT = [...CORS_KEPT, 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-max-age']
+const preflight = origin => ({ origin, 'access-control-request-method': 'PUT', 'access-control-request-headers': 'content-type,x-identity-auth-chain-0' })
+const OWNED_DRAFT = '/v1/collections/c011ec71-0000-4000-8000-000000000001'
+
+const EDGE_CASES = [
+  { name: '512-newsletter-subscribe', description: 'POST /newsletter without a signature, an email and the source the sign-up sends', method: 'POST', path: '/v1/newsletter', body: { email: 'jane.doe@example.com', source: 'auth' } },
+  { name: '513-newsletter-no-source', description: 'POST /newsletter without a signature, an email and no source', method: 'POST', path: '/v1/newsletter', body: { email: 'john.doe@example.com' } },
+  { name: '514-newsletter-malformed-email', description: 'POST /newsletter without a signature, an email that is no address', method: 'POST', path: '/v1/newsletter', body: { email: 'not-an-email', source: 'auth' } },
+  { name: '515-newsletter-service-fails', description: 'POST /newsletter without a signature, an email the newsletter service answers 500 to', method: 'POST', path: '/v1/newsletter', body: { email: NEWSLETTER_FAILING_EMAIL, source: 'auth' } },
+  { name: '516-cors-listed-origin', description: 'GET /committee without a signature, from an origin CORS_ORIGIN lists', method: 'GET', path: '/v1/committee', send: { origin: LISTED_ORIGIN }, keep: CORS_KEPT },
+  { name: '517-cors-foreign-origin', description: 'GET /committee without a signature, from an origin CORS_ORIGIN does not list', method: 'GET', path: '/v1/committee', send: { origin: FOREIGN_ORIGIN }, keep: CORS_KEPT },
+  { name: '518-cors-preflight-listed', description: 'OPTIONS /collections/{id}, the preflight of a signed PUT from an origin CORS_ORIGIN lists', method: 'OPTIONS', path: OWNED_DRAFT, send: preflight(LISTED_ORIGIN), keep: PREFLIGHT_KEPT },
+  { name: '519-cors-preflight-foreign', description: 'OPTIONS /collections/{id}, the preflight of a signed PUT from an origin CORS_ORIGIN does not list', method: 'OPTIONS', path: OWNED_DRAFT, send: preflight(FOREIGN_ORIGIN), keep: PREFLIGHT_KEPT },
+  { name: '520-cors-info-any-origin', description: 'GET /info from an origin CORS_ORIGIN does not list, a route that answers every origin', method: 'GET', path: '/v1/info', send: { origin: FOREIGN_ORIGIN }, keep: CORS_KEPT },
+  { name: '521-review-writes-per-minute', description: 'POST /collections/{id}/validations signed by a wallet with no role, after 30 such requests within the minute, with the review flow off', method: 'POST', path: reviewOf('302', 'validations'), signer: 'stranger', repeat: 30, keep: ['retry-after', 'ratelimit', 'ratelimit-policy'] }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2503,7 +2528,8 @@ const CASES = [
   ...THIRD_PARTY_PUBLISH_CASES,
   ...VALIDATION_CASES,
   ...VIDEO_CASES,
-  ...REVIEW_CASES
+  ...REVIEW_CASES,
+  ...EDGE_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -2976,6 +3002,28 @@ function slackRecord(messages) {
   return messages.length ? { slack: messages } : {}
 }
 
+/**
+ * The fake newsletter service's answer to a request at `url` (below `/newsletter`), recording each
+ * subscription it receives; it fails a subscription of `NEWSLETTER_FAILING_EMAIL` with 500.
+ */
+function newsletterAnswer(method, url, headers, bytes, received) {
+  if (method !== 'POST' || url !== `/v2/publications/${NEWSLETTER_PUBLICATION}/subscriptions`) return undefined
+  let body
+  try {
+    body = JSON.parse(bytes.toString('utf8'))
+  } catch {
+    body = null
+  }
+  received.push({ method, path: url, authorization: headers.authorization ?? null, accept: headers.accept ?? null, content_type: headers['content-type'] ?? null, body })
+  if (body?.email === NEWSLETTER_FAILING_EMAIL) return { status: 500, body: { errors: [{ message: 'Internal error' }] } }
+  return { status: 201, body: { data: { id: 'sub_example', email: body?.email, status: 'active' } } }
+}
+
+/** What a capture records of the subscriptions its case forwarded: nothing, or `newsletter` in arrival order. */
+function newsletterRecord(calls) {
+  return calls.length ? { newsletter: calls } : {}
+}
+
 /** The forum upstream posts to; the seed's forum links are under it. */
 const FORUM_ORIGIN = 'https://forum.example.org'
 const FORUM_HOST = 'forum.example.org'
@@ -3184,6 +3232,7 @@ function startFakes(req, unfaked, chain, forum) {
   const warehoused = []
   const slacked = []
   const queued = []
+  const newslettered = []
   const server = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -3208,6 +3257,11 @@ function startFakes(req, unfaked, chain, forum) {
         server.validationEnded?.()
         response.writeHead(answer.status, { 'content-type': 'text/xml' })
         return response.end(answer.body)
+      }
+      if (request.url.startsWith('/newsletter/')) {
+        const answer = newsletterAnswer(request.method, request.url.slice('/newsletter'.length), request.headers, Buffer.concat(chunks), newslettered)
+        if (!answer) unfaked.push(`newsletter ${request.method} ${request.url}`)
+        return send(answer?.status ?? 404, answer?.body ?? { errors: ['not faked'] })
       }
       if (request.url.startsWith('/slack/')) {
         const answer = slackAnswer(request.method, request.url.slice('/slack'.length), request.headers, Buffer.concat(chunks), slacked)
@@ -3259,6 +3313,7 @@ function startFakes(req, unfaked, chain, forum) {
     })
   })
   server.slacked = slacked
+  server.newslettered = newslettered
   server.queued = queued
   server.forum = forum
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)))
@@ -3300,6 +3355,10 @@ function upstreamEnvironment(fakeBase, url, admins) {
     FF_COLLECTION_API_ALT: 'false',
     SLACK_BOT_TOKEN: SLACK_TOKEN,
     SLACK_CURATION_CHANNEL: SLACK_CHANNEL,
+    NEWSLETTER_SERVICE_URL: `${fakeBase}/newsletter/v2`,
+    NEWSLETTER_PUBLICATION_ID: NEWSLETTER_PUBLICATION,
+    NEWSLETTER_SERVICE_API_KEY: NEWSLETTER_KEY,
+    CORS_ORIGIN: CAPTURE_CORS_ORIGIN,
     ADMIN_ADDRESSES: admins,
     NODE_ENV: 'production'
   }
@@ -3462,10 +3521,15 @@ async function record(req, base, signers, volatileFields, item, bucket, latestSt
   const headers = item.signer
     ? await signedHeaders(req, signers[item.signer], item)
     : item.validator ? validatorHeaders(item.validator, sent.body) : { ...item.headers }
+  Object.assign(headers, item.send)
   if (item.body !== undefined) headers['content-type'] = 'application/json'
   const recordedHeaders = item.validation_of
     ? { ...validatorHeaders(item.validator, JSON.stringify(item.body)), 'content-type': 'application/json' }
     : headers
+  for (let n = 0; n < (item.repeat ?? 0); n++) {
+    const again = item.signer ? { ...(await signedHeaders(req, signers[item.signer], item)), ...item.send } : headers
+    await (await fetch(base + item.path + (search ? '?' + search : ''), { method: item.method, headers: again, body: sent.body, redirect: 'manual', signal: AbortSignal.timeout(5000) })).arrayBuffer()
+  }
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
     method: item.method,
     headers,
@@ -3475,7 +3539,7 @@ async function record(req, base, signers, volatileFields, item, bucket, latestSt
   })
   const bytes = Buffer.from(bucketNamed(Buffer.from(await response.arrayBuffer()).toString('latin1'), bucket), 'latin1')
   const kept = {}
-  for (const name of KEPT_RESPONSE_HEADERS) {
+  for (const name of [...KEPT_RESPONSE_HEADERS, ...(item.keep ?? [])]) {
     const value = response.headers.get(name)
     if (value !== null) kept[name] = bucketNamed(value, bucket)
   }
@@ -3503,7 +3567,8 @@ async function record(req, base, signers, volatileFields, item, bucket, latestSt
     ...(item.sign ? { sign: recordedSign(item) } : {}),
     ...(item.validator ? { validator_sign: item.validator } : {}),
     ...(item.review_flow ? { review_flow: true } : {}),
-    ...(item.validation_of ? { validation_of: item.validation_of } : {})
+    ...(item.validation_of ? { validation_of: item.validation_of } : {}),
+    ...(item.repeat ? { repeat: item.repeat } : {})
   }
 }
 
@@ -3556,6 +3621,7 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     }
     for (const item of CASES) {
       const sent = fakes.slacked.length
+      const subscribed = fakes.newslettered.length
       const called = fakes.forum.calls.length
       const requested = fakes.queued.length
       process.env.FF_AUTO_CURATION_REVIEW_FLOW = item.review_flow ? 'true' : 'false'
@@ -3566,10 +3632,12 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
       const slack = slackRecord(fakes.slacked.slice(sent))
       const forum = forumRecord(fakes.forum.calls.slice(called))
       const queue = queueRecord(fakes.queued.slice(requested))
+      const newsletter = newsletterRecord(fakes.newslettered.slice(subscribed))
+      refuseMarkers(item.name, newsletter)
       refuseMarkers(item.name, slack)
       refuseMarkers(item.name, forum)
       refuseMarkers(item.name, queue)
-      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack, ...forum, ...queue })])
+      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...newsletter, ...slack, ...forum, ...queue })])
     }
     return fixtures
   } finally {
@@ -3626,4 +3694,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { sentBody, REVIEW_CASES, snsAnswer, queueRecord, validatorHeaders, trackValidations, VALIDATOR_SECRET, SNS_TOPIC, activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { EDGE_CASES, CAPTURE_CORS_ORIGIN, NEWSLETTER_KEY, NEWSLETTER_PUBLICATION, NEWSLETTER_FAILING_EMAIL, newsletterAnswer, newsletterRecord, sentBody, REVIEW_CASES, snsAnswer, queueRecord, validatorHeaders, trackValidations, VALIDATOR_SECRET, SNS_TOPIC, activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

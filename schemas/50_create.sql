@@ -199,6 +199,8 @@ CREATE TABLE builder.uploaded_contents (
     CONSTRAINT uploaded_contents_uploaded_by_lowercase_check CHECK (uploaded_by = lower(uploaded_by))
 );
 
+CREATE INDEX uploaded_contents_uploaded_by_idx ON builder.uploaded_contents (uploaded_by) INCLUDE (size);
+
 CREATE TABLE builder.item_contents (
     item_id uuid NOT NULL,
     file text NOT NULL,

@@ -2,7 +2,9 @@
 //! `POST .../curation/appeal`, `GET .../events` and `POST .../comments`.
 //!
 //! Each answers only with the review flow on ([`review::enabled`]): after
-//! the signature, the flag is read and, off, the route answers 404 `Not
+//! the signature and the route's own budget per signer
+//! ([`crate::limits::spend_review`], whatever the flag, as builder-server),
+//! the flag is read and, off, the route answers 404 `Not
 //! found` as an absent route does and touches nothing else. Then
 //! `builder::access` decides, then the body is read.
 
@@ -57,6 +59,7 @@ pub async fn validations(
     Signed(signer): Signed,
     Path(id): Path<String>,
 ) -> Result<Json<ApiData<EventOut>>, ApiError> {
+    crate::limits::spend_review(&state, signer.as_str(), false)?;
     flow_on(&state).await?;
     let creator = access::review_creator(&state, &signer, &id).await?;
     Ok(Json(ApiData::ok(review::retry(&state, creator).await?)))
@@ -70,6 +73,7 @@ pub async fn appeal(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ApiData<CollectionCurationOut>>, ApiError> {
+    crate::limits::spend_review(&state, signer.as_str(), false)?;
     flow_on(&state).await?;
     let creator = access::review_creator(&state, &signer, &id).await?;
     let AppealBody { note } = body_of(&body)?;
@@ -89,6 +93,7 @@ pub async fn events(
     Path(id): Path<String>,
     RawQuery(query): RawQuery,
 ) -> Result<Json<ApiData<EventsPage>>, ApiError> {
+    crate::limits::spend_review(&state, signer.as_str(), true)?;
     flow_on(&state).await?;
     let read = access::read_review(&state, &signer, &id).await?;
     let (page, limit) = review::pagination(query.as_deref());
@@ -104,6 +109,7 @@ pub async fn comments(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ApiData<EventOut>>, ApiError> {
+    crate::limits::spend_review(&state, signer.as_str(), false)?;
     flow_on(&state).await?;
     let member = access::review_member(&state, &signer, &id).await?;
     let CommentBody { message, item_id } = body_of(&body)?;

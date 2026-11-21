@@ -724,3 +724,28 @@ test('a verdict case sends its collection\'s newest start and records the body i
   assert.equal(await sentBody(plain, 'unchanged', () => assert.fail('read a start')), 'unchanged')
   assert.ok(CASES.filter(item => item.review_flow).every(item => REVIEW_CASES.includes(item)))
 })
+
+test('the fake newsletter service records each subscription as sent and fails only its failing email', () => {
+  const { newsletterAnswer, newsletterRecord, NEWSLETTER_PUBLICATION, NEWSLETTER_FAILING_EMAIL } = require(script)
+  const received = []
+  const path = `/v2/publications/${NEWSLETTER_PUBLICATION}/subscriptions`
+  const headers = { authorization: 'Bearer example-newsletter-key', accept: 'application/json', 'content-type': 'application/json' }
+  const sent = { email: 'jane.doe@example.com', reactivate_existing: true, send_welcome_email: false, utm_source: 'auth', utm_medium: 'organic' }
+  assert.equal(newsletterAnswer('POST', path, headers, Buffer.from(JSON.stringify(sent)), received).status, 201)
+  assert.equal(newsletterAnswer('POST', path, headers, Buffer.from(JSON.stringify({ ...sent, email: NEWSLETTER_FAILING_EMAIL })), received).status, 500)
+  assert.equal(newsletterAnswer('POST', '/v2/publications/other/subscriptions', headers, Buffer.from('{}'), received), undefined)
+  assert.equal(newsletterAnswer('GET', path, headers, Buffer.alloc(0), received), undefined)
+  assert.deepEqual(received[0], { method: 'POST', path, authorization: headers.authorization, accept: 'application/json', content_type: 'application/json', body: sent })
+  assert.equal(received.length, 2)
+  assert.deepEqual(newsletterRecord([]), {})
+  assert.deepEqual(newsletterRecord(received), { newsletter: received })
+})
+
+test('the edge cases send their origin and keep the headers they are about, and only the limiter case repeats', () => {
+  const { EDGE_CASES } = require(script)
+  for (const item of EDGE_CASES.filter(item => item.name.includes('-cors-'))) {
+    assert.ok(item.send.origin, item.name)
+    assert.ok(item.keep.includes('access-control-allow-origin'), item.name)
+  }
+  assert.deepEqual(EDGE_CASES.filter(item => item.repeat).map(item => [item.name, item.repeat]), [['521-review-writes-per-minute', 30]])
+})

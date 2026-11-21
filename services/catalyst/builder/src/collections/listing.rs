@@ -80,8 +80,31 @@ const ON_CHAIN_UNAPPROVED: &str = "(chain.contract_address IS NOT NULL AND NOT c
 const APPROVED_ON_CHAIN: &str = "COALESCE(chain.is_approved, false)";
 const REVIEWED_ON_CHAIN: &str = "(chain.contract_address IS NOT NULL AND NOT chain.is_approved \
     AND chain.reviewed_at <> chain.created_at)";
-const TO_REVIEW: &str = "(c.third_party_id IS NOT NULL OR (chain.contract_address IS NOT NULL \
-    AND NOT chain.is_approved AND chain.reviewed_at = chain.created_at))";
+const ON_CHAIN: &str = "(chain.contract_address IS NOT NULL)";
+const STANDARD: &str = "(c.third_party_id IS NULL AND c.urn_suffix IS NULL)";
+const THIRD_PARTY: &str = "(c.third_party_id IS NOT NULL AND c.urn_suffix IS NOT NULL)";
+macro_rules! newest_curation {
+    ($column:literal) => {
+        concat!(
+            "(SELECT cc.",
+            $column,
+            " FROM builder.collection_curations cc WHERE cc.collection_id = c.id ORDER BY cc.created_at DESC LIMIT 1)"
+        )
+    };
+}
+const NEWEST_STATUS: &str = newest_curation!("status");
+const NEWEST_ASSIGNEE: &str = newest_curation!("assignee");
+const NO_CURATION: &str =
+    "NOT EXISTS (SELECT 1 FROM builder.collection_curations cn WHERE cn.collection_id = c.id)";
+const PENDING_ITEM_CURATION: &str = "EXISTS (SELECT 1 FROM builder.item_curations pk \
+    JOIN builder.items pi ON pi.id = pk.item_id WHERE pi.collection_id = c.id AND pk.status = 'pending')";
+const AUTO_REVIEWING: &str = "(COALESCE((SELECT cc.status FROM builder.collection_curations cc \
+    WHERE cc.collection_id = c.id ORDER BY cc.created_at DESC LIMIT 1) = 'pending', false) \
+    AND c.third_party_id IS NULL AND EXISTS (SELECT 1 FROM builder.validation_requests r \
+    WHERE r.collection_id = c.id AND r.settled_at IS NULL AND NOT EXISTS (SELECT 1 FROM builder.collection_events d \
+    WHERE d.collection_id = c.id AND d.type IN ('review.approved', 'review.rejected') AND d.created_at > \
+    COALESCE((SELECT max(s.created_at) FROM builder.collection_events s WHERE s.collection_id = c.id \
+    AND s.type = 'review.automated_started' AND s.payload->>'validationId' = r.id::text), r.created_at))))";
 const STATUS: &str = "(CASE WHEN c.third_party_id IS NOT NULL THEN NULL \
     WHEN chain.contract_address IS NULL THEN 'draft' \
     WHEN chain.is_approved THEN 'published' \
@@ -270,10 +293,40 @@ impl Sort {
 /// One filter, as a constant fragment and the values it binds.
 enum Filter {
     Fragment(&'static str),
+    Sql(String),
+    Assignees(Vec<String>, bool),
     Name(String),
     Tags(Vec<String>),
     Contract(String),
-    AnyOf(Vec<&'static str>),
+}
+
+fn curation_condition(status: &str, review_flow: bool) -> String {
+    let auto = if review_flow { AUTO_REVIEWING } else { "false" };
+    let st = NEWEST_STATUS;
+    match status {
+        "pending" => format!(
+            "((({st} = 'pending' AND ({ON_CHAIN_UNAPPROVED} OR {THIRD_PARTY})) OR ({NO_CURATION} \
+             AND {ON_CHAIN_UNAPPROVED})) AND NOT {auto})"
+        ),
+        "approved" => format!(
+            "(({st} = 'approved' AND ({APPROVED_ON_CHAIN} OR {THIRD_PARTY})) OR ({NO_CURATION} \
+             AND {APPROVED_ON_CHAIN}))"
+        ),
+        "rejected" => format!("({st} = 'rejected' AND ({ON_CHAIN} OR {THIRD_PARTY}))"),
+        "to_review" => format!(
+            "({NEWEST_ASSIGNEE} IS NULL AND (({THIRD_PARTY} AND ({st} = 'pending' OR {NO_CURATION} \
+             OR {PENDING_ITEM_CURATION})) OR ({STANDARD} AND {ON_CHAIN} AND ({st} = 'pending' OR \
+             ({NO_CURATION} AND NOT {APPROVED_ON_CHAIN} AND NOT {REVIEWED_ON_CHAIN})))) AND NOT {auto})"
+        ),
+        "under_review" => format!(
+            "({NEWEST_ASSIGNEE} IS NOT NULL AND ({st} = 'pending' OR ({THIRD_PARTY} AND \
+             {PENDING_ITEM_CURATION})) AND NOT {auto})"
+        ),
+        "auto_reviewing" => format!("({STANDARD} AND {auto})"),
+        _ => format!(
+            "({ON_CHAIN_UNAPPROVED} AND ({st} = 'approved' OR ({NO_CURATION} AND {REVIEWED_ON_CHAIN})))"
+        ),
+    }
 }
 
 /// A listing request, validated.
@@ -331,7 +384,7 @@ fn distinct(values: Vec<&str>) -> Vec<String> {
 impl Listing {
     /// `GET /v1/collections`: `getReviewFilters`, then the shared filters,
     /// the item tags and the sort.
-    fn everyone(q: &ListQuery) -> Result<Self, ApiError> {
+    fn everyone(q: &ListQuery, review_flow: bool) -> Result<Self, ApiError> {
         let mut filters = Vec::new();
         let statuses = distinct(q.all("status"));
         if let Some(bad) = statuses
@@ -384,21 +437,16 @@ impl Listing {
         let published_only = common(q, &mut filters)?;
         if !assignees.is_empty() {
             let unassigned = assignees.iter().any(|a| a == UNASSIGNED);
-            filters.push(Filter::Fragment(if unassigned { "true" } else { "false" }));
+            let curators = assignees.into_iter().filter(|a| a != UNASSIGNED).collect();
+            filters.push(Filter::Assignees(curators, unassigned));
         }
         if !statuses.is_empty() {
-            let any = |status: &str| statuses.iter().any(|s| s == status);
-            let matched = [
-                ("pending", ON_CHAIN_UNAPPROVED),
-                ("approved", APPROVED_ON_CHAIN),
-                ("to_review", TO_REVIEW),
-                ("disabled", REVIEWED_ON_CHAIN),
-            ]
-            .into_iter()
-            .filter(|(status, _)| any(status))
-            .map(|(_, fragment)| fragment)
-            .collect();
-            filters.push(Filter::AnyOf(matched));
+            let conditions = statuses
+                .iter()
+                .map(|status| curation_condition(status, review_flow))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            filters.push(Filter::Sql(format!("({conditions})")));
         }
         match review_types.first().map(String::as_str) {
             Some("updates") => filters.push(Filter::Fragment(
@@ -533,6 +581,20 @@ impl Listing {
                 Filter::Fragment(fragment) => {
                     sql.push(*fragment);
                 }
+                Filter::Sql(condition) => {
+                    sql.push(condition.as_str());
+                }
+                Filter::Assignees(curators, unassigned) => {
+                    sql.push("(")
+                        .push(NEWEST_ASSIGNEE)
+                        .push(" = ANY(")
+                        .push_bind(curators.clone())
+                        .push(")");
+                    if *unassigned {
+                        sql.push(" OR ").push(NEWEST_ASSIGNEE).push(" IS NULL");
+                    }
+                    sql.push(")");
+                }
                 Filter::Name(pattern) => {
                     sql.push("c.name ILIKE '%' || ")
                         .push_bind(pattern.clone())
@@ -550,19 +612,6 @@ impl Listing {
                 Filter::Contract(contract) => {
                     sql.push("c.contract_address = ")
                         .push_bind(contract.clone());
-                }
-                Filter::AnyOf(fragments) if fragments.is_empty() => {
-                    sql.push("false");
-                }
-                Filter::AnyOf(fragments) => {
-                    sql.push("(");
-                    for (i, fragment) in fragments.iter().enumerate() {
-                        if i > 0 {
-                            sql.push(" OR ");
-                        }
-                        sql.push(*fragment);
-                    }
-                    sql.push(")");
                 }
             }
         }
@@ -613,21 +662,26 @@ pub struct OwnListing {
 }
 
 impl CommitteeListing {
-    /// The listing `q` asks for, for a committee member.
-    pub fn new(_committee: &OnCommittee, q: &ListQuery) -> Result<Self, ApiError> {
+    /// The listing `q` asks for, for a committee member; `review_flow` says
+    /// whether the review flow is on ([`crate::review::enabled`]).
+    pub fn new(
+        _committee: &OnCommittee,
+        q: &ListQuery,
+        review_flow: bool,
+    ) -> Result<Self, ApiError> {
         Ok(Self {
-            listing: Listing::everyone(q)?,
+            listing: Listing::everyone(q, review_flow)?,
         })
     }
 }
 
 impl PublicSearch {
     /// The search `q` asks for, or `None` when `q` is no public search.
-    pub fn new(q: &ListQuery) -> Result<Option<Self>, ApiError> {
+    pub fn new(q: &ListQuery, review_flow: bool) -> Result<Option<Self>, ApiError> {
         if !q.is_public_search() {
             return Ok(None);
         }
-        let listing = Listing::everyone(q)?;
+        let listing = Listing::everyone(q, review_flow)?;
         Ok(listing.published_only.then_some(Self { listing }))
     }
 }
@@ -635,8 +689,8 @@ impl PublicSearch {
 impl PublishedAddresses {
     /// The listing `q` asks for: its `type` ignored, standard collections
     /// only, published ones only.
-    pub fn new(q: &ListQuery) -> Result<Self, ApiError> {
-        let mut listing = Listing::everyone(&q.without("type"))?;
+    pub fn new(q: &ListQuery, review_flow: bool) -> Result<Self, ApiError> {
+        let mut listing = Listing::everyone(&q.without("type"), review_flow)?;
         listing
             .filters
             .push(Filter::Fragment("c.third_party_id IS NULL"));
@@ -927,7 +981,7 @@ mod tests {
             url::form_urlencoded::byte_serialize(hostile.as_bytes()).collect::<String>(),
             url::form_urlencoded::byte_serialize(hostile.as_bytes()).collect::<String>(),
         );
-        let listing = Listing::everyone(&query(&raw)).unwrap();
+        let listing = Listing::everyone(&query(&raw), false).unwrap();
         assert_eq!(listing.sort, Sort::Unordered);
         let mut sql = QueryBuilder::<Postgres>::new("SELECT 1 FROM x");
         listing.push_where(&mut sql, None, true);
@@ -936,15 +990,15 @@ mod tests {
         assert!(!text.contains("DROP"), "{text}");
         assert!(text.contains("ILIKE '%' || $1 || '%'"), "{text}");
         assert_eq!(Sort::named("name_asc"), Sort::Unordered);
-        assert!(Listing::everyone(&query("type=x")).is_err());
-        assert!(Listing::everyone(&query(&format!("q={}", "a".repeat(Q_MAX + 1)))).is_err());
-        assert!(Listing::everyone(&query(&format!("q={}", "ä".repeat(Q_MAX)))).is_ok());
+        assert!(Listing::everyone(&query("type=x"), false).is_err());
+        assert!(Listing::everyone(&query(&format!("q={}", "a".repeat(Q_MAX + 1))), false).is_err());
+        assert!(Listing::everyone(&query(&format!("q={}", "ä".repeat(Q_MAX))), false).is_ok());
     }
 
     #[test]
     fn the_review_filters_refuse_as_builder_server_does() {
         let status = |raw: &str| {
-            Listing::everyone(&query(raw))
+            Listing::everyone(&query(raw), false)
                 .err()
                 .map(|e| (e.status(), e.to_string()))
         };

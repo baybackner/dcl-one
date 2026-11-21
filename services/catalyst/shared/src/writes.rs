@@ -333,6 +333,7 @@ mod tests {
     #[cfg(unix)]
     const STORAGE_WRITERS: &[(&str, &str)] = &[
         ("builder/src/items/upload.rs", "create"),
+        ("builder/src/items/video.rs", "create"),
         ("camera-reel/src/handlers/images.rs", "create"),
         ("camera-reel/src/import.rs", "create"),
         ("comms/src/gatekeeper/reports.rs", "social"),

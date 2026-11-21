@@ -399,8 +399,13 @@ fn volatile_notes(raw: &Value, candidate: &[u8]) -> Vec<String> {
 }
 
 fn request_of(raw: &Value) -> Option<(String, String)> {
+    let method = raw["request"]["method"].as_str()?;
+    let method = match raw["request"]["headers"]["access-control-request-method"].as_str() {
+        Some(asked) if method == "OPTIONS" => asked,
+        _ => method,
+    };
     Some((
-        raw["request"]["method"].as_str()?.to_string(),
+        method.to_string(),
         raw["request"]["path"].as_str()?.to_string(),
     ))
 }
@@ -2384,6 +2389,7 @@ struct Replay {
     state: Arc<State>,
     slack: FakeSlack,
     forum: FakeForum,
+    newsletter: FakeNewsletter,
     wallets: BTreeMap<String, Wallet>,
     validator_calls: std::sync::atomic::AtomicI64,
     claims: std::sync::Mutex<BTreeMap<String, (Value, Value)>>,
@@ -2496,6 +2502,57 @@ const SLACK_CHANNEL: &str = "curation-example";
 #[derive(Clone, Default)]
 struct FakeSlack(Arc<std::sync::Mutex<Vec<Value>>>);
 
+#[derive(Clone, Default)]
+struct FakeNewsletter(Arc<std::sync::Mutex<Vec<Value>>>);
+
+const NEWSLETTER_KEY: &str = "example-newsletter-key";
+const NEWSLETTER_PUBLICATION: &str = "pub-example";
+const NEWSLETTER_FAILING_EMAIL: &str = "fail@example.com";
+const CAPTURE_CORS_ORIGIN: &str =
+    r"regex:^https://(.{1,50}\.)?decentraland\.example$;https://partner.example";
+
+impl FakeNewsletter {
+    async fn start(&self) -> String {
+        let received = self.0.clone();
+        let path = format!("/v2/publications/{NEWSLETTER_PUBLICATION}/subscriptions");
+        let recorded = path.clone();
+        let app = Router::new().route(
+            &path,
+            axum::routing::post(move |headers: HeaderMap, body: axum::body::Bytes| {
+                let received = received.clone();
+                let path = recorded.clone();
+                async move {
+                    let header = |name: &str| {
+                        headers
+                            .get(name)
+                            .and_then(|v| v.to_str().ok())
+                            .map_or(Value::Null, |v| Value::from(v.to_string()))
+                    };
+                    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    let failing = body["email"] == NEWSLETTER_FAILING_EMAIL;
+                    received.lock().unwrap().push(serde_json::json!({
+                        "method": "POST", "path": path, "authorization": header("authorization"),
+                        "accept": header("accept"), "content_type": header("content-type"), "body": body,
+                    }));
+                    if failing {
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    } else {
+                        axum::http::StatusCode::CREATED
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}/v2")
+    }
+
+    fn take(&self) -> Vec<Value> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
 impl FakeSlack {
     async fn start(&self) -> String {
         let posted = self.0.clone();
@@ -2576,6 +2633,8 @@ async fn replay_setup() -> Option<Replay> {
         }
     }
     let forum_api = forum.start().await;
+    let newsletter = FakeNewsletter::default();
+    let newsletter_api = newsletter.start().await;
     let mut forum_settings = FakeForum::forum(&forum_api);
     forum_settings.url = "https://forum.example.org".into();
     let mut state = State::new(
@@ -2600,6 +2659,12 @@ async fn replay_setup() -> Option<Replay> {
             forum: Some(forum_settings),
             builder_server_url: "https://builder-api.example.org".into(),
             validator_secret: Some(VALIDATOR_SECRET.into()),
+            newsletter: Some(catalyst::builder::NewsletterForward {
+                url: newsletter_api,
+                publication_id: NEWSLETTER_PUBLICATION.into(),
+                api_key: NEWSLETTER_KEY.into(),
+            }),
+            cors: catalyst::builder::cors::Cors::parse(Some(CAPTURE_CORS_ORIGIN), None).unwrap(),
             ..Settings::default()
         },
     )
@@ -2614,6 +2679,7 @@ async fn replay_setup() -> Option<Replay> {
         state,
         slack,
         forum,
+        newsletter,
         wallets,
         validator_calls: std::sync::atomic::AtomicI64::new(0),
         claims: std::sync::Mutex::default(),
@@ -2674,7 +2740,23 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
         fresh_signature(raw, &fx, &replay.wallets, prefix).await
     };
     let every_key = Volatility::default().with_ignored_fields(&[]);
+    let repeat = raw.get("repeat").and_then(Value::as_u64).unwrap_or(0);
+    let fresh_budget = || {
+        if let Some(signer) = signer_of(raw) {
+            replay.state.limits.review_writes.clear(&signer);
+            replay.state.limits.review_reads.clear(&signer);
+        }
+    };
+    if repeat > 0 {
+        fresh_budget();
+    }
+    for _ in 0..repeat {
+        replay_with(&replay.app, prefix, name, &fx, &auth, &every_key).await;
+    }
     let (mut notes, body) = replay_with(&replay.app, prefix, name, &fx, &auth, &every_key).await;
+    if repeat > 0 {
+        fresh_budget();
+    }
     notes.extend(volatile_notes(raw, &body));
     replay.state.notices.settled().await;
     let sent = Value::Array(replay.slack.take());
@@ -2684,6 +2766,16 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
         .unwrap_or_else(|| Value::Array(vec![]));
     if sent != recorded {
         notes.push(format!("slack: fixture={recorded} candidate={sent}"));
+    }
+    let subscribed = Value::Array(replay.newsletter.take());
+    let recorded = raw
+        .get("newsletter")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    if subscribed != recorded {
+        notes.push(format!(
+            "newsletter: fixture={recorded} candidate={subscribed}"
+        ));
     }
     let sent = Value::Array(replay.forum.take());
     let recorded = raw

@@ -119,24 +119,35 @@ pub async fn get_item(
     Ok(Json(ApiData::ok(state.items.item(&read).await?)))
 }
 
-/// `POST /v1/items/:id/files` (`uploadItemFiles`): decided before the body
-/// is read (`items::upload`); answers `{ok: true}` without data.
+/// `POST /v1/items/:id/files` (`uploadItemFiles`): decided, and the
+/// signer's storage bound checked ([`crate::limits::within_storage`]),
+/// before the body is read (`items::upload`); answers `{ok: true}` without
+/// data.
 pub async fn post_item_files(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
     multipart: axum::extract::Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let change = access::change_item(&state, &signer, &id).await?;
     state.items.require_documents_release().await?;
+    crate::limits::within_storage(
+        &state,
+        signer.as_str(),
+        &headers,
+        crate::UPLOAD_BODY_LIMIT as u64,
+    )
+    .await?;
     let files = upload::read(multipart).await?;
     state.items.save_item_files(&change, files).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// `POST /v1/items/:id/videos` (`uploadItemFiles` with the video bound):
-/// access, the item's video name and a place among the uploads in flight are
-/// settled before the body is read ([`video`]); a refused place answers 429
+/// access, the item's video name, the signer's storage bound and a place
+/// among the uploads in flight are settled before the body is read
+/// ([`video`]); a refused place answers 429
 /// with `Retry-After` at once. The store and its record run
 /// in a task of their own, so a client that leaves can't cut them short.
 pub async fn post_item_videos(
@@ -152,6 +163,13 @@ pub async fn post_item_videos(
     if !state.items.names_video(change.id()).await? {
         return Err(ApiError::bad_request("The item names no video"));
     }
+    crate::limits::within_storage(
+        &state,
+        signer.as_str(),
+        request.headers(),
+        video::BODY_LIMIT as u64,
+    )
+    .await?;
     let source = source_key(&client_ip(request.headers()));
     let admission = match state.videos.admit(signer.as_str(), &source) {
         Ok(admission) => admission,

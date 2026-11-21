@@ -2253,6 +2253,32 @@ fn public_file_sql(hash: &str) -> String {
         .replace("{hash}", hash)
 }
 
+/// The bytes of every upload record of `wallet`'s, from
+/// `uploaded_contents_uploaded_by_idx` alone.
+pub(crate) async fn uploaded_bytes(pool: &sqlx::PgPool, wallet: &str) -> Result<i64, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COALESCE(sum(size), 0)::bigint FROM builder.uploaded_contents WHERE uploaded_by = $1",
+    )
+    .bind(wallet)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// The bytes of `wallet`'s upload records whose hash no published item
+/// names ([`PUBLIC_FILE`]): what its uploads hold in the store that nobody
+/// else may read. Starts from the wallet's records
+/// (`uploaded_contents_uploaded_by_idx`).
+pub(crate) async fn unpublished_bytes(pool: &sqlx::PgPool, wallet: &str) -> Result<i64, ApiError> {
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COALESCE(sum(own.size), 0)::bigint FROM builder.uploaded_contents own \
+         WHERE own.uploaded_by = $1 AND NOT {}",
+        public_file_sql("own.hash")
+    )))
+    .bind(wallet)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// [`FILE_READ`] with the published rule of [`chain_state::published_by_any_pass`].
 pub(crate) fn file_read_sql() -> String {
     FILE_READ.replace("{public}", &public_file_sql("$1"))

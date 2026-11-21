@@ -5,6 +5,8 @@ use clap::Args;
 /// The creator plane: builder and camera_reel.
 #[derive(Args, Clone, Debug)]
 pub struct CreateConfig {
+    /// Opens the creator plane's writes; off, each builder and camera reel
+    /// write answers 503 with `Retry-After`.
     #[arg(long, env = "CREATE_WRITES_ENABLED", default_value_t = false, action = clap::ArgAction::Set)]
     pub create_writes_enabled: bool,
 
@@ -14,23 +16,39 @@ pub struct CreateConfig {
     #[arg(long, env = "BUILDER_POLYGON_RPC_URL", hide_env_values = true)]
     pub builder_polygon_rpc_url: Option<String>,
 
-    /// Comma-separated admin wallets (curation routes, non-owner collection reads).
+    /// Comma-separated wallets that may use the builder's curation console
+    /// (`/v1/collections/curation`); they hold no role on any other builder route.
     #[arg(long, env = "BUILDER_ADMIN_ADDRESSES", default_value = "")]
     pub builder_admin_addresses: String,
 
-    /// Bearer of the curation routes; unset fails closed.
+    /// Bearer of the builder's curation console; unset fails closed.
     #[arg(long, env = "CATALYRST_BUILDER_ADMIN_TOKEN", hide_env_values = true)]
     pub catalyrst_builder_admin_token: Option<String>,
 
-    /// The newsletter forward is configured only when all three are set.
+    /// The newsletter service's API base (public http(s)) a subscription is
+    /// forwarded to; the forward needs all three newsletter settings, and
+    /// without them a subscription is only stored.
     #[arg(long, env = "NEWSLETTER_SERVICE_URL")]
     pub newsletter_service_url: Option<String>,
 
+    /// The newsletter publication a subscription joins.
     #[arg(long, env = "NEWSLETTER_PUBLICATION_ID")]
     pub newsletter_publication_id: Option<String>,
 
+    /// The newsletter service's bearer key.
     #[arg(long, env = "NEWSLETTER_SERVICE_API_KEY", hide_env_values = true)]
     pub newsletter_service_api_key: Option<String>,
+
+    /// The origins that may read the builder routes' answers: `;`-separated,
+    /// `regex:` entries matched as patterns, `*` any origin, others exactly;
+    /// unset, the Decentraland front-ends and `http://localhost:<port>`.
+    #[arg(long, env = "CORS_ORIGIN")]
+    pub cors_origin: Option<String>,
+
+    /// The methods a builder route's preflight allows, `,`-separated; unset
+    /// or `*`, every method the routes answer.
+    #[arg(long, env = "CORS_METHOD")]
+    pub cors_method: Option<String>,
 
     /// The warehouse a terms-of-service acceptance is forwarded to; the
     /// forward is configured only when the token is set too. Without it the
@@ -65,7 +83,7 @@ pub struct CreateConfig {
     #[arg(long, env = "FORUM_API_KEY", hide_env_values = true)]
     pub forum_api_key: Option<String>,
 
-    /// The forum account used for reads.
+    /// The forum account the node posts and replies as.
     #[arg(long, env = "FORUM_API_USERNAME")]
     pub forum_api_username: Option<String>,
 

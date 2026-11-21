@@ -100,6 +100,7 @@ pub(super) struct Options {
     pub(super) secret: Option<&'static str>,
     pub(super) writes: bool,
     pub(super) storage: Option<Arc<crate::storage::Storage>>,
+    pub(super) unbounded: bool,
 }
 
 impl Default for Options {
@@ -108,6 +109,7 @@ impl Default for Options {
             secret: Some(SECRET),
             writes: true,
             storage: None,
+            unbounded: false,
         }
     }
 }
@@ -205,6 +207,9 @@ pub(super) async fn node_over(pool: PgPool, options: Options) -> Node {
     .unwrap();
     state.now = clock;
     state.guarded = dcl_http::Outbound::for_tests();
+    if options.unbounded {
+        state.limits = crate::limits::Limits::unbounded();
+    }
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))

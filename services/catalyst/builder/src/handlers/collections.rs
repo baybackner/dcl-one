@@ -33,13 +33,27 @@ pub async fn get_collection_items(
     Signed(signer): Signed,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
+    headers: HeaderMap,
 ) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
     let q = ListQuery::parse(raw.as_deref());
     let status = q.non_empty("status")?.map(str::to_string);
     let read = access::collection_items(&state, &signer, &id, status.as_deref()).await?;
-    Ok(Json(ApiData::ok(
-        state.items.collection_items(&read, &q).await?,
-    )))
+    let items = state.items.collection_items(&read, &q).await?;
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
+    Ok(Json(ApiData::ok(items)))
+}
+
+/// Whether a listing's `status` filter reads the review flow as on: only a
+/// listing that filters by status asks.
+pub(crate) async fn review_flow_asked(
+    state: &SharedState,
+    q: &ListQuery,
+) -> Result<bool, ApiError> {
+    if q.all("status").is_empty() {
+        return Ok(false);
+    }
+    let mut conn = state.items.pool().acquire().await?;
+    crate::review::enabled(&mut conn, state).await
 }
 
 /// builder-server's `HTTPError('Unauthorized', { eth_address }, 401)`: a
@@ -87,6 +101,10 @@ async fn list_collections(
         state.eip1654.as_deref(),
     )
     .await;
+    if let Some(signer) = &signer {
+        crate::limits::spend_wallet(state, signer.as_str(), &axum::http::Method::GET)?;
+    }
+    let review_flow = review_flow_asked(state, &q).await?;
     let committee = match (&signer, q.is_public_search()) {
         (Some(signer), true) => access::known_committee_member(state, signer).await,
         (Some(signer), false) => Some(access::committee(state, signer).await?),
@@ -98,14 +116,14 @@ async fn list_collections(
             state
                 .items
                 .committee_collections(
-                    &CommitteeListing::new(&member, &q)?,
+                    &CommitteeListing::new(&member, &q, review_flow)?,
                     &state.third_parties,
                     state.market.as_ref(),
                 )
                 .await?
         }
         None => {
-            let search = PublicSearch::new(&q)?.ok_or_else(|| unauthorized_for(""))?;
+            let search = PublicSearch::new(&q, review_flow)?.ok_or_else(|| unauthorized_for(""))?;
             state.items.public_collections(&search).await?
         }
     };
@@ -117,9 +135,12 @@ async fn list_collections(
 pub async fn get_items(
     State(state): State<SharedState>,
     Signed(signer): Signed,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let committee = access::committee(&state, &signer).await?;
-    Ok(Json(ApiData::ok(state.items.every_item(&committee).await?)).into_response())
+    let items = state.items.every_item(&committee).await?;
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
+    Ok(Json(ApiData::ok(items)).into_response())
 }
 
 /// `GET /v1/{address}/collections` (`getAddressCollections`): the wallet
@@ -131,12 +152,18 @@ pub async fn get_address_collections(
     Signed(signer): Signed,
     Path(address): Path<String>,
     RawQuery(raw): RawQuery,
+    headers: HeaderMap,
 ) -> Result<Json<ApiData<Value>>, ApiError> {
     let wallet = access::own_address(&state, &signer, &address).await?;
     let listing = OwnListing::new(&wallet, &ListQuery::parse(raw.as_deref()))?;
-    Ok(Json(ApiData::ok(
-        state.items.address_collections(&listing).await?,
-    )))
+    let collections = state.items.address_collections(&listing).await?;
+    let rows = collections
+        .get("results")
+        .unwrap_or(&collections)
+        .as_array()
+        .map_or(0, Vec::len);
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), rows);
+    Ok(Json(ApiData::ok(collections)))
 }
 
 /// `GET /v1/{address}/items` (`getAddressItems`): the wallet itself,
@@ -147,14 +174,15 @@ pub async fn get_address_items(
     Signed(signer): Signed,
     Path(address): Path<String>,
     RawQuery(raw): RawQuery,
+    headers: HeaderMap,
 ) -> Result<Json<ApiData<ItemsOut>>, ApiError> {
     let wallet = access::own_address(&state, &signer, &address).await?;
-    Ok(Json(ApiData::ok(
-        state
-            .items
-            .address_items(&wallet, &ListQuery::parse(raw.as_deref()))
-            .await?,
-    )))
+    let items = state
+        .items
+        .address_items(&wallet, &ListQuery::parse(raw.as_deref()))
+        .await?;
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), items.len());
+    Ok(Json(ApiData::ok(items)))
 }
 
 /// `GET /v1/committee`: the current committee members, unauthenticated;

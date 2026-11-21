@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, RawQuery, State};
+use axum::http::HeaderMap;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -183,6 +184,7 @@ pub async fn patch_items_status_bulk(
 pub async fn curations(
     State(state): State<SharedState>,
     Signed(signer): Signed,
+    headers: HeaderMap,
 ) -> Result<Json<ApiData<Vec<CollectionCurationOut>>>, ApiError> {
     let scope = access::curation_scope(&state, &signer).await?;
     let mut conn = state.items.pool().acquire().await?;
@@ -193,6 +195,8 @@ pub async fn curations(
             rows::newest_of_wallet(&mut conn, wallet.address(), &wallet.provider_ids()).await?
         }
     };
+    drop(conn);
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), rows.len());
     Ok(Json(ApiData::ok(rows)))
 }
 
@@ -258,13 +262,16 @@ pub async fn collection_item_curations(
     Signed(signer): Signed,
     Path(id): Path<String>,
     RawQuery(query): RawQuery,
+    headers: HeaderMap,
 ) -> Result<Json<ApiData<Vec<ItemCurationOut>>>, ApiError> {
     let items = item_ids(query.as_deref())?;
     let curator = access::curate_collection(&state, &signer, &id).await?;
     let mut conn = state.items.pool().acquire().await?;
-    Ok(Json(ApiData::ok(
-        rows::newest_of_collection_items(&mut conn, curator.collection(), items.as_deref()).await?,
-    )))
+    let rows =
+        rows::newest_of_collection_items(&mut conn, curator.collection(), items.as_deref()).await?;
+    drop(conn);
+    crate::limits::charge_rows(&state, &headers, Some(signer.as_str()), rows.len());
+    Ok(Json(ApiData::ok(rows)))
 }
 
 /// `GET /v1/items/:id/curation` (`getItemCuration`): the item's newest

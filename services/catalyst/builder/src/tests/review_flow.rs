@@ -43,7 +43,22 @@ async fn set_flags(pool: &PgPool, flow: Value) {
 
 /// A node with the review flow on and `curator` on the committee.
 async fn flow_node() -> Option<Node> {
-    let node = node().await?;
+    flow_node_with(Options::default()).await
+}
+
+async fn unbounded_flow_node() -> Option<Node> {
+    flow_node_with(Options {
+        unbounded: true,
+        ..Options::default()
+    })
+    .await
+}
+
+async fn flow_node_with(options: Options) -> Option<Node> {
+    set_clock(
+        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap(),
+    );
+    let node = node_over(own_pool().await?, options).await;
     set_flags(&node.pool, json!(true)).await;
     FakeCommittee::with(&[&address(CURATOR_KEY)])
         .publish(&node.pool)
@@ -1201,7 +1216,7 @@ async fn a_changes_submission_with_the_flow_on_waits_for_the_running_review_and_
 
 #[tokio::test]
 async fn creator_text_is_bounded_per_collection_and_per_caller_each_utc_day() {
-    let Some(node) = flow_node().await else {
+    let Some(node) = unbounded_flow_node().await else {
         return;
     };
     set_clock(clock().date_naive().and_hms_opt(1, 0, 0).unwrap().and_utc());
@@ -1267,7 +1282,7 @@ async fn creator_text_is_bounded_per_collection_and_per_caller_each_utc_day() {
 
 #[tokio::test]
 async fn concurrent_appeals_open_one_review_and_concurrent_comments_keep_the_bound() {
-    let Some(node) = flow_node().await else {
+    let Some(node) = unbounded_flow_node().await else {
         return;
     };
     let (id, _) = rejected_by_validator(&node, "Racing", 1).await;
@@ -1378,4 +1393,142 @@ async fn a_first_publication_without_the_flow_records_no_timeline() {
     assert_eq!(publish(&node, id, 1).await.0, 200);
     assert!(events(&node.pool, id).await.is_empty());
     assert_eq!(requests(&node.pool, id).await.len(), 1);
+}
+
+async fn on_chain_unapproved(pool: &PgPool, collections: &[Uuid]) {
+    for id in collections {
+        sqlx::query(
+            "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
+               is_completed, is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) \
+             SELECT 'matic', lower(contract_address), 137, name, eth_address, eth_address, 'urn:listed', true, false, true, \
+               '{}', '{}', 1, 1, 1, timezone('UTC', now()) FROM builder.collections WHERE id = $1",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+async fn listed(node: &Node, query: &str) -> Vec<String> {
+    let mut request = Request::builder().uri(format!("/v1/collections?{query}"));
+    for (name, value) in signed_map(CURATOR_KEY, "get", "/v1/collections", "{}", false).await {
+        request = request.header(name, value);
+    }
+    let (status, body) = send(&node.app, request.body(Body::empty()).unwrap()).await;
+    assert_eq!(status, 200, "{query}: {body}");
+    let answer = json_of(&body);
+    let rows = answer["data"].get("results").unwrap_or(&answer["data"]);
+    let mut names: Vec<String> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn the_committee_lists_the_collections_in_an_automated_review_apart_while_the_flow_is_on() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    let (running, _) = published(&node, "Running", 1).await;
+    let (waiting, _) = published(&node, "Waiting", 1).await;
+    let (assigned, _) = published(&node, "Assigned", 1).await;
+    for id in [waiting, assigned] {
+        sqlx::query(
+            "UPDATE builder.validation_requests SET settled_at = timezone('UTC', now()), outcome = 'passed' WHERE collection_id = $1",
+        )
+        .bind(id)
+        .execute(&node.pool)
+        .await
+        .unwrap();
+    }
+    on_chain_unapproved(&node.pool, &[running, waiting, assigned]).await;
+    for id in [running, waiting, assigned] {
+        collection_curation(&node.pool, id, "pending").await;
+    }
+    let curator = address(CURATOR_KEY);
+    sqlx::query("UPDATE builder.collection_curations SET assignee = $2 WHERE collection_id = $1")
+        .bind(assigned)
+        .bind(&curator)
+        .execute(&node.pool)
+        .await
+        .unwrap();
+
+    assert_eq!(listed(&node, "status=auto_reviewing").await, ["Running"]);
+    assert_eq!(listed(&node, "status=to_review").await, ["Waiting"]);
+    assert_eq!(listed(&node, "status=under_review").await, ["Assigned"]);
+    assert_eq!(
+        listed(&node, "status=pending").await,
+        ["Assigned", "Waiting"]
+    );
+    assert_eq!(
+        listed(&node, &format!("assignee={curator}")).await,
+        ["Assigned"]
+    );
+    assert_eq!(
+        listed(&node, "assignee=unassigned").await,
+        ["Running", "Waiting"]
+    );
+    assert_eq!(
+        listed(&node, "status=to_review&status=auto_reviewing").await,
+        ["Running", "Waiting"]
+    );
+
+    sqlx::query(
+        "INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at) \
+         VALUES (gen_random_uuid(), $1, 'review.rejected', 'curator', $2, '{}', timezone('UTC', now()) + interval '1 second')",
+    )
+    .bind(running)
+    .bind(&curator)
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        listed(&node, "status=auto_reviewing").await,
+        Vec::<String>::new(),
+        "a curator's decision ends the automated review"
+    );
+    assert_eq!(
+        listed(&node, "status=to_review").await,
+        ["Running", "Waiting"]
+    );
+
+    set_flags(&node.pool, json!(false)).await;
+    sqlx::query("DELETE FROM builder.collection_events WHERE collection_id = $1 AND type = 'review.rejected'")
+        .bind(running)
+        .execute(&node.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        listed(&node, "status=auto_reviewing").await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        listed(&node, "status=to_review").await,
+        ["Running", "Waiting"]
+    );
+}
+
+#[tokio::test]
+async fn the_committee_filters_by_each_collections_newest_curation() {
+    let Some(node) = flow_node().await else {
+        return;
+    };
+    set_flags(&node.pool, json!(false)).await;
+    let (approved, _) = published(&node, "Approved", 1).await;
+    let (rejected, _) = published(&node, "Rejected", 1).await;
+    let (fresh, _) = published(&node, "Fresh", 1).await;
+    collection_curation(&node.pool, approved, "pending").await;
+    collection_curation(&node.pool, approved, "approved").await;
+    collection_curation(&node.pool, rejected, "approved").await;
+    collection_curation(&node.pool, rejected, "rejected").await;
+    on_chain_unapproved(&node.pool, &[approved, rejected, fresh]).await;
+    assert_eq!(listed(&node, "status=rejected").await, ["Rejected"]);
+    assert_eq!(listed(&node, "status=to_review").await, ["Fresh"]);
+    assert_eq!(listed(&node, "status=pending").await, ["Fresh"]);
+    assert_eq!(listed(&node, "status=approved").await, Vec::<String>::new());
 }

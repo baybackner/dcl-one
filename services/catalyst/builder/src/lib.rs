@@ -74,12 +74,14 @@ pub mod chain_state;
 pub mod cheques;
 pub mod collections;
 pub mod committee;
+pub mod cors;
 pub mod curation;
 pub mod drafts;
 pub mod handlers;
 pub mod http;
 pub mod items;
 pub mod kept;
+pub mod limits;
 pub mod onchain;
 pub mod publication;
 pub mod publication_chain;
@@ -111,16 +113,25 @@ use items::{ItemsComponent, NewsletterComponent};
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_BUILDER_ADMIN_TOKEN";
 /// One 20 MiB upload with its framing.
-const UPLOAD_BODY_LIMIT: usize = 21 * 1024 * 1024;
+pub const UPLOAD_BODY_LIMIT: usize = 21 * 1024 * 1024;
 
 /// The newsletter SaaS forward (`NEWSLETTER_SERVICE_URL`,
 /// `NEWSLETTER_PUBLICATION_ID`, `NEWSLETTER_SERVICE_API_KEY`), configured
 /// only when all three are set.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NewsletterForward {
     pub url: String,
     pub publication_id: String,
     pub api_key: String,
+}
+
+impl std::fmt::Debug for NewsletterForward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewsletterForward")
+            .field("url", &self.url)
+            .field("publication_id", &self.publication_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The warehouse a terms-of-service acceptance is forwarded to
@@ -143,7 +154,7 @@ impl std::fmt::Debug for WarehouseForward {
 }
 
 /// The environment as `Config` hands it over (the old env names).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RawSettings {
     /// `CREATE_WRITES_ENABLED` (false).
     pub writes_enabled: bool,
@@ -186,9 +197,13 @@ pub struct RawSettings {
     /// validator signs its calls with; unset, no validation is requested
     /// and the validator routes refuse.
     pub validator_secret: Option<String>,
+    /// `CORS_ORIGIN`: the origins that may read the answers ([`cors`]).
+    pub cors_origin: Option<String>,
+    /// `CORS_METHOD`: the methods a preflight allows ([`cors`]).
+    pub cors_method: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Settings {
     pub writes_enabled: bool,
     pub polygon_rpc_url: Option<String>,
@@ -205,6 +220,27 @@ pub struct Settings {
     pub builder_server_url: String,
     /// The wearable validator's secret; none turns validation off.
     pub validator_secret: Option<validator::Secret>,
+    /// Who may read the answers from another origin.
+    pub cors: cors::Cors,
+}
+
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("writes_enabled", &self.writes_enabled)
+            .field("polygon_rpc_url", &self.polygon_rpc_url.is_some())
+            .field("admin_addresses", &self.admin_addresses)
+            .field("admin_token", &self.admin_token.is_some())
+            .field("newsletter", &self.newsletter)
+            .field("warehouse", &self.warehouse)
+            .field("slack", &self.slack)
+            .field("links", &self.links)
+            .field("forum", &self.forum)
+            .field("builder_server_url", &self.builder_server_url)
+            .field("validator_secret", &self.validator_secret)
+            .field("cors", &self.cors)
+            .finish()
+    }
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -305,7 +341,9 @@ impl Settings {
                 bail!("{name} must be an http(s) URL");
             }
         }
+        let cors = cors::Cors::parse(raw.cors_origin.as_deref(), raw.cors_method.as_deref())?;
         Ok(Self {
+            cors,
             slack,
             links,
             forum,
@@ -354,6 +392,8 @@ pub struct State {
     pub validator_calls: crate::shared::limits::RateLimiter,
     /// The item video uploads' bounds and those in flight.
     pub videos: items::video::Videos,
+    /// The request budgets per source, signer and route ([`limits`]).
+    pub limits: limits::Limits,
 }
 
 pub type SharedState = Arc<State>;
@@ -393,6 +433,7 @@ impl State {
             content_sync: Arc::default(),
             validator_calls: validator::calls_limiter(),
             videos: items::video::Videos::default(),
+            limits: limits::Limits::default(),
         })
     }
 
@@ -590,11 +631,15 @@ fn api_routes() -> Router<SharedState> {
 
 fn finish(routes: Router<SharedState>, state: SharedState) -> Router {
     let writes_enabled = state.settings.writes_enabled;
+    let cors = state.settings.cors.layer();
     let router = routes
         .route_layer(axum::middleware::map_response(http::enveloped))
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            limits::per_source,
+        ))
         .with_state(state);
-    writes::guard(router, writes_enabled)
+    writes::guard(router, writes_enabled).layer(cors)
 }
 
 /// The whole builder surface, for the `/builder-api` nest: the API routes
@@ -649,6 +694,40 @@ mod router_tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn no_secret_reaches_the_settings_printout() {
+        let settings = Settings::parse(RawSettings {
+            polygon_rpc_url: Some("https://rpc.example/v3/sk-example-rpc".into()),
+            admin_token: Some("sk-example-admin".into()),
+            newsletter_service_url: Some("https://newsletter.example/v2".into()),
+            newsletter_publication_id: Some("pub-example".into()),
+            newsletter_api_key: Some("sk-example-newsletter".into()),
+            warehouse_url: Some("https://warehouse.example/?key=sk-example-warehouse-url".into()),
+            warehouse_token: Some("sk-example-warehouse".into()),
+            slack_bot_token: Some("xoxb-example-slack".into()),
+            slack_curation_channel: Some("curation".into()),
+            forum_url: Some("https://forum.example".into()),
+            forum_api_key: Some("sk-example-forum".into()),
+            forum_api_username: Some("builder".into()),
+            forum_category: Some("7".into()),
+            validator_secret: Some("sk-example-validator-0123456789abcdef".into()),
+            ..RawSettings::default()
+        })
+        .unwrap();
+        let printed = format!("{settings:?}");
+        for secret in [
+            "sk-example-rpc",
+            "sk-example-admin",
+            "sk-example-newsletter",
+            "sk-example-warehouse",
+            "xoxb-example-slack",
+            "sk-example-forum",
+            "sk-example-validator",
+        ] {
+            assert!(!printed.contains(secret), "{secret} in {printed}");
+        }
     }
 
     #[test]

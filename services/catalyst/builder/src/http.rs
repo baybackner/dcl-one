@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 pub use crate::shared::errors::ApiData;
 
 const INTERNAL_MESSAGE: &str = "Internal Server Error";
+const TOO_MANY: &str = "Too many requests, try again in a minute";
 
 /// What a published or locked refusal is about: upstream words the two
 /// differently.
@@ -36,6 +37,8 @@ pub enum ApiError {
     },
     Database(sqlx::Error),
     Internal(String),
+    /// 429 with a `Retry-After` of the wait, in whole seconds.
+    Limited(std::time::Duration),
 }
 
 impl ApiError {
@@ -122,6 +125,7 @@ impl ApiError {
         match self {
             Self::Http { status, .. } => *status,
             Self::Database(_) | Self::Internal(_) => 500,
+            Self::Limited(_) => 429,
         }
     }
 }
@@ -132,6 +136,7 @@ impl fmt::Display for ApiError {
             Self::Http { error, .. } => f.write_str(error),
             Self::Database(e) => write!(f, "database error: {e}"),
             Self::Internal(m) => f.write_str(m),
+            Self::Limited(_) => f.write_str(TOO_MANY),
         }
     }
 }
@@ -154,6 +159,15 @@ impl From<sqlx::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error, data) = match self {
+            Self::Limited(wait) => {
+                let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, seconds.clamp(1, 86_400).to_string())],
+                    Json(json!({ "ok": false, "data": {}, "error": TOO_MANY })),
+                )
+                    .into_response();
+            }
             Self::Http {
                 status,
                 error,
