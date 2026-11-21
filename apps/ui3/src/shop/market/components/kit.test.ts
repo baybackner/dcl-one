@@ -16,6 +16,30 @@ describe("when a market write fails", () => {
     });
   });
 
+  describe("and the relay refused it because the account's fee-free quota is spent", () => {
+    let error: MetaTransactionError;
+
+    beforeEach(() => {
+      error = new MetaTransactionError("Max amount of transactions reached", "quota_reached", 429, true, { error: "quota_reached", quota: 30 });
+    });
+
+    it("should name the spent quota", () => {
+      expect(writeFailureText(error)).toBe("You've used all 30 fee-free transactions this account gets in 24 hours. Try again later.");
+    });
+  });
+
+  describe("and the relay refused it because the shared fee-free limit is spent", () => {
+    let error: MetaTransactionError;
+
+    beforeEach(() => {
+      error = new MetaTransactionError("Budget spent", "relay_budget_spent", 429, true, { error: "relay_budget_spent" });
+    });
+
+    it("should say the shared fee-free limit was reached", () => {
+      expect(writeFailureText(error)).toBe("The shared fee-free limit for this operation has been reached. Try again later.");
+    });
+  });
+
   describe("and the relay refused it for another reason", () => {
     let error: MetaTransactionError;
 

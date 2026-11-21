@@ -210,6 +210,23 @@ class ClientAddressHeaderTest(unittest.TestCase):
         self.assertIn("real_ip_header CF-Connecting-IP;\n    real_ip_recursive off;", text)
         self.assertIn("set_real_ip_from 203.0.113.0/24;", text)
 
+    def test_cf_connecting_ip_is_accepted_from_cloudflare_ranges(self):
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="173.245.48.0/20 2400:cb00::/32",
+                      GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+        self.assertIn("set_real_ip_from 2400:cb00::/32;", text)
+
+    def test_cf_connecting_ip_refuses_non_public_trusted_networks(self):
+        # A load balancer passes a client's own CF-Connecting-IP through; with no hop walk it would be trusted.
+        for cidrs in ["10.0.0.0/8", "173.245.48.0/20 172.18.0.0/16", "192.168.1.10", "100.64.0.0/10",
+                      "127.0.0.1", "169.254.0.0/16", "fd00::/8", "fe80::/64", "::1", "0.0.0.0/0", "::/0"]:
+            with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ValueError, "CF-Connecting-IP"):
+                render(GATEWAY_TRUSTED_PROXY_CIDRS=cidrs, GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+
+    def test_x_forwarded_for_still_trusts_a_private_load_balancer(self):
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="10.0.0.0/8 173.245.48.0/20")
+        self.assertIn("set_real_ip_from 10.0.0.0/8;", text)
+        self.assertIn("real_ip_recursive on;", text)
+
     def test_other_headers_are_rejected(self):
         for value in ["X-Real-IP", "True-Client-IP", "CF-Connecting-IP;", ""]:
             with self.subTest(value=value), self.assertRaises(ValueError):

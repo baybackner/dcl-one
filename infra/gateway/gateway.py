@@ -134,6 +134,12 @@ def site_prefixes(files):
     return sorted(prefixes)
 
 
+# Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA), link-local and IPv4-mapped networks.
+NON_PUBLIC_NETWORKS = [ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+    "192.168.0.0/16", "::/128", "::1/128", "::ffff:0:0/96", "fc00::/7", "fe80::/10")]
+
+
 def settings(env, resolv_conf="/etc/resolv.conf"):
     domain = hostname(env.get("GATEWAY_DOMAIN", "localhost"))
     aliases = [hostname(host) for host in words(env.get("GATEWAY_HOST_ALIASES", ""))]
@@ -158,6 +164,14 @@ def settings(env, resolv_conf="/etc/resolv.conf"):
         env.get("GATEWAY_CLIENT_IP_HEADER", "X-Forwarded-For").lower())
     if not client_header:
         raise ValueError("GATEWAY_CLIENT_IP_HEADER must be X-Forwarded-For or CF-Connecting-IP")
+    # Read without walking hops, CF-Connecting-IP is taken as sent from every trusted network. Cloudflare's
+    # ranges are public; a non-public one is a load balancer that passes a client's own header through.
+    if client_header == "CF-Connecting-IP" and any(
+            ipaddress.ip_network(proxy).overlaps(internal)
+            for proxy in trusted for internal in NON_PUBLIC_NETWORKS
+            if ipaddress.ip_network(proxy).version == internal.version):
+        raise ValueError("GATEWAY_CLIENT_IP_HEADER=CF-Connecting-IP needs GATEWAY_TRUSTED_PROXY_CIDRS to list "
+                         "only Cloudflare's public ranges; behind a load balancer keep X-Forwarded-For")
     storage_trusted = networks(env.get("GATEWAY_STORAGE_TRUSTED_CIDRS", ""))
     if any(ipaddress.ip_network(proxy).overlaps(ipaddress.ip_network(caller))
            for proxy in trusted for caller in storage_trusted

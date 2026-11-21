@@ -627,6 +627,52 @@ async fn an_unlisted_gateway_does_not_put_every_client_in_one_relay_bucket() {
     }
 }
 
+/// A listed gateway behind an unlisted private load balancer forwards that load balancer's internal
+/// address as every client's `X-Real-IP`: it names no single client, so it is not limited either.
+#[tokio::test]
+async fn a_trusted_proxys_internal_client_address_is_not_one_relay_bucket() {
+    let settings = Settings {
+        trusted_proxy_cidrs: vec!["10.0.0.0/8".parse().unwrap()],
+        ..Settings::for_tests()
+    };
+    let app = pinned_relay(settings);
+    for internal in ["172.18.0.9", "fd00::9"] {
+        for _ in 0..super::RELAY_REQUESTS_PER_WINDOW * 2 {
+            assert_eq!(
+                post_from(&app, "10.0.0.2", Some(internal), "{}".into())
+                    .await
+                    .status(),
+                StatusCode::BAD_REQUEST,
+                "{internal}"
+            );
+        }
+    }
+}
+
+/// A limited caller is answered before its body is read: a body that never arrives does not hold
+/// the refusal back.
+#[tokio::test]
+async fn a_limited_relay_request_is_refused_before_its_body_is_read() {
+    let app = pinned_relay(Settings::for_tests());
+    exhaust_relay_window(&app, "203.0.113.7", None).await;
+    let never = futures::stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/transactions")
+        .header("content-type", "application/json")
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::new(
+            "203.0.113.7".parse().unwrap(),
+            4242,
+        )))
+        .body(Body::from_stream(never))
+        .unwrap();
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+        .await
+        .expect("refused without waiting for the body")
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
 /// An IPv6 client cycling /64s inside one /48 shares the /48's budget: past it a fresh /64 is
 /// refused, and the refusal leaves that /64's own budget untouched; another /48 is still served.
 #[tokio::test]

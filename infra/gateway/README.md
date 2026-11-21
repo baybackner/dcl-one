@@ -35,17 +35,30 @@ process counts its own requests, so N processes allow up to N times that.
 
 Every per-client limit here needs both halves of the trust chain:
 `HTTP_TRUSTED_PROXY_CIDRS` on the API, naming the gateway's network, and
-`GATEWAY_TRUSTED_PROXY_CIDRS` on the gateway, naming the CDN's ranges (for
-Cloudflare, its published IP ranges). Without the gateway's setting the client
-address is a CDN edge address, which is public, so every client behind one edge
-shares that edge's limits. By default the gateway walks `X-Forwarded-For` back
-past those ranges. Behind Cloudflare, set `GATEWAY_CLIENT_IP_HEADER` to
-`CF-Connecting-IP` so the gateway reads only the address Cloudflare writes; the
-header is then trusted from every network in `GATEWAY_TRUSTED_PROXY_CIDRS`, so
-list only Cloudflare's ranges there. An internal address in a trusted proxy's
-`X-Real-IP` is used as the client address as is, so a private load balancer in
-front of the gateway must be listed in `GATEWAY_TRUSTED_PROXY_CIDRS`, or every
-client behind it shares one bucket.
+`GATEWAY_TRUSTED_PROXY_CIDRS` on the gateway, naming every proxy in front of it.
+Without the gateway's setting the client address is the address of the proxy
+that connects to it: a CDN edge address is public, so every client behind one
+edge shares that edge's limits. The supported topologies are:
+
+- Cloudflare connects to the gateway directly: list only Cloudflare's published
+  IP ranges, and set `GATEWAY_CLIENT_IP_HEADER` to `CF-Connecting-IP` so the
+  gateway reads the one address Cloudflare writes. That header is taken as sent
+  from every listed network, so the gateway refuses to start when the list
+  includes a private, CGNAT, ULA, link-local or loopback network. With Cloudflare
+  set Pseudo IPv4 to off or "Add header": "Overwrite headers" puts a derived
+  IPv4 address in `CF-Connecting-IP`, and the IPv6 /64 and /48 grouping no
+  longer applies.
+- A load balancer in front of the gateway, with or without Cloudflare in front
+  of it: keep the default `X-Forwarded-For` and list the load balancer's network
+  and the CDN's ranges. The gateway walks `X-Forwarded-For` back past listed
+  hops and takes the first unlisted one: the address the outermost listed proxy
+  (Cloudflare, or the load balancer without a CDN) appended, never one the
+  client wrote.
+
+A gateway behind an unlisted private load balancer sees that load balancer as
+every client. Its forwarded `X-Real-IP` is then internal, which names no single
+client: the relay limit and the per-network report limit skip it, and the other
+per-client limits share one bucket.
 
 Place reports count against the reporter's wallet and, when its address names
 one client (a trusted proxy's `X-Real-IP` or a public peer), its network. Behind

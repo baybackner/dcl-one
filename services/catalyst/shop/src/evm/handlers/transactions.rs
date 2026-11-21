@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{ConnectInfo, Extension, Path, State};
+use axum::extract::{ConnectInfo, Extension, FromRequest, Path, Request, State};
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
@@ -17,17 +17,19 @@ use crate::evm::upstream::UpstreamForwarder;
 /// `POST /transactions`. An error answered before anything was sent, or after a send attempt
 /// that proves nothing went out, carries `"not_sent": true`: the only evidence a client takes
 /// that it may release the buyer's credit and sign again. Every other failure, and every answer
-/// forwarded from an upstream relay, is answered without it.
+/// forwarded from an upstream relay, is answered without it. The client limit runs before the
+/// body is read, so a limited caller's body is never read.
 pub async fn send_transaction(
     State(state): State<SharedState>,
     peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
-    body: Result<Bytes, BytesRejection>,
+    request: Request,
 ) -> Response {
     let peer = peer.map(|Extension(ConnectInfo(p))| p);
     if let Some(refused) = refuse_over_client_limit(&state, &headers, peer).await {
         return refused;
     }
+    let body = Bytes::from_request(request, &()).await;
     match relay(&state, &headers, body).await {
         Ok(response) => response,
         Err(Failure::NotSent(err)) => not_sent(err).await,
@@ -55,9 +57,10 @@ pub(crate) fn retry_at(now: chrono::DateTime<chrono::Utc>, wait: u64) -> i64 {
 }
 
 /// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address, or
-/// its IPv6 /48, spent its window, before the body is parsed or validated. Only an address naming
-/// one client ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's
-/// own address would put every client in one bucket. The limiters are per process.
+/// its IPv6 /48, spent its window, before the body is read. Only a public address naming one
+/// client ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's own
+/// address, or the internal `X-Real-IP` a trusted gateway forwards for an unlisted load balancer,
+/// would put every client in one bucket. The limiters are per process.
 async fn refuse_over_client_limit(
     state: &SharedState,
     headers: &HeaderMap,
@@ -68,6 +71,12 @@ async fn refuse_over_client_limit(
         peer,
         &state.settings.trusted_proxy_cidrs,
     )?;
+    if ip
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(crate::shared::client_ip::is_internal)
+    {
+        return None;
+    }
     use crate::shared::limits::RateLimitDecision::Allow;
     let key = crate::shared::client_ip::source_key(&ip);
     if state.relay_limiter.check(&key) == Allow {
