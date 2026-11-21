@@ -35,6 +35,8 @@
 //!   given that notification's `signedDate`: it is refused (409) when Apple's
 //!   latest decision is signed after it, and recorded as the latest decision
 //!   otherwise; a purchase never credited becomes held, for `/admin/iap/credits`.
+//!   An unknown transaction (404) or one with no refund to undo (409) is
+//!   refused and records nothing.
 //!   Operator `GET /credits/iap/held` (`/admin/iap/held`) lists the held purchases.
 
 use axum::Json;
@@ -47,7 +49,7 @@ use serde_json::{Value as JsonValue, json};
 use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::admin::{RequireAdmin, normalize_address, paginate};
-use crate::credits::apple::{NOTIFICATION_MAX_FUTURE_SECS, Transaction, VerifyError};
+use crate::credits::apple::{Transaction, VerifyError, signed_ahead};
 use crate::credits::errors::ApiError;
 use crate::credits::iap::{
     CapReason, Channel, CreditOutcome, HoldReason, Iap, Notice, Purchase, RefundOutcome,
@@ -182,7 +184,8 @@ pub async fn webhook(
             }))),
             // Idempotent per transaction: a retry after a failed credit credits it.
             ReinstateOutcome::Uncredited => charge(&state, iap, notice, &t).await,
-            ReinstateOutcome::NotRefunded => {
+            // `Unknown` answers only an operator reversal.
+            ReinstateOutcome::NotRefunded | ReinstateOutcome::Unknown => {
                 Ok(Json(json!({ "ok": true, "action": "not_refunded" })))
             }
             // Signed before the transaction's latest refund or reversal.
@@ -560,7 +563,7 @@ pub struct AdminReversalBody {
 /// Operator reversal of a refund (a `REFUND_REVERSED` too old to deliver),
 /// ordered by Apple's `signedDate` against the transaction's latest decision.
 pub async fn admin_reversal(
-    _admin: RequireAdmin,
+    admin: RequireAdmin,
     State(state): State<SharedState>,
     body: Result<Json<AdminReversalBody>, JsonRejection>,
 ) -> Result<Json<JsonValue>, ApiError> {
@@ -569,16 +572,20 @@ pub async fn admin_reversal(
     validate_id("appleTransactionId", &b.apple_transaction_id)?;
     validate_id("reversalId", &b.reversal_id)?;
     // A future date would make every later Apple decision stale.
-    if b.signed_date > (now() + NOTIFICATION_MAX_FUTURE_SECS) * 1000 {
+    if signed_ahead(b.signed_date, now().saturating_mul(1000)) {
         return Err(ApiError::bad_request(
-            "signedDate is ahead of this node's clock",
+            "signedDate is more than 5 minutes ahead of this node's clock",
         ));
     }
     let uuid = format!("operator:{}", b.reversal_id);
-    let by = Reverser::Operator(Notice {
-        uuid: &uuid,
-        signed_date_ms: b.signed_date,
-    });
+    let actor = admin.audit_actor_description();
+    let by = Reverser::Operator {
+        notice: Notice {
+            uuid: &uuid,
+            signed_date_ms: b.signed_date,
+        },
+        actor: &actor,
+    };
     let ids = json!({ "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id, "reversalId": b.reversal_id });
     match state
         .credits
@@ -599,6 +606,9 @@ pub async fn admin_reversal(
         ReinstateOutcome::NotRefunded => Err(ApiError::conflict(
             "no refund of this transaction to reverse",
         )),
+        ReinstateOutcome::Unknown => {
+            Err(ApiError::not_found("no App Store transaction with this id"))
+        }
         ReinstateOutcome::Superseded => Err(ApiError::conflict(
             "Apple's latest refund decision for this transaction is signed after this reversal",
         )),

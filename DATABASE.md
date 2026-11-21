@@ -1667,16 +1667,18 @@ row, only when `(signed_at, notification_uuid)` (the uuid compared bytewise)
 is not ordered before the recorded pair (`ON CONFLICT ... WHERE`, primary
 key), so a retry of the recorded notification still applies and two
 decisions signed in the same millisecond end alike in either delivery order;
-a reversal writes it even when the purchase is still `paid` or has no row
+Apple's reversal writes it even when the purchase is still `paid` or has no row
 yet. A refund or reversal ordered before the recorded decision applies
 nothing and keeps its uuid record, so a reversal delivered before the refund
 it undoes keeps that refund from charging the wallet, and a reversal of an
 earlier refund never undoes a later one. A revoked transaction (from the
 device or a purchase notification) signed before a recorded reversal applies
 nothing. An operator reversal carries the `signedDate` of the
-`REFUND_REVERSED` it applies (refused when ahead of the node's clock) under
-the uuid `operator:<reversalId>`, and is compared and recorded like Apple's;
-one ordered before the recorded decision answers 409. An operator refund is
+`REFUND_REVERSED` it applies (refused when more than 5 minutes ahead of the
+node's clock) under the uuid `operator:<reversalId>`, and is compared and
+recorded like Apple's; one ordered before the recorded decision answers 409.
+An operator reversal of a transaction with no row (404) or with no refund to
+undo (409) writes nothing, so it never makes a later Apple refund stale. An operator refund is
 not signed by Apple, so it writes nothing; it reads the table and answers
 409 while the latest decision is a reversal, unless the request sets
 `overrideReversal`. One row per transaction that Apple refunded or

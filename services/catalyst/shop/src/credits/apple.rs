@@ -40,6 +40,12 @@ pub const NOTIFICATION_MAX_AGE_SECS: i64 = 7 * 24 * 3600;
 /// How far ahead of this node's clock a notification's `signedDate` may be;
 /// one further ahead is answered for a retry (the node's clock is behind).
 pub const NOTIFICATION_MAX_FUTURE_SECS: i64 = 5 * 60;
+
+/// Whether a `signedDate` is more than [`NOTIFICATION_MAX_FUTURE_SECS`] ahead of `now_ms`.
+pub fn signed_ahead(signed_date_ms: i64, now_ms: i64) -> bool {
+    signed_date_ms > now_ms.saturating_add(NOTIFICATION_MAX_FUTURE_SECS * 1000)
+}
+
 /// How long `credits.iap_notifications` keeps a record: the accepted age plus
 /// a day, so a node whose clock differs from the purging node's still finds it.
 pub const NOTIFICATION_RECORD_SECS: i64 = NOTIFICATION_MAX_AGE_SECS + 24 * 3600;
@@ -218,7 +224,7 @@ impl Verifier {
                 signed_date_ms,
             });
         }
-        if signed_date_ms > now_ms + NOTIFICATION_MAX_FUTURE_SECS * 1000 {
+        if signed_ahead(signed_date_ms, now_ms) {
             return Err(VerifyError::Ahead {
                 notification_uuid,
                 signed_date_ms,
@@ -890,6 +896,15 @@ mod tests {
         assert_eq!(refused(at(old)), (true, old * 1000));
         let ahead = now + NOTIFICATION_MAX_FUTURE_SECS + 1;
         assert_eq!(refused(at(ahead)), (false, ahead * 1000));
+    }
+
+    #[test]
+    fn signed_ahead_allows_the_skew_and_refuses_beyond_it() {
+        let now_ms = 1_700_000_000_000;
+        let skew_ms = NOTIFICATION_MAX_FUTURE_SECS * 1000;
+        assert!(!signed_ahead(now_ms + skew_ms, now_ms));
+        assert!(signed_ahead(now_ms + skew_ms + 1, now_ms));
+        assert!(!signed_ahead(i64::MAX, i64::MAX));
     }
 
     #[test]

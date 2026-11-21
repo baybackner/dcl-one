@@ -1556,10 +1556,13 @@ fn signed_field(signed: &str, field: &str) -> String {
 /// The `notificationUUID` a signed notification carries.
 /// An operator reversal signed now.
 fn operator_reversal(uuid: &str) -> super::iap::Reverser<'_> {
-    super::iap::Reverser::Operator(super::iap::Notice {
-        uuid,
-        signed_date_ms: chrono::Utc::now().timestamp_millis(),
-    })
+    super::iap::Reverser::Operator {
+        notice: super::iap::Notice {
+            uuid,
+            signed_date_ms: chrono::Utc::now().timestamp_millis(),
+        },
+        actor: "token:test",
+    }
 }
 
 fn uuid_of(signed: &str) -> String {
@@ -3085,7 +3088,7 @@ async fn an_operator_reversal_keeps_a_held_purchase_from_an_older_revoked_copy()
 }
 
 #[tokio::test]
-async fn a_replayed_reversal_grant_is_refused_and_rolled_back() {
+async fn a_replayed_reversal_grant_is_an_internal_error_and_rolled_back() {
     let Some(pool) = pool().await else { return };
     let c = chain(ChainSpec::default());
     let app = setup_with_admin(&pool, &c, open_limits());
@@ -3108,7 +3111,7 @@ async fn a_replayed_reversal_grant_is_refused_and_rolled_back() {
     .unwrap();
     let ms = chrono::Utc::now().timestamp_millis();
     let (status, out) = operator_reverse(&app, &id, "v-1", ms).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{out}");
     assert_eq!(
         (
             row(&pool, &id).await.unwrap().0.as_str(),
@@ -3116,6 +3119,106 @@ async fn a_replayed_reversal_grant_is_refused_and_rolled_back() {
         ),
         ("refunded", "0")
     );
+}
+
+/// The refund decisions recorded for `id`.
+async fn decisions(pool: &PgPool, id: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM credits.iap_refund_decisions WHERE transaction_id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn an_operator_reversal_with_no_refund_to_undo_records_nothing() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // An unknown transaction.
+    let unknown = tx_id();
+    let (status, out) = operator_reverse(&app, &unknown, "v-unknown", now_ms).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
+    assert_eq!(decisions(&pool, &unknown).await, 0);
+    assert!(row(&pool, &unknown).await.is_none());
+
+    // A paid purchase: refused, and Apple's earlier-signed refund still charges it back.
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let (status, out) = operator_reverse(&app, &id, "v-paid", now_ms - 1_000).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(decisions(&pool, &id).await, 0);
+    let refund = c.notification_signed_at(
+        "REFUND",
+        Some(bought[0].clone()),
+        Chain::app_data(),
+        now_ms - 3_000,
+    );
+    let (_, out) = notify(&app, refund).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+
+    // A purchase held for a cap, never refunded.
+    let capped = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1,
+            ..open_limits()
+        },
+    );
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&capped, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["held"], true, "{out}");
+    let (status, out) = operator_reverse(&capped, &id, "v-held", now_ms).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(decisions(&pool, &id).await, 0);
+    assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+}
+
+#[tokio::test]
+async fn an_operator_reversal_is_audited_as_the_operator() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    pledge(&pool, &w.address, 400, 0, 300).await;
+    notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert!(blocked(&pool, &w.address).await);
+    let ms = chrono::Utc::now().timestamp_millis();
+    let (status, out) = operator_reverse(&app, &id, "v-1", ms).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert!(!blocked(&pool, &w.address).await);
+    let actors: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT action, actor, detail->>'source' FROM ops.admin_audit \
+         WHERE domain = 'credits' AND target = $1 AND action IN ('grant', 'user.unblock') \
+           AND detail->>'reversalRef' = 'operator:v-1' ORDER BY action",
+    )
+    .bind(&w.address)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let operator = format!("token:{}", super::admin::ADMIN_TOKEN_ENV);
+    assert_eq!(
+        actors,
+        vec![
+            (
+                "grant".to_string(),
+                operator.clone(),
+                "operator".to_string()
+            ),
+            ("user.unblock".to_string(), operator, "operator".to_string())
+        ]
+    );
+    assert_eq!(unblock_audits(&pool, &w.address).await, 0);
 }
 
 #[tokio::test]
