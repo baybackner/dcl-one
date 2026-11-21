@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 32] = [
+const PREPARED_PENDING_STEPS: [&str; 33] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -43,7 +43,8 @@ const PREPARED_PENDING_STEPS: [&str; 32] = [
     "0050_explore_poster_avif",
     "0051_explore_auth_identity_request_id",
     "0052_shop_committee_index",
-    "0053_explore_rating_downgrade_notice",
+    "0053_shop_bid_received_producer",
+    "0054_explore_rating_downgrade_notice",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -1547,7 +1548,7 @@ async fn earlier_event_hook_layouts_upgrade_without_losing_intents() {
     old.drop().await;
 }
 
-/// Step 0053 replaces the places notice-kind CHECK an earlier layout created,
+/// Step 0054 replaces the places notice-kind CHECK an earlier layout created,
 /// so a refused rating downgrade can be queued.
 #[tokio::test]
 async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
@@ -1568,7 +1569,7 @@ async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
                 WHEN 'events' THEN kind IN ('submitted','edited','approved','rejected','deleted','profile_permissions','upcoming')
                 WHEN 'places' THEN kind IN ('disabled','rating_upgraded')
             END);
-        DELETE FROM meta.schema_steps WHERE step = '0053_explore_rating_downgrade_notice';",
+        DELETE FROM meta.schema_steps WHERE step = '0054_explore_rating_downgrade_notice';",
     )
     .execute(pool)
     .await
@@ -1592,7 +1593,7 @@ async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
         result
             .steps
             .iter()
-            .any(|step| step == "0053_explore_rating_downgrade_notice")
+            .any(|step| step == "0054_explore_rating_downgrade_notice")
     );
     insert("rating_downgrade_refused").await.unwrap();
     insert("rating_upgraded").await.unwrap();

@@ -1,4 +1,12 @@
-import { createRef, forwardRef, memo, type ComponentType, type Ref } from 'react'
+import {
+  createRef,
+  forwardRef,
+  memo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type Ref
+} from 'react'
 import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claimProblems, componentExports } from '../src/coverage'
@@ -17,9 +25,15 @@ vi.mock('@dcl/one-ui', async (importOriginal) => {
   )
 })
 
+// Mounted as an element, as ExampleView mounts an example, so its hooks belong to the example.
+function mount(example: { render: () => ReactNode }) {
+  const Render = example.render
+  return render(<Render />)
+}
+
 function mountedBy(entry: Pick<GalleryEntry, 'examples'>): Set<string> {
   instrumentation.mounted.clear()
-  for (const example of entry.examples) render(<>{example.render()}</>).unmount()
+  for (const example of entry.examples) mount(example).unmount()
   return new Set(instrumentation.mounted)
 }
 
@@ -28,17 +42,20 @@ const examples = entries.flatMap((entry) =>
 )
 
 describe('when the gallery renders its examples with deterministic data', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  // Restored after each case, so a failed assertion cannot leave the spy on later ones.
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
 
   it.each(examples)('should render %s without network access or errors', (_, example) => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { container } = render(<>{example.render()}</>)
+    const { container } = mount(example)
     expect(container.childElementCount).toBeGreaterThan(0)
     expect(fetch).not.toHaveBeenCalled()
     expect(errors).not.toHaveBeenCalled()
-    errors.mockRestore()
   })
 
   it.each(foundationPages.map((page) => [page.name, page] as const))(
@@ -48,6 +65,16 @@ describe('when the gallery renders its examples with deterministic data', () => 
       expect(container.textContent).not.toBe('')
     }
   )
+
+  it('should mount an example whose render calls a hook, as ExampleView does', () => {
+    const { container } = mount({
+      render: () => {
+        const [label] = useState('Hooked')
+        return <p>{label}</p>
+      }
+    })
+    expect(container.textContent).toBe('Hooked')
+  })
 
   it('should give every page and example a unique id', () => {
     const ids = examples.map(([id]) => id)

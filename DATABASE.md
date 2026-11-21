@@ -490,7 +490,7 @@ intents, and the object pass recreates the changed due/creator indexes.
 The places channel carries operator disables and rating upgrades, and a
 creator's rating change: a stricter rating, which the row takes
 (`rating_upgraded`), or a laxer one, which it keeps out
-(`rating_downgrade_refused`; step `0053_explore_rating_downgrade_notice` admits
+(`rating_downgrade_refused`; step `0054_explore_rating_downgrade_notice` admits
 the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade
@@ -888,7 +888,8 @@ Peer sync is not a backup of local state: a node taking local writes holds the o
 `shared::notifications` (`services/catalyst/shared/src/notifications.rs`) is the
 one writer of `social.notifications` and its `social.notification_deliveries`
 email row, for every producer: Social's own and Shop's sale, royalty, transfer,
-rental, tip, favorite-discount, credits and goal notices. Each batch is one statement on the
+rental, on-chain bid (`bid_received`, `shop/src/market/bid_notices.rs`), tip,
+favorite-discount, credits and goal notices. Each batch is one statement on the
 producer's executor, so the notice commits with the producer's transaction: an
 upsert by `id` (or by `(address, broadcast_key)` for keyed notices) and, for new
 rows only, a `pending` delivery row, or `skipped` with the reason when the type has
