@@ -2532,6 +2532,30 @@ neither catalogue holds the place and no pending row for it remains. Its context
 `content.deployments` for shared-scene rooms, by primary key or world name.
 Neither table has an FK: queue rows outlive catalogue deletion.
 
+Workload and invariants for removal notices: one immutable recipient set per
+live removal, with a durable `recipient_cursor` advanced after each Social
+acceptance. Explore freezes valid active local admin wallets into the queued event in
+the catalogue removal transaction, using exact World keys or the Genesis base.
+Its plain MVCC read of `social.scene_admins` (`place_id`, `admin_address`,
+`active`) takes no Social row locks and performs no Social writes. This preserves
+recipients if a re-grant overwrites `added_at` before the first maintenance pass.
+Safety cleanup and fallback capture for older events commit before external
+owner/permission lookups. Missing external authority leaves
+`recipients_resolved=false`; a saved owner alone is never a complete set.
+Retries reuse the complete set and original event time. Initial historical
+feed seeding sets `notify=false`, retaining cleanup without sending old notices.
+
+The catalogue legs keep `removal_admin_keys` as exact local evidence. Before
+final scene retirement, Explore snapshots currently active identity keys when
+no backing `worlds.world_scenes` remain. Removed identities from older
+lifetimes are excluded. The removal trigger freezes their union with current
+active keys into `place_removal_pending.admin_keys`. An actual scene insert
+clears only catalogue evidence, with ordered active-identity locks before
+catalogue writes; importing an identity alone cannot clear it. Queue rows
+survive re-adds. The existing world-row lock serializes publication; imports
+lock affected worlds and identities in order and retire only saved bindings
+whose backing scenes are gone. No grant history is inferred from parcel overlap.
+
 ## Scene admin grants
 
 `social.scene_admins` (`schemas/40_social.sql`) holds the explicit admins of a
@@ -2556,7 +2580,8 @@ Invariants:
 - An owner change writes no row. Ownership is read when a request arrives.
 - The cleanup of a removed place (above) revokes the grants made before the
   removal (`added_at`; a cleanup that runs late keeps the later ones): those
-  on the places of the active scenes of a world (`explore.world_scene_place`
+  on the places of the active scenes of a world and its queued exact retired
+  keys (`explore.world_scene_place`
   by `world_name` on `world_scene_place_deployment_idx`; the id of a world
   place is the world name or an imported id, never the key of a grant), or
   those on the base parcel of a Genesis place when no enabled `explore.place`
@@ -2640,6 +2665,27 @@ Not announced: a LAND owner or operator change, a NAME transfer until the
 owner reconcile writes `worlds.worlds.owner`, a ban. The key job and the check
 on each use cover them. A scene admin removal checks the key in its own
 request.
+
+Streaming notification fanout uses the same owner and permission authorities
+as access decisions: LAND owner/operator/update operator/update managers and
+approved-for-all wallets, or World owner and footprint-scoped grantees, plus
+scene admins. Wallets are normalized and deduplicated. Invalid historical
+admin strings are excluded from delivery without preventing safety cleanup.
+Each credential stores its bound `admin_place_key` at issuance/reset/Cast;
+the cleanup context preserves it for later resolution. `scene_stream_cleanup`
+keeps the complete `recipients`, `recipients_resolved` bit and guarded
+`recipient_cursor`. Each Social acceptance advances one cursor under the
+current claim token, so a bounded pass resumes after its accepted prefix.
+`notification_started` commits before the first acceptance; later key regeneration
+cannot suppress an unfinished expiry suffix, including an uncheckpointed acceptance.
+Social deduplicates by recipient, kind and event identity. Reset-to-revoke
+conversion retains the complete recipient set and starts the new kind at zero.
+
+Existing credentials without a saved admin key can recover only a current
+applicable identity. Already retired pre-cutover scenes and overwritten
+pre-cutover grant history have no exact recovery evidence. Existing scalar
+cleanup recipients are preserved while remaining authority classes resolve;
+an existing scalar value alone never marks the snapshot complete.
 
 ## Stream state reconciliation
 
@@ -2836,3 +2882,12 @@ in its own memory with the same rules, like the places reads fall back to the
 API; that mode serves one process only, so a deployment with several Sites
 replicas sets the database URL. The bootstrap defines the table; an existing
 database gains it from the object pass, so no step exists.
+
+Before exposing writers, a Social-writing serve process scans active native
+credentials with missing admin keys in bounded UUID batches, decodes their
+canonical rooms with the existing codec, and saves exact live world identity
+bindings under world/identity locks. Read-only Social replicas skip this write.
+The upgrade requires stopping old writers and finishing offline imports before
+the coordinated startup, so identities cannot retire before this backfill.
+Noncanonical imported rooms and scenes already retired before the upgrade
+remain outside exact recovery; pending authority stays retryable where available.

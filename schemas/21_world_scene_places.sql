@@ -47,3 +47,46 @@ FROM (
     ) END AS entity_id
     FROM worlds.world_scene_identity i
 ) existing;
+
+-- Preserve exact current admin namespaces before the final scene retirement.
+-- Worlds serializes scene changes under its world row lock. Catalogue rows
+-- retain their fetch time; this is local evidence, not a mirror refresh.
+CREATE FUNCTION explore.capture_world_removal_admin_keys() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE keys text[];
+BEGIN
+    IF OLD.active AND NOT NEW.active AND NOT EXISTS (
+        SELECT 1 FROM worlds.world_scenes WHERE world_name=OLD.world_name
+    ) THEN
+        SELECT array_agg(identity::text ORDER BY identity) INTO keys
+        FROM explore.world_scene_place WHERE world_name=OLD.world_name AND active;
+        UPDATE explore.place SET removal_admin_keys=ARRAY(
+            SELECT DISTINCT unnest(removal_admin_keys || keys) ORDER BY 1
+        ) WHERE world AND lower(world_name)=OLD.world_name;
+        UPDATE explore.place_world_local SET removal_admin_keys=ARRAY(
+            SELECT DISTINCT unnest(removal_admin_keys || keys) ORDER BY 1
+        ) WHERE world AND lower(world_name)=OLD.world_name;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER world_removal_admin_keys BEFORE UPDATE OF active ON explore.world_scene_place
+FOR EACH ROW EXECUTE FUNCTION explore.capture_world_removal_admin_keys();
+
+-- An imported identity can precede its backing scene. Only a real scene
+-- insertion starts a new live catalogue lifetime; queued events stay frozen.
+CREATE FUNCTION explore.clear_world_removal_admin_keys() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    -- Keep the identity-before-catalogue lock order used by publication and ranking.
+    PERFORM identity FROM explore.world_scene_place
+    WHERE world_name=NEW.world_name AND active ORDER BY identity FOR UPDATE;
+    UPDATE explore.place SET removal_admin_keys='{}'
+    WHERE world AND lower(world_name)=NEW.world_name AND cardinality(removal_admin_keys)>0;
+    UPDATE explore.place_world_local SET removal_admin_keys='{}'
+    WHERE world AND lower(world_name)=NEW.world_name AND cardinality(removal_admin_keys)>0;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER world_scene_clear_removal_admin_keys AFTER INSERT ON worlds.world_scenes
+FOR EACH ROW EXECUTE FUNCTION explore.clear_world_removal_admin_keys();

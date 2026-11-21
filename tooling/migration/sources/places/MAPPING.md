@@ -80,7 +80,9 @@ which then count twice with the imported facts. Rows upstream does not list
 
 - `explore.place_removal_pending` / `place_removal_state`: the catalogue
   triggers fill them. A moderation-disabled place enqueues one removal, as
-  the schema's own seed does for an existing disabled catalogue.
+  the schema's own seed does for an existing disabled catalogue. Seeded
+  historical rows suppress notifications while retaining safety cleanup and
+  lifecycle state; later real removals enable notifications.
 - `explore.place_indexed` (view), `mirror_state`, `signed_actions`,
   `seen_nonces`.
 
@@ -90,3 +92,7 @@ The `place` load deletes only overlays it wrote whose upstream decision is
 gone. Rows that disappear upstream are not detected. That includes
 unfavorites, a world losing its last scene, and a place becoming
 overwritten. Run the final pass with upstream writes stopped.
+
+The `place` load initializes `removal_admin_keys` empty for new rows and
+preserves existing local evidence on re-import. Identity import alone never
+clears that evidence; a backing world scene insertion does.

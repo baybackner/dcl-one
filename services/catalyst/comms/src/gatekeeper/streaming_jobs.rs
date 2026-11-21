@@ -187,6 +187,8 @@ pub(super) struct Prepared {
     version: i64,
     event: Option<StreamingNotification>,
     context: Option<serde_json::Value>,
+    recipients: Vec<Address>,
+    recipients_resolved: bool,
 }
 
 impl Prepared {
@@ -203,6 +205,7 @@ impl Prepared {
             self.version,
             self.event.as_ref(),
             self.context.as_ref(),
+            Some((&self.recipients, self.recipients_resolved)),
         )
         .await
     }
@@ -214,47 +217,70 @@ pub(super) async fn prepare(
     id: Uuid,
     command: CleanupCommand,
 ) -> Result<Option<Prepared>, ApiError> {
-    let snapshot: Option<(String,i64)> = sqlx::query_as("SELECT place_id,streaming_state_version FROM social.scene_stream_access WHERE id=$1 AND active")
+    let snapshot: Option<(String,i64,Option<String>,Option<String>)> = sqlx::query_as("SELECT place_id,streaming_state_version,admin_place_key,room_id FROM social.scene_stream_access WHERE id=$1 AND active")
         .bind(id).fetch_optional(&state.pool).await?;
-    let Some((place_id, version)) = snapshot else {
+    let Some((place_id, version, mut admin_place_key, room)) = snapshot else {
         return Ok(None);
     };
+    if admin_place_key.is_none()
+        && let Some(room) = room
+    {
+        admin_place_key = super::recover_admin_place_key(&state.pool, id, &room).await?;
+    }
     let context = RemovedPlaces::new(state.pool.clone())
         .place(&place_id)
         .await?;
+    let at = chrono::Utc::now().naive_utc();
+    let mut recipients = Vec::new();
+    let mut recipients_resolved = false;
     let event = if let (Some(kind), Some(context)) = (command.notification(), context.as_ref()) {
-        let key = format!("{}-{id}", kind.as_str());
+        recipients = super::notifications::scene_admins(
+            &state.pool,
+            context,
+            at,
+            &admin_place_key.iter().cloned().collect::<Vec<_>>(),
+        )
+        .await?;
         match tokio::time::timeout(
             Duration::from_secs(5),
-            super::notifications::prepare_streaming_for_context(
-                state,
-                context,
-                &key,
-                kind,
-                chrono::Utc::now().naive_utc(),
-            ),
+            super::notifications::recipients(state, context, &recipients),
         )
         .await
         {
-            Ok(Ok(event)) => Some(event),
+            Ok(Ok((owner, resolved))) => {
+                recipients = resolved;
+                recipients_resolved = true;
+                Some(super::notifications::notification(
+                    context,
+                    owner,
+                    &format!("{}-{id}", kind.as_str()),
+                    kind,
+                    at,
+                ))
+            }
             failure => {
-                tracing::warn!(access_id=%id,error=?failure,"stream notification owner pending; cleanup will proceed");
+                tracing::warn!(access_id=%id,error=?failure,"stream notification authority pending; cleanup will proceed");
                 None
             }
         }
     } else {
         None
     };
-    let context = context
+    let mut context = context
         .map(serde_json::to_value)
         .transpose()
         .map_err(|_| ApiError::internal("stream context serialization failed"))?;
+    if let Some(context) = context.as_mut() {
+        context["admin_place_key"] = serde_json::json!(admin_place_key);
+    }
     Ok(Some(Prepared {
         id,
         command,
         version,
         event,
         context,
+        recipients,
+        recipients_resolved,
     }))
 }
 
@@ -275,7 +301,9 @@ pub(super) async fn enqueue_prepared<'e, E: sqlx::PgExecutor<'e>>(
     version: i64,
     event: Option<&StreamingNotification>,
     context: Option<&serde_json::Value>,
+    snapshot: Option<(&[Address], bool)>,
 ) -> Result<bool, sqlx::Error> {
+    let (recipients, recipients_resolved) = snapshot.unwrap_or((&[], false));
     let kind = command.notification().map(|kind| kind.as_str());
     let force = command.permits_running();
     // The predicate rechecks expiry and the webhook version after the snapshot lookup.
@@ -285,11 +313,12 @@ pub(super) async fn enqueue_prepared<'e, E: sqlx::PgExecutor<'e>>(
          AND ($2::text IS DISTINCT FROM 'streaming_key_expired' OR (COALESCE(expiration_time,created_at+interval '4 days')<=timezone('UTC',now()))) \
          AND ($2::text IS DISTINCT FROM 'streaming_time_exceeded' OR (streaming AND streaming_start_time<=timezone('UTC',now())-interval '4 hours')) \
          RETURNING id,place_id,ingress_id) \
-         INSERT INTO social.scene_stream_cleanup(access_id,place_id,ingress_id,notification_kind,occurred_at,due_at,recipient,metadata,source_context) \
-         SELECT id,place_id,ingress_id,$2,COALESCE($5,timezone('UTC',now())),timezone('UTC',now()),$6,$7,$8 FROM removed \
+         INSERT INTO social.scene_stream_cleanup(access_id,place_id,ingress_id,notification_kind,occurred_at,due_at,recipient,metadata,source_context,recipients,recipients_resolved) \
+         SELECT id,place_id,ingress_id,$2,COALESCE($5,timezone('UTC',now())),timezone('UTC',now()),$6,$7,$8,$9,$10 FROM removed \
          ON CONFLICT(access_id) DO NOTHING RETURNING access_id")
         .bind(id).bind(kind).bind(force).bind(version).bind(event.map(|e| e.occurred_at))
-        .bind(event.map(|e| &e.recipient)).bind(event.map(|e| &e.metadata)).bind(context).fetch_optional(executor).await?;
+        .bind(event.map(|e| &e.recipient)).bind(event.map(|e| &e.metadata)).bind(context)
+        .bind(recipients).bind(recipients_resolved).fetch_optional(executor).await?;
     Ok(changed.is_some())
 }
 
@@ -333,6 +362,10 @@ struct Cleanup {
     recipient: Option<Address>,
     metadata: Option<serde_json::Value>,
     source_context: Option<serde_json::Value>,
+    recipients: Vec<Address>,
+    recipients_resolved: bool,
+    recipient_cursor: i32,
+    notification_started: bool,
 }
 
 pub(super) async fn drain_cleanup(state: &CommsState) -> Result<(), ApiError> {
@@ -351,7 +384,7 @@ async fn cleanup(state: &CommsState, target: Option<Uuid>) -> Result<(), ApiErro
             "UPDATE social.scene_stream_cleanup SET claim_token=$1,claim_until=timezone('UTC',now())+interval '5 minutes' \
              WHERE access_id=(SELECT access_id FROM social.scene_stream_cleanup WHERE due_at<=timezone('UTC',now()) \
              AND (claim_until IS NULL OR claim_until<=timezone('UTC',now())) AND ($2::uuid IS NULL OR access_id=$2) ORDER BY due_at,access_id LIMIT 1 FOR UPDATE SKIP LOCKED) \
-             RETURNING access_id,place_id,ingress_id,notification_kind,occurred_at,ingress_deleted,recipient,metadata,source_context")
+             RETURNING access_id,place_id,ingress_id,notification_kind,occurred_at,ingress_deleted,recipient,metadata,source_context,recipients,recipients_resolved,recipient_cursor,notification_started")
             .bind(token).bind(target).fetch_optional(&state.pool).await?;
         let Some(row) = row else {
             if let Some(id) = target {
@@ -467,7 +500,8 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
         .bind(&row.place_id)
         .fetch_one(&state.pool)
         .await?;
-        if kind == StreamingNotificationKind::KeyExpired && replacement {
+        if kind == StreamingNotificationKind::KeyExpired && replacement && !row.notification_started
+        {
             return Ok(());
         }
         if kind == StreamingNotificationKind::KeyReset && !replacement {
@@ -476,7 +510,7 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
             // replacement revoked in turn): the reset is delivered as the revocation it is.
             let now = chrono::Utc::now().naive_utc();
             if now - row.occurred_at > RESET_REPLACEMENT_GRACE {
-                sqlx::query("UPDATE social.scene_stream_cleanup SET notification_kind='streaming_key_revoke', recipient=NULL, metadata=NULL \
+                sqlx::query("UPDATE social.scene_stream_cleanup SET notification_kind='streaming_key_revoke', metadata=NULL, recipient_cursor=0, notification_started=false \
                     WHERE access_id=$1 AND claim_token=$2 AND notification_kind='streaming_key_reset'")
                     .bind(row.access_id).bind(token).execute(&state.pool).await?;
                 return Err(ApiError::internal(
@@ -489,59 +523,111 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
         }
     }
     let key = format!("{kind_str}-{}", row.access_id);
-    let event = if let (Some(recipient), Some(metadata)) = (&row.recipient, &row.metadata) {
-        StreamingNotification {
-            event_key: key,
-            recipient: recipient.clone(),
-            kind,
-            metadata: metadata.clone(),
-            occurred_at: row.occurred_at,
-        }
-    } else {
-        let resolved = if let Some(context) = row.source_context.as_ref() {
-            let context: PlaceContext = serde_json::from_value(context.clone())
-                .map_err(|_| ApiError::internal("stream context snapshot invalid"))?;
-            tokio::time::timeout(
-                Duration::from_secs(5),
-                super::notifications::prepare_streaming_for_context(
-                    state,
-                    &context,
-                    &key,
-                    kind,
-                    row.occurred_at,
-                ),
-            )
-            .await
-            .map_err(|_| ApiError::internal("stream notification owner resolution timed out"))??
+    let mut recipients = row.recipients.clone();
+    let mut metadata = row.metadata.clone();
+    if !row.recipients_resolved || metadata.is_none() {
+        let context = if let Some(context) = &row.source_context {
+            serde_json::from_value::<PlaceContext>(context.clone())
+                .map_err(|_| ApiError::internal("stream context snapshot invalid"))?
         } else {
-            // Historic row with no catalogue context: retain explicit durable failure
-            // after ingress cleanup. Never fabricate a notification recipient.
-            tokio::time::timeout(
-                Duration::from_secs(5),
-                super::notifications::prepare_streaming_for_place(
-                    state,
-                    &row.place_id,
-                    &key,
-                    kind,
+            RemovedPlaces::new(state.pool.clone())
+                .place(&row.place_id)
+                .await?
+                .ok_or_else(|| ApiError::http(503, "stream notification context unavailable"))?
+        };
+        if !row.recipients_resolved {
+            // Expand scalar-era intents; a saved owner is not a complete set.
+            if let Some(recipient) = &row.recipient {
+                recipients.push(recipient.clone());
+            }
+            recipients.extend(
+                super::notifications::scene_admins(
+                    &state.pool,
+                    &context,
                     row.occurred_at,
-                ),
+                    &row.source_context
+                        .as_ref()
+                        .and_then(|value| value.get("admin_place_key"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                )
+                .await?,
+            );
+            let (_, resolved) = tokio::time::timeout(
+                Duration::from_secs(5),
+                super::notifications::recipients(state, &context, &recipients),
             )
             .await
-            .map_err(|_| ApiError::internal("historic stream owner resolution timed out"))??
+            .map_err(|_| ApiError::internal("stream notification authority timed out"))??;
+            recipients = resolved;
+        }
+        let template = if let Some(metadata) = metadata {
+            metadata
+        } else {
+            super::notifications::notification(
+                &context,
+                recipients.first().cloned().ok_or_else(|| {
+                    ApiError::internal("stream notification recipients unavailable")
+                })?,
+                &key,
+                kind,
+                row.occurred_at,
+            )
+            .metadata
         };
-        let updated=sqlx::query("UPDATE social.scene_stream_cleanup SET recipient=$3,metadata=$4 WHERE access_id=$1 AND claim_token=$2")
-            .bind(row.access_id).bind(token).bind(&resolved.recipient).bind(&resolved.metadata).execute(&state.pool).await?;
-        if updated.rows_affected() == 0 {
+        let context = serde_json::to_value(context)
+            .map_err(|_| ApiError::internal("stream context serialization failed"))?;
+        let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET recipients=$3,recipients_resolved=true,metadata=$4,source_context=$5 WHERE access_id=$1 AND claim_token=$2 AND recipient_cursor=$6")
+            .bind(row.access_id).bind(token).bind(&recipients).bind(&template).bind(&context).bind(row.recipient_cursor)
+            .execute(&state.pool).await?;
+        if changed.rows_affected() == 0 {
             return Err(ApiError::internal("stream cleanup lease lost"));
         }
-        resolved
-    };
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        state.social.notify_streaming_notification(&event),
-    )
-    .await
-    .map_err(|_| ApiError::internal("stream notification delivery timed out"))??;
+        metadata = Some(template);
+    }
+    let metadata =
+        metadata.ok_or_else(|| ApiError::internal("stream notification metadata unavailable"))?;
+    let cursor = usize::try_from(row.recipient_cursor)
+        .map_err(|_| ApiError::internal("invalid stream notification cursor"))?;
+    if cursor > recipients.len() {
+        return Err(ApiError::internal("invalid stream notification cursor"));
+    }
+    // Commit the delivery decision before the first possible acceptance. A
+    // replacement created after acceptance cannot suppress an unfinished suffix,
+    // even if a crash prevented the first cursor checkpoint.
+    if !row.notification_started {
+        let changed=sqlx::query("UPDATE social.scene_stream_cleanup SET notification_started=true WHERE access_id=$1 AND claim_token=$2 AND recipient_cursor=$3")
+            .bind(row.access_id).bind(token).bind(row.recipient_cursor).execute(&state.pool).await?;
+        if changed.rows_affected() == 0 {
+            return Err(ApiError::internal("stream cleanup lease lost"));
+        }
+    }
+    for (index, recipient) in recipients.iter().enumerate().skip(cursor) {
+        let mut metadata = metadata.clone();
+        metadata["address"] = serde_json::json!(recipient.as_str());
+        let event = StreamingNotification {
+            event_key: key.clone(),
+            recipient: recipient.clone(),
+            kind,
+            metadata,
+            occurred_at: row.occurred_at,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            state.social.notify_streaming_notification(&event),
+        )
+        .await
+        .map_err(|_| ApiError::internal("stream notification delivery timed out"))??;
+        // A crash between acceptance and this checkpoint safely replays one
+        // event/recipient identity; a successful prefix never starves its suffix.
+        let changed=sqlx::query("UPDATE social.scene_stream_cleanup SET recipient_cursor=$4 WHERE access_id=$1 AND claim_token=$2 AND recipient_cursor=$3 AND recipients_resolved")
+            .bind(row.access_id).bind(token).bind(index as i32).bind(index as i32+1).execute(&state.pool).await?;
+        if changed.rows_affected() == 0 {
+            return Err(ApiError::internal("stream cleanup lease lost"));
+        }
+    }
     Ok(())
 }
 
@@ -635,6 +721,511 @@ async fn clear_stale(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wallet(n: u8) -> Address {
+        Address::parse(&format!("0x{n:040x}")).unwrap()
+    }
+
+    async fn fanout_fixture(
+        world: bool,
+    ) -> Option<(
+        CommsState,
+        Arc<crate::interfaces::test_support::StubDirectory>,
+        String,
+    )> {
+        use crate::interfaces::test_support::{StubDirectory, StubPolicy, StubScenes};
+        let pool = crate::db::scratch::isolated_pool(4).await?;
+        let place = format!("stream-fanout-{}", Uuid::new_v4());
+        let name = format!("{place}.dcl.eth");
+        sqlx::query("INSERT INTO explore.place (id,base_position,raw) VALUES ($1,'10,20',$2)")
+            .bind(&place).bind(serde_json::json!({"world":world,"world_name":name,"owner":wallet(1).as_str(),"positions":["10,20"]}))
+            .execute(&pool).await.unwrap();
+        let admin_key = if world {
+            let identity = Uuid::new_v4();
+            sqlx::query("INSERT INTO explore.world_scene_place (world_name,identity,entity_id,parcels) VALUES ($1,$2,'fanout-scene','{\"10,20\"}')")
+                .bind(&name).bind(identity).execute(&pool).await.unwrap();
+            let unrelated = Uuid::new_v4();
+            sqlx::query("INSERT INTO explore.world_scene_place (world_name,identity,entity_id,parcels) VALUES ($1,$2,'unrelated-scene','{\"30,40\"}')")
+                .bind(&name).bind(unrelated).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO social.scene_admins (place_id,admin_address,added_by) VALUES ($1,$2,$2)")
+                .bind(unrelated.to_string()).bind(wallet(10)).execute(&pool).await.unwrap();
+            identity.to_string()
+        } else {
+            "10,20".to_string()
+        };
+        for (key, admin, active) in [
+            (admin_key.as_str(), wallet(2), true),
+            (admin_key.as_str(), wallet(3), true),
+            (admin_key.as_str(), wallet(7), false),
+            (place.as_str(), wallet(8), true),
+            ("unrelated-scene", wallet(9), true),
+        ] {
+            sqlx::query("INSERT INTO social.scene_admins (place_id,admin_address,added_by,active,removed_at) VALUES ($1,$2,$2,$3,CASE WHEN $3 THEN NULL ELSE timezone('UTC',now()) END)")
+                .bind(key).bind(admin).bind(active).execute(&pool).await.unwrap();
+        }
+        let policy = if world {
+            StubPolicy {
+                world_owner: Ok(Some(wallet(1))),
+                grantees: Ok([wallet(3), wallet(4)].into_iter().collect()),
+                expected_grantee_parcels: Some(
+                    crate::world_identity::ParcelSet::parse(&["10,20"]).unwrap(),
+                ),
+                ..Default::default()
+            }
+        } else {
+            StubPolicy {
+                land: Ok(Some(Arc::new(Some(crate::access::LandOperators {
+                    owner: wallet(1).to_string(),
+                    operator: Some(wallet(3).to_string()),
+                    update_operator: Some(wallet(4).to_string()),
+                    update_managers: vec![wallet(5).to_string(), wallet(3).to_string()],
+                    approved_for_all: vec![wallet(6).to_string()],
+                })))),
+                ..Default::default()
+            }
+        };
+        let directory = Arc::new(StubDirectory::default());
+        let state = CommsState::new(
+            pool,
+            crate::http::Outbound::for_tests(),
+            crate::gatekeeper::Settings::for_tests(),
+            None,
+            None,
+            Arc::new(policy),
+            Arc::new(StubScenes::default()),
+            Arc::new(crate::presence::Presence::new()),
+            directory.clone(),
+        );
+        Some((state, directory, place))
+    }
+
+    async fn fanout_access(state: &CommsState, place: &str, command: CleanupCommand) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access (id,place_id,streaming_url,streaming_key,generated_by,streaming,streaming_start_time,expiration_time) VALUES ($1,$2,'rtmp://example.invalid/live','test-key','test',$3,timezone('UTC',now())-interval '5 hours',timezone('UTC',now())-interval '1 second')")
+            .bind(id).bind(place).bind(command == CleanupCommand::DurationExpiry)
+            .execute(&state.pool).await.unwrap();
+        assert!(enqueue(state, id, command).await.unwrap());
+        if command == CleanupCommand::Reset {
+            sqlx::query("INSERT INTO social.scene_stream_access (place_id,streaming_url,streaming_key,generated_by) VALUES ($1,'rtmp://example.invalid/live','replacement','test')")
+                .bind(place).execute(&state.pool).await.unwrap();
+        }
+        id
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_native_upgrade_backfills_before_retirement_with_sibling() {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let admin_key: String = sqlx::query_scalar(
+            "SELECT identity::text FROM explore.world_scene_place WHERE entity_id='fanout-scene'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        let name = format!("{place}.dcl.eth");
+        sqlx::query("INSERT INTO worlds.worlds(name) VALUES ($1)")
+            .bind(&name)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        for entity in ["fanout-scene", "unrelated-scene"] {
+            sqlx::query("INSERT INTO worlds.world_scenes(world_name,entity_id,deployment_auth_chain,entity,deployer,parcels,size) VALUES ($1,$2,'[]','{}','owner',ARRAY['10,20'],0)")
+                .bind(&name).bind(entity).execute(&state.pool).await.unwrap();
+        }
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,streaming_url,streaming_key,generated_by,room_id) VALUES ($1,$2,'rtmp://example.invalid/live','test','test',$3)")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        super::super::backfill_admin_place_keys(&state.pool)
+            .await
+            .unwrap();
+        let saved: Option<String> = sqlx::query_scalar(
+            "SELECT admin_place_key FROM social.scene_stream_access WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(saved.as_deref(), Some(admin_key.as_str()));
+        sqlx::query(
+            "DELETE FROM worlds.world_scenes WHERE world_name=$1 AND entity_id='fanout-scene'",
+        )
+        .bind(&name)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE identity::text=$1").bind(&admin_key).execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO social.scene_admins(place_id,admin_address,added_by) VALUES ($1,'invalid-historical-admin','operator')")
+            .bind(&admin_key).execute(&state.pool).await.unwrap();
+        assert!(enqueue(&state, id, CleanupCommand::Revoke).await.unwrap());
+        // A real room keeps independent LiveKit eviction pending in this
+        // database-only fixture; notification delivery must still complete.
+        assert!(
+            cleanup_access(&state, id)
+                .await
+                .unwrap_err()
+                .message
+                .contains("cast eviction")
+        );
+        let notices = directory.streaming_notifications.lock().unwrap();
+        assert_eq!(
+            notices
+                .iter()
+                .map(|notice| notice.recipient.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            (1..=4).map(wallet).collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_every_key_notice_reaches_all_genesis_managers() {
+        all_key_notice_recipients(false).await;
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_every_key_notice_reaches_world_managers() {
+        all_key_notice_recipients(true).await;
+    }
+
+    async fn all_key_notice_recipients(world: bool) {
+        let Some((state, directory, place)) = fanout_fixture(world).await else {
+            return;
+        };
+        let expected: std::collections::BTreeSet<_> =
+            (1..=if world { 4 } else { 6 }).map(wallet).collect();
+        for command in [
+            CleanupCommand::Reset,
+            CleanupCommand::Revoke,
+            CleanupCommand::KeyExpiry,
+            CleanupCommand::DurationExpiry,
+        ] {
+            let id = fanout_access(&state, &place, command).await;
+            cleanup_access(&state, id).await.unwrap();
+            {
+                let notices = directory.streaming_notifications.lock().unwrap();
+                let actual: std::collections::BTreeSet<_> =
+                    notices.iter().map(|n| n.recipient.clone()).collect();
+                assert_eq!(
+                    actual, expected,
+                    "{command:?}: every affected manager must receive the notice"
+                );
+                assert_eq!(
+                    notices.len(),
+                    expected.len(),
+                    "overlapping manager roles must be deduplicated"
+                );
+                for notice in notices.iter() {
+                    assert_eq!(notice.kind, command.notification().unwrap());
+                    assert_eq!(notice.metadata["address"], notice.recipient.as_str());
+                }
+            }
+            directory.streaming_notifications.lock().unwrap().clear();
+            sqlx::query("DELETE FROM social.scene_stream_access WHERE place_id=$1")
+                .bind(&place)
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_partial_delivery_keeps_original_set() {
+        let Some((mut state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        let id = fanout_access(&state, &place, CleanupCommand::Revoke).await;
+        *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(2));
+        assert!(
+            cleanup_access(&state, id).await.is_err(),
+            "the second recipient must be attempted"
+        );
+        assert_eq!(directory.streaming_notifications.lock().unwrap().len(), 1);
+        sqlx::query("UPDATE social.scene_admins SET active=false,removed_at=timezone('UTC',now()) WHERE place_id='10,20'")
+            .execute(&state.pool).await.unwrap();
+        state.policy = Arc::new(crate::interfaces::test_support::StubPolicy::default());
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        cleanup_access(&state, id).await.unwrap();
+        {
+            let notices = directory.streaming_notifications.lock().unwrap();
+            assert_eq!(
+                notices.len(),
+                6,
+                "a retry must retain admins and external manager addresses from preparation"
+            );
+            assert_eq!(
+                notices
+                    .iter()
+                    .map(|n| n.recipient.clone())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (1..=6).map(wallet).collect()
+            );
+        }
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM social.scene_stream_cleanup WHERE access_id=$1)",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert!(
+            !pending,
+            "the intent is acknowledged only after the complete fanout"
+        );
+        assert_eq!(
+            *directory.streaming_attempts.lock().unwrap(),
+            [1, 2, 2, 3, 4, 5, 6].map(wallet),
+            "a successful prefix is checkpointed, rather than replayed on every pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_partial_expiry_completes_after_key_regeneration() {
+        let Some((state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        let id = fanout_access(&state, &place, CleanupCommand::KeyExpiry).await;
+        *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(2));
+        assert!(cleanup_access(&state, id).await.is_err());
+        sqlx::query("INSERT INTO social.scene_stream_access(place_id,streaming_url,streaming_key,generated_by) VALUES ($1,'rtmp://example.invalid/live','replacement','test')")
+            .bind(&place).execute(&state.pool).await.unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1").bind(id).execute(&state.pool).await.unwrap();
+        cleanup_access(&state, id).await.unwrap();
+        let notices = directory.streaming_notifications.lock().unwrap();
+        assert_eq!(notices.len(), 6);
+        assert!(
+            notices
+                .iter()
+                .all(|notice| notice.kind == StreamingNotificationKind::KeyExpired)
+        );
+        assert_eq!(
+            notices
+                .iter()
+                .map(|notice| notice.recipient.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            (1..=6).map(wallet).collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_accepted_expiry_replays_after_lost_checkpoint_and_regeneration() {
+        let Some((state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        let id = fanout_access(&state, &place, CleanupCommand::KeyExpiry).await;
+        *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(2));
+        assert!(cleanup_access(&state, id).await.is_err());
+        sqlx::query("UPDATE social.scene_stream_cleanup SET recipient_cursor=0 WHERE access_id=$1 AND notification_started").bind(id).execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO social.scene_stream_access(place_id,streaming_url,streaming_key,generated_by) VALUES ($1,'rtmp://example.invalid/live','replacement','test')")
+            .bind(&place).execute(&state.pool).await.unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1").bind(id).execute(&state.pool).await.unwrap();
+        cleanup_access(&state, id).await.unwrap();
+        let notices = directory.streaming_notifications.lock().unwrap();
+        assert_eq!(notices.len(), 6);
+        assert!(
+            notices
+                .iter()
+                .all(|notice| notice.kind == StreamingNotificationKind::KeyExpired)
+        );
+        assert_eq!(
+            notices
+                .iter()
+                .map(|notice| notice.recipient.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            (1..=6).map(wallet).collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_resumes_after_the_production_sixty_second_budget() {
+        use std::sync::atomic::Ordering;
+        let Some((mut state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        state.policy = Arc::new(crate::interfaces::test_support::StubPolicy {
+            land: Ok(Some(Arc::new(Some(crate::access::LandOperators {
+                owner: wallet(1).to_string(),
+                operator: None,
+                update_operator: None,
+                update_managers: (2..=14).map(|n| wallet(n).to_string()).collect(),
+                approved_for_all: vec![],
+            })))),
+            ..Default::default()
+        });
+        let id = fanout_access(&state, &place, CleanupCommand::Revoke).await;
+        directory.streaming_delay_ms.store(4_900, Ordering::SeqCst);
+        let state = Arc::new(state);
+        // Keep the clock from auto-advancing while real PostgreSQL I/O finishes.
+        // Each explicit advance models one successful slow Social write.
+        let awake = tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        tokio::time::pause();
+        let work_state = state.clone();
+        let pass = tokio::spawn(async move {
+            run_budgeted(
+                &tokio_util::sync::CancellationToken::new(),
+                cleanup_access(&work_state, id),
+            )
+            .await
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        for index in 0..12 {
+            while directory.streaming_attempts.lock().unwrap().len() <= index {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for the next notification attempt"
+                );
+                tokio::task::yield_now().await;
+            }
+            tokio::time::advance(Duration::from_millis(4_901)).await;
+            loop {
+                let cursor: i32 = sqlx::query_scalar(
+                    "SELECT recipient_cursor FROM social.scene_stream_cleanup WHERE access_id=$1",
+                )
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+                if cursor == index as i32 + 1 {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for durable delivery progress"
+                );
+                tokio::task::yield_now().await;
+            }
+        }
+        while directory.streaming_attempts.lock().unwrap().len() < 13 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for interrupted notification"
+            );
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        assert!(
+            pass.await.unwrap().is_err(),
+            "the production 60-second budget must cancel the unfinished suffix"
+        );
+        tokio::time::resume();
+        awake.abort();
+        let cursor: i32 = sqlx::query_scalar(
+            "SELECT recipient_cursor FROM social.scene_stream_cleanup WHERE access_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(cursor, 12);
+        directory.streaming_delay_ms.store(0, Ordering::SeqCst);
+        // A restarted worker resumes after the canceled worker's lease expires.
+        sqlx::query("UPDATE social.scene_stream_cleanup SET claim_until=timezone('UTC',now())-interval '1 second' WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        cleanup_access(&state, id).await.unwrap();
+        assert_eq!(directory.streaming_notifications.lock().unwrap().len(), 14);
+        let attempts = directory.streaming_attempts.lock().unwrap();
+        assert_eq!(
+            attempts.iter().filter(|a| **a == wallet(1)).count(),
+            1,
+            "the accepted prefix must not consume the next pass budget"
+        );
+        assert_eq!(
+            attempts.iter().filter(|a| **a == wallet(13)).count(),
+            2,
+            "only the interrupted recipient is replayed"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_expands_scalar_era_intents_without_losing_the_saved_recipient() {
+        let Some((state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access (id,place_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,'rtmp://example.invalid/live','scalar-test','test')")
+            .bind(id).bind(&place).execute(&state.pool).await.unwrap();
+        let context = RemovedPlaces::new(state.pool.clone())
+            .place(&place)
+            .await
+            .unwrap()
+            .unwrap();
+        let context = serde_json::to_value(context).unwrap();
+        let event = StreamingNotification {
+            event_key: format!("streaming_key_revoke-{id}"),
+            recipient: wallet(11),
+            kind: StreamingNotificationKind::KeyRevoke,
+            occurred_at: chrono::Utc::now().naive_utc(),
+            metadata: serde_json::json!({"title":"saved template","address":wallet(11).as_str()}),
+        };
+        assert!(
+            enqueue_prepared(
+                &state.pool,
+                id,
+                CleanupCommand::Revoke,
+                0,
+                Some(&event),
+                Some(&context),
+                None
+            )
+            .await
+            .unwrap()
+        );
+        cleanup_access(&state, id).await.unwrap();
+        let notices = directory.streaming_notifications.lock().unwrap();
+        let actual: std::collections::BTreeSet<_> =
+            notices.iter().map(|n| n.recipient.clone()).collect();
+        let mut expected: std::collections::BTreeSet<_> = (1..=6).map(wallet).collect();
+        expected.insert(wallet(11));
+        assert_eq!(actual, expected);
+        assert!(
+            notices
+                .iter()
+                .all(|n| n.metadata["title"] == "saved template"
+                    && n.metadata["address"] == n.recipient.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_reset_conversion_keeps_the_resolved_recipient_snapshot() {
+        let Some((mut state, directory, place)) = fanout_fixture(false).await else {
+            return;
+        };
+        let id = fanout_access(&state, &place, CleanupCommand::Reset).await;
+        sqlx::query("DELETE FROM social.scene_stream_access WHERE place_id=$1 AND id<>$2")
+            .bind(&place)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET occurred_at=timezone('UTC',now())-interval '2 hours' WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        assert!(
+            cleanup_access(&state, id).await.is_err(),
+            "reset without replacement converts to revoke on retry"
+        );
+        state.policy = Arc::new(crate::interfaces::test_support::StubPolicy::default());
+        sqlx::query("UPDATE social.scene_admins SET active=false,removed_at=timezone('UTC',now()) WHERE place_id='10,20'")
+            .execute(&state.pool).await.unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        cleanup_access(&state, id).await.unwrap();
+        let notices = directory.streaming_notifications.lock().unwrap();
+        assert_eq!(notices.len(), 6);
+        assert!(
+            notices
+                .iter()
+                .all(|n| n.kind == StreamingNotificationKind::KeyRevoke
+                    && n.metadata["title"] == "Stream Key Deactivated")
+        );
+    }
 
     #[test]
     fn cleanup_commands_keep_persisted_labels_and_reject_non_cleanup_kinds() {
@@ -827,9 +1418,17 @@ mod tests {
             occurred_at: chrono::Utc::now().naive_utc(),
         };
         assert!(
-            !enqueue_prepared(&pool, id, CleanupCommand::IdleReplacement, 0, None, None)
-                .await
-                .unwrap()
+            !enqueue_prepared(
+                &pool,
+                id,
+                CleanupCommand::IdleReplacement,
+                0,
+                None,
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         let unchanged: (bool, bool, bool) = sqlx::query_as(
             "SELECT active,streaming,EXISTS(SELECT 1 FROM social.scene_stream_cleanup WHERE access_id=$1) FROM social.scene_stream_access WHERE id=$1",
@@ -843,19 +1442,43 @@ mod tests {
         // only non-forced command exposed by the lifecycle API.
         // A start/end webhook after metadata capture invalidates that snapshot.
         assert!(
-            !enqueue_prepared(&pool, id, CleanupCommand::Revoke, 1, Some(&event), None)
-                .await
-                .unwrap()
+            !enqueue_prepared(
+                &pool,
+                id,
+                CleanupCommand::Revoke,
+                1,
+                Some(&event),
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         assert!(
-            enqueue_prepared(&pool, id, CleanupCommand::Revoke, 0, Some(&event), None)
-                .await
-                .unwrap()
+            enqueue_prepared(
+                &pool,
+                id,
+                CleanupCommand::Revoke,
+                0,
+                Some(&event),
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         assert!(
-            !enqueue_prepared(&pool, id, CleanupCommand::Reset, 0, Some(&event), None)
-                .await
-                .unwrap()
+            !enqueue_prepared(
+                &pool,
+                id,
+                CleanupCommand::Reset,
+                0,
+                Some(&event),
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         let facts: (bool,String,bool) = sqlx::query_as("SELECT a.active,c.notification_kind,c.ingress_deleted FROM social.scene_stream_access a JOIN social.scene_stream_cleanup c ON a.id=c.access_id WHERE a.id=$1")
             .bind(id).fetch_one(&pool).await.unwrap();
@@ -884,9 +1507,17 @@ mod tests {
         sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,streaming_url,streaming_key,generated_by,streaming) VALUES($1,$2,'rtmp://example.org','idle-key','test',false)")
             .bind(idle).bind(format!("idle-test-{idle}")).execute(&pool).await.unwrap();
         assert!(
-            enqueue_prepared(&pool, idle, CleanupCommand::IdleReplacement, 0, None, None)
-                .await
-                .unwrap()
+            enqueue_prepared(
+                &pool,
+                idle,
+                CleanupCommand::IdleReplacement,
+                0,
+                None,
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         let idle_facts: (bool, bool, Option<String>) = sqlx::query_as(
             "SELECT a.active,a.streaming,c.notification_kind FROM social.scene_stream_access a JOIN social.scene_stream_cleanup c ON a.id=c.access_id WHERE a.id=$1",
@@ -908,17 +1539,33 @@ mod tests {
         sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,streaming_url,streaming_key,generated_by,streaming,expiration_time) VALUES($1,$2,'rtmp://example.org','test-key','test',true,timezone('UTC',now())+interval '4 days')")
             .bind(running).bind(format!("deadline-test-{running}")).execute(&pool).await.unwrap();
         assert!(
-            !enqueue_prepared(&pool, running, CleanupCommand::KeyExpiry, 0, None, None)
-                .await
-                .unwrap()
+            !enqueue_prepared(
+                &pool,
+                running,
+                CleanupCommand::KeyExpiry,
+                0,
+                None,
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         sqlx::query("UPDATE social.scene_stream_access SET expiration_time=timezone('UTC',now())-interval '1 second' WHERE id=$1")
             .bind(running).execute(&pool).await.unwrap();
         // Unresolved historic owner does not prevent durable revocation intent.
         assert!(
-            enqueue_prepared(&pool, running, CleanupCommand::KeyExpiry, 0, None, None)
-                .await
-                .unwrap()
+            enqueue_prepared(
+                &pool,
+                running,
+                CleanupCommand::KeyExpiry,
+                0,
+                None,
+                None,
+                None
+            )
+            .await
+            .unwrap()
         );
         let stopped: bool = sqlx::query_scalar(
             "SELECT NOT active AND NOT streaming FROM social.scene_stream_access WHERE id=$1",
