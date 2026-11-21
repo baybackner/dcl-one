@@ -53,7 +53,8 @@
         "source/441-curation-post-unsigned.json",
         "source/431-collection-post-unsigned.json",
         "source/470-collection-approval-data-unsigned.json",
-        "source/487-item-videos-unsigned.json"
+        "source/487-item-videos-unsigned.json",
+        "source/499-review-events-unsigned.json"
       ],
       "anchors": []
     },
@@ -311,11 +312,13 @@
       ]
     },
     "fixed-capture-clock": {
-      "text": "A curation row written twice during the capture run: upstream ran on the capture's fixed clock, so a row created and later updated in the run reads the same created_at and updated_at there; the node stamps each write with its own clock, as upstream does outside the capture, so updated_at is later.",
+      "text": "A curation row written twice during the capture run: upstream ran on the capture's fixed clock, so a row created and later updated in the run reads the same created_at and updated_at there; the node stamps each write with its own clock, as upstream does outside the capture, so updated_at is later. Two curation rows written in the run share one created_at there, so upstream's newest curation is ambiguous: after an appeal it read the earlier rejected row and accepted a second appeal, which the node refuses with 409 as upstream does on a real clock.",
       "captures": [
         "source/416-collection-curation-approve-assigned.json",
         "source/417-collection-curation-reopen.json",
-        "source/429-curations-committee-after.json"
+        "source/429-curations-committee-after.json",
+        "source/508-review-curation-after-rejection.json",
+        "source/511-review-appeal-again.json"
       ],
       "anchors": []
     },
@@ -454,6 +457,43 @@
     },
     "item-video-bounds": {
       "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 when the body hasn't arrived 20 minutes after the upload was admitted or no byte came for 30 seconds. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
+      "captures": [],
+      "anchors": []
+    },
+    "review-flow-switch": {
+      "text": "The review routes and the review flow's effects: upstream's flow is on while its builder-auto-curation and builder-auto-curation-review-flow flags are truthy and its events topic is configured. The node's is on only while WEARABLE_VALIDATOR_CALLBACK_SECRET is set and the builder flags document, with this node's overrides, holds both flags as the boolean true; off, the four review routes answer 404 Not found after the signature and change nothing, and a verdict only settles its request.",
+      "captures": [],
+      "anchors": []
+    },
+    "review-timeline-unreadable-as-absent": {
+      "text": "GET /v1/collections/:id/events: a signer who holds no role on the collection and is not on the committee gets the 404 an absent collection gets (Couldn't find ... on collections, with the id and table name); upstream answers such a signer 401 Unauthorized for an existing collection, which tells it the collection exists.",
+      "captures": [
+        "source/498-review-events-stranger.json"
+      ],
+      "anchors": []
+    },
+    "review-text-bounds": {
+      "text": "POST /v1/collections/:id/comments and .../curation/appeal: a collection takes at most 200 comments and 5 appeals in a UTC day and a wallet writes at most 200 comments and 20 appeals in a UTC day across collections (an appeal recorded by a changes submission counts too); beyond, 429 {ok:false, data:{id, retryAt}} with the next UTC day. Upstream bounds only the rate per wallet.",
+      "captures": [],
+      "anchors": []
+    },
+    "review-access-before-body": {
+      "text": "POST /v1/collections/:id/comments: the node decides who may comment before it reads the body, so a signer without a role and outside the committee gets 401 for any body; upstream checks the body's schema first and answers such a signer 400 for an invalid body.",
+      "captures": [],
+      "anchors": []
+    },
+    "review-running-is-an-open-request": {
+      "text": "POST /v1/collections/:id/validations and a creator's changes submission with the review flow on: an automated review runs while the collection has an open validation request (claimed or not) that no curator decision followed, and a retryable error from the validator keeps it open for the validator's next claim. A creator's request while it runs answers 409; at 5 requests of the collection in the UTC day it answers 429 with retryAt, counting every request. Upstream counts a run as running from its start event until its verdict within 7 days, frees a retryable error for the creator's retry, and counts the day's starts since the newest curator decision, sweep re-sends left out.",
+      "captures": [],
+      "anchors": []
+    },
+    "review-timeline-from-requests": {
+      "text": "The review timeline with the flow on: the node records a start when it records a validation request and never a sweep re-send or a publish_failed error (the validator pulls its work; a lapsed claim is claimed again); a request abandoned after three lapsed claims or expired after 7 days records review.automated_error with reason sweep_exhausted. A creator's changes submission when nothing changed since the validator's own untouched rejection answers that rejection in the shape of an opened request (id, status, created_at, updated_at, collection_id, assignee).",
+      "captures": [],
+      "anchors": []
+    },
+    "review-verdict-acts-by-claim": {
+      "text": "POST /v1/collections/:id/validation-result with the review flow on: a verdict acts only from its request's current claim (claimId), on the collection that request names, in the transaction that settles the request; a rejection rejects the pending review or opens a rejected one, a pass reopens only the validator's own rejection, and neither touches a review a curator decided since the request started. Each such write is recorded in the operator audit as the validator. Upstream acts on the latest start's validationId.",
       "captures": [],
       "anchors": []
     }
@@ -3457,13 +3497,24 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/430-collection-curation-after.json",
           "scope": "GET /collections/{id}/curation signed by a committee member after the collection was approved, rejected and requested again.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/508-review-curation-after-rejection.json",
+          "scope": "GET /collections/{id}/curation by the owner after the validator's rejection.",
+          "replay": [
+            "data.created_at and data.updated_at differ"
+          ],
+          "explained_by": {
+            "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
+          }
         }
       ],
       "gaps": [
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
         "deliberate:curation-invalid-id",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:fixed-capture-clock"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -3956,44 +4007,198 @@
     {
       "id": "api_http:POST:/v1/collections/:id/validations",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "With the review flow off the owner's request answers 404 Not found as upstream's. With it on, the owner's request for a published collection no automated review started on answers its start (redacted) and queues the same manifest upstream sends the validator, and a second request while that review runs answers 409.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/492-review-validations-flag-off.json",
+          "scope": "POST /collections/{id}/validations by the owner, the review flow off.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/505-review-validations-owner.json",
+          "scope": "POST /collections/{id}/validations by the owner, the review flow on, no review started.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/506-review-validations-running.json",
+          "scope": "POST /collections/{id}/validations by the owner while that review runs.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:review-flow-switch",
+        "deliberate:review-running-is-an-open-request",
+        "deliberate:review-timeline-from-requests",
+        "deliberate:validator-pull"
+      ],
+      "remaining_verification": "Retries after a verdict, a too-large collection, a curator's rejection and the daily bound are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/curation/appeal",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "With the review flow off the owner's appeal answers 404 Not found. With it on, an appeal of a pending review answers 409, and the owner's appeal after the validator's rejection opens a pending review and posts upstream's curators' notice with the note on one line, escaped. A second appeal while it is open answers 409 on the node; upstream accepted it only because of the capture's fixed clock.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/493-review-appeal-flag-off.json",
+          "scope": "POST /collections/{id}/curation/appeal by the owner, the review flow off.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/504-review-appeal-not-rejected.json",
+          "scope": "POST /collections/{id}/curation/appeal of a pending review.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/510-review-appeal-owner.json",
+          "scope": "POST /collections/{id}/curation/appeal by the owner after the validator's rejection.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/511-review-appeal-again.json",
+          "scope": "POST /collections/{id}/curation/appeal while the appeal is open.",
+          "replay": [
+            "status: fixture=200 candidate=409",
+            "data.assignee missing",
+            "data.collection_id missing",
+            "data.created_at missing",
+            "data.rejection_message missing",
+            "data.rejection_reasons missing",
+            "data.reviewed_by missing",
+            "data.status missing",
+            "data.updated_at missing",
+            "error extra",
+            "ok value",
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=409": "deliberate:fixed-capture-clock",
+            "data.assignee missing": "deliberate:fixed-capture-clock",
+            "data.collection_id missing": "deliberate:fixed-capture-clock",
+            "data.created_at missing": "deliberate:fixed-capture-clock",
+            "data.rejection_message missing": "deliberate:fixed-capture-clock",
+            "data.rejection_reasons missing": "deliberate:fixed-capture-clock",
+            "data.reviewed_by missing": "deliberate:fixed-capture-clock",
+            "data.status missing": "deliberate:fixed-capture-clock",
+            "data.updated_at missing": "deliberate:fixed-capture-clock",
+            "error extra": "deliberate:fixed-capture-clock",
+            "ok value": "deliberate:fixed-capture-clock",
+            "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]": "deliberate:fixed-capture-clock"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:fixed-capture-clock",
+        "deliberate:review-flow-switch",
+        "deliberate:review-text-bounds"
+      ],
+      "remaining_verification": "Concurrent appeals and the daily bounds are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:GET:/v1/collections/:id/events",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "With the review flow off the owner's read answers 404 Not found. With it on, the owner and a committee member read the timeline (a curator's approval, comments, a retry's start and the validator's rejection) as upstream answers it, redacted for the owner; an unsigned read answers upstream's 401. A stranger gets an absent collection's 404 instead of upstream's 401, a deliberate gap.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/494-review-events-flag-off.json",
+          "scope": "GET /collections/{id}/events by the owner, the review flow off.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/496-review-events-owner.json",
+          "scope": "GET /collections/{id}/events by the owner, a curator's approval.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/497-review-events-committee.json",
+          "scope": "GET /collections/{id}/events by a committee member.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/498-review-events-stranger.json",
+          "scope": "GET /collections/{id}/events by a wallet with no role.",
+          "replay": [
+            "status: fixture=401 candidate=404",
+            "data.ethAddress missing",
+            "data.tableName extra",
+            "error value"
+          ],
+          "explained_by": {
+            "status: fixture=401 candidate=404": "deliberate:review-timeline-unreadable-as-absent",
+            "data.ethAddress missing": "deliberate:review-timeline-unreadable-as-absent",
+            "data.tableName extra": "deliberate:review-timeline-unreadable-as-absent",
+            "error value": "deliberate:review-timeline-unreadable-as-absent"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/499-review-events-unsigned.json",
+          "scope": "GET /collections/{id}/events unsigned.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/509-review-events-after-rejection.json",
+          "scope": "GET /collections/{id}/events by the owner after the validator's rejection.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:review-flow-switch",
+        "deliberate:review-timeline-unreadable-as-absent",
+        "deliberate:unauthenticated-message"
+      ],
+      "remaining_verification": "Pagination bounds, a manager's read and the committee's unredacted validation ids are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/comments",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "With the review flow off the owner's comment answers 404 Not found. With it on, the owner's comment (trimmed, markup kept as text) answers its event and posts upstream's curators' notice escaped on one line; a committee member's comment about an item answers its curator event with no notice; a stranger's answers 401 and a blank one 400.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/495-review-comments-flag-off.json",
+          "scope": "POST /collections/{id}/comments by the owner, the review flow off.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/500-review-comment-owner.json",
+          "scope": "POST /collections/{id}/comments by the owner, markup on two lines.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/501-review-comment-committee.json",
+          "scope": "POST /collections/{id}/comments by a committee member about an item.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/502-review-comment-stranger.json",
+          "scope": "POST /collections/{id}/comments by a wallet with no role.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/503-review-comment-blank.json",
+          "scope": "POST /collections/{id}/comments with a message of spaces.",
+          "replay": []
+        }
+      ],
+      "gaps": [
+        "deliberate:review-flow-switch",
+        "deliberate:review-text-bounds",
+        "deliberate:review-access-before-body"
+      ],
+      "remaining_verification": "A closed review, an unpublished collection, a foreign item and the daily bounds are covered by the node's tests, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/validation-result",
       "owner": "curation",
       "status": "reviewed",
-      "result": "The wearable validator's result was compared unsigned, signed with another secret and signed five minutes and a millisecond before the clock, and each refusal matches. A signed result naming another collection than the path's, one without its items and a valid one were compared: each differs only by the claimId the node requires and the schema errors upstream lists, deliberate gaps.",
+      "result": "The wearable validator's result was compared unsigned, signed with another secret and signed five minutes and a millisecond before the clock, and each refusal matches. A signed result naming another collection than the path's, one without its items and a valid one were compared: each differs only by the claimId the node requires and the schema errors upstream lists, deliberate gaps. With the review flow on, a rejection of the running review (the claim the node issued standing for upstream's start) answers 204 on both and rejects the pending review as the validator, as the following curation and timeline reads show.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/477-validation-result-unsigned.json",
@@ -4045,6 +4250,11 @@
             "status: fixture=204 candidate=400": "deliberate:validator-claim-id",
             "body bytes differ: fixture=\"\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Invalid request body\\\",\\\"ok\\\":false}\"": "deliberate:validator-claim-id"
           }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/507-review-validation-result-rejected.json",
+          "scope": "POST /collections/{id}/validation-result rejecting the running review, the review flow on.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -4054,9 +4264,10 @@
         "deliberate:validator-pull",
         "deliberate:validator-switch",
         "deliberate:validator-write-gate",
-        "deliberate:validator-call-bounds"
+        "deliberate:validator-call-bounds",
+        "deliberate:review-verdict-acts-by-claim"
       ],
-      "remaining_verification": "A result for a claim the node issued is covered by the node's tests, not by a capture: upstream issues no claim."
+      "remaining_verification": "Passes, errors, stale and superseded claims and a curator's decision since the request are covered by the node's tests, not by a capture: upstream issues no claim."
     },
     {
       "id": "api_http:GET:/v1/committee",

@@ -262,6 +262,7 @@ mod sealed {
     impl Sealed for super::CollectionManage {}
     impl Sealed for super::ThirdPartyPublish {}
     impl Sealed for super::Curator {}
+    impl Sealed for super::ValidatorVerdict {}
 }
 
 /// A grant to record a review of one collection: a curation of it or of its
@@ -285,6 +286,47 @@ impl CurationGrant for ThirdPartyPublish {
 impl CurationGrant for Curator {
     fn curated(&self) -> Uuid {
         self.collection
+    }
+}
+
+impl CurationGrant for ValidatorVerdict {
+    fn curated(&self) -> Uuid {
+        self.collection
+    }
+}
+
+/// The wearable validator may decide, by its verdict on its current claim,
+/// the curation of the collection that claim's request names: made only
+/// from a call whose signature verified ([`validator_verdict`]).
+#[derive(Debug)]
+pub struct ValidatorVerdict {
+    collection: Uuid,
+}
+
+/// The validator's grant over `collection`, for a verdict whose signature
+/// `verified` proves.
+pub fn validator_verdict(
+    _verified: &crate::handlers::validator::Verified,
+    collection: Uuid,
+) -> ValidatorVerdict {
+    ValidatorVerdict { collection }
+}
+
+/// May read a collection's review timeline: a role on it, or the committee,
+/// which also reads the validator's ids.
+#[derive(Debug)]
+pub struct ReviewRead {
+    id: Uuid,
+    committee: bool,
+}
+
+impl ReviewRead {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+    /// The committee admitted the signer.
+    pub fn committee(&self) -> bool {
+        self.committee
     }
 }
 
@@ -1877,6 +1919,105 @@ pub async fn curate_item(
     admit(state, signer, &c, parent_id, Some(id), role, registry).await
 }
 
+/// `GET /v1/collections/:id/events`: the signer holds a role on the
+/// collection or is on the committee (503 while the committee can't be read
+/// for a signer without a role, whether or not the collection exists).
+/// Anyone else gets the answer an absent collection gets.
+pub async fn read_review(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<ReviewRead, ApiError> {
+    let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let (mut conn, view) = decision(state).await?;
+    let c = collection(&mut conn, &view, id, providers(&registry)).await?;
+    drop(conn);
+    let s = signer.as_str();
+    if let Some(c) = &c
+        && c.role(s)
+    {
+        return Ok(ReviewRead {
+            id,
+            committee: known_committee(state, s).await,
+        });
+    }
+    if on_committee(state, s).await? && c.is_some() {
+        return Ok(ReviewRead {
+            id,
+            committee: true,
+        });
+    }
+    Err(not_found(id, COLLECTIONS))
+}
+
+/// `POST /v1/collections/:id/comments`: the collection must exist (404),
+/// then the signer must hold a role on it or be on the committee (401). A
+/// role holder writes as the committee only when the index shows it on it.
+pub async fn review_member(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<Curator, ApiError> {
+    let (id, c, registry) = reviewed(state, raw).await?;
+    let s = signer.as_str();
+    let role = c.role(s);
+    let committee = if role {
+        known_committee(state, s).await
+    } else {
+        on_committee(state, s).await?
+    };
+    if !role && !committee {
+        return Err(
+            ApiError::unauthorized("Unauthorized").with_data(json!({ "id": id, "ethAddress": s }))
+        );
+    }
+    Ok(Curator {
+        collection: id,
+        item: None,
+        signer: s.to_string(),
+        role,
+        committee,
+        registry,
+    })
+}
+
+/// `POST /v1/collections/:id/validations` and `.../curation/appeal`: the
+/// collection must exist (404), then the signer must hold a role on it
+/// (401); the committee gets nothing here.
+pub async fn review_creator(
+    state: &SharedState,
+    signer: &Signer,
+    raw: &str,
+) -> Result<Curator, ApiError> {
+    let (id, c, registry) = reviewed(state, raw).await?;
+    let s = signer.as_str();
+    if !c.role(s) {
+        return Err(unauthorized_user(s, COLLECTIONS, id));
+    }
+    Ok(Curator {
+        collection: id,
+        item: None,
+        signer: s.to_string(),
+        role: true,
+        committee: false,
+        registry,
+    })
+}
+
+async fn reviewed(
+    state: &SharedState,
+    raw: &str,
+) -> Result<(Uuid, Collection, Option<Registry>), ApiError> {
+    let id = parse(raw)?;
+    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let (mut conn, view) = decision(state).await?;
+    let c = collection(&mut conn, &view, id, providers(&registry))
+        .await?
+        .ok_or_else(|| not_found(id, COLLECTIONS))?;
+    Ok((id, c, registry))
+}
+
 async fn admit(
     state: &SharedState,
     signer: &Signer,
@@ -1936,6 +2077,7 @@ pub struct CuratedState {
     pub stored_owner: bool,
     pub third_party: bool,
     pub contract: Option<String>,
+    pub published: bool,
 }
 
 /// [`curate_collection`]'s and [`curate_item`]'s decision again, inside the
@@ -1946,6 +2088,34 @@ pub(crate) async fn confirm_curator(
     view: &DecisionView,
     curator: &Curator,
 ) -> Result<CuratedState, ApiError> {
+    let (c, role) = curated(conn, view, curator).await?;
+    let s = curator.signer.as_str();
+    if !c.published {
+        return Err(ApiError::conflict("Unpublished collection")
+            .with_data(json!({ "id": curator.collection, "ethAddress": s })));
+    }
+    keeps_role(curator, role)?;
+    curated_state(conn, curator, c).await
+}
+
+/// [`review_member`]'s and [`review_creator`]'s decision again, inside the
+/// write's transaction: the collection still there, a role still held
+/// unless the committee admitted the signer.
+pub(crate) async fn confirm_reviewer(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    curator: &Curator,
+) -> Result<CuratedState, ApiError> {
+    let (c, role) = curated(conn, view, curator).await?;
+    keeps_role(curator, role)?;
+    curated_state(conn, curator, c).await
+}
+
+async fn curated(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    curator: &Curator,
+) -> Result<(Collection, bool), ApiError> {
     let gone = || curation_not_found(&curator.signer);
     let c = collection(conn, view, curator.collection, providers(&curator.registry))
         .await?
@@ -1961,24 +2131,33 @@ pub(crate) async fn confirm_curator(
         }
         None => c.role(s),
     };
-    if !c.published {
-        return Err(ApiError::conflict("Unpublished collection")
-            .with_data(json!({ "id": curator.collection, "ethAddress": s })));
-    }
+    Ok((c, role))
+}
+
+fn keeps_role(curator: &Curator, role: bool) -> Result<(), ApiError> {
     if curator.role && !role && !curator.committee {
         return Err(ApiError::unauthorized("Unauthorized").with_data(
-            json!({ "id": curator.item.unwrap_or(curator.collection), "ethAddress": s }),
+            json!({ "id": curator.item.unwrap_or(curator.collection), "ethAddress": curator.signer }),
         ));
     }
+    Ok(())
+}
+
+async fn curated_state(
+    conn: &mut PgConnection,
+    curator: &Curator,
+    c: Collection,
+) -> Result<CuratedState, ApiError> {
     let name: String = sqlx::query_scalar("SELECT name FROM builder.collections WHERE id = $1")
         .bind(curator.collection)
         .fetch_one(&mut *conn)
         .await?;
     Ok(CuratedState {
         name,
-        stored_owner: c.stored_owner == s,
+        stored_owner: c.stored_owner == curator.signer,
         third_party: c.third_party,
         contract: c.contract,
+        published: c.published,
     })
 }
 

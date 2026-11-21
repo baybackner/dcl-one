@@ -708,3 +708,19 @@ test('the events topic records a validation request on its topic and refuses any
   assert.deepEqual(queueRecord([]), {})
   assert.deepEqual(queueRecord(queued), { queue: queued })
 })
+
+test('a verdict case sends its collection\'s newest start and records the body it names, and only review cases turn the flow on', async () => {
+  const { sentBody, REVIEW_CASES, CASES } = require(script)
+  const verdict = REVIEW_CASES.find(item => item.validation_of)
+  const asked = []
+  const sent = JSON.parse(await sentBody(verdict, JSON.stringify(verdict.body), async collection => {
+    asked.push(collection)
+    return 'c011ec71-0000-4000-8000-0000000009ff'
+  }))
+  assert.deepEqual(asked, [verdict.validation_of])
+  assert.deepEqual(sent, { ...verdict.body, validationId: 'c011ec71-0000-4000-8000-0000000009ff' })
+  assert.notEqual(verdict.body.validationId, sent.validationId)
+  const plain = CASES.find(item => !item.validation_of && item.body)
+  assert.equal(await sentBody(plain, 'unchanged', () => assert.fail('read a start')), 'unchanged')
+  assert.ok(CASES.filter(item => item.review_flow).every(item => REVIEW_CASES.includes(item)))
+})

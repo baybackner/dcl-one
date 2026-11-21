@@ -348,6 +348,9 @@ fn refusal_status(refusal: Refusal) -> u16 {
         Refusal::StatusIsCommittees | Refusal::AssigneeIsCommittees => 401,
         Refusal::NoCuration => 404,
         Refusal::Ongoing | Refusal::NeverCurated | Refusal::ItemAssignee => 400,
+        Refusal::VerdictOnly | Refusal::Decided => {
+            unreachable!("no curation route sends a verdict")
+        }
     }
 }
 
@@ -424,10 +427,14 @@ async fn every_cell_of_the_transition_table_answers_and_writes_as_the_table_says
                             }
                             ("PATCH", Some(json!({ "curation": c })))
                         }
+                        Asked::Reject | Asked::Reopen => {
+                            unreachable!("only a verdict rejects or reopens")
+                        }
                     };
                     let key = match actor {
                         Actor::Committee => COMMITTEE_KEY,
                         Actor::Creator => OWNER_KEY,
+                        Actor::Validator => unreachable!("the validator signs no wallet request"),
                     };
                     let before = statuses(&n.pool, curation, subject).await;
                     let audited = audits(&n.pool, subject).await;
@@ -449,6 +456,9 @@ async fn every_cell_of_the_transition_table_answers_and_writes_as_the_table_says
                                 let mut rows = before.clone();
                                 rows.push("pending".into());
                                 rows
+                            }
+                            Ok(Change::OpenRejected) => {
+                                unreachable!("only the validator opens a rejected curation")
                             }
                             Ok(Change::Update { status: to, .. }) => {
                                 if status != 200 {

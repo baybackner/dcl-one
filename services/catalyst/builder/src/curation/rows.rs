@@ -116,6 +116,19 @@ pub async fn newest_of_collection(
     .await?)
 }
 
+/// The collection curation `id`.
+pub async fn collection_curation(
+    conn: &mut PgConnection,
+    id: Uuid,
+) -> Result<CollectionCurationOut, ApiError> {
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLLECTION_COLUMNS} FROM builder.collection_curations k WHERE k.id = $1"
+    )))
+    .bind(id)
+    .fetch_one(conn)
+    .await?)
+}
+
 /// The newest curation of the item `id`.
 pub async fn newest_of_item(
     conn: &mut PgConnection,

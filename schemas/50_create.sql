@@ -435,6 +435,9 @@ CREATE INDEX collection_events_collection_created_idx
 CREATE INDEX collection_events_automated_started_idx ON builder.collection_events (created_at)
     WHERE type = 'review.automated_started';
 
+CREATE INDEX collection_events_creator_text_idx ON builder.collection_events (actor_address, created_at)
+    WHERE type IN ('review.comment', 'review.appeal_requested');
+
 CREATE UNIQUE INDEX collection_events_verdict_validation_idx
     ON builder.collection_events (collection_id, type, (payload->>'validationId'), (COALESCE(payload->>'reason', '')))
     WHERE type IN ('review.automated_passed', 'review.automated_rejected', 'review.automated_error',
@@ -477,7 +480,7 @@ CREATE TABLE builder.validation_requests (
     CONSTRAINT validation_requests_pkey PRIMARY KEY (id),
     CONSTRAINT validation_requests_collection_id_fkey FOREIGN KEY (collection_id)
         REFERENCES builder.collections (id) ON DELETE CASCADE,
-    CONSTRAINT validation_requests_trigger_check CHECK (trigger IN ('publish', 'changes')),
+    CONSTRAINT validation_requests_trigger_check CHECK (trigger IN ('publish', 'changes', 'retry')),
     CONSTRAINT validation_requests_item_ids_check CHECK (cardinality(item_ids) BETWEEN 1 AND 50),
     CONSTRAINT validation_requests_claims_check CHECK (claims BETWEEN 0 AND 3),
     CONSTRAINT validation_requests_claim_check

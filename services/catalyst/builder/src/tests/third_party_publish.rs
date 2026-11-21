@@ -1080,3 +1080,82 @@ async fn the_publish_decides_again_inside_its_transaction() {
     );
     assert_eq!(written(&w.pool).await, before);
 }
+
+async fn set_review_flow(pool: &PgPool, on: bool) {
+    sqlx::query(
+        "INSERT INTO explore_api.feature_flags (app, document, fetched_at) VALUES ('builder', $1, timezone('UTC', now())) \
+         ON CONFLICT (app) DO UPDATE SET document = EXCLUDED.document",
+    )
+    .bind(json!({ "flags": { "builder-auto-curation": true, "builder-auto-curation-review-flow": on }, "variants": {} }))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn hand_offs(pool: &PgPool, collection: Uuid) -> Vec<(String, Option<String>, Value)> {
+    sqlx::query_as(
+        "SELECT actor, actor_address, payload FROM builder.collection_events \
+         WHERE collection_id = $1 AND type = 'review.human_required'",
+    )
+    .bind(collection)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn with_the_review_flow_on_a_third_party_publication_hands_its_review_to_a_curator_once() {
+    let Some(w) = world_with(crate::Settings {
+        validator_secret: Some("example-validator-secret-0123456789abcdef".into()),
+        ..crate::Settings::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let manager = address(MANAGER_KEY);
+    let provider = listed(&w, &[&manager], "10");
+    set_review_flow(&w.pool, false).await;
+    let (quiet, quiet_items) = collection(&w, &provider, 1).await;
+    let (status, body) = call(
+        &w.app,
+        Some(MANAGER_KEY),
+        publish(quiet),
+        Some(json!({ "itemIds": [quiet_items[0]], "cheque": cheque(MANAGER_KEY, &provider, 1, &salt()) })),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        hand_offs(&w.pool, quiet).await.is_empty(),
+        "the flow off records nothing"
+    );
+
+    set_review_flow(&w.pool, true).await;
+    let (id, items) = collection(&w, &provider, 2).await;
+    for (n, item) in items.iter().enumerate() {
+        let (status, body) = call(
+            &w.app,
+            Some(MANAGER_KEY),
+            publish(id),
+            Some(
+                json!({ "itemIds": [item], "cheque": cheque(MANAGER_KEY, &provider, 1, &salt()) }),
+            ),
+        )
+        .await;
+        assert_eq!(status, 200, "publish {n}: {body}");
+        sqlx::query("UPDATE builder.item_curations SET status = 'approved' WHERE item_id = $1")
+            .bind(item)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        hand_offs(&w.pool, id).await,
+        vec![(
+            "system".to_string(),
+            None,
+            json!({ "reason": "third_party" })
+        )],
+        "one hand-off however many batches"
+    );
+}

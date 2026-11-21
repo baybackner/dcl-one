@@ -65,6 +65,37 @@ pub enum Notice {
     Verdict { approved: bool },
     /// The collection gets no automated review, for `reason`.
     ValidationNotRequested { reason: String },
+    /// The validator passed the collection; `stale` items changed while it
+    /// ran.
+    AutomatedPassed { stale: usize },
+    /// The validator can't check the items `unsupported`.
+    Unsupported { unsupported: Vec<String> },
+    /// The validator could not validate the collection in `validation`.
+    ValidatorFailed { validation: String },
+    /// The validator failed in `validation` and will be asked again.
+    AutomatedFailed { validation: String },
+    /// A creator asked a curator to look again, with `note`.
+    AppealRequested { note: String },
+    /// A creator commented `message`.
+    CommentPosted { message: String },
+}
+
+/// The most characters of a comment a notice quotes.
+pub const MAX_QUOTE: usize = 300;
+
+fn quoted(text: &str) -> String {
+    let line = one_line(text);
+    if line.chars().count() > MAX_QUOTE {
+        escape(
+            &line
+                .chars()
+                .take(MAX_QUOTE)
+                .chain(['…'])
+                .collect::<String>(),
+        )
+    } else {
+        escape(&line)
+    }
 }
 
 /// Builder-server's `toOneLine`: each line trimmed, blank ones dropped,
@@ -149,10 +180,27 @@ impl Links {
         format!("<{}|{}>", self.editor(collection), escape(&quoted))
     }
 
+    /// builder-server's `describeCollection`, which its review-flow notices
+    /// name a collection by: the name quoted, the id, its creators page.
+    fn described(&self, collection: Uuid, name: &str) -> String {
+        let line = one_line(name);
+        let quoted: String = if line.chars().count() > MAX_NAME {
+            line.chars().take(MAX_NAME).chain(['…']).collect()
+        } else {
+            line
+        };
+        format!(
+            "\"{}\" ({collection}) {}/collections/{collection}",
+            escape(&quoted),
+            self.creators_url.as_deref().unwrap_or_default()
+        )
+    }
+
     /// The text of `notice` about the collection `collection`, named `name`,
     /// sent by `actor`.
     pub fn text(&self, collection: Uuid, name: &str, actor: &str, notice: &Notice) -> String {
         let link = self.collection(collection, name);
+        let described = self.described(collection, name);
         match notice {
             Notice::Published { items } => format!(
                 "🎨 New collection ready for review: {link} by {} ({items} {}).",
@@ -199,6 +247,35 @@ impl Links {
             ),
             Notice::ValidationNotRequested { reason } => format!(
                 "⚠️ No automated review for {link}: {reason}. It needs a curator review without it."
+            ),
+            Notice::AutomatedPassed { stale: 0 } => format!(
+                "Automated review passed for collection {described}. It is ready for a curator approval."
+            ),
+            Notice::AutomatedPassed { stale } => format!(
+                "Automated review passed for collection {described}, but {stale} item(s) changed while it ran, so it needs a new review."
+            ),
+            Notice::Unsupported { unsupported } => format!(
+                "Collection {described} needs a curator review: the validator cannot check {} item(s) ({}).",
+                unsupported.len(),
+                unsupported.join(", ")
+            ),
+            Notice::ValidatorFailed { validation } => format!(
+                "Collection {described} needs a curator review: the validator could not validate it (validation {validation})."
+            ),
+            Notice::AutomatedFailed { validation } => format!(
+                "Automated review failed for collection {described} (validation {validation}). It will be re-sent automatically."
+            ),
+            Notice::AppealRequested { note } if note.is_empty() => {
+                format!("Human review requested for collection {described}.")
+            }
+            Notice::AppealRequested { note } => format!(
+                "Human review requested for collection {described}.\n> {}",
+                escape(&one_line(note))
+            ),
+            Notice::CommentPosted { message } => format!(
+                "💬 New comment on {link} by {}: {}",
+                self.person(actor, false),
+                quoted(message)
             ),
         }
     }

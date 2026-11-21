@@ -62,6 +62,8 @@ pub struct Update {
 #[derive(Debug, Default)]
 pub struct Open {
     pub assignee: Option<String>,
+    /// What changed, as the creator says it, trimmed.
+    pub note: String,
 }
 
 fn object(value: &Value) -> Result<&Map<String, Value>, ApiError> {
@@ -144,9 +146,7 @@ pub fn parse_open(curation: Option<&Value>) -> Result<Open, ApiError> {
                     _ => return Err(invalid_schema()),
                 }
             }
-            "note" => {
-                bounded(value, MAX_NOTE, 0)?;
-            }
+            "note" => open.note = bounded(value, MAX_NOTE, 0)?.trim().to_string(),
             _ => return Err(invalid_schema()),
         }
     }
@@ -168,6 +168,9 @@ fn refused(refusal: Refusal, id: Uuid) -> ApiError {
             "Item curations can't be created for items that weren't curated before",
         ),
         Refusal::ItemAssignee => return invalid_schema(),
+        Refusal::VerdictOnly | Refusal::Decided => {
+            return ApiError::internal(format!("a curation request refused as {refusal:?}"));
+        }
     }
     .with_data(data)
 }
@@ -241,7 +244,7 @@ async fn audited(
     Ok(())
 }
 
-/// Appends an event to the collection's review timeline, after its newest.
+/// Appends a curator's event to the collection's review timeline.
 async fn event(
     conn: &mut PgConnection,
     collection: Uuid,
@@ -249,17 +252,15 @@ async fn event(
     actor: &str,
     payload: Value,
 ) -> Result<(), ApiError> {
-    sqlx::query(
-        "INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at) \
-         SELECT $1, $2, $3, 'curator', $4, $5, GREATEST(timezone('UTC', clock_timestamp()), \
-           (SELECT max(created_at) + interval '1 microsecond' FROM builder.collection_events WHERE collection_id = $2))",
+    super::events::record(
+        conn,
+        collection,
+        kind,
+        super::events::Actor::Curator,
+        Some(actor),
+        payload,
+        None,
     )
-    .bind(Uuid::new_v4())
-    .bind(collection)
-    .bind(kind)
-    .bind(actor)
-    .bind(payload)
-    .execute(conn)
     .await?;
     Ok(())
 }
@@ -569,7 +570,34 @@ pub async fn open_collection(
     };
     let validation = match (&notice, &curated.contract) {
         (Some(Notice::ReviewRequested { .. }), Some(contract)) if !curated.third_party => {
-            validator::on_changes(&mut tx, state, &view, id, contract).await?
+            if crate::review::enabled(&mut tx, state).await? {
+                match crate::review::submit(
+                    &mut tx,
+                    state,
+                    id,
+                    contract,
+                    previous.as_ref(),
+                    curator.signer(),
+                    &open.note,
+                )
+                .await?
+                {
+                    crate::review::Submitted::Answered(existing) => {
+                        tx.rollback().await?;
+                        return Ok(CollectionCurationOpened {
+                            id: existing.id,
+                            status: existing.status,
+                            created_at: existing.created_at,
+                            updated_at: existing.updated_at,
+                            collection_id: id,
+                            assignee: existing.assignee,
+                        });
+                    }
+                    crate::review::Submitted::Opened(notice) => notice,
+                }
+            } else {
+                validator::on_changes(&mut tx, state, &view, id, contract).await?
+            }
         }
         _ => None,
     };

@@ -715,6 +715,10 @@ enum Op {
     ValidatorClaim,
     ValidatorLease,
     ValidationResult,
+    ReviewRetry,
+    ReviewAppeal,
+    ReviewEvents,
+    ReviewComment,
 }
 
 const NOT_PUBLISHED: &str = "The collection is not published.";
@@ -844,6 +848,10 @@ impl Op {
             ("POST", "/v1/validator/claims") => Op::ValidatorClaim,
             ("POST", "/v1/validator/claims/{id}/lease") => Op::ValidatorLease,
             ("POST", "/v1/collections/{id}/validation-result") => Op::ValidationResult,
+            ("POST", "/v1/collections/{id}/validations") => Op::ReviewRetry,
+            ("POST", "/v1/collections/{id}/curation/appeal") => Op::ReviewAppeal,
+            ("GET", "/v1/collections/{id}/events") => Op::ReviewEvents,
+            ("POST", "/v1/collections/{id}/comments") => Op::ReviewComment,
             _ => return None,
         })
     }
@@ -876,6 +884,14 @@ impl Op {
         matches!(
             self,
             Op::ValidatorClaim | Op::ValidatorLease | Op::ValidationResult
+        )
+    }
+
+    /// A review-flow route; the matrix's worlds have the review flow on.
+    fn review(self) -> bool {
+        matches!(
+            self,
+            Op::ReviewRetry | Op::ReviewAppeal | Op::ReviewEvents | Op::ReviewComment
         )
     }
 
@@ -928,6 +944,10 @@ impl Op {
                 | Op::ItemCurationRequest
                 | Op::ForumPost
                 | Op::ForumReply
+                | Op::ReviewRetry
+                | Op::ReviewAppeal
+                | Op::ReviewEvents
+                | Op::ReviewComment
         )
     }
 
@@ -975,6 +995,9 @@ impl Op {
                 | Op::ValidatorClaim
                 | Op::ValidatorLease
                 | Op::ValidationResult
+                | Op::ReviewRetry
+                | Op::ReviewAppeal
+                | Op::ReviewComment
         )
     }
 
@@ -1074,6 +1097,27 @@ impl Op {
                         "validationId": Uuid::new_v4(), "collectionId": collection, "verdict": "passed",
                         "rulesVersion": "1.0.0", "items": [], "claimId": Uuid::new_v4(),
                     })),
+                )
+            }
+            Op::ReviewRetry | Op::ReviewAppeal | Op::ReviewEvents | Op::ReviewComment => {
+                let (method, route, payload) = match self {
+                    Op::ReviewRetry => ("POST", "validations", Payload::None),
+                    Op::ReviewAppeal => (
+                        "POST",
+                        "curation/appeal",
+                        Payload::Json(json!({ "note": "Matrix" })),
+                    ),
+                    Op::ReviewEvents => ("GET", "events", Payload::None),
+                    _ => (
+                        "POST",
+                        "comments",
+                        Payload::Json(json!({ "message": "Matrix" })),
+                    ),
+                };
+                (
+                    method,
+                    format!("/v1/collections/{}/{route}", f.collection_id(kind)),
+                    payload,
                 )
             }
             Op::ForumPost => (
@@ -1249,6 +1293,9 @@ impl Op {
         };
         if self.curation() {
             return self.expect_curation(kind, caller, f);
+        }
+        if self.review() {
+            return self.expect_review(kind, caller, f);
         }
         let kind = kind.base();
         let signed = caller != Anonymous;
@@ -1463,6 +1510,53 @@ impl Op {
         }
     }
 
+    /// The review routes' decisions: the collection, then a role on it (for
+    /// the timeline and comments, or the committee); the timeline answers
+    /// anyone else as an absent collection; then the review the kind
+    /// carries.
+    fn expect_review(self, kind: Kind, caller: Caller, f: &Fixture) -> Option<Expect> {
+        if caller == Anonymous {
+            return unauthenticated();
+        }
+        if matches!(kind, Orphan | Unminted) {
+            return None;
+        }
+        let collection = f.collection_id(kind);
+        match kind {
+            Missing => return not_found(&collection, "collections"),
+            Malformed => return invalid_uuid(&collection),
+            _ => {}
+        }
+        let role = kind.owner(caller) || kind.manager(caller);
+        let committee = caller == Committee;
+        let not_published = "The collection is not published, so it has no review yet";
+        match self {
+            Op::ReviewEvents if role || committee => ok(),
+            Op::ReviewEvents => not_found(&collection, "collections"),
+            Op::ReviewComment if !role && !committee => unauthorized(),
+            Op::ReviewComment if !kind.published() => refused(409, not_published),
+            Op::ReviewComment if matches!(kind, ReviewPending | ReviewRejected) => ok(),
+            Op::ReviewComment => refused(409, "The collection has no open review to comment on"),
+            _ if !role => unauthorized_user(&caller.address(), "collections", &collection),
+            Op::ReviewAppeal if kind == ReviewRejected => ok(),
+            Op::ReviewAppeal => refused(409, "Only rejected collections can be appealed"),
+            _ if !kind.published() => refused(409, not_published),
+            _ if kind.third_party() => refused(
+                409,
+                "Only standard collections can be validated automatically",
+            ),
+            _ if kind == ReviewApproved => refused(
+                409,
+                "There is nothing to validate again: submit your changes for review",
+            ),
+            _ if kind == ReviewRejected => refused(
+                409,
+                "A curator rejected this collection: submit your changes for review instead of validating again",
+            ),
+            _ => ok(),
+        }
+    }
+
     /// The curation routes' decisions: the collection, then its
     /// publication, then a role (for an item's curation, the item's own
     /// owner instead of the collection's), then the committee; a write then
@@ -1584,7 +1678,7 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
     fresh_pass(&pool, 0).await;
     sqlx::query(
         "INSERT INTO explore_api.feature_flags (app, document, fetched_at) \
-         VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true},\"variants\":{}}', timezone('UTC', now())) \
+         VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true,\"builder-auto-curation-review-flow\":true},\"variants\":{}}', timezone('UTC', now())) \
          ON CONFLICT (app) DO NOTHING",
     )
     .execute(&pool)
@@ -2166,6 +2260,16 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                     }
                     Op::ItemCuration | Op::ItemCurationRequest => {
                         kind.published() && !kind.item_owner(caller) && !kind.manager(caller)
+                    }
+                    Op::ReviewEvents => {
+                        !matches!(kind, Malformed | Orphan | Unminted)
+                            && !kind.owner(caller)
+                            && !kind.manager(caller)
+                    }
+                    Op::ReviewComment => {
+                        !matches!(kind, Missing | Malformed | Orphan | Unminted)
+                            && !kind.owner(caller)
+                            && !kind.manager(caller)
                     }
                     _ => false,
                 };

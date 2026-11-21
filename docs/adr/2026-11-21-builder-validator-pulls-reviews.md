@@ -16,8 +16,9 @@ unapproved on chain, and when its creator submits changes for review on a
 published standard collection. About one review a day is requested, at most
 28 in one day; a published standard collection holds a median of one item.
 
-The verdict is advisory: it doesn't approve or reject a curation. Curators
-decide, and the validator posts its own findings to their channel.
+Unless the review flow is on, the verdict is advisory: it doesn't approve or
+reject a curation. Curators decide, and the validator posts its own findings
+to their channel.
 
 ## Decision
 
@@ -52,8 +53,10 @@ decide, and the validator posts its own findings to their channel.
   standard collection, whose files the builder's file rule makes public, and
   a claim names only the hashes its items name when claimed. The validator
   gets no reader of private files.
-- **The verdict is advisory.** It settles its request and is logged; it
-  writes no curation, event or model text.
+- **The verdict is advisory unless the review flow is on.** It settles its
+  request and is logged; it writes no curation, event or model text. With
+  the review flow on, it also acts within its claim
+  ([ADR](2026-11-21-builder-review-flow.md)).
 - **Off unless configured.** Nothing is recorded, and the validator's routes
   refuse as an unsigned call, unless the secret is set and the `builder`
   flags document, with this node's overrides, has `builder-auto-curation`
@@ -74,5 +77,6 @@ decide, and the validator posts its own findings to their channel.
 - Rotating the secret costs at most one lease: the validator's calls are
   refused until both sides hold the new secret, and its request is claimed
   again once the lease lapses.
-- Letting a verdict act on a curation, the creator's review timeline, retries
-  and appeals build on the same request table and are separate decisions.
+- The review flow (a verdict acting on a curation, the creator's review
+  timeline, retries and appeals) builds on the same request table
+  ([ADR](2026-11-21-builder-review-flow.md)).

@@ -13,8 +13,9 @@
 //!
 //! The validator claims the oldest claimable request, extends its lease and
 //! posts its verdict ([`claims`], over the routes in
-//! `handlers::validator`, each call signed with the secret). A verdict is
-//! advisory: it settles its request and is logged; it writes no curation.
+//! `handlers::validator`, each call signed with the secret). A verdict
+//! settles its request and is logged; only with the review flow on does it
+//! act on the collection's curation ([`crate::review`]).
 //! The `builder-validation-requests` job ([`sweep`]) abandons a request
 //! after its third lapsed lease, expires one left unsettled for
 //! [`UNSETTLED_FOR`], each with a notice to the curators, deletes settled
@@ -33,6 +34,7 @@ use uuid::Uuid;
 use crate::State;
 use crate::chain_state::{self, DecisionView};
 use crate::content::JsJson;
+use crate::curation::events::{self, EventOut};
 use crate::curation::slack::Notice;
 use crate::http::ApiError;
 use crate::items::hash::{self, Hashed};
@@ -98,6 +100,17 @@ pub fn calls_limiter() -> RateLimiter {
 /// boolean `true` (`shared::feature_flags`); read on `conn`, the caller's
 /// transaction.
 pub async fn enabled(conn: &mut PgConnection, state: &State) -> Result<bool, ApiError> {
+    features_on(conn, state, &[FEATURE]).await
+}
+
+/// Whether the secret is set and every one of `features` of the `builder`
+/// flags document, with this node's overrides, is on as the boolean `true`;
+/// read on `conn`.
+pub(crate) async fn features_on(
+    conn: &mut PgConnection,
+    state: &State,
+    features: &[&str],
+) -> Result<bool, ApiError> {
     if state.settings.validator_secret.is_none() {
         return Ok(false);
     }
@@ -116,7 +129,10 @@ pub async fn enabled(conn: &mut PgConnection, state: &State) -> Result<bool, Api
         document.unwrap_or_else(|| serde_json::json!({ "flags": {}, "variants": {} })),
         &overrides,
     );
-    Ok(feature_flags::Snapshot::from_document(document).enabled(APP, FEATURE))
+    let snapshot = feature_flags::Snapshot::from_document(document);
+    Ok(features
+        .iter()
+        .all(|feature| snapshot.enabled(APP, feature)))
 }
 
 /// What started a request.
@@ -124,6 +140,7 @@ pub async fn enabled(conn: &mut PgConnection, state: &State) -> Result<bool, Api
 pub enum Trigger {
     Publish,
     Changes,
+    Retry,
 }
 
 impl Trigger {
@@ -131,8 +148,25 @@ impl Trigger {
         match self {
             Self::Publish => "publish",
             Self::Changes => "changes",
+            Self::Retry => "retry",
         }
     }
+}
+
+/// What recording a request did: the curators' notice when it recorded
+/// none because the collection is too large, and the start it wrote on the
+/// review timeline.
+#[derive(Default)]
+pub(crate) struct Recorded {
+    pub notice: Option<Notice>,
+    pub start: Option<EventOut>,
+}
+
+/// Whether a request's start goes on the review timeline, and who asked.
+#[derive(Clone, Copy)]
+pub(crate) enum Timeline<'a> {
+    Off,
+    On { by: Option<&'a str> },
 }
 
 /// A minted item of a collection as saved now.
@@ -248,30 +282,13 @@ pub(crate) async fn saved_items(
         .collect()
 }
 
-/// Records a request for `items` of `collection` on `conn`, which holds the
-/// collection's row lock; answers the curators' notice when it records none
-/// because the collection is too large.
-async fn record(
+/// The requests `collection` got in the UTC day of `now`, and when the next
+/// day starts.
+pub(crate) async fn requests_today(
     conn: &mut PgConnection,
-    state: &State,
     collection: Uuid,
-    trigger: Trigger,
-    items: &[Uuid],
-) -> Result<Option<Notice>, ApiError> {
-    if items.is_empty() {
-        tracing::info!(%collection, trigger = trigger.as_str(), "builder validation: no item to review");
-        return Ok(None);
-    }
-    if items.len() > MAX_ITEMS {
-        tracing::info!(%collection, trigger = trigger.as_str(), items = items.len(), "builder validation: too large to request");
-        return Ok(Some(Notice::ValidationNotRequested {
-            reason: format!(
-                "it is too large for the automated review ({} items)",
-                items.len()
-            ),
-        }));
-    }
-    let now = (state.now)().naive_utc();
+    now: chrono::NaiveDateTime,
+) -> Result<(i64, chrono::NaiveDateTime), ApiError> {
     let day = now.date().and_time(NaiveTime::MIN);
     let today: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM builder.validation_requests \
@@ -280,11 +297,105 @@ async fn record(
     .bind(collection)
     .bind(day)
     .bind(day + TimeDelta::days(1))
-    .fetch_one(&mut *conn)
+    .fetch_one(conn)
     .await?;
-    if today >= DAILY_REQUESTS {
+    Ok((today, day + TimeDelta::days(1)))
+}
+
+async fn start(
+    conn: &mut PgConnection,
+    collection: Uuid,
+    payload: serde_json::Value,
+    by: Option<&str>,
+    at: chrono::NaiveDateTime,
+) -> Result<EventOut, ApiError> {
+    events::record(
+        conn,
+        collection,
+        "review.automated_started",
+        events::Actor::Validator,
+        by,
+        payload,
+        Some(at),
+    )
+    .await
+}
+
+fn started(
+    validation: Uuid,
+    trigger: Trigger,
+    items: &[Uuid],
+    hashes: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "validationId": validation,
+        "trigger": trigger.as_str(),
+        "itemIds": items,
+        "contentHashes": hashes,
+    })
+}
+
+/// Records a request for `items` of `collection` on `conn`, which holds the
+/// collection's row lock, and its start on the review timeline when
+/// `timeline` says so; a collection too large for the validator gets no
+/// request but the curators' notice (and, on the timeline, a start and its
+/// `too_large` error).
+pub(crate) async fn record(
+    conn: &mut PgConnection,
+    state: &State,
+    collection: Uuid,
+    trigger: Trigger,
+    items: &[Uuid],
+    timeline: Timeline<'_>,
+) -> Result<Recorded, ApiError> {
+    if items.is_empty() {
+        tracing::info!(%collection, trigger = trigger.as_str(), "builder validation: no item to review");
+        return Ok(Recorded::default());
+    }
+    let now = (state.now)().naive_utc();
+    if items.len() > MAX_ITEMS {
+        tracing::info!(%collection, trigger = trigger.as_str(), items = items.len(), "builder validation: too large to request");
+        let notice = Some(Notice::ValidationNotRequested {
+            reason: format!(
+                "it is too large for the automated review ({} items)",
+                items.len()
+            ),
+        });
+        let Timeline::On { by } = timeline else {
+            return Ok(Recorded {
+                notice,
+                start: None,
+            });
+        };
+        let validation = Uuid::new_v4();
+        let started = start(
+            conn,
+            collection,
+            started(validation, trigger, items, serde_json::json!({})),
+            by,
+            now,
+        )
+        .await?;
+        events::record_once(
+            conn,
+            collection,
+            "review.automated_error",
+            events::Actor::System,
+            &serde_json::value::to_raw_value(
+                &serde_json::json!({ "reason": "too_large", "validationId": validation, "itemCount": items.len() }),
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+            now,
+        )
+        .await?;
+        return Ok(Recorded {
+            notice,
+            start: Some(started),
+        });
+    }
+    if requests_today(conn, collection, now).await?.0 >= DAILY_REQUESTS {
         tracing::info!(%collection, trigger = trigger.as_str(), "builder validation: the collection's requests for the day are spent");
-        return Ok(None);
+        return Ok(Recorded::default());
     }
     sqlx::query(
         "UPDATE builder.validation_requests SET settled_at = $2, outcome = 'superseded' \
@@ -307,21 +418,70 @@ async fn record(
     .execute(&mut *conn)
     .await?;
     tracing::info!(validation = %id, %collection, trigger = trigger.as_str(), items = items.len(), "builder validation requested");
-    Ok(None)
+    let Timeline::On { by } = timeline else {
+        return Ok(Recorded::default());
+    };
+    let contract: Option<String> =
+        sqlx::query_scalar("SELECT contract_address FROM builder.collections WHERE id = $1")
+            .bind(collection)
+            .fetch_one(&mut *conn)
+            .await?;
+    let hashes: serde_json::Map<String, serde_json::Value> = match contract {
+        Some(contract) => saved_items(conn, collection, Some(items))
+            .await?
+            .iter()
+            .map(|item| (item.id.to_string(), item.content_hash(&contract).into()))
+            .collect(),
+        None => serde_json::Map::new(),
+    };
+    let started = start(
+        conn,
+        collection,
+        started(id, trigger, items, hashes.into()),
+        by,
+        now,
+    )
+    .await?;
+    Ok(Recorded {
+        notice: None,
+        start: Some(started),
+    })
 }
 
 /// A standard collection's first publication of `items`, on the
 /// publication's transaction.
+/// With the review flow on, the publication goes on the review timeline as
+/// `publisher`'s, and so does the request's start.
 pub(crate) async fn on_publish(
     conn: &mut PgConnection,
     state: &State,
     collection: Uuid,
     items: &[Uuid],
+    publisher: &str,
 ) -> Result<Option<Notice>, ApiError> {
     if !enabled(conn, state).await? {
         return Ok(None);
     }
-    record(conn, state, collection, Trigger::Publish, items).await
+    let timeline = if crate::review::enabled(conn, state).await? {
+        events::record(
+            conn,
+            collection,
+            "collection.published",
+            events::Actor::Creator,
+            Some(publisher),
+            serde_json::json!({}),
+            Some((state.now)().naive_utc()),
+        )
+        .await?;
+        Timeline::On { by: None }
+    } else {
+        Timeline::Off
+    };
+    Ok(
+        record(conn, state, collection, Trigger::Publish, items, timeline)
+            .await?
+            .notice,
+    )
 }
 
 /// A creator's changes submission on a published standard collection at
@@ -337,6 +497,31 @@ pub(crate) async fn on_changes(
     if !enabled(conn, state).await? {
         return Ok(None);
     }
+    let changed = match changed(conn, view, collection, contract).await? {
+        Ok(changed) => changed.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        Err(notice) => return Ok(Some(notice)),
+    };
+    Ok(record(
+        conn,
+        state,
+        collection,
+        Trigger::Changes,
+        &changed,
+        Timeline::Off,
+    )
+    .await?
+    .notice)
+}
+
+/// The minted items of `collection` at `contract` whose content differs from
+/// what the chain copy holds, with their hash; the curators' notice when the
+/// copy can't tell.
+pub(crate) async fn changed(
+    conn: &mut PgConnection,
+    view: &DecisionView,
+    collection: Uuid,
+    contract: &str,
+) -> Result<Result<Vec<(Uuid, String)>, Notice>, ApiError> {
     let on_chain: HashMap<String, Option<String>> = match chain_state::collection(conn, view, contract).await {
         Ok(Some(_)) => sqlx::query_as(
             "SELECT item_id::text, content_hash FROM shop.items WHERE network = 'matic' AND contract_address = lower($1)",
@@ -349,21 +534,49 @@ pub(crate) async fn on_changes(
         Ok(None) => HashMap::new(),
         Err(error) => {
             tracing::warn!(%collection, %error, "builder validation: the chain copy can't tell what changed");
-            return Ok(Some(Notice::ValidationNotRequested {
+            return Ok(Err(Notice::ValidationNotRequested {
                 reason: "the automated review could not be requested".into(),
             }));
         }
     };
-    let changed: Vec<Uuid> = saved_items(conn, collection, None)
+    Ok(Ok(saved_items(conn, collection, None)
         .await?
         .iter()
-        .filter(|item| {
-            on_chain.get(&item.blockchain_item_id).cloned().flatten()
-                != Some(item.content_hash(contract))
+        .map(|item| {
+            (
+                item.id,
+                item.content_hash(contract),
+                &item.blockchain_item_id,
+            )
         })
-        .map(|item| item.id)
-        .collect();
-    record(conn, state, collection, Trigger::Changes, &changed).await
+        .filter(|(_, hash, on)| on_chain.get(*on).cloned().flatten().as_ref() != Some(hash))
+        .map(|(id, hash, _)| (id, hash))
+        .collect()))
+}
+
+/// Settles with `outcome` the open requests `due` selects (`$1` now, `$3`
+/// its bound) and, when `$2` (the review flow is on), records on
+/// each one's timeline that the automated review gave up; the collections
+/// and their names.
+fn settle_without_verdict(outcome: &str, due: &str) -> String {
+    format!(
+        "WITH settled AS ( \
+           UPDATE builder.validation_requests r SET settled_at = $1, outcome = '{outcome}' \
+           FROM builder.collections c \
+           WHERE c.id = r.collection_id AND r.settled_at IS NULL AND {due} \
+           RETURNING r.id, r.collection_id, c.name), \
+         noted AS ( \
+           INSERT INTO builder.collection_events (id, collection_id, type, actor, actor_address, payload, created_at) \
+           SELECT gen_random_uuid(), s.collection_id, 'review.automated_error', 'validator', NULL, \
+             jsonb_build_object('reason', 'sweep_exhausted', 'validationId', s.id::text), \
+             GREATEST($1, (SELECT max(e.created_at) + interval '1 microsecond' \
+               FROM builder.collection_events e WHERE e.collection_id = s.collection_id)) \
+           FROM settled s WHERE $2 \
+           ON CONFLICT (collection_id, type, (payload->>'validationId'), (COALESCE(payload->>'reason', ''))) \
+             WHERE type IN {} DO NOTHING) \
+         SELECT collection_id, name FROM settled",
+        events::VERDICT_TYPES
+    )
 }
 
 /// One pass of the `builder-validation-requests` job: abandons the requests
@@ -377,24 +590,24 @@ pub async fn sweep(state: &State) -> anyhow::Result<()> {
     }
     let now = (state.now)().naive_utc();
     let pool = state.items.pool();
-    let abandoned: Vec<(Uuid, String)> = sqlx::query_as(
-        "UPDATE builder.validation_requests r SET settled_at = $1, outcome = 'abandoned' \
-         FROM builder.collections c \
-         WHERE c.id = r.collection_id AND r.settled_at IS NULL AND r.claims >= $2 AND r.lease_until < $1 \
-         RETURNING r.collection_id, c.name",
-    )
+    let flow = {
+        let mut conn = pool.acquire().await?;
+        crate::review::enabled(&mut conn, state).await?
+    };
+    let abandoned: Vec<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(
+        settle_without_verdict("abandoned", "r.claims >= $3 AND r.lease_until < $1"),
+    ))
     .bind(now)
+    .bind(flow)
     .bind(MAX_CLAIMS)
     .fetch_all(pool)
     .await?;
-    let expired: Vec<(Uuid, String)> = sqlx::query_as(
-        "UPDATE builder.validation_requests r SET settled_at = $1, outcome = 'expired' \
-         FROM builder.collections c \
-         WHERE c.id = r.collection_id AND r.settled_at IS NULL AND r.created_at <= $2 \
-           AND (r.lease_until IS NULL OR r.lease_until < $1) \
-         RETURNING r.collection_id, c.name",
-    )
+    let expired: Vec<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(settle_without_verdict(
+        "expired",
+        "r.created_at <= $3 AND (r.lease_until IS NULL OR r.lease_until < $1)",
+    )))
     .bind(now)
+    .bind(flow)
     .bind(now - UNSETTLED_FOR)
     .fetch_all(pool)
     .await?;

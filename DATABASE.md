@@ -1796,13 +1796,16 @@ The builder records the wearable validator's work in
 (`services/catalyst/builder/src/validator.rs`, `validator/claims.rs`,
 `handlers/validator.rs`; decided in
 [the validator ADR](docs/adr/2026-11-21-builder-validator-pulls-reviews.md)).
-The object pass creates both tables; no step is needed.
+The object pass creates both tables. Step
+`0065_builder_validation_retry` widens `validation_requests_trigger_check`
+to the trigger `retry` on a database that has the table; the object pass
+creates it with that check where it doesn't.
 
 Writers and readers:
 
-- A standard collection's first publication and a creator's changes
-  submission insert a request in their own transaction, under the
-  collection's row lock: a count of the collection's requests that UTC day
+- A standard collection's first publication, a creator's changes
+  submission and, with the review flow on, a creator's retry insert a
+  request in their own transaction, under the collection's row lock: a count of the collection's requests that UTC day
   (`validation_requests_collection_created_idx`), the open one settled
   `superseded` (`validation_requests_open_key`), then the insert.
 - A claim takes the oldest open request with claims left whose lease isn't
@@ -1857,6 +1860,65 @@ abandon and expire scan `validation_requests_open_key` (199 open rows);
 retention a bitmap scan of `validation_requests_settled_idx`; the
 seen-signature sweep an index scan of
 `validator_seen_signatures_expires_idx`.
+
+## Builder review timeline workload
+
+With the review flow on
+([the review flow ADR](docs/adr/2026-11-21-builder-review-flow.md)), the
+builder writes a collection's review timeline in
+`builder.collection_events` beside its curator decisions
+(`services/catalyst/builder/src/review.rs`, `curation/events.rs`,
+`handlers/review.rs`). No other table is added.
+
+Writers, each under the collection's row lock in its own transaction:
+
+- Recording a validation request writes its start; a first publication
+  also writes the publication; a changes submission writes the submitted
+  item ids, or an appeal when nothing changed since a rejection.
+- A verdict from the current claim writes its event once
+  (`ON CONFLICT DO NOTHING` on `collection_events_verdict_validation_idx`)
+  and, through the transition table, rejects or reopens the newest
+  collection curation in the transaction that settles its request; that
+  transaction locks the collection row before the request row, as every
+  request writer does.
+- A comment and an appeal take a transaction advisory lock on the writing
+  wallet, count that wallet's comments or appeals of the UTC day across
+  collections and the collection's own, and insert one event.
+- The leased `builder-validation-requests` job writes the give-up error of
+  each request it abandons or expires in the statement that settles it.
+- A third-party publication writes its curator hand-off once.
+
+Each insert stamps its row after the collection's newest event, so the
+timeline's order is the order of the writes.
+
+Readers: a timeline page (a count and at most 200 rows newest first, by
+`collection_events_collection_created_idx`); the newest start, a
+validation's verdict, a curator decision after a start, the newest event
+that isn't a comment and the judged content hashes of the last 50 verdicts,
+each over the collection's events; the wallet's daily count over the
+partial index `collection_events_creator_text_idx (actor_address,
+created_at)` on comments and appeals.
+
+Invariants:
+
+- One verdict event per validation and reason.
+- A collection takes at most 200 comments and five appeals in a UTC day; a
+  wallet writes at most 200 comments and 20 appeals in a UTC day.
+- The validator's curation writes set `reviewed_by = 'validator'` and are
+  audited in `ops.admin_audit` with the actor `validator`.
+
+Size: the reference data holds no events. A review writes about five
+events, comments and appeals are bounded per day, so a collection's
+timeline stays in the hundreds. `EXPLAIN ANALYZE` with 17,000 collections
+and 300,000 events: a page and its count are bitmap scans of
+`collection_events_collection_created_idx` (0.14 ms); the collection's daily
+count an index scan of it and the wallet's an index scan of
+`collection_events_creator_text_idx` (0.12 ms together); the judged hashes a
+bitmap-or of `collection_events_verdict_validation_idx` (0.12 ms); the
+newest start, the decision check, the newest event that isn't a comment and
+the stamp index scans of `collection_events_collection_created_idx` (under
+0.03 ms); a validation's verdict an index scan of
+`collection_events_verdict_validation_idx` (0.01 ms).
 
 ## Notification writer
 

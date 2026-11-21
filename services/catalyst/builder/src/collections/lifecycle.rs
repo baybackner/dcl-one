@@ -311,7 +311,7 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         }
         if first && !now.approved {
             let items: Vec<Uuid> = now.items.iter().map(|(item, _)| *item).collect();
-            validation = validator::on_publish(&mut tx, state, id, &items).await?;
+            validation = validator::on_publish(&mut tx, state, id, &items, sync.signer()).await?;
         }
         tx.commit().await?;
         first_publication = first;

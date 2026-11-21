@@ -24,7 +24,7 @@ use super::support::{
 };
 use crate::shared::validator_signature::{SIGNATURE_HEADER, TIMESTAMP_HEADER, sign};
 
-const SECRET: &str = "example-validator-secret-0123456789abcdef";
+pub(super) const SECRET: &str = "example-validator-secret-0123456789abcdef";
 const OTHER_SECRET: &str = "example-other-secret-0123456789abcdefghij";
 const SLACK_TOKEN: &str = "xoxb-example123";
 const CLAIMS: &str = "/v1/validator/claims";
@@ -35,15 +35,15 @@ thread_local! {
     static SENT: Cell<i64> = const { Cell::new(0) };
 }
 
-fn clock() -> DateTime<Utc> {
+pub(super) fn clock() -> DateTime<Utc> {
     DateTime::from_timestamp_millis(NOW.with(Cell::get)).unwrap()
 }
 
-fn set_clock(at: DateTime<Utc>) {
+pub(super) fn set_clock(at: DateTime<Utc>) {
     NOW.with(|now| now.set(at.timestamp_millis()));
 }
 
-fn advance(by: Duration) {
+pub(super) fn advance(by: Duration) {
     set_clock(clock() + by);
 }
 
@@ -57,17 +57,17 @@ fn iso(t: DateTime<Utc>) -> String {
     crate::http::iso(&t)
 }
 
-fn address(key: &str) -> String {
+pub(super) fn address(key: &str) -> String {
     format!("{:#x}", wallet(key).address())
 }
 
 #[derive(Clone, Default)]
-struct FakeSlack {
+pub(super) struct FakeSlack {
     texts: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeSlack {
-    async fn start(&self) -> String {
+    pub(super) async fn start(&self) -> String {
         let fake = self.clone();
         let app = Router::new().route(
             "/api/chat.postMessage",
@@ -88,7 +88,7 @@ impl FakeSlack {
         format!("http://{addr}/api")
     }
 
-    fn texts(&self) -> Vec<String> {
+    pub(super) fn texts(&self) -> Vec<String> {
         let mut texts = self.texts.lock().unwrap().clone();
         texts.sort();
         texts
@@ -96,10 +96,10 @@ impl FakeSlack {
 }
 
 #[derive(Clone)]
-struct Options {
-    secret: Option<&'static str>,
-    writes: bool,
-    storage: Option<Arc<crate::storage::Storage>>,
+pub(super) struct Options {
+    pub(super) secret: Option<&'static str>,
+    pub(super) writes: bool,
+    pub(super) storage: Option<Arc<crate::storage::Storage>>,
 }
 
 impl Default for Options {
@@ -112,18 +112,18 @@ impl Default for Options {
     }
 }
 
-struct Node {
-    pool: PgPool,
-    storage: Arc<crate::storage::Storage>,
-    app: Router,
-    state: crate::SharedState,
-    oracle: FakeOracle,
-    slack: FakeSlack,
+pub(super) struct Node {
+    pub(super) pool: PgPool,
+    pub(super) storage: Arc<crate::storage::Storage>,
+    pub(super) app: Router,
+    pub(super) state: crate::SharedState,
+    pub(super) oracle: FakeOracle,
+    pub(super) slack: FakeSlack,
 }
 
 /// The `builder` flags document as the flags mirror stores it, with
 /// `builder-auto-curation` holding `value`; `None` stores no document.
-async fn set_flag(pool: &PgPool, value: Option<Value>) {
+pub(super) async fn set_flag(pool: &PgPool, value: Option<Value>) {
     sqlx::query("DELETE FROM explore_api.feature_flags WHERE app = 'builder'")
         .execute(pool)
         .await
@@ -157,7 +157,7 @@ async fn set_local_flag(pool: &PgPool, on: Option<bool>) {
     }
 }
 
-async fn own_pool() -> Option<PgPool> {
+pub(super) async fn own_pool() -> Option<PgPool> {
     let pool = crate::db::scratch::isolated_pool(4).await?;
     sqlx::query(
         "INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at, pass_started_at) \
@@ -171,7 +171,7 @@ async fn own_pool() -> Option<PgPool> {
     Some(pool)
 }
 
-async fn node_over(pool: PgPool, options: Options) -> Node {
+pub(super) async fn node_over(pool: PgPool, options: Options) -> Node {
     let oracle = FakeOracle::default();
     let slack = FakeSlack::default();
     let committee = FakeCommittee::with(&[]);
@@ -219,12 +219,12 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
     }
 }
 
-async fn node() -> Option<Node> {
+pub(super) async fn node() -> Option<Node> {
     set_clock(DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap());
     Some(node_over(own_pool().await?, Options::default()).await)
 }
 
-async fn send(app: &Router, request: Request<Body>) -> (u16, String) {
+pub(super) async fn send(app: &Router, request: Request<Body>) -> (u16, String) {
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status().as_u16();
     let bytes = axum::body::to_bytes(response.into_body(), 8 << 20)
@@ -233,12 +233,12 @@ async fn send(app: &Router, request: Request<Body>) -> (u16, String) {
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn json_of(body: &str) -> Value {
+pub(super) fn json_of(body: &str) -> Value {
     serde_json::from_str(body).unwrap_or(Value::Null)
 }
 
 /// A wallet's call, signed by `key` when given.
-async fn call(
+pub(super) async fn call(
     app: &Router,
     key: Option<&str>,
     method: &str,
@@ -320,7 +320,12 @@ fn validator_request(method: &str, path: &str, body: &str, signing: &Signing) ->
         .unwrap()
 }
 
-async fn validator_call(app: &Router, method: &str, path: &str, body: &str) -> (u16, String) {
+pub(super) async fn validator_call(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> (u16, String) {
     send(
         app,
         validator_request(method, path, body, &Signing::default()),
@@ -328,12 +333,12 @@ async fn validator_call(app: &Router, method: &str, path: &str, body: &str) -> (
     .await
 }
 
-async fn claim(node: &Node) -> (u16, Value) {
+pub(super) async fn claim(node: &Node) -> (u16, Value) {
     let (status, body) = validator_call(&node.app, "POST", CLAIMS, "{}").await;
     (status, json_of(&body))
 }
 
-async fn lease(node: &Node, validation: &Value, claim: &Value) -> (u16, Value) {
+pub(super) async fn lease(node: &Node, validation: &Value, claim: &Value) -> (u16, Value) {
     let (status, body) = validator_call(
         &node.app,
         "POST",
@@ -344,7 +349,7 @@ async fn lease(node: &Node, validation: &Value, claim: &Value) -> (u16, Value) {
     (status, json_of(&body))
 }
 
-async fn verdict(node: &Node, collection: Uuid, result: &Value) -> (u16, Value) {
+pub(super) async fn verdict(node: &Node, collection: Uuid, result: &Value) -> (u16, Value) {
     let (status, body) = validator_call(
         &node.app,
         "POST",
@@ -357,7 +362,7 @@ async fn verdict(node: &Node, collection: Uuid, result: &Value) -> (u16, Value) 
 
 /// The verdict a claim's validator posts: every item it was sent, `passed`
 /// as the verdict says.
-fn result_of(claimed: &Value, verdict: &str) -> Value {
+pub(super) fn result_of(claimed: &Value, verdict: &str) -> Value {
     let data = &claimed["data"];
     json!({
         "validationId": data["validationId"],
@@ -381,7 +386,7 @@ fn result_of(claimed: &Value, verdict: &str) -> Value {
 /// A standard draft of the owner's named `name` with `items` items, each
 /// naming a model file of its own (and the first a video) that the owner
 /// uploaded.
-async fn draft(node: &Node, name: &str, items: usize) -> (Uuid, Vec<Uuid>) {
+pub(super) async fn draft(node: &Node, name: &str, items: usize) -> (Uuid, Vec<Uuid>) {
     let id = Uuid::new_v4();
     let owner = address(OWNER_KEY);
     save_collection(&node.state.items, &owner, json!({ "id": id, "name": name }))
@@ -445,7 +450,7 @@ async fn bare_draft(node: &Node, name: &str, items: usize) -> (Uuid, Vec<Uuid>) 
     (id, ids)
 }
 
-async fn contract_of(pool: &PgPool, id: Uuid) -> String {
+pub(super) async fn contract_of(pool: &PgPool, id: Uuid) -> String {
     sqlx::query_scalar("SELECT contract_address FROM builder.collections WHERE id = $1")
         .bind(id)
         .fetch_one(pool)
@@ -454,7 +459,7 @@ async fn contract_of(pool: &PgPool, id: Uuid) -> String {
 }
 
 /// `POST /v1/collections/:id/publish` once the chain holds `on_chain` items.
-async fn publish(node: &Node, id: Uuid, on_chain: u64) -> (u16, Value) {
+pub(super) async fn publish(node: &Node, id: Uuid, on_chain: u64) -> (u16, Value) {
     node.oracle
         .deploy(&contract_of(&node.pool, id).await, on_chain);
     call(
@@ -467,16 +472,16 @@ async fn publish(node: &Node, id: Uuid, on_chain: u64) -> (u16, Value) {
     .await
 }
 
-async fn published(node: &Node, name: &str, items: usize) -> (Uuid, Vec<Uuid>) {
+pub(super) async fn published(node: &Node, name: &str, items: usize) -> (Uuid, Vec<Uuid>) {
     let (id, ids) = draft(node, name, items).await;
     let (status, body) = publish(node, id, items as u64).await;
     assert_eq!(status, 200, "{body}");
     (id, ids)
 }
 
-type RequestRow = (Uuid, String, Vec<Uuid>, i16, Option<String>);
+pub(super) type RequestRow = (Uuid, String, Vec<Uuid>, i16, Option<String>);
 
-async fn requests(pool: &PgPool, collection: Uuid) -> Vec<RequestRow> {
+pub(super) async fn requests(pool: &PgPool, collection: Uuid) -> Vec<RequestRow> {
     sqlx::query_as(
         "SELECT id, trigger, item_ids, claims, outcome FROM builder.validation_requests \
          WHERE collection_id = $1 ORDER BY created_at, id",
@@ -496,7 +501,7 @@ async fn every_request(pool: &PgPool) -> i64 {
 
 /// What the curators and creators see of a collection's review: its
 /// curations, item curations and timeline.
-async fn review_state(pool: &PgPool) -> String {
+pub(super) async fn review_state(pool: &PgPool) -> String {
     sqlx::query_scalar(
         "SELECT md5(concat( \
            (SELECT string_agg(c::text, ',' ORDER BY id) FROM builder.collection_curations c), \
@@ -508,7 +513,7 @@ async fn review_state(pool: &PgPool) -> String {
     .unwrap()
 }
 
-async fn collection_curation(pool: &PgPool, collection: Uuid, status: &str) {
+pub(super) async fn collection_curation(pool: &PgPool, collection: Uuid, status: &str) {
     sqlx::query(
         "INSERT INTO builder.collection_curations (id, collection_id, status, created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $4)",
@@ -523,7 +528,7 @@ async fn collection_curation(pool: &PgPool, collection: Uuid, status: &str) {
 }
 
 /// The chain copy holds `contract` with each `(on-chain id, content hash)`.
-async fn copy_holds(pool: &PgPool, contract: &str, items: &[(u64, &str)]) {
+pub(super) async fn copy_holds(pool: &PgPool, contract: &str, items: &[(u64, &str)]) {
     sqlx::query(
         "INSERT INTO shop.collections (network, contract_address, chain_id, name, creator, owner, urn, \
            is_completed, is_approved, is_editable, managers, minters, created_at, updated_at, reviewed_at, mirrored_at) \
@@ -554,7 +559,7 @@ async fn copy_holds(pool: &PgPool, contract: &str, items: &[(u64, &str)]) {
     }
 }
 
-async fn local_hash(pool: &PgPool, item: Uuid) -> String {
+pub(super) async fn local_hash(pool: &PgPool, item: Uuid) -> String {
     sqlx::query_scalar("SELECT local_content_hash FROM builder.items WHERE id = $1")
         .bind(item)
         .fetch_one(pool)
@@ -564,7 +569,7 @@ async fn local_hash(pool: &PgPool, item: Uuid) -> String {
 
 /// The owner saves item `item` of `collection` again, as it is, and the
 /// node computes its content hash.
-async fn resave(node: &Node, collection: Uuid, item: Uuid, n: usize, model: &[u8]) {
+pub(super) async fn resave(node: &Node, collection: Uuid, item: Uuid, n: usize, model: &[u8]) {
     let item_row: Value = super::support::read_item(&node.state.items, item)
         .await
         .unwrap();
@@ -592,7 +597,7 @@ async fn resave(node: &Node, collection: Uuid, item: Uuid, n: usize, model: &[u8
         .unwrap();
 }
 
-fn notice(collection: Uuid, name: &str, reason: &str) -> String {
+pub(super) fn notice(collection: Uuid, name: &str, reason: &str) -> String {
     format!(
         "⚠️ No automated review for <https://creators.example.org/collections/editor?collection={collection}&reviewing=true|{name}>: {reason}. It needs a curator review without it."
     )
@@ -607,7 +612,7 @@ fn published_notice(collection: Uuid, name: &str, items: usize) -> String {
     )
 }
 
-async fn sweep(node: &Node) {
+pub(super) async fn sweep(node: &Node) {
     crate::validator::sweep(&node.state).await.unwrap();
     node.state.notices.settled().await;
 }
@@ -1293,6 +1298,17 @@ async fn a_validator_that_dies_lets_its_lease_lapse_and_the_third_lapse_abandons
     assert_eq!(
         requests(&node.pool, id).await[0].4.as_deref(),
         Some("abandoned")
+    );
+    let timeline: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM builder.collection_events WHERE collection_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&node.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        timeline, 0,
+        "without the review flow the timeline records nothing"
     );
     assert_eq!(node.slack.texts(), {
         let mut expected = vec![

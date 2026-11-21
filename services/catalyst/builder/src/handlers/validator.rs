@@ -73,7 +73,16 @@ fn unauthorized() -> ApiError {
     ApiError::unauthorized("Unauthorized")
 }
 
-async fn authenticate(state: &SharedState, called: &Called, body: &[u8]) -> Result<(), ApiError> {
+/// A validator call whose signature verified, fresh and never seen before:
+/// made only here, the proof `access::validator_verdict` takes.
+#[derive(Debug)]
+pub struct Verified(());
+
+async fn authenticate(
+    state: &SharedState,
+    called: &Called,
+    body: &[u8],
+) -> Result<Verified, ApiError> {
     let secret = state
         .settings
         .validator_secret
@@ -112,7 +121,7 @@ async fn authenticate(state: &SharedState, called: &Called, body: &[u8]) -> Resu
         tracing::info!(path = %called.path.request, "builder validation: a signature seen before is refused");
         return Err(unauthorized());
     }
-    Ok(())
+    Ok(Verified(()))
 }
 
 fn invalid_body() -> ApiError {
@@ -172,7 +181,7 @@ pub async fn verdict(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
-    authenticate(&state, &called, &body).await?;
-    claims::settle(&state, &id, claims::Verdict::parse(&body)?).await?;
+    let verified = authenticate(&state, &called, &body).await?;
+    claims::settle(&state, &id, claims::Verdict::parse(&body)?, &verified).await?;
     Ok(StatusCode::NO_CONTENT)
 }

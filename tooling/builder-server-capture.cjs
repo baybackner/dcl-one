@@ -566,6 +566,35 @@ const VIDEO_CASES = [
   { name: '491-item-videos-not-named', description: 'POST /items/{id}/videos signed by the owner, an MP4 the item doesn\'t name', method: 'POST', path: videosOf('3fa'), signer: 'owner', multipart: videoPart(ITEM_OTHER_VIDEO_TEXT) }
 ]
 
+const reviewOf = (suffix, route) => `/v1/collections/${id(suffix)}/${route}`
+const EVENTS = ['data.results.id', 'data.results.created_at']
+const EVENT = ['data.id', 'data.created_at']
+const CURATION = ['data.id', 'data.created_at', 'data.updated_at']
+const flowOn = { review_flow: true }
+
+const REVIEW_CASES = [
+  { name: '492-review-validations-flag-off', description: 'POST /collections/{id}/validations signed by the owner while the review flow is off', method: 'POST', path: reviewOf('302', 'validations'), signer: 'owner' },
+  { name: '493-review-appeal-flag-off', description: 'POST /collections/{id}/curation/appeal signed by the owner while the review flow is off', method: 'POST', path: reviewOf('302', 'curation/appeal'), signer: 'owner', body: { note: 'Please look again' } },
+  { name: '494-review-events-flag-off', description: 'GET /collections/{id}/events signed by the owner while the review flow is off', method: 'GET', path: reviewOf('302', 'events'), signer: 'owner' },
+  { name: '495-review-comments-flag-off', description: 'POST /collections/{id}/comments signed by the owner while the review flow is off', method: 'POST', path: reviewOf('302', 'comments'), signer: 'owner', body: { message: 'Hello' } },
+  { name: '496-review-events-owner', description: 'GET /collections/{id}/events signed by the owner with the review flow on, a collection a curator approved and reopened', method: 'GET', path: reviewOf('302', 'events'), signer: 'owner', volatile: EVENTS, ...flowOn },
+  { name: '497-review-events-committee', description: 'GET /collections/{id}/events signed by a committee member with the review flow on', method: 'GET', path: reviewOf('302', 'events'), signer: 'committee', volatile: EVENTS, ...flowOn },
+  { name: '498-review-events-stranger', description: 'GET /collections/{id}/events signed by a wallet with no role with the review flow on', method: 'GET', path: reviewOf('302', 'events'), signer: 'stranger', ...flowOn },
+  { name: '499-review-events-unsigned', description: 'GET /collections/{id}/events without a signature with the review flow on', method: 'GET', path: reviewOf('302', 'events'), ...flowOn },
+  { name: '500-review-comment-owner', description: 'POST /collections/{id}/comments signed by the owner with the review flow on, a pending review, a message with markup on two lines', method: 'POST', path: reviewOf('302', 'comments'), signer: 'owner', body: { message: '  Is the clipping fine now?\n<b>thanks</b> & bye  ' }, volatile: EVENT, ...flowOn },
+  { name: '501-review-comment-committee', description: 'POST /collections/{id}/comments signed by a committee member with the review flow on, about an item of the collection', method: 'POST', path: reviewOf('302', 'comments'), signer: 'committee', body: { message: 'Checking it now', itemId: id('3b1') }, volatile: EVENT, ...flowOn },
+  { name: '502-review-comment-stranger', description: 'POST /collections/{id}/comments signed by a wallet with no role with the review flow on', method: 'POST', path: reviewOf('302', 'comments'), signer: 'stranger', body: { message: 'Hello' }, ...flowOn },
+  { name: '503-review-comment-blank', description: 'POST /collections/{id}/comments signed by the owner with the review flow on, a message of spaces', method: 'POST', path: reviewOf('302', 'comments'), signer: 'owner', body: { message: '   ' }, ...flowOn },
+  { name: '504-review-appeal-not-rejected', description: 'POST /collections/{id}/curation/appeal signed by the owner with the review flow on, a pending review', method: 'POST', path: reviewOf('302', 'curation/appeal'), signer: 'owner', body: {}, ...flowOn },
+  { name: '505-review-validations-owner', description: 'POST /collections/{id}/validations signed by the owner with the review flow on, a published collection no automated review started on', method: 'POST', path: reviewOf('302', 'validations'), signer: 'owner', volatile: EVENT, ...flowOn },
+  { name: '506-review-validations-running', description: 'POST /collections/{id}/validations signed by the owner with the review flow on, while that review runs', method: 'POST', path: reviewOf('302', 'validations'), signer: 'owner', ...flowOn },
+  { name: '507-review-validation-result-rejected', description: 'POST /collections/{id}/validation-result signed by the validator with the review flow on, rejecting the running review', method: 'POST', path: validationResultOf('302'), validator: {}, validation_of: id('302'), body: { validationId: 'c011ec71-0000-4000-8000-0000000005a2', collectionId: id('302'), verdict: 'rejected', rulesVersion: '1.4.0', items: [{ itemId: id('3b1'), contentHash: 'bafkreibk2rcaifdobrjwlon5bbyrn6immanlsfy5yjsa4lisz6mh6rw4dm', passed: false, findings: [{ rule: 'M-01', check: 'triangles', severity: 'error', message: 'Too many triangles', measured: 1.5e4, limit: 10000 }] }, { itemId: id('3b2'), contentHash: 'bafkreidvdvwrg5c75hsxt7ubcmfb5ppjvtkg7wun5abdakvchcujopqhi4', passed: true, findings: [] }] }, ...flowOn },
+  { name: '508-review-curation-after-rejection', description: 'GET /collections/{id}/curation signed by the owner, after the validator rejected the review', method: 'GET', path: reviewOf('302', 'curation'), signer: 'owner', volatile: CURATION, ...flowOn },
+  { name: '509-review-events-after-rejection', description: 'GET /collections/{id}/events signed by the owner with the review flow on, after the validator rejected the review', method: 'GET', path: reviewOf('302', 'events'), signer: 'owner', volatile: EVENTS, ...flowOn },
+  { name: '510-review-appeal-owner', description: 'POST /collections/{id}/curation/appeal signed by the owner with the review flow on, a note on two lines after the validator\'s rejection', method: 'POST', path: reviewOf('302', 'curation/appeal'), signer: 'owner', body: { note: ' The clipping is intended:\nsee <the> reference. ' }, volatile: CURATION, ...flowOn },
+  { name: '511-review-appeal-again', description: 'POST /collections/{id}/curation/appeal signed by the owner with the review flow on, while its appeal is open', method: 'POST', path: reviewOf('302', 'curation/appeal'), signer: 'owner', body: {}, volatile: CURATION, ...flowOn }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2473,7 +2502,8 @@ const CASES = [
   ...FORUM_CASES,
   ...THIRD_PARTY_PUBLISH_CASES,
   ...VALIDATION_CASES,
-  ...VIDEO_CASES
+  ...VIDEO_CASES,
+  ...REVIEW_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -3415,14 +3445,27 @@ function bucketNamed(value, bucket) {
   return bucket ? value.split(bucket).join(BUCKET_URL) : value
 }
 
-async function record(req, base, signers, volatileFields, item, bucket) {
+/**
+ * The body `item` sends: its recorded body, except that a case with `validation_of` sends the validation id of
+ * that collection's newest automated review start, which `latestStart` reads.
+ */
+async function sentBody(item, body, latestStart) {
+  if (!item.validation_of) return body
+  return JSON.stringify({ ...item.body, validationId: await latestStart(item.validation_of) })
+}
+
+async function record(req, base, signers, volatileFields, item, bucket, latestStart) {
   const query = item.query || {}
   const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
   const sent = requestBody({ ...item, body: await withCheque(item, signers) })
+  sent.body = await sentBody(item, sent.body, latestStart)
   const headers = item.signer
     ? await signedHeaders(req, signers[item.signer], item)
     : item.validator ? validatorHeaders(item.validator, sent.body) : { ...item.headers }
   if (item.body !== undefined) headers['content-type'] = 'application/json'
+  const recordedHeaders = item.validation_of
+    ? { ...validatorHeaders(item.validator, JSON.stringify(item.body)), 'content-type': 'application/json' }
+    : headers
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
     method: item.method,
     headers,
@@ -3439,7 +3482,7 @@ async function record(req, base, signers, volatileFields, item, bucket) {
   const recorded = { status: response.status, headers: kept }
   if ((kept['content-type'] || '').startsWith('application/json')) recorded.body_json = JSON.parse(bytes.toString('utf8'))
   else recorded.body_bytes_b64 = bytes.toString('base64')
-  refuseMarkers(item.name, { request: { headers, query, ...sent.recorded }, response: recorded })
+  refuseMarkers(item.name, { request: { headers: recordedHeaders, query, ...sent.recorded }, response: recorded })
   const equalities = volatileEqualities(item, recorded.body_json)
   scrubVolatile(item, recorded.body_json, volatileFields)
   return {
@@ -3448,7 +3491,7 @@ async function record(req, base, signers, volatileFields, item, bucket) {
       method: item.method,
       path: item.path,
       query,
-      headers: Object.fromEntries(Object.entries(headers).sort(([a], [b]) => a.localeCompare(b))),
+      headers: Object.fromEntries(Object.entries(recordedHeaders).sort(([a], [b]) => a.localeCompare(b))),
       ...sent.recorded
     },
     response: recorded,
@@ -3458,7 +3501,9 @@ async function record(req, base, signers, volatileFields, item, bucket) {
     ...(equalities.length ? { volatile_equal: equalities } : {}),
     ...(item.headers ? { auth: 'recorded' } : {}),
     ...(item.sign ? { sign: recordedSign(item) } : {}),
-    ...(item.validator ? { validator_sign: item.validator } : {})
+    ...(item.validator ? { validator_sign: item.validator } : {}),
+    ...(item.review_flow ? { review_flow: true } : {}),
+    ...(item.validation_of ? { validation_of: item.validation_of } : {})
   }
 }
 
@@ -3495,13 +3540,29 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     const base = `http://127.0.0.1:${listener.address().port}`
     const fixtures = []
     const bucket = `${environment.AWS_STORAGE_URL}/${environment.AWS_BUCKET_NAME}`
+    const latestStart = async collection => {
+      const reader = new Client({ connectionString: url })
+      await reader.connect()
+      try {
+        const { rows } = await reader.query(
+          "SELECT payload->>'validationId' AS id FROM collection_events WHERE collection_id = $1 AND type = 'review.automated_started' ORDER BY created_at DESC, id DESC LIMIT 1",
+          [collection]
+        )
+        if (!rows.length) fail(`no automated review started on ${collection}`)
+        return rows[0].id
+      } finally {
+        await reader.end()
+      }
+    }
     for (const item of CASES) {
       const sent = fakes.slacked.length
       const called = fakes.forum.calls.length
       const requested = fakes.queued.length
-      const fixture = await capture.record(base, item, bucket)
+      process.env.FF_AUTO_CURATION_REVIEW_FLOW = item.review_flow ? 'true' : 'false'
+      const fixture = await capture.record(base, item, bucket, latestStart)
       await validations.settled()
       await noticesSettled()
+      process.env.FF_AUTO_CURATION_REVIEW_FLOW = 'false'
       const slack = slackRecord(fakes.slacked.slice(sent))
       const forum = forumRecord(fakes.forum.calls.slice(called))
       const queue = queueRecord(fakes.queued.slice(requested))
@@ -3537,7 +3598,7 @@ async function main() {
   const seed = readSeed()
   const signers = wallets(capture.req, seed)
   const { volatile_fields: volatileFields } = ledger
-  capture.record = (base, item, bucket) => record(capture.req, base, signers, volatileFields, item, bucket)
+  capture.record = (base, item, bucket, latestStart) => record(capture.req, base, signers, volatileFields, item, bucket, latestStart)
   const unfaked = []
   const { Client } = capture.req('pg')
   const admin = new Client({ connectionString: databaseUrl(adminUrl, 'postgres') })
@@ -3565,4 +3626,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { snsAnswer, queueRecord, validatorHeaders, trackValidations, VALIDATOR_SECRET, SNS_TOPIC, activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { sentBody, REVIEW_CASES, snsAnswer, queueRecord, validatorHeaders, trackValidations, VALIDATOR_SECRET, SNS_TOPIC, activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

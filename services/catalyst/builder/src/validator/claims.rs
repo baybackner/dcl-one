@@ -224,6 +224,8 @@ pub struct Verdict {
     reason: Option<String>,
     retryable: Option<bool>,
     claim_id: Uuid,
+    #[serde(skip)]
+    result: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
 }
 
 fn token(value: &str) -> bool {
@@ -242,7 +244,9 @@ impl Verdict {
     /// `Invalid request body` otherwise.
     pub fn parse(body: &[u8]) -> Result<Self, ApiError> {
         let refused = || ApiError::bad_request("Invalid request body");
-        let verdict: Self = serde_json::from_slice(body).map_err(|_| refused())?;
+        let mut verdict: Self = serde_json::from_slice(body).map_err(|_| refused())?;
+        verdict.result = serde_json::from_slice(body).map_err(|_| refused())?;
+        verdict.result.remove("claimId");
         let valid = token(&verdict.validation_id)
             && token(&verdict.collection_id)
             && token(&verdict.rules_version)
@@ -285,9 +289,16 @@ fn another_collection(data: Value) -> ApiError {
 
 /// Settles the request `verdict` names with its outcome when it comes from
 /// the request's current claim; a retryable error ends the lease instead,
-/// so the request can be claimed again. 400 for a verdict about another
+/// so the request can be claimed again. With the review flow on, the
+/// verdict also acts on the review in the same transaction
+/// ([`crate::review::on_verdict`]). 400 for a verdict about another
 /// collection than `path_id` or an item its request didn't name.
-pub async fn settle(state: &State, path_id: &str, verdict: Verdict) -> Result<(), ApiError> {
+pub async fn settle(
+    state: &State,
+    path_id: &str,
+    verdict: Verdict,
+    verified: &crate::handlers::validator::Verified,
+) -> Result<(), ApiError> {
     if verdict.collection_id != path_id {
         return Err(another_collection(
             json!({ "id": path_id, "collectionId": verdict.collection_id }),
@@ -298,21 +309,33 @@ pub async fn settle(state: &State, path_id: &str, verdict: Verdict) -> Result<()
     };
     let now = (state.now)();
     let mut tx = state.items.pool().begin().await?;
+    let named: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM builder.validation_requests WHERE id = $1")
+            .bind(validation)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(collection) = named {
+        sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+            .bind(collection)
+            .execute(&mut *tx)
+            .await?;
+    }
     type RequestRow = (
         Uuid,
         Vec<Uuid>,
         Option<Uuid>,
         Option<chrono::NaiveDateTime>,
         bool,
+        chrono::NaiveDateTime,
     );
     let request: Option<RequestRow> = sqlx::query_as(
-        "SELECT collection_id, item_ids, claim_id, lease_until, settled_at IS NOT NULL \
+        "SELECT collection_id, item_ids, claim_id, lease_until, settled_at IS NOT NULL, created_at \
          FROM builder.validation_requests WHERE id = $1 FOR UPDATE",
     )
     .bind(validation)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((collection, item_ids, claim, lease_until, settled)) = request else {
+    let Some((collection, item_ids, claim, lease_until, settled, requested_at)) = request else {
         tracing::info!(%validation, "builder validation: a verdict for no request");
         return Ok(());
     };
@@ -368,7 +391,6 @@ pub async fn settle(state: &State, path_id: &str, verdict: Verdict) -> Result<()
                 .collect(),
             None => Default::default(),
         };
-    tx.commit().await?;
     let stale: Vec<&str> = verdict
         .items
         .iter()
@@ -380,6 +402,37 @@ pub async fn settle(state: &State, path_id: &str, verdict: Verdict) -> Result<()
         })
         .map(|item| item.item_id.as_str())
         .collect();
+    let notices = if crate::review::enabled(&mut tx, state).await? {
+        let judged: &[&str] = if verdict.verdict == Outcome::Error {
+            &[]
+        } else {
+            &stale
+        };
+        crate::review::on_verdict(
+            &mut tx,
+            state,
+            &crate::access::validator_verdict(verified, collection),
+            validation,
+            requested_at,
+            &verdict.result,
+            judged,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    tx.commit().await?;
+    if !notices.is_empty() {
+        let name: String = sqlx::query_scalar("SELECT name FROM builder.collections WHERE id = $1")
+            .bind(collection)
+            .fetch_one(state.items.pool())
+            .await?;
+        for notice in notices {
+            state
+                .notices
+                .send(&state.guarded, collection, &name, "", notice);
+        }
+    }
     let items: Vec<String> = verdict
         .items
         .iter()

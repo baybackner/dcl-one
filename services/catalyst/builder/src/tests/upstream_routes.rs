@@ -2,10 +2,9 @@
 //! registers under `/v1` at `98897af692f26063a088aebb2ea5bb3f683168a2`, and
 //! whether this crate's router answers its method and path. A `Routed` route
 //! reaches a handler, which says nothing about matching upstream's
-//! behaviour; a `Todo` route is still to add; a `Removed` route is outside
-//! the port and stays unanswered: the node keeps no scenes (projects,
-//! manifests, templates, deployments, asset packs, assets and their files),
-//! analytics or NFT reads. Adding a route moves its row to `Routed` first.
+//! behaviour; a `Removed` route is outside the port and stays unanswered:
+//! the node keeps no scenes (projects, manifests, templates, deployments,
+//! asset packs, assets and their files), analytics or NFT reads.
 //! [`SCENE_ROUTES`] lists the scene routes the node itself added beyond
 //! upstream's, which stay unanswered under both mounts.
 
@@ -23,10 +22,9 @@ use crate::{Settings, State};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Route {
     Routed,
-    Todo,
     Removed,
 }
-use Route::{Removed, Routed, Todo};
+use Route::{Removed, Routed};
 
 pub(super) const UPSTREAM: &[(&str, &str, Route)] = &[
     ("GET", "/info", Routed),
@@ -79,10 +77,10 @@ pub(super) const UPSTREAM: &[(&str, &str, Route)] = &[
     ("GET", "/items/:id/curation", Routed),
     ("PATCH", "/items/:id/curation", Routed),
     ("POST", "/items/:id/curation", Routed),
-    ("POST", "/collections/:id/validations", Todo),
-    ("POST", "/collections/:id/curation/appeal", Todo),
-    ("GET", "/collections/:id/events", Todo),
-    ("POST", "/collections/:id/comments", Todo),
+    ("POST", "/collections/:id/validations", Routed),
+    ("POST", "/collections/:id/curation/appeal", Routed),
+    ("GET", "/collections/:id/events", Routed),
+    ("POST", "/collections/:id/comments", Routed),
     ("POST", "/collections/:id/validation-result", Routed),
     ("GET", "/committee", Routed),
     ("GET", "/thirdParties", Routed),

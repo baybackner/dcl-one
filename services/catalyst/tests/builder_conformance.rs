@@ -524,6 +524,17 @@ fn capture_errors(relative: &str, raw: &Value, volatile_fields: &[String]) -> Ve
             ));
         }
     }
+    if raw.get("validation_of").is_some() && raw.get("validator_sign").is_none() {
+        errors.push(format!(
+            "{relative}: validation_of names the claim of a validator's capture only"
+        ));
+    }
+    if raw
+        .get("review_flow")
+        .is_some_and(|flow| flow != &Value::Bool(true))
+    {
+        errors.push(format!("{relative}: review_flow is true or absent"));
+    }
     match raw.get("auth") {
         None => {}
         Some(Value::String(mode)) if mode == "recorded" => {
@@ -1498,6 +1509,32 @@ fn one_capture(fx: Value, extra_routes: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn a_review_flow_or_claim_marker_the_replay_cannot_apply_is_refused() {
+    let base = |extra: Value| {
+        let mut fx = serde_json::json!({
+            "request": {"method": "GET", "path": "/v1/info"},
+            "response": {"status": 200, "body_json": {"ok": true}}
+        });
+        fx.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        fx
+    };
+    refused(
+        &one_capture(
+            base(serde_json::json!({ "validation_of": "c011ec71-0000-4000-8000-000000000302" })),
+            &[],
+        ),
+        "source/01-info.json: validation_of names the claim of a validator's capture only",
+    );
+    refused(
+        &one_capture(base(serde_json::json!({ "review_flow": "true" })), &[]),
+        "source/01-info.json: review_flow is true or absent",
+    );
+    assert!(one_capture(base(serde_json::json!({ "review_flow": true })), &[]).is_empty());
+}
+
+#[test]
 fn a_marker_written_into_a_capture_is_refused() {
     let unreached = serde_json::json!({
         "request": {"method": "GET", "path": "/v1/info"},
@@ -2349,6 +2386,7 @@ struct Replay {
     forum: FakeForum,
     wallets: BTreeMap<String, Wallet>,
     validator_calls: std::sync::atomic::AtomicI64,
+    claims: std::sync::Mutex<BTreeMap<String, (Value, Value)>>,
     _dir: TempDir,
 }
 
@@ -2429,6 +2467,16 @@ impl Replay {
                 .unwrap();
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             assert_eq!(status, 200, "a recorded request is claimed: {body}");
+            self.claims.lock().unwrap().insert(
+                body["data"]["collectionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                (
+                    body["data"]["validationId"].clone(),
+                    body["data"]["claimId"].clone(),
+                ),
+            );
             claimed.push(serde_json::json!({
                 "collectionId": body["data"]["collectionId"],
                 "items": body["data"]["items"],
@@ -2568,6 +2616,7 @@ async fn replay_setup() -> Option<Replay> {
         forum,
         wallets,
         validator_calls: std::sync::atomic::AtomicI64::new(0),
+        claims: std::sync::Mutex::default(),
         _dir: dir,
     })
 }
@@ -2581,6 +2630,27 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
     let mut fx: Fixture =
         serde_json::from_value(raw.clone()).unwrap_or_else(|e| panic!("{path}: {e}"));
     let name = Path::new(path).file_stem().unwrap().to_str().unwrap();
+    if let Some(collection) = raw.get("validation_of").and_then(Value::as_str) {
+        let (validation, claim) = replay
+            .claims
+            .lock()
+            .unwrap()
+            .get(collection)
+            .cloned()
+            .unwrap_or_else(|| panic!("{path}: the node holds no claim of {collection}"));
+        let body = fx.request.body.as_mut().expect("a verdict has a body");
+        body["validationId"] = validation;
+        body["claimId"] = claim;
+    }
+    let review_flow = raw.get("review_flow") == Some(&Value::Bool(true));
+    sqlx::query(if review_flow {
+        "UPDATE explore_api.feature_flags SET document = jsonb_set(document, '{flags,builder-auto-curation-review-flow}', 'true') WHERE app = 'builder'"
+    } else {
+        "UPDATE explore_api.feature_flags SET document = document #- '{flags,builder-auto-curation-review-flow}' WHERE app = 'builder'"
+    })
+    .execute(&replay.scratch.pool)
+    .await
+    .unwrap();
     let auth = if let Some(sign) = raw.get("validator_sign") {
         let sign: ValidatorSign = serde_json::from_value(sign.clone()).unwrap();
         fx.request

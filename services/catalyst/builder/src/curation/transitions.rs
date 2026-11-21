@@ -18,6 +18,20 @@
 //! | item | pending | `POST` | 400 | 400 |
 //! | item | none | `POST` | 400 | 400 |
 //!
+//! The validator acts only on a collection's curation, only by its verdict,
+//! and never approves:
+//!
+//! | From | Verdict | Validator |
+//! | --- | --- | --- |
+//! | none | reject | a new rejected row |
+//! | pending | reject | the newest row, rejected |
+//! | approved, rejected | reject | refused |
+//! | rejected | reopen | a new pending row |
+//! | none, pending, approved | reopen | refused |
+//!
+//! Every other request of the validator, and a verdict sent by anyone else,
+//! is refused. The caller asks to reopen only the validator's own rejection.
+//!
 //! A creator is any wallet with a role on the collection (its owner, an
 //! on-chain manager, its provider's manager; for an item's curation, the
 //! item's owner) that the committee did not admit. Every write the committee
@@ -59,6 +73,8 @@ pub enum Curation {
 pub enum Actor {
     Committee,
     Creator,
+    /// The wearable validator, by a verdict on its current claim.
+    Validator,
 }
 
 /// What the request asks.
@@ -71,6 +87,10 @@ pub enum Request {
     },
     /// `POST`: a new review request, assigned when `assignee`.
     Open { assignee: bool },
+    /// The validator's rejection.
+    Reject,
+    /// The validator's pass after its own rejection.
+    Reopen,
 }
 
 /// The write a request is allowed.
@@ -83,6 +103,8 @@ pub enum Change {
     },
     /// Insert a new pending row.
     Open { assignee: bool },
+    /// Insert a new rejected row.
+    OpenRejected,
 }
 
 /// Why a request is refused.
@@ -100,6 +122,11 @@ pub enum Refusal {
     NeverCurated,
     /// 400: an item's curation has no assignee.
     ItemAssignee,
+    /// Only the validator's verdict rejects or reopens, and it does nothing
+    /// else.
+    VerdictOnly,
+    /// The curation is decided: the validator leaves it alone.
+    Decided,
 }
 
 /// The table: what `actor` may do to a curation whose newest row is `from`.
@@ -110,7 +137,23 @@ pub fn decide(
     actor: Actor,
 ) -> Result<Change, Refusal> {
     let creator = actor == Actor::Creator;
+    let verdict = matches!(request, Request::Reject | Request::Reopen);
+    if verdict != (actor == Actor::Validator) || (verdict && curation == Curation::Item) {
+        return Err(Refusal::VerdictOnly);
+    }
     match (curation, request) {
+        (_, Request::Reject) => match from {
+            None => Ok(Change::OpenRejected),
+            Some(Status::Pending) => Ok(Change::Update {
+                status: Some(Status::Rejected),
+                assignee: false,
+            }),
+            Some(_) => Err(Refusal::Decided),
+        },
+        (_, Request::Reopen) if from == Some(Status::Rejected) => {
+            Ok(Change::Open { assignee: false })
+        }
+        (_, Request::Reopen) => Err(Refusal::Decided),
         (_, Request::Update { assignee: true, .. }) if creator => {
             Err(Refusal::AssigneeIsCommittees)
         }
@@ -150,7 +193,7 @@ pub fn decide(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use Actor::{Committee, Creator};
+    use Actor::{Committee, Creator, Validator};
     use Curation::{Collection, Item};
     use Refusal::*;
     use Status::{Approved, Pending, Rejected};
@@ -171,6 +214,21 @@ pub(crate) mod tests {
     ) -> Result<Change, Refusal> {
         let decided = matches!(from, Some(Approved | Rejected));
         match (curation, request, actor) {
+            (Item, _, Validator) | (Item, Request::Reject | Request::Reopen, _) => Err(VerdictOnly),
+            (_, Request::Reject | Request::Reopen, Committee | Creator) => Err(VerdictOnly),
+            (_, Request::Update { .. } | Request::Open { .. }, Validator) => Err(VerdictOnly),
+            (Collection, Request::Reject, Validator) if from.is_none() => Ok(Change::OpenRejected),
+            (Collection, Request::Reject, Validator) if from == Some(Pending) => {
+                Ok(Change::Update {
+                    status: Some(Rejected),
+                    assignee: false,
+                })
+            }
+            (Collection, Request::Reject, Validator) => Err(Decided),
+            (Collection, Request::Reopen, Validator) if from == Some(Rejected) => {
+                Ok(Change::Open { assignee: false })
+            }
+            (Collection, Request::Reopen, Validator) => Err(Decided),
             (_, Request::Update { assignee: true, .. }, Creator) => Err(AssigneeIsCommittees),
             (Item, Request::Update { assignee: true, .. }, Committee) => Err(ItemAssignee),
             (
@@ -211,6 +269,8 @@ pub(crate) mod tests {
         let mut requests = vec![
             Request::Open { assignee: false },
             Request::Open { assignee: true },
+            Request::Reject,
+            Request::Reopen,
         ];
         for status in [None, Some(Pending), Some(Approved), Some(Rejected)] {
             for assignee in [false, true] {
@@ -223,7 +283,7 @@ pub(crate) mod tests {
         for curation in [Collection, Item] {
             for from in FROM {
                 for &request in &requests {
-                    for actor in [Committee, Creator] {
+                    for actor in [Committee, Creator, Validator] {
                         assert_eq!(
                             decide(curation, from, request, actor),
                             expected(curation, from, request, actor),
@@ -234,7 +294,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert_eq!(cells, 2 * 4 * 9 * 2);
+        assert_eq!(cells, 2 * 4 * 11 * 3);
     }
 
     #[test]
@@ -270,5 +330,31 @@ pub(crate) mod tests {
                 Ok(Change::Open { assignee: false })
             );
         }
+    }
+
+    #[test]
+    fn the_validator_never_approves_and_never_touches_a_decided_curation() {
+        for from in FROM {
+            for request in [Request::Reject, Request::Reopen] {
+                let change = decide(Collection, from, request, Validator);
+                assert!(
+                    !matches!(
+                        change,
+                        Ok(Change::Update {
+                            status: Some(Approved),
+                            ..
+                        })
+                    ),
+                    "{from:?} {request:?}"
+                );
+                if from == Some(Approved) {
+                    assert_eq!(change, Err(Decided));
+                }
+            }
+        }
+        assert_eq!(
+            decide(Collection, Some(Rejected), Request::Reject, Validator),
+            Err(Decided)
+        );
     }
 }

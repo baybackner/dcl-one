@@ -5,7 +5,8 @@
 //! prepared here, signed and submitted by the client, the receipt verified
 //! here), third-party publication (the items a provider manager submits for
 //! curation with its signed slot cheque, [`cheques`]), the wearable
-//! validator's review requests, which it pulls ([`validator`]), and the
+//! validator's review requests, which it pulls ([`validator`]), the review
+//! flow creators, curators and the validator share ([`review`]), and the
 //! newsletter opt-in. It keeps no scenes: no projects, manifests,
 //! asset packs or scene files. Schema `builder` (`schemas/50_create.sql`).
 //!
@@ -84,6 +85,7 @@ pub mod publication;
 pub mod publication_chain;
 pub mod publication_store;
 pub mod rarities;
+pub mod review;
 pub mod terms;
 pub mod third_parties;
 pub mod validator;
@@ -520,6 +522,19 @@ fn api_routes() -> Router<SharedState> {
             "/v1/validator/claims/{id}/lease",
             post(handlers::validator::lease)
                 .layer(DefaultBodyLimit::max(handlers::validator::SMALL_BODY)),
+        )
+        .route(
+            "/v1/collections/{id}/validations",
+            post(handlers::review::validations),
+        )
+        .route(
+            "/v1/collections/{id}/curation/appeal",
+            post(handlers::review::appeal),
+        )
+        .route("/v1/collections/{id}/events", get(handlers::review::events))
+        .route(
+            "/v1/collections/{id}/comments",
+            post(handlers::review::comments),
         )
         .route(
             "/v1/collections/{id}/validation-result",

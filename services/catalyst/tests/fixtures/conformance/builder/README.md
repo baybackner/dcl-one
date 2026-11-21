@@ -37,7 +37,15 @@ validator's call carries `validator_sign`, the defect its signature carries:
 `{}` for none, an `offset` in milliseconds from the clock, or `"secret":
 "wrong"` for a signature under another secret; it names no wallet signer,
 `sign` or `auth`, and the replay signs it again with the node's scheme and
-that defect. A volatile leaf is recorded as
+that defect. A capture recorded with the review flow on carries
+`review_flow: true`: the capture turns upstream's
+`builder-auto-curation-review-flow` on for that request only, and the replay
+turns the node's on in its `builder` flags document for it. A validator's
+capture that answers a running review carries `validation_of`, the
+collection whose review it answers: the capture sends that collection's
+newest start's `validationId` and records the body as written, with its
+signature over that body, and the replay sends the node's open request of
+that collection and the claim it holds instead. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a

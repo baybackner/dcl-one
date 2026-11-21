@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::access::CurationGrant;
 use crate::http::ApiError;
 
+pub mod events;
 pub mod forum;
 pub mod forum_posts;
 pub mod forum_text;
