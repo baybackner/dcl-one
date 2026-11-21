@@ -277,6 +277,30 @@ pub const MAX_VIDEO_UPLOADS_SETTING: usize = 256;
 /// The shortest admin token or validator secret startup accepts.
 pub const MIN_SECRET_BYTES: usize = 32;
 
+/// The settings of one integration, all set or none; one set without the
+/// others refuses to start, naming the first missing.
+fn all_or_none<const N: usize>(
+    named: [(&str, &Option<String>); N],
+) -> anyhow::Result<Option<[String; N]>> {
+    let values = named.map(|(name, value)| (name, non_empty(value)));
+    if values.iter().all(|(_, value)| value.is_none()) {
+        return Ok(None);
+    }
+    if let Some((missing, _)) = values.iter().find(|(_, value)| value.is_none()) {
+        let set: Vec<&str> = named.iter().map(|(name, _)| *name).collect();
+        bail!("{} are set together; {missing} is unset", set.join(", "));
+    }
+    Ok(Some(values.map(|(_, value)| value.unwrap_or_default())))
+}
+
+/// Refuses a URL that carries a token unless it is a public https URL.
+fn token_url(name: &str, url: &str) -> anyhow::Result<()> {
+    if !url.starts_with("https://") || !dcl_http::is_safe_http_url(url) {
+        bail!("{name} must be a public https URL: it carries a token");
+    }
+    Ok(())
+}
+
 fn non_empty(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -309,60 +333,58 @@ impl Settings {
                 );
             }
         }
-        let newsletter = match (
-            non_empty(&raw.newsletter_service_url),
-            non_empty(&raw.newsletter_publication_id),
-            non_empty(&raw.newsletter_api_key),
-        ) {
-            (Some(url), Some(publication_id), Some(api_key)) => {
-                if !dcl_http::is_safe_http_url(&url) {
-                    bail!("NEWSLETTER_SERVICE_URL must be a public http(s) URL");
-                }
-                Some(NewsletterForward {
-                    url,
-                    publication_id,
-                    api_key,
-                })
-            }
-            _ => None,
-        };
-        let warehouse = match (
-            non_empty(&raw.warehouse_url),
-            non_empty(&raw.warehouse_token),
-        ) {
-            (Some(url), Some(token)) => {
-                if !dcl_http::is_safe_http_url(&url) {
-                    bail!("WAREHOUSE_URL must be a public http(s) URL");
-                }
-                Some(WarehouseForward {
-                    url,
-                    token,
-                    context_prefix: non_empty(&raw.warehouse_context_prefix),
-                })
-            }
-            _ => None,
-        };
-        let slack = match (
-            non_empty(&raw.slack_bot_token),
-            non_empty(&raw.slack_curation_channel),
-        ) {
-            (Some(token), Some(channel)) => Some(curation::slack::Slack {
+        let newsletter = all_or_none([
+            ("NEWSLETTER_SERVICE_URL", &raw.newsletter_service_url),
+            ("NEWSLETTER_PUBLICATION_ID", &raw.newsletter_publication_id),
+            ("NEWSLETTER_SERVICE_API_KEY", &raw.newsletter_api_key),
+        ])?
+        .map(|[url, publication_id, api_key]| {
+            token_url("NEWSLETTER_SERVICE_URL", &url).map(|()| NewsletterForward {
+                url,
+                publication_id,
+                api_key,
+            })
+        })
+        .transpose()?;
+        let warehouse = all_or_none([
+            ("WAREHOUSE_URL", &raw.warehouse_url),
+            ("WAREHOUSE_TOKEN", &raw.warehouse_token),
+        ])?
+        .map(|[url, token]| {
+            token_url("WAREHOUSE_URL", &url).map(|()| WarehouseForward {
+                url,
                 token,
-                channel,
-                api: curation::slack::API.to_string(),
-            }),
-            _ => None,
-        };
+                context_prefix: non_empty(&raw.warehouse_context_prefix),
+            })
+        })
+        .transpose()?;
+        let slack = all_or_none([
+            ("SLACK_BOT_TOKEN", &raw.slack_bot_token),
+            ("SLACK_CURATION_CHANNEL", &raw.slack_curation_channel),
+        ])?
+        .map(|[token, channel]| curation::slack::Slack {
+            token,
+            channel,
+            api: curation::slack::API.to_string(),
+        });
         let links = curation::slack::Links {
             creators_url: non_empty(&raw.creators_url),
             builder_url: non_empty(&raw.builder_url),
         };
-        let forum = curation::forum::Forum::parse(
-            non_empty(&raw.forum_url),
-            non_empty(&raw.forum_api_key),
-            non_empty(&raw.forum_api_username),
-            non_empty(&raw.forum_category),
-        )?;
+        let forum = match all_or_none([
+            ("FORUM_URL", &raw.forum_url),
+            ("FORUM_API_KEY", &raw.forum_api_key),
+            ("FORUM_API_USERNAME", &raw.forum_api_username),
+            ("FORUM_CATEGORY", &raw.forum_category),
+        ])? {
+            Some([url, api_key, api_username, category]) => curation::forum::Forum::parse(
+                Some(url),
+                Some(api_key),
+                Some(api_username),
+                Some(category),
+            )?,
+            None => None,
+        };
         let builder_server_url = non_empty(&raw.builder_server_url);
         for (name, url) in [
             ("CREATORS_URL", &links.creators_url),
@@ -753,18 +775,11 @@ mod router_tests {
             admin_addresses: " 0xABC, ,0xdef ".into(),
             admin_token: Some("  ".into()),
             polygon_rpc_url: Some("https://polygon-rpc.com".into()),
-            newsletter_service_url: Some("https://api.beehiiv.com/v2".into()),
-            newsletter_publication_id: Some("pub_1".into()),
-            newsletter_api_key: None,
             ..RawSettings::default()
         })
         .unwrap();
         assert_eq!(s.admin_addresses, vec!["0xabc", "0xdef"]);
         assert_eq!(s.admin_token, None, "a blank token is unset");
-        assert!(
-            s.newsletter.is_none(),
-            "the forward needs all three settings"
-        );
         assert!(!s.writes_enabled);
         let err = Settings::parse(RawSettings {
             polygon_rpc_url: Some("http://rpc.example/v3/SECRET".into()),
@@ -783,6 +798,66 @@ mod router_tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn an_integration_set_in_part_or_carrying_its_token_in_clear_refuses_to_start() {
+        let some = |v: &str| Some(v.to_string());
+        for (raw, named) in [
+            (
+                RawSettings {
+                    newsletter_service_url: some("https://newsletter.example/v2"),
+                    newsletter_publication_id: some("pub_1"),
+                    ..RawSettings::default()
+                },
+                "NEWSLETTER_SERVICE_API_KEY",
+            ),
+            (
+                RawSettings {
+                    warehouse_url: some("https://warehouse.example/events"),
+                    ..RawSettings::default()
+                },
+                "WAREHOUSE_TOKEN",
+            ),
+            (
+                RawSettings {
+                    slack_bot_token: some("xoxb-example"),
+                    ..RawSettings::default()
+                },
+                "SLACK_CURATION_CHANNEL",
+            ),
+            (
+                RawSettings {
+                    forum_url: some("https://forum.example"),
+                    forum_api_key: some("sk-example123"),
+                    ..RawSettings::default()
+                },
+                "FORUM_API_USERNAME",
+            ),
+            (
+                RawSettings {
+                    warehouse_url: some("http://warehouse.example/events"),
+                    warehouse_token: some("sk-example123"),
+                    ..RawSettings::default()
+                },
+                "WAREHOUSE_URL",
+            ),
+            (
+                RawSettings {
+                    newsletter_service_url: some("http://newsletter.example/v2"),
+                    newsletter_publication_id: some("pub_1"),
+                    newsletter_api_key: some("sk-example123"),
+                    ..RawSettings::default()
+                },
+                "NEWSLETTER_SERVICE_URL",
+            ),
+        ] {
+            let err = Settings::parse(raw).unwrap_err().to_string();
+            assert!(
+                err.contains(named) && !err.contains("sk-example123"),
+                "{named}: {err}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -908,18 +983,8 @@ mod router_tests {
                 Some("prd")
             )
         );
-        assert!(
-            warehouse("https://warehouse.example/events", None, None)
-                .unwrap()
-                .warehouse
-                .is_none()
-        );
-        assert!(
-            warehouse("https://warehouse.example/events", Some(" "), None)
-                .unwrap()
-                .warehouse
-                .is_none()
-        );
+        assert!(warehouse("https://warehouse.example/events", None, None).is_err());
+        assert!(warehouse("https://warehouse.example/events", Some(" "), None).is_err());
         assert!(
             warehouse(
                 "https://warehouse.example/events",

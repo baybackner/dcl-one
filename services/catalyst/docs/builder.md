@@ -52,8 +52,10 @@ from the shop's committee index, on the same node.
 
 - `HTTP_TRUSTED_PROXY_CIDRS` lists the gateway's networks. Without it, a
   signed request on a path the gateway rewrote (`builder-api.<domain>`) is
-  refused, and the builder can't tell clients apart, so it applies no
-  per-source request budget and only the gateway's per-client limit holds.
+  refused, and the builder can't tell clients apart. Behind a gateway on a
+  private address it applies no per-source bound, and only the gateway's
+  per-client limit holds; behind one on a public address every client is
+  one source and shares one address's budgets and upload places.
 - `CORS_ORIGIN` lists the origins that may read the answers (`;`-separated,
   `regex:` entries), `CORS_METHOD` the methods a preflight allows. Unset,
   `CORS_ORIGIN` is the Decentraland front-ends and `http://localhost:<port>`.
@@ -85,15 +87,19 @@ bound counts and what a request past it gets.
 
 - **Sources.** A source address is the client's address, an IPv6 address
   widened to its /64; an upload source widens an IPv6 address to the block
-  the table names. Behind the gateway, set `HTTP_TRUSTED_PROXY_CIDRS`, or
-  the node sees no client address and applies no per-source bound.
+  the table names. Behind the gateway, set `HTTP_TRUSTED_PROXY_CIDRS` to
+  the gateway's networks. Without it, a gateway on a private address leaves
+  the node with no client address, so it applies no per-source bound; a
+  gateway on a public address becomes every client's one source, so all
+  clients together share one address's budgets and places.
 - **Request budgets.** Every request spends from its source address's
   reads or writes a minute, and a verified signer from its wallet's, before
   the body is read; past either, 429 with `Retry-After`.
 - **Unpublished uploads.** A wallet's unpublished uploads are its upload
   records whose file no published item names. Before an upload's body is
   read, its declared length, else the route's largest body, counts as
-  stored: past the wallet's bound the upload answers 413 with `maxBytes`
+  stored; a declared length past the route's body answers 413 at once,
+  before the upload takes a place: past the wallet's bound the upload answers 413 with `maxBytes`
   or `maxFiles` ("The wallet's unpublished files reached their limit"),
   past the node's 507 ("The node's unpublished files reached their limit").
   `BUILDER_UNPUBLISHED_MAX_BYTES` and `BUILDER_UNPUBLISHED_MAX_FILES` set
@@ -112,13 +118,16 @@ bound counts and what a request past it gets.
   within its deadline answers 408 ("The upload timed out") and frees the
   place.
 - **Video uploads.** A video upload takes a place among the node's video
-  places, of which a wallet and an upload source hold a share, and spends
-  upload time from the wallet's and the source's day. While every place is
-  held, a newcomer takes the place of the upload that has run past its
-  first idle window and whose wallet or source spent the longest uploading
-  today, if longer than the newcomer's; that upload ends with 408 ("The
-  upload gave its place to another while the node was busy"). Otherwise the
-  newcomer gets 429 with `Retry-After`. `BUILDER_VIDEO_UPLOADS_MAX` sets the
+  places, of which a wallet and an upload source hold a share. The time it
+  holds the place, whether bytes arrive or not and however it ends, spends
+  the wallet's and the source's day of upload time. While every place is
+  held, a newcomer takes the place of the upload whose wallet or source
+  spent the longest on finished uploads today, if longer than the
+  newcomer's; that upload ends with 408 ("The upload gave its place to
+  another while the node was busy") and `Retry-After`, and its spooled
+  bytes are removed. An upload whose wallet and source finished none today
+  keeps its place until it ends. Otherwise the newcomer gets 429 with
+  `Retry-After`. `BUILDER_VIDEO_UPLOADS_MAX` sets the
   node's places; startup refuses a value outside the table's range.
 - **Drafts.** A wallet's drafts are the items it holds that no publication
   names (a standard item until its collection is published, a third-party
@@ -137,7 +146,10 @@ bound counts and what a request past it gets.
 Each row names the constant of the builder crate
 (`services/catalyst/builder/src`) that holds its value. The builder's test
 `the_builder_doc_states_each_bound_the_code_enforces` fails when a row and
-its constant differ or a row names no bound it checks.
+its constant differ, a row names no bound it checks, a budget the node
+builds holds another value, or a numeric constant of the crate is neither
+a row nor listed in the test as no bound of this table (a unit, an internal
+step, or a bound of the review, validator or outside-service areas).
 
 | Bound | Value | Code |
 | --- | --- | --- |
@@ -168,7 +180,7 @@ its constant differ or a row names no bound it checks.
 | `Retry-After` of a refused place | 30 seconds | `items::places::RETRY_AFTER_SECS` |
 | Bytes of a video | 250,000,000 bytes | `items::video::DEFAULT_MAX_BYTES` |
 | Time for a video's body to arrive | 20 minutes | `items::video::DEFAULT_DEADLINE` |
-| Idle window: time without a byte before a video upload ends, and before a newcomer may take its place | 30 seconds | `items::video::DEFAULT_IDLE_TIMEOUT` |
+| Idle window: time without a byte before a video upload ends | 30 seconds | `items::video::DEFAULT_IDLE_TIMEOUT` |
 | Video uploads at once on the node, `BUILDER_VIDEO_UPLOADS_MAX` unset | 32 | `items::video::MAX_UPLOADS` |
 | The most `BUILDER_VIDEO_UPLOADS_MAX` sets, from 1 | 256 | `MAX_VIDEO_UPLOADS_SETTING` |
 | Video uploads at once of a wallet | 1 | `items::video::MAX_UPLOADS_PER_SIGNER` |
@@ -182,10 +194,66 @@ its constant differ or a row names no bound it checks.
 | Documents an upload source saves a day | 2 GiB | `limits::SOURCE_DOCUMENT_KIB` |
 | The least a save costs its day | 4 KiB | `limits::DOCUMENT_MIN_KIB` |
 | Body bytes one more write token pays for | 16 KiB | `limits::BYTES_PER_WRITE_TOKEN` |
+| Review writes (retry, appeal, comment) of a wallet a minute | 30 | `limits::REVIEW_WRITES` |
+| Review timeline reads of a wallet a minute | 120 | `limits::REVIEW_READS` |
+| Newsletter subscriptions of a source address an hour | 10 | `limits::NEWSLETTER_PER_SOURCE` |
+| Newsletter subscriptions of an email a day | 3 | `limits::NEWSLETTER_PER_EMAIL` |
+| Newsletter subscriptions through the node an hour | 1,000 | `limits::NEWSLETTER_PER_NODE` |
+| Read tokens `GET /v1/addresses` and the public collection search spend beyond their first | 50 | `limits::ADDRESSES_TOKENS` |
+| Rows of a listing one read token pays for | 20 | `limits::ROWS_PER_TOKEN` |
+| Item document bytes of a listing one read token pays for | 64 KiB | `limits::BYTES_PER_TOKEN` |
+| Item document bytes one listing answers; past it, 413 ("The listing is too large") | 64 MiB | `limits::LISTING_BYTES` |
+| Wallets or sources each budget tracks; past it, the least spent are forgotten | 50,000 | `limits::KEYS` |
+| Time the count of the unpublished uploads may take before every record counts | 50 seconds | `limits::UNPUBLISHED_COUNT_TIMEOUT` |
+| The IPv6 block of one source address | /64 | `limits::source` |
+| The shortest admin token or validator secret startup takes | 32 bytes | `MIN_SECRET_BYTES` |
+| Rows a drafts listing answers, the newest | 5,000 | `drafts::DRAFTS_CAP` |
+| Rows a collection's or an address's item listing answers | 20,000 | `items::listing::ROWS_CAP` |
+| Rows `GET /v1/items` answers | 1,000 | `items::listing::EVERY_ITEM_CAP` |
+| Rows the committee's collection listing or the public search answers | 1,000 | `collections::listing::COMMITTEE_CAP` |
+| Rows an address's collection listing answers | 5,000 | `collections::listing::ADDRESS_CAP` |
+| Characters of a collection search's `q` | 256 | `collections::listing::Q_MAX` |
+| Assignees a collection listing filters by | 20 | `collections::listing::MAX_ASSIGNEES` |
+| Tags a collection listing filters by | 5 | `collections::listing::MAX_TAGS` |
+| Characters of one of those tags | 64 | `collections::listing::TAG_MAX` |
+| Rows a curation list answers | 20,000 | `curation::rows::MAX_ROWS` |
+| Items one third-party publication names | 20,000 | `collections::publish_third_party::MAX_ITEMS` |
+| Hashes a terms acceptance names | 40,000 | `terms::MAX_HASHES` |
+| Characters of one of those hashes | 64 | `terms::MAX_HASH_LEN` |
+| Tags of a new item's save (an item the node holds may grow to it, or keep more) | 20 | `items::save::MAX_TAGS` |
+| Outcomes of a social emote's save | 10 | `items::save::MAX_OUTCOMES` |
+| Files an item document names, and models of one representation | 256 | `items::schema::MAX_CONTENTS` |
+| Tags or required permissions of an item document | 1,000 | `items::schema::LIST_MAX` |
+| Characters of a tag, permission, file name or spring bone name | 1,000 | `items::schema::TEXT_MAX` |
+| Representations of an item document | 10 | `items::schema::REPRESENTATIONS_MAX` |
+| Categories one list hides or replaces | 100 | `items::schema::HIDDEN_MAX` |
+| Spring bones of one model | 1,000 | `items::schema::BONES_MAX` |
+| Mapping entries of an item | 100 | `items::schema::MAX_MAPPINGS` |
+| Token ids an item's mappings name | 10,000 | `items::schema::MAX_MAPPING_IDS` |
+| Characters of a collection's name | 42 | `collections::save::NAME_MAX` |
+| Characters of a collection's other text fields | 256 | `collections::save::TEXT_MAX` |
+| Entries of a collection's address lists | 1,000 | `collections::save::LIST_MAX` |
+| Bytes of a collection save's `data` | 1 MiB | `collections::save::DATA_MAX` |
+| Items one bulk item curation write names | 1,000 | `handlers::curation::MAX_BULK_ITEMS` |
+| Body of a newsletter subscription | 4 KiB | `handlers::newsletter::MAX_BODY` |
+| Characters of a subscription's `source` | 100 | `handlers::newsletter::MAX_SOURCE` |
+| Body of a validator claim or lease | 4 KiB | `handlers::validator::SMALL_BODY` |
+| Body of a validator verdict | 5 MiB | `handlers::validator::VERDICT_BODY` |
+| Largest file read whole to tell whether it's an SVG image | 1 MiB | `handlers::svg::MAX_BYTES` |
+| Element depth of a file served as an SVG image | 256 | `handlers::svg::MAX_DEPTH` |
+| Characters of a third-party id in a path | 512 | `handlers::third_parties::ID_MAX` |
+| Body of a video upload | 251,048,576 bytes | `items::video::BODY_LIMIT` |
+| Bytes a video upload's form may hold besides the video's | 64 KiB | `items::video::FRAMING_BYTES` |
+| Age at which a video upload removes a spool file a crash left | 1 hour | `items::video::SPOOL_ORPHAN_AGE` |
 
 ## Outside services and secrets
 
-Each secret may also be given as `<NAME>_FILE`; none is printed.
+Each secret may also be given as `<NAME>_FILE`; none is printed. Startup
+refuses a service given some of its settings without the others
+(`WAREHOUSE_CONTEXT_PREFIX`, `CREATORS_URL`, `BUILDER_URL` and
+`BUILDER_SERVER_URL` stay optional), and a `WAREHOUSE_URL` or
+`NEWSLETTER_SERVICE_URL` that is not a public `https://` URL, because each
+carries a token.
 
 | Service | Settings | Without them |
 | --- | --- | --- |

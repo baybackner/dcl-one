@@ -4,7 +4,7 @@
 //! elements deep, checked in one pass over at most [`MAX_BYTES`].
 
 const NAMESPACE: &str = "http://www.w3.org/2000/svg";
-const MAX_DEPTH: usize = 256;
+pub(crate) const MAX_DEPTH: usize = 256;
 
 /// The largest file read whole to tell whether it is SVG.
 pub const MAX_BYTES: u64 = 1 << 20;

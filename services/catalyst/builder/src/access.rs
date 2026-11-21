@@ -114,6 +114,7 @@ pub struct CollectionEdit {
     at: DateTime<Utc>,
     provider: Option<String>,
     registry: Option<Registry>,
+    own_content: bool,
 }
 
 /// May lock the collection, at `at`.
@@ -438,6 +439,9 @@ impl CollectionEdit {
     }
     pub fn signer(&self) -> &str {
         &self.signer
+    }
+    pub fn own_content(&self) -> bool {
+        self.own_content
     }
 }
 
@@ -1144,6 +1148,7 @@ pub async fn edit_collection(
         at: (state.now)(),
         provider: provider.map(str::to_string),
         registry,
+        own_content: state.content_sync.is_own_content_authority(),
     };
     let (mut conn, view) = decision(state).await?;
     confirm_collection_edit(&mut conn, &view, &edit).await?;
@@ -1358,20 +1363,33 @@ async fn urn_taken(
     if urn_in_use(conn, save.id, third_party_id, item).await? || urn_deployed(conn, urn).await? {
         return Ok(true);
     }
-    if !save.own_content {
-        for entity_type in crate::content::sync::item_coverage::ITEM_TYPES {
-            if !matches!(
-                crate::content::sync::item_coverage::item_history_coverage(conn, entity_type)
-                    .await?,
-                crate::content::sync::item_coverage::Coverage::Covered { .. }
-            ) {
-                return Err(ApiError::service_unavailable(
-                    "The catalyst's items are not available. Try again later.",
-                ));
-            }
+    content_knows_items(conn, save.own_content).await?;
+    urn_deployed(conn, urn).await
+}
+
+/// 503 unless this node can tell an item URN its content lacks from one it
+/// hasn't synced yet: it is its own content authority (`own_content`), or
+/// its wearable and emote history is covered. Read before the content, so
+/// the coverage holds for what is read after it.
+pub(crate) async fn content_knows_items(
+    conn: &mut PgConnection,
+    own_content: bool,
+) -> Result<(), ApiError> {
+    if own_content {
+        return Ok(());
+    }
+    for entity_type in crate::content::sync::item_coverage::ITEM_TYPES {
+        if !matches!(
+            crate::content::sync::item_coverage::item_history_coverage(&mut *conn, entity_type)
+                .await?,
+            crate::content::sync::item_coverage::Coverage::Covered { .. }
+        ) {
+            return Err(ApiError::service_unavailable(
+                "The catalyst's items are not available. Try again later.",
+            ));
         }
     }
-    urn_deployed(conn, urn).await
+    Ok(())
 }
 
 fn with_id(id: Option<&str>, mut data: serde_json::Value) -> serde_json::Value {
@@ -1862,7 +1880,8 @@ pub(crate) async fn confirm_third_party_publish(
 }
 
 /// [`sync_collection`]'s decision again, inside the write's transaction: a
-/// role the rows decide is decided again; the committee's admission stands.
+/// role the rows decide, else the committee read again on the write's
+/// connection.
 pub(crate) async fn confirm_collection_sync(
     conn: &mut PgConnection,
     view: &DecisionView,
@@ -1871,7 +1890,9 @@ pub(crate) async fn confirm_collection_sync(
     let c = collection(conn, view, sync.id, providers(&sync.registry))
         .await?
         .ok_or_else(|| not_found(sync.id, COLLECTIONS))?;
-    if !sync.committee && !c.role(&sync.signer) {
+    if !c.role(&sync.signer)
+        && !(sync.committee && crate::committee::is_member(&mut *conn, &sync.signer).await?)
+    {
         return Err(unauthorized_user(&sync.signer, COLLECTIONS, sync.id));
     }
     Ok(())
@@ -2206,7 +2227,8 @@ pub(crate) async fn still_assignable(
 
 /// [`review_member`]'s and [`review_creator`]'s decision again, inside the
 /// write's transaction: the collection still there, a role still held
-/// unless the committee admitted the signer.
+/// unless the committee admitted the signer, and a committee admission
+/// still on the committee.
 pub(crate) async fn confirm_reviewer(
     conn: &mut PgConnection,
     view: &DecisionView,
@@ -2214,6 +2236,7 @@ pub(crate) async fn confirm_reviewer(
 ) -> Result<CuratedState, ApiError> {
     let (c, role) = curated(conn, view, curator).await?;
     keeps_role(curator, role)?;
+    keeps_committee(conn, curator).await?;
     curated_state(conn, curator, c).await
 }
 
@@ -2463,9 +2486,12 @@ async fn unpublished_sums(pool: &sqlx::PgPool, listed: &[String]) -> Result<Sums
         .replace("{published}", published)
         .replace("{curated}", ITEM_CURATED);
     let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout = '50s'")
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SET LOCAL statement_timeout = '{}s'",
+        crate::limits::UNPUBLISHED_COUNT_TIMEOUT.as_secs()
+    )))
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("SET LOCAL jit = off").execute(&mut *tx).await?;
     let sums = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "WITH public AS MATERIALIZED ({public}) \
@@ -2653,6 +2679,7 @@ pub(crate) mod granted {
             at: Utc::now(),
             provider: provider.map(str::to_string),
             registry: no_registry(),
+            own_content: true,
         }
     }
 

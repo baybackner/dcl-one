@@ -31,7 +31,7 @@ CAST_PRESENTATION_CAP = "101m"
 CAMERA_REEL_UPLOAD_CAP = "7m"
 # The root alias whose upload path takes CAMERA_REEL_UPLOAD_CAP.
 CAMERA_REEL_ALIAS = "^~ /camera-reel/"
-BUILDER_VIDEO_CAP = "240m"
+BUILDER_VIDEO_CAP = "251048576"
 BUILDER_LARGE_BODY_CAP = "2m"
 # The content server's `POST /entities` route limit at the default field
 # count (`max_deployment_body_bytes`: 200 MiB of files and fields plus

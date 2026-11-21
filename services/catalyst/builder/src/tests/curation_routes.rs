@@ -1380,7 +1380,7 @@ async fn a_creator_reads_its_curations_whatever_case_the_copy_holds_its_address_
 }
 
 /// The signer `key` as a signed `PATCH` of `path` proves it.
-async fn signer_of(key: &str, path: &str) -> crate::shared::signed_fetch::Signer {
+pub(super) async fn signer_of(key: &str, path: &str) -> crate::shared::signed_fetch::Signer {
     let mut headers = axum::http::HeaderMap::new();
     for (name, value) in signed_map(key, "patch", path, "{}", false).await {
         headers.insert(
@@ -1446,6 +1446,14 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     )
     .await
     .unwrap();
+    let comments = format!("/v1/collections/{id}/comments");
+    let commenting = crate::access::review_member(
+        &n.state,
+        &signer_of(FORMER_KEY, &comments).await,
+        &id.to_string(),
+    )
+    .await
+    .unwrap();
     let assign = || crate::curation::writes::Update {
         assignee: Some(Some(address(ADMIN_KEY))),
         ..Default::default()
@@ -1456,6 +1464,8 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     };
     drop_member(FORMER_KEY, 10).await;
     let rejected = crate::curation::writes::update_collection(&n.state, rejecting, reject()).await;
+    let commented =
+        crate::review::comment(&n.state, commenting, "Too late".to_string(), None).await;
     let mut holder = n.pool.begin().await.unwrap();
     sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
         .bind(id)
@@ -1492,9 +1502,10 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     assert_eq!(
         (
             assigned.err().map(|e| e.status()),
-            rejected.err().map(|e| e.status())
+            rejected.err().map(|e| e.status()),
+            commented.err().map(|e| e.status())
         ),
-        (Some(401), Some(401))
+        (Some(401), Some(401), Some(401))
     );
     assert_eq!(assignee, None);
     assert_eq!(

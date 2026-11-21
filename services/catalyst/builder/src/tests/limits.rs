@@ -682,6 +682,27 @@ async fn a_listing_past_its_bytes_or_its_readers_budget_is_refused_before_its_it
     assert_eq!((status, retry.is_some()), (429, true));
     let (status, _, _) = send(&app, &items("?page=1&limit=19")).await;
     assert_eq!(status, 200);
+    let (app, state) = node_over(pool.clone(), |state| {
+        state.limits = crate::limits::Limits::unbounded();
+        state.limits.source_reads = per_minute(3);
+        state.limits.wallet_reads = crate::limits::budget(1_000, Window::from_secs(86_400));
+    })
+    .await;
+    let from_source = Call {
+        source: Some("198.51.100.90"),
+        ..items("")
+    };
+    let (status, _, _) = send(&app, &from_source).await;
+    assert_eq!(status, 429);
+    let wallet = super::validator::address(OWNER_KEY);
+    let spent = state
+        .limits
+        .wallet_reads
+        .spent_at(&wallet, std::time::Instant::now());
+    assert!(
+        spent < 2.0,
+        "the wallet paid {spent} read tokens for a listing its address refused"
+    );
 }
 
 #[tokio::test]
@@ -1050,11 +1071,15 @@ async fn new_drafts_saved_at_once_stay_within_the_wallets_bound() {
 }
 
 /// The bounds table of `services/catalyst/docs/builder.md` states the value
-/// of each constant its rows name, and names no constant this test doesn't
-/// check.
+/// of each constant its rows name and names no constant this test doesn't
+/// check; every numeric constant of the builder crate is a row or listed
+/// here as no bound of the table; and the node's budgets take the
+/// constants' values.
 #[test]
 fn the_builder_doc_states_each_bound_the_code_enforces() {
-    use crate::items::{places, upload, video};
+    use crate::collections::{listing as cl, publish_third_party, save as cs};
+    use crate::handlers::{curation as hc, newsletter, svg, third_parties as htp, validator as hv};
+    use crate::items::{listing as il, places, save as is, schema, upload, video};
     use crate::limits as l;
     fn grouped(n: u64) -> String {
         let digits = n.to_string();
@@ -1090,6 +1115,7 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
     let mut ipv6 = axum::http::HeaderMap::new();
     ipv6.insert("x-real-ip", "2001:db8:5:1::1".parse().unwrap());
     let block = l::upload_source(&ipv6).unwrap();
+    let request_block = l::source(&ipv6).unwrap();
     let enforced = [
         ("limits::SOURCE_READS", count(l::SOURCE_READS.into())),
         ("limits::SOURCE_WRITES", count(l::SOURCE_WRITES.into())),
@@ -1200,7 +1226,270 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
             "limits::BYTES_PER_WRITE_TOKEN",
             binary(l::BYTES_PER_WRITE_TOKEN as u64),
         ),
+        ("limits::REVIEW_WRITES", count(l::REVIEW_WRITES.into())),
+        ("limits::REVIEW_READS", count(l::REVIEW_READS.into())),
+        (
+            "limits::NEWSLETTER_PER_SOURCE",
+            count(l::NEWSLETTER_PER_SOURCE.into()),
+        ),
+        (
+            "limits::NEWSLETTER_PER_EMAIL",
+            count(l::NEWSLETTER_PER_EMAIL.into()),
+        ),
+        (
+            "limits::NEWSLETTER_PER_NODE",
+            count(l::NEWSLETTER_PER_NODE.into()),
+        ),
+        (
+            "limits::ADDRESSES_TOKENS",
+            count(l::ADDRESSES_TOKENS.into()),
+        ),
+        ("limits::ROWS_PER_TOKEN", count(l::ROWS_PER_TOKEN as u64)),
+        ("limits::BYTES_PER_TOKEN", binary(l::BYTES_PER_TOKEN as u64)),
+        ("limits::LISTING_BYTES", binary(l::LISTING_BYTES as u64)),
+        ("limits::KEYS", count(l::KEYS as u64)),
+        (
+            "limits::UNPUBLISHED_COUNT_TIMEOUT",
+            span(l::UNPUBLISHED_COUNT_TIMEOUT),
+        ),
+        (
+            "limits::source",
+            format!("/{}", request_block.rsplit('/').next().unwrap()),
+        ),
+        ("MIN_SECRET_BYTES", bytes(crate::MIN_SECRET_BYTES as u64)),
+        (
+            "drafts::DRAFTS_CAP",
+            count(crate::drafts::DRAFTS_CAP as u64),
+        ),
+        ("items::listing::ROWS_CAP", count(il::ROWS_CAP as u64)),
+        (
+            "items::listing::EVERY_ITEM_CAP",
+            count(il::EVERY_ITEM_CAP as u64),
+        ),
+        (
+            "collections::listing::COMMITTEE_CAP",
+            count(cl::COMMITTEE_CAP as u64),
+        ),
+        (
+            "collections::listing::ADDRESS_CAP",
+            count(cl::ADDRESS_CAP as u64),
+        ),
+        ("collections::listing::Q_MAX", count(cl::Q_MAX as u64)),
+        (
+            "collections::listing::MAX_ASSIGNEES",
+            count(cl::MAX_ASSIGNEES as u64),
+        ),
+        ("collections::listing::MAX_TAGS", count(cl::MAX_TAGS as u64)),
+        ("collections::listing::TAG_MAX", count(cl::TAG_MAX as u64)),
+        (
+            "curation::rows::MAX_ROWS",
+            count(crate::curation::rows::MAX_ROWS as u64),
+        ),
+        (
+            "collections::publish_third_party::MAX_ITEMS",
+            count(publish_third_party::MAX_ITEMS as u64),
+        ),
+        ("terms::MAX_HASHES", count(crate::terms::MAX_HASHES as u64)),
+        (
+            "terms::MAX_HASH_LEN",
+            count(crate::terms::MAX_HASH_LEN as u64),
+        ),
+        ("items::save::MAX_TAGS", count(is::MAX_TAGS as u64)),
+        ("items::save::MAX_OUTCOMES", count(is::MAX_OUTCOMES as u64)),
+        (
+            "items::schema::MAX_CONTENTS",
+            count(schema::MAX_CONTENTS as u64),
+        ),
+        ("items::schema::LIST_MAX", count(schema::LIST_MAX as u64)),
+        ("items::schema::TEXT_MAX", count(schema::TEXT_MAX as u64)),
+        (
+            "items::schema::REPRESENTATIONS_MAX",
+            count(schema::REPRESENTATIONS_MAX as u64),
+        ),
+        (
+            "items::schema::HIDDEN_MAX",
+            count(schema::HIDDEN_MAX as u64),
+        ),
+        ("items::schema::BONES_MAX", count(schema::BONES_MAX as u64)),
+        (
+            "items::schema::MAX_MAPPINGS",
+            count(schema::MAX_MAPPINGS as u64),
+        ),
+        (
+            "items::schema::MAX_MAPPING_IDS",
+            count(schema::MAX_MAPPING_IDS as u64),
+        ),
+        ("collections::save::NAME_MAX", count(cs::NAME_MAX as u64)),
+        ("collections::save::TEXT_MAX", count(cs::TEXT_MAX as u64)),
+        ("collections::save::LIST_MAX", count(cs::LIST_MAX as u64)),
+        ("collections::save::DATA_MAX", binary(cs::DATA_MAX as u64)),
+        (
+            "handlers::curation::MAX_BULK_ITEMS",
+            count(hc::MAX_BULK_ITEMS as u64),
+        ),
+        (
+            "handlers::newsletter::MAX_BODY",
+            binary(newsletter::MAX_BODY as u64),
+        ),
+        (
+            "handlers::newsletter::MAX_SOURCE",
+            count(newsletter::MAX_SOURCE as u64),
+        ),
+        (
+            "handlers::validator::SMALL_BODY",
+            binary(hv::SMALL_BODY as u64),
+        ),
+        (
+            "handlers::validator::VERDICT_BODY",
+            binary(hv::VERDICT_BODY as u64),
+        ),
+        ("handlers::svg::MAX_BYTES", binary(svg::MAX_BYTES)),
+        ("handlers::svg::MAX_DEPTH", count(svg::MAX_DEPTH as u64)),
+        ("handlers::third_parties::ID_MAX", count(htp::ID_MAX as u64)),
+        ("items::video::BODY_LIMIT", bytes(video::BODY_LIMIT as u64)),
+        ("items::video::FRAMING_BYTES", binary(video::FRAMING_BYTES)),
+        (
+            "items::video::SPOOL_ORPHAN_AGE",
+            span(video::SPOOL_ORPHAN_AGE),
+        ),
     ];
+    let not_in_table = [
+        "limits::MINUTE",
+        "limits::HOUR",
+        "limits::DAY",
+        "limits::MIB",
+        "limits::UPLOAD_SOURCE_V6_BITS",
+        "items::video::SLICE_BYTES",
+        "handlers::storage::SNIFF_BYTES",
+        "collections::listing::UNPAGINATED_LIMIT",
+        "terms::MAX_ATTEMPTS",
+        "terms::PASS_LIMIT",
+        "access::FILE_PROVIDERS",
+        "access::LOCK_HOLDS",
+        "chain_state::STALE_AFTER",
+        "cheques::CHAIN_ID",
+        "collections::deployment::DEPLOYMENT_TTL",
+        "collections::deployment::KEPT_CONTRACTS",
+        "kept::FAILURE_TTL",
+        "kept::FETCH_TIMEOUT",
+        "onchain::MAX_REVIEW_ROWS",
+        "onchain::CURATION_CHUNK",
+        "rarities::RARITIES_TTL",
+        "rarities::MAX_RARITIES",
+        "rarities::NAME_MAX",
+        "rarities::AMOUNT_MAX",
+        "curation::events::JUDGED_RUNS",
+        "curation::forum::TIMEOUT",
+        "curation::forum::MAX_ANSWER",
+        "curation::forum::MAX_LINK",
+        "curation::forum_posts::CLAIM_HOLDS",
+        "curation::forum_posts::ATTEMPT",
+        "curation::forum_posts::MAX_REPLY",
+        "curation::forum_text::MAX_ITEMS",
+        "curation::slack::TIMEOUT",
+        "curation::slack::MAX_NAME",
+        "curation::slack::MAX_QUOTE",
+        "curation::writes::MAX_MESSAGE",
+        "curation::writes::MAX_NOTE",
+        "review::COMMENTS_PER_COLLECTION",
+        "review::COMMENTS_PER_CALLER",
+        "review::APPEALS_PER_COLLECTION",
+        "review::APPEALS_PER_CALLER",
+        "review::MAX_TEXT",
+        "review::DEFAULT_EVENTS",
+        "review::MAX_EVENTS",
+        "review::MAX_PAGE",
+        "validator::MAX_ITEMS",
+        "validator::DAILY_REQUESTS",
+        "validator::LEASE",
+        "validator::LEASE_LIMIT",
+        "validator::UNSETTLED_FOR",
+        "validator::KEPT_FOR",
+        "validator::claims::TOKEN",
+        "validator::claims::SHORT_TEXT",
+        "validator::claims::LONG_TEXT",
+        "validator::claims::MAX_FINDINGS",
+        "validator::claims::LOGGED_ERROR",
+    ];
+    let mut wrong = numeric_constants(std::path::Path::new(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/services/catalyst/builder/src"
+    )))
+    .into_iter()
+    .filter(|name| {
+        !enforced.iter().any(|(code, _)| code == name) && !not_in_table.contains(&name.as_str())
+    })
+    .map(|name| format!("{name}: a constant neither in the table nor listed as no bound of it"))
+    .collect::<Vec<_>>();
+    let defaults = l::Limits::default();
+    let now = std::time::Instant::now();
+    for (name, budget, per) in [
+        ("SOURCE_READS", &defaults.source_reads, l::SOURCE_READS),
+        ("SOURCE_WRITES", &defaults.source_writes, l::SOURCE_WRITES),
+        ("WALLET_READS", &defaults.wallet_reads, l::WALLET_READS),
+        ("WALLET_WRITES", &defaults.wallet_writes, l::WALLET_WRITES),
+        ("REVIEW_WRITES", &defaults.review_writes, l::REVIEW_WRITES),
+        ("REVIEW_READS", &defaults.review_reads, l::REVIEW_READS),
+        (
+            "NEWSLETTER_PER_SOURCE",
+            &defaults.newsletter_sources,
+            l::NEWSLETTER_PER_SOURCE,
+        ),
+        (
+            "NEWSLETTER_PER_EMAIL",
+            &defaults.newsletter_emails,
+            l::NEWSLETTER_PER_EMAIL,
+        ),
+        (
+            "NEWSLETTER_PER_NODE",
+            &defaults.newsletter_node,
+            l::NEWSLETTER_PER_NODE,
+        ),
+        (
+            "SOURCE_UPLOAD_MIB",
+            &defaults.source_upload_mib,
+            l::SOURCE_UPLOAD_MIB,
+        ),
+        (
+            "SOURCE_UPLOAD_FILES",
+            &defaults.source_upload_files,
+            l::SOURCE_UPLOAD_FILES,
+        ),
+        (
+            "WALLET_UPLOAD_FILES",
+            &defaults.wallet_upload_files,
+            l::WALLET_UPLOAD_FILES,
+        ),
+        (
+            "SOURCE_DOCUMENT_KIB",
+            &defaults.source_document_kib,
+            l::SOURCE_DOCUMENT_KIB,
+        ),
+        (
+            "WALLET_DOCUMENT_KIB",
+            &defaults.wallet_document_kib,
+            l::WALLET_DOCUMENT_KIB,
+        ),
+    ] {
+        if budget.take_at("probe", per, now).is_err() || budget.take_at("probe", 1, now).is_ok() {
+            wrong.push(format!("{name}: the node's budget holds another value"));
+        }
+    }
+    for (name, held, bound) in [
+        ("WALLET_BYTES", defaults.wallet_bytes, l::WALLET_BYTES),
+        ("WALLET_FILES", defaults.wallet_files, l::WALLET_FILES),
+        ("NODE_BYTES", defaults.node_bytes, l::NODE_BYTES),
+        ("NODE_FILES", defaults.node_files, l::NODE_FILES),
+        (
+            "LISTING_BYTES",
+            defaults.listing_bytes as u64,
+            l::LISTING_BYTES as u64,
+        ),
+    ] {
+        if held != bound {
+            wrong.push(format!("{name}: the node's bound holds {held}"));
+        }
+    }
     let doc = std::fs::read_to_string(concat!(
         env!("DCL_ONE_ROOT"),
         "/services/catalyst/docs/builder.md"
@@ -1222,16 +1511,17 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
         .iter()
         .map(|(code, value)| (code.as_str(), value.as_str()))
         .collect();
-    let mut wrong: Vec<String> = enforced
-        .iter()
-        .filter(|(code, value)| stated.get(code) != Some(&value.as_str()))
-        .map(|(code, value)| {
-            format!(
-                "{code}: the doc states {:?}, the code {value}",
-                stated.get(code)
-            )
-        })
-        .collect();
+    wrong.extend(
+        enforced
+            .iter()
+            .filter(|(code, value)| stated.get(code) != Some(&value.as_str()))
+            .map(|(code, value)| {
+                format!(
+                    "{code}: the doc states {:?}, the code {value}",
+                    stated.get(code)
+                )
+            }),
+    );
     wrong.extend(
         stated
             .keys()
@@ -1242,4 +1532,73 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
         wrong.push("a constant is named by two rows".to_string());
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Every numeric constant outside the tests under `dir`, by its path in the
+/// crate: `items::video::MAX_UPLOADS`, `BODY_LIMIT` for `lib.rs`.
+fn numeric_constants(dir: &std::path::Path) -> Vec<String> {
+    const NUMERIC: [&str; 10] = [
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "usize",
+        "i32",
+        "i64",
+        "f64",
+        "Duration",
+        "TimeDelta",
+    ];
+    let root = std::path::Path::new(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/services/catalyst/builder/src"
+    ));
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            if path.file_name() != Some(std::ffi::OsStr::new("tests")) {
+                found.extend(numeric_constants(&path));
+            }
+            continue;
+        }
+        if path.extension() != Some(std::ffi::OsStr::new("rs")) {
+            continue;
+        }
+        let module = path
+            .strip_prefix(root)
+            .unwrap()
+            .with_extension("")
+            .to_string_lossy()
+            .replace('/', "::");
+        let module = module
+            .strip_suffix("::mod")
+            .or_else(|| module.strip_suffix("lib"))
+            .unwrap_or(&module)
+            .to_string();
+        let source = std::fs::read_to_string(&path).unwrap();
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        for line in code.lines() {
+            let line = line.trim_start();
+            let line = ["pub(crate) ", "pub "]
+                .iter()
+                .find_map(|vis| line.strip_prefix(vis))
+                .unwrap_or(line);
+            let Some((name, kind)) = line
+                .strip_prefix("const ")
+                .and_then(|rest| rest.split_once(": "))
+            else {
+                continue;
+            };
+            let kind = kind.split([' ', '=']).next().unwrap_or("");
+            if NUMERIC.contains(&kind.rsplit("::").next().unwrap_or(kind)) {
+                found.push(if module.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{module}::{name}")
+                });
+            }
+        }
+    }
+    found
 }

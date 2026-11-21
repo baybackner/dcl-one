@@ -49,7 +49,7 @@ pub struct BulkItemStatusPatchOut {
     pub updated: u64,
 }
 
-const MAX_BULK_ITEMS: usize = 1000;
+pub(crate) const MAX_BULK_ITEMS: usize = 1000;
 
 fn parse_status(status: &str) -> Result<Status, ApiError> {
     Status::parse(status).ok_or_else(|| ApiError::bad_request("Invalid Status provided"))

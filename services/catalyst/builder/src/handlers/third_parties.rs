@@ -17,7 +17,7 @@ use crate::third_parties::{
     has_manager, managed_by, provider, provider_view, virtual_by_id, virtual_view,
 };
 
-const ID_MAX: usize = 512;
+pub(crate) const ID_MAX: usize = 512;
 
 fn missing(id: &str) -> ApiError {
     ApiError::not_found("The Third Party doesn't exists.").with_data(json!({ "id": id }))

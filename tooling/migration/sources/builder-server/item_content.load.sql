@@ -1,3 +1,10 @@
+DO $lock$ BEGIN
+  PERFORM 1 FROM builder.collections c
+   WHERE c.id IN (SELECT i.collection_id FROM builder.items i WHERE i.id IN (SELECT item_id FROM stage))
+   ORDER BY c.id FOR UPDATE;
+  PERFORM 1 FROM builder.items i WHERE i.id IN (SELECT item_id FROM stage) ORDER BY i.id FOR UPDATE;
+END $lock$;
+
 CREATE TEMP TABLE current_stage ON COMMIT DROP AS
 SELECT s.* FROM stage s
 JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';

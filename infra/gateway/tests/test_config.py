@@ -388,7 +388,7 @@ class ConfigurationTest(unittest.TestCase):
         idle = re.search(r"pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs\((\d+)\);", source)[1]
         expr = limit.replace("DEFAULT_MAX_BYTES as usize", f"({video})")
         self.assertRegex(expr, r"^[\d\s*+()]+$")
-        self.assertEqual(gateway.BUILDER_VIDEO_CAP, f"{eval(expr) // (1024 * 1024) + 1}m")
+        self.assertEqual(gateway.BUILDER_VIDEO_CAP, str(eval(expr)))
         _, regexes = self.worlds_locations()
         for path in ["/v1/items/6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55/videos",
                      "/builder-api/v1/items/6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55/videos"]:

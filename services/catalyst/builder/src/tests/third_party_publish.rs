@@ -1618,6 +1618,26 @@ async fn a_rename_never_moves_an_item_onto_a_urn_the_content_holds() {
         .await
         .unwrap();
     assert_eq!((status, urn), (409, format!("{old}:hat")), "{answer}");
+    w.state.content_sync.set_own_content_authority(false);
+    let free = format!("{provider}:free{}", Uuid::new_v4().simple());
+    let (status, answer) = send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/collections/{a}"),
+        json!({ "collection": { "id": a, "name": "Free", "urn": free, "eth_address": manager, "salt": null, "contract_address": null } }),
+    )
+    .await;
+    let urn: String = sqlx::query_scalar("SELECT urn_suffix FROM builder.items WHERE id = $1")
+        .bind(hat)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (status, urn),
+        (503, format!("{old}:hat")),
+        "a rename the content can't vouch for moves nothing: {answer}"
+    );
 }
 
 /// While one write holds a third-party collection, an item save, an item

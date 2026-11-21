@@ -2160,13 +2160,21 @@ async fn trickling(
     video: &[u8],
     windows: usize,
 ) -> (
-    tokio::task::JoinHandle<(u16, Value)>,
+    tokio::task::JoinHandle<(u16, Value, Option<String>)>,
     tokio::sync::mpsc::UnboundedSender<Bytes>,
 ) {
     let (body, tx, pulled) = fed();
     let uploading = tokio::spawn({
         let app = node.app.clone();
-        async move { send_unbounded(&app, OWNER_KEY, &format!("/v1/items/{item}/videos"), body).await }
+        async move {
+            let path = format!("/v1/items/{item}/videos");
+            answer(
+                app.oneshot(post(Some(OWNER_KEY), &path, None, body).await)
+                    .await
+                    .unwrap(),
+            )
+            .await
+        }
     });
     let whole = video_form(video);
     tx.send(Bytes::copy_from_slice(&whole[..120])).unwrap();
@@ -2184,12 +2192,15 @@ async fn trickling(
 }
 
 /// While the node's places are all held, a newcomer takes the place of an
-/// upload past its first window whose wallet and address have uploaded
-/// longer today than the newcomer's; one inside its first window, or a
-/// newcomer that uploaded longer, leaves the place and the newcomer waits.
+/// upload whose wallet finished longer uploads today than the newcomer's,
+/// however young; the cut upload answers 408 with `Retry-After` and leaves
+/// no spool file. An upload whose wallet finished none today keeps its
+/// place, and so does one against a newcomer that uploaded longer.
 #[tokio::test]
 async fn a_held_upload_gives_its_place_to_a_newcomer_that_uploaded_less_today() {
-    for (newcomer_spent, windows, newcomer) in [(0, 0, 429), (3_600, 2, 429), (0, 2, 200)] {
+    for (holder_spent, newcomer_spent, windows, newcomer) in
+        [(0, 0, 2, 429), (600, 3_600, 2, 429), (600, 0, 0, 200)]
+    {
         let Some(node) = node_with(
             |state| {
                 state.videos.places = crate::items::places::Places::new("video uploads", 1, 1, 2);
@@ -2200,33 +2211,40 @@ async fn a_held_upload_gives_its_place_to_a_newcomer_that_uploaded_less_today() 
         else {
             return;
         };
-        node.state.videos.used.wallets.charge_at(
-            &address(WALLET_KEYS[0]),
-            newcomer_spent,
-            std::time::Instant::now(),
-        );
+        for (key, spent) in [(OWNER_KEY, holder_spent), (WALLET_KEYS[0], newcomer_spent)] {
+            node.state.videos.used.wallets.charge_at(
+                &address(key),
+                spent,
+                std::time::Instant::now(),
+            );
+        }
         let video = mp4("slow holder");
         let (collection, item) = smart_wearable(&node, &video).await;
         let (uploading, tx) = trickling(&node, item, &video, windows).await;
         let (status, error, retry, other) =
             another_upload(&node, WALLET_KEYS[0], "198.51.100.50").await;
-        assert_eq!(status, newcomer, "{newcomer_spent} {windows}: {error:?}");
+        assert_eq!(
+            status, newcomer,
+            "{holder_spent} {newcomer_spent}: {error:?}"
+        );
         if newcomer == 429 {
             assert!(retry.is_some());
             assert!(!uploading.is_finished());
             uploading.abort();
         } else {
-            let (status, answer) = tokio::time::timeout(Duration::from_secs(10), uploading)
+            let (status, answer, retry) = tokio::time::timeout(Duration::from_secs(10), uploading)
                 .await
                 .expect("the slow upload ended")
                 .unwrap();
             assert_eq!(
-                (status, answer["error"].as_str()),
+                (status, answer["error"].as_str(), retry.as_deref()),
                 (
                     408,
-                    Some("The upload gave its place to another while the node was busy")
+                    Some("The upload gave its place to another while the node was busy"),
+                    Some("30")
                 )
             );
+            assert_eq!(spool_entries(&node), 0, "the cut upload's spool file stays");
         }
         drop(tx);
         until("every place back", || node.state.videos.idle()).await;
@@ -2609,4 +2627,117 @@ async fn a_stalled_file_upload_ends_at_its_deadline_and_frees_its_place() {
         (408, Some("The upload timed out"))
     );
     assert_eq!(node.state.file_uploads.in_flight(), 0);
+}
+
+/// An upload declaring a body longer than its route takes is refused at
+/// once with the route's own 413, before it takes a place or counts what the
+/// node holds, even while every place is held.
+#[tokio::test]
+async fn an_upload_declaring_more_than_its_route_takes_is_refused_before_a_place() {
+    let Some(node) = node_with(
+        |state| {
+            state.videos.places = crate::items::places::Places::new("video uploads", 1, 1, 2);
+            state.file_uploads = crate::items::places::Places::new("file uploads", 1, 1, 2);
+        },
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    let _videos = node.state.videos.admit("0xsomeone", None).ok().unwrap();
+    let _files = node
+        .state
+        .file_uploads
+        .admit("0xsomeone", None)
+        .ok()
+        .unwrap();
+    let video = mp4("declared");
+    let (collection, item) = smart_wearable(&node, &video).await;
+    for (route, bound, error, max) in [
+        (
+            "videos",
+            video::BODY_LIMIT,
+            "The video is too large",
+            250_000_000,
+        ),
+        (
+            "files",
+            crate::UPLOAD_BODY_LIMIT,
+            "The upload is too large",
+            crate::items::upload::MAX_BYTES as u64,
+        ),
+    ] {
+        for declared in [bound as u64 + 1, 1_000_000_000_000_000] {
+            let mut request = post(
+                Some(OWNER_KEY),
+                &format!("/v1/items/{item}/{route}"),
+                Some("198.51.100.60"),
+                Body::empty(),
+            )
+            .await;
+            request
+                .headers_mut()
+                .insert(header::CONTENT_LENGTH, declared.into());
+            let (status, answer, _) =
+                answer(node.app.clone().oneshot(request).await.unwrap()).await;
+            assert_eq!(
+                (status, answer["error"].as_str(), &answer["data"]),
+                (413, Some(error), &json!({ "maxBytes": max })),
+                "{route} declaring {declared}"
+            );
+        }
+    }
+    cleanup(&node.pool, &[collection], &[]).await;
+}
+
+/// A client that sends part of an upload's body and leaves still pays its
+/// address's day for the bytes that arrived, on both upload routes.
+#[tokio::test]
+async fn an_upload_its_client_leaves_still_pays_for_what_arrived() {
+    let Some(node) = node_with(|_| {}, true).await else {
+        return;
+    };
+    let video = mp4_of(4 * 1024 * 1024);
+    let (collection, item) = smart_wearable(&node, &video).await;
+    for (n, (route, whole)) in [
+        ("videos", video_form(&video)),
+        ("files", form(&[(&hash(&video), Some("blob"), &video)])),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let ip = format!("198.51.100.{}", 70 + n);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-real-ip", ip.parse().unwrap());
+        let site = crate::limits::upload_source(&headers).unwrap();
+        let (body, tx, pulled) = fed();
+        let request = post(
+            Some(OWNER_KEY),
+            &format!("/v1/items/{item}/{route}"),
+            Some(&ip),
+            body,
+        )
+        .await;
+        let uploading = tokio::spawn(node.app.clone().oneshot(request));
+        let sent = 3 * 1024 * 1024;
+        tx.send(Bytes::copy_from_slice(&whole[..sent])).unwrap();
+        pulled_to(&pulled, sent, || uploading.is_finished()).await;
+        assert!(!uploading.is_finished(), "{route} answered early");
+        uploading.abort();
+        until("the upload ended", || {
+            node.state.videos.idle() && node.state.file_uploads.in_flight() == 0
+        })
+        .await;
+        let spent = node
+            .state
+            .limits
+            .source_upload_mib
+            .spent_at(&site, std::time::Instant::now());
+        assert!(
+            spent > 2.9,
+            "{route}: the address paid {spent} MiB for 3 MiB"
+        );
+    }
+    cleanup(&node.pool, &[collection], &[]).await;
 }

@@ -8,10 +8,11 @@
 //! ([`Mp4`]); every read waits at most until the upload's deadline and the
 //! idle timeout after the last bytes, so a sender that stalls is cut and
 //! frees its place. A wallet and an upload source have a day of upload time
-//! ([`WALLET_VIDEO_SECS_A_DAY`], [`SOURCE_VIDEO_SECS_A_DAY`]). While the
-//! node's places are all held, a newcomer takes the place of the upload
-//! past its first idle-timeout window whose wallet or source uploaded
-//! longest today, if longer than the newcomer's ([`Videos::admit`]). Only
+//! ([`WALLET_VIDEO_SECS_A_DAY`], [`SOURCE_VIDEO_SECS_A_DAY`]), spent by
+//! the time each upload holds its place, bytes or none. While the node's
+//! places are all held, a newcomer takes the place of the upload whose
+//! wallet or source spent the longest on finished uploads today, if longer
+//! than the newcomer's ([`Videos::admit`]). Only
 //! then, in one transaction with the item locked, the decision runs again,
 //! the item must still name the hash at `video.mp4`, and the file goes to
 //! the blob store with its upload record, as [`super::upload`] stores files.
@@ -55,8 +56,7 @@ pub const BODY_LIMIT: usize = DEFAULT_MAX_BYTES as usize + 1024 * 1024;
 /// about 1.7 Mbit/s.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(20 * 60);
 
-/// The longest the body may go without a byte before the upload ends, and
-/// the time an upload runs before a newcomer may take its place.
+/// The longest the body may go without a byte before the upload ends.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Videos the node reads at once (`BUILDER_VIDEO_UPLOADS_MAX`), and of them
@@ -167,6 +167,11 @@ impl VideoAdmission {
         &self.progress
     }
 
+    /// A newcomer took its place.
+    pub fn gave_way(&self) -> bool {
+        self.progress.cut.load(Ordering::SeqCst)
+    }
+
     /// Its body has arrived: no newcomer takes its place while it stores,
     /// and the time it took counts toward its wallet's and source's day.
     pub fn received(&self) {
@@ -201,10 +206,10 @@ impl Videos {
     /// time left of their day ([`WALLET_VIDEO_SECS_A_DAY`],
     /// [`SOURCE_VIDEO_SECS_A_DAY`]; 429 with `Retry-After` otherwise).
     /// Never waits: while the node's places are all held, it takes the place
-    /// of the upload past its first idle-timeout window whose wallet or
-    /// source has spent the longest uploading today, its own upload so far
-    /// included, if longer than the newcomer's, which ends with 408; else
-    /// the refusal.
+    /// of the upload whose wallet or source has spent the longest on
+    /// finished uploads today, if longer than the newcomer's, which ends with
+    /// 408; else the refusal. An upload whose wallet and source finished none
+    /// today keeps its place until it ends.
     pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<VideoAdmission, Response> {
         let now = Instant::now();
         let at = now.into_std();
@@ -228,27 +233,15 @@ impl Videos {
             Ok(place) => place,
             Err((false, busy)) => return Err(busy),
             Err((true, busy)) => {
-                let running = |of: &dyn Fn(&Progress) -> bool| -> f64 {
-                    holders
-                        .iter()
-                        .filter(|h| !h.cut.load(Ordering::SeqCst) && of(h))
-                        .map(|h| h.elapsed(now))
-                        .sum()
-                };
                 let today = |wallet: &str, source: Option<&str>| {
-                    let by_wallet = self.used.wallets.spent_at(wallet, at)
-                        + running(&|h: &Progress| h.wallet == wallet);
-                    let by_source = source.map_or(0.0, |source| {
-                        self.used.sources.spent_at(source, at)
-                            + running(&|h: &Progress| h.source.as_deref() == Some(source))
-                    });
-                    by_wallet.max(by_source)
+                    let by_source =
+                        source.map_or(0.0, |source| self.used.sources.spent_at(source, at));
+                    self.used.wallets.spent_at(wallet, at).max(by_source)
                 };
                 let newcomer = today(signer, source);
                 let longest = holders
                     .iter()
                     .filter(|h| !h.cut.load(Ordering::SeqCst))
-                    .filter(|h| now.saturating_duration_since(h.started) >= self.idle_timeout)
                     .map(|h| (today(&h.wallet, h.source.as_deref()), h))
                     .filter(|(spent, _)| *spent > newcomer)
                     .max_by(|a, b| a.0.total_cmp(&b.0))
@@ -336,6 +329,11 @@ fn not_mp4() -> ApiError {
     ApiError::bad_request("The video is not an MP4 file")
 }
 
+/// 413 for a video past `max_bytes`.
+pub(crate) fn too_large(max_bytes: u64) -> ApiError {
+    ApiError::http(413, "The video is too large").with_data(json!({ "maxBytes": max_bytes }))
+}
+
 fn timed_out() -> ApiError {
     ApiError::http(408, "The upload timed out")
 }
@@ -376,10 +374,7 @@ pub async fn receive(
     let deadline = Instant::now() + videos.deadline;
     let mut window_start = Instant::now();
     let until = |window_start: Instant| deadline.min(window_start + videos.idle_timeout);
-    let too_large = || {
-        ApiError::http(413, "The video is too large")
-            .with_data(json!({ "maxBytes": videos.max_bytes }))
-    };
+    let too_large = || too_large(videos.max_bytes);
     let delivered = Arc::new(AtomicU64::new(0));
     let (parts, body) = request.into_parts();
     let body = Body::from_stream(Framed {
@@ -709,10 +704,6 @@ mod admission_tests {
             .expect("a place")
     }
 
-    fn cut(admission: &VideoAdmission) -> bool {
-        admission.progress().cut.load(Ordering::SeqCst)
-    }
-
     /// Every place held by uploads that each send fast from their own wallet,
     /// two per address: a creator arriving still gets a place, the one of the
     /// upload whose wallet and address have uploaded longest today.
@@ -738,7 +729,7 @@ mod admission_tests {
             creator.is_ok(),
             "a creator is refused while every place is held"
         );
-        let cut: Vec<usize> = (0..held.len()).filter(|n| cut(&held[*n])).collect();
+        let cut: Vec<usize> = (0..held.len()).filter(|n| held[*n].gave_way()).collect();
         assert_eq!(
             cut,
             [5],
@@ -766,7 +757,7 @@ mod admission_tests {
             .charge_at("203.0.113.2", 600, Instant::now().into_std());
         let refused = videos.admit("0xfresh", Some("203.0.113.2"));
         assert_eq!(refused.err().map(|r| r.status().as_u16()), Some(429));
-        assert!(held.iter().all(|h| !cut(h)));
+        assert!(held.iter().all(|h| !h.gave_way()));
     }
 
     /// One video at a time per wallet, and at most its hours of uploading a
@@ -788,5 +779,120 @@ mod admission_tests {
                 .contains_key(axum::http::header::RETRY_AFTER)
         );
         assert!(videos.admit("0xtwo", Some("203.0.113.5")).is_ok());
+    }
+
+    /// A creator that finished no upload today keeps its place until its
+    /// upload ends, however many fresh wallets and addresses arrive after it.
+    #[tokio::test(start_paused = true)]
+    async fn a_creator_with_its_day_untouched_keeps_its_place_until_its_upload_ends() {
+        let videos = Videos {
+            places: Places::new("video uploads", 4, 1, 2),
+            ..Videos::default()
+        };
+        let creator = hold(&videos, "0xcreator", "203.0.113.9");
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let others: Vec<VideoAdmission> = (0..3)
+            .map(|n| hold(&videos, &format!("0xother{n}"), &site(n)))
+            .collect();
+        tokio::time::advance(Duration::from_secs(300)).await;
+        let newcomer = videos.admit("0xnewcomer", Some(&site(9)));
+        assert_eq!(newcomer.err().map(|r| r.status().as_u16()), Some(429));
+        assert!(!creator.gave_way() && others.iter().all(|o| !o.gave_way()));
+    }
+
+    /// Uploads that each end just before their idle window and come straight
+    /// back never keep a creator out: their wallets and addresses have
+    /// uploading behind them today, and the creator has none.
+    #[tokio::test(start_paused = true)]
+    async fn uploads_restarting_inside_their_idle_window_still_give_way_to_a_creator() {
+        let videos = Videos::default();
+        let pair = |n: usize| (format!("0xattacker{n}"), site(n / MAX_UPLOADS_PER_SOURCE));
+        let mut held: Vec<Option<(VideoAdmission, Instant)>> = (0..MAX_UPLOADS)
+            .map(|n| {
+                let (w, s) = pair(n);
+                Some((hold(&videos, &w, &s), Instant::now()))
+            })
+            .collect();
+        let mut admitted = 0;
+        for _ in 0..(2 * 3_600) {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for (n, slot) in held.iter_mut().enumerate() {
+                if slot
+                    .as_ref()
+                    .is_some_and(|(_, at)| at.elapsed() >= Duration::from_secs(29))
+                {
+                    drop(slot.take());
+                    let (w, s) = pair(n);
+                    *slot = videos.admit(&w, Some(&s)).ok().map(|a| (a, Instant::now()));
+                }
+            }
+            if videos.admit("0xcreator", Some("203.0.113.9")).is_ok() {
+                admitted += 1;
+            }
+        }
+        assert!(
+            admitted > 0,
+            "no creator got a place in 2 h while 32 uploads restarted every 29 s"
+        );
+    }
+
+    /// Keeping a creator out of a 4-place node takes every place held, at
+    /// every moment, by a wallet and an address that finished no upload in
+    /// the last day's refill: 7 wallets and 2½ addresses a place. The
+    /// attacker restarts its places every 1,200 s, the longest an upload
+    /// runs, rotating `wallets` and `sources` (two places each); the creator
+    /// tries every 10 s and needs 400 s. With more than enough identities it
+    /// never gets in; with fewer it does, and finishes.
+    #[tokio::test(start_paused = true)]
+    async fn keeping_a_creator_out_takes_every_place_held_by_a_wallet_and_address_with_a_full_day()
+    {
+        for (wallets, sources, kept_out) in [(32, 10, true), (24, 10, false), (32, 8, false)] {
+            let videos = Videos {
+                places: Places::new("video uploads", 4, 1, 2),
+                ..Videos::default()
+            };
+            let period = 1_200;
+            let mut attacker: Vec<VideoAdmission> = Vec::new();
+            let mut creator: Option<(VideoAdmission, Instant)> = None;
+            let (mut admitted, mut finished) = (0, 0);
+            for second in (0..16 * period).step_by(10) {
+                if second % period == 0 {
+                    let k = second / period;
+                    attacker.clear();
+                    for place in 0..4 {
+                        let wallet = format!("0xattacker{}", (4 * k + place) % wallets);
+                        let source = site((2 * k + place / 2) % sources);
+                        attacker.extend(videos.admit(&wallet, Some(&source)).ok());
+                    }
+                }
+                match &creator {
+                    Some((admission, at)) if admission.gave_way() => {
+                        panic!(
+                            "{wallets} {sources}: the creator was cut after {:?}",
+                            at.elapsed()
+                        )
+                    }
+                    Some((_, at)) if at.elapsed() >= Duration::from_secs(400) => {
+                        finished += 1;
+                        creator = None;
+                    }
+                    Some(_) => {}
+                    None if finished > 0 => {}
+                    None => {
+                        creator = videos
+                            .admit("0xcreator", Some("203.0.113.9"))
+                            .ok()
+                            .map(|a| (a, Instant::now()));
+                        admitted += usize::from(creator.is_some());
+                    }
+                }
+                tokio::time::advance(Duration::from_secs(10)).await;
+            }
+            assert_eq!(
+                (admitted == 0, finished > 0),
+                (kept_out, !kept_out),
+                "{wallets} wallets and {sources} addresses: admitted {admitted}, finished {finished}"
+            );
+        }
     }
 }

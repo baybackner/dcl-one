@@ -23,9 +23,10 @@ stays the node's.
 No step has a watermark: published/curation state is derived from other
 tables, so every run re-scans. dcl_migration.builder_imported records each
 collection, item, virtual third party and curation the import wrote, with a
-fingerprint of the node row; a re-run updates a recorded row from upstream
-only while the node row still matches it, and never re-creates one the node
-deleted. Deletions upstream are not detected.
+fingerprint of the node row. A collection with its items and their curations
+is one unit: a re-run updates a unit from upstream only while every row of it
+still matches its fingerprint, under the node's locks, and never re-creates a
+row the node deleted. Deletions upstream are not detected.
 """
 
 [[step]]

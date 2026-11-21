@@ -52,7 +52,12 @@ impl Drop for Admission {
 
 /// A refused place: 429 at once, with a `Retry-After`.
 pub fn busy(error: &str) -> Response {
-    let mut response = ApiError::http(429, error).into_response();
+    retry_later(ApiError::http(429, error))
+}
+
+/// `refusal` with the `Retry-After` of a refused place.
+pub fn retry_later(refusal: ApiError) -> Response {
+    let mut response = refusal.into_response();
     response
         .headers_mut()
         .insert(header::RETRY_AFTER, HeaderValue::from(RETRY_AFTER_SECS));

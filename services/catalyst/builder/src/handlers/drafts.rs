@@ -147,33 +147,37 @@ pub async fn post_item_files(
     use axum::response::IntoResponse;
     let change = access::change_item(&state, &signer, &id).await?;
     state.items.require_documents_release().await?;
+    if crate::limits::declared_length(request.headers())
+        .is_some_and(|n| n > crate::UPLOAD_BODY_LIMIT as u64)
+    {
+        return Err(upload::too_large());
+    }
     let source = crate::limits::upload_source(request.headers());
     let _admission = match state.file_uploads.admit(signer.as_str(), source.as_deref()) {
         Ok(admission) => admission,
         Err(busy) => return Ok(busy),
     };
-    let upload = crate::limits::within_storage(
+    let mut upload = crate::limits::within_storage(
         &state,
         signer.as_str(),
         request.headers(),
         crate::UPLOAD_BODY_LIMIT as u64,
     )
     .await?;
-    let (request, received) = crate::limits::counted(request);
+    let request = upload.counted(request);
     let multipart = match axum::extract::Multipart::from_request(request, &state).await {
         Ok(multipart) => multipart,
-        Err(refused) => return Ok(refused.into_response()),
+        Err(refused) => {
+            upload.carried(0);
+            return Ok(refused.into_response());
+        }
     };
     let files = tokio::time::timeout(state.file_deadline, upload::read(multipart))
         .await
         .unwrap_or_else(|_| Err(ApiError::http(408, "The upload timed out")));
     let count = files.as_ref().map_or(1, |files| files.len().max(1));
-    crate::limits::charge_upload(
-        &state,
-        &upload,
-        &received,
-        u32::try_from(count).unwrap_or(u32::MAX),
-    );
+    upload.carried(u32::try_from(count).unwrap_or(u32::MAX));
+    drop(upload);
     let files = files?;
     let bytes = files.iter().map(|(_, file)| file.len() as u64).sum();
     let count = files.len() as u64;
@@ -200,6 +204,11 @@ pub async fn post_item_videos(
     if !state.items.names_video(change.id()).await? {
         return Err(ApiError::bad_request("The item names no video"));
     }
+    if crate::limits::declared_length(request.headers())
+        .is_some_and(|n| n > video::BODY_LIMIT as u64)
+    {
+        return Err(video::too_large(state.videos.max_bytes));
+    }
     let source = crate::limits::upload_source(request.headers());
     let admission = match state.videos.admit(signer.as_str(), source.as_deref()) {
         Ok(admission) => admission,
@@ -214,10 +223,15 @@ pub async fn post_item_videos(
     .await?;
     let root = video::spool_root(&state.items.blobs);
     state.videos.sweep(&root).await;
-    let (request, sent) = crate::limits::counted(request);
+    let request = upload.counted(request);
     let received = video::receive(&state.videos, &root, request, admission.progress()).await;
-    crate::limits::charge_upload(&state, &upload, &sent, 1);
-    let received = received?;
+    drop(upload);
+    let received = match received {
+        Err(refused) if admission.gave_way() => {
+            return Ok(crate::items::places::retry_later(refused));
+        }
+        received => received?,
+    };
     let size = received.size();
     admission.received();
     let stored = state.clone();

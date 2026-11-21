@@ -33,8 +33,8 @@ use super::listing;
 use super::schema::{ItemInput, ItemType};
 use super::urn::ThirdPartyItemUrn;
 
-const MAX_TAGS: usize = 20;
-const MAX_OUTCOMES: usize = 10;
+pub(crate) const MAX_TAGS: usize = 20;
+pub(crate) const MAX_OUTCOMES: usize = 10;
 
 /// The item a save writes: its id and what the decision reads of the body.
 #[derive(Debug)]

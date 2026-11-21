@@ -38,10 +38,10 @@ const CONTRACT_NETWORKS: [&str; 10] = [
     "sepolia",
     "amoy",
 ];
-const TEXT_MAX: usize = 256;
-const LIST_MAX: usize = 1000;
-const DATA_MAX: usize = 1 << 20;
-const NAME_MAX: usize = 42;
+pub(crate) const TEXT_MAX: usize = 256;
+pub(crate) const LIST_MAX: usize = 1000;
+pub(crate) const DATA_MAX: usize = 1 << 20;
+pub(crate) const NAME_MAX: usize = 42;
 
 /// What a valid body asks for.
 #[derive(Debug)]
@@ -502,6 +502,7 @@ impl ItemsComponent {
         if let (Some((_, Some(old))), Some(new)) = (&stored, save.urn.as_deref())
             && old != new
         {
+            access::content_knows_items(&mut tx, edit.own_content()).await?;
             let deployed: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM builder.items i \
                    JOIN content.active_pointers ap ON ap.pointer = lower($2 || substr(i.urn_suffix, length($3) + 1)) \

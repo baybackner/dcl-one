@@ -10,18 +10,18 @@ use crate::http::ApiError;
 
 type Fields = Vec<(String, JsJson)>;
 
-const MAX_CONTENTS: usize = 256;
+pub(crate) const MAX_CONTENTS: usize = 256;
 /// Tags or required permissions of one item: builder-server's largest has 117.
-const LIST_MAX: usize = 1_000;
+pub(crate) const LIST_MAX: usize = 1_000;
 /// Characters of a tag, permission, file name or spring bone name: the
 /// longest builder-server holds has 208.
-const TEXT_MAX: usize = 1_000;
+pub(crate) const TEXT_MAX: usize = 1_000;
 /// Representations of one item: builder-server's items have at most 2.
-const REPRESENTATIONS_MAX: usize = 10;
+pub(crate) const REPRESENTATIONS_MAX: usize = 10;
 /// Categories one list hides or replaces: builder-server's longest has 15.
-const HIDDEN_MAX: usize = 100;
+pub(crate) const HIDDEN_MAX: usize = 100;
 /// Spring bones of one model.
-const BONES_MAX: usize = 1_000;
+pub(crate) const BONES_MAX: usize = 1_000;
 const RARITIES: &[&str] = &[
     "unique",
     "mythic",

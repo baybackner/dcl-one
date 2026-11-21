@@ -42,7 +42,7 @@ pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 /// gateway's 21 MiB request bound with room for the multipart framing.
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
 
-fn too_large() -> ApiError {
+pub(crate) fn too_large() -> ApiError {
     ApiError::http(413, "The upload is too large").with_data(json!({ "maxBytes": MAX_BYTES }))
 }
 

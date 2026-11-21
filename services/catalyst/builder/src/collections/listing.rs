@@ -58,9 +58,9 @@ pub const COMMITTEE_CAP: i64 = 1000;
 pub const ADDRESS_CAP: i64 = 5000;
 /// The longest `q`.
 pub const Q_MAX: usize = 256;
-const MAX_ASSIGNEES: usize = 20;
-const MAX_TAGS: usize = 5;
-const TAG_MAX: usize = 64;
+pub(crate) const MAX_ASSIGNEES: usize = 20;
+pub(crate) const MAX_TAGS: usize = 5;
+pub(crate) const TAG_MAX: usize = 64;
 const UNPAGINATED_LIMIT: i64 = 100_000;
 const UNASSIGNED: &str = "unassigned";
 

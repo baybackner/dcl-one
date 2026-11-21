@@ -1875,3 +1875,52 @@ async fn a_delivery_that_predates_a_merge_leaves_the_merged_acceptance_waiting()
         .unwrap();
     assert_eq!(pending_terms(&node.pool, id).await, vec![(false, 0)]);
 }
+
+/// A committee member dropped from the committee between the publication's
+/// decision and its write publishes nothing; one still on it publishes.
+#[tokio::test]
+async fn a_committee_member_dropped_before_the_publish_writes_nothing() {
+    let committee = FakeCommittee::with(&[&address(COMMITTEE_KEY)]);
+    let Some(node) = node(Options {
+        committee: Some(committee),
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let mut outcomes = Vec::new();
+    for dropped in [false, true] {
+        let (id, _, _) = draft(&node, 1).await;
+        let contract = contract_of(&node.pool, id).await;
+        copy_holds(&node.pool, &contract, &address(OWNER_KEY), &[], &[0]).await;
+        let path = format!("/v1/collections/{id}/publish");
+        let sync = crate::access::sync_collection(
+            &node.state,
+            &super::curation_routes::signer_of(COMMITTEE_KEY, &path).await,
+            &id.to_string(),
+        )
+        .await
+        .unwrap();
+        if dropped {
+            super::support::record_committee_event(
+                &node.pool,
+                10,
+                "0xaeec95a8aa671a6d3fec56594827d7804964fa70",
+                &address(COMMITTEE_KEY),
+                false,
+            )
+            .await;
+            super::support::publish_committee_at(&node.pool, 10, "timezone('UTC', now())").await;
+        }
+        let published = crate::collections::lifecycle::publish(&node.state, &sync).await;
+        outcomes.push((
+            published.err().map(|e| e.status()),
+            chain_ids(&node.pool, id).await,
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        [(None, vec![Some("0".to_string())]), (Some(401), vec![None])]
+    );
+}

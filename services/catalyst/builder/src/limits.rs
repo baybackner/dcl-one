@@ -131,7 +131,11 @@ pub const UNPUBLISHED_KEPT: Duration = MINUTE;
 /// The prefix of an IPv6 address that names one upload source.
 const UPLOAD_SOURCE_V6_BITS: u32 = 48;
 const MIB: u64 = 1024 * 1024;
-const KEYS: usize = 50_000;
+/// Keys each budget keeps; past it, the least spent are forgotten.
+pub(crate) const KEYS: usize = 50_000;
+/// The longest the count of the unpublished uploads may take before every
+/// record counts.
+pub const UNPUBLISHED_COUNT_TIMEOUT: Duration = Duration::from_secs(50);
 
 /// Every budget, each a pub field so a test can set its own.
 pub struct Limits {
@@ -443,26 +447,69 @@ pub fn upload_source(headers: &HeaderMap) -> Option<String> {
     }
 }
 
-/// An upload admitted by [`within_storage`]: who pays for it and at what
-/// price per byte and file.
+/// An upload admitted by [`within_storage`]: who pays for it, at what price
+/// per byte and file, and what it sent. When it drops, however the request
+/// ended, its bytes, in MiB, and its files go to its source address's day
+/// at its price, its files to its wallet's day.
 pub struct Upload {
-    pub source: Option<String>,
+    state: SharedState,
+    source: Option<String>,
     wallet: String,
     price: u32,
+    received: Arc<AtomicU64>,
+    files: u32,
+}
+
+impl Upload {
+    /// `request` with a body whose bytes this upload pays for.
+    pub fn counted(&self, request: Request) -> Request {
+        let counter = self.received.clone();
+        request.map(|body| {
+            axum::body::Body::from_stream(body.into_data_stream().inspect_ok(move |chunk| {
+                counter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }))
+        })
+    }
+
+    /// The files it carried: one until told.
+    pub fn carried(&mut self, files: u32) {
+        self.files = files;
+    }
+}
+
+impl Drop for Upload {
+    fn drop(&mut self) {
+        let limits = &self.state.limits;
+        let now = limits.instant((self.state.now)());
+        limits
+            .wallet_upload_files
+            .charge_at(&self.wallet, self.files, now);
+        let Some(source) = &self.source else {
+            return;
+        };
+        let mib =
+            u32::try_from(self.received.load(Ordering::Relaxed).div_ceil(MIB)).unwrap_or(u32::MAX);
+        limits
+            .source_upload_mib
+            .charge_at(source, mib.saturating_mul(self.price), now);
+        limits
+            .source_upload_files
+            .charge_at(source, self.files.saturating_mul(self.price), now);
+    }
 }
 
 /// Refuses an upload by `wallet` before its body is read. 429 while its
 /// source address ([`upload_source`]) has sent its day of
 /// [`SOURCE_UPLOAD_MIB`] or [`SOURCE_UPLOAD_FILES`], or the wallet its
-/// [`WALLET_UPLOAD_FILES`] (what it sends is charged once received,
-/// [`charge_upload`], at [`NEAR_BOUND_PRICE`] for the source once every
+/// [`WALLET_UPLOAD_FILES`] (what it sends is charged when the [`Upload`]
+/// drops, at [`NEAR_BOUND_PRICE`] for the source once every
 /// wallet's unpublished uploads hold half the node's bound); 413 when the
 /// wallet's unpublished uploads hold its bound of files, or could take its
 /// bound of bytes with this body ([`WALLET_FILES`], [`WALLET_BYTES`]); 507
 /// when every wallet's together hold the node's ([`NODE_FILES`],
 /// [`NODE_BYTES`]). The body's declared length, else `most`, the route's
-/// largest body, counts as stored. The unpublished uploads are counted at
-/// most once every [`UNPUBLISHED_KEPT`], by one count at a time and never
+/// largest body, counts as stored; the route refused a longer one first.
+/// The unpublished uploads are counted at most once every [`UNPUBLISHED_KEPT`], by one count at a time and never
 /// on the request's way unless none is kept or the wallet passes its bound
 /// by the sum of its records; meanwhile a wallet's count moves by what its
 /// records gained or lost, the node's by what this process stored.
@@ -472,10 +519,7 @@ pub async fn within_storage(
     headers: &HeaderMap,
     most: u64,
 ) -> Result<Upload, ApiError> {
-    let incoming = headers
-        .get(axum::http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
-        .unwrap_or(most);
+    let incoming = declared_length(headers).unwrap_or(most);
     let limits = &state.limits;
     let node_bound = Held {
         bytes: limits.node_bytes,
@@ -528,10 +572,20 @@ pub async fn within_storage(
         );
     }
     Ok(Upload {
+        state: state.clone(),
         source,
         wallet: wallet.to_string(),
         price,
+        received: Arc::default(),
+        files: 1,
     })
+}
+
+/// The body length a request declares in `Content-Length`.
+pub fn declared_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.parse().ok())
 }
 
 /// The bound `held` passes with `incoming` more bytes, as `{maxBytes}` or
@@ -628,7 +682,7 @@ impl Tallies {
             .as_ref()
             .map_or(0, |last| last.generation + 1);
         let at = limits.instant((state.now)());
-        *lock(&self.added) = Held::default();
+        let before = *lock(&self.added);
         let near_wallet = Held {
             bytes: limits
                 .wallet_bytes
@@ -650,29 +704,11 @@ impl Tallies {
             wallets,
         });
         *lock(&self.last) = Some(tally.clone());
+        let mut added = lock(&self.added);
+        *added = added.minus(before);
+        drop(added);
         Ok(tally)
     }
-}
-
-/// What an upload `upload` admitted sent, whatever came of it: its bytes,
-/// in MiB, and `files` to its source address's day at its price, its files
-/// to its wallet's day.
-pub fn charge_upload(state: &SharedState, upload: &Upload, received: &AtomicU64, files: u32) {
-    let limits = &state.limits;
-    let now = limits.instant((state.now)());
-    limits
-        .wallet_upload_files
-        .charge_at(&upload.wallet, files, now);
-    let Some(source) = &upload.source else {
-        return;
-    };
-    let mib = u32::try_from(received.load(Ordering::Relaxed).div_ceil(MIB)).unwrap_or(u32::MAX);
-    limits
-        .source_upload_mib
-        .charge_at(source, mib.saturating_mul(upload.price), now);
-    limits
-        .source_upload_files
-        .charge_at(source, files.saturating_mul(upload.price), now);
 }
 
 /// `bytes` in `files` this process stored as upload records, which count
@@ -711,23 +747,14 @@ impl Listing<'_> {
         }
         let now = (self.state.now)();
         limits.take_cost(&limits.wallet_reads, self.signer, tokens, now)?;
-        if let Some(source) = source(self.headers) {
-            limits.take_cost(&limits.source_reads, &source, tokens, now)?;
+        if let Some(source) = source(self.headers)
+            && let Err(refused) = limits.take_cost(&limits.source_reads, &source, tokens, now)
+        {
+            limits.wallet_reads.refund(self.signer, tokens);
+            return Err(refused);
         }
         Ok(())
     }
-}
-
-/// The request with a body that counts the bytes it hands on.
-pub fn counted(request: Request) -> (Request, Arc<AtomicU64>) {
-    let received = Arc::new(AtomicU64::new(0));
-    let counter = received.clone();
-    let request = request.map(|body| {
-        axum::body::Body::from_stream(body.into_data_stream().inspect_ok(move |chunk| {
-            counter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-        }))
-    });
-    (request, received)
 }
 
 /// `rows` answered by an unbounded listing, charged to the signer's and the
@@ -754,5 +781,55 @@ pub fn charge(state: &SharedState, headers: &HeaderMap, signer: Option<&str>, to
     }
     if let Some(source) = source(headers) {
         limits.source_reads.charge_at(&source, tokens, now);
+    }
+}
+
+#[cfg(test)]
+mod tally_tests {
+    use std::sync::Arc;
+
+    use super::{Held, lock};
+
+    /// A count that fails keeps what this process stored since the last
+    /// one, so the node's figure still holds it.
+    #[tokio::test]
+    async fn a_failed_count_keeps_what_this_process_stored() {
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let state = Arc::new(
+            crate::State::new(
+                pool.clone(),
+                crate::tests::support::temp_storage().await,
+                Arc::default(),
+                dcl_http::Outbound::for_tests(),
+                None,
+                None,
+                crate::Settings::default(),
+            )
+            .unwrap(),
+        );
+        let tallies = &state.limits.tallies;
+        tallies.count(&state).await.unwrap();
+        super::stored(&state, 10, 1);
+        sqlx::query("ALTER TABLE builder.uploaded_contents RENAME TO uploaded_contents_away")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(tallies.count(&state).await.is_err());
+        let kept = *lock(&tallies.added);
+        sqlx::query("ALTER TABLE builder.uploaded_contents_away RENAME TO uploaded_contents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            kept,
+            Held {
+                bytes: 10,
+                files: 1
+            }
+        );
+        tallies.count(&state).await.unwrap();
+        assert_eq!(*lock(&tallies.added), Held::default());
     }
 }
