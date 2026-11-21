@@ -511,7 +511,8 @@ impl ExploreState {
 
     /// Attaches the configured mirrors as periodic jobs: the first pass right
     /// away (jittered), then every interval, doubling the wait after a failed
-    /// pass up to an hour.
+    /// pass up to an hour. The places derive pass reads parcel owners from the
+    /// LAND authority attached before this call (`PlacesComponent::set_land_authz`).
     pub fn spawn_jobs(self: &Arc<Self>, jobs: &Jobs, client: crate::http::Outbound) {
         if self.settings.operator_writes_enabled {
             moderation_hooks::spawn(
@@ -559,10 +560,7 @@ impl ExploreState {
                 self.settings.content_public_url.clone(),
                 self.storage.clone(),
                 self.settings.places_notices().map(str::to_string),
-                {
-                    let state = self.clone();
-                    move || state.places.land_authz().cloned()
-                },
+                self.places.land_authz().cloned(),
             );
         }
         if let Some(source) = self.settings.places_upstream.clone() {

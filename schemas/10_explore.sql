@@ -268,11 +268,13 @@ CREATE TABLE explore.place_moderation (
 
 -- The content rating last held on each parcel by the derived place covering it
 -- (src/explore/places/derive.rs, `settle_ratings`), with that place's id and
--- whole parcel set (`parcels`: the hex SHA-256 of its distinct positions in
--- byte order, joined by `;`), the deployer address that created it and the parcel's LAND owner when the
--- record was written (the estate's owner for a parcel in one, from the local
--- land_authz index; NULL while that index is unpublished or the parcel is
--- unindexed): the derive pass writes the rating it settles for a new
+-- whole parcel set (`parcel_set_hash`: the hex SHA-256 of the string its
+-- distinct positions make sorted in byte order and joined by `;`), the
+-- deployer address that created it and the parcel's LAND owner (the estate's
+-- owner for a parcel in one, from the local land_authz index; NULL while that
+-- index is unpublished or the parcel is unindexed, and filled by a later pass
+-- over the same place once the index knows it): the derive pass writes the
+-- rating it settles for a new
 -- deployment or a new row over every parcel of that row (and clears the
 -- parcels of one left with no rating), and fills a missing parcel from the
 -- row's stored rating; an operator's rating of a derived place
@@ -290,7 +292,7 @@ CREATE TABLE explore.place_parcel_rating (
     position        text PRIMARY KEY,
     content_rating  text NOT NULL,
     place_id        text NOT NULL,
-    parcels         text NOT NULL,
+    parcel_set_hash text NOT NULL,
     creator_address text,
     owner_address   text,
     operator        boolean NOT NULL DEFAULT false,

@@ -363,6 +363,11 @@ fn notify(state: &SharedState) -> Option<&str> {
     state.settings.places_notices()
 }
 
+/// The LAND index a place rating reads its parcels' owners from.
+fn land(state: &SharedState) -> Option<&crate::land_authz::LandAuthzState> {
+    state.places.land_authz().map(|l| &**l)
+}
+
 /// `updatePlace`'s predicate on the row a places route addresses
 /// (`Place/model.ts:928-935`): `disabled is false AND world is false` on a
 /// genesis place, `world is true AND (disabled IS FALSE OR disabled_reason =
@@ -381,7 +386,7 @@ async fn decide(
     actor: &str,
     not_found: impl FnOnce() -> ApiError,
 ) -> Result<(), ApiError> {
-    match moderation::apply(&state.pool, target, decision, actor).await? {
+    match moderation::apply(&state.pool, target, decision, actor, land(state)).await? {
         Some(_) => Ok(()),
         None => Err(not_found()),
     }
@@ -408,7 +413,7 @@ pub async fn put_place_rating(
     let ctx = moderation::Context {
         comment: comment.as_deref(),
         notify: notify(&state),
-        land: state.places.land_authz().map(|l| &**l),
+        land: land(&state),
     };
     moderation::apply_with(
         &state.pool,
@@ -445,7 +450,7 @@ pub async fn put_world_rating(
     let ctx = moderation::Context {
         comment: comment.as_deref(),
         notify: notify(&state),
-        land: state.places.land_authz().map(|l| &**l),
+        land: land(&state),
     };
     moderation::apply_with(
         &state.pool,
@@ -547,7 +552,7 @@ pub async fn put_place_disable(
     let ctx = moderation::Context {
         comment: None,
         notify: notify(&state),
-        land: state.places.land_authz().map(|l| &**l),
+        land: land(&state),
     };
     let applied = moderation::apply_with(
         &state.pool,
@@ -591,7 +596,7 @@ pub async fn patch_place_disable(
     let ctx = moderation::Context {
         comment: None,
         notify: notify(&state),
-        land: state.places.land_authz().map(|l| &**l),
+        land: land(&state),
     };
     moderation::apply_with(
         &state.pool,
@@ -2736,7 +2741,11 @@ mod tests {
                 Target::Place(&id),
                 &Decision::Highlighted(false),
                 ADMIN_TOKEN_ACTOR,
-                moderation::Context::default(),
+                moderation::Context {
+                    comment: None,
+                    notify: None,
+                    land: None,
+                },
             )
             .await
             .unwrap()

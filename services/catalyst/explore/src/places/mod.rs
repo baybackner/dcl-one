@@ -53,12 +53,6 @@ const PARCEL_ALIAS_SQL: &str = "SELECT id, base_position FROM explore.place \
      WHERE world IS FALSE AND disabled IS FALSE \
      ORDER BY deployed_at DESC NULLS LAST, id";
 
-/// A parcel position `x,y` as coordinates.
-pub(crate) fn parse_parcel(position: &str) -> Option<(i32, i32)> {
-    let (x, y) = position.split_once(',')?;
-    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
-}
-
 /// The id a content-derived place carried: UUIDv5 of its base parcel. Links
 /// minted under that scheme outlive the derived rows, so the read side resolves
 /// the same id back to the parcel.

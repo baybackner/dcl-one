@@ -46,6 +46,8 @@
 //! mirrors normalise an upstream `PR` the same way (`mirror::UPSERT`,
 //! `derive::UPSERT*`).
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -217,8 +219,9 @@ impl Target<'_> {
     }
 }
 
-/// What goes with a decision beyond the row.
-#[derive(Default, Clone)]
+/// What goes with a decision beyond the row. Every field is named, so no
+/// caller drops the LAND index.
+#[derive(Clone)]
 pub struct Context<'a> {
     /// The rating's audit comment (`comment` of the old rating body).
     pub comment: Option<&'a str>,
@@ -350,7 +353,7 @@ const PLACE_PARCELS: &str = r#"
 /// row by that creator or on that owner's LAND, to.
 const OPERATOR_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
-        (position, content_rating, place_id, parcels, creator_address, owner_address, operator)
+        (position, content_rating, place_id, parcel_set_hash, creator_address, owner_address, operator)
     SELECT DISTINCT pos, $2, p.id,
            (SELECT encode(sha256(convert_to(string_agg(e, ';' ORDER BY e COLLATE "C"), 'UTF8')), 'hex')
             FROM (SELECT DISTINCT e FROM jsonb_array_elements_text(p.raw->'positions') AS e) AS s),
@@ -364,28 +367,51 @@ const OPERATOR_PARCEL_RATINGS: &str = r#"
     ORDER BY pos
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
-        parcels = EXCLUDED.parcels, creator_address = EXCLUDED.creator_address,
+        parcel_set_hash = EXCLUDED.parcel_set_hash, creator_address = EXCLUDED.creator_address,
         owner_address = COALESCE(EXCLUDED.owner_address,
             CASE WHEN r.place_id = EXCLUDED.place_id THEN r.owner_address END),
         operator = true, updated_at = timezone('UTC', now())
 "#;
 
-/// The LAND owner of each of `parcels`, positional and empty when unknown.
-async fn parcel_owners(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+/// The LAND owner of each of `parcels` the index knows, on the caller's
+/// transaction ([`LandAuthzState::owners_at`](crate::land_authz::LandAuthzState::owners_at));
+/// none without the index. A failed lookup is logged and answers none, as an
+/// unpublished index does, inside a savepoint so the transaction goes on.
+pub(crate) async fn parcel_owners(
+    tx: &mut Transaction<'_, Postgres>,
     land: Option<&crate::land_authz::LandAuthzState>,
     parcels: &[String],
-) -> Result<Vec<String>, ApiError> {
+) -> Result<HashMap<String, String>, sqlx::Error> {
     let Some(land) = land else {
-        return Ok(vec![String::new(); parcels.len()]);
+        return Ok(HashMap::new());
     };
-    let xy: Vec<Option<(i32, i32)>> = parcels.iter().map(|p| super::parse_parcel(p)).collect();
-    let known: Vec<(i32, i32)> = xy.iter().flatten().copied().collect();
-    let mut owners = land.owners_at(tx, &known).await?.into_iter();
-    Ok(xy
+    let coords: Vec<(&String, (i32, i32))> = parcels
         .iter()
-        .map(|c| c.and_then(|_| owners.next().flatten()).unwrap_or_default())
-        .collect())
+        .filter_map(|p| {
+            let (x, y) = crate::auth::parse_pointer(p)?;
+            Some((p, (i32::try_from(x).ok()?, i32::try_from(y).ok()?)))
+        })
+        .collect();
+    if coords.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let xy: Vec<(i32, i32)> = coords.iter().map(|(_, c)| *c).collect();
+    let mut savepoint = sqlx::Acquire::begin(&mut *tx).await?;
+    match land.owners_at(&mut savepoint, &xy).await {
+        Ok(owners) => {
+            savepoint.commit().await?;
+            Ok(coords
+                .into_iter()
+                .zip(owners)
+                .filter_map(|((p, _), o)| Some((p.clone(), o?)))
+                .collect())
+        }
+        Err(error) => {
+            savepoint.rollback().await?;
+            tracing::warn!(%error, "places: LAND owner lookup failed; parcel owners unknown");
+            Ok(HashMap::new())
+        }
+    }
 }
 
 /// The `raw` keys a disable decision writes, as `updateDisabled` did
@@ -400,19 +426,24 @@ fn disable_raw_patch(disabled: bool, reason: Option<&str>, at: DateTime<Utc>) ->
     }
 }
 
-/// Records `decision` for `target` as `actor` and projects it onto the row.
+/// Records `decision` for `target` as `actor` and projects it onto the row,
+/// reading a rated place's parcel owners from `land`.
 /// `Ok(None)` when no catalogue row matches (the old routes' 404).
 pub async fn apply(
     pool: &PgPool,
     target: Target<'_>,
     decision: &Decision,
     actor: &str,
+    land: Option<&crate::land_authz::LandAuthzState>,
 ) -> Result<Option<String>, ApiError> {
-    Ok(
-        apply_with(pool, target, decision, actor, Context::default())
-            .await?
-            .map(|applied| applied.id),
-    )
+    let ctx = Context {
+        comment: None,
+        notify: None,
+        land,
+    };
+    Ok(apply_with(pool, target, decision, actor, ctx)
+        .await?
+        .map(|applied| applied.id))
 }
 
 /// [`apply`] with the rating's comment and the webhook capture; see the
@@ -487,6 +518,10 @@ pub async fn apply_with(
                 .execute(&mut *tx)
                 .await?;
             let owners = parcel_owners(&mut tx, ctx.land, &parcels).await?;
+            let owners: Vec<String> = parcels
+                .iter()
+                .map(|p| owners.get(p).cloned().unwrap_or_default())
+                .collect();
             sqlx::query(OPERATOR_PARCEL_RATINGS)
                 .bind(&id)
                 .bind(rating)
@@ -1029,7 +1064,11 @@ mod tests {
                 reason: Some("spam".into()),
             },
             actor,
-            Context::default(),
+            Context {
+                comment: None,
+                notify: None,
+                land: None,
+            },
         )
         .await
         .unwrap()
@@ -1098,6 +1137,7 @@ mod tests {
                 reason: None,
             },
             actor,
+            None,
         )
         .await
         .unwrap();
@@ -1108,7 +1148,11 @@ mod tests {
             Target::Place(&id),
             &Decision::rating("PR").unwrap(),
             actor,
-            Context::default(),
+            Context {
+                comment: None,
+                notify: None,
+                land: None,
+            },
         )
         .await
         .unwrap()
@@ -1119,6 +1163,7 @@ mod tests {
             Target::Place(&id),
             &Decision::rating("A").unwrap(),
             actor,
+            None,
         )
         .await
         .unwrap();
@@ -1127,7 +1172,8 @@ mod tests {
                 &pool,
                 Target::World(&id),
                 &Decision::Highlighted(true),
-                actor
+                actor,
+                None,
             )
             .await
             .unwrap(),
@@ -1139,7 +1185,8 @@ mod tests {
                 &pool,
                 Target::Place("no-such-place"),
                 &Decision::Highlighted(true),
-                actor
+                actor,
+                None,
             )
             .await
             .unwrap(),
@@ -1162,6 +1209,7 @@ mod tests {
                 reason: Some("moderation".into()),
             },
             actor,
+            None,
         )
         .await
         .unwrap();
@@ -1203,6 +1251,7 @@ mod tests {
                 reason: None,
             },
             actor,
+            None,
         )
         .await
         .unwrap();
@@ -1415,7 +1464,11 @@ mod tests {
             Target::Place(&id),
             &Decision::rating("T").unwrap(),
             actor,
-            Context::default(),
+            Context {
+                comment: None,
+                notify: None,
+                land: None,
+            },
         )
         .await
         .unwrap();

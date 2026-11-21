@@ -1547,6 +1547,59 @@ async fn earlier_event_hook_layouts_upgrade_without_losing_intents() {
     old.drop().await;
 }
 
+/// Step 0053 replaces the places notice-kind CHECK an earlier layout created,
+/// so a refused rating downgrade can be queued.
+#[tokio::test]
+async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
+    let Some(old) = prepared_v2(None).await else {
+        return;
+    };
+    let pool = &old.pool;
+    release_result(pool, &release_v3()).await.unwrap();
+    schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+        .await
+        .unwrap();
+    // The CHECK as `24_explore_moderation_hooks.sql` declared it before the
+    // step, with the step still to run.
+    sqlx::raw_sql(
+        "ALTER TABLE explore.moderation_hooks DROP CONSTRAINT moderation_hooks_kind_check;
+        ALTER TABLE explore.moderation_hooks ADD CONSTRAINT moderation_hooks_kind_check CHECK (
+            CASE channel
+                WHEN 'events' THEN kind IN ('submitted','edited','approved','rejected','deleted','profile_permissions','upcoming')
+                WHEN 'places' THEN kind IN ('disabled','rating_upgraded')
+            END);
+        DELETE FROM meta.schema_steps WHERE step = '0053_explore_rating_downgrade_notice';",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let insert = |kind: &'static str| async move {
+        sqlx::query(
+            "INSERT INTO explore.moderation_hooks (id, channel, subject, kind, payload) \
+             VALUES (gen_random_uuid(), 'places', 'rated-place', $1, '{}')",
+        )
+        .bind(kind)
+        .execute(pool)
+        .await
+    };
+    assert!(insert("rating_downgrade_refused").await.is_err());
+
+    let result =
+        schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
+            .await
+            .unwrap();
+    assert!(
+        result
+            .steps
+            .iter()
+            .any(|step| step == "0053_explore_rating_downgrade_notice")
+    );
+    insert("rating_downgrade_refused").await.unwrap();
+    insert("rating_upgraded").await.unwrap();
+    assert!(insert("not_a_kind").await.is_err());
+    old.drop().await;
+}
+
 #[tokio::test]
 async fn world_admission_object_upgrade_and_explicit_ban_release_preserve_existing_state() {
     let Some(old) = prepared_v2(None).await else {

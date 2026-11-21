@@ -510,19 +510,23 @@ deploys it; the new id keeps the place's rating and its operator's record
 later scene on the old base gets its own id). A place by another creator on
 another owner's LAND and another parcel set starts fresh. The owner is the parcel's (or its estate's) owner in the
 published `land_authz` index, read on the page's connection; while that index
-is unpublished or a parcel is unindexed, the owner is unknown and only the
-place and the creator match.
+is unpublished, a parcel is unindexed or the lookup fails (logged), the owner
+is unknown and only the place and the creator match. A later pass over the
+same place fills a record's unknown owner once the index knows it; a record of
+a pruned place keeps it unknown.
 
 `explore.place_parcel_rating` keeps the rating last held on each parcel by the
-derived place covering it, with that place's id, whole parcel set (the
-hex SHA-256 of its distinct positions in byte order, joined by `;`), creator and LAND owner, and
+derived place covering it, with that place's id, whole parcel set
+(`parcel_set_hash`: the hex SHA-256 of the string its distinct positions make
+sorted in byte order and joined by `;`), creator and LAND owner, and
 whether an operator's rating set it, so the rating
 outlives a row the pass prunes (an unpublished scene, or one moved to another
 base parcel by the same creator). Workload: one row per rated parcel the
 catalogue derives (at most the deployed parcels); written in the derive page's
 transaction, one batched upsert for the rows whose rating the page settles, one
 delete for the parcels of settled rows left with no rating, and one insert of
-missing parcels for the others (an existing catalogue fills on its first pass),
+missing parcels and one owner fill for the others (an existing catalogue fills
+on its first pass),
 and one row per parcel for an operator's rating of a derived place; read by
 primary key for each settled row's parcels, plus one indexed `land_authz`
 owner lookup per page and per operator place rating. Invariant: a parcel's row
@@ -535,7 +539,7 @@ writers first take transaction advisory locks on the hash buckets (at most 128)
 of the parcels they write, in one sorted order, so a page that inserts a missing
 parcel after locking the recorded ones cannot deadlock with an operator's
 rating; a page locks only the parcels of its new rows and new deployments and
-the unrecorded parcels it fills, so a page of unchanged rows does not delay an
+the unrecorded parcels and unknown owners it fills, so a page of unchanged rows does not delay an
 operator's rating of another place (the page's own rows stay locked). The table is a new object: the object pass of
 `catalyst schema migrate` creates it, so no step exists.
 
