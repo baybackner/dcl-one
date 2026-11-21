@@ -214,8 +214,8 @@ waiting, so each completed run tests every earlier commit and a macOS-only
 failure shows up there. A PR labelled `ci:macos` runs them on macOS (label,
 then push or reopen; re-running a job does not pick up a new label). A PR runs
 the Rust tests only when it changes an input of the Rust job: a file on the
-`RUST_INPUTS` list in `tooling/dev-ci.py` (the backend crates and the scene CLI
-manifest, the library crates they compile, the schema, the protocol, the API
+`RUST_INPUTS` list in `tooling/dev-ci.py` (the backend crates, the scene CLI,
+the library crates they compile, the schema, the protocol, the API
 contract, the toolchain, the dev shell and the test tooling) or a path that a
 Rust source names. A new input of the Rust job goes on that list and on the
 path list of `development.yml` in the change that adds it; pushes to `main`
@@ -228,6 +228,11 @@ across the shards, and each shard starts its longest binaries first. A binary
 without a recorded time keeps its place in the byte-order cut (every third from
 the shard's own). Refresh the times from a recent `main` run (the `finished in`
 of each binary's summary line on Linux) when binaries are added or change much.
+The Linux leg of shard 3 also runs `make scene-cli-test`: `dcl-scene-cli` and the
+scene toolchain crates that `NODE_CRATES` leaves out, with Node from `setup-node`
+because the CI shell has none (`apps/dcl-scene-cli/docs/testing.md`). It does not
+run on macOS, where six of its tests fail, mostly on the `/var` to `/private/var`
+temp symlink and the case-insensitive file system.
 Two more labels work the same way: `ci:desktop` builds the Creator Hub desktop
 app for macOS, Windows and Linux on a PR and attaches its test builds, and
 `ci:linux` builds Linux alone. `release:creator-hub` is read after the merge:

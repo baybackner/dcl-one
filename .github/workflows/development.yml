@@ -15,8 +15,8 @@ on:
       - 'tooling/tests/**'
       - 'tooling/migration/**'
       - 'services/catalyst/**'
-      # the node never links the scene CLI, but the workspace reads its manifest
-      - 'apps/dcl-scene-cli/Cargo.toml'
+      # a workspace member; one Linux Rust shard runs its tests (make scene-cli-test)
+      - 'apps/dcl-scene-cli/**'
       - 'library/**'
       - '.cargo/**'
       - 'apps/sites/**'
@@ -188,6 +188,26 @@ jobs:
           nix develop .#ci --command bash tooling/dev-test.sh rust || status=$?
           [ -z "${RUSTC_WRAPPER:-}" ] || sccache --show-stats || true
           exit "$status"
+      # The scene CLI's tests need node, which the CI shell lacks. Linux only: on macOS six of them fail,
+      # mostly on the /var -> /private/var temp symlink and the case-insensitive file system.
+      - name: Set up Node for the scene CLI tests
+        if: runner.os == 'Linux' && matrix.shard == 3
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.16.0
+      - name: Run the scene CLI tests
+        if: runner.os == 'Linux' && matrix.shard == 3
+        env:
+          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_GHA_VERSION: dcl-dev-rust-tests-v1
+          SCCACHE_IDLE_TIMEOUT: '0'
+          USE_COMPILER_CACHE: ${{ steps.deps-restored.outputs.restored == 'true' && steps.compiler-cache.outcome == 'success' }}
+        run: |
+          # The backend step's server is still up (no idle timeout); start one if it is not.
+          if [ "$USE_COMPILER_CACHE" = true ] && { sccache --start-server 2>/dev/null || sccache --show-stats > /dev/null; }; then
+            export RUSTC_WRAPPER=sccache
+          fi
+          nix develop .#ci --command make scene-cli-test
       - name: Run provisioned auth stress
         if: matrix.shard == 2
         run: |

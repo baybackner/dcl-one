@@ -146,6 +146,26 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         self.assertIn('bash tooling/dev-smoke.sh', smoke)
         self.assertIn('bash tooling/dev-test.sh e2e', smoke)
 
+    def test_one_linux_shard_runs_the_scene_cli_crates_that_catalyst_test_leaves_out(self):
+        rust = jobs()['rust']
+        step = lambda name: re.search(rf'(?ms)^      - name: {name}\n(.*?)(?=^      - |\Z)', rust).group(1)
+        node, tests = step('Set up Node for the scene CLI tests'), step('Run the scene CLI tests')
+        for body in (node, tests):
+            self.assertIn("        if: runner.os == 'Linux' && matrix.shard == 3\n", body)
+        self.assertRegex(node, r'uses: actions/setup-node@[0-9a-f]{40} # v')
+        self.assertIn('nix develop .#ci --command make scene-cli-test\n', tests)
+        self.assertLess(rust.index('Run backend tests with PostgreSQL'), rust.index('Run the scene CLI tests'))
+        # The compiler cache under the same condition as the backend tests.
+        self.assertIn("USE_COMPILER_CACHE: ${{ steps.deps-restored.outputs.restored == 'true' && steps.compiler-cache.outcome == 'success' }}", tests)
+        # Every crate NODE_CRATES excludes is one make scene-cli-test runs, and nothing more.
+        makefile = (WORKFLOW.parents[2] / 'Makefile').read_text()
+        node_crates = re.search(r'(?m)^NODE_CRATES = (.*)$', makefile).group(1)
+        scene_crates = re.search(r'(?m)^SCENE_CLI_CRATES = (.*)$', makefile).group(1)
+        self.assertEqual(re.findall(r'--exclude (\S+)', node_crates), re.findall(r'-p (\S+)', scene_crates))
+        self.assertIn('\tcd services/catalyst && cargo test --locked $(SCENE_CLI_CRATES)\n', makefile)
+        # A scene CLI change is a path the workflow watches, so the PR plan can select the Rust job.
+        self.assertIn("      - 'apps/dcl-scene-cli/**'\n", WORKFLOW.read_text().split('  pull_request:', 1)[0])
+
     def test_header_geometry_control_requires_the_original_missing_port_evidence(self):
         web = jobs()['web']
         original = re.search(r'(?ms)^      - name: Run Sites unit tests\n(.*?)(?=^      - |\Z)', web).group(1)

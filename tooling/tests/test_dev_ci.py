@@ -35,7 +35,7 @@ class DevCiTest(unittest.TestCase):
                         ['docs/development.md', 'rendering/bevy-explorer/source/react-web/src/App.tsx',
                          'apps/ui3/src/a.ts'],
                         ['services/catalyst/db/src/lib.rs'], ['library/protocol/proto/a.proto'],
-                        ['schemas/50_create.sql']):
+                        ['schemas/50_create.sql'], ['apps/dcl-scene-cli/src/main.rs']):
             with self.subTest(changed=changed):
                 self.assertFalse(self.macos(*changed))
 
@@ -216,7 +216,8 @@ class DevCiTest(unittest.TestCase):
                      'services/catalyst/tests/fixtures/a.json', 'services/catalyst/rust-toolchain.toml',
                      'schemas/storage.sql', 'library/vendor/rusty_enet/src/lib.rs', 'library/dcl-http/src/lib.rs',
                      'library/catalyst-api/openapi/a.json', 'library/protocol/proto/a.proto',
-                     'apps/dcl-scene-cli/Cargo.toml', '.cargo/config.toml', 'flake.nix', 'flake.lock', 'Makefile',
+                     'apps/dcl-scene-cli/Cargo.toml', 'apps/dcl-scene-cli/src/main.rs',
+                     'apps/dcl-scene-cli/tests/golden.rs', '.cargo/config.toml', 'flake.nix', 'flake.lock', 'Makefile',
                      'infra/dev/shell-hook.sh', 'infra/packages/tools.nix', 'tooling/dev.py', 'tooling/dev-test.sh',
                      'tooling/dev-regressions.json', 'tooling/catalyst-test.sh', 'tooling/ci_paths.py',
                      'tooling/tests/test_dev_regressions.py', '.github/workflows/development.yml'):
