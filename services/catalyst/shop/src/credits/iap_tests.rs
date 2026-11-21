@@ -3049,8 +3049,15 @@ async fn an_operator_reversal_follows_apples_latest_decision() {
     let (status, out) = operator_reverse(&app, &id, "v-ahead", ahead).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
     assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+}
 
-    // A purchase never credited, held by the reversal, stays held for an older revoked copy.
+#[tokio::test]
+async fn an_operator_reversal_keeps_a_held_purchase_from_an_older_revoked_copy() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let id = tx_id();
     let signed = c.transaction(&id, PRODUCT, Some(&w.address));
     let (_, out) = notify(
@@ -3075,6 +3082,40 @@ async fn an_operator_reversal_follows_apples_latest_decision() {
     let body = json!({ "jwsRepresentation": revoked_at(now_ms) });
     call(&app, &w, "post", verify, &[], Some(body)).await;
     assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+}
+
+#[tokio::test]
+async fn a_replayed_reversal_grant_is_refused_and_rolled_back() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let refund = c.notification("REFUND", Some(bought[0].clone()));
+    let (_, out) = notify(&app, refund.clone()).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    // The grant this refund's reversal would make is already recorded.
+    let key = format!("apple-iap:{id}:reinstated:{}", uuid_of(&refund));
+    sqlx::query(
+        "INSERT INTO credits.idempotency (scope, idempotency_key, address, amount, available, actor) \
+         VALUES ('grant', $1, $2, 100, 0, 'apple')",
+    )
+    .bind(&key)
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let ms = chrono::Utc::now().timestamp_millis();
+    let (status, out) = operator_reverse(&app, &id, "v-1", ms).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(
+        (
+            row(&pool, &id).await.unwrap().0.as_str(),
+            available(&pool, &w.address).await.as_str()
+        ),
+        ("refunded", "0")
+    );
 }
 
 #[tokio::test]
