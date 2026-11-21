@@ -136,10 +136,20 @@ def site_prefixes(files):
 
 # Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA), link-local, IPv4-mapped, benchmarking,
 # IETF-assigned and reserved networks, and the NAT64, 6to4 and Teredo prefixes that embed an IPv4 address.
+# Keep in sync with `is_non_public` in services/catalyst/shared/src/client_ip.rs.
 NON_PUBLIC_NETWORKS = [ipaddress.ip_network(n) for n in (
     "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
     "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "240.0.0.0/4", "::/128", "::1/128",
     "::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fc00::/7", "fe80::/10")]
+
+# Cloudflare's published ranges (https://www.cloudflare.com/ips/, checked 2026-11-21): the only networks
+# CF-Connecting-IP mode trusts. Update this list when Cloudflare publishes a change.
+CLOUDFLARE_NETWORKS = [ipaddress.ip_network(n) for n in (
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
+    "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
+    "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32",
+    "2a06:98c0::/29", "2c0f:f248::/32")]
 
 
 def settings(env, resolv_conf="/etc/resolv.conf"):
@@ -174,6 +184,13 @@ def settings(env, resolv_conf="/etc/resolv.conf"):
             if ipaddress.ip_network(proxy).version == internal.version):
         raise ValueError("GATEWAY_CLIENT_IP_HEADER=CF-Connecting-IP needs GATEWAY_TRUSTED_PROXY_CIDRS to list "
                          "only Cloudflare's public ranges; behind a load balancer keep X-Forwarded-For")
+    # A public load balancer passes the check above; only a network inside Cloudflare's ranges writes the header.
+    if client_header == "CF-Connecting-IP" and not all(
+            any(ipaddress.ip_network(proxy).subnet_of(cloudflare)
+                for cloudflare in CLOUDFLARE_NETWORKS if cloudflare.version == ipaddress.ip_network(proxy).version)
+            for proxy in trusted):
+        raise ValueError("GATEWAY_CLIENT_IP_HEADER=CF-Connecting-IP needs every GATEWAY_TRUSTED_PROXY_CIDRS entry "
+                         "inside Cloudflare's published ranges; behind a load balancer keep X-Forwarded-For")
     storage_trusted = networks(env.get("GATEWAY_STORAGE_TRUSTED_CIDRS", ""))
     if any(ipaddress.ip_network(proxy).overlaps(ipaddress.ip_network(caller))
            for proxy in trusted for caller in storage_trusted

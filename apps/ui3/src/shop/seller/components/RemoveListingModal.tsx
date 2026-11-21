@@ -40,8 +40,8 @@ export function RemoveListing({ token }: { token: TokenRecord }) {
         } catch (e) {
           // Offer the gas path after a gasless refusal; a request limit withdraws it, other errors keep it.
           if (mode !== "direct") {
-            if (e instanceof GaslessCancelFailedError) setGaslessFailed(true);
-            else if (isRequestLimited(e)) setGaslessFailed(false);
+            if (isRequestLimited(e)) setGaslessFailed(false);
+            else if (e instanceof GaslessCancelFailedError) setGaslessFailed(true);
           }
           throw e;
         }

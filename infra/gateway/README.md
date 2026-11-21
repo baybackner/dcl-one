@@ -46,8 +46,9 @@ edge shares that edge's limits. The supported topologies are:
   gateway reads the one address Cloudflare writes. That header is taken as sent
   from every listed network, so the gateway refuses to start when the list
   includes a private, CGNAT, ULA, link-local, loopback, benchmarking, reserved,
-  NAT64, 6to4 or Teredo network. A public load balancer passes this check, so
-  list nothing but Cloudflare's ranges. With Cloudflare, set Pseudo IPv4 to off
+  NAT64, 6to4 or Teredo network, or any network outside the Cloudflare ranges
+  it ships (`CLOUDFLARE_NETWORKS` in `gateway.py`; update that list when
+  Cloudflare publishes a change). With Cloudflare, set Pseudo IPv4 to off
   or "Add header": "Overwrite headers" puts a derived IPv4 address in
   `CF-Connecting-IP`, and the IPv6 /64 and /48 grouping no longer applies.
 - A load balancer in front of the gateway, with or without Cloudflare in front
@@ -66,8 +67,9 @@ edge shares that edge's limits. The supported topologies are:
 
 A gateway behind an unlisted private load balancer sees that load balancer as
 every client. Its forwarded `X-Real-IP` is then internal, which names no single
-client: the relay limit and the per-network report limit skip it, and the other
-per-client limits share one bucket.
+client: the relay, place report, tip forward, trade post and comms WebSocket
+per-client limits skip it, as they skip a reserved address (such as Cloudflare's
+Pseudo IPv4 `240.0.0.0/4`), and only their other limits apply.
 
 Place reports count against the reporter's wallet and, when its address is
 public (a trusted proxy's public `X-Real-IP`, or a public peer), its network.

@@ -33,10 +33,11 @@ static REPORTS: std::sync::LazyLock<WindowLimiter> =
     std::sync::LazyLock::new(|| WindowLimiter::new(std::time::Duration::from_secs(3600), 100_000));
 
 /// The network a report comes from, IPv6 by its /64, when the address names
-/// one client: a trusted proxy's `X-Real-IP` or a public peer. An untrusted
-/// private peer (most likely a gateway missing from
-/// `HTTP_TRUSTED_PROXY_CIDRS`) would put every reporter in one bucket, so it
-/// gives none and only the wallet limit applies.
+/// one client: a trusted proxy's public `X-Real-IP` or a public peer. An
+/// untrusted private peer (most likely a gateway missing from
+/// `HTTP_TRUSTED_PROXY_CIDRS`) or a trusted proxy's non-public `X-Real-IP`
+/// would put every reporter in one bucket, so it gives none and only the
+/// wallet limit applies.
 fn report_source(
     headers: &HeaderMap,
     peer: Option<std::net::SocketAddr>,

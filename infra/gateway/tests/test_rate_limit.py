@@ -206,9 +206,9 @@ class ClientAddressHeaderTest(unittest.TestCase):
         self.assertIn("real_ip_header X-Forwarded-For;\n    real_ip_recursive on;", text)
 
     def test_cf_connecting_ip_is_read_alone_without_walking_hops(self):
-        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="203.0.113.0/24", GATEWAY_CLIENT_IP_HEADER="cf-connecting-ip")
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="173.245.48.0/20", GATEWAY_CLIENT_IP_HEADER="cf-connecting-ip")
         self.assertIn("real_ip_header CF-Connecting-IP;\n    real_ip_recursive off;", text)
-        self.assertIn("set_real_ip_from 203.0.113.0/24;", text)
+        self.assertIn("set_real_ip_from 173.245.48.0/20;", text)
 
     def test_cf_connecting_ip_is_accepted_from_cloudflare_ranges(self):
         cloudflare = ("173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 "
@@ -228,6 +228,19 @@ class ClientAddressHeaderTest(unittest.TestCase):
                       "64:ff9b:1::/48", "2002::/16", "2001::/32"]:
             with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ValueError, "CF-Connecting-IP"):
                 render(GATEWAY_TRUSTED_PROXY_CIDRS=cidrs, GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+
+    def test_cf_connecting_ip_refuses_public_networks_outside_cloudflare(self):
+        # A public load balancer passes a client's own CF-Connecting-IP through too.
+        for cidrs in ["203.0.113.0/24", "173.245.48.0/20 198.51.100.7", "173.245.48.0/19", "104.16.0.0/12",
+                      "2400:cb00::/31", "2001:db8::/32", "2606:4700::/32 2a00:1450::/32"]:
+            with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ValueError, "Cloudflare's published ranges"):
+                render(GATEWAY_TRUSTED_PROXY_CIDRS=cidrs, GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+
+    def test_cf_connecting_ip_accepts_a_subnet_of_a_cloudflare_range(self):
+        text = render(GATEWAY_TRUSTED_PROXY_CIDRS="104.16.0.0/16 2606:4700:10::/48",
+                      GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+        self.assertIn("set_real_ip_from 104.16.0.0/16;", text)
+        self.assertIn("set_real_ip_from 2606:4700:10::/48;", text)
 
     def test_x_forwarded_for_still_trusts_a_private_load_balancer(self):
         text = render(GATEWAY_TRUSTED_PROXY_CIDRS="10.0.0.0/8 173.245.48.0/20")
