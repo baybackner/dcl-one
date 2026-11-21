@@ -788,6 +788,32 @@ pub async fn follow_creator_world_rating(
     Ok(())
 }
 
+/// A creator's `proposed` rating for the local world `key`, whose own rating
+/// is `stored`: held to [`world_rating_in_force`], taken only when it raises
+/// that ([`CreatorRating`]), which moves an operator's rating with it, and
+/// reported against the held rating when `notify` (the places site) is set.
+/// The rating the world takes, if any; none without a proposal.
+pub async fn settle_world_rating<'p>(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &str,
+    stored: Option<String>,
+    proposed: Option<&'p str>,
+    notify: Option<&str>,
+) -> Result<Option<&'p str>, sqlx::Error> {
+    let Some(proposed) = proposed else {
+        return Ok(None);
+    };
+    let held = world_rating_in_force(tx, key, stored).await?;
+    let applies = CreatorRating::of(held.as_deref(), proposed).applies();
+    if applies {
+        follow_creator_world_rating(tx, key, proposed).await?;
+    }
+    if let (Some(base), Some(held)) = (notify, held.as_deref()) {
+        capture_creator_rating(tx, base, RatedRow::World(key), held, proposed).await?;
+    }
+    Ok(applies.then_some(proposed))
+}
+
 /// Queues one notice in the decision's transaction.
 async fn capture(
     tx: &mut Transaction<'_, Postgres>,

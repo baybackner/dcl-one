@@ -1,9 +1,6 @@
 //! Worlds settings persistence on the shared pool.
 use super::*;
-use crate::explore::places::moderation::{
-    CreatorRating, RatedRow, capture_creator_rating, follow_creator_world_rating,
-    world_rating_in_force,
-};
+use crate::explore::places::moderation::settle_world_rating;
 use crate::index::content_file_hash;
 
 /// What a deployed scene expresses about its world's settings; a value out
@@ -174,28 +171,18 @@ pub async fn update_world_settings(
         }
     }
 
-    let proposed_rating = input.content_rating.as_deref();
     // Held to an operator's rating even before the world row exists.
-    let stored_rating = match proposed_rating {
-        Some(_) => {
-            let own = locked
-                .as_ref()
-                .and_then(|r| r.get::<Option<String>, _>("content_rating"));
-            world_rating_in_force(&mut tx, world.key(), own).await?
-        }
-        None => None,
-    };
-    let content_rating =
-        proposed_rating.filter(|r| CreatorRating::of(stored_rating.as_deref(), r).applies());
-    if let Some(rating) = content_rating {
-        follow_creator_world_rating(&mut tx, world.key(), rating).await?;
-    }
-    if let (Some(base), Some(stored), Some(proposed)) =
-        (notify, stored_rating.as_deref(), proposed_rating)
-    {
-        let row = RatedRow::World(world.key());
-        capture_creator_rating(&mut tx, base, row, stored, proposed).await?;
-    }
+    let own = locked
+        .as_ref()
+        .and_then(|r| r.get::<Option<String>, _>("content_rating"));
+    let content_rating = settle_world_rating(
+        &mut tx,
+        world.key(),
+        own,
+        input.content_rating.as_deref(),
+        notify,
+    )
+    .await?;
 
     let categories: Option<Vec<String>> = input
         .categories_provided
