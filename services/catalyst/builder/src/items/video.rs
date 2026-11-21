@@ -7,10 +7,11 @@
 //! the blob store, hashed as it arrives and walked as an MP4 container
 //! ([`Mp4`]); every read waits at most until the upload's deadline and the
 //! idle timeout after the last bytes, so a sender that stalls is cut and
-//! frees its place. While the node's places are all held, a newcomer takes
-//! the place of the slowest upload past its first idle-timeout window that
-//! runs below the rate a largest video needs to arrive within the deadline
-//! ([`Videos::admit`]). Only
+//! frees its place. A wallet and an upload source have a day of upload time
+//! ([`WALLET_VIDEO_SECS_A_DAY`], [`SOURCE_VIDEO_SECS_A_DAY`]). While the
+//! node's places are all held, a newcomer takes the place of the upload
+//! past its first idle-timeout window whose wallet or source uploaded
+//! longest today, if longer than the newcomer's ([`Videos::admit`]). Only
 //! then, in one transaction with the item locked, the decision runs again,
 //! the item must still name the hash at `video.mp4`, and the file goes to
 //! the blob store with its upload record, as [`super::upload`] stores files.
@@ -25,7 +26,7 @@ use std::time::{Duration, SystemTime};
 use axum::body::{Body, BodyDataStream, Bytes};
 use axum::extract::{FromRequest, Multipart, Request};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use dcl_auth::hash::HashV1Writer;
 use futures::Stream;
 use serde_json::json;
@@ -58,16 +59,36 @@ pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(20 * 60);
 /// the time an upload runs before a newcomer may take its place.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Bytes a second below which an upload gives its place to a newcomer
-/// while the node is full: what [`DEFAULT_MAX_BYTES`] needs to arrive
-/// within [`DEFAULT_DEADLINE`], about 1.7 Mbit/s.
-pub const DEFAULT_YIELD_RATE: u64 = DEFAULT_MAX_BYTES / DEFAULT_DEADLINE.as_secs();
-
-/// Videos the node reads at once, and of them per wallet and per source
-/// address, so filling the node takes four wallets on four addresses.
-pub const MAX_UPLOADS: usize = 8;
-pub const MAX_UPLOADS_PER_SIGNER: usize = 2;
+/// Videos the node reads at once (`BUILDER_VIDEO_UPLOADS_MAX`), and of them
+/// per wallet and per upload source, so filling the node takes as many
+/// wallets and half as many sources.
+pub const MAX_UPLOADS: usize = 32;
+pub const MAX_UPLOADS_PER_SIGNER: usize = 1;
 pub const MAX_UPLOADS_PER_SOURCE: usize = 2;
+
+/// The time one wallet may spend uploading videos a day: 36 largest videos
+/// at 5 Mbit/s.
+pub const WALLET_VIDEO_SECS_A_DAY: Duration = Duration::from_secs(4 * 3_600);
+/// The time one upload source may spend uploading videos a day.
+pub const SOURCE_VIDEO_SECS_A_DAY: Duration = Duration::from_secs(12 * 3_600);
+
+/// The seconds of video uploading each wallet and source spent in the last
+/// day.
+pub struct Used {
+    pub wallets: crate::shared::limits::RateLimiter,
+    pub sources: crate::shared::limits::RateLimiter,
+}
+
+impl Default for Used {
+    fn default() -> Self {
+        let day = Duration::from_secs(86_400);
+        let secs = |d: Duration| u32::try_from(d.as_secs()).unwrap_or(u32::MAX);
+        Self {
+            wallets: crate::limits::budget(secs(WALLET_VIDEO_SECS_A_DAY), day),
+            sources: crate::limits::budget(secs(SOURCE_VIDEO_SECS_A_DAY), day),
+        }
+    }
+}
 
 /// Bytes the multipart parser may have taken from the body beyond the
 /// video's bytes it handed on: the part headers, boundaries and look-ahead.
@@ -91,8 +112,9 @@ pub struct Videos {
     pub max_bytes: u64,
     pub deadline: Duration,
     pub idle_timeout: Duration,
-    pub yield_rate: u64,
     pub places: Places,
+    /// What each wallet and source spent uploading today.
+    pub used: Arc<Used>,
     holders: Arc<Mutex<Vec<Arc<Progress>>>>,
 }
 
@@ -102,25 +124,34 @@ impl Default for Videos {
             max_bytes: DEFAULT_MAX_BYTES,
             deadline: DEFAULT_DEADLINE,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            yield_rate: DEFAULT_YIELD_RATE,
             places: Places::new(
                 "video uploads",
                 MAX_UPLOADS,
                 MAX_UPLOADS_PER_SIGNER,
                 MAX_UPLOADS_PER_SOURCE,
             ),
+            used: Arc::default(),
             holders: Arc::default(),
         }
     }
 }
 
-/// What an admitted upload has received since it started, and whether a
-/// newcomer took its place.
+/// Who sends an admitted upload, what it has received since it started,
+/// and whether a newcomer took its place.
 pub struct Progress {
+    wallet: String,
+    source: Option<String>,
     started: Instant,
     received: AtomicU64,
     cut: AtomicBool,
     cut_now: tokio::sync::Notify,
+    ended: AtomicBool,
+}
+
+impl Progress {
+    fn elapsed(&self, now: Instant) -> f64 {
+        now.saturating_duration_since(self.started).as_secs_f64()
+    }
 }
 
 /// An admitted video upload: its place and its [`Progress`].
@@ -128,6 +159,7 @@ pub struct VideoAdmission {
     _place: Admission,
     progress: Arc<Progress>,
     holders: Arc<Mutex<Vec<Arc<Progress>>>>,
+    used: Arc<Used>,
 }
 
 impl VideoAdmission {
@@ -135,12 +167,24 @@ impl VideoAdmission {
         &self.progress
     }
 
-    /// Its body has arrived: no newcomer takes its place while it stores.
+    /// Its body has arrived: no newcomer takes its place while it stores,
+    /// and the time it took counts toward its wallet's and source's day.
     pub fn received(&self) {
         self.holders
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|held| !Arc::ptr_eq(held, &self.progress));
+        let progress = &self.progress;
+        if progress.ended.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let now = Instant::now();
+        let secs = u32::try_from(progress.elapsed(now).ceil() as u64).unwrap_or(u32::MAX);
+        let at = now.into_std();
+        self.used.wallets.charge_at(&progress.wallet, secs, at);
+        if let Some(source) = &progress.source {
+            self.used.sources.charge_at(source, secs, at);
+        }
     }
 }
 
@@ -152,12 +196,29 @@ impl Drop for VideoAdmission {
 
 impl Videos {
     /// A place for `signer`'s upload from `source` ([`Places::admit`]) among
-    /// [`MAX_UPLOADS`], [`MAX_UPLOADS_PER_SIGNER`] and
-    /// [`MAX_UPLOADS_PER_SOURCE`]. Never waits: while the node's places are
-    /// all held, it takes the place of the slowest upload that has run an
-    /// idle-timeout window below `yield_rate` bytes a second, which ends
-    /// with 408; else the refusal.
+    /// the node's places, [`MAX_UPLOADS_PER_SIGNER`] and
+    /// [`MAX_UPLOADS_PER_SOURCE`], while the wallet and the source have
+    /// time left of their day ([`WALLET_VIDEO_SECS_A_DAY`],
+    /// [`SOURCE_VIDEO_SECS_A_DAY`]; 429 with `Retry-After` otherwise).
+    /// Never waits: while the node's places are all held, it takes the place
+    /// of the upload past its first idle-timeout window whose wallet or
+    /// source has spent the longest uploading today, its own upload so far
+    /// included, if longer than the newcomer's, which ends with 408; else
+    /// the refusal.
     pub fn admit(&self, signer: &str, source: Option<&str>) -> Result<VideoAdmission, Response> {
+        let now = Instant::now();
+        let at = now.into_std();
+        for (spent, key) in [
+            (&self.used.wallets, Some(signer)),
+            (&self.used.sources, source),
+        ] {
+            if let Some(key) = key {
+                spent
+                    .take_at(key, 1, at)
+                    .map_err(|wait| ApiError::Limited(wait).into_response())?;
+                spent.refund(key, 1);
+            }
+        }
         let mut holders = self.holders.lock().unwrap_or_else(|e| e.into_inner());
         let yielding = holders
             .iter()
@@ -167,41 +228,58 @@ impl Videos {
             Ok(place) => place,
             Err((false, busy)) => return Err(busy),
             Err((true, busy)) => {
-                let now = Instant::now();
-                let rate = |h: &Progress| {
-                    h.received.load(Ordering::SeqCst) as f64
-                        / now.saturating_duration_since(h.started).as_secs_f64()
+                let running = |of: &dyn Fn(&Progress) -> bool| -> f64 {
+                    holders
+                        .iter()
+                        .filter(|h| !h.cut.load(Ordering::SeqCst) && of(h))
+                        .map(|h| h.elapsed(now))
+                        .sum()
                 };
-                let slowest = holders
+                let today = |wallet: &str, source: Option<&str>| {
+                    let by_wallet = self.used.wallets.spent_at(wallet, at)
+                        + running(&|h: &Progress| h.wallet == wallet);
+                    let by_source = source.map_or(0.0, |source| {
+                        self.used.sources.spent_at(source, at)
+                            + running(&|h: &Progress| h.source.as_deref() == Some(source))
+                    });
+                    by_wallet.max(by_source)
+                };
+                let newcomer = today(signer, source);
+                let longest = holders
                     .iter()
                     .filter(|h| !h.cut.load(Ordering::SeqCst))
                     .filter(|h| now.saturating_duration_since(h.started) >= self.idle_timeout)
-                    .filter(|h| rate(h) < self.yield_rate as f64)
-                    .min_by(|a, b| rate(a).total_cmp(&rate(b)))
-                    .cloned();
-                let Some(slowest) = slowest else {
+                    .map(|h| (today(&h.wallet, h.source.as_deref()), h))
+                    .filter(|(spent, _)| *spent > newcomer)
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, h)| h.clone());
+                let Some(longest) = longest else {
                     return Err(busy);
                 };
                 let place = self
                     .places
                     .admit_beyond(signer, source, yielding + 1)
                     .map_err(|(_, busy)| busy)?;
-                slowest.cut.store(true, Ordering::SeqCst);
-                slowest.cut_now.notify_one();
+                longest.cut.store(true, Ordering::SeqCst);
+                longest.cut_now.notify_one();
                 place
             }
         };
         let progress = Arc::new(Progress {
-            started: Instant::now(),
+            wallet: signer.to_string(),
+            source: source.map(str::to_string),
+            started: now,
             received: AtomicU64::new(0),
             cut: AtomicBool::new(false),
             cut_now: tokio::sync::Notify::new(),
+            ended: AtomicBool::new(false),
         });
         holders.push(progress.clone());
         Ok(VideoAdmission {
             _place: place,
             progress,
             holders: self.holders.clone(),
+            used: self.used.clone(),
         })
     }
 
@@ -243,6 +321,13 @@ pub struct Spooled {
     size: u64,
 }
 
+impl Spooled {
+    /// The video's bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
 fn invalid() -> ApiError {
     ApiError::bad_request("Invalid multipart upload")
 }
@@ -256,7 +341,10 @@ fn timed_out() -> ApiError {
 }
 
 fn yielded() -> ApiError {
-    ApiError::http(408, "The upload was too slow while the node was busy")
+    ApiError::http(
+        408,
+        "The upload gave its place to another while the node was busy",
+    )
 }
 
 async fn within<T>(
@@ -603,5 +691,102 @@ mod tests {
             "a box smaller than its header"
         );
         assert!(!walk(&[]).complete(), "nothing");
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    fn site(n: usize) -> String {
+        format!("198.51.100.{n}")
+    }
+
+    fn hold(videos: &Videos, wallet: &str, source: &str) -> VideoAdmission {
+        videos
+            .admit(wallet, Some(source))
+            .map_err(|refused| refused.status())
+            .expect("a place")
+    }
+
+    fn cut(admission: &VideoAdmission) -> bool {
+        admission.progress().cut.load(Ordering::SeqCst)
+    }
+
+    /// Every place held by uploads that each send fast from their own wallet,
+    /// two per address: a creator arriving still gets a place, the one of the
+    /// upload whose wallet and address have uploaded longest today.
+    #[tokio::test(start_paused = true)]
+    async fn a_full_node_gives_a_newcomer_the_place_of_whoever_uploaded_longest_today() {
+        let videos = Videos::default();
+        let held: Vec<VideoAdmission> = (0..MAX_UPLOADS)
+            .map(|n| {
+                hold(
+                    &videos,
+                    &format!("0xholder{n}"),
+                    &site(n / MAX_UPLOADS_PER_SOURCE),
+                )
+            })
+            .collect();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        videos
+            .used
+            .wallets
+            .charge_at("0xholder5", 3_600, Instant::now().into_std());
+        let creator = videos.admit("0xcreator", Some("203.0.113.1"));
+        assert!(
+            creator.is_ok(),
+            "a creator is refused while every place is held"
+        );
+        let cut: Vec<usize> = (0..held.len()).filter(|n| cut(&held[*n])).collect();
+        assert_eq!(
+            cut,
+            [5],
+            "the holder that uploaded an hour earlier today gives way"
+        );
+    }
+
+    /// A newcomer that uploaded longer today than every holder waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_newcomer_that_uploaded_longer_today_than_every_holder_waits() {
+        let videos = Videos::default();
+        let held: Vec<VideoAdmission> = (0..MAX_UPLOADS)
+            .map(|n| {
+                hold(
+                    &videos,
+                    &format!("0xholder{n}"),
+                    &site(n / MAX_UPLOADS_PER_SOURCE),
+                )
+            })
+            .collect();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        videos
+            .used
+            .sources
+            .charge_at("203.0.113.2", 600, Instant::now().into_std());
+        let refused = videos.admit("0xfresh", Some("203.0.113.2"));
+        assert_eq!(refused.err().map(|r| r.status().as_u16()), Some(429));
+        assert!(held.iter().all(|h| !cut(h)));
+    }
+
+    /// One video at a time per wallet, and at most its hours of uploading a
+    /// day per wallet and per address.
+    #[tokio::test(start_paused = true)]
+    async fn a_wallet_uploads_one_video_at_a_time_and_its_hours_a_day() {
+        let videos = Videos::default();
+        let first = hold(&videos, "0xone", "203.0.113.3");
+        let second = videos.admit("0xone", Some("203.0.113.4"));
+        assert_eq!(second.err().map(|r| r.status().as_u16()), Some(429));
+        tokio::time::advance(WALLET_VIDEO_SECS_A_DAY + Duration::from_secs(1)).await;
+        drop(first);
+        let later = videos.admit("0xone", Some("203.0.113.5"));
+        let refused = later.err().expect("its day of uploading is spent");
+        assert_eq!(refused.status().as_u16(), 429);
+        assert!(
+            refused
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER)
+        );
+        assert!(videos.admit("0xtwo", Some("203.0.113.5")).is_ok());
     }
 }

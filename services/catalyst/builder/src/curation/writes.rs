@@ -230,6 +230,24 @@ async fn newest_status(state: &SharedState, curator: &Curator) -> Result<Option<
     .and_then(Status::parse))
 }
 
+/// 401 when the committee index no longer lists `assignee`, asked again on
+/// the write's connection.
+async fn unassignable(
+    conn: &mut PgConnection,
+    assignee: Option<&str>,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    if let Some(assignee) = assignee
+        && !access::still_assignable(conn, assignee).await?
+    {
+        return Err(
+            ApiError::unauthorized("The assignee must be a committee member")
+                .with_data(json!({ "id": id })),
+        );
+    }
+    Ok(())
+}
+
 async fn lock(conn: &mut PgConnection, collection: Uuid) -> Result<(), ApiError> {
     sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
         .bind(collection)
@@ -370,7 +388,9 @@ pub async fn update_collection(
     {
         return Err(refused(refusal, id));
     }
-    if let Some(Some(assignee)) = &update.assignee
+    let assignee_of = update.assignee.clone().flatten();
+    let assignee_of = assignee_of.as_deref();
+    if let Some(assignee) = assignee_of
         && !access::assignable(state, assignee).await?
     {
         return Err(
@@ -382,6 +402,7 @@ pub async fn update_collection(
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;
     let curated = access::confirm_curator(&mut tx, &view, &curator).await?;
+    unassignable(&mut tx, assignee_of, id).await?;
     let previous = rows::newest_of_collection(&mut tx, id).await?;
     let from = previous.as_ref().and_then(|k| Status::parse(&k.status));
     transitions::decide(Curation::Collection, from, request, actor(&curator))
@@ -525,7 +546,8 @@ pub async fn open_collection(
     let id = curator.collection();
     transitions::decide(Curation::Collection, from, request, actor(&curator))
         .map_err(|r| refused(r, id))?;
-    if let Some(assignee) = &open.assignee
+    let assignee_of = open.assignee.as_deref();
+    if let Some(assignee) = assignee_of
         && !access::assignable(state, assignee).await?
     {
         return Err(
@@ -538,6 +560,7 @@ pub async fn open_collection(
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;
     let curated = access::confirm_curator(&mut tx, &view, &curator).await?;
+    unassignable(&mut tx, assignee_of, id).await?;
     let previous = rows::newest_of_collection(&mut tx, id).await?;
     let from = previous.as_ref().and_then(|k| Status::parse(&k.status));
     transitions::decide(Curation::Collection, from, request, actor(&curator))

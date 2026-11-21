@@ -218,6 +218,8 @@ pub struct RawSettings {
     pub unpublished_max_bytes: Option<u64>,
     /// `BUILDER_UNPUBLISHED_MAX_FILES` ([`limits::NODE_FILES`] unset).
     pub unpublished_max_files: Option<u64>,
+    /// `BUILDER_VIDEO_UPLOADS_MAX` ([`items::video::MAX_UPLOADS`] unset).
+    pub video_uploads_max: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -243,6 +245,8 @@ pub struct Settings {
     pub unpublished_max_bytes: Option<u64>,
     /// The node's bound of unpublished upload files, if not the default.
     pub unpublished_max_files: Option<u64>,
+    /// The video uploads the node reads at once, if not the default.
+    pub video_uploads_max: Option<usize>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -262,9 +266,13 @@ impl std::fmt::Debug for Settings {
             .field("cors", &self.cors)
             .field("unpublished_max_bytes", &self.unpublished_max_bytes)
             .field("unpublished_max_files", &self.unpublished_max_files)
+            .field("video_uploads_max", &self.video_uploads_max)
             .finish()
     }
 }
+
+/// The most video uploads `BUILDER_VIDEO_UPLOADS_MAX` may set: 64 GB of spool.
+pub const MAX_VIDEO_UPLOADS_SETTING: usize = 256;
 
 /// The shortest admin token or validator secret startup accepts.
 pub const MIN_SECRET_BYTES: usize = 32;
@@ -378,10 +386,17 @@ impl Settings {
                 bail!("{name} must be at least {MIN_SECRET_BYTES} bytes");
             }
         }
+        if raw
+            .video_uploads_max
+            .is_some_and(|n| !(1..=MAX_VIDEO_UPLOADS_SETTING).contains(&n))
+        {
+            bail!("BUILDER_VIDEO_UPLOADS_MAX must be 1 to {MAX_VIDEO_UPLOADS_SETTING}");
+        }
         Ok(Self {
             cors,
             unpublished_max_bytes: raw.unpublished_max_bytes,
             unpublished_max_files: raw.unpublished_max_files,
+            video_uploads_max: raw.video_uploads_max,
             slack,
             links,
             forum,
@@ -433,6 +448,9 @@ pub struct State {
     /// [`FILE_UPLOADS`] on the node, [`FILE_UPLOADS_PER_SIGNER`] of a wallet,
     /// [`FILE_UPLOADS_PER_SOURCE`] of a source address.
     pub file_uploads: items::places::Places,
+    /// The longest a file upload's body may take to arrive
+    /// ([`items::upload::DEADLINE`]).
+    pub file_deadline: std::time::Duration,
     /// The request budgets per source, signer and route ([`limits`]).
     pub limits: limits::Limits,
 }
@@ -466,6 +484,15 @@ impl State {
         let mut limits = limits::Limits::default();
         limits.node_bytes = settings.unpublished_max_bytes.unwrap_or(limits.node_bytes);
         limits.node_files = settings.unpublished_max_files.unwrap_or(limits.node_files);
+        let mut videos = items::video::Videos::default();
+        if let Some(places) = settings.video_uploads_max {
+            videos.places = items::places::Places::new(
+                "video uploads",
+                places,
+                items::video::MAX_UPLOADS_PER_SIGNER,
+                items::video::MAX_UPLOADS_PER_SOURCE,
+            );
+        }
         Ok(Self {
             items: ItemsComponent::new(pool.clone(), blobs).with_denylist(denylist.clone()),
             market,
@@ -481,13 +508,14 @@ impl State {
             notices,
             content_sync: Arc::default(),
             validator_calls: validator::calls_limiter(),
-            videos: items::video::Videos::default(),
+            videos,
             file_uploads: items::places::Places::new(
                 "file uploads",
                 FILE_UPLOADS,
                 FILE_UPLOADS_PER_SIGNER,
                 FILE_UPLOADS_PER_SOURCE,
             ),
+            file_deadline: items::upload::DEADLINE,
             limits,
         })
     }
@@ -755,6 +783,39 @@ mod router_tests {
             })
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn the_video_places_setting_sizes_the_node_and_refuses_what_it_cannot_hold() {
+        for refused in [0, MAX_VIDEO_UPLOADS_SETTING + 1] {
+            let err = Settings::parse(RawSettings {
+                video_uploads_max: Some(refused),
+                ..RawSettings::default()
+            })
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("BUILDER_VIDEO_UPLOADS_MAX"), "{err}");
+        }
+        let settings = Settings::parse(RawSettings {
+            video_uploads_max: Some(2),
+            ..RawSettings::default()
+        })
+        .unwrap();
+        let state = State::new(
+            crate::tests::support::lazy_pool(),
+            crate::tests::support::temp_storage().await,
+            Arc::default(),
+            dcl_http::Outbound::for_tests(),
+            None,
+            None,
+            settings,
+        )
+        .unwrap();
+        let held: Vec<_> = (0..2)
+            .map(|n| state.videos.admit(&format!("0xwallet{n}"), None).ok())
+            .collect();
+        assert!(held.iter().all(Option::is_some));
+        assert!(state.videos.admit("0xwallet2", None).is_err());
     }
 
     #[test]

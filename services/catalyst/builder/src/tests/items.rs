@@ -607,6 +607,25 @@ async fn a_third_party_urn_in_the_path_reaches_exactly_one_item() {
         (404, Some("The third party item can not be created by URN."))
     );
 
+    let recased = format!(
+        "{PROVIDER}:{}:hat",
+        collection.simple().to_string().to_uppercase()
+    );
+    let mut other_part = by_urn.clone();
+    other_part["item"]["urn"] = recased.clone().into();
+    let (got, body) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{recased}"),
+        &other_part,
+    )
+    .await;
+    assert_ne!(
+        body["error"].as_str(),
+        Some("The third party item can not be created by URN."),
+        "the provider and the item part find the item, as builder-server: {got} {body}"
+    );
+
     let sibling = Uuid::new_v4();
     let sibling_urn = format!("{PROVIDER}:{}", sibling.simple());
     sqlx::query(

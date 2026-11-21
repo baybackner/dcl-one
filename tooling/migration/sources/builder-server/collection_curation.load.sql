@@ -1,29 +1,58 @@
-CREATE TEMP TABLE fresh_collection_curation ON COMMIT DROP AS
-SELECT s.* FROM stage s
-WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.builder_imported m WHERE m.step = 'collection_curation' AND m.id = s.id::text);
+CREATE OR REPLACE FUNCTION pg_temp.builder_collection_curation_fingerprint(k builder.collection_curations) RETURNS text
+LANGUAGE sql STABLE AS $$
+  SELECT md5(json_build_array(k.collection_id, k.status, k.assignee, k.reviewed_by, k.rejection_reasons,
+                              k.rejection_message, k.created_at, k.updated_at)::text)
+$$;
 
-INSERT INTO builder.collection_curations AS k
-    (id, collection_id, status, assignee, reviewed_by, rejection_reasons, rejection_message, created_at, updated_at)
-SELECT DISTINCT ON (s.collection_id, s.created_at)
-       s.id, s.collection_id, s.status,
-       CASE WHEN lower(s.assignee) ~ '^0x[0-9a-f]{40}$' THEN lower(s.assignee) END,
-       CASE WHEN lower(s.reviewed_by) ~ '^0x[0-9a-f]{40}$' OR s.reviewed_by = 'validator' THEN lower(s.reviewed_by) END,
+CREATE TEMP TABLE incoming_collection_curation ON COMMIT DROP AS
+SELECT s.id, s.collection_id, s.status,
+       CASE WHEN lower(s.assignee) ~ '^0x[0-9a-f]{40}$' THEN lower(s.assignee) END AS assignee,
+       CASE WHEN lower(s.reviewed_by) ~ '^0x[0-9a-f]{40}$' OR s.reviewed_by = 'validator' THEN lower(s.reviewed_by) END
+           AS reviewed_by,
        CASE WHEN s.rejection_reasons <@ ARRAY['clipping', 'thumbnail', 'category_hides', 'rigging',
                  'triangle_count', 'emote', 'file_size', 'textures_materials', 'reversed_faces',
                  'smart_wearable_files', 'content_policy_ip', 'other']
-            THEN NULLIF(s.rejection_reasons, '{}') END,
-       CASE WHEN char_length(btrim(s.rejection_message)) <= 3000 THEN NULLIF(btrim(s.rejection_message), '') END,
-       s.created_at AT TIME ZONE 'UTC',
-       GREATEST(s.updated_at, s.created_at) AT TIME ZONE 'UTC'
-FROM fresh_collection_curation s
+            THEN NULLIF(s.rejection_reasons, '{}') END AS rejection_reasons,
+       CASE WHEN char_length(btrim(s.rejection_message)) <= 3000 THEN NULLIF(btrim(s.rejection_message), '') END
+           AS rejection_message,
+       s.created_at AT TIME ZONE 'UTC' AS created_at,
+       GREATEST(s.updated_at, s.created_at) AT TIME ZONE 'UTC' AS updated_at,
+       s.updated_at AS upstream_updated_at,
+       m.id IS NOT NULL AS imported
+FROM stage s
+LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = s.id::text
+WHERE s.status IN ('pending', 'approved', 'rejected');
+
+WITH refreshed AS (
+  UPDATE builder.collection_curations AS k
+     SET (status, assignee, reviewed_by, rejection_reasons, rejection_message, updated_at)
+       = (s.status, s.assignee, s.reviewed_by, s.rejection_reasons, s.rejection_message, s.updated_at)
+    FROM incoming_collection_curation s
+    JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = s.id::text
+   WHERE k.id = s.id
+     AND m.fingerprint = pg_temp.builder_collection_curation_fingerprint(k)
+     AND (k.status, k.assignee, k.reviewed_by, k.rejection_reasons, k.rejection_message, k.updated_at)
+         IS DISTINCT FROM (s.status, s.assignee, s.reviewed_by, s.rejection_reasons, s.rejection_message, s.updated_at)
+  RETURNING k.id, pg_temp.builder_collection_curation_fingerprint(k) AS fingerprint)
+INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
+SELECT 'collection_curation', id::text, fingerprint FROM refreshed
+ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
+
+INSERT INTO builder.collection_curations
+    (id, collection_id, status, assignee, reviewed_by, rejection_reasons, rejection_message, created_at, updated_at)
+SELECT DISTINCT ON (s.collection_id, s.created_at)
+       s.id, s.collection_id, s.status, s.assignee, s.reviewed_by, s.rejection_reasons, s.rejection_message,
+       s.created_at, s.updated_at
+FROM incoming_collection_curation s
 JOIN builder.collections c ON c.id = s.collection_id
-WHERE s.status IN ('pending', 'approved', 'rejected')
+WHERE NOT s.imported
   AND NOT EXISTS (SELECT 1 FROM builder.collection_curations o
-                  WHERE o.collection_id = s.collection_id AND o.created_at = s.created_at AT TIME ZONE 'UTC'
-                    AND o.id <> s.id)
-ORDER BY s.collection_id, s.created_at, s.updated_at DESC, s.id DESC
+                  WHERE o.collection_id = s.collection_id AND o.created_at = s.created_at AND o.id <> s.id)
+ORDER BY s.collection_id, s.created_at, s.upstream_updated_at DESC, s.id DESC
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO dcl_migration.builder_imported (step, id)
-SELECT 'collection_curation', f.id::text FROM fresh_collection_curation f JOIN builder.collection_curations t ON t.id = f.id
+INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
+SELECT 'collection_curation', k.id::text, pg_temp.builder_collection_curation_fingerprint(k)
+FROM incoming_collection_curation s JOIN builder.collection_curations k ON k.id = s.id
+WHERE NOT s.imported
 ON CONFLICT DO NOTHING;

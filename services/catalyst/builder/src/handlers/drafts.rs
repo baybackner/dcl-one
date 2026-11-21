@@ -54,8 +54,11 @@ pub async fn put_collection(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<ApiData<Value>>, ApiError> {
+    let bytes = serde_json::to_vec(&body).map_or(0, |b| b.len());
+    crate::limits::spend_document(&state, &headers, signer.as_str(), bytes)?;
     let save = save::parse(&body)?;
     if save.id != id {
         return Err(
@@ -95,8 +98,10 @@ pub async fn put_item(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(path): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiData<FullItemOut>>, ApiError> {
+    crate::limits::spend_document(&state, &headers, signer.as_str(), body.len())?;
     let input = schema::parse(&body)?;
     state.items.require_documents_release().await?;
     let target = item_save::prepare(&state, &path, &input).await?;
@@ -142,12 +147,12 @@ pub async fn post_item_files(
     use axum::response::IntoResponse;
     let change = access::change_item(&state, &signer, &id).await?;
     state.items.require_documents_release().await?;
-    let source = crate::limits::source(request.headers());
+    let source = crate::limits::upload_source(request.headers());
     let _admission = match state.file_uploads.admit(signer.as_str(), source.as_deref()) {
         Ok(admission) => admission,
         Err(busy) => return Ok(busy),
     };
-    crate::limits::within_storage(
+    let upload = crate::limits::within_storage(
         &state,
         signer.as_str(),
         request.headers(),
@@ -159,9 +164,21 @@ pub async fn post_item_files(
         Ok(multipart) => multipart,
         Err(refused) => return Ok(refused.into_response()),
     };
-    let files = upload::read(multipart).await;
-    crate::limits::charge_upload(&state, source.as_deref(), &received);
-    state.items.save_item_files(&change, files?).await?;
+    let files = tokio::time::timeout(state.file_deadline, upload::read(multipart))
+        .await
+        .unwrap_or_else(|_| Err(ApiError::http(408, "The upload timed out")));
+    let count = files.as_ref().map_or(1, |files| files.len().max(1));
+    crate::limits::charge_upload(
+        &state,
+        &upload,
+        &received,
+        u32::try_from(count).unwrap_or(u32::MAX),
+    );
+    let files = files?;
+    let bytes = files.iter().map(|(_, file)| file.len() as u64).sum();
+    let count = files.len() as u64;
+    state.items.save_item_files(&change, files).await?;
+    crate::limits::stored(&state, bytes, count);
     Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
@@ -183,12 +200,12 @@ pub async fn post_item_videos(
     if !state.items.names_video(change.id()).await? {
         return Err(ApiError::bad_request("The item names no video"));
     }
-    let source = crate::limits::source(request.headers());
+    let source = crate::limits::upload_source(request.headers());
     let admission = match state.videos.admit(signer.as_str(), source.as_deref()) {
         Ok(admission) => admission,
         Err(busy) => return Ok(busy),
     };
-    crate::limits::within_storage(
+    let upload = crate::limits::within_storage(
         &state,
         signer.as_str(),
         request.headers(),
@@ -199,8 +216,9 @@ pub async fn post_item_videos(
     state.videos.sweep(&root).await;
     let (request, sent) = crate::limits::counted(request);
     let received = video::receive(&state.videos, &root, request, admission.progress()).await;
-    crate::limits::charge_upload(&state, source.as_deref(), &sent);
+    crate::limits::charge_upload(&state, &upload, &sent, 1);
     let received = received?;
+    let size = received.size();
     admission.received();
     let stored = state.clone();
     tokio::spawn(async move {
@@ -209,6 +227,7 @@ pub async fn post_item_videos(
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))??;
+    crate::limits::stored(&state, size, 1);
     Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 

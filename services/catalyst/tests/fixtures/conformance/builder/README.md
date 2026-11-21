@@ -136,6 +136,10 @@ names), and the recorded value there must be
 differ: ...`, `candidate body is not JSON: ...`, `slack: ...` or `newsletter: ...`, as
 `social::test_fixtures::replay_signed` words them.
 
+An evidence entry outside this folder names a node test for what no capture
+holds, such as a bound: `path` is the source file and `test` the test
+function in it, which the ledger test requires to be there.
+
 ## Tests
 
 The tests in `services/catalyst/tests/builder_conformance.rs` (test group

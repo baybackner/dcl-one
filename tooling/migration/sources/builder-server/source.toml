@@ -13,7 +13,7 @@ Prerequisite, out of scope for a DB import: every item content hash must be
 in the blob store's builder tree (<STORAGE_ROOT_FOLDER>/builder) and
 recorded, with its size, in
 dcl_migration.blob_inventory (source 'builder-server', object_key = hash);
-item_content stops on a missing hash.
+item_content stops on a missing hash of an item it writes.
 
 Not migrated: projects, asset_packs, assets, deployments,
 pools, pool_groups, pool_likes (no target), the collections' managers,
@@ -21,9 +21,11 @@ minters and reviewed_at columns (no target column). collection_publications
 stays the node's.
 
 No step has a watermark: published/curation state is derived from other
-tables, so every run re-scans; collections, items, virtual third parties and
-curations are imported once each (dcl_migration.builder_imported), never
-updated or re-created. Deletions upstream are not detected.
+tables, so every run re-scans. dcl_migration.builder_imported records each
+collection, item, virtual third party and curation the import wrote, with a
+fingerprint of the node row; a re-run updates a recorded row from upstream
+only while the node row still matches it, and never re-creates one the node
+deleted. Deletions upstream are not detected.
 """
 
 [[step]]

@@ -86,6 +86,13 @@ source is down.
   delete and accept the terms of every collection and item of the provider,
   and read the files those items name in a name whose writer holds the
   bytes.
+- **Virtual third parties.** A wallet changes a provider's virtual third
+  party (`PATCH /v1/thirdParties/{id}`) or removes it (`DELETE`) only when
+  the virtual third party lists it and it manages the provider by the rule
+  above (`access::changes_virtual_third_party`), so a change never acts for
+  a wallet the registry leaves out of an approved or unapproved provider.
+  Both read the registry and answer 503 while it can't tell, and both decide
+  inside their transaction, with the provider locked.
 - **Third-party creates.** A save that creates a third-party collection
   under a provider the registry or a virtual third party has is a
   provider manager's. Under a provider neither has, any signer creates it,
@@ -118,10 +125,16 @@ source is down.
   the committee's curation listing and every decision only the committee
   can make answer 503, never a narrower view. Which status change each caller may make is
   one table (`builder/src/curation/transitions.rs`); a write asks it again
-  inside its transaction, with the collection row locked.
-- **Admins.** `BUILDER_ADMIN_ADDRESSES` and the admin bearer open the
-  operator's item status routes only; they grant no role on collections,
-  items or their curations. On those routes the operator sets the status of
+  inside its transaction, with the collection row locked. There it also
+  reads the committee index again on its own connection: a curator the
+  committee admitted, and the assignee a write names, must still be members
+  (401 otherwise).
+- **Admins.** The operator's routes, the item status routes and the
+  console's under-review listing (`GET /v1/collections/curation`), admit
+  the curation console's bearer (`CATALYRST_BUILDER_ADMIN_TOKEN`) and a
+  signed request from a `BUILDER_ADMIN_ADDRESSES` wallet
+  (`builder/src/auth.rs` `authorize_admin`). Neither opens another route or
+  grants a role on collections, items or their curations. On the item status routes the operator sets the status of
   an item curation of a published collection (404 when the collection is
   absent, 409 when it isn't published) with the moves the committee has on
   an item's status, asked of the same table as the operator, in one
@@ -159,7 +172,9 @@ source is down.
 - Between a creator transfer and the copy's next pass, the previous creator
   keeps the owner's access.
 - A wallet the committee no longer lists reads and changes no curation,
-  even one it is assigned to or decided; a committee member who also holds a
+  even one it is assigned to or decided, and a write the committee admitted
+  commits nothing once the index drops the curator or the assignee before
+  the write's transaction reads it; a committee member who also holds a
   role reads and writes as that role until the table asks for the
   committee.
 - A new role or source is one change to `access.rs`, which the authorization

@@ -1354,3 +1354,182 @@ async fn the_chains_creator_on_the_committee_asks_for_a_review_as_its_creator() 
     let texts = slack.texts();
     assert_eq!(texts.len(), 1, "{texts:?}");
 }
+
+/// A creator whose address the chain copy holds in another case still reads
+/// its collection's curation.
+#[tokio::test]
+async fn a_creator_reads_its_curations_whatever_case_the_copy_holds_its_address_in() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let id = standard(&n.pool, "Cased").await;
+    collection_curation(&n.pool, id, "pending").await;
+    sqlx::query(
+        "UPDATE shop.collections s SET creator = upper(s.creator) FROM builder.collections b \
+         WHERE b.id = $1 AND s.contract_address = b.contract_address",
+    )
+    .bind(id)
+    .execute(&n.pool)
+    .await
+    .unwrap();
+    let (status, answer) = call(&n.app, Some(OWNER_KEY), "GET", "/v1/curations", None).await;
+    let listed = answer["data"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|row| row["collection_id"] == json!(id)));
+    assert_eq!((status, listed), (200, true), "{answer}");
+}
+
+/// The signer `key` as a signed `PATCH` of `path` proves it.
+async fn signer_of(key: &str, path: &str) -> crate::shared::signed_fetch::Signer {
+    let mut headers = axum::http::HeaderMap::new();
+    for (name, value) in signed_map(key, "patch", path, "{}", false).await {
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    crate::auth::require_signer(
+        &headers,
+        "patch",
+        &crate::auth::SignedPath::local(path.to_string()),
+        None,
+    )
+    .await
+    .unwrap()
+}
+
+/// A curator, or an assignee, the committee index drops after the decision
+/// writes nothing: the write asks the index again inside its transaction.
+#[tokio::test]
+async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let committee = FakeCommittee::with(&[
+        &address(COMMITTEE_KEY),
+        &address(FORMER_KEY),
+        &address(ADMIN_KEY),
+    ]);
+    let n = node_over(
+        pool,
+        Options {
+            committee,
+            ..Options::default()
+        },
+    )
+    .await;
+    let drop_member = async |key: &str, block: i64| {
+        super::support::record_committee_event(
+            &n.pool,
+            block,
+            "0xaeec95a8aa671a6d3fec56594827d7804964fa70",
+            &address(key),
+            false,
+        )
+        .await;
+        super::support::publish_committee_at(&n.pool, block, "timezone('UTC', now())").await;
+    };
+    let id = standard(&n.pool, "Dropped").await;
+    collection_curation(&n.pool, id, "pending").await;
+    let path = format!("/v1/collections/{id}/curation");
+    let assigning = crate::access::curate_collection(
+        &n.state,
+        &signer_of(COMMITTEE_KEY, &path).await,
+        &id.to_string(),
+    )
+    .await
+    .unwrap();
+    let rejecting = crate::access::curate_collection(
+        &n.state,
+        &signer_of(FORMER_KEY, &path).await,
+        &id.to_string(),
+    )
+    .await
+    .unwrap();
+    let assign = || crate::curation::writes::Update {
+        assignee: Some(Some(address(ADMIN_KEY))),
+        ..Default::default()
+    };
+    let reject = || crate::curation::writes::Update {
+        status: Some(crate::curation::transitions::Status::Rejected),
+        ..Default::default()
+    };
+    drop_member(FORMER_KEY, 10).await;
+    let rejected = crate::curation::writes::update_collection(&n.state, rejecting, reject()).await;
+    let mut holder = n.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let assigning = tokio::spawn({
+        let state = n.state.clone();
+        async move { crate::curation::writes::update_collection(&state, assigning, assign()).await }
+    });
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database \
+             WHERE NOT l.granted AND d.datname = current_database()",
+        )
+        .fetch_one(&n.pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    drop_member(ADMIN_KEY, 11).await;
+    holder.commit().await.unwrap();
+    let assigned = assigning.await.unwrap();
+    let assignee: Option<String> = sqlx::query_scalar(
+        "SELECT assignee FROM builder.collection_curations WHERE collection_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&n.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            assigned.err().map(|e| e.status()),
+            rejected.err().map(|e| e.status())
+        ),
+        (Some(401), Some(401))
+    );
+    assert_eq!(assignee, None);
+    assert_eq!(
+        statuses(&n.pool, Curation::Collection, id).await,
+        ["pending"]
+    );
+}
+
+/// A committee member who also creates the collection on chain decides its
+/// curation as the committee: its approval is taken and audited, where the
+/// creator alone is refused.
+#[tokio::test]
+async fn a_creator_on_the_committee_approves_as_the_committee() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let id = standard(&n.pool, "Both").await;
+    collection_curation(&n.pool, id, "pending").await;
+    let path = format!("/v1/collections/{id}/curation");
+    let approve = || Some(json!({ "curation": { "status": "approved" } }));
+    let (creator_alone, _) = call(&n.app, Some(OWNER_KEY), "PATCH", &path, approve()).await;
+    sqlx::query(
+        "UPDATE shop.collections s SET creator = $2, owner = $2 FROM builder.collections b \
+         WHERE b.id = $1 AND s.contract_address = b.contract_address",
+    )
+    .bind(id)
+    .bind(address(COMMITTEE_KEY))
+    .execute(&n.pool)
+    .await
+    .unwrap();
+    let (both, body) = call(&n.app, Some(COMMITTEE_KEY), "PATCH", &path, approve()).await;
+    assert_eq!((creator_alone, both), (401, 200), "{body}");
+    assert_eq!(
+        statuses(&n.pool, Curation::Collection, id).await,
+        ["approved"]
+    );
+    assert_eq!(audits(&n.pool, id).await, 1);
+}

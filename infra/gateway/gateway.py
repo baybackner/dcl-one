@@ -32,6 +32,7 @@ CAMERA_REEL_UPLOAD_CAP = "7m"
 # The root alias whose upload path takes CAMERA_REEL_UPLOAD_CAP.
 CAMERA_REEL_ALIAS = "^~ /camera-reel/"
 BUILDER_VIDEO_CAP = "240m"
+BUILDER_LARGE_BODY_CAP = "2m"
 # The content server's `POST /entities` route limit at the default field
 # count (`max_deployment_body_bytes`: 200 MiB of files and fields plus
 # multipart framing), rounded up, so its own 413 is the one a client meets.
@@ -364,6 +365,8 @@ def render(table, cfg, mime):
     locations += location('~ "^/badges/assets/.+$"', proxy("apis",
         f"client_max_body_size {BADGES_ASSET_CAP}; "
         f"limit_conn badge_asset_uploads {DEPLOY_CONNECTIONS_PER_ADDRESS};"))
+    locations += location("~ ^(/builder-api)?/v1/collections/[^/]+(/(tos|publish))?/*$",
+                          proxy("apis", f"client_max_body_size {BUILDER_LARGE_BODY_CAP};"))
     locations += location("~ ^(/builder-api)?/v1/items/[^/]+/files/*$",
                           proxy("apis", f"client_max_body_size 21m; {uploads}"))
     locations += location("~ ^(/builder-api)?/v1/items/[^/]+/videos/*$", proxy("apis",

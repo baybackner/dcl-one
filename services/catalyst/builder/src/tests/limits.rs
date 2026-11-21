@@ -737,3 +737,509 @@ async fn a_wallets_drafts_answer_at_most_their_cap_and_cost_it_by_the_row() {
     let (status, _, _) = send(&app, &drafts).await;
     assert_eq!(status, 429);
 }
+
+/// Incompressible text of `len` characters, different for each `seed`.
+fn noise(seed: u64, len: usize) -> String {
+    let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    (0..len)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            char::from(b'a' + (x % 26) as u8)
+        })
+        .collect()
+}
+
+/// `PUT /v1/items/{id}` of a new or stored loose item of `key`'s from
+/// `source`, carrying `filler` characters of permissions.
+async fn put_item(
+    app: &Router,
+    state: &crate::SharedState,
+    key: &str,
+    source: &str,
+    id: Uuid,
+    filler: usize,
+) -> (u16, String) {
+    let permissions: Vec<String> = (0..filler.div_ceil(1_000))
+        .map(|n| noise(id.as_u128() as u64 ^ n as u64, 1_000.min(filler)))
+        .collect();
+    let body = super::support::item_body(
+        &state.items,
+        &super::validator::address(key),
+        &serde_json::json!({ "id": id, "name": "Big hat", "rarity": "common",
+            "contents": super::support::contents_of(&[("model.glb", b"model")]),
+            "data": { "requiredPermissions": permissions } }),
+    )
+    .await;
+    let (status, body, _) = send(
+        app,
+        &Call {
+            method: "PUT",
+            path: format!("/v1/items/{id}"),
+            key: Some(key),
+            source: Some(source),
+            body: serde_json::to_vec(&body).unwrap(),
+        },
+    )
+    .await;
+    (status, body)
+}
+
+async fn stored_items(pool: &sqlx::PgPool, ids: &[Uuid]) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM builder.items WHERE id = ANY($1)")
+        .bind(ids)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+const DOCUMENT_KEYS: [&str; 8] = [
+    "0x5611111111111111111111111111111111111111111111111111111111111111",
+    "0x5622222222222222222222222222222222222222222222222222222222222222",
+    "0x5633333333333333333333333333333333333333333333333333333333333333",
+    "0x5644444444444444444444444444444444444444444444444444444444444444",
+    "0x5655555555555555555555555555555555555555555555555555555555555555",
+    "0x5666666666666666666666666666666666666666666666666666666666666666",
+    "0x5677777777777777777777777777777777777777777777777777777777777777",
+    "0x5688888888888888888888888888888888888888888888888888888888888888",
+];
+
+/// A wallet keeps at most its bound of draft items: the next new one is
+/// refused and not stored, while it still edits the ones it has and
+/// another wallet saves on.
+#[tokio::test]
+async fn a_wallet_keeps_at_most_its_bound_of_draft_items_and_still_edits_them() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let (app, state) = node_over(pool.clone(), |state| state.items.documents.items = 3).await;
+    let ids: Vec<Uuid> = (0..4).map(|_| Uuid::new_v4()).collect();
+    let mut statuses = Vec::new();
+    for id in &ids {
+        statuses.push(put_item(&app, &state, DOCUMENT_KEYS[0], SOURCE, *id, 10).await);
+    }
+    let edited = put_item(&app, &state, DOCUMENT_KEYS[0], SOURCE, ids[0], 20)
+        .await
+        .0;
+    let other = Uuid::new_v4();
+    let others = put_item(&app, &state, DOCUMENT_KEYS[3], SOURCE, other, 10)
+        .await
+        .0;
+    let stored = stored_items(&pool, &ids).await;
+    let (status, body) = &statuses[3];
+    assert_eq!(
+        statuses[..3].iter().map(|s| s.0).collect::<Vec<_>>(),
+        [200, 200, 200]
+    );
+    assert_eq!(*status, 413, "{body}");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["data"], serde_json::json!({ "maxItems": 3 }));
+    assert_eq!((stored, edited, others), (3, 200, 200));
+}
+
+/// A wallet keeps at most its bound of draft collections.
+#[tokio::test]
+async fn a_wallet_keeps_at_most_its_bound_of_draft_collections() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let (app, _) = node_over(pool.clone(), |state| state.items.documents.collections = 2).await;
+    let owner = super::validator::address(DOCUMENT_KEYS[2]);
+    let mut statuses = Vec::new();
+    for n in 0..3 {
+        let id = Uuid::new_v4();
+        let body = super::support::collection_body(
+            serde_json::json!({ "id": id, "name": format!("Kept {n} {}", &id.simple().to_string()[..8]) }),
+            &owner,
+        );
+        let (status, body, _) = send(
+            &app,
+            &Call {
+                method: "PUT",
+                path: format!("/v1/collections/{id}"),
+                key: Some(DOCUMENT_KEYS[2]),
+                source: Some(SOURCE),
+                body: serde_json::to_vec(&body).unwrap(),
+            },
+        )
+        .await;
+        statuses.push((status, body));
+    }
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM builder.collections WHERE eth_address = $1")
+            .bind(&owner)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        statuses.iter().map(|s| s.0).collect::<Vec<_>>(),
+        [200, 200, 413],
+        "{:?}",
+        statuses[2].1
+    );
+    assert!(
+        statuses[2].1.contains(r#""maxCollections":2"#),
+        "{}",
+        statuses[2].1
+    );
+    assert_eq!(stored, 2);
+}
+
+/// A wallet's draft item documents are bounded in stored bytes as in
+/// number: a save that would pass the bound is refused and not stored.
+#[tokio::test]
+async fn a_wallets_draft_item_documents_are_bounded_in_bytes() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let (app, state) = node_over(pool.clone(), |state| state.items.documents.bytes = 20_000).await;
+    let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    let mut statuses = Vec::new();
+    for id in &ids {
+        statuses.push(put_item(&app, &state, DOCUMENT_KEYS[1], OTHER_SOURCE, *id, 8_000).await);
+    }
+    let stored = stored_items(&pool, &ids).await;
+    assert_eq!(
+        statuses.iter().map(|s| s.0).collect::<Vec<_>>(),
+        [200, 200, 413],
+        "{}",
+        statuses[2].1
+    );
+    assert!(
+        statuses[2].1.contains(r#""maxBytes":20000"#),
+        "{}",
+        statuses[2].1
+    );
+    assert_eq!(stored, 2);
+}
+
+/// Document saves spend their bytes of their address's and their wallet's
+/// day: past either, the next save waits, while another address and wallet
+/// save on.
+#[tokio::test]
+async fn document_saves_spend_their_bytes_of_the_day() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let day = || crate::limits::budget(600, Window::from_secs(86_400));
+    let (app, state) = node_over(pool.clone(), |state| {
+        state.limits.source_document_kib = day();
+        state.limits.wallet_document_kib = day();
+    })
+    .await;
+    let big = 240_000;
+    let a = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[4],
+        "198.51.100.30",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    let b = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[5],
+        "198.51.100.30",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    let c = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[6],
+        "198.51.100.30",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    let d = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[6],
+        "198.51.100.31",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    let e = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[4],
+        "198.51.100.32",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    let f = put_item(
+        &app,
+        &state,
+        DOCUMENT_KEYS[4],
+        "198.51.100.33",
+        Uuid::new_v4(),
+        big,
+    )
+    .await;
+    assert_eq!(
+        (a.0, b.0, c.0, d.0, e.0, f.0),
+        (200, 200, 429, 200, 200, 429),
+        "{} {}",
+        c.1,
+        f.1
+    );
+}
+
+/// Under the production budgets one wallet behind one address can't keep
+/// writing item documents of the size bound as fast as it asks.
+#[tokio::test]
+async fn under_the_production_budgets_one_wallet_cannot_write_documents_at_will() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let (app, state) = node_over(pool.clone(), |_| {}).await;
+    let mut statuses = std::collections::BTreeMap::new();
+    for _ in 0..300 {
+        let status = put_item(&app, &state, OTHER_KEY, SOURCE, Uuid::new_v4(), 245_000)
+            .await
+            .0;
+        *statuses.entry(status).or_insert(0) += 1;
+        if status == 429 {
+            break;
+        }
+    }
+    sqlx::query("DELETE FROM builder.items WHERE eth_address = $1")
+        .bind(super::validator::address(OTHER_KEY))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        statuses.get(&429).is_some_and(|refused| *refused > 0),
+        "{statuses:?}"
+    );
+}
+
+/// Saves of new drafts sent at once still leave the wallet within its bound.
+#[tokio::test]
+async fn new_drafts_saved_at_once_stay_within_the_wallets_bound() {
+    let Some(pool) = super::support::scratch_pool(8).await else {
+        return;
+    };
+    let (app, state) = node_over(pool.clone(), |state| state.items.documents.items = 3).await;
+    let ids: Vec<Uuid> = (0..12).map(|_| Uuid::new_v4()).collect();
+    let saves = ids.iter().map(|id| {
+        let (app, state, id) = (app.clone(), state.clone(), *id);
+        tokio::spawn(async move {
+            put_item(&app, &state, DOCUMENT_KEYS[7], SOURCE, id, 10)
+                .await
+                .0
+        })
+    });
+    let mut statuses = Vec::new();
+    for save in saves.collect::<Vec<_>>() {
+        statuses.push(save.await.unwrap());
+    }
+    statuses.sort();
+    assert_eq!(stored_items(&pool, &ids).await, 3, "{statuses:?}");
+    assert_eq!(
+        statuses,
+        [[200; 3].as_slice(), [413; 9].as_slice()].concat()
+    );
+}
+
+/// The bounds table of `services/catalyst/docs/builder.md` states the value
+/// of each constant its rows name, and names no constant this test doesn't
+/// check.
+#[test]
+fn the_builder_doc_states_each_bound_the_code_enforces() {
+    use crate::items::{places, upload, video};
+    use crate::limits as l;
+    fn grouped(n: u64) -> String {
+        let digits = n.to_string();
+        digits
+            .chars()
+            .enumerate()
+            .fold(String::new(), |mut out, (i, digit)| {
+                if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                    out.push(',');
+                }
+                out.push(digit);
+                out
+            })
+    }
+    let count = grouped;
+    let bytes = |n: u64| format!("{} bytes", grouped(n));
+    let binary = |n: u64| {
+        let (unit, size) = [("GiB", 1u64 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)]
+            .into_iter()
+            .find(|(_, size)| n.is_multiple_of(*size))
+            .unwrap_or(("bytes", 1));
+        format!("{} {unit}", grouped(n / size))
+    };
+    let span = |d: std::time::Duration| {
+        let secs = d.as_secs();
+        let (unit, size) = [("hour", 3_600), ("minute", 60), ("second", 1)]
+            .into_iter()
+            .find(|(_, size)| secs.is_multiple_of(*size))
+            .unwrap();
+        let n = secs / size;
+        format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+    };
+    let mut ipv6 = axum::http::HeaderMap::new();
+    ipv6.insert("x-real-ip", "2001:db8:5:1::1".parse().unwrap());
+    let block = l::upload_source(&ipv6).unwrap();
+    let enforced = [
+        ("limits::SOURCE_READS", count(l::SOURCE_READS.into())),
+        ("limits::SOURCE_WRITES", count(l::SOURCE_WRITES.into())),
+        ("limits::WALLET_READS", count(l::WALLET_READS.into())),
+        ("limits::WALLET_WRITES", count(l::WALLET_WRITES.into())),
+        ("ITEM_BODY_LIMIT", binary(crate::ITEM_BODY_LIMIT as u64)),
+        ("LARGE_BODY_LIMIT", binary(crate::LARGE_BODY_LIMIT as u64)),
+        ("BODY_LIMIT", binary(crate::BODY_LIMIT as u64)),
+        ("limits::WALLET_BYTES", bytes(l::WALLET_BYTES)),
+        ("limits::WALLET_FILES", count(l::WALLET_FILES)),
+        ("limits::NODE_BYTES", bytes(l::NODE_BYTES)),
+        ("limits::NODE_FILES", count(l::NODE_FILES)),
+        ("limits::UNPUBLISHED_KEPT", span(l::UNPUBLISHED_KEPT)),
+        (
+            "limits::SOURCE_UPLOAD_MIB",
+            binary(u64::from(l::SOURCE_UPLOAD_MIB) << 20),
+        ),
+        (
+            "limits::SOURCE_UPLOAD_FILES",
+            count(l::SOURCE_UPLOAD_FILES.into()),
+        ),
+        (
+            "limits::WALLET_UPLOAD_FILES",
+            count(l::WALLET_UPLOAD_FILES.into()),
+        ),
+        (
+            "limits::NEAR_BOUND_PRICE",
+            count(l::NEAR_BOUND_PRICE.into()),
+        ),
+        (
+            "limits::upload_source",
+            format!("/{}", block.rsplit('/').next().unwrap()),
+        ),
+        ("items::upload::MAX_FILES", count(upload::MAX_FILES as u64)),
+        ("items::upload::MAX_BYTES", binary(upload::MAX_BYTES as u64)),
+        ("UPLOAD_BODY_LIMIT", binary(crate::UPLOAD_BODY_LIMIT as u64)),
+        ("items::upload::DEADLINE", span(upload::DEADLINE)),
+        ("FILE_UPLOADS", count(crate::FILE_UPLOADS as u64)),
+        (
+            "FILE_UPLOADS_PER_SIGNER",
+            count(crate::FILE_UPLOADS_PER_SIGNER as u64),
+        ),
+        (
+            "FILE_UPLOADS_PER_SOURCE",
+            count(crate::FILE_UPLOADS_PER_SOURCE as u64),
+        ),
+        (
+            "items::places::RETRY_AFTER_SECS",
+            span(std::time::Duration::from_secs(
+                places::RETRY_AFTER_SECS.into(),
+            )),
+        ),
+        (
+            "items::video::DEFAULT_MAX_BYTES",
+            bytes(video::DEFAULT_MAX_BYTES),
+        ),
+        (
+            "items::video::DEFAULT_DEADLINE",
+            span(video::DEFAULT_DEADLINE),
+        ),
+        (
+            "items::video::DEFAULT_IDLE_TIMEOUT",
+            span(video::DEFAULT_IDLE_TIMEOUT),
+        ),
+        (
+            "items::video::MAX_UPLOADS",
+            count(video::MAX_UPLOADS as u64),
+        ),
+        (
+            "MAX_VIDEO_UPLOADS_SETTING",
+            count(crate::MAX_VIDEO_UPLOADS_SETTING as u64),
+        ),
+        (
+            "items::video::MAX_UPLOADS_PER_SIGNER",
+            count(video::MAX_UPLOADS_PER_SIGNER as u64),
+        ),
+        (
+            "items::video::MAX_UPLOADS_PER_SOURCE",
+            count(video::MAX_UPLOADS_PER_SOURCE as u64),
+        ),
+        (
+            "items::video::WALLET_VIDEO_SECS_A_DAY",
+            span(video::WALLET_VIDEO_SECS_A_DAY),
+        ),
+        (
+            "items::video::SOURCE_VIDEO_SECS_A_DAY",
+            span(video::SOURCE_VIDEO_SECS_A_DAY),
+        ),
+        ("limits::WALLET_ITEMS", count(l::WALLET_ITEMS)),
+        ("limits::WALLET_COLLECTIONS", count(l::WALLET_COLLECTIONS)),
+        (
+            "limits::WALLET_DOCUMENT_BYTES",
+            binary(l::WALLET_DOCUMENT_BYTES),
+        ),
+        (
+            "limits::WALLET_DOCUMENT_KIB",
+            binary(u64::from(l::WALLET_DOCUMENT_KIB) << 10),
+        ),
+        (
+            "limits::SOURCE_DOCUMENT_KIB",
+            binary(u64::from(l::SOURCE_DOCUMENT_KIB) << 10),
+        ),
+        (
+            "limits::DOCUMENT_MIN_KIB",
+            binary(u64::from(l::DOCUMENT_MIN_KIB) << 10),
+        ),
+        (
+            "limits::BYTES_PER_WRITE_TOKEN",
+            binary(l::BYTES_PER_WRITE_TOKEN as u64),
+        ),
+    ];
+    let doc = std::fs::read_to_string(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/services/catalyst/docs/builder.md"
+    ))
+    .unwrap();
+    let rows: Vec<(String, String)> = doc
+        .split_once("\n### Bounds\n")
+        .expect("builder.md has a Bounds table")
+        .1
+        .lines()
+        .take_while(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            let code = cells.get(3)?.strip_prefix('`')?.strip_suffix('`')?;
+            Some((code.to_string(), cells[2].to_string()))
+        })
+        .collect();
+    let stated: std::collections::BTreeMap<&str, &str> = rows
+        .iter()
+        .map(|(code, value)| (code.as_str(), value.as_str()))
+        .collect();
+    let mut wrong: Vec<String> = enforced
+        .iter()
+        .filter(|(code, value)| stated.get(code) != Some(&value.as_str()))
+        .map(|(code, value)| {
+            format!(
+                "{code}: the doc states {:?}, the code {value}",
+                stated.get(code)
+            )
+        })
+        .collect();
+    wrong.extend(
+        stated
+            .keys()
+            .filter(|code| !enforced.iter().any(|(checked, _)| checked == *code))
+            .map(|code| format!("{code}: no bound of this test")),
+    );
+    if rows.len() != stated.len() {
+        wrong.push("a constant is named by two rows".to_string());
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

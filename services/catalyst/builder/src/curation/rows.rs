@@ -168,7 +168,7 @@ pub async fn newest_of_wallet(
         "SELECT DISTINCT ON (k.collection_id) {COLLECTION_COLUMNS} FROM builder.collection_curations k \
          WHERE k.collection_id IN ( \
            SELECT b.id FROM shop.collections s JOIN builder.collections b ON b.contract_address = s.contract_address \
-           WHERE s.network = 'matic' AND (s.creator = $1 OR EXISTS (SELECT 1 FROM unnest(s.managers || s.minters) r \
+           WHERE s.network = 'matic' AND (lower(s.creator) = $1 OR EXISTS (SELECT 1 FROM unnest(s.managers || s.minters) r \
              WHERE lower(r) = $1)) \
            UNION SELECT t.id FROM builder.collections t WHERE t.third_party_id = ANY($2)) \
          ORDER BY k.collection_id, k.created_at DESC LIMIT $3"

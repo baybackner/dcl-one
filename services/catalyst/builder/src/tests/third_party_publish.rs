@@ -1564,3 +1564,146 @@ async fn a_renamed_linked_collection_takes_its_items_urns_with_it() {
     .unwrap();
     assert_eq!(holders, 0);
 }
+
+/// A rename that would move an item onto a URN the node's content already
+/// holds is refused, and the items keep their URNs.
+#[tokio::test]
+async fn a_rename_never_moves_an_item_onto_a_urn_the_content_holds() {
+    let Some(w) = world().await else { return };
+    w.state.content_sync.set_own_content_authority(true);
+    let manager = address(MANAGER_KEY);
+    let provider = listed(&w, &[&manager], "10");
+    let (a, _) = collection(&w, &provider, 0).await;
+    let old: String =
+        sqlx::query_scalar("SELECT urn_suffix FROM builder.collections WHERE id = $1")
+            .bind(a)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    let hat = Uuid::new_v4();
+    let (status, answer) = save_hat(&w, a, Some(hat), &format!("{old}:hat")).await;
+    assert_eq!(status, 200, "{answer}");
+    let renamed = format!("{provider}:taken{}", Uuid::new_v4().simple());
+    let entity = format!("bafkentity{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, \
+           entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
+         VALUES ('0x0', 'v3', 'wearable', $1, '{\"v\":{}}'::json, timezone('UTC', now()), ARRAY[$2], \
+           timezone('UTC', now()), '[]'::json)",
+    )
+    .bind(&entity)
+    .bind(format!("{renamed}:hat"))
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO content.active_pointers (pointer, entity_id, entity_type) VALUES ($1, $2, 'wearable')",
+    )
+    .bind(format!("{renamed}:hat"))
+    .bind(&entity)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (status, answer) = send(
+        &w.app,
+        MANAGER_KEY,
+        "PUT",
+        &format!("/v1/collections/{a}"),
+        json!({ "collection": { "id": a, "name": "Taken", "urn": renamed, "eth_address": manager, "salt": null, "contract_address": null } }),
+    )
+    .await;
+    let urn: String = sqlx::query_scalar("SELECT urn_suffix FROM builder.items WHERE id = $1")
+        .bind(hat)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!((status, urn), (409, format!("{old}:hat")), "{answer}");
+}
+
+/// While one write holds a third-party collection, an item save, an item
+/// approval, a rename and a publish of it each wait for it, on any node:
+/// what an approval compares, a save changes and a rename moves can't
+/// interleave.
+#[tokio::test]
+async fn every_write_to_a_collection_waits_for_the_one_holding_it() {
+    let Some(w) = world().await else { return };
+    let (id, item, urn) = submitted(&w).await;
+    let reviewed = newest_curation(&w, item).await.1;
+    let provider: String =
+        sqlx::query_scalar("SELECT third_party_id FROM builder.collections WHERE id = $1")
+            .bind(id)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    let mut holder = w.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM builder.collections WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let w = Arc::new(w);
+    let manager = address(MANAGER_KEY);
+    let writes: Vec<(&str, tokio::task::JoinHandle<()>)> = vec![
+        ("approval", {
+            let w = w.clone();
+            let reviewed = reviewed.clone();
+            tokio::spawn(async move {
+                send(
+                    &w.app,
+                    COMMITTEE_KEY,
+                    "PATCH",
+                    &format!("/v1/items/{item}/curation"),
+                    json!({ "curation": { "status": "approved", "contentHash": reviewed } }),
+                )
+                .await;
+            })
+        }),
+        ("item save", {
+            let w = w.clone();
+            tokio::spawn(async move {
+                edit(&w, id, item, &urn, "saved while held").await;
+            })
+        }),
+        ("rename", {
+            let w = w.clone();
+            let renamed = format!("{provider}:held{}", Uuid::new_v4().simple());
+            tokio::spawn(async move {
+                send(
+                    &w.app,
+                    MANAGER_KEY,
+                    "PUT",
+                    &format!("/v1/collections/{id}"),
+                    json!({ "collection": { "id": id, "name": "Held", "urn": renamed, "eth_address": manager, "salt": null, "contract_address": null } }),
+                )
+                .await;
+            })
+        }),
+        ("publish", {
+            let w = w.clone();
+            let provider = provider.clone();
+            tokio::spawn(async move {
+                call(
+                    &w.app,
+                    Some(MANAGER_KEY),
+                    publish(id),
+                    Some(json!({ "itemIds": [item], "cheque": cheque(MANAGER_KEY, &provider, 1, &salt()) })),
+                )
+                .await;
+            })
+        }),
+    ];
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let ran: Vec<&str> = writes
+        .iter()
+        .filter(|(_, write)| write.is_finished())
+        .map(|(name, _)| *name)
+        .collect();
+    holder.commit().await.unwrap();
+    for (_, write) in writes {
+        write.await.unwrap();
+    }
+    assert!(
+        ran.is_empty(),
+        "{ran:?} ran while another write held the collection"
+    );
+}

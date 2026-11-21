@@ -27,8 +27,8 @@ WITH ready AS (
   SELECT folded_block FROM shop.chain_cursor
   WHERE indexer = 'committee' AND network = 'matic' AND full_history
     AND folded_block IS NOT NULL
-    AND folded_at <= timezone('UTC', now())
-    AND folded_at >= timezone('UTC', now()) - interval '30 minutes'
+    AND folded_at <= timezone('UTC', statement_timestamp())
+    AND folded_at >= timezone('UTC', statement_timestamp()) - interval '30 minutes'
 )
 SELECT (SELECT folded_block FROM ready) IS NOT NULL AS ready,
   ARRAY(
@@ -51,7 +51,9 @@ pub struct Member {
 
 /// The current members, lowercase and sorted; `None` while the index is
 /// unpublished or stale.
-pub async fn current_members(pool: &PgPool) -> Result<Option<Vec<String>>, sqlx::Error> {
+pub async fn current_members<'e>(
+    pool: impl sqlx::PgExecutor<'e>,
+) -> Result<Option<Vec<String>>, sqlx::Error> {
     let (ready, members): (bool, Vec<String>) = sqlx::query_as(MEMBERS_SQL).fetch_one(pool).await?;
     Ok(ready.then_some(members))
 }
@@ -69,7 +71,10 @@ pub async fn members(pool: &PgPool) -> Result<Vec<Member>, ApiError> {
 }
 
 /// Whether `address` is a current member; 503 when the index can't tell.
-pub async fn is_member(pool: &PgPool, address: &str) -> Result<bool, ApiError> {
+pub async fn is_member<'e>(
+    pool: impl sqlx::PgExecutor<'e>,
+    address: &str,
+) -> Result<bool, ApiError> {
     Ok(contains(&read(pool).await?, address))
 }
 
@@ -81,7 +86,7 @@ pub async fn known_member(pool: &PgPool, address: &str) -> bool {
         .is_ok_and(|members| contains(&members, address))
 }
 
-async fn read(pool: &PgPool) -> Result<Vec<String>, ApiError> {
+async fn read<'e>(pool: impl sqlx::PgExecutor<'e>) -> Result<Vec<String>, ApiError> {
     match current_members(pool).await {
         Ok(Some(members)) => Ok(members),
         Ok(None) => {

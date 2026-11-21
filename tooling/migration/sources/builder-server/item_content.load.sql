@@ -1,8 +1,12 @@
+CREATE TEMP TABLE current_stage ON COMMIT DROP AS
+SELECT s.* FROM stage s
+JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
+
 DO $missing$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT h.hash) INTO n
-    FROM (SELECT s.hash FROM stage s
+    FROM (SELECT s.hash FROM current_stage s
           UNION SELECT i.video FROM builder.items i
-           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM stage)) h
+           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM current_stage)) h
    WHERE NOT EXISTS (SELECT 1 FROM dcl_migration.blob_inventory b
                       WHERE b.source = 'builder-server' AND b.object_key = h.hash);
   IF n > 0 THEN RAISE EXCEPTION
@@ -13,16 +17,12 @@ DO $oversized$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT b.object_key) INTO n
     FROM dcl_migration.blob_inventory b
    WHERE b.source = 'builder-server' AND b.size > 250000000
-     AND b.object_key IN (SELECT s.hash FROM stage s
+     AND b.object_key IN (SELECT s.hash FROM current_stage s
                           UNION SELECT i.video FROM builder.items i
-                           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM stage));
+                           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM current_stage));
   IF n > 0 THEN RAISE EXCEPTION
     'builder-server/item_content: % content hashes are over 250,000,000 bytes, the largest file the node keeps', n;
   ELSE NULL; END IF; END $oversized$;
-
-CREATE TEMP TABLE current_stage ON COMMIT DROP AS
-SELECT s.* FROM stage s
-JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
 
 INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
 SELECT s.hash, b.size, lower(s.owner), bool_or(s.file = 'video.mp4')

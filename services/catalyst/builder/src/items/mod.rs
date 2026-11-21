@@ -43,6 +43,8 @@ pub struct ItemsComponent {
     pub(crate) pool: PgPool,
     pub(crate) blobs: Arc<Storage>,
     pub(crate) denylist: Arc<crate::content::Denylist>,
+    /// What one wallet's drafts may hold.
+    pub documents: crate::limits::Documents,
     released: AtomicBool,
 }
 
@@ -60,6 +62,7 @@ impl ItemsComponent {
             pool,
             blobs,
             denylist: Arc::default(),
+            documents: crate::limits::Documents::default(),
             released: AtomicBool::new(false),
         }
     }

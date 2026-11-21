@@ -48,9 +48,12 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   `schemas/releases/builder-item-documents-and-uploaders.sql` first.
 - Names are trimmed (node CHECK); empty `price`/`beneficiary`/`rarity` become
   NULL; addresses are lowercased. An item whose collection is missing
-  upstream becomes a loose draft (`collection_id` NULL).
+  upstream, or not on the node yet, becomes a loose draft (`collection_id`
+  NULL); a later run attaches it once the node holds the collection (see
+  "Re-runs").
 - Timestamps: upstream `timestamp without time zone`, read as UTC.
-- Each collection and item is imported once (see "Re-runs").
+- A re-run updates a collection or item only while the node row is as the
+  import left it (see "Re-runs").
 - A collection or item id the node holds with another creation time is a
   row the import didn't write, such as an id a wallet took on the node
   before the import: `collection` and `item` stop the batch and name the
@@ -62,8 +65,8 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
 provider id, its managers (lowercased; the node's CHECK requires it),
 `raw_metadata` as upstream writes it (`tp:1:<name>:<description>[:<contracts>]`)
 and `"isProgrammatic"` as `is_programmatic`. A row whose id is longer than
-512 characters, the node's bound, is skipped. Each row is imported once
-(see "Re-runs"). Whether
+512 characters, the node's bound, is skipped. A re-run updates a row only
+while the node row is as the import left it (see "Re-runs"). Whether
 a virtual third party's managers manage the provider is decided on read,
 with the registry: see the builder's access rules.
 
@@ -98,8 +101,10 @@ The import never imports a forum claim timestamp.
 A source older than builder-server's last two migrations has no review
 columns on `collection_curations` and no `collection_events` table: the
 extracts read the review columns when present and no events when the table
-is absent. `updated_at` is never older than `created_at`. Each curation is
-imported once (see "Re-runs"); events and cheques are never updated.
+is absent. `updated_at` is never older than `created_at`. A re-run updates
+a curation, never its collection, item or creation time, only while the node
+row is as the import left it (see "Re-runs"); events and cheques are never
+updated.
 
 ## Blobs
 
@@ -115,7 +120,8 @@ upstream served those files to anyone. A record of a hash an item names at
 takes no other record for a `video.mp4` entry. `item_content` carries each
 item's upstream `updated_at` and writes names and records only for items
 whose node row still has it: an item the node saved since keeps its own
-contents on re-runs. An item's `video` is a name too: `item` writes
+contents on re-runs, and its hashes and video are not checked against the
+blob inventory. An item's `video` is a name too: `item` writes
 `video_named_by`, the owner; `item_content` records the owner as an uploader
 of each staged item's video as well, and stops the batch when the video's
 hash is not in the
@@ -144,13 +150,34 @@ hash whose inventory size is over 250,000,000 bytes, the largest file the node k
 
 ## Re-runs
 
-Every run re-scans upstream, with no watermark, and imports only what it
-hasn't imported yet. `dcl_migration.builder_imported (step, id)` records each
+Every run re-scans upstream, with no watermark.
+`dcl_migration.builder_imported (step, id, fingerprint)` records each
 collection, item, virtual third party, collection curation and item curation
-id once the node holds it; a later run skips every id the table records and
-inserts the others, never updating a row that exists. So a row the node
-changed after the import keeps its change, whether or not it moved
-`updated_at` (a forum link, a pinned video, a refreshed curation hash), a row
-the node deleted stays deleted, and an upstream change to a row already
-imported is not carried. Upstream deletions, including files removed from an
-item's `contents`, are not detected.
+the import wrote, with an md5 of every column of the node row as the import
+left it. On a later run:
+
+- An id the table doesn't record is inserted, as on the first run.
+- A recorded row the node holds unchanged (it still matches its fingerprint)
+  takes upstream's current values when they differ, and the table records its
+  new fingerprint. This completes a row an earlier run imported partly: an
+  item whose upstream row moved before `item_content` ran reaches upstream's
+  `updated_at`, so `item_content` then writes its contents, and an item
+  imported loose because its collection wasn't on the node yet joins the
+  collection. Items and their curations follow upstream together, so a
+  pending curation's hash keeps matching its item.
+- A recorded row the node changed keeps its change, whether or not the change
+  moved `updated_at`: a forum topic or a claim on one, a publication in
+  progress, a pinned video, a linked collection's new URN on its items, a
+  refreshed curation hash.
+- A recorded row the node deleted stays deleted.
+- A row recorded without a fingerprint is left alone.
+
+Each load's fingerprint lists every column of its table, so a column added
+to `builder.collections`, `builder.items`, `builder.virtual_third_parties`,
+`builder.collection_curations` or `builder.item_curations` joins its load's
+fingerprint in the same change.
+
+An item saved upstream between a run's `item` and `item_content` walks keeps
+the contents it had (none, for an item new to that run) until the next run,
+which brings the row and then its contents to the later save. Upstream deletions, including files removed from
+an item's `contents`, are not detected.

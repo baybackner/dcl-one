@@ -407,6 +407,26 @@ class ConfigurationTest(unittest.TestCase):
                 self.assertFalse(any(gateway.BUILDER_VIDEO_CAP in body or "proxy_request_buffering" in body
                                      for regex, body in regexes if regex.search(path)))
 
+    def test_builder_collection_saves_take_the_nodes_large_body(self):
+        root = Path(__file__).parents[3] / "services/catalyst"
+        source = (root / "builder/src/lib.rs").read_text()
+        expr = re.search(r"pub const LARGE_BODY_LIMIT: usize = ([^;]+);", source)[1]
+        self.assertRegex(expr, r"^[\d\s*]+$")
+        self.assertEqual(gateway.BUILDER_LARGE_BODY_CAP, f"{eval(expr) // (1024 * 1024)}m")
+        _, regexes = self.worlds_locations()
+        collection = "6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55"
+        for path in [f"/v1/collections/{collection}", f"/builder-api/v1/collections/{collection}/tos",
+                     f"/builder-api/v1/collections/{collection}/publish", f"/v1/collections/{collection}/publish/"]:
+            with self.subTest(path=path):
+                body = next(body for regex, body in regexes if regex.search(path))
+                self.assertIn("proxy_pass http://apis;", body)
+                self.assertIn(f"client_max_body_size {gateway.BUILDER_LARGE_BODY_CAP};", body)
+        for path in [f"/v1/collections/{collection}/items", f"/v1/collections/{collection}/curation",
+                     f"/x/v1/collections/{collection}", "/v1/collections"]:
+            with self.subTest(path=path):
+                self.assertFalse(any(f"client_max_body_size {gateway.BUILDER_LARGE_BODY_CAP};" in body
+                                     for regex, body in regexes if regex.search(path)))
+
     def test_item_files_are_capped_per_address_like_every_upload(self):
         _, regexes = self.worlds_locations()
         for path in ["/v1/items/6f1b4f8a-6a1e-4c2f-9b3d-0d9a2c7b1e55/files",

@@ -297,6 +297,40 @@ impl ItemsComponent {
     /// The save `edit` was decided for, in one transaction: the collection
     /// row `FOR UPDATE`, then the claimed name or URN under an advisory lock,
     /// then the decision again and the kind and URN rules, then the upsert.
+    /// Refuses (413) a new collection of `owner`'s while the owner holds
+    /// `documents.collections` unpublished ones: every collection it holds
+    /// is counted first, the unpublished ones only past the bound.
+    async fn within_collections(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        owner: &str,
+    ) -> Result<(), ApiError> {
+        let bound = i64::try_from(self.documents.collections).unwrap_or(i64::MAX);
+        crate::items::save::lock_owner(tx, owner).await?;
+        let held: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM builder.collections WHERE eth_address = $1")
+                .bind(owner)
+                .fetch_one(&mut **tx)
+                .await?;
+        if held < bound {
+            return Ok(());
+        }
+        let (chain_join, published) = chain_state::published_by_any_pass();
+        let unpublished: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM builder.collections c {chain_join} \
+             WHERE c.eth_address = $1 AND NOT {published}"
+        )))
+        .bind(owner)
+        .fetch_one(&mut **tx)
+        .await?;
+        if unpublished >= bound {
+            return Err(crate::items::save::drafts_full(
+                json!({ "maxCollections": self.documents.collections }),
+            ));
+        }
+        Ok(())
+    }
+
     /// `deployment` is the standard save's computed address; `None` saves a
     /// third-party collection.
     pub async fn save_collection(
@@ -414,6 +448,9 @@ impl ItemsComponent {
                 "updated",
             ));
         }
+        if stored.is_none() {
+            self.within_collections(&mut tx, signer).await?;
+        }
         let saved: Option<Uuid> = match (provider, &deployment) {
             (Some((provider, _)), _) => sqlx::query_scalar(
                 "INSERT INTO builder.collections AS c (id, name, eth_address, salt, urn_suffix, third_party_id, \
@@ -465,6 +502,24 @@ impl ItemsComponent {
         if let (Some((_, Some(old))), Some(new)) = (&stored, save.urn.as_deref())
             && old != new
         {
+            let deployed: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM builder.items i \
+                   JOIN content.active_pointers ap ON ap.pointer = lower($2 || substr(i.urn_suffix, length($3) + 1)) \
+                   JOIN content.deployments d ON d.entity_id = ap.entity_id \
+                   WHERE i.collection_id = $1 AND lower(left(i.urn_suffix, length($3) + 1)) = lower($3 || ':') \
+                     AND d.deleter_deployment IS NULL)",
+            )
+            .bind(id)
+            .bind(new)
+            .bind(old)
+            .fetch_one(&mut *tx)
+            .await?;
+            if deployed {
+                return Err(ApiError::conflict(
+                    "The collection's items would take URNs the catalyst already holds",
+                )
+                .with_data(json!({ "id": id, "urn": new })));
+            }
             sqlx::query(
                 "UPDATE builder.items SET urn_suffix = $2 || substr(urn_suffix, length($3) + 1) \
                  WHERE collection_id = $1 AND lower(left(urn_suffix, length($3) + 1)) = lower($3 || ':')",

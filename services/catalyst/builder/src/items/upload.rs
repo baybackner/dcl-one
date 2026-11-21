@@ -34,6 +34,10 @@ use super::video::VIDEO_FILE;
 /// names in the reference data (198).
 pub const MAX_FILES: usize = 256;
 
+/// The longest an upload's body may take to arrive: its largest body at
+/// about 0.6 Mbit/s.
+pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Bytes in one upload, every file together and so each file: under the
 /// gateway's 21 MiB request bound with room for the multipart framing.
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;

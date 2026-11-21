@@ -188,7 +188,7 @@
       ]
     },
     "item-upload-bounds": {
-      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same source address has eight. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
+      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed; a body that hasn't arrived 5 minutes after the node began reading it answers 408 The upload timed out and frees its place. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same upload source (an IPv6 address widened to its /48) has eight. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
       "captures": [],
       "anchors": []
     },
@@ -457,7 +457,7 @@
       ]
     },
     "item-video-bounds": {
-      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 The upload timed out when the body hasn't arrived 20 minutes after the upload was admitted or no byte came for 30 seconds. While all eight places are held, a new upload takes the place of the slowest one that has run 30 seconds at an average below 208,333 bytes a second (what 250,000,000 bytes need to arrive within 20 minutes, about 1.7 Mbit/s), which ends with 408 The upload was too slow while the node was busy. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
+      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while its 32 places (BUILDER_VIDEO_UPLOADS_MAX, 1 to 256) are held, while the same wallet has one in flight or the same upload source (an IPv6 address widened to its /48) two, and while the wallet has spent its 4 hours or the source its 12 hours of upload time of the day (each upload charged the time it took once its body arrived or it ended); while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 The upload timed out when the body hasn't arrived 20 minutes after the node began reading it or no byte came for 30 seconds. While every place is held, a new upload takes the place of the upload that has run 30 seconds and whose wallet or upload source spent the longest uploading today, its running uploads included, if longer than the newcomer's; that upload ends with 408 The upload gave its place to another while the node was busy. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
       "captures": [],
       "anchors": []
     },
@@ -552,12 +552,12 @@
       ]
     },
     "request-budgets": {
-      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items spends one more read per 20 rows and per 64 KiB of item documents before it reads them, and is refused when its budgets can't pay that at once; a listing of curations or of an address's collections, or of a wallet's drafts (its newest 5,000), spends one more read per 20 rows once answered; and GET /v1/addresses and the public collection search 50 more; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes. A request body is bounded to what its route takes: 256 KiB for an item save, 2 MiB for a collection save, a terms acceptance and a publication, the upload routes their own, and 64 KiB elsewhere (413 unread).",
+      "text": "Every builder route spends, before anything else, from its source address's budget of 3,000 reads (GET, HEAD) or 2,400 writes a minute, and every signed route, once its signature verifies and before its body or the database, from its wallet's budget of 2,400 reads or 1,200 writes a minute; a listing of items spends one more read per 20 rows and per 64 KiB of item documents before it reads them, and is refused when its budgets can't pay that at once; a listing of curations or of an address's collections, or of a wallet's drafts (its newest 5,000), spends one more read per 20 rows once answered; and GET /v1/addresses and the public collection search 50 more; an item or collection save spends one more write token per 16 KiB of its body, and its KiB, at least 4, from its wallet's day of 1 GiB and its upload source's day of 2 GiB of saved documents; beyond a budget, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After, the seconds until a request fits. A request from no address or an internal one (every request behind a gateway HTTP_TRUSTED_PROXY_CIDRS doesn't list) spends no source budget. Upstream bounds only the review routes. A request body is bounded to what its route takes: 256 KiB for an item save, 2 MiB for a collection save, a terms acceptance and a publication, the upload routes their own, and 64 KiB elsewhere (413 unread).",
       "captures": [],
       "anchors": []
     },
     "wallet-storage-bound": {
-      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload whose signer's uploads hold, apart from files a published item names, 100,000 files, or could hold past 5,000,000,000 bytes with it: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The wallet's unpublished files reached their limit\"}. Every wallet's together are bounded the same way by BUILDER_UNPUBLISHED_MAX_BYTES (1,000,000,000,000 unset) and BUILDER_UNPUBLISHED_MAX_FILES (10,000,000 unset); past either, 507 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The node's unpublished files reached their limit\"}. Past the plain sum of the upload records, the unpublished ones are counted at most once a minute and moved meanwhile by what the records gained or lost, so a publication frees them within a minute. A request's source address may send 20 GiB of uploads a day, charged with the bytes each upload actually sent once it ends, whatever its outcome; while the day's are spent, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After. Upstream bounds no wallet's, address's or node's storage.",
+      "text": "POST /v1/items/:id/files and POST /v1/items/:id/videos refuse, before the body is read, an upload whose signer's uploads hold, apart from files a published item names, 100,000 files, or could hold past 5,000,000,000 bytes with it: the body's declared length, else the route's largest body, counts as stored; 413 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The wallet's unpublished files reached their limit\"}. Every wallet's together are bounded the same way by BUILDER_UNPUBLISHED_MAX_BYTES (1,000,000,000,000 unset) and BUILDER_UNPUBLISHED_MAX_FILES (10,000,000 unset); past either, 507 {ok:false, data:{maxBytes} or {maxFiles}, error:\"The node's unpublished files reached their limit\"}. The node counts the unpublished uploads in the background, one count at a time, and keeps each count a minute, so a publication frees them within a minute. An upload source (the client's address, an IPv6 address widened to its /48) may send 20 GiB and 100,000 files of uploads a day, and a wallet 50,000 files from any address, each checked before the body and charged with what the upload actually sent once it ends, whatever its outcome; once every wallet's unpublished uploads hold half the node's bound in bytes or files, each byte and file an upload source sends costs its day ten times. While a day is spent, 429 {ok:false, data:{}, error:'Too many requests, try again in a minute'} with Retry-After. Upstream bounds no wallet's, address's or node's storage.",
       "captures": [],
       "anchors": []
     },
@@ -598,6 +598,21 @@
       "anchors": [
         "status: fixture=401 candidate=200"
       ]
+    },
+    "wallet-draft-bounds": {
+      "text": "PUT /v1/items/:idOrURN and PUT /v1/collections/:id: a wallet holds at most 25,000 items that no publication names (a standard item until its collection is published, a third-party item until it has an item curation, an item with no collection), 5,000 unpublished collections and 256 MiB of those items' stored documents. A save that would pass one, a new item or collection or an item's documents, answers 413 {ok:false, data:{maxItems}, {maxCollections} or {maxBytes}, error:\"The wallet's unpublished drafts reached their limit\"} and stores nothing; a wallet at its item bound still saves the items it holds. Upstream bounds none. The busiest wallet in the reference data holds 12,669 items and 1,542 collections.",
+      "captures": [],
+      "anchors": []
+    },
+    "virtual-third-party-changes": {
+      "text": "PATCH and DELETE /v1/thirdParties/:id: the node lets a wallet the virtual third party lists change or remove it only when the wallet also manages the provider: once the registry lists the provider, approved or not, a manager the registry lists too; with no registry record, the virtual third party's managers. Another wallet gets 401 {ok:false, data:{id}, error:'You are not the manager of this Third Party.'}. PATCH reads the registry and answers 503 while it can't tell. Upstream lets every wallet the virtual third party lists change or remove it, and reads the registry only for a removal.",
+      "captures": [],
+      "anchors": []
+    },
+    "collection-urn-change-keeps-deployed-urns": {
+      "text": "PUT /v1/collections/:id: a third-party save that changes an unpublished collection's URN moves its items' URNs to the new prefix and refuses with 409 {ok:false, data:{id, urn}, error:\"The collection's items would take URNs the catalyst already holds\"} when an item would move onto a URN this node's content holds with an active entity; the items keep their URNs. Upstream derives its items' URNs from the collection's and asks no catalyst.",
+      "captures": [],
+      "anchors": []
     }
   },
   "operations": [
@@ -1387,6 +1402,36 @@
           "path": "services/catalyst/builder/src/tests/limits.rs",
           "test": "an_item_save_larger_than_the_body_cap_is_refused_before_its_keys_are_read",
           "scope": "A 3 MiB save with an unknown key: 413."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "a_wallet_keeps_at_most_its_bound_of_draft_items_and_still_edits_them",
+          "scope": "The next new draft item past the wallet's bound refused (413 maxItems) and not stored; the wallet still edits its items and another wallet saves on."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "a_wallets_draft_item_documents_are_bounded_in_bytes",
+          "scope": "A save that would pass the wallet's bytes of draft documents refused (413 maxBytes) and not stored."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "document_saves_spend_their_bytes_of_the_day",
+          "scope": "Saves spend their bytes of the address's and the wallet's day: past either 429; another address and wallet save on."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "new_drafts_saved_at_once_stay_within_the_wallets_bound",
+          "scope": "Twelve new drafts saved at once with a bound of three: three stored, nine refused with 413."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "under_the_production_budgets_one_wallet_cannot_write_documents_at_will",
+          "scope": "Under the production budgets one wallet behind one address can't keep writing documents of the size bound."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "a_third_party_urn_in_the_path_reaches_exactly_one_item",
+          "scope": "A save at a third-party URN reaches the item with that provider and item part, whatever the case of the collection part; an item part in another case reaches none (404)."
         }
       ],
       "gaps": [
@@ -1398,7 +1443,8 @@
         "deliberate:managers-from-chain-only",
         "deliberate:chain-copy-lag",
         "deliberate:catalyst-is-this-node",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:wallet-draft-bounds"
       ],
       "remaining_verification": "The lock and a registry manager's accepted saves."
     },
@@ -1554,6 +1600,46 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/247-item-files-private-draft.json",
           "scope": "POST /items/{id}/files signed by the owner, uploading the model of the item with no collection.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_wallet_holds_at_most_its_bound_of_unpublished_files",
+          "scope": "A wallet at its bound of unpublished files refused the next upload (413 maxFiles) before the body is read; another wallet uploads on."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "the_node_holds_at_most_its_bound_of_unpublished_files_and_bytes",
+          "scope": "Every wallet's unpublished files, then bytes, together at the node's bound: the next upload refused with 507 maxFiles or maxBytes, whichever wallet sends it."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "past_half_its_bound_the_node_charges_each_address_ten_times_for_its_files",
+          "scope": "Past half the node's bound an address pays ten times per file of its day; a creator below its share still uploads."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_node_past_its_file_bound_refuses_uploads_without_counting_every_record_first",
+          "scope": "A node past its bound with 100,000 records and 20 holders each refuses uploads at once, with no request waiting on a whole count."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "an_address_uploads_at_most_its_day_of_files_however_small",
+          "scope": "Two wallets behind one address send its day of tiny files, then wait with 429; another address uploads on."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_wallet_uploads_at_most_its_day_of_files_from_any_address",
+          "scope": "A wallet's day of files follows it from address to address."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "the_prefixes_of_one_site_share_its_day_of_files",
+          "scope": "IPv6 /64s under one /48 share its day of files; another /48 uploads on."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_stalled_file_upload_ends_at_its_deadline_and_frees_its_place",
+          "scope": "A file upload whose body stops arriving ends at its deadline with 408 and gives its place back."
         }
       ],
       "gaps": [
@@ -1566,7 +1652,7 @@
         "deliberate:managers-from-chain-only",
         "deliberate:wallet-storage-bound"
       ],
-      "remaining_verification": "The lock and a registry manager's uploads."
+      "remaining_verification": "The lock and a registry manager's uploads; the bounds, which no capture holds, are held by the cited tests."
     },
     {
       "id": "api_http:POST:/v1/items/:id/videos",
@@ -1656,6 +1742,36 @@
           "path": "services/catalyst/builder/src/tests/item_videos.rs",
           "test": "a_wallet_at_its_storage_bound_is_refused_the_next_upload_until_it_deletes_or_publishes",
           "scope": "A wallet at its bound refused a video and a file before either body is read; accepted after deleting an item and after its own item is published, not after another item is."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "wallets_and_an_address_at_their_places_leave_another_creator_room",
+          "scope": "Wallets and an address at their share of the video places refused the next upload with 429; another creator still gets a place."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "the_node_reads_at_most_its_places_of_videos_and_refuses_the_next_at_once",
+          "scope": "The node's video places held: the next upload refused at once with 429 and Retry-After."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_held_upload_gives_its_place_to_a_newcomer_that_uploaded_less_today",
+          "scope": "With every place held, a newcomer takes the place of an upload past its first window whose wallet and address uploaded longer today, which ends with 408; one inside its window, or a newcomer that uploaded longer, waits."
+        },
+        {
+          "path": "services/catalyst/builder/src/items/video.rs",
+          "test": "a_full_node_gives_a_newcomer_the_place_of_whoever_uploaded_longest_today",
+          "scope": "Every place held by fast uploads: the newcomer gets the place of the upload whose wallet and address uploaded longest today."
+        },
+        {
+          "path": "services/catalyst/builder/src/items/video.rs",
+          "test": "a_newcomer_that_uploaded_longer_today_than_every_holder_waits",
+          "scope": "A newcomer that uploaded longer today than every holder is refused with 429."
+        },
+        {
+          "path": "services/catalyst/builder/src/items/video.rs",
+          "test": "a_wallet_uploads_one_video_at_a_time_and_its_hours_a_day",
+          "scope": "One video at a time per wallet, and at most its hours of uploading a day per wallet and per address."
         }
       ],
       "gaps": [
@@ -2868,6 +2984,21 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/289-collection-tos-linked.json",
           "scope": "POST /collections/{id}/tos signed by the provider manager of a third-party collection, with its items' hashes.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "a_creators_acceptances_keep_one_row_no_larger_than_its_collections_items",
+          "scope": "A creator's acceptances keep one row per collection, signer and event, and more hashes than the collection has items are refused."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "an_acceptance_waiting_for_the_warehouse_keeps_every_batch_it_covers",
+          "scope": "Two batches accepted while the warehouse refuses are both delivered once it answers."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "a_delivery_that_predates_a_merge_leaves_the_merged_acceptance_waiting",
+          "scope": "A delivery sent before a newer acceptance merged in leaves the merged acceptance waiting for its own delivery."
         }
       ],
       "gaps": [
@@ -3508,6 +3639,16 @@
           "path": "services/catalyst/builder/src/tests/cors.rs",
           "test": "a_preflight_is_answered_before_authentication_the_database_and_any_budget",
           "scope": "Preflights of signed and validator routes at both mounts over a pool that never connects, with a source budget of one."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/limits.rs",
+          "test": "a_wallet_keeps_at_most_its_bound_of_draft_collections",
+          "scope": "The next new collection past the wallet's bound of unpublished collections refused with 413 maxCollections."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_publish.rs",
+          "test": "a_rename_never_moves_an_item_onto_a_urn_the_content_holds",
+          "scope": "A URN change that would move an item onto a URN the node's content holds refused with 409; the items keep their URNs."
         }
       ],
       "gaps": [
@@ -3523,7 +3664,10 @@
         "deliberate:chain-copy-lag",
         "deliberate:stored-name-trimmed",
         "deliberate:third-party-claims",
-        "deliberate:cors-allow-list"
+        "deliberate:cors-allow-list",
+        "deliberate:wallet-draft-bounds",
+        "deliberate:request-budgets",
+        "deliberate:collection-urn-change-keeps-deployed-urns"
       ],
       "remaining_verification": "The lock's 423 waits for the lifecycle change."
     },
@@ -4928,9 +5072,16 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/333-third-party-delete-registered.json",
           "scope": "DELETE /thirdParties/{id} signed by the virtual third party's manager once the registry lists the provider. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party",
+          "scope": "A wallet the virtual third party lists but the registry's unapproved record leaves out neither changes nor removes it (401); a wallet both list does."
         }
       ],
-      "gaps": [],
+      "gaps": [
+        "deliberate:virtual-third-party-changes"
+      ],
       "remaining_verification": "A removal while the registry can't tell: the node answers 503 where upstream answers 200 with ok:false."
     },
     {
@@ -4963,10 +5114,16 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/328-third-party-update-unknown.json",
           "scope": "PATCH /thirdParties/{id} of a provider no virtual third party has. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party",
+          "scope": "A wallet the virtual third party lists but the registry's unapproved record leaves out neither changes nor removes it (401); a wallet both list does."
         }
       ],
       "gaps": [
-        "deliberate:invalid-body-detail"
+        "deliberate:invalid-body-detail",
+        "deliberate:virtual-third-party-changes"
       ],
       "remaining_verification": "An update of a virtual third party whose provider the registry already lists."
     },

@@ -61,6 +61,11 @@ pub struct CreateConfig {
     #[arg(long, env = "BUILDER_UNPUBLISHED_MAX_FILES")]
     pub builder_unpublished_max_files: Option<u64>,
 
+    /// The item videos the builder reads at once, each spooled to disk up to
+    /// 250 MB; 1 to 256. Unset, 32.
+    #[arg(long, env = "BUILDER_VIDEO_UPLOADS_MAX")]
+    pub builder_video_uploads_max: Option<usize>,
+
     /// The warehouse a terms-of-service acceptance is forwarded to; the
     /// forward is configured only when the token is set too. Without it the
     /// acceptance is stored and kept for a later forward.

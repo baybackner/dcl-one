@@ -1187,7 +1187,13 @@ The builder answers a collection's body and its two listings from
   largest owner holds 1,542 collections).
 - `GET` and `PUT /v1/collections/{id}`: one collection; a save locks its
   row, takes an advisory lock on the name (standard) or URN (third party) it
-  claims, and checks that no other collection has it.
+  claims, and checks that no other collection has it. A third-party save
+  that changes the collection's URN moves its items' URNs to the new prefix
+  in the same transaction, and first refuses (409) when an item would take a
+  URN that `content.active_pointers` names with an active
+  `content.deployments` entity (`deleter_deployment IS NULL`), one pointer
+  probe per item of the collection. A save that creates a collection also
+  counts its owner's drafts ("Drafts held per wallet" below).
 
 Invariants:
 
@@ -1363,7 +1369,10 @@ Invariants:
   one without only when the process is its own content authority or
   `content::sync::item_coverage::item_history_coverage` answers covered for
   both item types, read before the last entity probe; otherwise 503 and
-  nothing written. The builder never writes these tables.
+  nothing written. A third-party collection save that changes the
+  collection's URN refuses (409) to move an item onto a URN with an active
+  entity ("Builder collection listings workload"). The builder never writes
+  these tables.
 - Bounds. A collection's or an address's items answer at most 20,000 rows
   per response, `GET /v1/items` 1,000; an upload carries at most 256 parts,
   empty ones included, and 20 MiB in all; a video upload one part of at most
@@ -1526,47 +1535,102 @@ only when it holds an upload record for the name's hash. The index
 
 ### Storage held per wallet and per node
 
-A wallet's uploads may hold at most 5,000,000,000 bytes and 100,000 files
-that no published item names, and every wallet's together
-`BUILDER_UNPUBLISHED_MAX_BYTES` (1,000,000,000,000 unset) and
-`BUILDER_UNPUBLISHED_MAX_FILES` (10,000,000 unset)
-(`builder::limits::within_storage`). `POST /v1/items/{id}/files` and `POST
-/v1/items/{id}/videos` ask once each, after the access decision and the
-upload's place and before the body is read; the body's declared length, else
-the route's largest body, counts as stored.
+A wallet's uploads may hold a bound of bytes and files that no published
+item names, and every wallet's together `BUILDER_UNPUBLISHED_MAX_BYTES` and
+`BUILDER_UNPUBLISHED_MAX_FILES` (`builder::limits::within_storage`; the
+values are in `services/catalyst/docs/builder.md`, "Bounds"). `POST
+/v1/items/{id}/files` and `POST /v1/items/{id}/videos` ask once each, after
+the access decision and the upload's place and before the body is read; the
+body's declared length, else the route's largest body, counts as stored.
 
-- First, the wallet's whole total and count, from
+Each upload reads two things:
+
+- The wallet's whole total and count, from
   `uploaded_contents_uploaded_by_idx (uploaded_by) INCLUDE (size)` alone (an
-  index-only scan), then the node's, a scan of the table. Most uploads stop
-  here.
-- Only when a total could pass its bound, the bytes and files of the records
-  that no published item names: the same index (the whole table for the
-  node), then the public-file probe above for each record. The node keeps
-  that count a minute per wallet and for the node, in process memory, and
-  moves it by how much the total changed since, so the count runs at most
-  once a minute however often uploads ask, and a publication frees its bytes
-  within a minute.
+  index-only scan): 0.1 ms for a wallet of 72 records, 2.7 ms for one of
+  36,000. Most uploads stop here for the wallet.
+- The node's last count of unpublished uploads, kept in process memory for a
+  minute, plus what this process stored since that count ran.
 
-Measured on a scratch copy of the fresh schema with 323,928 upload records,
-107,976 items and 8,298 collections, half of them on chain (PostgreSQL 18):
+The count runs one at a time per process, in a task of its own once the kept
+count is a minute old. A request waits for a count only when none is kept
+yet (the process's first upload) or when its wallet's whole total passes the
+wallet's bound and no count younger than a minute lists the wallet; no other
+request scans the table. The count has two stages:
 
-| Statement | A wallet of 72 records | A wallet of 36,000 records |
-| --- | --- | --- |
-| The total | 0.1 ms | 2.7 ms |
-| The unpublished bytes | 1.4 ms | 548 ms |
+1. One aggregate over `builder.uploaded_contents`, grouped by uploader
+   (`GROUPING SETS ((uploaded_by), ())`): the total of every record, and the
+   totals of each wallet whose records come within one largest upload of its
+   bound (a video's body in bytes, an upload's parts in files). A scan of the
+   table.
+2. Only when a wallet is listed or every record together reaches half the
+   node's bound: the records that no published item names, per listed wallet
+   and for the node, as one anti-join of the records against the set of
+   hashes a published item names in a name whose writer holds an upload
+   record (`PUBLIC_HASHES` in `builder/src/access.rs`, the item files rule's
+   public answer as a set, materialized once), under a 50-second statement
+   timeout with JIT off. A count that can't finish in time logs a warning and
+   counts every record, which bounds the unpublished ones from above.
 
-The node's total over 302,172 records takes 18 to 24 ms (a parallel scan,
-`jit` off, PostgreSQL 18, scratch table of that size).
+Between counts, a listed wallet's count moves by how much its whole total
+changed since, and the node's by what this process stored, so a publication
+frees a wallet's uploads within a minute.
+
+Measured on PostgreSQL 18 with a release build over a synthetic table: both
+stages at 1,000,000 upload records and 1,000,000 item names took 2.8 to 3.1 s
+with 100 wallets holding each hash and 3.3 s with one holder each. The cost
+is linear in the records and the names and independent of how many wallets
+share a hash; near 10,000,000 records it approaches the statement timeout.
 
 Invariants:
 
 - A published item's files never count, so publishing frees a wallet's
   bound; deleting an item frees it once no item names the hash (the delete
   removes the upload records in its transaction).
-- Uploads in flight at once can each pass the check: a wallet's two videos
-  and four file uploads in flight can overshoot the bound by their sizes.
+- Uploads in flight at once can each pass the check: a wallet's video and
+  four file uploads in flight can overshoot its bound by their sizes, and
+  the node's bound counts another process's uploads only from the next
+  count, at most a minute later.
+- One process runs one count at a time. Once a count is kept, a request
+  whose wallet's whole total is within its bound, or whose wallet a count
+  younger than a minute lists, never waits for one.
 
 `schema migrate` builds the index from `schemas/50_create.sql`.
+
+### Drafts held per wallet
+
+A wallet's drafts are bounded too (`builder::items::save` `within_documents`
+and `builder::collections::save` `within_collections`; the values are in
+`services/catalyst/docs/builder.md`, "Bounds"): the items it holds that no
+publication names, its unpublished collections, and the stored bytes of
+those items' documents. The busiest wallet in the reference data holds
+12,669 items and 1,542 collections.
+
+Every item save, and every save that creates a collection, first takes a
+transaction-scoped advisory lock keyed by its owner (`builder drafts of
+<owner>`), so the saves of one wallet sent at once count one after another.
+Then, in the save's transaction:
+
+- An item save counts every item the owner holds by `eth_address`
+  (`items_owner_updated_idx`), and only when that many items at the largest
+  item body could pass the byte bound, sums their stored documents
+  (`pg_column_size` of `data`, `metrics` and `mappings`).
+- A save that creates a collection counts every collection the owner holds
+  by `eth_address` (`collections_owner_idx`).
+- Only past a bound does it count the unpublished ones: the items of a
+  standard collection that neither the chain copy nor the node's
+  publication records show published, the items with no collection, the
+  third-party items without an item curation, and the collections not
+  published. The save is refused (413) only when those pass the bound.
+
+Invariants:
+
+- A published item or collection never counts, so publishing frees a
+  wallet's bound.
+- Only a new item counts toward the item bound: a wallet at its bound still
+  saves the items it holds, within the byte bound.
+- Two saves of one wallet never both pass a bound by counting before the
+  other writes.
 
 ## Builder newsletter workload
 
@@ -3293,7 +3357,9 @@ Every builder decision only the committee could grant (`builder::access`:
 the committee's listings, another wallet's collections and items, draft
 reads, curation writes, forum replies) and `GET /v1/committee` read the
 current members of the Polygon curation committee; `BUILDER_ADMIN_ADDRESSES`
-admits only the node's curation console. Shop's `committee` index
+grants no committee role (its wallets' signed requests, like the curation
+console's bearer, open only the operator's item status routes and
+`GET /v1/collections/curation`). Shop's `committee` index
 (`MARKETPLACE_COMMITTEE_INDEX_ENABLED`) walks the two Committee contracts'
 `MemberSet` logs from the first one's deployment into `shop.committee_event`
 over the `TRADE_RPC_URLS` 137 entry, else on mainnet `RPC_ENDPOINT_POLYGON`,
@@ -3308,7 +3374,12 @@ publish wait for it. Unlike the shop routes' readiness rule, it does not
 require `folded_block = last_block`, so the published membership stays
 readable while a pass runs. Builder reads it afresh for every decision, so a
 removed member loses the role once the index publishes the block that
-removed it. An index that is off, not yet published or published more than
+removed it, and a curation write reads it again on its own transaction's
+connection, after its row locks: a curator the committee admitted and the
+assignee it names must still be members (401 otherwise). The
+statement compares `folded_at` with `statement_timestamp()`, so a read
+inside a transaction that began before the index's latest publish still
+sees it published. An index that is off, not yet published or published more than
 30 minutes ago (`READY_WINDOW`), or a failed read, can't tell: a decision
 only the committee could grant and `GET /v1/committee` answer 503, a view
 the committee only widens answers as for any signer, and the console lists

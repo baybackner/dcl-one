@@ -1264,3 +1264,50 @@ async fn an_unsigned_request_never_reads_the_registry() {
         "an id over the bound reads nothing"
     );
 }
+
+/// A wallet the virtual third party lists but the registry's unapproved
+/// record leaves out neither removes nor changes the virtual third party,
+/// so it can't widen the provider's managers to all the registry's; a
+/// wallet both list still does.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party() {
+    let Some(w) = world().await else { return };
+    let squatted = fixture(&w, Squatted).await;
+    let path = format!("/v1/thirdParties/{}", squatted.provider);
+    let patched = call(
+        &w.app,
+        Holder,
+        "PATCH",
+        &path,
+        Some(json!({ "isProgrammatic": true })),
+    )
+    .await
+    .0;
+    let deleted = call(&w.app, Holder, "DELETE", &path, None).await.0;
+    let kept: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM builder.virtual_third_parties WHERE id = $1 AND NOT is_programmatic)",
+    )
+    .bind(&squatted.provider)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    let claimed = fixture(&w, Claimed).await;
+    let removed = call(
+        &w.app,
+        Holder,
+        "DELETE",
+        &format!("/v1/thirdParties/{}", claimed.provider),
+        None,
+    )
+    .await
+    .0;
+    assert_eq!(
+        (patched, deleted, kept, removed),
+        (
+            StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
+            true,
+            StatusCode::OK
+        )
+    );
+}

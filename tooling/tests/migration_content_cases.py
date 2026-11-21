@@ -220,7 +220,7 @@ class ContentMigrationCases:
             self.content_load(db, 'builder-server', 'item', [item])
         self.assertEqual(self.sql(db, 'SELECT count(*) FROM builder.items;\n').strip(), '0')
 
-    def test_when_reimporting_it_should_write_each_upstream_row_once_and_keep_what_the_node_wrote(self):
+    def test_when_reimporting_it_should_keep_the_rows_the_node_changed(self):
         db = self.content_db('content_builder_node_wins')
         self.import_builder(db, 'Upstream', '2026-02-01Z')
         self.sql(db, f"""UPDATE builder.collections SET name = 'Node', updated_at = '2026-03-01' WHERE id = '{COLLECTION}';
@@ -275,6 +275,103 @@ class ContentMigrationCases:
         self.assertEqual(self.sql(db, "SELECT string_agg(name, ',' ORDER BY name) FROM builder.collections;\n").strip(),
                          'Later,Upstream')
 
+    def test_when_an_items_upstream_row_moved_before_its_contents_were_imported_it_should_get_them_on_the_next_run(self):
+        db = self.content_db('content_builder_contents_late')
+        self.import_builder(db, 'Upstream', '2026-02-01Z')
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
+        self.import_builder(db, 'Upstream edited', '2026-03-01Z')
+        self.content_load(db, 'builder-server', 'item_content',
+                          [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-03-01Z'"])
+        self.assertEqual(self.sql(db, f"SELECT count(*) FROM builder.item_contents WHERE item_id = '{ITEM}';\n").strip(), '1')
+
+    def test_when_an_item_was_imported_before_its_collection_it_should_join_the_collection_on_the_next_run(self):
+        db = self.content_db('content_builder_item_before_collection')
+        collection, item = self.builder_rows('Upstream', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'item', [item])
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        self.content_load(db, 'builder-server', 'item', [item])
+        self.assertEqual(self.sql(db, f"SELECT collection_id FROM builder.items WHERE id = '{ITEM}';\n").strip(), COLLECTION)
+
+    def test_when_upstream_changed_imported_rows_the_node_left_alone_it_should_carry_the_changes_on_reimport(self):
+        db = self.curated_world('content_builder_upstream_changes')
+        provider = 'urn:decentraland:matic:collections-thirdparty:virtual'
+        item = '66666666-6666-4666-8666-666666666666'
+        self.linked_item(db, item)
+        collection_curation, item_curation = 'c0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000001'
+
+        def upstream(name, status, updated):
+            self.import_builder(db, name, updated)
+            self.content_load(db, 'builder-server', 'virtual_third_party', [
+                self.virtual_third_party_row(provider, [OWNER], f'tp:1:{name}:', 'false', updated)])
+            self.content_load(db, 'builder-server', 'collection_curation', [
+                self.collection_curation(collection_curation, COLLECTION, status, updated=updated)])
+            self.content_load(db, 'builder-server', 'item_curation', [
+                f"'{item_curation}', '{item}', '{status}', '{self.HASH}', false, '2026-01-01Z', '{updated}'"])
+        upstream('First', 'pending', '2026-02-01Z')
+        upstream('Second', 'approved', '2026-03-01Z')
+        self.assertEqual(self.sql(db, f"""SELECT (SELECT name FROM builder.collections WHERE id = '{COLLECTION}'),
+                                                 (SELECT name FROM builder.items WHERE id = '{ITEM}'),
+                                                 (SELECT raw_metadata FROM builder.virtual_third_parties),
+                                                 (SELECT status FROM builder.collection_curations),
+                                                 (SELECT status FROM builder.item_curations);\n""").strip(),
+                         'Second\tSecond\ttp:1:Second:\tapproved\tapproved')
+
+    def test_when_the_node_wrote_imported_rows_without_moving_their_time_it_should_keep_them_when_upstream_changes(self):
+        db = self.content_db('content_builder_node_quiet_writes_upstream_moved')
+
+        def upstream(name, updated):
+            collection, item = self.builder_rows(name, updated)
+            self.content_load(db, 'builder-server', 'collection', [collection])
+            self.content_load(db, 'builder-server', 'item', [item.replace("'d', NULL, NULL,", "'d', NULL, 'bafkupstreamvideo',")])
+        upstream('Upstream', '2026-02-01Z')
+        self.sql(db, f"""UPDATE builder.collections SET forum_link = 'https://forum.example.test/t/1', forum_id = 1
+                          WHERE id = '{COLLECTION}';
+                         UPDATE builder.items SET video = 'bafknodevideo' WHERE id = '{ITEM}' AND video_named_by = '{OWNER}';\n""")
+        upstream('Upstream edited', '2026-03-01Z')
+        self.assertEqual(self.sql(db, f"""SELECT (SELECT forum_link FROM builder.collections WHERE id = '{COLLECTION}'),
+                                                 (SELECT video FROM builder.items WHERE id = '{ITEM}');\n""").strip(),
+                         'https://forum.example.test/t/1\tbafknodevideo')
+        self.assertEqual(self.builder_names(db), 'Upstream\tUpstream')
+
+    def test_when_the_node_is_posting_a_topic_or_publishing_it_should_keep_the_collection_when_upstream_changes(self):
+        db = self.content_db('content_builder_node_claims')
+        publishing = '77777777-7777-4777-8777-777777777777'
+
+        def upstream(name, updated, forum='NULL, NULL'):
+            collection, _ = self.builder_rows(name, updated)
+            posted = collection.removesuffix(', NULL, NULL') + f', {forum}'
+            self.content_load(db, 'builder-server', 'collection', [posted, collection.replace(COLLECTION, publishing)])
+        upstream('Upstream', '2026-02-01Z')
+        self.sql(db, f"""UPDATE builder.collections SET forum_claimed_at = '2026-02-02' WHERE id = '{COLLECTION}';
+                         UPDATE builder.collections SET publication_pending = true WHERE id = '{publishing}';\n""")
+        upstream('Upstream later', '2026-03-01Z', "'https://forum.example.test/t/9', 9")
+        self.assertEqual(self.sql(db, "SELECT name, forum_link IS NULL, forum_claimed_at IS NOT NULL, publication_pending "
+                                      "FROM builder.collections ORDER BY id;\n").strip().split('\n'),
+                         ['Upstream\tt\tt\tf', 'Upstream\tt\tf\tt'])
+
+    def test_when_the_node_renamed_a_linked_collection_it_should_keep_its_items_urns_on_reimport(self):
+        db = self.curated_world('content_builder_node_renames')
+        item = '66666666-6666-4666-8666-666666666666'
+        self.linked_item(db, item)
+        self.sql(db, f"""UPDATE builder.collections SET urn_suffix = '{self.PROVIDER}:caps', updated_at = '2026-03-01'
+                          WHERE id = '{self.LINKED}';
+                         UPDATE builder.items SET urn_suffix = '{self.PROVIDER}:caps:{item[:8]}' WHERE id = '{item}';\n""")
+        self.linked_item(db, item)
+        self.assertEqual(self.sql(db, f"SELECT urn_suffix FROM builder.items WHERE id = '{item}';\n").strip(),
+                         f'{self.PROVIDER}:caps:{item[:8]}')
+
+    def test_when_the_ledger_predates_fingerprints_it_should_leave_its_rows_alone(self):
+        db = self.catalyst_db('content_builder_old_ledger')
+        self.sql(db, "CREATE SCHEMA dcl_migration;\n"
+                     "CREATE TABLE dcl_migration.builder_imported (step text NOT NULL, id text NOT NULL, "
+                     "PRIMARY KEY (step, id));\n")
+        self.sql(db, harness.migrate.CHECKPOINT_DDL)
+        self.import_builder(db, 'Upstream', '2026-02-01Z')
+        self.sql(db, "UPDATE dcl_migration.builder_imported SET fingerprint = NULL;\n")
+        self.import_builder(db, 'Upstream later', '2026-03-01Z')
+        self.assertEqual(self.builder_names(db), 'Upstream\tUpstream')
+
     def test_when_the_node_changed_an_items_contents_it_should_keep_them_on_reimport(self):
         db = self.content_db('content_builder_node_contents')
         self.import_builder(db, 'Upstream', '2026-02-01Z')
@@ -295,6 +392,21 @@ class ContentMigrationCases:
                                       f"FROM builder.item_contents WHERE item_id = '{ITEM}';\n").strip(),
                          'model.glb bafknodemodel')
         self.assertEqual(self.sql(db, "SELECT count(*) FROM builder.uploaded_contents;\n").strip(), '0')
+
+    def test_when_the_node_saved_an_item_with_a_video_of_its_own_it_should_still_import_the_other_items_contents(self):
+        db = self.content_db('content_builder_node_video')
+        other = '77777777-7777-4777-8777-777777777777'
+        _, item = self.builder_rows('Upstream', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [self.builder_rows('Upstream', '2026-02-01Z')[0]])
+        self.content_load(db, 'builder-server', 'item', [item, item.replace(ITEM, other)])
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n"
+                     f"UPDATE builder.items SET video = 'bafknodevideo', video_named_by = '{OWNER}', "
+                     f"updated_at = '2026-03-01' WHERE id = '{ITEM}';\n")
+        self.content_load(db, 'builder-server', 'item_content', [
+            f"'{ITEM}', 'model.glb', 'bafkupstreamonly', '{OWNER}', 0, '2026-02-01Z'",
+            f"'{other}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'"])
+        self.assertEqual(self.sql(db, "SELECT string_agg(item_id::text, ',') FROM builder.item_contents;\n").strip(), other)
 
     def test_when_the_node_holds_an_id_the_import_did_not_write_it_should_stop_the_batch(self):
         db = self.content_db('content_builder_taken_ids')

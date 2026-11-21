@@ -564,6 +564,20 @@ type StoredCollection = (
     Option<bool>,
 );
 
+/// Whether `signer` may change or remove the virtual third party `id`
+/// listing `listed`: a wallet it lists that also manages the provider
+/// ([`provider_managers`] over `registry`), so a change never widens an
+/// unapproved record's managers for a wallet the registry leaves out.
+pub(crate) fn changes_virtual_third_party(
+    registry: &[Provider],
+    id: &str,
+    listed: &[String],
+    signer: &str,
+) -> bool {
+    has_manager(listed, signer)
+        && has_manager(&provider_managers(Some(registry), id, Some(listed)), signer)
+}
+
 /// The wallets that manage the provider `id`, as builder-server's
 /// `ThirdPartyService.isManager` orders its sources: the registry's managers
 /// once it approved the provider; before approval, its managers that the
@@ -2164,7 +2178,30 @@ pub(crate) async fn confirm_curator(
             .with_data(json!({ "id": curator.collection, "ethAddress": s })));
     }
     keeps_role(curator, role)?;
+    keeps_committee(conn, curator).await?;
     curated_state(conn, curator, c).await
+}
+
+/// 401 when the committee admitted `curator` and the index no longer lists
+/// it, read again on the write's connection.
+async fn keeps_committee(conn: &mut PgConnection, curator: &Curator) -> Result<(), ApiError> {
+    if curator.committee
+        && !crate::committee::is_member(&mut *conn, curator.signer.as_str()).await?
+    {
+        return Err(ApiError::unauthorized("Unauthorized").with_data(
+            json!({ "id": curator.item.unwrap_or(curator.collection), "ethAddress": curator.signer }),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `address` is a current committee member, asked on the write's
+/// connection after the decision: [`assignable`] again.
+pub(crate) async fn still_assignable(
+    conn: &mut PgConnection,
+    address: &str,
+) -> Result<bool, ApiError> {
+    crate::committee::is_member(conn, &address.to_ascii_lowercase()).await
 }
 
 /// [`review_member`]'s and [`review_creator`]'s decision again, inside the
@@ -2331,27 +2368,133 @@ pub(crate) async fn uploaded(
     Ok(crate::limits::Held { bytes, files })
 }
 
-/// The bytes and files of `wallet`'s upload records (every wallet's with
-/// `None`) whose hash no published item names ([`PUBLIC_FILE`]): what the
-/// uploads hold in the store that nobody else may read. A wallet's starts
-/// from its records (`uploaded_contents_uploaded_by_idx`).
+/// The hashes a published item names in a name whose writer holds an upload
+/// record for them ([`PUBLIC_FILE`] as a set): from each collection to its
+/// items' names, so a count is linear in the names and the records, however
+/// many wallets hold one hash.
+const PUBLIC_HASHES: &str = "SELECT ic.hash FROM builder.collections c {chain_join} \
+       JOIN builder.items i ON i.collection_id = c.id \
+       JOIN builder.item_contents ic ON ic.item_id = i.id \
+       JOIN builder.uploaded_contents u ON u.hash = ic.hash AND u.uploaded_by = ic.named_by \
+       WHERE CASE WHEN c.third_party_id IS NOT NULL THEN {curated} ELSE {published} END \
+     UNION SELECT i.video FROM builder.collections c {chain_join} \
+       JOIN builder.items i ON i.collection_id = c.id \
+       JOIN builder.uploaded_contents u ON u.hash = i.video AND u.uploaded_by = i.video_named_by \
+       WHERE CASE WHEN c.third_party_id IS NOT NULL THEN {curated} ELSE {published} END";
+
+/// Bytes and files of upload records per wallet listed (`None`: the rest)
+/// and of all of them (the grouping flag set).
+type Sums = Vec<(Option<String>, bool, i64, i64)>;
+
+/// The node's upload records counted whole: the bytes and files of every
+/// wallet's unpublished ones (whose hash no published item names,
+/// [`PUBLIC_FILE`]), and, of each wallet whose records pass `near_wallet`
+/// in bytes or files, its unpublished ones and all of its records. The
+/// unpublished ones are counted only when a wallet is listed or every
+/// record together reaches `half_node`; else all of them count, as they do
+/// when that count can't finish within its statement timeout.
+pub(crate) async fn tally_uploads(
+    pool: &sqlx::PgPool,
+    near_wallet: crate::limits::Held<u64>,
+    half_node: crate::limits::Held<u64>,
+) -> Result<
+    (
+        crate::limits::Held<i64>,
+        std::collections::HashMap<String, (crate::limits::Held<i64>, crate::limits::Held<i64>)>,
+    ),
+    ApiError,
+> {
+    use crate::limits::Held;
+    let held = |bytes, files| Held { bytes, files };
+    let sums: Sums = sqlx::query_as(
+        "SELECT uploaded_by, GROUPING(uploaded_by) = 1, COALESCE(sum(size), 0)::bigint, count(*) \
+         FROM builder.uploaded_contents GROUP BY GROUPING SETS ((uploaded_by), ()) \
+         HAVING GROUPING(uploaded_by) = 1 OR sum(size) > $1 OR count(*) >= $2",
+    )
+    .bind(i64::try_from(near_wallet.bytes).unwrap_or(i64::MAX))
+    .bind(i64::try_from(near_wallet.files).unwrap_or(i64::MAX))
+    .fetch_all(pool)
+    .await?;
+    let mut all = Held::default();
+    let mut wallets = std::collections::HashMap::new();
+    for (wallet, whole, bytes, files) in sums {
+        match (whole, wallet) {
+            (true, _) => all = held(bytes, files),
+            (false, Some(wallet)) => {
+                wallets.insert(wallet, (held(bytes, files), held(bytes, files)));
+            }
+            (false, None) => {}
+        }
+    }
+    let reaches = |n: i64, bound: u64| u64::try_from(n).unwrap_or(0) >= bound;
+    if wallets.is_empty()
+        && !reaches(all.bytes, half_node.bytes)
+        && !reaches(all.files, half_node.files)
+    {
+        return Ok((all, wallets));
+    }
+    let listed: Vec<String> = wallets.keys().cloned().collect();
+    match unpublished_sums(pool, &listed).await {
+        Ok(sums) => {
+            let mut node = Held::default();
+            for (unpublished, _) in wallets.values_mut() {
+                *unpublished = Held::default();
+            }
+            for (wallet, whole, bytes, files) in sums {
+                match (whole, wallet.and_then(|w| wallets.get_mut(&w))) {
+                    (true, _) => node = held(bytes, files),
+                    (false, Some((unpublished, _))) => *unpublished = held(bytes, files),
+                    (false, None) => {}
+                }
+            }
+            Ok((node, wallets))
+        }
+        Err(error) => {
+            tracing::warn!(%error, "builder: the unpublished uploads could not be counted; all records count");
+            Ok((all, wallets))
+        }
+    }
+}
+
+async fn unpublished_sums(pool: &sqlx::PgPool, listed: &[String]) -> Result<Sums, sqlx::Error> {
+    let (chain_join, published) = chain_state::published_by_any_pass();
+    let public = PUBLIC_HASHES
+        .replace("{chain_join}", chain_join)
+        .replace("{published}", published)
+        .replace("{curated}", ITEM_CURATED);
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '50s'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL jit = off").execute(&mut *tx).await?;
+    let sums = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "WITH public AS MATERIALIZED ({public}) \
+         SELECT w, GROUPING(w) = 1, COALESCE(sum(size), 0)::bigint, count(*) FROM ( \
+           SELECT CASE WHEN own.uploaded_by = ANY($1) THEN own.uploaded_by END AS w, own.size \
+           FROM builder.uploaded_contents own \
+           WHERE NOT EXISTS (SELECT 1 FROM public p WHERE p.hash = own.hash)) unpublished \
+         GROUP BY GROUPING SETS ((w), ())"
+    )))
+    .bind(listed)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(sums)
+}
+
+/// The bytes and files of `wallet`'s upload records whose hash no published
+/// item names ([`PUBLIC_FILE`]).
+#[cfg(test)]
 pub(crate) async fn unpublished(
     pool: &sqlx::PgPool,
-    wallet: Option<&str>,
+    wallet: &str,
 ) -> Result<crate::limits::Held<i64>, ApiError> {
-    let scope = match wallet {
-        Some(_) => "own.uploaded_by = $1",
-        None => "$1::text IS NULL",
-    };
-    let (bytes, files): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT COALESCE(sum(own.size), 0)::bigint, count(*) FROM builder.uploaded_contents own \
-         WHERE {scope} AND NOT {}",
-        public_file_sql("own.hash")
-    )))
-    .bind(wallet)
-    .fetch_one(pool)
-    .await?;
-    Ok(crate::limits::Held { bytes, files })
+    let sums = unpublished_sums(pool, &[wallet.to_string()]).await?;
+    Ok(sums
+        .into_iter()
+        .find(|(w, whole, _, _)| !whole && w.as_deref() == Some(wallet))
+        .map(|(_, _, bytes, files)| crate::limits::Held { bytes, files })
+        .unwrap_or_default())
 }
 
 /// [`FILE_READ`] with the published rule of [`chain_state::published_by_any_pass`].

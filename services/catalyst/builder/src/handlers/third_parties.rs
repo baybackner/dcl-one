@@ -124,7 +124,9 @@ async fn lock_provider(
 }
 
 /// `DELETE /v1/thirdParties/:id` (`removeVirtualThirdParty`): a manager of
-/// the virtual third party removes it once the registry has the provider;
+/// the virtual third party that also manages the provider
+/// ([`access::changes_virtual_third_party`]) removes it once the registry
+/// has the provider;
 /// a missing one is 404, another signer 401, a provider the registry
 /// doesn't have yet 400.
 pub async fn delete(
@@ -136,19 +138,34 @@ pub async fn delete(
         return Err(missing(&id));
     }
     let since = Instant::now();
-    let decide = |found: Option<crate::third_parties::Virtual>| match found {
-        None => Err(missing(&id)),
-        Some(v) if !has_manager(&v.managers, signer.as_str()) => Err(not_its_manager(&id)),
-        Some(_) => Ok(()),
-    };
     {
         let mut conn = state.items.pool().acquire().await?;
-        decide(virtual_by_id(&mut conn, &id).await?)?;
+        match virtual_by_id(&mut conn, &id).await? {
+            None => return Err(missing(&id)),
+            Some(v) if !has_manager(&v.managers, signer.as_str()) => {
+                return Err(not_its_manager(&id));
+            }
+            Some(_) => {}
+        }
     }
     let registry = state
         .third_parties
         .registry(state.market.as_ref(), since)
         .await?;
+    let decide = |found: Option<crate::third_parties::Virtual>| match found {
+        None => Err(missing(&id)),
+        Some(v)
+            if !access::changes_virtual_third_party(
+                &registry,
+                &id,
+                &v.managers,
+                signer.as_str(),
+            ) =>
+        {
+            Err(not_its_manager(&id))
+        }
+        Some(_) => Ok(()),
+    };
     let mut tx = state.items.pool().begin().await?;
     lock_provider(&mut tx, &id).await?;
     decide(virtual_by_id(&mut tx, &id).await?)?;
@@ -168,7 +185,9 @@ pub async fn delete(
 
 /// `PATCH /v1/thirdParties/:id` (`updateThirdParty`): the body is exactly
 /// `{isProgrammatic: boolean}` (400 otherwise); a manager of the virtual
-/// third party sets it; a missing one is 404, another signer 401.
+/// third party that also manages the provider
+/// ([`access::changes_virtual_third_party`]) sets it; a missing one is 404,
+/// another signer 401, 503 while the registry can't be read.
 pub async fn update(
     State(state): State<SharedState>,
     Signed(signer): Signed,
@@ -185,11 +204,22 @@ pub async fn update(
     if id.len() > ID_MAX {
         return Err(missing(&id));
     }
+    let registry = state
+        .third_parties
+        .registry(state.market.as_ref(), Instant::now())
+        .await?;
     let mut tx = state.items.pool().begin().await?;
     lock_provider(&mut tx, &id).await?;
     match virtual_by_id(&mut tx, &id).await? {
         None => return Err(missing(&id)),
-        Some(v) if !has_manager(&v.managers, signer.as_str()) => {
+        Some(v)
+            if !access::changes_virtual_third_party(
+                &registry,
+                &id,
+                &v.managers,
+                signer.as_str(),
+            ) =>
+        {
             return Err(not_its_manager(&id));
         }
         Some(_) => {}

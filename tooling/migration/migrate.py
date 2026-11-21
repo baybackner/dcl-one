@@ -94,8 +94,15 @@ CREATE TABLE IF NOT EXISTS dcl_migration.blob_missing (
 CREATE TABLE IF NOT EXISTS dcl_migration.builder_imported (
     step text NOT NULL,
     id text NOT NULL,
+    fingerprint text,
     PRIMARY KEY (step, id)
 );
+DO $ddl$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'dcl_migration'
+                 AND table_name = 'builder_imported' AND column_name = 'fingerprint') THEN
+    ALTER TABLE dcl_migration.builder_imported ADD COLUMN fingerprint text;
+  END IF;
+END $ddl$;
 -- The worlds.world_limit_overrides values `worlds-limits` last wrote; a row that no longer
 -- matches them was changed on the node and is left alone.
 CREATE TABLE IF NOT EXISTS dcl_migration.world_limit_seeded (

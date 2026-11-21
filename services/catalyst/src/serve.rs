@@ -810,6 +810,7 @@ pub async fn serve(
             cors_method: config.create.cors_method.clone(),
             unpublished_max_bytes: config.create.builder_unpublished_max_bytes,
             unpublished_max_files: config.create.builder_unpublished_max_files,
+            video_uploads_max: config.create.builder_video_uploads_max,
         })
         .context("BUILDER_* / NEWSLETTER_* / CORS_* configuration")?,
     )

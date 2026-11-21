@@ -113,12 +113,11 @@ pub async fn prepare(
     let stored_id: Option<Uuid> = match (&by_urn, &input.id) {
         (Some(urn), _) => sqlx::query_scalar(
             "SELECT i.id FROM builder.items i JOIN builder.collections c ON c.id = i.collection_id \
-             WHERE i.urn_suffix = $3 AND c.third_party_id = $1 AND i.urn_suffix = c.urn_suffix || ':' || $2 \
+             WHERE c.third_party_id = $1 AND i.urn_suffix = c.urn_suffix || ':' || $2 \
              ORDER BY i.created_at, i.id LIMIT 1",
         )
         .bind(&urn.third_party_id)
         .bind(&urn.item)
-        .bind(path)
         .fetch_optional(pool)
         .await?,
         (None, Some(id)) => {
@@ -368,6 +367,11 @@ impl ItemsComponent {
             .as_ref()
             .and_then(Option::as_ref)
             .map(crate::content::js_stringify);
+        let data = crate::content::js_stringify(&input.data);
+        let metrics = crate::content::js_stringify(&input.metrics);
+        let incoming = data.len() + metrics.len() + mappings.as_ref().map_or(0, String::len);
+        self.within_documents(&mut tx, &owner, id, incoming as i64)
+            .await?;
         let (video_before, video_after): (Option<String>, Option<String>) = sqlx::query_as(
             "WITH before AS (SELECT video FROM builder.items WHERE id = $1) \
              INSERT INTO builder.items AS i (id, collection_id, eth_address, name, description, thumbnail, video, type, \
@@ -409,8 +413,8 @@ impl ItemsComponent {
         .bind(&rarity)
         .bind(&price)
         .bind(&beneficiary)
-        .bind(crate::content::js_stringify(&input.data))
-        .bind(crate::content::js_stringify(&input.metrics))
+        .bind(&data)
+        .bind(&metrics)
         .bind(&utility)
         .bind(&mappings)
         .bind(&urn)
@@ -468,6 +472,91 @@ impl ItemsComponent {
         forget_unnamed(&mut tx, &dropped).await?;
         tx.commit().await?;
         listing::item(self, id, Reached::ById, true).await
+    }
+}
+
+/// The stored bytes of the documents of the items `i`.
+const STORED_BYTES: &str = "COALESCE(sum(pg_column_size(i.data) + pg_column_size(i.metrics) + COALESCE(pg_column_size(i.mappings), 0)), 0)::bigint";
+
+/// A refusal of a save that would pass a wallet's bound of drafts.
+pub(crate) fn drafts_full(over: serde_json::Value) -> ApiError {
+    ApiError::http(413, "The wallet's unpublished drafts reached their limit").with_data(over)
+}
+
+/// Queues the saves of `owner`'s drafts, so its bounds hold however many
+/// it sends at once.
+pub(crate) async fn lock_owner(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('builder drafts of ' || $1, 0))")
+        .bind(owner)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+impl ItemsComponent {
+    /// Refuses (413, [`drafts_full`]) saving the item `id` for `owner` with
+    /// `incoming` bytes of documents when the owner's unpublished items would
+    /// pass `documents.items` (a new item) or their stored documents
+    /// `documents.bytes`. Counts every item the owner holds first, and the
+    /// unpublished ones only past a bound.
+    async fn within_documents(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        owner: &str,
+        id: Uuid,
+        incoming: i64,
+    ) -> Result<(), ApiError> {
+        let bound = self.documents;
+        let (items, bytes) = (
+            i64::try_from(bound.items).unwrap_or(i64::MAX),
+            i64::try_from(bound.bytes).unwrap_or(i64::MAX),
+        );
+        lock_owner(tx, owner).await?;
+        let (new, held): (bool, i64) = sqlx::query_as(
+            "SELECT NOT EXISTS (SELECT 1 FROM builder.items WHERE id = $2), \
+               (SELECT count(*) FROM builder.items WHERE eth_address = $1 AND id <> $2)",
+        )
+        .bind(owner)
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
+        let may_pass_bytes = (held + 1).saturating_mul(crate::ITEM_BODY_LIMIT as i64) > bytes;
+        let stored: i64 = if may_pass_bytes {
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT {STORED_BYTES} FROM builder.items i WHERE i.eth_address = $1 AND i.id <> $2"
+            )))
+            .bind(owner)
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?
+        } else {
+            0
+        };
+        if !(new && held >= items) && stored.saturating_add(incoming) <= bytes {
+            return Ok(());
+        }
+        let (chain_join, published) = chain_state::published_by_any_pass();
+        let (held, stored): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*), {STORED_BYTES} FROM builder.items i \
+             LEFT JOIN builder.collections c ON c.id = i.collection_id {chain_join} \
+             WHERE i.eth_address = $1 AND i.id <> $2 AND NOT COALESCE(CASE WHEN c.third_party_id IS NOT NULL \
+               THEN {curated} ELSE {published} END, false)",
+            curated = crate::curation::ITEM_CURATED,
+        )))
+        .bind(owner)
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if new && held >= items {
+            return Err(drafts_full(serde_json::json!({ "maxItems": bound.items })));
+        }
+        if stored.saturating_add(incoming) > bytes {
+            return Err(drafts_full(serde_json::json!({ "maxBytes": bound.bytes })));
+        }
+        Ok(())
     }
 }
 
