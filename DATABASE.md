@@ -1558,7 +1558,7 @@ and keep the flags raised while no listener is up: the next step if the
 database gains other roles.
 
 Invariants: a flag is a signal, not a verdict: it holds the credits claim
-alone, and the admin's unflag or the operator's unblock deletes it; nothing
+and refuses free operator grants, and the admin's unflag or the operator's unblock deletes it; nothing
 else does, and a flag never expires. A wallet has at most one flag (the
 primary key); flagging it again keeps `flagged_at` and takes the new source,
 IP and links. Addresses are lower-cased and checked by the table; the handler
