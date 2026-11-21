@@ -693,30 +693,36 @@ const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.
 /// which `PRUNE` removes; that row's operator rating first), disabled ones
 /// included. A place by another creator on another owner's LAND and another
 /// parcel set starts fresh; an empty creator or owner matches none. `$1` the
-/// ids, `$2` each one's positions, `$3` each one's lowercase creator; `$4` to
-/// `$8` one entry per parcel: the id, the position, the creator, the parcel's
-/// LAND owner and the place's parcel set ([`parcel_set`]).
+/// ids, `$2` each one's positions; `$3` to `$7` one entry per parcel: the id,
+/// the position, the lowercase creator, the parcel's LAND owner and the
+/// place's parcel set ([`parcel_set`]). The overlapping places are found one
+/// parcel at a time (`@>` on one position, behind `OFFSET 0`), so each probe
+/// uses `place_positions_path_gin`.
 const HELD_RATINGS: &str = r#"
     SELECT f.id, false AS predecessor, m.content_rating AS rating
     FROM unnest($1::text[]) AS f(id)
     JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
     UNION ALL
     SELECT c.id, true, r.content_rating
-    FROM unnest($4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
-         AS c(id, position, creator, owner, parcels)
+    FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+         AS c(id, position, creator, owner, parcel_set)
     JOIN explore.place_parcel_rating r ON r.position = c.position
-     AND (r.place_id = c.id OR r.parcel_set_hash = c.parcels
+     AND (r.place_id = c.id OR r.parcel_set_hash = c.parcel_set
           OR (c.creator <> '' AND r.creator_address = c.creator)
           OR (c.owner <> '' AND r.owner_address = c.owner))
     UNION ALL
-    SELECT f.id, true, COALESCE(m.content_rating, p.content_rating)
-    FROM unnest($1::text[], $2::jsonb[], $3::text[]) AS f(id, positions, creator)
-    JOIN explore.place p
-      ON p.id <> f.id AND p.world IS FALSE AND p.raw->>'source' = 'content'
-     AND p.raw->'positions' ?| ARRAY(SELECT jsonb_array_elements_text(f.positions))
-     AND ((f.creator <> '' AND lower(btrim(p.creator_address)) = f.creator)
-          OR ((p.raw->'positions') @> f.positions AND f.positions @> (p.raw->'positions')))
+    SELECT c.id, true, COALESCE(m.content_rating, p.content_rating)
+    FROM unnest($3::text[], $4::text[], $5::text[]) AS c(id, position, creator)
+    CROSS JOIN LATERAL (
+        SELECT p.id, p.creator_address, p.content_rating, p.raw FROM explore.place p
+        WHERE p.raw->'positions' @> jsonb_build_array(c.position)
+          AND p.world IS FALSE AND p.raw->>'source' = 'content'
+        OFFSET 0) p
+    JOIN unnest($1::text[], $2::jsonb[]) AS f(id, positions) ON f.id = c.id
     LEFT JOIN explore.place_moderation m ON m.place_id = p.id
+    WHERE p.id <> c.id
+      AND ((c.creator <> '' AND lower(btrim(p.creator_address)) = c.creator)
+           OR ((p.raw->'positions') @> f.positions AND f.positions @> (p.raw->'positions')))
 "#;
 
 /// The page's parcel ratings, locked after its places as an operator's
@@ -1164,7 +1170,6 @@ async fn settle_ratings(
             .iter()
             .map(|p| Value::from(positions_of(p)))
             .collect();
-        let creators: Vec<String> = settled.iter().map(|p| creator_of(p)).collect();
         let (mut cell_ids, mut cells, mut cell_creators, mut cell_owners, mut cell_sets) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for p in &settled {
@@ -1180,7 +1185,6 @@ async fn settle_ratings(
         for r in sqlx::query(HELD_RATINGS)
             .bind(&ids)
             .bind(&positions)
-            .bind(&creators)
             .bind(&cell_ids)
             .bind(&cells)
             .bind(&cell_creators)
@@ -3071,6 +3075,36 @@ mod tests {
         assert_eq!(t.kinds(&p[2]).await, ["rating_downgrade_refused"]);
         assert_eq!(t.kinds(&p[4]).await, ["rating_downgrade_refused"]);
         assert_eq!(t.kinds(&p[11]).await, ["rating_downgrade_refused"]);
+    }
+
+    /// The overlap lookup of [`HELD_RATINGS`] can probe the positions index.
+    #[tokio::test]
+    async fn held_ratings_can_use_the_positions_index() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let plan: Vec<String> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {HELD_RATINGS}")))
+                .bind(vec!["p".to_string()])
+                .bind(vec![json!(["1,1", "1,2"])])
+                .bind(vec!["p".to_string(), "p".to_string()])
+                .bind(vec!["1,1".to_string(), "1,2".to_string()])
+                .bind(vec!["0xa".to_string(), "0xa".to_string()])
+                .bind(vec![String::new(), String::new()])
+                .bind(vec!["s".to_string(), "s".to_string()])
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap();
+        assert!(
+            plan.iter().any(|l| l.contains("place_positions_path_gin")),
+            "{}",
+            plan.join("\n")
+        );
     }
 
     /// Renting the LAND out does not change its owner: a tenant's place on a
