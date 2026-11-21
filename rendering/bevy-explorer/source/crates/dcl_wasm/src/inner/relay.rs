@@ -10,13 +10,10 @@
 // by B before it reaches A, and calls `relay_fail` instead.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::VecDeque,
-    sync::{
-        atomic::{AtomicBool, AtomicI32, Ordering},
-        Arc,
-    },
-    task::{Context, Poll, Wake, Waker},
+    sync::{atomic::AtomicI32, Arc},
+    task::{Context, Waker},
 };
 
 use serde::Deserialize;
@@ -35,7 +32,11 @@ use super::{
     relay_proto::{RelayInit, ToEngine, ToScene},
     SceneInitializationData, SCENE_QUEUE,
 };
-use crate::{scene_loop_mode, tick_limits::tick_limit_broken};
+use crate::{
+    relay_wake::{self, RelayWake},
+    scene_loop_mode,
+    tick_limits::tick_limit_broken,
+};
 
 // swapped for the copy module's and B's exports in a relay worker (see relay_imports.js)
 #[wasm_bindgen(module = "/src/relay_imports.js")]
@@ -63,56 +64,6 @@ const MAX_MESSAGES_PER_PUMP: usize = 64;
 const MAX_IPC_CHANNELS: usize = 4096;
 // a scene's error message, as forwarded
 const MAX_ERROR_BYTES: usize = 8 * 1024;
-
-// The word a relay's worker waits on between pumps when the scene loop mode wakes relays
-// (scene_loop_mode `relay_wake`) and the engine wakes its scene (`wakes_scene`: the scenes the
-// player is in and portable experiences): the engine bumps it and notifies when it sends the
-// scene something, through the waker the relay registers on its engine channels. The worker reads
-// its address (`relay_wake_ptr`) and only loads and waits on it; the engine alone writes it. The
-// Arc keeps the word alive while a channel still holds the waker, after the relay is dropped.
-struct RelayWake {
-    seq: AtomicI32,
-    // whether the worker waits on the word, as the relay last decided (`relay_wake_mode`); a
-    // waker left on a channel after that turned off bumps the word without a notify
-    waits: AtomicBool,
-}
-
-thread_local! {
-    // set on a relay's thread: it has no glue, so the waker never reaches JS from here (and the
-    // relay is running anyway, so it needs no notify)
-    static RELAY_THREAD: Cell<bool> = const { Cell::new(false) };
-    // engine threads: a view over the engine memory for the notify, renewed when it grows
-    static WAKE_VIEW: RefCell<Option<js_sys::Int32Array>> = const { RefCell::new(None) };
-}
-
-impl Wake for RelayWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.seq.fetch_add(1, Ordering::SeqCst);
-        if RELAY_THREAD.try_with(Cell::get).unwrap_or(true) || !self.waits.load(Ordering::SeqCst) {
-            return;
-        }
-        notify(&self.seq);
-    }
-}
-
-/// Engine threads only (they have the glue): wakes whoever waits on `word`.
-fn notify(word: &AtomicI32) {
-    let index = (word as *const AtomicI32 as usize / 4) as u32;
-    let _ = WAKE_VIEW.try_with(|view| {
-        let mut view = view.borrow_mut();
-        if view.as_ref().is_none_or(|v| index >= v.length()) {
-            let memory = wasm_bindgen::memory().unchecked_into::<js_sys::WebAssembly::Memory>();
-            *view = Some(js_sys::Int32Array::new(&memory.buffer()));
-        }
-        if let Some(view) = view.as_ref() {
-            let _ = js_sys::Atomics::notify(view, index);
-        }
-    });
-}
 
 struct Relay {
     scene_id: SceneId,
@@ -321,13 +272,10 @@ pub fn relay_init() -> u32 {
         ..
     } = data;
     let is_super = super_user.is_some();
-    if RELAY_THREAD.try_with(|relay| relay.set(true)).is_err() {
+    if !relay_wake::mark_relay_thread() {
         return 0;
     }
-    let wake = Arc::new(RelayWake {
-        seq: AtomicI32::new(0),
-        waits: AtomicBool::new(false),
-    });
+    let wake = RelayWake::new(Box::new(relay_wake::engine_notify));
 
     // per-relay (per-thread) registry: ids the scene picks can only collide with its own
     let (ipc_sx, ipc_rx) = mpsc::unbounded_channel();
@@ -402,7 +350,7 @@ pub fn relay_killed() -> u32 {
 /// The worker takes it once, before scene code runs.
 #[wasm_bindgen]
 pub fn relay_wake_ptr() -> u32 {
-    with_relay(|relay| &relay.wake.seq as *const AtomicI32 as usize as u32).unwrap_or(0)
+    with_relay(|relay| relay.wake.word() as *const AtomicI32 as usize as u32).unwrap_or(0)
 }
 
 /// 1 when the worker should wait for the engine's send between pumps, 0 to sleep as before: in a
@@ -411,10 +359,10 @@ pub fn relay_wake_ptr() -> u32 {
 #[wasm_bindgen]
 pub fn relay_wake_mode() -> u32 {
     with_relay(|relay| {
-        let waits = scene_loop_mode::get().relay_wake()
-            && scene_loop_mode::wakes_scene(relay.scene_id.0.to_bits())
-                .unwrap_or_else(|| relay.wake.waits.load(Ordering::SeqCst));
-        relay.wake.waits.store(waits, Ordering::SeqCst);
+        let scene = relay.scene_id.0.to_bits();
+        let waits = relay.wake.update_waits(scene_loop_mode::get(), || {
+            scene_loop_mode::wakes_scene(scene)
+        });
         waits as u32
     })
     .unwrap_or(0)
@@ -439,23 +387,13 @@ pub fn relay_pump() -> u32 {
         let mut moved = 0;
         // when the worker waits for the engine's send, an empty channel registers the waker
         // before it waits: anything sent from then on bumps the word it waits on
-        let wake = relay.wake.waits.load(Ordering::SeqCst);
+        let wake = relay.wake.waits();
         let waker = relay.waker.clone();
         let mut cx = Context::from_waker(&waker);
 
         // engine -> scene
         let mut sent = Ok(());
-        loop {
-            let response = match relay.thread_rx.try_recv() {
-                Ok(response) => response,
-                Err(mpsc::error::TryRecvError::Empty) if wake => {
-                    match relay.thread_rx.poll_recv(&mut cx) {
-                        Poll::Ready(Some(response)) => response,
-                        _ => break,
-                    }
-                }
-                Err(_) => break,
-            };
+        while let Some(response) = relay_wake::next(&mut relay.thread_rx, wake, &mut cx) {
             moved += 1;
             let reply = match &response {
                 RendererResponse::Ok(..) => Reply::Tick,
@@ -488,17 +426,7 @@ pub fn relay_pump() -> u32 {
                 Err(_) => break,
             }
         }
-        loop {
-            let (id, message) = match relay.ipc_rx.try_recv() {
-                Ok(message) => message,
-                Err(mpsc::error::TryRecvError::Empty) if wake => {
-                    match relay.ipc_rx.poll_recv(&mut cx) {
-                        Poll::Ready(Some(message)) => message,
-                        _ => break,
-                    }
-                }
-                Err(_) => break,
-            };
+        while let Some((id, message)) = relay_wake::next(&mut relay.ipc_rx, wake, &mut cx) {
             moved += 1;
             // the scene side doesn't echo our close back, so release the entry here
             if matches!(message, IpcMessage::Closed) {
