@@ -911,8 +911,9 @@ async fn resolve_and_authorize(
 
 /// The old route table (`api_router`, `/ping` and the `/health/*` status
 /// checks), to nest under `/world-storage` (the old gateway location, which
-/// stripped the prefix and set `x-original-path`) with the content routes'
-/// CORS guard and the query half of their NUL guard.
+/// stripped the prefix and set `x-original-path`) with the query half of the
+/// content routes' NUL guard, and CORS for any origin without credentials
+/// (signed fetch carries its auth in headers).
 pub fn router(state: SharedState) -> Router {
     let largest_value = [
         state.settings.world_limits,
@@ -982,7 +983,7 @@ pub fn router(state: SharedState) -> Router {
         .layer(axum::middleware::from_fn(
             nul_guard::nul_query_guard_middleware,
         ))
-        .layer(axum::middleware::from_fn(cors::cors_middleware))
+        .layer(axum::middleware::from_fn(cors::cors_without_credentials))
 }
 
 #[cfg(test)]
