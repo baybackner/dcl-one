@@ -460,8 +460,11 @@ export type CancelMode = "auto" | "gasless-only" | "direct";
 
 export class GaslessCancelFailedError extends Error {
   override name = "GaslessCancelFailedError";
+  /** The relay's own refusal, kept so a quota or budget limit still reads as that limit. */
+  readonly refusal: MetaTransactionError["refusal"] | undefined;
   constructor(readonly original: unknown) {
     super("The gasless cancellation was not confirmed");
+    this.refusal = original instanceof MetaTransactionError ? original.refusal : undefined;
   }
 }
 

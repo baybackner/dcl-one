@@ -18,7 +18,7 @@ use crate::evm::upstream::UpstreamForwarder;
 /// that proves nothing went out, carries `"not_sent": true`: the only evidence a client takes
 /// that it may release the buyer's credit and sign again. Every other failure, and every answer
 /// forwarded from an upstream relay, is answered without it. The client limit runs before the
-/// body is read, so a limited caller's body is never read.
+/// body is read, so a limited caller's body is never read by the handler.
 pub async fn send_transaction(
     State(state): State<SharedState>,
     peer: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
@@ -58,7 +58,7 @@ pub(crate) fn retry_at(now: chrono::DateTime<chrono::Utc>, wait: u64) -> i64 {
 
 /// 429 with `Retry-After` (and `retryAt`, as the quota refusals) once the caller's address, or
 /// its IPv6 /48, spent its window, before the body is read. Only a public address naming one
-/// client ([`crate::shared::client_ip::distinct_client_ip`]) is limited: an unlisted gateway's own
+/// client ([`crate::shared::client_ip::public_client_ip`]) is limited: an unlisted gateway's own
 /// address, or the internal `X-Real-IP` a trusted gateway forwards for an unlisted load balancer,
 /// would put every client in one bucket. The limiters are per process.
 async fn refuse_over_client_limit(
@@ -66,17 +66,11 @@ async fn refuse_over_client_limit(
     headers: &HeaderMap,
     peer: Option<std::net::SocketAddr>,
 ) -> Option<Response> {
-    let ip = crate::shared::client_ip::distinct_client_ip(
+    let ip = crate::shared::client_ip::public_client_ip(
         headers,
         peer,
         &state.settings.trusted_proxy_cidrs,
     )?;
-    if ip
-        .parse::<std::net::IpAddr>()
-        .is_ok_and(crate::shared::client_ip::is_internal)
-    {
-        return None;
-    }
     use crate::shared::limits::RateLimitDecision::Allow;
     let key = crate::shared::client_ip::source_key(&ip);
     if state.relay_limiter.check(&key) == Allow {

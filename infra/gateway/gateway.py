@@ -134,10 +134,12 @@ def site_prefixes(files):
     return sorted(prefixes)
 
 
-# Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA), link-local and IPv4-mapped networks.
+# Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA), link-local, IPv4-mapped, benchmarking,
+# IETF-assigned and reserved networks, and the NAT64, 6to4 and Teredo prefixes that embed an IPv4 address.
 NON_PUBLIC_NETWORKS = [ipaddress.ip_network(n) for n in (
     "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
-    "192.168.0.0/16", "::/128", "::1/128", "::ffff:0:0/96", "fc00::/7", "fe80::/10")]
+    "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "240.0.0.0/4", "::/128", "::1/128",
+    "::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fc00::/7", "fe80::/10")]
 
 
 def settings(env, resolv_conf="/etc/resolv.conf"):

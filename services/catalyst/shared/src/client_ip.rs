@@ -121,9 +121,10 @@ pub fn peer_client_ip(
     Some(ip.to_string())
 }
 
-/// [`peer_client_ip`] only when it names one client: a trusted proxy's
-/// `X-Real-IP`, or a peer that is not internal (an unlisted gateway's own
-/// address would put every client in one bucket).
+/// [`peer_client_ip`] unless the peer is an internal address outside
+/// `trusted_proxies` (an unlisted gateway's own address would put every client
+/// in one bucket). A trusted proxy's `X-Real-IP` is returned as sent, even when
+/// internal; [`public_client_ip`] skips that too.
 pub fn distinct_client_ip(
     headers: &HeaderMap,
     peer: Option<std::net::SocketAddr>,
@@ -134,6 +135,17 @@ pub fn distinct_client_ip(
         return peer_client_ip(headers, peer, trusted_proxies);
     }
     (!is_internal(ip)).then(|| ip.to_string())
+}
+
+/// [`distinct_client_ip`] only when it is not internal: a trusted proxy's internal
+/// `X-Real-IP` (an unlisted load balancer in front of the gateway) names no one client.
+pub fn public_client_ip(
+    headers: &HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+    trusted_proxies: &[ipnet::IpNet],
+) -> Option<String> {
+    distinct_client_ip(headers, peer, trusted_proxies)
+        .filter(|ip| !ip.parse::<std::net::IpAddr>().is_ok_and(is_internal))
 }
 
 /// Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA) or link-local.
@@ -256,6 +268,40 @@ mod tests {
             distinct_client_ip(&HeaderMap::new(), peer("10.0.0.5"), &trusted),
             None
         );
+    }
+
+    #[test]
+    fn public_client_ip_skips_a_trusted_proxys_internal_real_ip() {
+        let peer = |ip: &str| Some(std::net::SocketAddr::new(ip.parse().unwrap(), 1));
+        let trusted = ["10.0.0.0/8".parse().unwrap()];
+        for internal in [
+            "10.1.2.3",
+            "192.168.0.9",
+            "127.0.0.1",
+            "fd00::7",
+            "::ffff:172.18.0.2",
+        ] {
+            let real = headers(&[("x-real-ip", internal)]);
+            assert!(
+                distinct_client_ip(&real, peer("10.0.0.5"), &trusted).is_some(),
+                "{internal}"
+            );
+            assert_eq!(
+                public_client_ip(&real, peer("10.0.0.5"), &trusted),
+                None,
+                "{internal}"
+            );
+        }
+        let real = headers(&[("x-real-ip", "203.0.113.9")]);
+        assert_eq!(
+            public_client_ip(&real, peer("10.0.0.5"), &trusted).as_deref(),
+            Some("203.0.113.9")
+        );
+        assert_eq!(
+            public_client_ip(&real, peer("198.51.100.4"), &[]).as_deref(),
+            Some("198.51.100.4")
+        );
+        assert_eq!(public_client_ip(&real, peer("10.0.0.5"), &[]), None);
     }
 
     #[test]

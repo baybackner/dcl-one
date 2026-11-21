@@ -27,10 +27,11 @@ without it every client behind the gateway shares one `/contents` budget
 (1000 requests a minute by default) and gets 429s past it.
 
 The relay (`POST /v1/transactions`) allows 30 requests a minute per client
-address (IPv6 by /64) and 120 per IPv6 /48, before parsing, and only when the
-address names one client (a trusted
-proxy's `X-Real-IP` or a public peer). Behind an unlisted private gateway that
-limit does not apply, so set `HTTP_TRUSTED_PROXY_CIDRS` to keep it. Each API
+address (IPv6 by /64) and 120 per IPv6 /48, before parsing, and only when that
+address is public: a trusted proxy's public `X-Real-IP`, or a public peer. Behind
+an unlisted private gateway, or a trusted gateway that forwards an internal
+address, that limit does not apply, so set `HTTP_TRUSTED_PROXY_CIDRS` on the API
+and `GATEWAY_TRUSTED_PROXY_CIDRS` on the gateway to keep it. Each API
 process counts its own requests, so N processes allow up to N times that.
 
 Every per-client limit here needs both halves of the trust chain:
@@ -44,25 +45,34 @@ edge shares that edge's limits. The supported topologies are:
   IP ranges, and set `GATEWAY_CLIENT_IP_HEADER` to `CF-Connecting-IP` so the
   gateway reads the one address Cloudflare writes. That header is taken as sent
   from every listed network, so the gateway refuses to start when the list
-  includes a private, CGNAT, ULA, link-local or loopback network. With Cloudflare
-  set Pseudo IPv4 to off or "Add header": "Overwrite headers" puts a derived
-  IPv4 address in `CF-Connecting-IP`, and the IPv6 /64 and /48 grouping no
-  longer applies.
+  includes a private, CGNAT, ULA, link-local, loopback, benchmarking, reserved,
+  NAT64, 6to4 or Teredo network. A public load balancer passes this check, so
+  list nothing but Cloudflare's ranges. With Cloudflare, set Pseudo IPv4 to off
+  or "Add header": "Overwrite headers" puts a derived IPv4 address in
+  `CF-Connecting-IP`, and the IPv6 /64 and /48 grouping no longer applies.
 - A load balancer in front of the gateway, with or without Cloudflare in front
   of it: keep the default `X-Forwarded-For` and list the load balancer's network
   and the CDN's ranges. The gateway walks `X-Forwarded-For` back past listed
   hops and takes the first unlisted one: the address the outermost listed proxy
-  (Cloudflare, or the load balancer without a CDN) appended, never one the
-  client wrote.
+  (Cloudflare, or the load balancer without a CDN) appended. That holds only if
+  no request reaches a listed proxy with an `X-Forwarded-For` it keeps from a
+  sender inside a listed range. Cloudflare Workers send their subrequests from
+  Cloudflare's published ranges (`2a06:98c0::/29`); whether Cloudflare replaces
+  an `X-Forwarded-For` a Worker sets is not verified here. If it keeps it, the
+  gateway takes the Worker's value as the client address, so every per-client
+  limit keys on a value the caller chose. When Cloudflare connects to the gateway
+  directly, use `CF-Connecting-IP` instead; with Cloudflare in front of a load
+  balancer, confirm that behaviour before relying on this mode.
 
 A gateway behind an unlisted private load balancer sees that load balancer as
 every client. Its forwarded `X-Real-IP` is then internal, which names no single
 client: the relay limit and the per-network report limit skip it, and the other
 per-client limits share one bucket.
 
-Place reports count against the reporter's wallet and, when its address names
-one client (a trusted proxy's `X-Real-IP` or a public peer), its network. Behind
-an unlisted private gateway only the wallet limit applies, and fresh wallets cost
+Place reports count against the reporter's wallet and, when its address is
+public (a trusted proxy's public `X-Real-IP`, or a public peer), its network.
+Behind an unlisted private gateway, or a trusted gateway that forwards an internal
+address, only the wallet limit applies, and fresh wallets cost
 nothing, so set `HTTP_TRUSTED_PROXY_CIDRS` to keep the per-network report limit.
 
 Set `PUBLIC_URL` to the externally reachable node base URL, including its port and any deployment prefix. Without it, the node uses its bind address (for example `http://0.0.0.0:<port>`), which is only a local fallback and cannot provide public image or notification links. See [event client and deployment guidance](../../services/catalyst/docs/events.md).

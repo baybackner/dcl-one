@@ -284,6 +284,23 @@ describe("cancelling a listing", () => {
     await expect(cancelTrade({ provider: stranger, trade, wait: noWait })).rejects.toThrow(/signed/);
   });
 
+  it("gasless-only keeps the relay's quota refusal on the failure it reports", async () => {
+    const trade = await storedTrade();
+    const wallet = fakeWallet();
+    restore = fakeChain({ contracts: { [trade.contract]: { abi: MARKETPLACE_ABI, answer: () => 3n } } });
+    const original = globalThis.fetch;
+    const spent = { ok: false, not_sent: true, error: "quota_reached", code: "quota_reached", message: "Max amount of transactions reached for address. Quota: 30", retryAt: 1_767_230_000, quota: 30 };
+    globalThis.fetch = (async () => new Response(JSON.stringify(spent), { status: 429 })) as typeof fetch;
+    try {
+      const cancelled = cancelTrade({ provider: wallet, trade, mode: "gasless-only", wait: noWait });
+      await expect(cancelled).rejects.toBeInstanceOf(GaslessCancelFailedError);
+      await expect(cancelled).rejects.toMatchObject({ refusal: { error: "quota_reached", quota: 30, retryAt: 1_767_230_000 } });
+      expect(wallet.sent).toHaveLength(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("over the relay's request limit, reports it instead of paying gas for the cancellation", async () => {
     const trade = await storedTrade();
     const wallet = fakeWallet();
