@@ -4,8 +4,9 @@
 //! console calls them with the session wallet and the grant, revoke or block
 //! records that wallet in its own `ops.admin_audit` row, in the same
 //! transaction as the ledger write (`credits::admin_store`); the console's
-//! row records the call. The input rules are the credits admin routes'
-//! (`credits::admin` validators). As in the old console, every call needs
+//! row records the call. The input rules and the grant's key and kind are
+//! the credits admin routes' (`credits::admin` validators and
+//! `operator_grant_key`). As in the old console, every call needs
 //! `CATALYRST_CREDITS_ADMIN_TOKEN` configured (403
 //! `credits-admin-token-not-configured` otherwise, like every other console
 //! family): the credits operator credential is what enables the console to

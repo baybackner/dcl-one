@@ -407,17 +407,23 @@ async fn a_console_grant_recovers_a_top_up_like_the_bearer_route() {
         "a booked recovery replays: {body}"
     );
     for address in [&user, &booked_user] {
-        for sql in [
-            "DELETE FROM credits.ledger WHERE address = $1",
-            "DELETE FROM credits.purchases WHERE address = $1",
-            "DELETE FROM credits.idempotency WHERE address = $1",
-            "DELETE FROM ops.admin_audit WHERE domain = 'credits' AND target = $1",
-            "DELETE FROM credits.wallets WHERE address = $1",
-        ] {
-            sqlx::query(sql).bind(address).execute(&pool).await.unwrap();
-        }
+        cleanup_credit_wallet(&pool, address).await;
     }
     cleanup(&pool, &actor).await;
+}
+
+/// Removes the rows a console credits test booked for `address`, its flag included.
+async fn cleanup_credit_wallet(pool: &PgPool, address: &str) {
+    for sql in [
+        "DELETE FROM credits.wallet_flags WHERE address = $1",
+        "DELETE FROM credits.ledger WHERE address = $1",
+        "DELETE FROM credits.purchases WHERE address = $1",
+        "DELETE FROM credits.idempotency WHERE address = $1",
+        "DELETE FROM ops.admin_audit WHERE domain = 'credits' AND target = $1",
+        "DELETE FROM credits.wallets WHERE address = $1",
+    ] {
+        sqlx::query(sql).bind(address).execute(pool).await.unwrap();
+    }
 }
 
 /// A console recovery of a top-up the wallet paid is booked as a purchase, so it credits a flagged wallet
@@ -531,20 +537,7 @@ async fn a_console_recovery_of_a_paid_top_up_is_a_purchase_even_for_a_flagged_wa
         "only the paid recovery is booked, a purchase under the claim's own key"
     );
 
-    sqlx::query("DELETE FROM credits.wallet_flags WHERE address = $1")
-        .bind(&user)
-        .execute(&pool)
-        .await
-        .unwrap();
-    for sql in [
-        "DELETE FROM credits.ledger WHERE address = $1",
-        "DELETE FROM credits.purchases WHERE address = $1",
-        "DELETE FROM credits.idempotency WHERE address = $1",
-        "DELETE FROM ops.admin_audit WHERE domain = 'credits' AND target = $1",
-        "DELETE FROM credits.wallets WHERE address = $1",
-    ] {
-        sqlx::query(sql).bind(&user).execute(&pool).await.unwrap();
-    }
+    cleanup_credit_wallet(&pool, &user).await;
     cleanup(&pool, &actor).await;
 }
 

@@ -10056,17 +10056,12 @@ async fn an_operator_grant_to_a_flagged_wallet_is_refused() {
     cleanup(&pool, &linked).await;
 }
 
-/// A flag holds only free credits: a grant answers 409 and moves nothing, while a purchase (a Stripe or MANA
-/// payment, a paid top-up recovery) and a refund still credit the flagged wallet.
+/// A flag refuses free grants only: a grant answers 409 and books nothing, while a purchase (the kind a paid
+/// top-up recovery books) and a refund through the wallet's own refund path still credit the flagged wallet.
 #[tokio::test]
 async fn a_flag_refuses_only_free_grants() {
     let Some(pool) = pool().await else { return };
     let addr = scratch_wallet().address;
-    sqlx::query("INSERT INTO credits.wallet_flags (address, source) VALUES ($1, 'test')")
-        .bind(&addr)
-        .execute(&pool)
-        .await
-        .unwrap();
     let credits = Credits::new(pool.clone());
     let detail = json!({});
     let request = |kind: &'static str| GrantRequest {
@@ -10079,6 +10074,13 @@ async fn a_flag_refuses_only_free_grants() {
         detail: &detail,
         studio_name: None,
     };
+    let flag = || {
+        sqlx::query("INSERT INTO credits.wallet_flags (address, source) VALUES ($1, 'test')")
+            .bind(&addr)
+            .execute(&pool)
+    };
+
+    flag().await.unwrap();
     let err = credits
         .admin_grant_credits(request("grant"))
         .await
@@ -10087,18 +10089,36 @@ async fn a_flag_refuses_only_free_grants() {
         matches!(&err, ApiError::Conflict(m) if m.contains("flagged (test)")),
         "{err:?}"
     );
-    assert_eq!(
-        available(&pool, &addr).await,
-        "0",
-        "the refused grant moved nothing"
-    );
-    for kind in ["purchase", "refund"] {
-        credits
-            .admin_grant_credits(request(kind))
-            .await
-            .unwrap_or_else(|e| panic!("a {kind} credits a flagged wallet: {e:?}"));
-    }
-    assert_eq!(available(&pool, &addr).await, "6");
+    let booked: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM credits.wallets WHERE address = $1), \
+                (SELECT count(*) FROM credits.ledger WHERE address = $1), \
+                (SELECT count(*) FROM ops.admin_audit WHERE domain = 'credits' AND target = $1)",
+    )
+    .bind(&addr)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(booked, (0, 0, 0), "the refused grant booked nothing");
+    credits
+        .admin_grant_credits(request("purchase"))
+        .await
+        .unwrap_or_else(|e| panic!("a purchase credits a flagged wallet: {e:?}"));
+    assert_eq!(available(&pool, &addr).await, "3");
+    cleanup(&pool, &addr).await;
+
+    // A refund runs through `Credits::refund`, on a spend made before the flag.
+    seed_wallet(&pool, &addr, "0", "10").await;
+    credits
+        .spend(&addr, "4", "test:flagged-refund", None)
+        .await
+        .unwrap();
+    flag().await.unwrap();
+    let refund = credits
+        .refund(&addr, "4", "test:flagged-refund", None)
+        .await
+        .unwrap_or_else(|e| panic!("a refund credits a flagged wallet: {e:?}"));
+    assert_eq!(refund.applied.parse::<f64>().unwrap(), 4.0);
+    assert_eq!(available(&pool, &addr).await, "10");
     cleanup(&pool, &addr).await;
 }
 

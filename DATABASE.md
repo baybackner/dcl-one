@@ -1542,7 +1542,7 @@ address, folded into the captcha claim and the balance reports as
 `is_blocked_for_claiming`; the spend and the reservation read the operator's
 block alone, so a flag never holds credits a wallet has), the operator grant
 on the bearer route and the console (its `source` by address in the grant's
-transaction: the flag holds free credits only, so a grant answers 409 until
+transaction: the flag refuses free grants only, so a grant answers 409 until
 the unflag; purchases are unaffected, including a verified top-up recovery
 under `mana-topup:<txHash>`, and so are refunds) and the admin list
 (`GET /credits/admin/flags`, by address or paged by `flagged_at`). Rows are

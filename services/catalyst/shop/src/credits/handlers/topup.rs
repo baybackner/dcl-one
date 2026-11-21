@@ -15,7 +15,7 @@
 //! the operator's amount, not one derived from the transfer value (no rate is
 //! recorded for the transfers it exists for), and is not refused under
 //! `CREDITS_TRIAL_MODE`. It is a paid credit, so a `credits.wallet_flags` flag,
-//! which holds only free grants, does not refuse it.
+//! which refuses free grants only, does not refuse it.
 
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};

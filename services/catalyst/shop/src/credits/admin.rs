@@ -7,6 +7,10 @@
 //! the `{ok:false,error,message}` envelope with the two old messages. The
 //! actor an audit row records is server-chosen (`token:<VARIABLE>`), never a
 //! client-supplied header.
+//!
+//! Also the input validators every operator route shares, and
+//! [`operator_grant_key`], which books a recovered top-up key through the
+//! claim's own checks (`handlers::topup`).
 
 use axum::extract::FromRequestParts;
 use axum::http::HeaderMap;
@@ -16,6 +20,7 @@ use serde_json::{Value, json};
 
 use super::SharedState;
 use super::errors::ApiError;
+use super::handlers::topup::{recovered_topup_key, verify_recovered_topup};
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_CREDITS_ADMIN_TOKEN";
 
@@ -101,7 +106,6 @@ pub async fn operator_grant_key(
     key: Option<String>,
     address: &str,
 ) -> Result<(Option<String>, &'static str), ApiError> {
-    use super::handlers::topup::{recovered_topup_key, verify_recovered_topup};
     let Some(recovered) = key.as_deref().and_then(recovered_topup_key) else {
         return Ok((key, "grant"));
     };
