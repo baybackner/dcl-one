@@ -9,6 +9,17 @@ DO $missing$ DECLARE n bigint; BEGIN
     'builder-server/item_content: % content hashes are not in dcl_migration.blob_inventory; copy the blobs first', n;
   ELSE NULL; END IF; END $missing$;
 
+DO $oversized$ DECLARE n bigint; BEGIN
+  SELECT count(DISTINCT b.object_key) INTO n
+    FROM dcl_migration.blob_inventory b
+   WHERE b.source = 'builder-server' AND b.size > 250000000
+     AND b.object_key IN (SELECT s.hash FROM stage s
+                          UNION SELECT i.video FROM builder.items i
+                           WHERE i.video IS NOT NULL AND i.id IN (SELECT item_id FROM stage));
+  IF n > 0 THEN RAISE EXCEPTION
+    'builder-server/item_content: % content hashes are over 250,000,000 bytes, the largest file the node keeps', n;
+  ELSE NULL; END IF; END $oversized$;
+
 INSERT INTO builder.uploaded_contents (hash, size, uploaded_by)
 SELECT DISTINCT s.hash, b.size, lower(s.owner)
 FROM stage s

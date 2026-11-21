@@ -199,6 +199,26 @@ class ContentMigrationCases:
         with self.assertRaisesRegex(harness.migrate.MigrationError, 'not in dcl_migration.blob_inventory'):
             self.content_load(db, 'builder-server', 'item_content', [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0"])
 
+    def test_when_an_items_video_is_over_the_nodes_largest_file_it_should_stop_the_batch(self):
+        db = self.content_db('content_builder_video_size')
+        collection, _ = self.builder_rows('Video size', '2026-02-01Z')
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        item = (f"'{ITEM}', '{COLLECTION}', '{OWNER}', 'Video size', 'd', NULL, 'bafkvideo', 'wearable', 'common', NULL, "
+                f"NULL, '{{}}', NULL, NULL, NULL, NULL, NULL, false, 0, NULL, NULL, '2026-01-01Z', '2026-02-01Z'")
+        self.content_load(db, 'builder-server', 'item', [item])
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary'),"
+                     "('builder-server', 'bafkvideo', 'bafkvideo', 250000001, 'video/mp4');\n")
+        rows = [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0", f"'{ITEM}', 'video.mp4', 'bafkvideo', '{OWNER}', 1"]
+        with self.assertRaisesRegex(harness.migrate.MigrationError, '1 content hashes are over 250,000,000 bytes'):
+            self.content_load(db, 'builder-server', 'item_content', rows)
+        self.assertEqual(self.sql(db, "SELECT count(*) FROM builder.uploaded_contents;\n").strip(), '0')
+        self.sql(db, "UPDATE dcl_migration.blob_inventory SET size = 250000000 WHERE object_key = 'bafkvideo';\n")
+        self.content_load(db, 'builder-server', 'item_content', rows)
+        self.assertEqual(self.sql(db, "SELECT string_agg(hash || ' ' || size, ',' ORDER BY hash) "
+                                      "FROM builder.uploaded_contents;\n").strip(),
+                         'bafkamodel 5,bafkvideo 250000000')
+
     def test_when_the_item_documents_release_has_not_run_it_should_refuse_to_import_items(self):
         db = self.content_db('content_builder_before_release')
         collection, item = self.builder_rows('Early', '2026-02-01Z')

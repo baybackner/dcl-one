@@ -37,6 +37,26 @@ The builder answers items as `github.com/decentraland/builder-server` at
   content hash its item names. The node reads the body within its bounds,
   hashes each file, refuses a file whose bytes don't match the hash or whose
   item doesn't name it, and only then stores it.
+- **A video streams to the store.** `POST /v1/items/{id}/videos` takes a
+  smart wearable's preview video, one file part named `video.mp4`, of up to
+  250,000,000 bytes. The node decides access, checks that the item names a
+  video and takes one of eight places for uploads in flight, at most two for
+  each wallet and two for each source address, before it reads a byte of
+  the body; it never waits for a place, and a refused one answers 429 with
+  `Retry-After` at once, so two wallets can't hold every place.
+  The body then streams into one spool file beside the blob store, hashed as
+  it arrives, holding no database connection or row lock. The multipart
+  parser may hold at most 64 KiB beyond the bytes it has handed on, the
+  whole body must arrive within 20 minutes (about 1.7 Mbit/s for the
+  largest video), 30 seconds without a byte ends the upload, and the node
+  stops reading the moment a bound is passed. The video must be an MP4 container (an `ftyp`
+  box first, a `moov` box, boxes that end where the file does), whatever
+  its part's name or content type says. Only then, in one transaction with
+  the item locked, the node decides access again, checks that the item
+  still names the hash at `video.mp4`, stores the file and records the
+  upload; that store runs in a task of its own, so a client that leaves
+  can't cut it short. A refused or abandoned upload leaves no spool file,
+  and a spool file a crash left is removed once an hour old.
 - **Naming grants nothing.** An item may name any hash. What proves a wallet
   holds a file is its own upload record (`builder.uploaded_contents`, one row
   per hash and uploader), never a name in an item.
@@ -134,7 +154,15 @@ The builder answers items as `github.com/decentraland/builder-server` at
   import refuses to load, so no document loses its order; reads keep
   working.
 - A client must save an item before uploading its files and must send each
-  file under its hash, as the old builder web does.
+  file under its hash, and its video as the file `video.mp4`, as the
+  `/create` dApp does.
+- The gateway passes a video's body to the node as it arrives, so a caller
+  the node refuses never makes the gateway store a body first. What an
+  admitted upload can cost is bounded: 250 MB of spool and of store for
+  each upload, eight at a time, two for each wallet and two for each source
+  address, so filling every place takes four wallets on four addresses; a
+  stalled sender gives its place back within 30 seconds. A replaced video's
+  bytes become collectable once no item names them.
 
 ## Alternatives considered
 

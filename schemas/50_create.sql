@@ -195,7 +195,7 @@ CREATE TABLE builder.uploaded_contents (
     uploaded_by text NOT NULL,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     CONSTRAINT uploaded_contents_pkey PRIMARY KEY (hash, uploaded_by),
-    CONSTRAINT uploaded_contents_size_check CHECK (size >= 0 AND size <= 20971520),
+    CONSTRAINT uploaded_contents_size_check CHECK (size >= 0 AND size <= 250000000),
     CONSTRAINT uploaded_contents_uploaded_by_lowercase_check CHECK (uploaded_by = lower(uploaded_by))
 );
 

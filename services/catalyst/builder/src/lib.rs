@@ -11,7 +11,8 @@
 //!
 //! What it reuses: the ONE pool; the ONE `http::Outbound` client for the
 //! Polygon RPC and the newsletter forward; the ONE blob store (`storage`)
-//! for uploaded item files, by hash, which it serves itself (who
+//! for uploaded item files, by hash (an item's video streams there,
+//! [`items::video`]), which it serves itself (who
 //! may read a file is [`access::read_file`]); signed
 //! fetch through `src/auth` and the shared verifier the explore and social
 //! routes use (`shared::signed_fetch`, [`auth`]); the marketplace subgraph
@@ -349,6 +350,8 @@ pub struct State {
     pub content_sync: Arc<crate::content::SyncStatus>,
     /// The wearable validator's calls per source address.
     pub validator_calls: crate::shared::limits::RateLimiter,
+    /// The item video uploads' bounds and those in flight.
+    pub videos: items::video::Videos,
 }
 
 pub type SharedState = Arc<State>;
@@ -387,6 +390,7 @@ impl State {
             notices,
             content_sync: Arc::default(),
             validator_calls: validator::calls_limiter(),
+            videos: items::video::Videos::default(),
         })
     }
 
@@ -411,6 +415,11 @@ fn api_routes() -> Router<SharedState> {
         .route(
             "/v1/items/{id}/files",
             post(handlers::drafts::post_item_files).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/v1/items/{id}/videos",
+            post(handlers::drafts::post_item_videos)
+                .layer(DefaultBodyLimit::max(items::video::BODY_LIMIT)),
         )
         .route(
             "/v1/collections/{id}/publication",

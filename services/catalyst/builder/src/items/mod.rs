@@ -1,7 +1,7 @@
 //! Items as builder-server answers them, and the draft store handle
 //! ([`ItemsComponent`]: the ONE pool plus the ONE blob store for uploaded
 //! item files): the body ([`body`]), the save's schema ([`schema`]), the
-//! save, delete and upload ([`save`], [`upload`]), the listings
+//! save, delete and uploads ([`save`], [`upload`], [`video`]), the listings
 //! ([`listing`]), third-party item URNs ([`urn`]), the content hash a
 //! published item's body carries ([`hash`]) and a minted item's public facts
 //! by contract ([`minted`]). Also the collection projection
@@ -20,6 +20,7 @@ pub mod save;
 pub mod schema;
 pub mod upload;
 pub mod urn;
+pub mod video;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

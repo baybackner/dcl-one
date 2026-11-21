@@ -365,6 +365,9 @@ async fn copy_row(pool: &PgPool, contract: &str, creator: Caller, approved: bool
 /// The bytes of the one file every matrix item names, as `model.glb`.
 const MATRIX_FILE: &[u8] = b"matrix model";
 
+/// The MP4 every matrix item names as its video, `video.mp4`.
+const MATRIX_VIDEO: &[u8] = b"\0\0\0\x10ftypisom\0\0\x02\0\0\0\0\x08moov";
+
 /// A client-shaped `PUT /v1/items/:id` body for the matrix item `id`.
 fn item_json(id: &str, collection: Option<Uuid>, urn: Option<String>) -> Value {
     let mut item = json!({
@@ -421,6 +424,15 @@ async fn insert_item(
     )
     .bind(id)
     .bind(dcl_auth::hash_bytes_v1(MATRIX_FILE))
+    .bind(Owner.address())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO builder.item_contents (item_id, file, hash, named_by, position) VALUES ($1, 'video.mp4', $2, $3, 1)",
+    )
+    .bind(id)
+    .bind(dcl_auth::hash_bytes_v1(MATRIX_VIDEO))
     .bind(Owner.address())
     .execute(pool)
     .await
@@ -534,6 +546,7 @@ enum Payload {
     None,
     Json(Value),
     Upload,
+    Video,
 }
 
 const BOUNDARY: &str = "matrix-boundary";
@@ -597,6 +610,20 @@ async fn call(
             )
             .into_bytes()
         }
+        Payload::Video => {
+            request = request.header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            );
+            let mut body = format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"video.mp4\"; filename=\"video.mp4\"\r\n\
+                 Content-Type: video/mp4\r\n\r\n"
+            )
+            .into_bytes();
+            body.extend_from_slice(MATRIX_VIDEO);
+            body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+            body
+        }
     };
     if caller == Validator {
         let now = Utc::now().timestamp_millis().to_string();
@@ -636,6 +663,7 @@ enum Op {
     SaveItem,
     DeleteItem,
     UploadFiles,
+    UploadVideo,
     ListCollections,
     ListItems,
     AddressCollections,
@@ -764,6 +792,7 @@ impl Op {
             ("PUT", "/v1/items/{id}") => Op::SaveItem,
             ("DELETE", "/v1/items/{id}") => Op::DeleteItem,
             ("POST", "/v1/items/{id}/files") => Op::UploadFiles,
+            ("POST", "/v1/items/{id}/videos") => Op::UploadVideo,
             ("GET", "/v1/collections") => Op::ListCollections,
             ("GET", "/v1/items") => Op::ListItems,
             ("GET", "/v1/{address}/collections") => Op::AddressCollections,
@@ -889,6 +918,7 @@ impl Op {
                 | Op::SaveItem
                 | Op::DeleteItem
                 | Op::UploadFiles
+                | Op::UploadVideo
                 | Op::CollectionCuration
                 | Op::CollectionItemCurations
                 | Op::CollectionCurationUpdate
@@ -927,6 +957,7 @@ impl Op {
                 | Op::SaveItem
                 | Op::DeleteItem
                 | Op::UploadFiles
+                | Op::UploadVideo
                 | Op::PublicationBegin
                 | Op::PublicationTransaction
                 | Op::PublicationCancel
@@ -965,6 +996,7 @@ impl Op {
                 | Op::SaveItem
                 | Op::DeleteItem
                 | Op::UploadFiles
+                | Op::UploadVideo
                 | Op::ItemCuration
                 | Op::ItemCurationUpdate
                 | Op::ItemCurationRequest
@@ -1080,6 +1112,11 @@ impl Op {
                 "POST",
                 format!("/v1/items/{}/files", f.item_id(kind)),
                 Payload::Upload,
+            ),
+            Op::UploadVideo => (
+                "POST",
+                format!("/v1/items/{}/videos", f.item_id(kind)),
+                Payload::Video,
             ),
             Op::ListCollections => ("GET", "/v1/collections".into(), Payload::None),
             Op::ListItems => ("GET", "/v1/items".into(), Payload::None),
@@ -1415,7 +1452,7 @@ impl Op {
                 Publishing | Locked => item_locked("deleted"),
                 _ => ok(),
             },
-            Op::UploadFiles => match kind {
+            Op::UploadFiles | Op::UploadVideo => match kind {
                 Missing => not_found(&item, "items"),
                 Malformed => invalid_uuid(&item),
                 Orphan if caller == Owner => ok(),

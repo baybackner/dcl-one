@@ -14,6 +14,7 @@ mod curations;
 mod draft_persistence;
 mod forum;
 mod item_files;
+mod item_videos;
 mod items;
 mod lifecycle;
 mod publication_preparation;

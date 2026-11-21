@@ -1727,6 +1727,7 @@ dependencies = [
  "chrono",
  "dcl-auth",
  "dcl-http",
+ "futures",
  "hex",
  "reqwest 0.13.5",
  "serde",

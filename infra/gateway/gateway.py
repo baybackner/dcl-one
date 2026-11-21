@@ -31,6 +31,7 @@ CAST_PRESENTATION_CAP = "101m"
 CAMERA_REEL_UPLOAD_CAP = "7m"
 # The root alias whose upload path takes CAMERA_REEL_UPLOAD_CAP.
 CAMERA_REEL_ALIAS = "^~ /camera-reel/"
+BUILDER_VIDEO_CAP = "240m"
 # The content server's `POST /entities` route limit at the default field
 # count (`max_deployment_body_bytes`: 200 MiB of files and fields plus
 # multipart framing), rounded up, so its own 413 is the one a client meets.
@@ -365,6 +366,9 @@ def render(table, cfg, mime):
         f"limit_conn badge_asset_uploads {DEPLOY_CONNECTIONS_PER_ADDRESS};"))
     locations += location("~ ^(/builder-api)?/v1/items/[^/]+/files/*$",
                           proxy("apis", "client_max_body_size 21m;"))
+    locations += location("~ ^(/builder-api)?/v1/items/[^/]+/videos/*$", proxy("apis",
+        f"client_max_body_size {BUILDER_VIDEO_CAP}; proxy_request_buffering off; client_body_timeout 30s; "
+        f"proxy_send_timeout 30s; {uploads}"))
     locations += location('~ "^/explorer/0x[0-9a-fA-F]{40}/(wearables|emotes)$"', proxy("apis"))
     # Keep the Sites .data regex after every API regex.
     locations += location(r"~ \.data$", proxy("sites"))

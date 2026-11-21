@@ -29,6 +29,7 @@ reqwest.workspace = true
 url.workspace = true
 alloy-sol-types.workspace = true
 ts-rs = { workspace = true, optional = true }
+futures.workspace = true
 
 [features]
 ts = ["dep:ts-rs", "catalyst-shared/ts", "catalyst-storage/ts", "catalyst-chain-index/ts", "catalyst-content/ts"]

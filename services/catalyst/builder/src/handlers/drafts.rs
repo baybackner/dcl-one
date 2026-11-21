@@ -11,7 +11,7 @@ use crate::collections::{lifecycle, save};
 use crate::drafts::CollectionListingOut;
 use crate::http::{ApiData, ApiError};
 use crate::items::body::FullItemOut;
-use crate::items::{save as item_save, schema, upload};
+use crate::items::{save as item_save, schema, upload, video};
 use crate::publication::PublicationPreparation;
 
 /// Local drafts use the verified signer; upstream global lists belong to the committee.
@@ -132,6 +132,42 @@ pub async fn post_item_files(
     let files = upload::read(multipart).await?;
     state.items.save_item_files(&change, files).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `POST /v1/items/:id/videos` (`uploadItemFiles` with the video bound):
+/// access, the item's video name and a place among the uploads in flight are
+/// settled before the body is read ([`video`]); a refused place answers 429
+/// with `Retry-After` at once. The store and its record run
+/// in a task of their own, so a client that leaves can't cut them short.
+pub async fn post_item_videos(
+    State(state): State<SharedState>,
+    Signed(signer): Signed,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    use crate::shared::client_ip::{client_ip, source_key};
+    use axum::response::IntoResponse;
+    let change = access::change_item(&state, &signer, &id).await?;
+    state.items.require_documents_release().await?;
+    if !state.items.names_video(change.id()).await? {
+        return Err(ApiError::bad_request("The item names no video"));
+    }
+    let source = source_key(&client_ip(request.headers()));
+    let admission = match state.videos.admit(signer.as_str(), &source) {
+        Ok(admission) => admission,
+        Err(busy) => return Ok(busy),
+    };
+    let root = video::spool_root(&state.items.blobs);
+    state.videos.sweep_once(&root).await;
+    let received = video::receive(&state.videos, &root, request).await?;
+    let stored = state.clone();
+    tokio::spawn(async move {
+        let _admission = admission;
+        stored.items.save_item_video(&change, received).await
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+    Ok(Json(serde_json::json!({ "ok": true })).into_response())
 }
 
 pub async fn get_publication(

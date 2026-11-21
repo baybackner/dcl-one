@@ -548,6 +548,24 @@ const VALIDATION_CASES = [
   { name: '482-validation-result', description: 'POST /collections/{id}/validation-result signed by the validator, a result of its collection while no review flow records starts', method: 'POST', path: validationResultOf('302'), body: validationResult(id('302')), validator: {} }
 ]
 
+const ITEM_VIDEO_TEXT = '\u0000\u0000\u0000\u0018ftypisom\u0000\u0000\u0002\u0000isomconf\u0000\u0000\u0000\u0008moov\u0000\u0000\u0000\u0019mdatconformance video'
+const ITEM_VIDEO = 'bafkreibozaxi4ubbxpjzszp4w2t73gmtb23um46nykraewnxacb2wuzoki'
+const ITEM_OTHER_VIDEO_TEXT = '\u0000\u0000\u0000\u0018ftypisom\u0000\u0000\u0002\u0000isomconf\u0000\u0000\u0000\u0008moov\u0000\u0000\u0000\u001fmdatconformance other video'
+const videoPart = (text, name = 'video.mp4') => [{ name, filename: 'video.mp4', type: 'video/mp4', text }]
+const videosOf = suffix => `/v1/items/${id(suffix)}/videos`
+
+const VIDEO_CASES = [
+  { name: '483-item-create-smart-wearable', description: 'PUT /items/{id} signed by the owner, creating an item with no collection that names its preview video as video.mp4', method: 'PUT', path: `/v1/items/${id('3fa')}`, signer: 'owner', body: itemBody({ id: id('3fa'), name: 'Smart hat', contents: { 'model.glb': ITEM_DRAFT_MODEL, 'thumbnail.png': ITEM_THUMBNAIL, 'video.mp4': ITEM_VIDEO }, video: ITEM_VIDEO }), volatile: SAVED },
+  { name: '484-item-videos-owner', description: 'POST /items/{id}/videos signed by the owner, uploading the MP4 its item names as video.mp4 under that field', method: 'POST', path: videosOf('3fa'), signer: 'owner', multipart: videoPart(ITEM_VIDEO_TEXT) },
+  { name: '485-item-videos-stranger', description: 'POST /items/{id}/videos signed by a wallet with no role on the item', method: 'POST', path: videosOf('3fa'), signer: 'stranger', multipart: videoPart(ITEM_VIDEO_TEXT) },
+  { name: '486-item-videos-committee', description: 'POST /items/{id}/videos signed by a committee member', method: 'POST', path: videosOf('3fa'), signer: 'committee', multipart: videoPart(ITEM_VIDEO_TEXT) },
+  { name: '487-item-videos-unsigned', description: 'POST /items/{id}/videos without a signature', method: 'POST', path: videosOf('3fa'), multipart: videoPart(ITEM_VIDEO_TEXT) },
+  { name: '488-item-videos-unknown', description: 'POST /items/{id}/videos of an id no item has', method: 'POST', path: videosOf('3ff'), signer: 'owner', multipart: videoPart(ITEM_VIDEO_TEXT) },
+  { name: '489-item-videos-not-mp4', description: 'POST /items/{id}/videos signed by the owner, a web page sent as video.mp4', method: 'POST', path: videosOf('3fa'), signer: 'owner', multipart: videoPart('<!DOCTYPE html><title>conformance</title>') },
+  { name: '490-item-videos-field-by-hash', description: 'POST /items/{id}/videos signed by the owner, the video the item names sent under its hash as the field name', method: 'POST', path: videosOf('3fa'), signer: 'owner', multipart: videoPart(ITEM_VIDEO_TEXT, ITEM_VIDEO) },
+  { name: '491-item-videos-not-named', description: 'POST /items/{id}/videos signed by the owner, an MP4 the item doesn\'t name', method: 'POST', path: videosOf('3fa'), signer: 'owner', multipart: videoPart(ITEM_OTHER_VIDEO_TEXT) }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2454,7 +2472,8 @@ const CASES = [
   ...CURATION_ROUTE_CASES,
   ...FORUM_CASES,
   ...THIRD_PARTY_PUBLISH_CASES,
-  ...VALIDATION_CASES
+  ...VALIDATION_CASES,
+  ...VIDEO_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */

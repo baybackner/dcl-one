@@ -1280,6 +1280,9 @@ Tables and what they hold:
 - `builder.uploaded_contents`: one row per hash and uploader, the record that
   this wallet sent the bytes and the node stored them in the ONE blob store.
   An upload stores only a hash its item names, verified against the bytes.
+  `size` is at most 250,000,000 bytes, the largest item video
+  (`uploaded_contents_size_check`; step `0064_builder_uploaded_video_size`
+  sets it on an applied database).
 
 Workload, at about 116,000 items, 51,700 collections and 420,000 content rows
 (the reference data; measured on a scratch copy):
@@ -1313,12 +1316,15 @@ Invariants:
   nothing written. The builder never writes these tables.
 - Bounds. A collection's or an address's items answer at most 20,000 rows
   per response, `GET /v1/items` 1,000; an upload carries at most 256 parts,
-  empty ones included, and 20 MiB in all. Filters are bound values over fixed SQL.
+  empty ones included, and 20 MiB in all; a video upload one part of at most
+  250,000,000 bytes. Filters are bound values over fixed SQL.
 - Pages first. A listing resolves the page's ids and the total, then reads
   the bodies of that page only, in a read-only transaction without JIT.
 - One transaction per write. A save, a delete and an upload lock the item's
   collections and the item (`FOR UPDATE`, collections first, as the
-  publications do) and decide again inside the transaction. A third-party
+  publications do) and decide again inside the transaction. A video upload
+  holds no connection while its body streams to a spool file; its
+  transaction starts once the body has arrived. A third-party
   save also takes an advisory lock on its URN's item part, so two saves never
   take the same item part in the provider's collections.
 - Upload records follow the names. When a save or a delete leaves a hash no

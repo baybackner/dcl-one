@@ -118,7 +118,9 @@ blob inventory either. What an imported name and record let a wallet read is the
 routes' decision, the same as for a save and an upload on the node. The blob copy (out of
 scope) must record each hash in `dcl_migration.blob_inventory (source,
 object_key, hash, size)` with `source = 'builder-server'` and
-`object_key = hash`; `item_content` stops the batch on any missing hash.
+`object_key = hash`; `item_content` stops the batch on any missing hash, and on any
+hash whose inventory size is over 250,000,000 bytes, the largest file the node keeps
+(`builder.uploaded_contents.size`; an item's video up to that size, any other file too).
 
 ## Not migrated
 

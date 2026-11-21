@@ -52,7 +52,8 @@
         "source/356-curations-unsigned.json",
         "source/441-curation-post-unsigned.json",
         "source/431-collection-post-unsigned.json",
-        "source/470-collection-approval-data-unsigned.json"
+        "source/470-collection-approval-data-unsigned.json",
+        "source/487-item-videos-unsigned.json"
       ],
       "anchors": []
     },
@@ -77,7 +78,7 @@
       "anchors": []
     },
     "access-checks-never-write": {
-      "text": "DELETE /v1/items/:id, POST /v1/items/:id/files, POST /v1/collections/:id/lock, POST /v1/collections/:id/tos and DELETE /v1/collections/:id: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
+      "text": "DELETE /v1/items/:id, POST /v1/items/:id/files, POST /v1/items/:id/videos, POST /v1/collections/:id/lock, POST /v1/collections/:id/tos and DELETE /v1/collections/:id: the node's access check changes no row. Upstream's can set a collection's stored eth_address, and its items', to the chain creator when they differ, so a later read of those rows names the creator.",
       "captures": [],
       "anchors": []
     },
@@ -429,6 +430,30 @@
     },
     "validator-call-bounds": {
       "text": "The validator's three routes take at most 60 calls a minute per source address (429 {ok:false, data:{}, error:'Too many requests, try again in a minute'}), a claim or lease body of at most 4 KiB and a result body of at most 5 MiB (413). A result's request must belong to the path's collection and name every item the result names (400), its validationId must be a UUID, and nothing of it is stored but its outcome.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-video-named-part": {
+      "text": "POST /v1/items/:id/videos: the node takes one file part, under the field video.mp4, and stores it only when its bytes hash to the hash the item names at video.mp4, which it checks again in the transaction that stores it; it refuses any other form with 400 before it stores anything: another field name, a part that isn't a file, a second part, no part, or bytes the item doesn't name. Upstream stores every file part under the hash it computes, whatever the field name, and ties no file to the item. The /create dApp saves the item first and sends its video as video.mp4.",
+      "captures": [
+        "source/490-item-videos-field-by-hash.json",
+        "source/491-item-videos-not-named.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "item-video-container": {
+      "text": "POST /v1/items/:id/videos: the node walks the video's top-level MP4 boxes as they arrive and refuses with 400 The video is not an MP4 file, storing nothing, a file that doesn't begin with an ftyp box, has no moov box, or whose boxes don't end where the file does. Upstream stores any bytes under the content type the client sends; the node serves a stored file under the type its bytes show.",
+      "captures": [
+        "source/489-item-videos-not-mp4.json"
+      ],
+      "anchors": [
+        "status: fixture=200 candidate=400"
+      ]
+    },
+    "item-video-bounds": {
+      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while eight are in flight, while the same wallet has two or while the same source address has two; while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 when the body hasn't arrived 20 minutes after the upload was admitted or no byte came for 30 seconds. Upstream bounds none of these. The node's gateway takes bodies of up to 240 MiB on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
       "captures": [],
       "anchors": []
     }
@@ -1096,6 +1121,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/472-item-save-third-party-urn-deployed.json",
           "scope": "The provider's manager creates a third-party item under a URN the catalyst holds an entity at.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/483-item-create-smart-wearable.json",
+          "scope": "PUT /items/{id} signed by the owner, creating an item with no collection that names its preview video as video.mp4.",
+          "replay": []
         }
       ],
       "gaps": [
@@ -1278,11 +1308,99 @@
     {
       "id": "api_http:POST:/v1/items/:id/videos",
       "owner": "items",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "Uploads by the owner, refusals of a stranger, the committee, an unsigned request and an unknown item, and a web page sent as the video, a video sent under its hash and a video the item doesn't name were compared; the node refuses those three parts.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/484-item-videos-owner.json",
+          "scope": "POST /items/{id}/videos signed by the owner, uploading the MP4 its item names as video.mp4 under that field.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/485-item-videos-stranger.json",
+          "scope": "POST /items/{id}/videos signed by a wallet with no role on the item.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/486-item-videos-committee.json",
+          "scope": "POST /items/{id}/videos signed by a committee member.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/487-item-videos-unsigned.json",
+          "scope": "POST /items/{id}/videos without a signature.",
+          "replay": [
+            "data.message value"
+          ],
+          "explained_by": {
+            "data.message value": "deliberate:unauthenticated-message"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/488-item-videos-unknown.json",
+          "scope": "POST /items/{id}/videos of an id no item has.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/489-item-videos-not-mp4.json",
+          "scope": "POST /items/{id}/videos signed by the owner, a web page sent as video.mp4.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data extra",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:item-video-container",
+            "data extra": "deliberate:item-video-container",
+            "error extra": "deliberate:item-video-container",
+            "ok value": "deliberate:item-video-container"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/490-item-videos-field-by-hash.json",
+          "scope": "POST /items/{id}/videos signed by the owner, the video the item names sent under its hash as the field name.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data extra",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:item-video-named-part",
+            "data extra": "deliberate:item-video-named-part",
+            "error extra": "deliberate:item-video-named-part",
+            "ok value": "deliberate:item-video-named-part"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/491-item-videos-not-named.json",
+          "scope": "POST /items/{id}/videos signed by the owner, an MP4 the item doesn't name.",
+          "replay": [
+            "status: fixture=200 candidate=400",
+            "data extra",
+            "error extra",
+            "ok value"
+          ],
+          "explained_by": {
+            "status: fixture=200 candidate=400": "deliberate:item-video-named-part",
+            "data extra": "deliberate:item-video-named-part",
+            "error extra": "deliberate:item-video-named-part",
+            "ok value": "deliberate:item-video-named-part"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:item-video-named-part",
+        "deliberate:item-video-container",
+        "deliberate:item-video-bounds",
+        "deliberate:unauthenticated-message",
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:chain-copy-lag",
+        "deliberate:access-checks-never-write",
+        "deliberate:managers-from-chain-only"
+      ],
+      "remaining_verification": "Uploads by an on-chain manager and a registry manager, and the bounds, which no capture holds (a body over 250 MB)."
     },
     {
       "id": "api_http:GET:/v1/items/:collectionAddress/:itemId/contents",
