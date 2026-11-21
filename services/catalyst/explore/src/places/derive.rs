@@ -699,11 +699,11 @@ const LOCK_RATINGS: &str = "SELECT id, content_rating, deployed_at FROM explore.
 /// parcel at a time (`@>` on one position, behind `OFFSET 0`), so each probe
 /// uses `place_positions_path_gin`.
 const HELD_RATINGS: &str = r#"
-    SELECT f.id, false AS predecessor, m.content_rating AS rating
+    SELECT f.id, m.content_rating AS rating
     FROM unnest($1::text[]) AS f(id)
     JOIN explore.place_moderation m ON m.place_id = f.id AND m.content_rating IS NOT NULL
     UNION ALL
-    SELECT c.id, true, r.content_rating
+    SELECT c.id, r.content_rating
     FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
          AS c(id, position, creator, owner, parcel_set)
     JOIN explore.place_parcel_rating r ON r.position = c.position
@@ -711,7 +711,7 @@ const HELD_RATINGS: &str = r#"
           OR (c.creator <> '' AND r.creator_address = c.creator)
           OR (c.owner <> '' AND r.owner_address = c.owner))
     UNION ALL
-    SELECT c.id, true, COALESCE(m.content_rating, p.content_rating)
+    SELECT c.id, COALESCE(m.content_rating, p.content_rating)
     FROM unnest($3::text[], $4::text[], $5::text[]) AS c(id, position, creator)
     CROSS JOIN LATERAL (
         SELECT p.id, p.creator_address, p.content_rating, p.raw FROM explore.place p
@@ -1163,7 +1163,7 @@ async fn settle_ratings(
         .copied()
         .filter(|p| redeployed(p) || (inserted.contains_key(&p.id) && recheck.contains(&p.id)))
         .collect();
-    let mut held: HashMap<String, (Vec<String>, bool)> = HashMap::new();
+    let mut held: HashMap<String, Vec<String>> = HashMap::new();
     if !settled.is_empty() {
         let ids: Vec<String> = settled.iter().map(|p| p.id.clone()).collect();
         let positions: Vec<Value> = settled
@@ -1197,9 +1197,8 @@ async fn settle_ratings(
                 .entry(r.try_get::<String, _>("id").unwrap_or_default())
                 .or_default();
             if let Some(rating) = r.try_get::<Option<String>, _>("rating").unwrap_or(None) {
-                entry.0.push(rating);
+                entry.push(rating);
             }
-            entry.1 |= r.try_get::<bool, _>("predecessor").unwrap_or(false);
         }
     }
     let (mut ids, mut ratings) = (Vec::new(), Vec::new());
@@ -1226,7 +1225,9 @@ async fn settle_ratings(
             continue;
         }
         // The rating held, and whether a creator's change to it is reported.
-        let (mut codes, predecessor) = held.remove(&p.id).unwrap_or_default();
+        let held_to = held.remove(&p.id);
+        let is_held = held_to.is_some();
+        let mut codes = held_to.unwrap_or_default();
         let own = if fresh {
             None
         } else {
@@ -1240,7 +1241,7 @@ async fn settle_ratings(
             _ => stored.clone(),
         };
         let code = |r: &Option<String>| r.as_deref().and_then(moderation::creator_code);
-        let report = (!fresh || predecessor) && (redeployed(p) || code(&rating) != code(&own));
+        let report = (!fresh || is_held) && (redeployed(p) || code(&rating) != code(&own));
         if let (Some(base), Some(stored), Some(declared), true) =
             (notify, stored.as_deref(), declared, report)
         {
@@ -3075,6 +3076,40 @@ mod tests {
         assert_eq!(t.kinds(&p[2]).await, ["rating_downgrade_refused"]);
         assert_eq!(t.kinds(&p[4]).await, ["rating_downgrade_refused"]);
         assert_eq!(t.kinds(&p[11]).await, ["rating_downgrade_refused"]);
+    }
+
+    /// A new row held only to its own operator rating (no parcel record, no
+    /// row it replaces) reports a laxer scene rating, as any held row does.
+    #[tokio::test]
+    async fn a_new_row_held_only_by_its_own_operator_rating_reports_a_laxer_one() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let x = u16::from_str_radix(&token[..4], 16).unwrap() as i32;
+        let y = u16::from_str_radix(&token[4..8], 16).unwrap() as i32 % 30000;
+        let a = format!("{x},{y}");
+        let site = Some("https://decentraland.org/places");
+        upsert_page(&pool, Ratings::deploy("0xowner", &a, &[&a], None, 0), site)
+            .await
+            .unwrap();
+        t.rate(&a, "R", None).await;
+        t.prune(&a).await;
+        sqlx::query("DELETE FROM explore.place_parcel_rating WHERE position = $1")
+            .bind(&a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        upsert_page(
+            &pool,
+            Ratings::deploy("0xother", &a, &[&a], Some("T"), 1),
+            site,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&a).await.as_deref(), Some("R"));
+        assert_eq!(t.kinds(&a).await, ["rating_downgrade_refused"]);
     }
 
     /// The overlap lookup of [`HELD_RATINGS`] can probe the positions index.
