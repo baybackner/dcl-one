@@ -112,6 +112,12 @@ HEADLESS_JOBS = {
     'Headless packages / build (macos-amd64, darwin-x64, macos-15, x86_64-apple-darwin)',
     'Headless packages / build (windows-amd64, win32-x64, windows-2025, x86_64-pc-windows-msvc)',
 }
+# What the browser test of the relay wake (job "Relay wake in the browser") compiles and runs with:
+# its crate, the workspace's manifests and Cargo configuration, the tools and the workflow. It is
+# not a lane: on main it follows the web lane's baseline.
+RELAY_WAKE_INPUTS = (SOURCE + 'crates/dcl_wasm/', SOURCE + 'Cargo.toml', SOURCE + 'Cargo.lock', SOURCE + '.cargo/',
+                     '.cargo/', 'apps/bevy-explorer/install-web-tools.py', 'apps/bevy-explorer/install-tools.sh',
+                     'tooling/bevy-target-cache.py', WORKFLOW, *TOOLS_INPUTS)
 # Unknown app inputs remain conservative. Only named integration boundaries narrow work.
 APP_INPUTS = {
     'README.md': (),
@@ -257,7 +263,7 @@ def ensure_commit(sha):
 
 
 def full_selection(reason):
-    return {**dict.fromkeys((*LANES, 'native-matrix', 'scenes'), True), 'reason': reason}
+    return {**dict.fromkeys((*LANES, 'native-matrix', 'scenes', 'relay-wake'), True), 'reason': reason}
 
 
 def platform_input(path):
@@ -300,7 +306,7 @@ def select(base, head):
         previous, bootstrap = {}, True
     shared_paths = set(shared) | set(previous)
     paths = changed_inputs(base, head, (*INPUTS, *(':(literal)' + path for path in sorted(shared_paths | set(HARNESS_WEB_READS)))))
-    selected = dict.fromkeys((*LANES, 'native-matrix', 'scenes'), False)
+    selected = dict.fromkeys((*LANES, 'native-matrix', 'scenes', 'relay-wake'), False)
     if bootstrap:
         selected['web'] = True
     for path in paths:
@@ -371,6 +377,8 @@ def select(base, head):
             affected = (*LANES, 'native-matrix', 'scenes')
         for lane in affected:
             selected[lane] = True
+        if path.startswith(RELAY_WAKE_INPUTS):
+            selected['relay-wake'] = True
     names = [name for name, enabled in selected.items() if enabled]
     return {**selected, 'base': base,
             'reason': 'Selected: ' + ', '.join(names) if names else 'Inputs unchanged; integrity checks only'}
@@ -390,6 +398,7 @@ def plan(event, base, head, repo):
                     selections[previous] = select(previous, head) if previous else full_selection('Missing lane baseline')
                 result[lane] = selections[previous][lane]
             result['native-matrix'] = result['test']
+            result['relay-wake'] = selections[baselines.get('web')]['relay-wake']
             result['reason'] = 'Compared each job with its latest successful main execution'
             return result
         if event not in ('pull_request', 'local'):
