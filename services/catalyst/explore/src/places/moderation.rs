@@ -345,8 +345,8 @@ const PLACE_PARCELS: &str = r#"
 "#;
 
 /// An operator's rating `$2` of the derived place `$1`, recorded on each of
-/// its parcels as an operator's, with the place, its parcel set (as
-/// `derive::parcel_set` builds it), its creator and the parcel's LAND owner
+/// its parcels as an operator's, with the place, its parcel set `$5`
+/// ([`super::parcel_set_hash`]), its creator and the parcel's LAND owner
 /// (`$3` positions, `$4` owners; an unknown owner keeps the one this place
 /// recorded) in `explore.place_parcel_rating`, which the derive pass holds a
 /// new deployment of that place, a new row on exactly its parcels, or a new
@@ -354,9 +354,7 @@ const PLACE_PARCELS: &str = r#"
 const OPERATOR_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
         (position, content_rating, place_id, parcel_set_hash, creator_address, owner_address, operator)
-    SELECT DISTINCT pos, $2, p.id,
-           (SELECT encode(sha256(convert_to(string_agg(e, ';' ORDER BY e COLLATE "C"), 'UTF8')), 'hex')
-            FROM (SELECT DISTINCT e FROM jsonb_array_elements_text(p.raw->'positions') AS e) AS s),
+    SELECT DISTINCT pos, $2, p.id, $5,
            NULLIF(lower(btrim(p.creator_address)), ''),
            NULLIF((SELECT o.owner FROM unnest($3::text[], $4::text[]) AS o(position, owner)
                    WHERE o.position = pos LIMIT 1), ''), true
@@ -527,6 +525,7 @@ pub async fn apply_with(
                 .bind(rating)
                 .bind(&parcels)
                 .bind(&owners)
+                .bind(super::parcel_set_hash(&parcels))
                 .execute(&mut *tx)
                 .await?;
         }

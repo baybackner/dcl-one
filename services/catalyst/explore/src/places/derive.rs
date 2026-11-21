@@ -1321,16 +1321,9 @@ fn creator_of(p: &DerivedPlace) -> String {
 }
 
 /// A place's whole parcel set as its parcel records keep it
-/// (`parcel_set_hash`): the hex SHA-256 of the string its distinct positions
-/// make sorted in byte order and joined by `;`
-/// (`moderation::OPERATOR_PARCEL_RATINGS` builds the same key). Two places
-/// with equal keys cover exactly the same parcels.
+/// ([`super::parcel_set_hash`]).
 fn parcel_set(p: &DerivedPlace) -> String {
-    use sha2::{Digest, Sha256};
-    let mut positions = positions_of(p);
-    positions.sort();
-    positions.dedup();
-    hex::encode(Sha256::digest(positions.join(";").as_bytes()))
+    super::parcel_set_hash(&positions_of(p))
 }
 
 /// Parcel records to write: each parcel's rating, place, creator, LAND
@@ -3110,6 +3103,20 @@ mod tests {
         .unwrap();
         assert_eq!(t.rating(&a).await.as_deref(), Some("R"));
         assert_eq!(t.kinds(&a).await, ["rating_downgrade_refused"]);
+    }
+
+    #[test]
+    fn a_parcel_set_hash_ignores_order_and_repeats() {
+        let set = |p: &[&str]| {
+            super::super::parcel_set_hash(&p.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(set(&["1,2", "-1,0", "1,2"]), set(&["-1,0", "1,2"]));
+        assert_ne!(set(&["-1,0", "1,2"]), set(&["-1,0"]));
+        // The digest of "-1,0;1,2".
+        assert_eq!(
+            set(&["1,2", "-1,0"]),
+            "97be2b158fe28859d4a4efdec7884cad93a036e2ec76eb2f34de8fac2141066d"
+        );
     }
 
     /// The overlap lookup of [`HELD_RATINGS`] can probe the positions index.
