@@ -1430,7 +1430,7 @@ async fn a_reversed_refund_of_an_uncredited_purchase_survives_a_failed_credit() 
     assert_eq!(out["action"], "unknown_credit", "{out}");
     let first = state
         .credits
-        .reinstate_iap(&id, "first", None)
+        .reinstate_iap(&id, operator_reversal("operator:first"))
         .await
         .unwrap();
     assert_eq!(first, super::iap::ReinstateOutcome::Uncredited);
@@ -1486,7 +1486,7 @@ async fn a_reversed_refund_of_an_uncredited_purchase_survives_a_failed_credit() 
     notify(&capped, c.notification("REFUND", Some(signed))).await;
     state
         .credits
-        .reinstate_iap(&id, "capped", None)
+        .reinstate_iap(&id, operator_reversal("operator:capped"))
         .await
         .unwrap();
     let (status, address, _) = row(&pool, &id).await.unwrap();
@@ -1554,6 +1554,14 @@ fn signed_field(signed: &str, field: &str) -> String {
 }
 
 /// The `notificationUUID` a signed notification carries.
+/// An operator reversal signed now.
+fn operator_reversal(uuid: &str) -> super::iap::Reverser<'_> {
+    super::iap::Reverser::Operator(super::iap::Notice {
+        uuid,
+        signed_date_ms: chrono::Utc::now().timestamp_millis(),
+    })
+}
+
 fn uuid_of(signed: &str) -> String {
     signed_field(signed, "notificationUUID")
 }
@@ -2594,7 +2602,10 @@ async fn refunds_and_reversals_lock_the_wallet_before_the_transaction_row() {
                     .await
                     .map(|_| ())
             } else {
-                credits.reinstate_iap(&id2, "r1", None).await.map(|_| ())
+                credits
+                    .reinstate_iap(&id2, operator_reversal("operator:r1"))
+                    .await
+                    .map(|_| ())
             }
         });
         until_a_lock_wait(&pool).await;
@@ -2893,7 +2904,9 @@ async fn an_operator_reversal_undoes_a_refund_and_holds_a_purchase_never_credite
     let c = chain(ChainSpec::default());
     let app = setup_with_admin(&pool, &c, open_limits());
     let reverse = |id: &str, reversal: &str| {
-        let body = json!({ "appleTransactionId": id, "reversalId": reversal });
+        let signed_date = chrono::Utc::now().timestamp_millis();
+        let body =
+            json!({ "appleTransactionId": id, "reversalId": reversal, "signedDate": signed_date });
         let app = app.clone();
         async move {
             let (status, _, out) = send(
@@ -2912,7 +2925,7 @@ async fn an_operator_reversal_undoes_a_refund_and_holds_a_purchase_never_credite
         "POST",
         "/credits/credits/iap/reversal",
         HeaderMap::new(),
-        Some(json!({ "appleTransactionId": tx_id(), "reversalId": "v-1" })),
+        Some(json!({ "appleTransactionId": tx_id(), "reversalId": "v-1", "signedDate": 1 })),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -2949,6 +2962,119 @@ async fn an_operator_reversal_undoes_a_refund_and_holds_a_purchase_never_credite
     .await;
     assert_eq!(status, StatusCode::OK, "{out}");
     assert_eq!(available(&pool, &w.address).await, "200");
+}
+
+/// Posts an operator reversal of `id` signed at `ms`.
+async fn operator_reverse(app: &Router, id: &str, reversal: &str, ms: i64) -> (StatusCode, Value) {
+    let body = json!({ "appleTransactionId": id, "reversalId": reversal, "signedDate": ms });
+    let (status, _, out) = send(
+        app,
+        "POST",
+        "/credits/credits/iap/reversal",
+        bearer(),
+        Some(body),
+    )
+    .await;
+    (status, out)
+}
+
+#[tokio::test]
+async fn a_reused_reversal_id_grants_a_later_refund_back() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let refund_at = |ms: i64| {
+        c.notification_signed_at("REFUND", Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    let (_, out) = notify(&app, refund_at(now_ms - 4_000)).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    let (status, out) = operator_reverse(&app, &id, "rev-1", now_ms - 3_000).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+    // Apple refunds it again; the operator reverses that one under the same id.
+    let (_, out) = notify(&app, refund_at(now_ms - 2_000)).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(available(&pool, &w.address).await, "0");
+    let (status, out) = operator_reverse(&app, &id, "rev-1", now_ms - 1_000).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["credits"], "100", "{out}");
+    assert_eq!(
+        (
+            row(&pool, &id).await.unwrap().0.as_str(),
+            available(&pool, &w.address).await.as_str()
+        ),
+        ("paid", "100")
+    );
+    // The operator's reversal is the latest decision: a refund needs an override.
+    let refund = json!({ "appleTransactionId": id, "refundId": "r-op", "reason": "support" });
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap/refund",
+        bearer(),
+        Some(refund),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+#[tokio::test]
+async fn an_operator_reversal_follows_apples_latest_decision() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // Apple's newer refund stands against an older reversal.
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let refund_at = |ms: i64| {
+        c.notification_signed_at("REFUND", Some(bought[0].clone()), Chain::app_data(), ms)
+    };
+    notify(&app, refund_at(now_ms - 4_000)).await;
+    let (_, out) = notify(&app, refund_at(now_ms - 2_000)).await;
+    assert_eq!(out["action"], "already_refunded", "{out}");
+    let (status, out) = operator_reverse(&app, &id, "v-old", now_ms - 3_000).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+    assert_eq!(available(&pool, &w.address).await, "0");
+    // A date ahead of the node's clock is refused.
+    let ahead = now_ms + (super::apple::NOTIFICATION_MAX_FUTURE_SECS + 60) * 1000;
+    let (status, out) = operator_reverse(&app, &id, "v-ahead", ahead).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+
+    // A purchase never credited, held by the reversal, stays held for an older revoked copy.
+    let id = tx_id();
+    let signed = c.transaction(&id, PRODUCT, Some(&w.address));
+    let (_, out) = notify(
+        &app,
+        c.notification_signed_at("REFUND", Some(signed), Chain::app_data(), now_ms - 3_000),
+    )
+    .await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let (status, out) = operator_reverse(&app, &id, "v-held", now_ms - 1_000).await;
+    assert_eq!(out["held"], true, "{status} {out}");
+    let revoked_at = |ms: i64| {
+        let mut p = super::apple::testkit::transaction_payload(&id, PRODUCT, Some(&w.address));
+        p["revocationDate"] = json!(now_ms - 3_000);
+        p["signedDate"] = json!(ms);
+        c.sign(&p)
+    };
+    let verify = "/credits/credits/iap/verify";
+    let body = json!({ "jwsRepresentation": revoked_at(now_ms - 2_000) });
+    let (_, out) = call(&app, &w, "post", verify, &[], Some(body)).await;
+    assert_eq!(out["code"], "revoked_transaction", "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "held");
+    let body = json!({ "jwsRepresentation": revoked_at(now_ms) });
+    call(&app, &w, "post", verify, &[], Some(body)).await;
+    assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
 }
 
 #[tokio::test]
@@ -3120,8 +3246,7 @@ async fn a_reversal_committed_before_its_credit_is_recorded_by_the_retry() {
         .credits
         .reinstate_iap(
             &id,
-            &uuid,
-            Some(super::iap::Notice {
+            super::iap::Reverser::Apple(super::iap::Notice {
                 uuid: &uuid,
                 signed_date_ms,
             }),

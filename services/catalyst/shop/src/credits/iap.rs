@@ -67,7 +67,10 @@
 //! the latest decision is a reversal unless the operator overrides it. A
 //! revoked transaction signed before a recorded reversal applies nothing.
 //! An operator reversal (`/admin/iap/reversals`) undoes a refund as Apple's
-//! does, for a `REFUND_REVERSED` too old to deliver.
+//! does, for a `REFUND_REVERSED` too old to deliver: it names that
+//! reversal's `signedDate`, is ordered against the recorded decision like
+//! Apple's and is recorded as the latest decision. A refund is granted back
+//! once, keyed on the refund it undoes, whichever reversal applies it.
 //!
 //! The account token is derived from the wallet address, so a purchase is
 //! credited to the wallet its token names whichever device bought it, and
@@ -234,6 +237,31 @@ pub struct Notice<'a> {
     pub uuid: &'a str,
     /// `signedDate`, in milliseconds since the epoch.
     pub signed_date_ms: i64,
+}
+
+/// Who reverses a refund. Both record the reversal as the transaction's
+/// latest decision; only Apple's notification is recorded with its effects.
+#[derive(Debug, Clone, Copy)]
+pub enum Reverser<'a> {
+    Apple(Notice<'a>),
+    /// An operator applying a `REFUND_REVERSED` too old to deliver, under
+    /// its own id and Apple's `signedDate`.
+    Operator(Notice<'a>),
+}
+
+impl<'a> Reverser<'a> {
+    fn notice(self) -> Notice<'a> {
+        match self {
+            Self::Apple(n) | Self::Operator(n) => n,
+        }
+    }
+
+    fn claimed(self) -> Option<Notice<'a>> {
+        match self {
+            Self::Apple(n) => Some(n),
+            Self::Operator(_) => None,
+        }
+    }
 }
 
 pub struct Purchase<'a> {
@@ -485,7 +513,8 @@ async fn latest_decision(
 /// Records `notice` as the transaction's latest refund decision; false when
 /// one ordered after it is recorded, so this one is stale. Decisions order by
 /// `signedDate`, then uuid bytewise; a retry of the recorded one is not stale.
-/// Without a notice (an operator refund) nothing is compared.
+/// An operator reversal passes Apple's `signedDate` under its own id; without
+/// a notice (an operator refund) nothing is compared.
 async fn record_decision(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction_id: &str,
@@ -945,21 +974,23 @@ impl Credits {
     /// be on chain), and a block it raised, that no operator or later
     /// reversal took over, is lifted (and audited) once the balance covers
     /// the live pledges. A refund of a purchase never credited becomes a
-    /// `held` row, committed before the caller credits it. Without a notice
-    /// (an operator reversal) no decision is compared or recorded.
+    /// `held` row, committed before the caller credits it. Apple's reversal
+    /// and an operator's are both ordered against, and recorded as, the
+    /// transaction's latest decision.
     pub async fn reinstate_iap(
         &self,
         transaction_id: &str,
-        refund_ref: &str,
-        notice: Option<Notice<'_>>,
+        by: Reverser<'_>,
     ) -> Result<ReinstateOutcome, ApiError> {
+        let notice = by.claimed();
+        let reversal_ref = by.notice().uuid;
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
         claim(&mut tx, notice).await?;
         let row = sqlx::query(
             "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
-                    refunded_at IS NOT NULL AS refunded, \
+                    refunded_at IS NOT NULL AS refunded, refund_ref AS reversed_ref, \
                     refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
@@ -967,8 +998,15 @@ impl Credits {
         .fetch_optional(&mut *tx)
         .await?;
         // Signed before the latest decision (a refund or reversal): it applies nothing.
-        if !record_decision(&mut tx, transaction_id, Decision::Reversal, notice).await? {
-            tracing::warn!(transaction_id = %transaction_id, refund_ref = %refund_ref, "app store refund reversal signed before the transaction's latest refund decision: not applied");
+        if !record_decision(
+            &mut tx,
+            transaction_id,
+            Decision::Reversal,
+            Some(by.notice()),
+        )
+        .await?
+        {
+            tracing::warn!(transaction_id = %transaction_id, reversal_ref = %reversal_ref, "app store refund reversal signed before the transaction's latest refund decision: not applied");
             tx.commit().await?;
             return Ok(ReinstateOutcome::Superseded);
         }
@@ -1016,6 +1054,10 @@ impl Credits {
             return Ok(ReinstateOutcome::NotRefunded);
         };
         let credits: String = row.get("revoked");
+        // One grant per refund undone, whichever reversal names it.
+        let reversed_ref: String = row
+            .get::<Option<String>, _>("reversed_ref")
+            .unwrap_or_else(|| reversal_ref.to_string());
         sqlx::query(
             "UPDATE credits.iap_transactions \
              SET status = CASE WHEN status = 'refunded' THEN 'paid' ELSE status END, revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
@@ -1026,22 +1068,28 @@ impl Credits {
         .execute(&mut *tx)
         .await?;
         if super::money::CreditAmount::parse_positive(&credits).is_ok() {
-            let key = format!("{}:reinstated:{refund_ref}", grant_key(transaction_id));
-            let detail = json!({ "source": "apple", "transactionId": transaction_id, "refundRef": refund_ref });
-            self.admin_grant_credits_in_tx(
-                &mut tx,
-                GrantRequest {
-                    address: &address,
-                    amount: &credits,
-                    kind: "refund",
-                    reason: Some("app store refund reversed"),
-                    actor: Some(IAP_ACTOR),
-                    idempotency_key: Some(&key),
-                    detail: &detail,
-                    studio_name: None,
-                },
-            )
-            .await?;
+            let key = format!("{}:reinstated:{reversed_ref}", grant_key(transaction_id));
+            let detail = json!({ "source": "apple", "transactionId": transaction_id, "refundRef": reversed_ref, "reversalRef": reversal_ref });
+            let granted = self
+                .admin_grant_credits_in_tx(
+                    &mut tx,
+                    GrantRequest {
+                        address: &address,
+                        amount: &credits,
+                        kind: "refund",
+                        reason: Some("app store refund reversed"),
+                        actor: Some(IAP_ACTOR),
+                        idempotency_key: Some(&key),
+                        detail: &detail,
+                        studio_name: None,
+                    },
+                )
+                .await?;
+            if granted.replayed {
+                return Err(ApiError::conflict(
+                    "this refund's reversal was already granted",
+                ));
+            }
         }
         // Only unclaimed rows (a claimed one may be on chain), and only while
         // the balance covers every unexpired credit the withdrawal leaves unqueued.
@@ -1076,7 +1124,8 @@ impl Credits {
                 let detail = json!({
                     "source": "apple",
                     "transactionId": transaction_id,
-                    "refundRef": refund_ref,
+                    "refundRef": reversed_ref,
+                    "reversalRef": reversal_ref,
                     "reason": "app store refund reversed",
                 });
                 Self::audit(

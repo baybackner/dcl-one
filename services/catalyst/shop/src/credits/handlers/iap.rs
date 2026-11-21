@@ -31,8 +31,10 @@
 //!   to the node's daily ceiling, not the per-wallet caps, and the refund
 //!   is refused (409) while Apple's latest decision is a reversal unless the
 //!   body sets `overrideReversal`. Operator `POST /credits/iap/reversal`
-//!   (`/admin/iap/reversals`) undoes a refund as `REFUND_REVERSED` does; a
-//!   purchase never credited becomes held, for `/admin/iap/credits`.
+//!   (`/admin/iap/reversals`) undoes a refund as `REFUND_REVERSED` does,
+//!   given that notification's `signedDate`: it is refused (409) when Apple's
+//!   latest decision is signed after it, and recorded as the latest decision
+//!   otherwise; a purchase never credited becomes held, for `/admin/iap/credits`.
 //!   Operator `GET /credits/iap/held` (`/admin/iap/held`) lists the held purchases.
 
 use axum::Json;
@@ -45,11 +47,11 @@ use serde_json::{Value as JsonValue, json};
 use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::admin::{RequireAdmin, normalize_address, paginate};
-use crate::credits::apple::{Transaction, VerifyError};
+use crate::credits::apple::{NOTIFICATION_MAX_FUTURE_SECS, Transaction, VerifyError};
 use crate::credits::errors::ApiError;
 use crate::credits::iap::{
     CapReason, Channel, CreditOutcome, HoldReason, Iap, Notice, Purchase, RefundOutcome,
-    ReinstateOutcome,
+    ReinstateOutcome, Reverser,
 };
 use crate::types::UsdCents;
 
@@ -163,7 +165,13 @@ pub async fn webhook(
         }
         "REFUND_REVERSED" => match state
             .credits
-            .reinstate_iap(&t.transaction_id, uuid, notice)
+            .reinstate_iap(
+                &t.transaction_id,
+                Reverser::Apple(Notice {
+                    uuid,
+                    signed_date_ms: notification.signed_date_ms,
+                }),
+            )
             .await?
         {
             ReinstateOutcome::Reinstated {
@@ -541,12 +549,16 @@ pub async fn admin_refund(
 pub struct AdminReversalBody {
     #[serde(rename = "appleTransactionId")]
     apple_transaction_id: String,
-    /// Names this reversal; one reversal per refund grants once.
+    /// Names this reversal.
     #[serde(rename = "reversalId")]
     reversal_id: String,
+    /// The `REFUND_REVERSED` notification's `signedDate`, in milliseconds.
+    #[serde(rename = "signedDate")]
+    signed_date: i64,
 }
 
-/// Operator reversal of a refund (a `REFUND_REVERSED` too old to deliver).
+/// Operator reversal of a refund (a `REFUND_REVERSED` too old to deliver),
+/// ordered by Apple's `signedDate` against the transaction's latest decision.
 pub async fn admin_reversal(
     _admin: RequireAdmin,
     State(state): State<SharedState>,
@@ -556,10 +568,21 @@ pub async fn admin_reversal(
     let Json(b) = body.map_err(|e| ApiError::bad_request(e.body_text()))?;
     validate_id("appleTransactionId", &b.apple_transaction_id)?;
     validate_id("reversalId", &b.reversal_id)?;
+    // A future date would make every later Apple decision stale.
+    if b.signed_date > (now() + NOTIFICATION_MAX_FUTURE_SECS) * 1000 {
+        return Err(ApiError::bad_request(
+            "signedDate is ahead of this node's clock",
+        ));
+    }
+    let uuid = format!("operator:{}", b.reversal_id);
+    let by = Reverser::Operator(Notice {
+        uuid: &uuid,
+        signed_date_ms: b.signed_date,
+    });
     let ids = json!({ "creditId": b.apple_transaction_id, "appleTransactionId": b.apple_transaction_id, "reversalId": b.reversal_id });
     match state
         .credits
-        .reinstate_iap(&b.apple_transaction_id, &b.reversal_id, None)
+        .reinstate_iap(&b.apple_transaction_id, by)
         .await?
     {
         ReinstateOutcome::Reinstated {
@@ -573,8 +596,11 @@ pub async fn admin_reversal(
             "creditId": ids["creditId"], "appleTransactionId": ids["appleTransactionId"],
             "reversalId": ids["reversalId"], "held": true,
         }))),
-        ReinstateOutcome::NotRefunded | ReinstateOutcome::Superseded => Err(ApiError::conflict(
+        ReinstateOutcome::NotRefunded => Err(ApiError::conflict(
             "no refund of this transaction to reverse",
+        )),
+        ReinstateOutcome::Superseded => Err(ApiError::conflict(
+            "Apple's latest refund decision for this transaction is signed after this reversal",
         )),
     }
 }

@@ -1568,16 +1568,17 @@ Writers are the App Store notification (`POST /credits/apple/webhook`), the
 device's `POST /credits/credits/iap/verify` and the operator's
 `POST /credits/credits/iap` (a credit), and the notification's `REFUND` and
 `REFUND_REVERSED` and the operator's `POST /credits/credits/iap/refund` and
-`POST /credits/credits/iap/reversal` (a refund and its undo). A credit takes a transaction-scoped advisory lock on
-the transaction id, then the node-wide App Store lock, reads the caps over the
-wallet's rows and the node's last 24 hours, inserts the row and grants the
-Credits in one transaction. A paid purchase it cannot credit (a cap, the
-node's ceiling, an unknown product or quantity, an account token naming no
-wallet) is upserted as `held` with its reason, unless an operator asked; a
-later delivery or an operator credit re-checks a held row and turns it `paid`
-in place (an operator credit with the held row's product and quantity only),
-keeping its account token, original transaction id and refund references;
-its `created_at` becomes the credit's time, so the 24-hour caps count it.
+`POST /credits/credits/iap/reversal` (a refund and its undo). A credit takes
+a transaction-scoped advisory lock on the transaction id, then the node-wide
+App Store lock, reads the caps over the wallet's rows and the node's last 24
+hours, inserts the row and grants the Credits in one transaction. A paid
+purchase it cannot credit (a cap, the node's ceiling, an unknown product or
+quantity, an account token naming no wallet) is upserted as `held` with its
+reason, unless an operator asked; a later delivery or an operator credit
+re-checks a held row and turns it `paid` in place (an operator credit with
+the held row's product and quantity only), keeping its account token,
+original transaction id and refund references; its `created_at` becomes the
+credit's time, so the 24-hour caps count it.
 A reversal takes the same transaction lock, then locks the wallet row before
 the transaction's row (the order of an operator block and a card reversal),
 flips the row to `refunded` (an `imported` row keeps its status and
@@ -1596,7 +1597,8 @@ credits not queued yet that pledge beyond the balance in `credits.revocations`
 whether it blocked the wallet, in one transaction. An operator's block or
 unblock, or a later reversal the balance cannot cover, clears the wallet's
 `raised_block` flags, so the block is no longer lifted by a reversal. `REFUND_REVERSED` grants
-`revoked_credits` back (a `refund` ledger row), deletes its revocations still
+`revoked_credits` back (a `refund` ledger row, idempotent per refund undone:
+key `apple-iap:<transaction id>:reinstated:<refund reference>`), deletes its revocations still
 `pending` and unclaimed (`attempts = 0`; the revocation job counts the attempt
 before it broadcasts) when `available` covers the unexpired credits that leaves
 unqueued (a claimed or sent one is final: a broadcast that failed before it
@@ -1649,10 +1651,11 @@ records nothing. A notification signed more than 7 days ago is refused with
 the node's clock answers 503, so Apple retries it. A redelivery older than
 7 days (for example from Apple's notification history after an outage) is
 therefore refused: apply it through `/admin/iap/credits`,
-`/admin/iap/refunds` or `/admin/iap/reversals` (a reversal of a purchase
-never credited leaves it held, for `/admin/iap/credits`). The credits outbox tick deletes rows whose `signed_at`
-is older than 7 days plus a day (`NOTIFICATION_RECORD_SECS`, a margin for
-clocks that differ between nodes), one bounded batch per tick
+`/admin/iap/refunds` or `/admin/iap/reversals` (with the reversal's
+`signedDate`; a reversal of a purchase never credited leaves it held, for
+`/admin/iap/credits`). The credits outbox tick deletes rows whose
+`signed_at` is older than 7 days plus a day (`NOTIFICATION_RECORD_SECS`, a
+margin for clocks that differ between nodes), one bounded batch per tick
 (`iap_notifications_signed_idx`); the table holds about eight days of
 notifications. Invariant: a uuid is recorded only with its effects.
 
@@ -1670,11 +1673,14 @@ nothing and keeps its uuid record, so a reversal delivered before the refund
 it undoes keeps that refund from charging the wallet, and a reversal of an
 earlier refund never undoes a later one. A revoked transaction (from the
 device or a purchase notification) signed before a recorded reversal applies
-nothing. Operator refunds and reversals are not signed by Apple, so they
-write nothing; an operator refund reads the table and answers 409 while the
-latest decision is a reversal, unless the request sets `overrideReversal`.
-One row per transaction that Apple refunded or reversed, kept like its
-`iap_transactions` row.
+nothing. An operator reversal carries the `signedDate` of the
+`REFUND_REVERSED` it applies (refused when ahead of the node's clock) under
+the uuid `operator:<reversalId>`, and is compared and recorded like Apple's;
+one ordered before the recorded decision answers 409. An operator refund is
+not signed by Apple, so it writes nothing; it reads the table and answers
+409 while the latest decision is a reversal, unless the request sets
+`overrideReversal`. One row per transaction that Apple refunded or
+reversed, kept like its `iap_transactions` row.
 
 The bootstrap defines the four tables; an existing database gains them from
 the object pass, so no step exists.
