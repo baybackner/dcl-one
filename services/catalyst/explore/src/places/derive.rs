@@ -760,21 +760,26 @@ async fn lock_page_parcels(
 /// overwrites a recorded rating, false only fills a parcel with none. A place
 /// with an operator rating records an operator's rating. An operator's record
 /// is replaced only by a place held to it ([`HELD_RATINGS`], which keeps it an
-/// operator's) or under a known owner other than its known one.
+/// operator's) or under a known owner other than its known one. An unknown
+/// owner keeps the owner the same place (or parcel set) recorded, as
+/// `moderation::OPERATOR_PARCEL_RATINGS` does.
 const RECORD_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
         (position, content_rating, place_id, parcel_set_hash, creator_address, owner_address, operator)
-    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id, u.parcels,
+    SELECT DISTINCT ON (u.position) u.position, u.rating, u.place_id, u.parcel_set,
            NULLIF(lower(btrim(u.creator)), ''), NULLIF(u.owner, ''),
            EXISTS (SELECT 1 FROM explore.place_moderation m
                    WHERE m.place_id = u.place_id AND m.content_rating IS NOT NULL)
     FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $6::text[], $7::text[])
-         AS u(position, rating, place_id, creator, owner, parcels)
+         AS u(position, rating, place_id, creator, owner, parcel_set)
     ORDER BY u.position
     ON CONFLICT (position) DO UPDATE
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
         parcel_set_hash = EXCLUDED.parcel_set_hash,
-        creator_address = EXCLUDED.creator_address, owner_address = EXCLUDED.owner_address,
+        creator_address = EXCLUDED.creator_address,
+        owner_address = COALESCE(EXCLUDED.owner_address,
+            CASE WHEN r.place_id = EXCLUDED.place_id OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
+                 THEN r.owner_address END),
         operator = EXCLUDED.operator OR (r.operator AND COALESCE(
             r.place_id = EXCLUDED.place_id OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
             OR r.creator_address = EXCLUDED.creator_address
@@ -786,7 +791,11 @@ const RECORD_PARCEL_RATINGS: &str = r#"
            OR (r.owner_address IS NOT NULL AND EXCLUDED.owner_address IS NOT NULL))
       AND (r.content_rating, r.place_id, r.parcel_set_hash, r.creator_address, r.owner_address)
           IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id, EXCLUDED.parcel_set_hash,
-                            EXCLUDED.creator_address, EXCLUDED.owner_address)
+                            EXCLUDED.creator_address,
+                            COALESCE(EXCLUDED.owner_address,
+                                CASE WHEN r.place_id = EXCLUDED.place_id
+                                       OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
+                                     THEN r.owner_address END))
 "#;
 
 /// Clears the parcels `$1` of a place left with no rating, so a later place
@@ -2862,6 +2871,51 @@ mod tests {
         }
         assert_eq!(t.rating(&p[2]).await.as_deref(), Some("A"));
         assert_eq!(t.rating(&p[5]).await.as_deref(), Some("R"));
+    }
+
+    /// A redeploy of the same place while the owner is unknown keeps the owner
+    /// its records know, so a later shifted place from another wallet of that
+    /// owner is still held.
+    #[tokio::test]
+    async fn a_redeploy_with_an_unknown_owner_keeps_the_known_one() {
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let t = Ratings { pool: pool.clone() };
+        let parcel = |n: i32| format!("50,{n}");
+        let site = Some("https://decentraland.org/places");
+        let (owner, wallet) = (
+            "0x00000000000000000000000000000000000000a1",
+            "0x00000000000000000000000000000000000000b2",
+        );
+        let (a, b, c) = (parcel(0), parcel(1), parcel(2));
+        let land = land_index(&pool, &[&a, &b, &c], owner).await;
+        super::upsert_page(
+            &pool,
+            Ratings::deploy(owner, &a, &[&a, &b], None, 0),
+            site,
+            Some(&land),
+        )
+        .await
+        .unwrap();
+        t.rate(&a, "R", Some(&land)).await;
+        assert_eq!(t.owner(&b).await.as_deref(), Some(owner));
+
+        upsert_page(&pool, Ratings::deploy(owner, &a, &[&a, &b], None, 1), site)
+            .await
+            .unwrap();
+        assert_eq!(t.owner(&b).await.as_deref(), Some(owner));
+
+        t.prune(&a).await;
+        super::upsert_page(
+            &pool,
+            Ratings::deploy(wallet, &c, &[&b, &c], Some("T"), 2),
+            site,
+            Some(&land),
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.rating(&c).await.as_deref(), Some("R"));
     }
 
     /// A LAND index that cannot be read leaves owners unknown: the derive page
