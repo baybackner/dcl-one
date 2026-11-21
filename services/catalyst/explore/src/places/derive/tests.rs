@@ -1744,6 +1744,31 @@ async fn held_ratings_can_use_the_positions_index() {
     );
 }
 
+/// Settling a place again never raises it past an operator's lowering: the
+/// scene's own rating applies only to a new deployment.
+#[tokio::test]
+async fn settling_a_place_again_keeps_an_operators_lower_rating() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    let t = Ratings { pool: pool.clone() };
+    let a = "80,0".to_string();
+    let site = Some("https://decentraland.org/places");
+    let owner = "0x00000000000000000000000000000000000000a1";
+    let deploy = || Ratings::deploy(owner, &a, &[&a], Some("A"), 0);
+    upsert_page(&pool, deploy(), site).await.unwrap();
+    t.rate(&a, "T", None).await;
+    assert_eq!(t.owner(&a).await, None);
+
+    let land = land_index(&pool, &[&a], owner).await;
+    super::upsert_page(&pool, deploy(), site, Some(&land))
+        .await
+        .unwrap();
+    assert_eq!(t.owner(&a).await.as_deref(), Some(owner));
+    assert_eq!(t.rating(&a).await.as_deref(), Some("T"));
+    assert!(t.kinds(&a).await.is_empty());
+}
+
 /// Renting the LAND out does not change its owner: a tenant's place on a
 /// shifted parcel set is held to the operator's rating of the lessor's.
 #[tokio::test]

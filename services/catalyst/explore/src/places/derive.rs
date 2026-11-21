@@ -1235,13 +1235,18 @@ async fn settle_ratings(
         };
         codes.extend(own.clone());
         let stored = moderation::strictest(codes.iter().map(String::as_str)).map(str::to_string);
+        // Settled again, the deployment was already applied: only a held
+        // rating moves it, never past an operator's lowering.
         let declared = p.content_rating.as_deref();
-        let rating = match declared {
+        let rating = match declared.filter(|_| redeployed(p)) {
             Some(d) if CreatorRating::of(stored.as_deref(), d).applies() => Some(d.to_string()),
             _ => stored.clone(),
         };
         let code = |r: &Option<String>| r.as_deref().and_then(moderation::creator_code);
-        let report = (!fresh || is_held) && (redeployed(p) || code(&rating) != code(&own));
+        // Settled again, only a changed rating that refused the scene's is reported.
+        let refused = declared.is_some_and(|d| !CreatorRating::of(stored.as_deref(), d).applies());
+        let report =
+            (!fresh || is_held) && (redeployed(p) || (code(&rating) != code(&own) && refused));
         if let (Some(base), Some(stored), Some(declared), true) =
             (notify, stored.as_deref(), declared, report)
         {

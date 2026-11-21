@@ -271,9 +271,10 @@ CREATE TABLE explore.place_moderation (
 -- whole parcel set (`parcel_set_hash`: the hex SHA-256 of the string its
 -- distinct positions make sorted in byte order and joined by `;`), the
 -- deployer address that created it and the parcel's LAND owner (the estate's
--- owner for a parcel in one, from the local land_authz index; NULL while that
--- index is unpublished or the parcel is unindexed, and filled by a later pass
--- over the same place once the index knows it): the derive pass writes the
+-- owner for a parcel in one, from the local land_authz index, the lessor while
+-- the Rentals contract holds it; NULL while that index is unpublished or the
+-- parcel is unindexed, and filled when a later pass settles the same place
+-- again once the index knows it): the derive pass writes the
 -- rating it settles for a new
 -- deployment or a new row over every parcel of that row (and clears the
 -- parcels of one left with no rating), and fills a missing parcel from the
@@ -285,7 +286,8 @@ CREATE TABLE explore.place_moderation (
 -- pass prunes; another creator on another owner's LAND and another parcel set
 -- starts fresh. An `operator` record is replaced or cleared only by a place
 -- held to it, or by a place on another parcel set whose known LAND owner
--- differs from the record's known one. Keyed by the parcel (`x,y`), one row per rated parcel
+-- differs from the record's known one; a place whose owner is unknown
+-- replaces no record with a known owner. Keyed by the parcel (`x,y`), one row per rated parcel
 -- the catalogue has derived; no FK to explore.place, whose rows come and go.
 -- The PK serves the pass's lookup and upsert by parcel.
 CREATE TABLE explore.place_parcel_rating (
