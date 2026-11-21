@@ -22,5 +22,6 @@ mod small_reads;
 mod third_party_matrix;
 mod third_party_publish;
 mod upstream_routes;
+mod validator;
 mod wire_contract;
 mod write_gate;

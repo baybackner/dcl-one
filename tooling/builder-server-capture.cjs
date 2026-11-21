@@ -529,6 +529,25 @@ const THIRD_PARTY_PUBLISH_CASES = [
   { name: '476-item-deployed-minted-owner', description: 'GET /items/{id} signed by the owner, a minted standard item the catalyst holds', method: 'GET', path: `/v1/items/${id('0b1')}`, signer: 'owner' }
 ]
 
+/** A wearable validator's result for collection `collection` as builder-server's schema takes it. */
+const validationResult = collection => ({
+  validationId: 'c011ec71-0000-4000-8000-0000000005a1',
+  collectionId: collection,
+  verdict: 'passed',
+  rulesVersion: '1.4.0',
+  items: [{ itemId: id('3b1'), contentHash: 'bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy', passed: true, findings: [] }]
+})
+const validationResultOf = suffix => `/v1/collections/${id(suffix)}/validation-result`
+
+const VALIDATION_CASES = [
+  { name: '477-validation-result-unsigned', description: 'POST /collections/{id}/validation-result without the validator\'s signature', method: 'POST', path: validationResultOf('302'), body: validationResult(id('302')) },
+  { name: '478-validation-result-wrong-secret', description: 'POST /collections/{id}/validation-result signed with another secret than the node\'s', method: 'POST', path: validationResultOf('302'), body: validationResult(id('302')), validator: { secret: 'wrong' } },
+  { name: '479-validation-result-stale', description: 'POST /collections/{id}/validation-result signed five minutes and a millisecond before the node\'s clock', method: 'POST', path: validationResultOf('302'), body: validationResult(id('302')), validator: { offset: -300001 } },
+  { name: '480-validation-result-another-collection', description: 'POST /collections/{id}/validation-result signed by the validator, the body naming another collection than the path', method: 'POST', path: validationResultOf('302'), body: validationResult(id('303')), validator: {} },
+  { name: '481-validation-result-invalid', description: 'POST /collections/{id}/validation-result signed by the validator, a body without its items', method: 'POST', path: validationResultOf('302'), body: { ...validationResult(id('302')), items: undefined }, validator: {} },
+  { name: '482-validation-result', description: 'POST /collections/{id}/validation-result signed by the validator, a result of its collection while no review flow records starts', method: 'POST', path: validationResultOf('302'), body: validationResult(id('302')), validator: {} }
+]
+
 const report = process.stderr.write.bind(process.stderr)
 let activeDrop
 
@@ -2434,7 +2453,8 @@ const CASES = [
   ...CURATION_CASES,
   ...CURATION_ROUTE_CASES,
   ...FORUM_CASES,
-  ...THIRD_PARTY_PUBLISH_CASES
+  ...THIRD_PARTY_PUBLISH_CASES,
+  ...VALIDATION_CASES
 ]
 
 /** Why `cases` can't run in the order of their numbers: a name without a number, or a number not above the one before. */
@@ -3024,11 +3044,97 @@ function trackNotices(notifications) {
   }
 }
 
+/** The secret the validator signs with, and one it doesn't. */
+const VALIDATOR_SECRET = 'example-validator-secret-0123456789abcdef'
+const WRONG_VALIDATOR_SECRET = 'example-wrong-secret-0123456789abcdefghij'
+const SNS_TOPIC = 'arn:aws:sns:us-east-1:000000000000:conformance'
+
+/** builder-server's validator headers for `rawBody`, signed as the case's `validator` says (another secret, a clock offset). */
+function validatorHeaders(validator, rawBody) {
+  const timestamp = String(Date.now() + (validator.offset || 0))
+  const secret = validator.secret === 'wrong' ? WRONG_VALIDATOR_SECRET : VALIDATOR_SECRET
+  const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex')
+  return { 'x-wearable-validator-signature': `sha256=${signature}`, 'x-wearable-validator-timestamp': timestamp }
+}
+
+/**
+ * The events topic's answer to upstream's SNS client (AWS query protocol): a `Publish` of a validation request on
+ * the configured topic is recorded in `queued` as its manifest without the random `validationId`; anything else is
+ * not faked.
+ */
+function snsAnswer(method, url, bytes, queued) {
+  if (method !== 'POST' || !/^\/sns\/?$/.test(url)) return undefined
+  const form = new URLSearchParams(bytes.toString('utf8'))
+  if (form.get('Action') !== 'Publish' || form.get('TopicArn') !== SNS_TOPIC) return undefined
+  const message = JSON.parse(form.get('Message'))
+  const { type, subType, key, metadata } = message
+  if (type !== 'builder' || subType !== 'collection-validation-requested' || key !== metadata?.collectionId) return undefined
+  const { validationId, ...manifest } = metadata
+  if (typeof validationId !== 'string') return undefined
+  queued.push(manifest)
+  return {
+    status: 200,
+    body: '<PublishResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><PublishResult><MessageId>c011ec71-0000-4000-8000-0000000005b1</MessageId></PublishResult><ResponseMetadata><RequestId>c011ec71-0000-4000-8000-0000000005b2</RequestId></ResponseMetadata></PublishResponse>'
+  }
+}
+
+/** What a capture records of the validation requests its case made upstream send: nothing, or `queue` in arrival order. */
+function queueRecord(manifests) {
+  return manifests.length ? { queue: manifests } : {}
+}
+
+/**
+ * Lets a capture wait for the validation requests upstream sends in the background. Each request ends in a message
+ * on the queue (`ended()` from the fake), a curators' notice that it was not requested, or no changed item to send.
+ */
+function trackValidations(AutoCurationService, notifications) {
+  const proto = AutoCurationService.prototype
+  const submissions = new Set()
+  let started = 0
+  let ended = 0
+  const end = () => { ended += 1 }
+  const submitted = proto.onChangesSubmittedInBackground
+  proto.onChangesSubmittedInBackground = function (...args) {
+    const running = submitted.apply(this, args)
+    submissions.add(running)
+    running.finally(() => submissions.delete(running)).catch(() => {})
+    return running
+  }
+  const background = proto.validateInBackground
+  proto.validateInBackground = function (...args) {
+    started += 1
+    return background.apply(this, args)
+  }
+  const changed = proto.findChangedItems
+  proto.findChangedItems = function (...args) {
+    return changed.apply(this, args).then(items => {
+      if (!items.length) end()
+      return items
+    })
+  }
+  const notRequested = notifications.validationNotRequested
+  notifications.validationNotRequested = (...args) => {
+    end()
+    return notRequested.apply(notifications, args)
+  }
+  return {
+    end,
+    settled: async () => {
+      while (submissions.size) await Promise.allSettled([...submissions])
+      for (let waited = 0; ended < started; waited += 1) {
+        if (waited > 2000) fail(`${started - ended} validation requests did not end`)
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+    }
+  }
+}
+
 function startFakes(req, unfaked, chain, forum) {
   const { parse } = req('graphql')
   const s3Objects = new Map()
   const warehoused = []
   const slacked = []
+  const queued = []
   const server = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -3043,6 +3149,16 @@ function startFakes(req, unfaked, chain, forum) {
         const answer = forumAnswer(request.method, request.url.slice('/forum'.length), request.headers, Buffer.concat(chunks), forum)
         if (!answer) unfaked.push(`forum ${request.method} ${request.url}`)
         return send(answer?.status ?? 404, answer?.body ?? { errors: ['not faked'] })
+      }
+      if (request.url.startsWith('/sns')) {
+        const answer = snsAnswer(request.method, request.url, Buffer.concat(chunks), queued)
+        if (!answer) {
+          unfaked.push(`sns ${request.method} ${request.url}`)
+          return send(400, { error: 'not faked' })
+        }
+        server.validationEnded?.()
+        response.writeHead(answer.status, { 'content-type': 'text/xml' })
+        return response.end(answer.body)
       }
       if (request.url.startsWith('/slack/')) {
         const answer = slackAnswer(request.method, request.url.slice('/slack'.length), request.headers, Buffer.concat(chunks), slacked)
@@ -3094,6 +3210,7 @@ function startFakes(req, unfaked, chain, forum) {
     })
   })
   server.slacked = slacked
+  server.queued = queued
   server.forum = forum
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)))
 }
@@ -3115,8 +3232,8 @@ function upstreamEnvironment(fakeBase, url, admins) {
     FORUM_CATEGORY,
     OPEN_SEA_URL: `${fakeBase}/opensea`,
     OPEN_SEA_API_KEY: 'example-opensea-key',
-    AWS_SNS_ARN: 'arn:aws:sns:us-east-1:000000000000:conformance',
-    WEARABLE_VALIDATOR_CALLBACK_SECRET: 'example-callback-secret',
+    AWS_SNS_ARN: SNS_TOPIC,
+    WEARABLE_VALIDATOR_CALLBACK_SECRET: VALIDATOR_SECRET,
     WAREHOUSE_URL: `${fakeBase}/warehouse`,
     WAREHOUSE_TOKEN,
     AWS_STORAGE_URL: `${fakeBase}/s3`,
@@ -3124,10 +3241,12 @@ function upstreamEnvironment(fakeBase, url, admins) {
     AWS_BUCKET_NAME: 'conformance',
     AWS_ACCESS_KEY: 'example-access-key',
     AWS_ACCESS_SECRET: 'example-access-secret',
+    AWS_ACCESS_KEY_ID: 'example-access-key',
+    AWS_SECRET_ACCESS_KEY: 'example-access-secret',
     AWS_REGION: 'us-east-1',
     BUILDER_SERVER_URL: 'https://builder-api.example.org',
     CREATORS_URL: 'https://creators.example.org',
-    FF_AUTO_CURATION: 'false',
+    FF_AUTO_CURATION: 'true',
     FF_AUTO_CURATION_REVIEW_FLOW: 'false',
     FF_COLLECTION_API_ALT: 'false',
     SLACK_BOT_TOKEN: SLACK_TOKEN,
@@ -3280,9 +3399,11 @@ function bucketNamed(value, bucket) {
 async function record(req, base, signers, volatileFields, item, bucket) {
   const query = item.query || {}
   const search = new URLSearchParams(Object.entries(query).flatMap(([key, value]) => [value].flat().map(v => [key, v]))).toString()
-  const headers = item.signer ? await signedHeaders(req, signers[item.signer], item) : { ...item.headers }
-  if (item.body !== undefined) headers['content-type'] = 'application/json'
   const sent = requestBody({ ...item, body: await withCheque(item, signers) })
+  const headers = item.signer
+    ? await signedHeaders(req, signers[item.signer], item)
+    : item.validator ? validatorHeaders(item.validator, sent.body) : { ...item.headers }
+  if (item.body !== undefined) headers['content-type'] = 'application/json'
   const response = await fetch(base + item.path + (search ? '?' + search : ''), {
     method: item.method,
     headers,
@@ -3317,7 +3438,8 @@ async function record(req, base, signers, volatileFields, item, bucket) {
     volatile_paths: item.volatile || [],
     ...(equalities.length ? { volatile_equal: equalities } : {}),
     ...(item.headers ? { auth: 'recorded' } : {}),
-    ...(item.sign ? { sign: recordedSign(item) } : {})
+    ...(item.sign ? { sign: recordedSign(item) } : {}),
+    ...(item.validator ? { validator_sign: item.validator } : {})
   }
 }
 
@@ -3342,7 +3464,10 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     process.stderr.write = () => true
     unrouteSlack = routeSlack(fakes.address().port)
     const { app } = load('server.ts')
-    const noticesSettled = trackNotices(load('Curation/notifications').curationNotifications)
+    const notifications = load('Curation/notifications').curationNotifications
+    const noticesSettled = trackNotices(notifications)
+    const validations = trackValidations(load('Curation/AutoCuration.service').AutoCurationService, notifications)
+    fakes.validationEnded = validations.end
     db = load('database').db
     await db.connect(url)
     listener = await new Promise(resolve => {
@@ -3354,13 +3479,17 @@ async function runUpstream(capture, url, seed, signers, unfaked) {
     for (const item of CASES) {
       const sent = fakes.slacked.length
       const called = fakes.forum.calls.length
+      const requested = fakes.queued.length
       const fixture = await capture.record(base, item, bucket)
+      await validations.settled()
       await noticesSettled()
       const slack = slackRecord(fakes.slacked.slice(sent))
       const forum = forumRecord(fakes.forum.calls.slice(called))
+      const queue = queueRecord(fakes.queued.slice(requested))
       refuseMarkers(item.name, slack)
       refuseMarkers(item.name, forum)
-      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack, ...forum })])
+      refuseMarkers(item.name, queue)
+      fixtures.push([`${item.name}.json`, fixtureJson({ ...fixture, ...slack, ...forum, ...queue })])
     }
     return fixtures
   } finally {
@@ -3417,4 +3546,4 @@ if (require.main === module) {
   main().then(() => process.exit(0), failed)
 }
 
-module.exports = { activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }
+module.exports = { snsAnswer, queueRecord, validatorHeaders, trackValidations, VALIDATOR_SECRET, SNS_TOPIC, activeEntities, receiptRows, chequeTypedData, withCheque, CASES, SLACK_TOKEN, SLACK_CHANNEL, slackAnswer, slackRoute, slackRecord, FORUM_KEY, FORUM_USERNAME, FORUM_CATEGORY, forumState, forumAnswer, forumRoute, forumRecord, readSeed, seedDatabase, FAKED_GRAPH_FIELDS, WAREHOUSE_TOKEN, warehouseAnswer, oracleAnswer, rarityRows, registryRows, bucketNamed, caseOrderErrors, ledgerCaptureErrors, recordedSign, requestBody, s3Answer, withScratchDatabase, finish, redact, scrubVolatile, refuseMarkers, volatileEqualities, migrate, installFailureHandlers, selected }

@@ -804,6 +804,7 @@ pub async fn serve(
             forum_api_username: config.create.forum_api_username.clone(),
             forum_category: config.create.forum_category.clone(),
             builder_server_url: config.create.builder_server_url.clone(),
+            validator_secret: config.create.wearable_validator_callback_secret.clone(),
         })
         .context("BUILDER_* / NEWSLETTER_* configuration")?,
     )
@@ -849,6 +850,17 @@ pub async fn serve(
                     builder::terms::forward_due(&builder).await?;
                     Ok(())
                 }
+            },
+        );
+    }
+    {
+        let builder = builder.clone();
+        jobs.spawn_periodic_leased(
+            "builder-validation-requests",
+            jobs::PeriodicCfg::every(Duration::from_secs(600)),
+            move |_ctx| {
+                let builder = builder.clone();
+                async move { builder::validator::sweep(&builder).await }
             },
         );
     }

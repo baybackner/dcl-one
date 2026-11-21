@@ -222,6 +222,10 @@ pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
         "builder.item_curations.content_hash",
         "the keccak-256 digest of a reviewed third-party item",
     ),
+    (
+        "builder.validation_requests.content_hashes",
+        "the entity hashes of the items a validator claim named: a record of what it judged",
+    ),
     ("shop.items.image", "a URL"),
     (
         "shop.items.content_hash",

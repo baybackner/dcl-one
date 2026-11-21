@@ -191,7 +191,7 @@ impl Config {
     /// bearers, service tokens, the console's session key): a short one is
     /// guessable or brute-forced offline, so startup refuses it. Bearers this
     /// node sends elsewhere keep their issuer's length.
-    pub const OPERATOR_SECRETS: [&'static str; 27] = [
+    pub const OPERATOR_SECRETS: [&'static str; 28] = [
         "SESSION_SECRET",
         "CATALYRST_CONTENT_ADMIN_TOKEN",
         "COMMUNITIES_ADMIN_TOKEN",
@@ -200,6 +200,7 @@ impl Config {
         "CATALYRST_BADGES_ADMIN_TOKEN",
         "CATALYRST_EVENTS_ADMIN_TOKEN",
         "CATALYRST_BUILDER_ADMIN_TOKEN",
+        "WEARABLE_VALIDATOR_CALLBACK_SECRET",
         "CATALYRST_CAMERA_REEL_ADMIN_TOKEN",
         "CAMERA_REEL_METRICS_BEARER_TOKEN",
         "CATALYRST_WORLDS_ADMIN_TOKEN",
@@ -274,7 +275,7 @@ impl Config {
         Ok(())
     }
 
-    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 84] {
+    pub(crate) fn secret_slots(&mut self) -> [(&'static str, &mut Option<String>); 85] {
         [
             ("SEGMENT_SIGNING_KEY", &mut self.social.segment_signing_key),
             ("ETH_RPC_URL", &mut self.content.eth_rpc_url),
@@ -388,6 +389,10 @@ impl Config {
             ("WAREHOUSE_URL", &mut self.create.warehouse_url),
             ("WAREHOUSE_TOKEN", &mut self.create.warehouse_token),
             ("FORUM_API_KEY", &mut self.create.forum_api_key),
+            (
+                "WEARABLE_VALIDATOR_CALLBACK_SECRET",
+                &mut self.create.wearable_validator_callback_secret,
+            ),
             (
                 "BUILDER_POLYGON_RPC_URL",
                 &mut self.create.builder_polygon_rpc_url,

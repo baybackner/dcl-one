@@ -131,7 +131,7 @@
       ]
     },
     "invalid-body-detail": {
-      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN, POST /v1/collections/:id/tos and PATCH /v1/thirdParties/:id with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; PATCH and POST /v1/collections/:id/curation and PATCH /v1/items/:id/curation answer 400 {ok:false, data, error:'Invalid schema'}. Upstream's data lists its JSON schema validator's errors, the node's is {}.",
+      "text": "PUT /v1/collections/:id, PUT /v1/items/:idOrURN, POST /v1/collections/:id/tos and PATCH /v1/thirdParties/:id and POST /v1/collections/:id/validation-result with a body the schema refuses: each answers 400 {ok:false, data, error:'Invalid request body'}; PATCH and POST /v1/collections/:id/curation and PATCH /v1/items/:id/curation answer 400 {ok:false, data, error:'Invalid schema'}. Upstream's data lists its JSON schema validator's errors, the node's is {}.",
       "captures": [
         "source/16-collection-invalid-body.json",
         "source/206-item-save-invalid-name.json",
@@ -140,7 +140,8 @@
         "source/390-collection-curation-request-long-note.json",
         "source/402-collection-curation-update-unknown-status.json",
         "source/413-collection-curation-reject-long-message.json",
-        "source/414-collection-curation-reject-unknown-reason.json"
+        "source/414-collection-curation-reject-unknown-reason.json",
+        "source/481-validation-result-invalid.json"
       ],
       "anchors": []
     },
@@ -391,6 +392,44 @@
         "source/474-item-deployed-curated-manager.json",
         "source/475-collection-items-deployed-stranger.json"
       ],
+      "anchors": []
+    },
+    "validator-pull": {
+      "text": "A standard collection's first publication, unapproved on chain, and a creator's changes submission on a published standard collection request its automated review. Upstream publishes the validation manifest to its events topic in the background, after answering. The node records a validation request (its item ids) in the transaction that publishes or submits, and the wearable validator pulls it: POST /v1/validator/claims answers the oldest claimable request's manifest, built from the items as saved when claimed, with a claimId and a 30-minute lease; POST /v1/validator/claims/:validationId/lease extends the lease, up to two hours after the claim; the result names its claimId. The replay claims every request the node recorded and compares the manifest with the one upstream queued.",
+      "captures": [],
+      "anchors": []
+    },
+    "validator-claim-id": {
+      "text": "POST /v1/collections/:id/validation-result: the node's body also carries the claimId of the claim the result answers, which upstream's schema refuses. A body without it answers 400 {ok:false, data:{}, error:'Invalid request body'} before its collection is compared with the path's. A result whose claim is not its request's current one (another claim, a lapsed or superseded lease, a settled request) or that names no request answers 204 and settles nothing.",
+      "captures": [
+        "source/480-validation-result-another-collection.json",
+        "source/482-validation-result.json"
+      ],
+      "anchors": []
+    },
+    "validator-signature-binds-route": {
+      "text": "The validator's calls: upstream's x-wearable-validator-signature is the HMAC-SHA256 of `timestamp.rawBody`; the node's is of `timestamp.METHOD.path.rawBody` over the path the validator requested, the timestamp is Unix milliseconds in digits within five minutes either way, and a signature the node has seen within its window is refused, each with upstream's 401 {ok:false, data:{}, error:'Unauthorized'}. The replay signs each capture with the node's scheme and the capture's defect.",
+      "captures": [],
+      "anchors": []
+    },
+    "validator-switch": {
+      "text": "Upstream requests automated reviews while its builder-auto-curation flag is on and its events topic is configured, and answers the validator's callback whatever the flag. The node records requests, and its validator routes answer, only while WEARABLE_VALIDATOR_CALLBACK_SECRET is set and the builder flags document, with this node's overrides, has builder-auto-curation on; otherwise those routes refuse as an unsigned call.",
+      "captures": [],
+      "anchors": []
+    },
+    "validator-write-gate": {
+      "text": "With CREATE_WRITES_ENABLED off the validator's claim, lease and result answer 503 as every write does, and the job that settles requests does nothing; a refused result leaves its lease to lapse, and the request is claimed again once writes are on.",
+      "captures": [],
+      "anchors": []
+    },
+    "validation-request-bounds": {
+      "text": "Upstream sends a request each time and refuses a manifest over 50 items or 240 KiB with a curators' notice naming both. The node keeps at most one open request per collection (a newer one supersedes it), records at most five per collection a UTC day, and records none over 50 items, telling the curators 'it is too large for the automated review (N items)'. A request is abandoned after its third lapsed lease and expires when unsettled for seven days, each with the curators' notice that the collection needs a review without it; settled requests are deleted after thirty days.",
+      "captures": [],
+      "anchors": []
+    },
+    "validator-call-bounds": {
+      "text": "The validator's three routes take at most 60 calls a minute per source address (429 {ok:false, data:{}, error:'Too many requests, try again in a minute'}), a claim or lease body of at most 4 KiB and a result body of at most 5 MiB (413). A result's request must belong to the path's collection and name every item the result names (400), its validationId must be a UUID, and nothing of it is stored but its outcome.",
+      "captures": [],
       "anchors": []
     }
   },
@@ -2187,7 +2226,7 @@
       "id": "api_http:POST:/v1/collections/:id/publish",
       "owner": "collections",
       "status": "reviewed",
-      "result": "The owner's publish of a collection on chain holding an item without an on-chain id (assigned in creation order), the same publish again, and the refusals of a stranger and of a draft the chain doesn't hold were compared and match, but the repeated publish's items, a deliberate gap. A third-party collection's publish was compared for its provider's manager naming items with the cheque it signed, and for each refusal upstream makes: a signer who doesn't manage the provider (the committee included), no item ids, no cheque, another wallet's cheque, a quantity other than the items', an item of another collection, no item, too few slots, and items under review; each matches, with the cheque, the item curations, the new collection curation, the Slack notice and the forum topic it writes. A cheque whose salt the provider already used is refused, a deliberate gap.",
+      "result": "The owner's publish of a collection on chain holding an item without an on-chain id (assigned in creation order), the same publish again, and the refusals of a stranger and of a draft the chain doesn't hold were compared and match, but the repeated publish's items, a deliberate gap. A third-party collection's publish was compared for its provider's manager naming items with the cheque it signed, and for each refusal upstream makes: a signer who doesn't manage the provider (the committee included), no item ids, no cheque, another wallet's cheque, a quantity other than the items', an item of another collection, no item, too few slots, and items under review; each matches, with the cheque, the item curations, the new collection curation, the Slack notice and the forum topic it writes. A cheque whose salt the provider already used is refused, a deliberate gap. The first publication's automated review request was compared through the manifest upstream queued and the one the node answers when the request is claimed, and they match.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/276-collection-publish-assigns-ids.json",
@@ -2319,7 +2358,10 @@
         "deliberate:chain-copy-lag",
         "deliberate:cheque-salt-reused",
         "deliberate:third-party-publish-input",
-        "deliberate:third-party-publish-forum-after-commit"
+        "deliberate:third-party-publish-forum-after-commit",
+        "deliberate:validator-pull",
+        "deliberate:validator-switch",
+        "deliberate:validation-request-bounds"
       ],
       "remaining_verification": "A repeat publish of more items once the first are decided (a forum post update) is covered by the node's tests, not by a capture."
     },
@@ -3469,7 +3511,7 @@
       "id": "api_http:POST:/v1/collections/:id/curation",
       "owner": "curation",
       "status": "reviewed",
-      "result": "A creator's first request on an unapproved collection, a request on a collection approved on chain and on a third-party collection after its approval, a request again after a rejection, the committee's request with an assignee and without one, and the refusals of a pending review, a stranger, a draft, an unknown id and a note over 2,000 characters, were compared, with the Slack notices each sends, and match but the schema refusal's detail.",
+      "result": "A creator's first request on an unapproved collection, a request on a collection approved on chain and on a third-party collection after its approval, a request again after a rejection, the committee's request with an assignee and without one, and the refusals of a pending review, a stranger, a draft, an unknown id and a note over 2,000 characters, were compared, with the Slack notices each sends, and match but the schema refusal's detail. Neither upstream nor the node requests an automated review for these requests: the first request is no changes submission, and the collection approved on chain holds no item to review.",
       "evidence": [
         {
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/386-collection-curation-request-pending.json",
@@ -3538,7 +3580,10 @@
         "deliberate:curation-notice-names",
         "deliberate:curation-unknown-key",
         "deliberate:invalid-body-detail",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:validator-pull",
+        "deliberate:validator-switch",
+        "deliberate:validation-request-bounds"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -3829,11 +3874,71 @@
     {
       "id": "api_http:POST:/v1/collections/:id/validation-result",
       "owner": "curation",
-      "status": "not_reviewed",
-      "result": "Registered upstream; no answer has been compared in this ledger.",
-      "evidence": [],
-      "gaps": [],
-      "remaining_verification": "Capture the pinned upstream's answers for the cases its clients send and replay them against the node. A route that answers does not establish parity."
+      "status": "reviewed",
+      "result": "The wearable validator's result was compared unsigned, signed with another secret and signed five minutes and a millisecond before the clock, and each refusal matches. A signed result naming another collection than the path's, one without its items and a valid one were compared: each differs only by the claimId the node requires and the schema errors upstream lists, deliberate gaps.",
+      "evidence": [
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/477-validation-result-unsigned.json",
+          "scope": "POST /collections/{id}/validation-result without the validator's signature.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/478-validation-result-wrong-secret.json",
+          "scope": "POST /collections/{id}/validation-result signed with another secret.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/479-validation-result-stale.json",
+          "scope": "POST /collections/{id}/validation-result signed five minutes and a millisecond before the clock.",
+          "replay": []
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/480-validation-result-another-collection.json",
+          "scope": "POST /collections/{id}/validation-result signed by the validator, the body naming another collection.",
+          "replay": [
+            "data.collectionId missing",
+            "data.id missing",
+            "error value"
+          ],
+          "explained_by": {
+            "data.collectionId missing": "deliberate:validator-claim-id",
+            "data.id missing": "deliberate:validator-claim-id",
+            "error value": "deliberate:validator-claim-id"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/481-validation-result-invalid.json",
+          "scope": "POST /collections/{id}/validation-result signed by the validator, a body without its items.",
+          "replay": [
+            "data value"
+          ],
+          "explained_by": {
+            "data value": "deliberate:invalid-body-detail"
+          }
+        },
+        {
+          "path": "services/catalyst/tests/fixtures/conformance/builder/source/482-validation-result.json",
+          "scope": "POST /collections/{id}/validation-result signed by the validator, a valid result.",
+          "replay": [
+            "status: fixture=204 candidate=400",
+            "body bytes differ: fixture=\"\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Invalid request body\\\",\\\"ok\\\":false}\""
+          ],
+          "explained_by": {
+            "status: fixture=204 candidate=400": "deliberate:validator-claim-id",
+            "body bytes differ: fixture=\"\" candidate=\"{\\\"data\\\":{},\\\"error\\\":\\\"Invalid request body\\\",\\\"ok\\\":false}\"": "deliberate:validator-claim-id"
+          }
+        }
+      ],
+      "gaps": [
+        "deliberate:validator-claim-id",
+        "deliberate:invalid-body-detail",
+        "deliberate:validator-signature-binds-route",
+        "deliberate:validator-pull",
+        "deliberate:validator-switch",
+        "deliberate:validator-write-gate",
+        "deliberate:validator-call-bounds"
+      ],
+      "remaining_verification": "A result for a claim the node issued is covered by the node's tests, not by a capture: upstream issues no claim."
     },
     {
       "id": "api_http:GET:/v1/committee",

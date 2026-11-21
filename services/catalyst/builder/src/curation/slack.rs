@@ -63,6 +63,8 @@ pub enum Notice {
     Assigned { assignee: Option<String> },
     /// A curator decided.
     Verdict { approved: bool },
+    /// The collection gets no automated review, for `reason`.
+    ValidationNotRequested { reason: String },
 }
 
 /// Builder-server's `toOneLine`: each line trimmed, blank ones dropped,
@@ -194,6 +196,9 @@ impl Links {
                 if *approved { "✅" } else { "❌" },
                 if *approved { "approved" } else { "rejected" },
                 self.person(actor, true)
+            ),
+            Notice::ValidationNotRequested { reason } => format!(
+                "⚠️ No automated review for {link}: {reason}. It needs a curator review without it."
             ),
         }
     }

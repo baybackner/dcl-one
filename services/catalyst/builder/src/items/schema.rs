@@ -221,21 +221,24 @@ impl ItemInput {
     /// empty files from `contents` and the files they name from each
     /// representation's `contents`.
     pub fn sanitize(&mut self) {
-        self.contents
-            .retain(|(file, hash)| !file.ends_with('/') && hash != EMPTY_CONTENT_HASH);
-        let files: Vec<&str> = self.contents.iter().map(|(f, _)| f.as_str()).collect();
-        let Some(representations) = field_mut(&mut self.data, "representations") else {
-            return;
-        };
-        let JsJson::Array(representations) = representations else {
-            return;
-        };
-        for representation in representations {
-            if let Some(JsJson::Array(names)) = field_mut(representation, "contents") {
-                names.retain(
-                    |name| matches!(name, JsJson::String(n) if files.contains(&n.as_str())),
-                );
-            }
+        sanitize(&mut self.contents, &mut self.data);
+    }
+}
+
+/// builder-server's `sanitizeItemContents` over an item's `contents` and
+/// `data`.
+pub(crate) fn sanitize(contents: &mut Vec<(String, String)>, data: &mut JsJson) {
+    contents.retain(|(file, hash)| !file.ends_with('/') && hash != EMPTY_CONTENT_HASH);
+    let files: Vec<&str> = contents.iter().map(|(f, _)| f.as_str()).collect();
+    let Some(representations) = field_mut(data, "representations") else {
+        return;
+    };
+    let JsJson::Array(representations) = representations else {
+        return;
+    };
+    for representation in representations {
+        if let Some(JsJson::Array(names)) = field_mut(representation, "contents") {
+            names.retain(|name| matches!(name, JsJson::String(n) if files.contains(&n.as_str())));
         }
     }
 }

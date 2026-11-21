@@ -29,7 +29,15 @@ post to Slack carries `slack`: the JSON bodies upstream posted to Slack's
 `chat.postMessage`, in the order they arrived. A capture that calls the forum
 carries `forum`: each call's `method`, `path`, `username`, and JSON `body`
 (null for a GET), in arrival order. The replay compares every forum field,
-including topic and post identifiers. A volatile leaf is recorded as
+including topic and post identifiers. A capture whose request made upstream
+request an automated review carries `queue`: each validation manifest it
+published to its events topic, without its random `validationId`
+(`collectionId` and `items`), in arrival order. A capture of the wearable
+validator's call carries `validator_sign`, the defect its signature carries:
+`{}` for none, an `offset` in milliseconds from the clock, or `"secret":
+"wrong"` for a signature under another secret; it names no wallet signer,
+`sign` or `auth`, and the replay signs it again with the node's scheme and
+that defect. A volatile leaf is recorded as
 `<<VOLATILE>>`, which matches any value on replay. A capture whose
 volatile timestamps were equal before masking lists them in
 `volatile_equal`. No other marker may appear in a builder capture: a
@@ -140,7 +148,11 @@ The tests in `services/catalyst/tests/builder_conformance.rs` (test group
   Slack that takes the capture's bot token; after each capture the replay
   waits for the node's notices and adds `slack: fixture=<recorded>
   candidate=<sent>` when the messages differ from the capture's `slack`
-  (none when it has none).
+  (none when it has none). The node has the validator's secret and the
+  `builder-auto-curation` flag on; after each capture the replay claims every
+  validation request the node recorded through `POST /v1/validator/claims`
+  and compares each claim's `collectionId` and `items` with the capture's
+  `queue`, noting each difference under `queue`.
 
 `seed.json` accepts only the fields both seeders apply; any other field
 fails the replay test with its name. `collections` are the builder's rows,
@@ -237,8 +249,14 @@ Then it:
    origin is `https://forum.example.org`; requests to that host and
    `slack.com` reach their fakes over loopback. The other peer, RPC,
    warehouse, S3, SNS, and OpenSea settings point at the fake directly. The
+   events topic's fake answers a `Publish` of a validation request on the
+   configured topic, records its manifest, and refuses anything else. The
    bot token is `xoxb-example123`, the channel `curation-example`, and the
-   feature flags are set off through their `FF_*` overrides.
+   feature flags are set through their `FF_*` overrides as production has
+   them: `builder-auto-curation` on, its review flow and the alternative
+   collections API off. A case waits until every automated review request
+   upstream started in the background has ended: in a message on the events
+   topic, a curators' notice that none was requested, or no changed item.
 4. Loads `tooling/builder-server-offline.cjs` into its own process and,
    with `--require`, into the migration process: proxy variables are
    removed, and a TCP connection to anything but localhost or a loopback
@@ -246,8 +264,8 @@ Then it:
    capture fails if anything was refused, if upstream asked the fake for
    another subgraph field or filtered by a `where` key the fake doesn't
    apply, called another JSON-RPC method, or called a fake route other than the subgraphs, the JSON-RPC, the
-   active-entities read, the profile read, the warehouse, Slack, forum, and S3
-   object writes. A case
+   active-entities read, the profile read, the warehouse, Slack, forum, the
+   events topic, and S3 object writes. A case
    that needs another answer adds it to the fake first. The guard covers
    `net` connections and `dns.lookup` on the main thread of the capture
    process and on every thread of the migration process. It

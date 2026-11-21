@@ -21,6 +21,7 @@ use crate::curation::slack::Notice;
 use crate::http::{ApiError, Subject};
 use crate::items::listing::ItemsOut;
 use crate::items::save::forget_unnamed;
+use crate::validator;
 
 const CHAIN_UNKNOWN: &str = "The collection's chain state is not available. Try again later.";
 
@@ -191,6 +192,7 @@ struct Snapshot {
     items: Vec<(Uuid, Option<String>)>,
     published: bool,
     copy: Option<BTreeSet<u64>>,
+    approved: bool,
 }
 
 async fn snapshot(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Snapshot, ApiError> {
@@ -209,12 +211,12 @@ async fn snapshot(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Snapshot, A
     .fetch_all(&mut *conn)
     .await?;
     let published = chain_state::published(conn, &view, id).await?;
+    let facts = match &contract {
+        Some(contract) => chain_state::collection(conn, &view, contract).await?,
+        None => None,
+    };
     let copy = match &contract {
-        Some(contract)
-            if chain_state::collection(conn, &view, contract)
-                .await?
-                .is_some() =>
-        {
+        Some(contract) if facts.is_some() => {
             let ids: Vec<String> = sqlx::query_scalar(
                 "SELECT item_id::text FROM shop.items WHERE network = 'matic' AND contract_address = lower($1)",
             )
@@ -231,6 +233,7 @@ async fn snapshot(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Snapshot, A
         items,
         published,
         copy,
+        approved: facts.is_some_and(|facts| facts.is_approved),
     })
 }
 
@@ -260,6 +263,7 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         },
     };
     let mut first_publication = false;
+    let mut validation = None;
     if missing {
         for (place, (item, _)) in before.items.iter().enumerate() {
             if !on_chain.contains(&(place as u64)) {
@@ -287,12 +291,13 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         if now.pending || now.contract.as_deref() != Some(contract.as_str()) || !same_items {
             return Err(not_published(id));
         }
-        let first: bool = sqlx::query_scalar(
-            "SELECT NOT EXISTS (SELECT 1 FROM builder.collection_curations WHERE collection_id = $1)",
-        )
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let first = now.items.iter().any(|(_, chain_id)| chain_id.is_none())
+            && sqlx::query_scalar(
+                "SELECT NOT EXISTS (SELECT 1 FROM builder.collection_curations WHERE collection_id = $1)",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
         for (place, (item, _)) in now.items.iter().enumerate() {
             sqlx::query(
                 "UPDATE builder.items SET blockchain_item_id = $2, is_published = true, urn_suffix = $3, \
@@ -303,6 +308,10 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
             .bind(format!("urn:decentraland:matic:collections-v2:{contract}:{place}"))
             .execute(&mut *tx)
             .await?;
+        }
+        if first && !now.approved {
+            let items: Vec<Uuid> = now.items.iter().map(|(item, _)| *item).collect();
+            validation = validator::on_publish(&mut tx, state, id, &items).await?;
         }
         tx.commit().await?;
         first_publication = first;
@@ -326,6 +335,12 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
                 items: before.items.len(),
             },
         );
+    }
+    if let Some(notice) = validation {
+        let name = published.collection["name"].as_str().unwrap_or_default();
+        state
+            .notices
+            .send(&state.guarded, id, name, sync.signer(), notice);
     }
     Ok(published)
 }

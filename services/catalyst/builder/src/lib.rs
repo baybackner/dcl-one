@@ -4,8 +4,9 @@
 //! curation, standard collection publication (Polygon factory parameters
 //! prepared here, signed and submitted by the client, the receipt verified
 //! here), third-party publication (the items a provider manager submits for
-//! curation with its signed slot cheque, [`cheques`]) and the newsletter
-//! opt-in. It keeps no scenes: no projects, manifests,
+//! curation with its signed slot cheque, [`cheques`]), the wearable
+//! validator's review requests, which it pulls ([`validator`]), and the
+//! newsletter opt-in. It keeps no scenes: no projects, manifests,
 //! asset packs or scene files. Schema `builder` (`schemas/50_create.sql`).
 //!
 //! What it reuses: the ONE pool; the ONE `http::Outbound` client for the
@@ -84,6 +85,7 @@ pub mod publication_store;
 pub mod rarities;
 pub mod terms;
 pub mod third_parties;
+pub mod validator;
 pub mod writes;
 
 #[cfg(test)]
@@ -177,6 +179,10 @@ pub struct RawSettings {
     /// `BUILDER_SERVER_URL`: the public origin of these routes, which a
     /// forum post's thumbnails link into.
     pub builder_server_url: Option<String>,
+    /// `WEARABLE_VALIDATOR_CALLBACK_SECRET`: the secret the wearable
+    /// validator signs its calls with; unset, no validation is requested
+    /// and the validator routes refuse.
+    pub validator_secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -194,6 +200,8 @@ pub struct Settings {
     pub forum: Option<curation::forum::Forum>,
     /// Where a forum post's thumbnails link to.
     pub builder_server_url: String,
+    /// The wearable validator's secret; none turns validation off.
+    pub validator_secret: Option<validator::Secret>,
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -299,6 +307,7 @@ impl Settings {
             links,
             forum,
             builder_server_url: builder_server_url.unwrap_or_default(),
+            validator_secret: non_empty(&raw.validator_secret).map(validator::Secret::from),
             writes_enabled: raw.writes_enabled,
             polygon_rpc_url,
             admin_addresses: Self::admin_addresses_from(&raw.admin_addresses),
@@ -338,6 +347,8 @@ pub struct State {
     /// The content sync's state: whether this process is its own content
     /// authority, so an item URN its content lacks is unused.
     pub content_sync: Arc<crate::content::SyncStatus>,
+    /// The wearable validator's calls per source address.
+    pub validator_calls: crate::shared::limits::RateLimiter,
 }
 
 pub type SharedState = Arc<State>;
@@ -375,13 +386,14 @@ impl State {
             deployments: collections::deployment::Deployments::default(),
             notices,
             content_sync: Arc::default(),
+            validator_calls: validator::calls_limiter(),
         })
     }
 
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={} forum={}",
+            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={} forum={} validator={}",
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),
@@ -389,6 +401,7 @@ impl State {
             self.settings.warehouse.is_some(),
             self.settings.slack.is_some(),
             self.settings.forum.is_some(),
+            self.settings.validator_secret.is_some(),
         )
     }
 }
@@ -488,6 +501,21 @@ fn api_routes() -> Router<SharedState> {
         .route(
             "/v1/collections/{id}/items/status",
             patch(handlers::curation::patch_items_status_bulk),
+        )
+        .route(
+            "/v1/validator/claims",
+            post(handlers::validator::claim)
+                .layer(DefaultBodyLimit::max(handlers::validator::SMALL_BODY)),
+        )
+        .route(
+            "/v1/validator/claims/{id}/lease",
+            post(handlers::validator::lease)
+                .layer(DefaultBodyLimit::max(handlers::validator::SMALL_BODY)),
+        )
+        .route(
+            "/v1/collections/{id}/validation-result",
+            post(handlers::validator::verdict)
+                .layer(DefaultBodyLimit::max(handlers::validator::VERDICT_BODY)),
         )
         .route("/v1/thirdParties", get(handlers::third_parties::list))
         .route(

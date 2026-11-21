@@ -11,6 +11,10 @@
 //! answer alike in each, and only the rarities answer 503 while their
 //! source is down.
 //!
+//! The wearable validator is a caller of its own: it signs with the shared
+//! secret instead of a wallet, so every wallet route answers it as it
+//! answers an anonymous caller, and its three routes refuse every wallet.
+//!
 //! A matrix test lists its cells ([`Cell`]) and runs them with
 //! [`failures_in`] on worlds in one [`Condition`] ([`super::cells`]): each
 //! cell gets a fresh fixture, and its world is reset to its seed after it.
@@ -29,6 +33,7 @@ use uuid::Uuid;
 use super::support::{FakeCommittee, FakeOracle, committee_index, temp_storage, wallet};
 use super::upstream_routes::{Route, UPSTREAM};
 use crate::shared::signed_fetch::test_support::signed_headers_by;
+use crate::shared::validator_signature::{SIGNATURE_HEADER, TIMESTAMP_HEADER};
 
 const OWNER_KEY: &str = super::support::OWNER_KEY;
 const STRANGER_KEY: &str = "0x2222222222222222222222222222222222222222222222222222222222222222";
@@ -38,6 +43,7 @@ const CREATOR_KEY: &str = "0x555555555555555555555555555555555555555555555555555
 const SIBLING_KEY: &str = "0x6666666666666666666666666666666666666666666666666666666666666666";
 const PROVIDER: &str = "urn:decentraland:matic:collections-thirdparty:matrix";
 const MOUNTS: [&str; 2] = ["", "/builder-api"];
+const VALIDATOR_SECRET: &str = "example-validator-secret-0123456789abcdef";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Caller {
@@ -48,17 +54,18 @@ enum Caller {
     Committee,
     Creator,
     Sibling,
+    Validator,
 }
 use Caller::*;
 
-const CALLERS: [Caller; 7] = [
-    Anonymous, Owner, Stranger, Manager, Committee, Creator, Sibling,
+const CALLERS: [Caller; 8] = [
+    Anonymous, Owner, Stranger, Manager, Committee, Creator, Sibling, Validator,
 ];
 
 impl Caller {
     fn key(self) -> Option<&'static str> {
         match self {
-            Anonymous => None,
+            Anonymous | Validator => None,
             Owner => Some(OWNER_KEY),
             Stranger => Some(STRANGER_KEY),
             Manager => Some(MANAGER_KEY),
@@ -515,7 +522,8 @@ async fn snapshot(pool: &PgPool) -> String {
            'publications', (SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.collection_id), '[]') FROM builder.collection_publications p), \
            'cheques', (SELECT COALESCE(jsonb_agg(to_jsonb(q) ORDER BY q.id), '[]') FROM builder.slot_usage_cheques q), \
            'curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.collection_curations k), \
-           'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k))::text)",
+           'item_curations', (SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.id), '[]') FROM builder.item_curations k), \
+           'validations', (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v.id), '[]') FROM builder.validation_requests v))::text)",
     )
     .fetch_one(pool)
     .await
@@ -555,8 +563,8 @@ async fn call(
             request = request.header(name, value);
         }
     }
-    let body = match payload {
-        Payload::None => Body::empty(),
+    let body: Vec<u8> = match payload {
+        Payload::None => Vec::new(),
         Payload::Json(value) => {
             let value = match (method, value.get("collection")) {
                 ("PUT", Some(collection)) if path.contains("/v1/collections/") => {
@@ -574,21 +582,36 @@ async fn call(
                 _ => value,
             };
             request = request.header(header::CONTENT_TYPE, "application/json");
-            Body::from(value.to_string())
+            value.to_string().into_bytes()
         }
         Payload::Upload => {
             request = request.header(
                 header::CONTENT_TYPE,
                 format!("multipart/form-data; boundary={BOUNDARY}"),
             );
-            Body::from(format!(
+            format!(
                 "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"blob\"\r\n\
                  Content-Type: application/octet-stream\r\n\r\n{}\r\n--{BOUNDARY}--\r\n",
                 dcl_auth::hash_bytes_v1(MATRIX_FILE),
                 String::from_utf8_lossy(MATRIX_FILE)
-            ))
+            )
+            .into_bytes()
         }
     };
+    if caller == Validator {
+        let now = Utc::now().timestamp_millis().to_string();
+        let signature = crate::shared::validator_signature::sign(
+            VALIDATOR_SECRET.as_bytes(),
+            &now,
+            method,
+            path.split('?').next().unwrap(),
+            &body,
+        );
+        request = request
+            .header(TIMESTAMP_HEADER, now)
+            .header(SIGNATURE_HEADER, signature);
+    }
+    let body = Body::from(body);
     let response = app
         .clone()
         .oneshot(request.body(body).unwrap())
@@ -661,6 +684,9 @@ enum Op {
     ItemCurationRequest,
     ForumPost,
     ForumReply,
+    ValidatorClaim,
+    ValidatorLease,
+    ValidationResult,
 }
 
 const NOT_PUBLISHED: &str = "The collection is not published.";
@@ -786,6 +812,9 @@ impl Op {
             ("POST", "/v1/items/{id}/curation") => Op::ItemCurationRequest,
             ("POST", "/v1/collections/{id}/post") => Op::ForumPost,
             ("POST", "/v1/collections/{id}/curation/post") => Op::ForumReply,
+            ("POST", "/v1/validator/claims") => Op::ValidatorClaim,
+            ("POST", "/v1/validator/claims/{id}/lease") => Op::ValidatorLease,
+            ("POST", "/v1/collections/{id}/validation-result") => Op::ValidationResult,
             _ => return None,
         })
     }
@@ -813,8 +842,18 @@ impl Op {
         matches!(self, Op::Utility | Op::ItemContents)
     }
 
+    /// A route only the wearable validator may call.
+    fn validator(self) -> bool {
+        matches!(
+            self,
+            Op::ValidatorClaim | Op::ValidatorLease | Op::ValidationResult
+        )
+    }
+
     fn kinds(self) -> &'static [Kind] {
-        if self.by_contract() {
+        if self == Op::ValidationResult {
+            &[Missing, Malformed, Published]
+        } else if self.by_contract() {
             &[
                 Missing,
                 Malformed,
@@ -902,6 +941,9 @@ impl Op {
                 | Op::ItemCurationRequest
                 | Op::ForumPost
                 | Op::ForumReply
+                | Op::ValidatorClaim
+                | Op::ValidatorLease
+                | Op::ValidationResult
         )
     }
 
@@ -981,6 +1023,27 @@ impl Op {
                 format!("/v1/collections/{}/approvalData", f.collection_id(kind)),
                 Payload::None,
             ),
+            Op::ValidatorClaim => (
+                "POST",
+                "/v1/validator/claims".into(),
+                Payload::Json(json!({})),
+            ),
+            Op::ValidatorLease => (
+                "POST",
+                format!("/v1/validator/claims/{}/lease", Uuid::new_v4()),
+                Payload::Json(json!({ "claimId": Uuid::new_v4() })),
+            ),
+            Op::ValidationResult => {
+                let collection = f.collection_id(kind);
+                (
+                    "POST",
+                    format!("/v1/collections/{collection}/validation-result"),
+                    Payload::Json(json!({
+                        "validationId": Uuid::new_v4(), "collectionId": collection, "verdict": "passed",
+                        "rulesVersion": "1.0.0", "items": [], "claimId": Uuid::new_v4(),
+                    })),
+                )
+            }
             Op::ForumPost => (
                 "POST",
                 format!("/v1/collections/{}/post", f.collection_id(kind)),
@@ -1136,6 +1199,17 @@ impl Op {
 
     /// The decision table; `None` where the cell doesn't apply.
     fn expect(self, kind: Kind, caller: Caller, f: &Fixture) -> Option<Expect> {
+        if self.validator() {
+            return match (self, caller) {
+                (Op::ValidatorLease, Validator) => refused(409, "The claim is not current"),
+                (_, Validator) => Some(Expect(204, String::new())),
+                _ => refused(401, "Unauthorized"),
+            };
+        }
+        let caller = match caller {
+            Validator => Anonymous,
+            caller => caller,
+        };
         if self.curation() {
             return self.expect_curation(kind, caller, f);
         }
@@ -1471,6 +1545,14 @@ async fn matrix(committee: &FakeCommittee) -> Option<Matrix> {
 async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> Option<Matrix> {
     let pool = super::cells::world_pool(connections).await?;
     fresh_pass(&pool, 0).await;
+    sqlx::query(
+        "INSERT INTO explore_api.feature_flags (app, document, fetched_at) \
+         VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true},\"variants\":{}}', timezone('UTC', now())) \
+         ON CONFLICT (app) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     committee.publish(&pool).await;
     committee.set_rarities(Some(&[("common", "10000000000000000000", "100000")]));
     let oracle = FakeOracle::with(&[("common", "4000000000000000000")]);
@@ -1488,11 +1570,14 @@ async fn matrix_with(committee: &FakeCommittee, connections: u32, rpc: bool) -> 
             forum: Some(crate::curation::forum::fake::FakeForum::forum(
                 &forum.start().await,
             )),
+            validator_secret: Some(VALIDATOR_SECRET.into()),
             ..crate::Settings::default()
         },
     )
     .unwrap();
     state.guarded = dcl_http::Outbound::for_tests();
+    state.validator_calls =
+        crate::shared::limits::RateLimiter::new(1_000_000, std::time::Duration::from_secs(60));
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
@@ -1578,6 +1663,21 @@ fn ops() -> Vec<Op> {
         .collect()
 }
 
+/// Names a forum post's collection after its id, so no two posts of one
+/// world share a topic title.
+async fn distinct_topic(pool: &PgPool, op: Op, f: &Fixture) {
+    if op == Op::ForumPost
+        && let Some(id) = f.collection
+    {
+        sqlx::query("UPDATE builder.collections SET name = $2 WHERE id = $1")
+            .bind(id)
+            .bind(id.simple().to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
 /// Runs `c` on `m` ([`Cell`]), audited under `condition`; its failure.
 async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Option<String> {
     let Cell {
@@ -1592,16 +1692,7 @@ async fn cell(m: &Matrix, condition: &str, c: Cell, committee_up: bool) -> Optio
     }
     let f = fixture(&m.pool, kind).await;
     let expected = expect(&f)?;
-    if op == Op::ForumPost
-        && let Some(id) = f.collection
-    {
-        sqlx::query("UPDATE builder.collections SET name = $2 WHERE id = $1")
-            .bind(id)
-            .bind(id.simple().to_string())
-            .execute(&m.pool)
-            .await
-            .unwrap();
-    }
+    distinct_topic(&m.pool, op, &f).await;
     let (method, path, payload) = op.request(kind, &f);
     let label = kind;
     let kind = kind.base();
@@ -1857,7 +1948,7 @@ async fn every_routed_operation_answers_each_caller_as_upstream_decides() {
 
 fn unavailable(op: Op, kind: Kind, caller: Caller) -> Option<Expect> {
     match caller {
-        Anonymous => unauthenticated(),
+        Anonymous | Validator => unauthenticated(),
         _ if matches!(op, Op::ForumReply | Op::ApprovalData) => None,
         _ if op.by_id()
             && matches!(
@@ -1880,6 +1971,7 @@ async fn cannot_tell_cell(
     (op, kind, caller, mount, expected): (Op, Kind, Caller, &str, u16),
 ) -> Vec<String> {
     let f = fixture(&m.pool, kind).await;
+    distinct_topic(&m.pool, op, &f).await;
     let (method, path, payload) = op.request(kind, &f);
     let before = snapshot(&m.pool).await;
     let (status, body) = call(&m.app, caller, method, &format!("{mount}{path}"), payload).await;
@@ -2043,7 +2135,7 @@ async fn a_committee_source_that_is_down_refuses_only_what_the_committee_decides
                 let committee_unavailable = committee_unavailable.clone();
                 cells.push(Cell::new(op, kind, caller, "", move |f: &Fixture| {
                     let normal = op.expect(kind, caller, f)?;
-                    if (decides && caller != Anonymous) || op == Op::Committee {
+                    if (decides && caller.key().is_some()) || op == Op::Committee {
                         Some(committee_unavailable.clone())
                     } else {
                         Some(normal)
@@ -2505,7 +2597,7 @@ async fn a_posted_collection_answers_its_link_to_its_posters_and_takes_replies_f
             )
             .await;
             let expected = match caller {
-                Anonymous => (401, json!("Unauthenticated")),
+                Anonymous | Validator => (401, json!("Unauthenticated")),
                 Owner | Manager => (409, json!("Forum post already exists")),
                 _ => (
                     401,
@@ -2531,7 +2623,7 @@ async fn a_posted_collection_answers_its_link_to_its_posters_and_takes_replies_f
             )
             .await;
             let expected = match caller {
-                Anonymous => (401, json!("Unauthenticated")),
+                Anonymous | Validator => (401, json!("Unauthenticated")),
                 Committee => (200, Value::Null),
                 _ => (401, json!("Unauthorized")),
             };

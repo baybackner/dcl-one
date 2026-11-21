@@ -460,6 +460,56 @@ CREATE TABLE builder.slot_usage_cheques (
 );
 
 CREATE INDEX slot_usage_cheques_collection_created_idx ON builder.slot_usage_cheques (collection_id, created_at);
+
+CREATE TABLE builder.validation_requests (
+    id uuid NOT NULL,
+    collection_id uuid NOT NULL,
+    trigger text NOT NULL,
+    item_ids uuid[] NOT NULL,
+    created_at timestamp without time zone NOT NULL,
+    claims smallint NOT NULL DEFAULT 0,
+    claim_id uuid,
+    claimed_at timestamp without time zone,
+    lease_until timestamp without time zone,
+    content_hashes jsonb,
+    settled_at timestamp without time zone,
+    outcome text,
+    CONSTRAINT validation_requests_pkey PRIMARY KEY (id),
+    CONSTRAINT validation_requests_collection_id_fkey FOREIGN KEY (collection_id)
+        REFERENCES builder.collections (id) ON DELETE CASCADE,
+    CONSTRAINT validation_requests_trigger_check CHECK (trigger IN ('publish', 'changes')),
+    CONSTRAINT validation_requests_item_ids_check CHECK (cardinality(item_ids) BETWEEN 1 AND 50),
+    CONSTRAINT validation_requests_claims_check CHECK (claims BETWEEN 0 AND 3),
+    CONSTRAINT validation_requests_claim_check
+        CHECK ((claim_id IS NULL) = (claimed_at IS NULL) AND (claimed_at IS NULL) = (lease_until IS NULL)
+               AND (claim_id IS NULL) = (claims = 0)),
+    CONSTRAINT validation_requests_content_hashes_object_check
+        CHECK (content_hashes IS NULL OR jsonb_typeof(content_hashes) = 'object'),
+    CONSTRAINT validation_requests_settled_check CHECK ((settled_at IS NULL) = (outcome IS NULL)),
+    CONSTRAINT validation_requests_outcome_check
+        CHECK (outcome IN ('passed', 'rejected', 'error', 'superseded', 'abandoned', 'expired'))
+);
+
+CREATE UNIQUE INDEX validation_requests_open_key ON builder.validation_requests (collection_id)
+    WHERE settled_at IS NULL;
+
+CREATE INDEX validation_requests_open_created_idx ON builder.validation_requests (created_at, id)
+    WHERE settled_at IS NULL;
+
+CREATE INDEX validation_requests_collection_created_idx
+    ON builder.validation_requests (collection_id, created_at);
+
+CREATE INDEX validation_requests_settled_idx ON builder.validation_requests (settled_at)
+    WHERE settled_at IS NOT NULL;
+
+CREATE TABLE builder.validator_seen_signatures (
+    signature text NOT NULL,
+    expires_at timestamp without time zone NOT NULL,
+    CONSTRAINT validator_seen_signatures_pkey PRIMARY KEY (signature),
+    CONSTRAINT validator_seen_signatures_signature_check CHECK (signature ~ '^[0-9a-f]{64}$')
+);
+
+CREATE INDEX validator_seen_signatures_expires_idx ON builder.validator_seen_signatures (expires_at);
 -- ==== end section: builder ====
 
 -- ==== section: camera_reel ====

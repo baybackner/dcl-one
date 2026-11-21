@@ -682,3 +682,29 @@ test('forum draft and no-topic cases address collections not deleted earlier in 
     assert.ok(!CASES.slice(0, index).some(item => item.method === 'DELETE' && item.path === collection), CASES[index].name)
   }
 })
+
+test('the events topic records a validation request on its topic and refuses anything else', () => {
+  const { snsAnswer, queueRecord, SNS_TOPIC } = require(script)
+  const manifest = { collectionId: 'c011ec71-0000-4000-8000-000000000302', items: [{ itemId: 'i' }] }
+  const publish = (fields, message) => Buffer.from(new URLSearchParams({
+    Action: 'Publish',
+    TopicArn: SNS_TOPIC,
+    Message: JSON.stringify({ type: 'builder', subType: 'collection-validation-requested', key: manifest.collectionId, timestamp: 1, metadata: { validationId: 'v', ...manifest }, ...message }),
+    ...fields
+  }).toString())
+  const queued = []
+  assert.equal(snsAnswer('POST', '/sns/', publish({}, {}), queued).status, 200)
+  assert.deepEqual(queued, [manifest], 'recorded without its random validationId')
+  for (const [label, bytes] of [
+    ['another topic', publish({ TopicArn: 'arn:aws:sns:us-east-1:000000000000:other' }, {})],
+    ['another action', publish({ Action: 'Subscribe' }, {})],
+    ['another event', publish({}, { subType: 'other' })],
+    ['a key that is not the collection', publish({}, { key: 'other' })]
+  ]) {
+    assert.equal(snsAnswer('POST', '/sns', bytes, queued), undefined, label)
+  }
+  assert.equal(snsAnswer('GET', '/sns', publish({}, {}), queued), undefined)
+  assert.equal(queued.length, 1)
+  assert.deepEqual(queueRecord([]), {})
+  assert.deepEqual(queueRecord(queued), { queue: queued })
+})

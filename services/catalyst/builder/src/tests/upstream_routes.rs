@@ -83,7 +83,7 @@ pub(super) const UPSTREAM: &[(&str, &str, Route)] = &[
     ("POST", "/collections/:id/curation/appeal", Todo),
     ("GET", "/collections/:id/events", Todo),
     ("POST", "/collections/:id/comments", Todo),
-    ("POST", "/collections/:id/validation-result", Todo),
+    ("POST", "/collections/:id/validation-result", Routed),
     ("GET", "/committee", Routed),
     ("GET", "/thirdParties", Routed),
     ("GET", "/thirdParties/:id/slots", Routed),

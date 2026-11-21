@@ -77,6 +77,16 @@ pub struct CreateConfig {
     #[arg(long, env = "BUILDER_SERVER_URL")]
     pub builder_server_url: Option<String>,
 
+    /// The secret the wearable validator signs its claims, lease extensions
+    /// and verdicts with (at least 32 bytes); unset, no automated review is
+    /// requested and the validator routes refuse.
+    #[arg(
+        long,
+        env = "WEARABLE_VALIDATOR_CALLBACK_SECRET",
+        hide_env_values = true
+    )]
+    pub wearable_validator_callback_secret: Option<String>,
+
     /// Bearer of the moderator routes; unset refuses them.
     #[arg(
         long,

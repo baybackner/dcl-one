@@ -1051,7 +1051,9 @@ and never writes it: `shop.collections` (`network`, `contract_address`,
 `created_at`, `updated_at`, `reviewed_at`, `mirrored_at`), `shop.items`
 (`network`, `contract_address`, `item_id`, `urn`, `item_type`, `price`,
 `beneficiary`, `rarity`, `total_supply`, `content_hash`, by network, contract
-and item id: a minted item's body) and `shop.mirror_state` (`last_complete_pass_at`,
+and item id: a minted item's body; by network and contract: what a changes
+submission compares each item's content with, "Builder validation requests
+workload") and `shop.mirror_state` (`last_complete_pass_at`,
 `pass_started_at` and `cursor_id` of `('collections', 'matic')`). The shop's
 `collections-mirror` and items mirror jobs write them; the builder reads
 `network = 'matic'` only, as upstream reads only the Polygon subgraph.
@@ -1779,6 +1781,76 @@ For a standard collection's creator name, builder reads, never writes,
 (`entity_id`, `entity_type`, `entity_metadata`): the active profile's first
 avatar supplies a nonempty claimed name; otherwise the address is shortened.
 The pointer key and deployment entity index serve this bounded lookup.
+
+## Builder validation requests workload
+
+The builder records the wearable validator's work in
+`builder.validation_requests` and refuses replayed validator calls with
+`builder.validator_seen_signatures`
+(`services/catalyst/builder/src/validator.rs`, `validator/claims.rs`,
+`handlers/validator.rs`; decided in
+[the validator ADR](docs/adr/2026-11-21-builder-validator-pulls-reviews.md)).
+The object pass creates both tables; no step is needed.
+
+Writers and readers:
+
+- A standard collection's first publication and a creator's changes
+  submission insert a request in their own transaction, under the
+  collection's row lock: a count of the collection's requests that UTC day
+  (`validation_requests_collection_created_idx`), the open one settled
+  `superseded` (`validation_requests_open_key`), then the insert.
+- A claim takes the oldest open request with claims left whose lease isn't
+  held and whose collection's lock doesn't hold
+  (`validation_requests_open_created_idx` joined to the collection's primary
+  key, `FOR UPDATE OF r SKIP LOCKED`, `LIMIT 1`), reads its items, and writes
+  its claim, lease and `content_hashes` in one transaction.
+- A lease extension and a verdict update one request by primary key, with
+  its `claim_id` in the predicate.
+- The leased `builder-validation-requests` job, every 10 minutes while
+  creator writes are on: abandons and expires open requests (both over
+  `validation_requests_open_key`), deletes requests settled more than 30
+  days ago (`validation_requests_settled_idx`) and seen signatures whose
+  window has passed (`validator_seen_signatures_expires_idx`).
+- Each validator call whose signature verifies inserts its signature
+  (`ON CONFLICT DO NOTHING` on the primary key); a call that inserts nothing
+  is a replay.
+
+A changes submission also reads `shop.items.content_hash` for the
+collection's contract on `matic`, by the copy's `(network,
+contract_address)` key, after `chain_state` says the copy holds the
+contract ("Builder chain state workload"). The feature switch reads, never
+writes, `explore_api.feature_flags` (`app`, `document`) and
+`explore_api.feature_flags_local` (`app`, `name`, `value`) for app
+`builder` on the caller's connection, each by its primary key (or its
+prefix), once per publication, submission and validator call, and decides
+with `shared::feature_flags` (on only for the boolean `true`); Explore's
+flags mirror writes the `builder` document.
+
+Invariants:
+
+- At most one open request per collection
+  (`validation_requests_open_key`, unique, `WHERE settled_at IS NULL`).
+- A request names 1 to 50 items, has at most three claims, and its claim
+  id, claim time and lease are set together; `settled_at` and `outcome` are
+  set together.
+- Only the open request's current claim, within its lease, settles it.
+- Requests die with their collection (`ON DELETE CASCADE`).
+
+Size and bounds, measured at the reference data: about one request a day,
+at most 28 in a day. Open requests are bounded by one per collection and by
+the seven-day expiry; settled ones by the 30-day retention, so the table
+holds a few hundred rows. A seen signature is inserted only after its HMAC
+verifies, at most 60 calls a minute per source, and lives five minutes past
+its timestamp, so the table holds at most a few hundred rows. `EXPLAIN
+ANALYZE` with 17,000 collections, 1,000 requests (200 open) and 600 seen
+signatures: the claim is an index scan of
+`validation_requests_open_created_idx` with one primary-key probe of
+`builder.collections` per candidate, under `LockRows`; the daily count an
+index-only scan of `validation_requests_collection_created_idx`; supersede,
+abandon and expire scan `validation_requests_open_key` (199 open rows);
+retention a bitmap scan of `validation_requests_settled_idx`; the
+seen-signature sweep an index scan of
+`validator_seen_signatures_expires_idx`.
 
 ## Notification writer
 

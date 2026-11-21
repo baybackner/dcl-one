@@ -123,8 +123,9 @@ fn js_cmp(a: &str, b: &str) -> Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
-/// The CID of a minted standard item's files and metadata (ADR-32).
-pub(crate) fn standard(item: &Hashed, contract: &str, blockchain_item_id: &str) -> String {
+/// The entity metadata the catalyst would receive for a minted standard
+/// item (builder-server's `buildEntityMetadata`).
+pub(crate) fn standard_metadata(item: &Hashed, contract: &str, blockchain_item_id: &str) -> JsJson {
     let id = format!("urn:decentraland:matic:collections-v2:{contract}:{blockchain_item_id}");
     let mut metadata = head(item, &id, Some(contract));
     match item.item_type {
@@ -141,11 +142,18 @@ pub(crate) fn standard(item: &Hashed, contract: &str, blockchain_item_id: &str) 
             metadata.push(("metrics".to_string(), item.metrics.clone()));
         }
     }
-    let mut files: Vec<&(String, String)> = item
-        .contents
-        .iter()
-        .filter(|(file, _)| file != VIDEO_PATH)
-        .collect();
+    JsJson::Object(metadata)
+}
+
+/// An item's files without its video, which is not deployed.
+pub(crate) fn deployed_files<'a>(item: &'a Hashed) -> impl Iterator<Item = &'a (String, String)> {
+    item.contents.iter().filter(|(file, _)| file != VIDEO_PATH)
+}
+
+/// The CID of a minted standard item's files and metadata (ADR-32).
+pub(crate) fn standard(item: &Hashed, contract: &str, blockchain_item_id: &str) -> String {
+    let metadata = standard_metadata(item, contract, blockchain_item_id);
+    let mut files: Vec<&(String, String)> = deployed_files(item).collect();
     files.sort_by(|(fa, ha), (fb, hb)| js_cmp(ha, hb).then_with(|| js_cmp(fa, fb)));
     let content = JsJson::Array(
         files
@@ -160,7 +168,7 @@ pub(crate) fn standard(item: &Hashed, contract: &str, blockchain_item_id: &str) 
     );
     let payload = JsJson::Object(vec![
         ("content".to_string(), content),
-        ("metadata".to_string(), JsJson::Object(metadata)),
+        ("metadata".to_string(), metadata),
     ]);
     dcl_auth::hash_bytes_v1(js_stringify(&payload).as_bytes())
 }

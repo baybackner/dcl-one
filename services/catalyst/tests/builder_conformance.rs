@@ -507,6 +507,23 @@ fn capture_errors(relative: &str, raw: &Value, volatile_fields: &[String]) -> Ve
             errors.push(format!("{relative}: sign names no signer"));
         }
     }
+    if let Some(sign) = raw.get("validator_sign") {
+        match serde_json::from_value::<ValidatorSign>(sign.clone()) {
+            Ok(ValidatorSign {
+                secret: Some(secret),
+                ..
+            }) if secret != "wrong" => errors.push(format!(
+                "{relative}: validator_sign names a secret other than \"wrong\""
+            )),
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{relative}: validator_sign: {e}")),
+        }
+        if raw.get("sign").is_some() || raw.get("auth").is_some() || signer_of(raw).is_some() {
+            errors.push(format!(
+                "{relative}: a validator's capture carries no wallet signature"
+            ));
+        }
+    }
     match raw.get("auth") {
         None => {}
         Some(Value::String(mode)) if mode == "recorded" => {
@@ -2331,7 +2348,94 @@ struct Replay {
     slack: FakeSlack,
     forum: FakeForum,
     wallets: BTreeMap<String, Wallet>,
+    validator_calls: std::sync::atomic::AtomicI64,
     _dir: TempDir,
+}
+
+/// The secret the capture configures upstream's validator callback with,
+/// and the one a `validator_sign` of `{"secret": "wrong"}` signs with.
+const VALIDATOR_SECRET: &str = "example-validator-secret-0123456789abcdef";
+const WRONG_VALIDATOR_SECRET: &str = "example-wrong-secret-0123456789abcdefghij";
+
+/// A capture's `validator_sign`: the defect its signature carries.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidatorSign {
+    #[serde(default)]
+    offset: i64,
+    secret: Option<String>,
+}
+
+impl Replay {
+    /// The validator's headers for `method` at `path` with `body`, signed
+    /// with the node's scheme at the capture's clock (each call a
+    /// millisecond before the last, so none repeats) plus `sign`'s defect.
+    fn validator_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        sign: &ValidatorSign,
+    ) -> HeaderMap {
+        use catalyst::shared::validator_signature::{
+            SIGNATURE_HEADER, TIMESTAMP_HEADER, sign as signed,
+        };
+        let n = self
+            .validator_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let timestamp = (capture_clock().timestamp_millis() + sign.offset - n).to_string();
+        let secret = match sign.secret.as_deref() {
+            Some(_) => WRONG_VALIDATOR_SECRET,
+            None => VALIDATOR_SECRET,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(TIMESTAMP_HEADER, HeaderValue::from_str(&timestamp).unwrap());
+        headers.insert(
+            SIGNATURE_HEADER,
+            HeaderValue::from_str(&signed(secret.as_bytes(), &timestamp, method, path, body))
+                .unwrap(),
+        );
+        headers
+    }
+
+    /// What the node queues for the validator after a capture: each request
+    /// it recorded, claimed through its route, as upstream's manifest
+    /// without the `validationId`.
+    async fn claimed(&self) -> Vec<Value> {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM builder.validation_requests WHERE settled_at IS NULL AND claims = 0",
+        )
+        .fetch_one(&self.scratch.pool)
+        .await
+        .unwrap();
+        let mut claimed = Vec::new();
+        for _ in 0..open {
+            let path = "/v1/validator/claims";
+            let mut request = axum::http::Request::builder().method("POST").uri(path);
+            for (name, value) in
+                &self.validator_headers("POST", path, b"{}", &ValidatorSign::default())
+            {
+                request = request.header(name, value);
+            }
+            let response = tower::ServiceExt::oneshot(
+                self.app.clone(),
+                request.body(axum::body::Body::from("{}")).unwrap(),
+            )
+            .await
+            .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 8 << 20)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            assert_eq!(status, 200, "a recorded request is claimed: {body}");
+            claimed.push(serde_json::json!({
+                "collectionId": body["data"]["collectionId"],
+                "items": body["data"]["items"],
+            }));
+        }
+        claimed
+    }
 }
 
 /// The bot token the capture configures upstream's Slack client with.
@@ -2391,6 +2495,13 @@ async fn replay_setup() -> Option<Replay> {
         wallets.insert(address.clone(), wallet);
     }
     seed(&scratch.pool, &seed_data).await;
+    sqlx::query(
+        "INSERT INTO explore_api.feature_flags (app, document, fetched_at) \
+         VALUES ('builder', '{\"flags\":{\"builder-auto-curation\":true},\"variants\":{}}', timezone('UTC', now()))",
+    )
+    .execute(&scratch.pool)
+    .await
+    .unwrap();
     let (collections_subgraph, registry_subgraph) = chain_subgraphs(&seed_data).await;
     let index = catalyst::chain_index::ChainIndex::new(
         Outbound::for_tests(),
@@ -2440,6 +2551,7 @@ async fn replay_setup() -> Option<Replay> {
             },
             forum: Some(forum_settings),
             builder_server_url: "https://builder-api.example.org".into(),
+            validator_secret: Some(VALIDATOR_SECRET.into()),
             ..Settings::default()
         },
     )
@@ -2455,6 +2567,7 @@ async fn replay_setup() -> Option<Replay> {
         slack,
         forum,
         wallets,
+        validator_calls: std::sync::atomic::AtomicI64::new(0),
         _dir: dir,
     })
 }
@@ -2465,9 +2578,27 @@ fn capture_clock() -> chrono::DateTime<chrono::Utc> {
 }
 
 async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec<String> {
-    let fx: Fixture = serde_json::from_value(raw.clone()).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let mut fx: Fixture =
+        serde_json::from_value(raw.clone()).unwrap_or_else(|e| panic!("{path}: {e}"));
     let name = Path::new(path).file_stem().unwrap().to_str().unwrap();
-    let auth = if raw.get("auth").is_some() {
+    let auth = if let Some(sign) = raw.get("validator_sign") {
+        let sign: ValidatorSign = serde_json::from_value(sign.clone()).unwrap();
+        fx.request
+            .headers
+            .retain(|name, _| !name.starts_with("x-wearable-validator-"));
+        let body = fx
+            .request
+            .body
+            .as_ref()
+            .map(|body| serde_json::to_vec(body).unwrap())
+            .unwrap_or_default();
+        replay.validator_headers(
+            &fx.request.method,
+            &format!("{prefix}{}", fx.request.path),
+            &body,
+            &sign,
+        )
+    } else if raw.get("auth").is_some() {
         recorded_auth(raw)
     } else {
         fresh_signature(raw, &fx, &replay.wallets, prefix).await
@@ -2492,6 +2623,18 @@ async fn replayed(replay: &Replay, path: &str, raw: &Value, prefix: &str) -> Vec
     notes.extend(
         catalyst_testing::conformance::diff::compare_json(
             "forum", "forum", &recorded, &sent, &every_key,
+        )
+        .into_iter()
+        .map(|difference| difference.to_string()),
+    );
+    let queued = Value::Array(replay.claimed().await);
+    let recorded = raw
+        .get("queue")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    notes.extend(
+        catalyst_testing::conformance::diff::compare_json(
+            "queue", "queue", &recorded, &queued, &every_key,
         )
         .into_iter()
         .map(|difference| difference.to_string()),
@@ -2524,6 +2667,25 @@ async fn a_forum_call_missing_from_its_capture_fails_the_replay() {
     replay.scratch.teardown().await;
     assert!(
         notes.contains(&"forum.length: baseline=0 candidate=2".to_string()),
+        "{notes:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_queued_manifest_unlike_the_nodes_fails_the_replay() {
+    let path = fixture("source/276-collection-publish-assigns-ids.json");
+    let mut raw = checked_capture(&path, &ledger().volatile_fields);
+    raw["queue"][0]["items"][1]["metadata"]["name"] = "Another name".into();
+    let Some(replay) = replay_setup().await else {
+        return;
+    };
+    let notes = replayed(&replay, &path, &raw, "").await;
+    replay.scratch.teardown().await;
+    assert!(
+        notes
+            .iter()
+            .any(|note| note
+                .starts_with("queue[0].items[1].metadata.name: baseline=\"Another name\"")),
         "{notes:#?}"
     );
 }

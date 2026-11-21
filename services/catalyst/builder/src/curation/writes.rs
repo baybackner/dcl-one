@@ -21,6 +21,7 @@ use crate::access::{self, Curator};
 use crate::chain_state;
 use crate::http::ApiError;
 use crate::shared::audit;
+use crate::validator;
 
 /// The rejection reasons builder-server accepts.
 pub const REJECTION_REASONS: [&str; 12] = [
@@ -566,6 +567,12 @@ pub async fn open_collection(
             })
         }
     };
+    let validation = match (&notice, &curated.contract) {
+        (Some(Notice::ReviewRequested { .. }), Some(contract)) if !curated.third_party => {
+            validator::on_changes(&mut tx, state, &view, id, contract).await?
+        }
+        _ => None,
+    };
     let opened = super::record_collection_curation(
         &mut tx,
         &curator,
@@ -589,7 +596,7 @@ pub async fn open_collection(
         .await?;
     }
     tx.commit().await?;
-    if let Some(notice) = notice {
+    for notice in notice.into_iter().chain(validation) {
         state
             .notices
             .send(&state.guarded, id, &curated.name, curator.signer(), notice);
