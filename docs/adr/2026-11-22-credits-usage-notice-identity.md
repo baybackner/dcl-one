@@ -32,6 +32,16 @@ selected-season delivery. An older season's notice does not suppress a new
 season's notice. Terminal email delivery retention does not erase the retained
 notification evidence. Deleted notification history cannot be reconstructed.
 
+The same still-unused credits can therefore produce a seven-day reminder on
+each side of a season change. With one to six grace days, the expiry window
+can open before the granting season ends. A gap between seasons can also let
+the window open while that season remains the last selected season, including
+with longer grace periods. If the next season starts before expiry and the
+wallet has progress in it, its selected-season key permits another reminder
+and email, subject to email preferences. Each kind still creates at most one
+delivery per wallet and selected season. Zero grace does not leave credits
+unexpired after their granting season ends.
+
 Existing partial notices and already queued emails are not deleted or recalled.
 No new table, index, process or service dependency is needed. Retire writers
 using origin-season keys before the corrected leased job runs: those writers
