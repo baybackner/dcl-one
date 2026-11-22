@@ -131,8 +131,8 @@ async fn send(
     Ok(n > 0)
 }
 
-/// Weekly reminders over the week's progress rows (goal reads create them, as
-/// upstream), skipping opted-out, blocked and flagged wallets.
+/// Weekly reminders use the week's progress. Claim restrictions do not remove
+/// recipients: sending a reminder does not authorize a claim.
 async fn weekly(
     state: &SharedState,
     gate: &Gate,
@@ -147,10 +147,10 @@ async fn weekly(
     let mut sent = 0;
     while !cancel.is_cancelled() {
         let rows = if kind == Kind::Claim {
-            sqlx::query("SELECT DISTINCT g.address FROM credits.goal_grants g JOIN credits.wallets w ON w.address=g.address WHERE g.season_id=$1 AND g.week_id=$2 AND g.claimed_at IS NULL AND g.expires_at>$3 AND NOT w.is_blocked_for_claiming AND NOT EXISTS(SELECT 1 FROM credits.wallet_flags f WHERE f.address=g.address) AND g.address>$4 ORDER BY g.address LIMIT $5")
+            sqlx::query("SELECT DISTINCT g.address FROM credits.goal_grants g WHERE g.season_id=$1 AND g.week_id=$2 AND g.claimed_at IS NULL AND g.expires_at>$3 AND g.address>$4 ORDER BY g.address LIMIT $5")
                 .bind(season.id).bind(week).bind(now).bind(&after).bind(PAGE).fetch_all(&state.credits.pool).await?
         } else {
-            sqlx::query("SELECT p.address, count(*) FILTER (WHERE p.completed_at IS NOT NULL) AS completed, count(*) FILTER (WHERE p.completed_at IS NULL) AS incomplete, bool_or(p.completed_steps>0) AS started, COALESCE(array_agg(p.goal_id ORDER BY d.position) FILTER (WHERE p.completed_at IS NULL),'{}') AS pending FROM credits.goal_progress p JOIN credits.season_goals d ON d.season_id=p.season_id AND d.goal_id=p.goal_id JOIN credits.wallets w ON w.address=p.address WHERE p.season_id=$1 AND p.week_id=$2 AND w.has_started_program AND NOT w.is_blocked_for_claiming AND NOT EXISTS(SELECT 1 FROM credits.program_opt_outs o WHERE o.address=p.address) AND NOT EXISTS(SELECT 1 FROM credits.wallet_flags f WHERE f.address=p.address) AND p.address>$3 GROUP BY p.address ORDER BY p.address LIMIT $4")
+            sqlx::query("SELECT p.address, count(*) FILTER (WHERE p.completed_at IS NOT NULL) AS completed, count(*) FILTER (WHERE p.completed_at IS NULL) AS incomplete, COALESCE(array_agg(p.goal_id ORDER BY d.position) FILTER (WHERE p.completed_at IS NULL),'{}') AS pending FROM credits.goal_progress p JOIN credits.season_goals d ON d.season_id=p.season_id AND d.goal_id=p.goal_id WHERE p.season_id=$1 AND p.week_id=$2 AND p.address>$3 GROUP BY p.address ORDER BY p.address LIMIT $4")
                 .bind(season.id).bind(week).bind(&after).bind(PAGE).fetch_all(&state.credits.pool).await?
         };
         let Some(last) = rows.last() else { break };
@@ -166,12 +166,9 @@ async fn weekly(
                 _ => {
                     let completed: i64 = row.get("completed");
                     let incomplete: i64 = row.get("incomplete");
-                    let started =
-                        completed > 0 || row.get::<Option<bool>, _>("started") == Some(true);
-                    // One goal per week here, so "some goals done" also counts steps made.
                     match kind {
-                        Kind::DoNotMissOut if !started => json!({"link":play}),
-                        Kind::CompleteGoals if started && incomplete > 0 => {
+                        Kind::DoNotMissOut if completed == 0 => json!({"link":play}),
+                        Kind::CompleteGoals if completed > 0 && incomplete > 0 => {
                             json!({"seasonId":season.id,"weekNumber":week,"pendingGoalIds":row.get::<Vec<String>, _>("pending"),"link":play})
                         }
                         _ => continue,
@@ -197,14 +194,17 @@ async fn usage(
     now: NaiveDateTime,
     cancel: &CancellationToken,
 ) -> Result<u64, ApiError> {
+    let Some(season) = current_or_last(&state.credits.pool, now).await? else {
+        return Ok(0);
+    };
     let window = if kind == Kind::Usage {
         TimeDelta::days(7)
     } else {
         TimeDelta::days(1)
     };
     let marketplace = links(&state.settings.shop_base_url).1;
-    let rows = sqlx::query("SELECT g.address, g.season_id, sum(g.amount_wei)::text AS amount, max(g.expires_at) AS expires FROM credits.goal_grants g WHERE g.claimed_at IS NOT NULL AND g.expires_at>$1 AND g.expires_at<=$2 AND NOT EXISTS(SELECT 1 FROM credits.usages u WHERE u.salt=g.salt AND u.chain_id=g.chain_id AND u.contract=g.contract AND u.credit_id=g.credit_hash AND u.sender=g.address) GROUP BY g.address, g.season_id ORDER BY g.address, g.season_id")
-        .bind(now).bind(now + window).fetch_all(&state.credits.pool).await?;
+    let rows = sqlx::query("SELECT g.address, g.season_id, sum(g.amount_wei)::text AS amount, max(g.expires_at) AS expires FROM credits.goal_grants g WHERE g.claimed_at IS NOT NULL AND g.expires_at>$1 AND g.expires_at<=$2 AND EXISTS(SELECT 1 FROM credits.goal_progress p WHERE p.address=g.address AND p.season_id=$3) AND NOT EXISTS(SELECT 1 FROM credits.usages u WHERE u.salt=g.salt AND u.chain_id=g.chain_id AND u.contract=g.contract AND u.credit_id=g.credit_hash AND u.sender=g.address) GROUP BY g.address, g.season_id ORDER BY g.address, g.season_id")
+        .bind(now).bind(now + window).bind(season.id).fetch_all(&state.credits.pool).await?;
     let mut sent = 0;
     for chunk in rows.chunks(PAGE as usize) {
         if cancel.is_cancelled() {

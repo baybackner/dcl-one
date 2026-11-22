@@ -126,7 +126,7 @@ async fn grant(
 ) {
     let salt = format!("0x{}{}", "0".repeat(24), &a[2..]);
     sqlx::query("INSERT INTO credits.goal_grants(address,season_id,week_id,goal_id,salt,chain_id,contract,credit_hash,amount_wei,signature,created_at,expires_at,claimed_at) VALUES($1,$2,$3,'take-photo',$4,137,$5,$4,$6::numeric,'0x',$7,$8,$9)")
-        .bind(a).bind(season).bind(week).bind(&salt).bind(MANAGER).bind(wei).bind(now()).bind(expires).bind(claimed.then(now)).execute(pool).await.unwrap();
+        .bind(a).bind(season).bind(week).bind(&salt).bind(MANAGER).bind(wei).bind(now() - TimeDelta::days(1)).bind(expires).bind(claimed.then(now)).execute(pool).await.unwrap();
 }
 async fn sent(pool: &sqlx::PgPool) -> Vec<(String, String, Value)> {
     sqlx::query_as("SELECT type,address,metadata FROM social.notifications WHERE type LIKE 'credits_reminder_%' ORDER BY type,address")
@@ -139,6 +139,230 @@ fn kinds(rows: &[(String, String, Value)]) -> Vec<(String, String)> {
 }
 fn pair(t: &str, a: &str) -> (String, String) {
     (format!("credits_reminder_{t}"), a.to_string())
+}
+
+#[tokio::test]
+async fn weekly_recipients_depend_on_completion_not_claim_eligibility() {
+    let Some(db) = OwnDatabase::create("reminder_recipients").await else {
+        return;
+    };
+    let pool = &db.pool;
+    season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
+    let mut unfinished = vec![];
+    let mut unclaimed = vec![];
+    // Each claim restriction is independent of whether a reminder is due.
+    for restriction in 0..5 {
+        for steps in [1, 2] {
+            let address = wallet(pool, restriction * 2 + steps).await;
+            progress(pool, &address, 1, 3, i32::from(steps)).await;
+            match restriction {
+                1 => {
+                    sqlx::query(
+                        "UPDATE credits.wallets SET has_started_program=false WHERE address=$1",
+                    )
+                    .bind(&address)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                }
+                2 => {
+                    sqlx::query(
+                        "UPDATE credits.wallets SET is_blocked_for_claiming=true WHERE address=$1",
+                    )
+                    .bind(&address)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                }
+                3 => {
+                    sqlx::query(
+                        "INSERT INTO credits.wallet_flags(address,source) VALUES($1,'test')",
+                    )
+                    .bind(&address)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                }
+                4 => {
+                    sqlx::query(
+                        "INSERT INTO credits.program_opt_outs(address,opted_out_at) VALUES($1,$2)",
+                    )
+                    .bind(&address)
+                    .bind(now())
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                }
+                _ => {}
+            }
+            if steps == 1 {
+                unfinished.push(address);
+            } else {
+                grant(
+                    pool,
+                    &address,
+                    1,
+                    3,
+                    "1",
+                    now() + TimeDelta::days(10),
+                    false,
+                )
+                .await;
+                unclaimed.push(address);
+            }
+        }
+    }
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        for kind in [Kind::DoNotMissOut, Kind::CompleteGoals, Kind::Claim] {
+            run(&state, &gate, kind, now(), &CancellationToken::new())
+                .await
+                .unwrap();
+        }
+    }
+    let mut expected: Vec<_> = unfinished
+        .iter()
+        .map(|a| pair("do_not_miss_out", a))
+        .chain(unclaimed.iter().map(|a| pair("claim_credits", a)))
+        .collect();
+    expected.sort();
+    assert_eq!(kinds(&sent(pool).await), expected);
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn usage_requires_selected_season_progress_and_observes_expiry_boundaries() {
+    let Some(db) = OwnDatabase::create("reminder_usage_bounds").await else {
+        return;
+    };
+    let pool = &db.pool;
+    season(pool, 1, "2026-10-05 00:00", "2026-11-09 00:00").await;
+    season(pool, 2, "2026-11-09 00:00", "2026-12-21 00:00").await;
+    for (n, expires, claimed) in [
+        (1, now(), true),
+        (2, now() + TimeDelta::days(1), true),
+        (3, now() + TimeDelta::days(1) + TimeDelta::seconds(1), true),
+        (4, now() + TimeDelta::days(7), true),
+        (5, now() + TimeDelta::days(7) + TimeDelta::seconds(1), true),
+        (6, now() + TimeDelta::hours(12), false),
+        (7, now() + TimeDelta::hours(12), true),
+        (8, now() + TimeDelta::hours(12), true),
+        (9, now() + TimeDelta::hours(12), true),
+        (10, now() + TimeDelta::hours(12), true),
+    ] {
+        let a = wallet(pool, n).await;
+        progress(pool, &a, 1, 5, 2).await;
+        if n != 9 {
+            // Any week of the selected season counts, even before this week.
+            progress(pool, &a, 2, 1, 0).await;
+        }
+        grant(pool, &a, 1, 5, "1000000000000000000", expires, claimed).await;
+        if n == 7 || n == 8 {
+            sqlx::query("INSERT INTO credits.usages(chain_id,block_number,log_index,contract,tx_hash,sender,credit_id,salt,credit_value,credit_expires_at,value_wei) SELECT chain_id,1,$2,contract,credit_hash,address,credit_hash,salt,amount_wei,extract(epoch FROM expires_at),$3::numeric FROM credits.goal_grants WHERE address=$1")
+                .bind(&a).bind(i32::from(n)).bind(if n == 7 { "400000000000000000" } else { "1000000000000000000" }).execute(pool).await.unwrap();
+        }
+        if n == 10 {
+            sqlx::query("UPDATE credits.wallets SET has_started_program=false,is_blocked_for_claiming=true WHERE address=$1")
+                .bind(&a).execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO credits.program_opt_outs(address,opted_out_at) VALUES($1,$2)")
+                .bind(&a)
+                .bind(now())
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO credits.wallet_flags(address,source) VALUES($1,'test')")
+                .bind(&a)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        for kind in [Kind::Usage, Kind::Usage24Hours] {
+            run(&state, &gate, kind, now(), &CancellationToken::new())
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        kinds(&sent(pool).await),
+        vec![
+            pair("usage", &addr(2)),
+            pair("usage", &addr(3)),
+            pair("usage", &addr(4)),
+            pair("usage", &addr(10)),
+            pair("usage_24_hours", &addr(2)),
+            pair("usage_24_hours", &addr(10)),
+        ]
+    );
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn all_reminder_kinds_preserve_email_preferences_and_deduplicate_deliveries() {
+    let Some(db) = OwnDatabase::create("reminder_preferences").await else {
+        return;
+    };
+    let pool = &db.pool;
+    let state = enabled(pool);
+    for n in 0..5 {
+        let address = addr(n);
+        let mut details = json!({"message_type":{}});
+        if n == 1 {
+            details["ignore_all_email"] = json!(true);
+        }
+        if n == 2 || n == 4 {
+            for kind in Kind::ALL {
+                details["message_type"][kind.notification_type()] =
+                    json!({"email":n == 4,"in_app":false});
+            }
+            details["ignore_all_in_app"] = json!(true);
+        }
+        sqlx::query("INSERT INTO social.subscriptions(address,email,details) VALUES($1,$2,$3)")
+            .bind(&address)
+            .bind((n != 3).then_some("reminders@example.org"))
+            .bind(details)
+            .execute(pool)
+            .await
+            .unwrap();
+        // Exercise delivery policy for all five types. Eligibility is tested
+        // separately: one supported goal cannot produce CompleteGoals.
+        for replay in [false, true] {
+            for kind in Kind::ALL {
+                let key = kind.key(&address, 1, Some(3));
+                assert_eq!(
+                    send(&state, kind, &address, &key, json!({}), now())
+                        .await
+                        .unwrap(),
+                    !replay
+                );
+            }
+        }
+        let deliveries: Vec<(String, Option<String>)> = sqlx::query_as("SELECT d.state,d.last_error FROM social.notification_deliveries d JOIN social.notifications n ON n.id=d.notification_id WHERE n.address=$1")
+            .bind(&address).fetch_all(pool).await.unwrap();
+        let expected = match n {
+            1 => ("skipped".to_string(), Some("ignore_all_email".to_string())),
+            2 => (
+                "skipped".to_string(),
+                Some("opted out of this type".to_string()),
+            ),
+            3 => (
+                "skipped".to_string(),
+                Some("no confirmed email".to_string()),
+            ),
+            _ => ("pending".to_string(), None),
+        };
+        assert_eq!(deliveries, vec![expected; Kind::ALL.len()]);
+    }
+    assert_eq!(sent(pool).await.len(), 5 * Kind::ALL.len());
+    db.drop().await;
 }
 
 #[tokio::test]
@@ -211,36 +435,37 @@ async fn reminders_pick_eligible_wallets_once_with_source_metadata() {
         kinds(&rows),
         vec![
             pair("claim_credits", &unclaimed),
-            pair("complete_goals", &started),
             pair("do_not_miss_out", &untouched),
+            pair("do_not_miss_out", &started),
+            pair("do_not_miss_out", &opted_out),
+            pair("do_not_miss_out", &blocked),
+            pair("do_not_miss_out", &flagged),
             pair("usage", &tomorrow),
             pair("usage", &later),
             pair("usage_24_hours", &tomorrow),
         ]
     );
     assert_eq!(rows[0].2, json!({"seasonId":1,"weekNumber":3,"link":PLAY}));
+    for row in &rows[1..6] {
+        assert_eq!(row.2, json!({"link":PLAY}));
+    }
     assert_eq!(
-        rows[1].2,
-        json!({"seasonId":1,"weekNumber":3,"pendingGoalIds":["take-photo"],"link":PLAY})
-    );
-    assert_eq!(rows[2].2, json!({"link":PLAY}));
-    assert_eq!(
-        rows[3].2,
+        rows[6].2,
         json!({"expirationDate":"November 19","expirationDay":"Thursday","balance":1.5,"link":SHOP})
     );
     assert_eq!(
-        rows[4].2,
+        rows[7].2,
         json!({"expirationDate":"November 22","expirationDay":"Sunday","balance":100,"link":SHOP})
     );
     assert_eq!(
-        rows[5].2,
+        rows[8].2,
         json!({"expirationDate":"November 19","balance":1.5,"link":SHOP})
     );
     let keys: Vec<String> = sqlx::query_scalar("SELECT broadcast_key FROM social.notifications WHERE type LIKE 'credits_reminder_%' ORDER BY broadcast_key")
         .fetch_all(pool).await.unwrap();
     assert!(keys.contains(&format!("{untouched}-do-not-miss-out-reminder-1-3")));
     assert!(keys.contains(&format!("{tomorrow}-usage-24-hours-reminder-1")));
-    assert_eq!(keys.len(), 6);
+    assert_eq!(keys.len(), 9);
 
     // Weekly reminders stop once the season is over.
     sqlx::query("DELETE FROM social.notifications")
@@ -415,6 +640,21 @@ async fn a_failing_kind_does_not_stop_the_others() {
     assert_eq!(kinds(&sent(pool).await), vec![pair("usage", &a)]);
     assert_eq!(ran.lock().get(&Kind::DoNotMissOut), None);
     assert_eq!(ran.lock().get(&Kind::Usage), Some(&thursday.date()));
+    sqlx::query("DROP TRIGGER fail_reminder ON social.notifications")
+        .execute(pool)
+        .await
+        .unwrap();
+    let retried = pass(&state, &ran, thursday, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(retried, vec![(Kind::DoNotMissOut, 5)]);
+    assert_eq!(sent(pool).await.len(), 6);
+    assert!(
+        pass(&state, &ran, thursday, &CancellationToken::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     db.drop().await;
 }
 

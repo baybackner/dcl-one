@@ -1740,11 +1740,20 @@ receipt identity. `METRICS.md` records the synthetic access-path measurement.
 Production volume and latency remain unmeasured.
 
 The `credits-reminders` job reads progress rows of the current week and grants
-for its weekly reminders by the progress and grant primary keys. Its usage
-reminders read claimed grants expiring within seven days or one day through
+for its weekly reminders by the progress and grant primary keys. Wallets with no
+completed goal receive the do-not-miss-out reminder; wallets with both completed
+and pending goals receive the complete-goals reminder. Partial steps do not count
+as completion.
+Reminder selection does not apply enrollment, opt-out, claim-block or wallet-flag
+restrictions; grant and claim authorization still enforce their own policy.
+Its usage reminders require progress in any week of the current or last season,
+using the progress primary-key prefix by address and season, and read claimed
+grants expiring within seven days or one day through
 the partial index on `credits.goal_grants (expires_at) WHERE claimed_at IS NOT
-NULL`, which the object pass creates on existing databases. Notifications are
-keyed per wallet, season and week, so a rerun inserts nothing.
+NULL`, which the object pass creates on existing databases. Credits with any
+consumption are excluded. Weekly notifications are keyed per wallet, season and
+week; usage notifications aggregate and key per wallet and originating grant
+season, so a rerun inserts nothing.
 
 The worker runs through the existing leased job registry under the Ops write
 gate. Receipts survive photo deletion and event retention; changing visibility
