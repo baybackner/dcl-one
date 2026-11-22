@@ -125,11 +125,12 @@ pub(crate) async fn features_on(
     .bind(APP)
     .fetch_all(&mut *conn)
     .await?;
+    let sourced = document.is_some();
     let document = feature_flags::apply_local_overrides(
         document.unwrap_or_else(|| serde_json::json!({ "flags": {}, "variants": {} })),
         &overrides,
     );
-    let snapshot = feature_flags::Snapshot::from_document(document);
+    let snapshot = feature_flags::Snapshot::from_document(document, sourced);
     Ok(features
         .iter()
         .all(|feature| snapshot.enabled(APP, feature)))

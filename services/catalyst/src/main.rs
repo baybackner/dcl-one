@@ -34,6 +34,11 @@ enum Command {
         #[command(subcommand)]
         command: SchemaCommand,
     },
+    /// Content server operator commands.
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
     /// Blob store operator commands.
     Storage {
         #[command(subcommand)]
@@ -307,6 +312,73 @@ enum SecretsCommand {
         #[arg(long)]
         with_abgen: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ContentCommand {
+    /// Record the avatar renders active profiles name in
+    /// `metadata.avatars[].avatar.snapshots` but not in `content[]`
+    /// (`content::profile_snapshots::repair`; DATABASE.md, "Profile snapshot
+    /// repair workload"): pages the active profiles by id, fetches each
+    /// render the store lacks from `SYNC_SOURCE` and inserts its
+    /// `content.content_files` row (`{name}.png`) once the blob is stored, so
+    /// the blob collector and the history prune keep it. Re-running is safe:
+    /// present rows are kept, and a render no source served is tried again.
+    /// Prints the outcome as JSON.
+    RepairProfileSnapshots {
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
+        database_url: String,
+        #[arg(
+            long,
+            env = "STORAGE_ROOT_FOLDER",
+            default_value = "/var/lib/catalyst/content"
+        )]
+        storage_root_folder: String,
+        /// The peers asked for a missing render (comma-separated).
+        #[arg(long, env = "SYNC_SOURCE")]
+        sync_source: String,
+        /// Profiles per batch.
+        #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(i64).range(1..=10_000))]
+        batch: i64,
+    },
+    /// List every entity id and content hash of the old content server's
+    /// denylist file (`<STORAGE_ROOT_FOLDER>/<DENYLIST_FILE_NAME>` on that
+    /// server, `denylist.txt` by default) in `content.denylist`, as console
+    /// rows added by `--added-by` (`content::denylist::import_file`). One id
+    /// a line; blank lines and lines starting with `#` are skipped, and so
+    /// are lines that are no entity id or hash (pointers), counted with
+    /// their line numbers. A listed id is left alone, so a re-run adds
+    /// nothing. A malformed line imports nothing and names itself. Prints
+    /// the counts as JSON; a running `serve` hides the new ids within about
+    /// 65 seconds (its 60 s denylist reload, then up to 5 s of cached history
+    /// answers). Not behind OPS_WRITES_ENABLED: an import is operator data.
+    ImportDenylist {
+        #[arg(
+            long,
+            env = "DATABASE_URL",
+            hide_env_values = true,
+            required_unless_present = "print_ids"
+        )]
+        database_url: Option<String>,
+        /// The file; `-` reads standard input.
+        #[arg(long)]
+        file: String,
+        /// The operator wallet recorded as each new row's `added_by` (the
+        /// console records the signed-in wallet); the audit actor is
+        /// `cli:<wallet>`.
+        #[arg(long, value_parser = wallet, required_unless_present = "print_ids")]
+        added_by: Option<String>,
+        /// Print the ids the import would list, one a line, and write
+        /// nothing.
+        #[arg(long)]
+        print_ids: bool,
+    },
+}
+
+/// `--added-by`: a wallet address, lowercased.
+fn wallet(value: &str) -> Result<String, String> {
+    catalyst::auth::normalize_eth_address(value)
+        .ok_or_else(|| "must be a wallet address (0x and 40 hex digits)".to_string())
 }
 
 #[derive(Subcommand)]
@@ -667,6 +739,46 @@ async fn run(
             println!("{}", serde_json::to_string(&out)?);
             Ok(())
         }
+        Command::Content {
+            command:
+                ContentCommand::ImportDenylist {
+                    database_url,
+                    file,
+                    added_by,
+                    print_ids,
+                },
+        } => {
+            let bytes = if file == "-" {
+                content::denylist::read_file(std::io::stdin().lock())?
+            } else {
+                let opened =
+                    std::fs::File::open(&file).with_context(|| format!("reading {file}"))?;
+                content::denylist::read_file(opened).with_context(|| format!("reading {file}"))?
+            };
+            if print_ids {
+                for id in content::denylist::checked_file(&bytes)?.ids {
+                    println!("{id}");
+                }
+                return Ok(());
+            }
+            let (Some(database_url), Some(added_by)) = (database_url, added_by) else {
+                anyhow::bail!("--database-url and --added-by are required");
+            };
+            tracing_subscriber::fmt().with_target(false).init();
+            let pool = db::connect_pool(
+                &database_url,
+                &db::PoolSettings {
+                    max_connections: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("connecting to DATABASE_URL")?;
+            db::bootstrap(&pool).await?;
+            let out = content::denylist::import_file(&pool, &bytes, &added_by).await?;
+            println!("{}", serde_json::to_string(&out)?);
+            Ok(())
+        }
         Command::Shop {
             command:
                 ShopCommand::NoticeRewind {
@@ -975,6 +1087,37 @@ async fn run(
                         .unwrap_or_default()
                 );
             }
+            Ok(())
+        }
+        Command::Content {
+            command:
+                ContentCommand::RepairProfileSnapshots {
+                    database_url,
+                    storage_root_folder,
+                    sync_source,
+                    batch,
+                },
+        } => {
+            tracing_subscriber::fmt().with_target(false).init();
+            let servers = content::sync::parse_sync_sources(&sync_source, &[])
+                .context("reading SYNC_SOURCE")?;
+            let client = content::sync::sources_http_client(&servers)?;
+            let pool = db::connect_pool(
+                &database_url,
+                &db::PoolSettings {
+                    max_connections: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("connecting to DATABASE_URL")?;
+            let storage = storage::Storage::from_config(Path::new(&storage_root_folder))
+                .await
+                .with_context(|| format!("opening STORAGE_ROOT_FOLDER {storage_root_folder}"))?;
+            let report =
+                content::profile_snapshots::repair(&pool, &storage, &client, &servers, batch)
+                    .await?;
+            println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
         Command::Storage {
