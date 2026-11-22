@@ -1399,7 +1399,8 @@ pub(super) async fn signer_of(key: &str, path: &str) -> crate::shared::signed_fe
 }
 
 /// A curator, or an assignee, the committee index drops after the decision
-/// writes nothing: the write asks the index again inside its transaction.
+/// writes nothing, even one that still holds a role on the collection: the
+/// write asks the index again inside its transaction.
 #[tokio::test]
 async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     let Some(pool) = own_pool().await else {
@@ -1447,6 +1448,18 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     )
     .await
     .unwrap();
+    let owner_rejecting = crate::access::as_committee(
+        &n.state,
+        crate::access::curate_collection(
+            &n.state,
+            &signer_of(OWNER_KEY, &path).await,
+            &id.to_string(),
+        )
+        .await
+        .unwrap(),
+    )
+    .await
+    .unwrap();
     let comments = format!("/v1/collections/{id}/comments");
     let commenting = crate::access::review_member(
         &n.state,
@@ -1473,6 +1486,8 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
     drop_member(OWNER_KEY, 9).await;
     drop_member(FORMER_KEY, 10).await;
     let rejected = crate::curation::writes::update_collection(&n.state, rejecting, reject()).await;
+    let owner_rejected =
+        crate::curation::writes::update_collection(&n.state, owner_rejecting, reject()).await;
     let commented =
         crate::review::comment(&n.state, commenting, "Too late".to_string(), None).await;
     let owner_commented = crate::review::comment(
@@ -1524,9 +1539,10 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
         (
             assigned.err().map(|e| e.status()),
             rejected.err().map(|e| e.status()),
+            owner_rejected.err().map(|e| e.status()),
             commented.err().map(|e| e.status())
         ),
-        (Some(401), Some(401), Some(401))
+        (Some(401), Some(401), Some(401), Some(401))
     );
     assert_eq!(assignee, None);
     assert_eq!(

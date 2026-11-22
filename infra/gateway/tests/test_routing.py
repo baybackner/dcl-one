@@ -119,13 +119,18 @@ class CorsFallbackTest(unittest.TestCase):
 
     def test_the_builder_answers_keep_the_origins_the_node_decided(self):
         for host, path in [("builder-api.example.test", "/v1/collections/x"),
-                           ("example.test", "/builder-api/v1/storage/contents/x")]:
+                           ("example.test", "/builder-api/v1/storage/contents/x"),
+                           *(("example.test", f"/v1/{route}") for route in (
+                               "addresses/0x1/collections", "collections", "collections/x", "committee", "curations",
+                               "drafts/items", "info", "newsletter", "published-collections/x", "rarities",
+                               "storage/contents/x", "third-parties", "validator/claims"))]:
             with self.subTest(host=host, path=path):
                 self.assertEqual(self.fallback(host, path), "")
                 self.assertEqual(self.fallback(host, path, "https://create.example.test"), "")
 
     def test_every_other_answer_without_an_origin_gets_the_wildcard(self):
-        for host, path in [("example.test", "/shop-api/v1/x"), ("example.test", "/v1/newsletter"),
+        for host, path in [("example.test", "/shop-api/v1/x"), ("example.test", "/v1/communities/x"),
+                           ("example.test", "/v1/items/x"), ("example.test", "/v1/collectionsx"),
                            ("places.example.test", "/api/places"), ("example.test", "/builder-apix/v1")]:
             with self.subTest(host=host, path=path):
                 self.assertEqual(self.fallback(host, path), "*")

@@ -97,12 +97,6 @@ CREATE TABLE IF NOT EXISTS dcl_migration.builder_imported (
     fingerprint text,
     PRIMARY KEY (step, id)
 );
-DO $ddl$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'dcl_migration'
-                 AND table_name = 'builder_imported' AND column_name = 'fingerprint') THEN
-    ALTER TABLE dcl_migration.builder_imported ADD COLUMN fingerprint text;
-  END IF;
-END $ddl$;
 -- The worlds.world_limit_overrides values `worlds-limits` last wrote; a row that no longer
 -- matches them was changed on the node and is left alone.
 CREATE TABLE IF NOT EXISTS dcl_migration.world_limit_seeded (
@@ -269,12 +263,11 @@ class Step:
     load: Path
     key: list
     watermark: str | None
-    columns: list  # [(name, type)]
+    columns: list
     notes: str = ''
-    whole: bool = False  # one batch holding the whole extract, so the load sees the full upstream set
-    allow_empty: bool = False  # --allow-empty: an empty upstream set may delete every imported row
-    accept_node_rows: bool = False
-    requires: str | None = None  # a source relation; without it the step reads nothing
+    whole: bool = False
+    allow_empty: bool = False
+    requires: str | None = None
 
     @property
     def cursor(self):
@@ -1070,20 +1063,25 @@ def camera_publication(store, inventory):
 def step_vars(step, dry_run):
     variables = [f'\\set source {literal(step.source)}', f'\\set step {literal(step.name)}',
                  f"\\set dry_run {'true' if dry_run else 'false'}",
-                 # Read by the empty-upstream guards; DO blocks cannot see psql variables.
                  f"SELECT set_config('dcl_migration.allow_empty', '{'on' if step.allow_empty else 'off'}', false)"
                  ' \\g /dev/null']
     if step.source == CAMERA:
         variables.append(f'\\set camera_api_url {literal(camera_api_url())}')
-    if step.source == 'builder-server':
-        variables.append(f"SELECT set_config('dcl_migration.builder_node_rows', "
-                         f"'{'on' if step.accept_node_rows else 'off'}', false) \\g /dev/null")
     if step.source == 'builder-server' and step.name == 'collection':
         variables.append(f'\\set forum_url {literal(forum_url())}')
     return variables
 
 
-def batch_script(step, walk, *, batch_size, expected, publication=(), dry=False):
+def builder_checks(step, first):
+    """The lines a builder-server load runs after: its shared fingerprints and, on a step's first batch,
+    the refusal of a node holding builder rows the import did not leave there."""
+    if step.source != 'builder-server':
+        return []
+    here = step.load.parent
+    return [f'\\i {psql_path(here / "fingerprint.sql")}'] + ([f'\\i {psql_path(here / "node_untouched.sql")}'] if first else [])
+
+
+def batch_script(step, walk, *, batch_size, expected, publication=(), dry=False, first=False):
     """The target-side script of one batch; the batch's CSV arrives on psql's stdin.
 
     `expected` is the checkpoint row this batch must find, (cursor, walk_started_at), or None
@@ -1121,6 +1119,7 @@ def batch_script(step, walk, *, batch_size, expected, publication=(), dry=False)
         "\\echo '@@cursor' :batch_cursor",
         'ALTER TABLE stage DROP COLUMN _ord;',
         *publication,
+        *builder_checks(step, first),
         "\\echo '@@load'",
         f'\\i {psql_path(step.load)}',
         "\\echo '@@loaded'",
@@ -1205,8 +1204,6 @@ def run_step(step, source_url, target_url, walk, checkpoint, *, batch_size, log,
     with tempfile.TemporaryDirectory(prefix='dcl-migration-', dir=work_dir) as tmp, contextlib.ExitStack() as stack:
         data, script = Path(tmp) / 'batch.data', Path(tmp) / 'batch.sql'
         if camera:
-            # Finish the source COPY before acquiring any target publication lock.
-            # CSV preserves raw filenames/metadata; the whole walk uses one snapshot.
             snapshot = Path(tmp) / 'source.csv'
             with snapshot.open('wb') as fh:
                 psql(source_url, camera_extract_sql(step, walk.since, walk.cursor), read_only=True,
@@ -1233,7 +1230,7 @@ def run_step(step, source_url, target_url, walk, checkpoint, *, batch_size, log,
                 with data.open('wb') as fh:
                     stream.take(fh, batch_size)
             script.write_text(batch_script(step, batch_walk, batch_size=batch_size, expected=expected,
-                                           publication=publication, dry=dry))
+                                           publication=publication, dry=dry, first=batch_no == 1))
             with data.open('rb') as fh:
                 out = psql(target_url, None, stdin=fh, extra=['-f', str(script)], options=timeouts.target)
             rows, last, tags = parse_batch_output(out)
@@ -1270,6 +1267,7 @@ def dry_run(plans, target_url, log, work_dir=None, timeouts=Timeouts()):
                 f'\\copy stage ({col_list}) FROM {psql_path(data)}',
                 null_check(step),
                 "SELECT '@@rows', count(*) FROM stage;",
+                *builder_checks(step, True),
                 "\\echo '@@load'",
                 f'\\i {psql_path(step.load)}',
                 "\\echo '@@loaded'",
@@ -1367,7 +1365,9 @@ def cmd_check(args, sources):
                 try:
                     defs = ', '.join(f'{ident(c)} {t}' for c, t in step.columns)
                     psql(target_url, f'BEGIN;\n{CHECKPOINT_DDL}\n' + '\n'.join(step_vars(step, True))
-                         + f'\nCREATE TEMP TABLE stage ({defs});\n\\i {psql_path(step.load)}\nROLLBACK;\n')
+                         + f'\nCREATE TEMP TABLE stage ({defs});\n'
+                         + ''.join(line + '\n' for line in builder_checks(step, True))
+                         + f'\\i {psql_path(step.load)}\nROLLBACK;\n')
                     print(f'ok   {where}: load runs on an empty stage')
                 except MigrationError as e:
                     failures += 1
@@ -1414,9 +1414,6 @@ def allow_empty_steps(selected, names):
 
 def cmd_run(args, sources):
     selected = allow_empty_steps(run_sources(sources, args.sources, args.step), args.allow_empty)
-    if args.accept_builder_node_rows:
-        selected = [dataclasses.replace(src, steps=[dataclasses.replace(step, accept_node_rows=True)
-                                                    for step in src.steps]) for src in selected]
     if args.sources == ['all']:
         print('run all: excluding credits-server, shop-server and both marketplace sources; explicitly name the source at cutover',
               flush=True)
@@ -2155,9 +2152,6 @@ def parser():
     run.add_argument('--allow-empty', action='append', metavar='SOURCE/STEP',
                      help='let this step apply an empty upstream set, deleting every row it imported'
                           ' (repeatable; only when upstream really is empty)')
-    run.add_argument('--accept-builder-node-rows', action='store_true',
-                     help='let a first builder-server run start although the node already holds collections or'
-                          ' items (they stay the node\'s); import before opening creator writes instead')
     run.add_argument('--batch-size', type=int, default=5000)
     run.add_argument('--lock-timeout', type=parse_duration, default=datetime.timedelta(minutes=1),
                      help='give up waiting for a lock after this long, on both sides (default 1m; 0s: never)')

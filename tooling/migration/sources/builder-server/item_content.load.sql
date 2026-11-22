@@ -7,8 +7,7 @@ END $lock$;
 
 CREATE TEMP TABLE current_stage ON COMMIT DROP AS
 SELECT s.* FROM stage s
-JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC'
-JOIN dcl_migration.builder_imported m ON m.step = 'item' AND m.id = s.item_id::text;
+JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
 
 DO $missing$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT h.hash) INTO n
@@ -32,25 +31,40 @@ DO $oversized$ DECLARE n bigint; BEGIN
     'builder-server/item_content: % content hashes are over 250,000,000 bytes, the largest file the node keeps', n;
   ELSE NULL; END IF; END $oversized$;
 
-INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
-SELECT s.hash, b.size, lower(s.owner), bool_or(s.file = 'video.mp4')
-FROM current_stage s
-JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
-GROUP BY s.hash, b.size, lower(s.owner)
-ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
-WHERE EXCLUDED.video AND NOT u.video;
+WITH written AS (
+  INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
+  SELECT s.hash, b.size, lower(s.owner), bool_or(s.file = 'video.mp4')
+  FROM current_stage s
+  JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = s.hash
+  GROUP BY s.hash, b.size, lower(s.owner)
+  ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
+  WHERE EXCLUDED.video AND NOT u.video
+  RETURNING u.uploaded_by || ':' || u.hash AS id, pg_temp.builder_uploaded_content_fingerprint(u) AS fingerprint)
+INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
+SELECT 'uploaded_content', id, fingerprint FROM written
+ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
-SELECT DISTINCT i.video, b.size, i.video_named_by, true
-FROM builder.items i
-JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = i.video
-WHERE i.video_named_by IS NOT NULL AND i.id IN (SELECT item_id FROM current_stage)
-ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
-WHERE NOT u.video;
+WITH written AS (
+  INSERT INTO builder.uploaded_contents AS u (hash, size, uploaded_by, video)
+  SELECT DISTINCT i.video, b.size, i.video_named_by, true
+  FROM builder.items i
+  JOIN dcl_migration.blob_inventory b ON b.source = 'builder-server' AND b.object_key = i.video
+  WHERE i.video_named_by IS NOT NULL AND i.id IN (SELECT item_id FROM current_stage)
+  ON CONFLICT (hash, uploaded_by) DO UPDATE SET video = true
+  WHERE NOT u.video
+  RETURNING u.uploaded_by || ':' || u.hash AS id, pg_temp.builder_uploaded_content_fingerprint(u) AS fingerprint)
+INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
+SELECT 'uploaded_content', id, fingerprint FROM written
+ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;
 
-INSERT INTO builder.item_contents AS c (item_id, file, hash, position, named_by)
-SELECT s.item_id, s.file, s.hash, s.position, lower(s.owner)
-FROM current_stage s
-ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash, position = EXCLUDED.position,
-    named_by = CASE WHEN c.hash = EXCLUDED.hash THEN c.named_by ELSE EXCLUDED.named_by END
-WHERE (c.hash, c.position) IS DISTINCT FROM (EXCLUDED.hash, EXCLUDED.position);
+WITH written AS (
+  INSERT INTO builder.item_contents AS c (item_id, file, hash, position, named_by)
+  SELECT s.item_id, s.file, s.hash, s.position, lower(s.owner)
+  FROM current_stage s
+  ON CONFLICT (item_id, file) DO UPDATE SET hash = EXCLUDED.hash, position = EXCLUDED.position,
+      named_by = CASE WHEN c.hash = EXCLUDED.hash THEN c.named_by ELSE EXCLUDED.named_by END
+  WHERE (c.hash, c.position) IS DISTINCT FROM (EXCLUDED.hash, EXCLUDED.position)
+  RETURNING c.item_id::text || ':' || c.file AS id, pg_temp.builder_item_content_fingerprint(c) AS fingerprint)
+INSERT INTO dcl_migration.builder_imported (step, id, fingerprint)
+SELECT 'item_content', id, fingerprint FROM written
+ON CONFLICT (step, id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint;

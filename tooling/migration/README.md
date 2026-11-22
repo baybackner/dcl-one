@@ -105,10 +105,13 @@ source is reserved for its separately planned service handover.
 
 The `builder-server` import's `collection` step also requires `FORUM_URL`,
 the forum origin builder-server is deployed with; see
-`sources/builder-server/MAPPING.md`. Run it before the node opens creator
-writes: its first run refuses a node that already holds collections or
-items unless you pass `--accept-builder-node-rows`, which keeps those rows
-as the node's.
+`sources/builder-server/MAPPING.md`. Run it while the node keeps creator
+writes closed, as often as you need (each run refreshes the node from
+upstream), then open them. It writes only into a node whose builder rows
+are exactly what it left there: each step refuses, before writing, a node
+that holds a builder row the import didn't write or changed or deleted one
+it did. Once writes are open, upstream is frozen for the node, the import
+refuses, and edits made upstream later are not carried over.
 
 A configured `worlds-content-server` import also requires
 `--worlds-blocked-names blocked-names.json`: export its effective
@@ -162,7 +165,6 @@ Options of `run`:
 | `--overlap DURATION` | How far back a catch-up re-reads (default `10m`). Set it above the longest source transaction plus the worst clock lag of any app that stamps a watermark. |
 | `--restart` | Ignores the stored checkpoint and starts the step over. |
 | `--allow-empty SOURCE/STEP` | Lets that step apply an empty upstream set (repeatable). A step that deletes the rows upstream no longer holds refuses an empty set while it has imported rows, since a wrong source database looks the same; pass this only after confirming upstream really holds none. |
-| `--accept-builder-node-rows` | Lets a first `builder-server` run start although the node already holds builder collections or items; they stay the node's. Without it, that run refuses. |
 | `--batch-size N` | Rows per batch (default 5000). |
 | `--lock-timeout DURATION` | Gives up waiting for a lock after this long, on the source and the target (default `1m`, `0s` never). |
 | `--statement-timeout DURATION` | Cancels a target statement after this long (default `30m`, `0s` never). The source extract stays open for the whole walk, so it runs with no statement, idle-in-transaction or transaction timeout, whatever the role or database sets. |

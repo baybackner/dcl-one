@@ -251,9 +251,11 @@ step, or a bound of the review, validator or outside-service areas).
 Each secret may also be given as `<NAME>_FILE`; none is printed. Startup
 refuses a service given some of its settings without the others
 (`WAREHOUSE_CONTEXT_PREFIX`, `CREATORS_URL`, `BUILDER_URL` and
-`BUILDER_SERVER_URL` stay optional), and a `WAREHOUSE_URL` or
-`NEWSLETTER_SERVICE_URL` that is not a public `https://` URL, because each
-carries a token. `SLACK_BOT_TOKEN` is also the bot social's Slack notices
+`BUILDER_SERVER_URL` stay optional), and a `WAREHOUSE_URL`,
+`NEWSLETTER_SERVICE_URL` or `FORUM_URL` that is not a public `https://` URL,
+because each carries a token or key. It also refuses the forum without
+`BUILDER_SERVER_URL`, the origin of the thumbnails a topic shows, and a
+`NEWSLETTER_PUBLICATION_ID` other than letters, digits, `_` and `-`. `SLACK_BOT_TOKEN` is also the bot social's Slack notices
 use: set alone, it leaves the curators' notices off.
 `SLACK_CURATION_CHANNEL` turns them on; set without the token, the node
 refuses to start.

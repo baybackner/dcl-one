@@ -99,7 +99,7 @@ impl Forum {
         let origin = url.strip_suffix('/').unwrap_or(&url).to_string();
         let parsed = url::Url::parse(&origin).ok();
         let is_origin = parsed.as_ref().is_some_and(|u| {
-            matches!(u.scheme(), "http" | "https")
+            u.scheme() == "https"
                 && u.username().is_empty()
                 && u.password().is_none()
                 && u.path() == "/"
@@ -109,7 +109,7 @@ impl Forum {
         });
         if !is_origin || !dcl_http::is_safe_http_url(&origin) {
             anyhow::bail!(
-                "FORUM_URL must be a public http(s) origin, such as https://forum.example.test"
+                "FORUM_URL must be a public https origin, such as https://forum.example.test: it carries a key"
             );
         }
         if category.is_empty()
@@ -392,6 +392,7 @@ mod tests {
             "https://forum.example.test/?a=1",
             "https://user:pw@forum.example.test",
             "ftp://forum.example.test",
+            "http://forum.example.test",
             "https://127.0.0.1",
             "http://localhost",
             "forum.example.test",

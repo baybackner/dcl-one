@@ -21,18 +21,18 @@ minters and reviewed_at columns (no target column). collection_publications
 stays the node's.
 
 No step has a watermark: published/curation state is derived from other
-tables, so every run re-scans. dcl_migration.builder_imported records each
-collection, item, virtual third party and curation the import wrote, with a
-fingerprint of the node row. A collection with its items and their curations
-is one unit: a re-run updates a unit from upstream only while every row of it
-still matches its fingerprint, under the node's locks, and never re-creates a
-row the node deleted. Deletions upstream are not detected.
+tables, so every run re-scans. dcl_migration.builder_imported records every
+row the import wrote to the builder tables it loads, with a fingerprint of
+the node row; a re-run refreshes those rows from upstream. Deletions
+upstream are not detected.
 
-Run the import with creator writes closed (CREATE_WRITES_ENABLED=false),
-then open them. A first run refuses a node that already holds collections or
-items unless --accept-builder-node-rows is passed; every run stops on an id
-the node holds that the import didn't write. A run after writes are open is
-a catch-up run, under MAPPING.md "Re-runs".
+The import writes only into a node whose builder rows are exactly what it
+left there: each step's first batch refuses, before writing, a node holding
+a builder row the import didn't record or a recorded row that was changed
+or deleted. Run it with creator writes closed (CREATE_WRITES_ENABLED=false),
+as often as needed, then open them; once writes are open, upstream is
+frozen for the node and the import refuses. See MAPPING.md "Before the
+first run".
 """
 
 [[step]]

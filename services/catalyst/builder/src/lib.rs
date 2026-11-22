@@ -341,7 +341,15 @@ impl Settings {
             ("NEWSLETTER_SERVICE_API_KEY", &raw.newsletter_api_key),
         ])?
         .map(|[url, publication_id, api_key]| {
-            token_url("NEWSLETTER_SERVICE_URL", &url).map(|()| NewsletterForward {
+            token_url("NEWSLETTER_SERVICE_URL", &url)?;
+            if publication_id.len() > 128
+                || !publication_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                bail!("NEWSLETTER_PUBLICATION_ID must be letters, digits, '_' or '-'");
+            }
+            Ok(NewsletterForward {
                 url,
                 publication_id,
                 api_key,
@@ -395,6 +403,11 @@ impl Settings {
             None => None,
         };
         let builder_server_url = non_empty(&raw.builder_server_url);
+        if forum.is_some() && builder_server_url.is_none() {
+            bail!(
+                "FORUM_URL is set without BUILDER_SERVER_URL, the origin of the thumbnails a topic shows"
+            );
+        }
         for (name, url) in [
             ("CREATORS_URL", &links.creators_url),
             ("BUILDER_URL", &links.builder_url),
@@ -860,6 +873,36 @@ mod router_tests {
                 },
                 "NEWSLETTER_SERVICE_URL",
             ),
+            (
+                RawSettings {
+                    newsletter_service_url: some("https://newsletter.example/v2"),
+                    newsletter_publication_id: some("pub_1/../admin"),
+                    newsletter_api_key: some("sk-example123"),
+                    ..RawSettings::default()
+                },
+                "NEWSLETTER_PUBLICATION_ID",
+            ),
+            (
+                RawSettings {
+                    forum_url: some("http://forum.example"),
+                    forum_api_key: some("sk-example123"),
+                    forum_api_username: some("builder"),
+                    forum_category: some("12"),
+                    builder_server_url: some("https://builder-api.example"),
+                    ..RawSettings::default()
+                },
+                "FORUM_URL",
+            ),
+            (
+                RawSettings {
+                    forum_url: some("https://forum.example"),
+                    forum_api_key: some("sk-example123"),
+                    forum_api_username: some("builder"),
+                    forum_category: some("12"),
+                    ..RawSettings::default()
+                },
+                "BUILDER_SERVER_URL",
+            ),
         ] {
             let err = Settings::parse(raw).unwrap_err().to_string();
             assert!(
@@ -944,6 +987,7 @@ mod router_tests {
             forum_api_key: Some("sk-example-forum".into()),
             forum_api_username: Some("builder".into()),
             forum_category: Some("7".into()),
+            builder_server_url: Some("https://builder-api.example".into()),
             validator_secret: Some("sk-example-validator-0123456789abcdef".into()),
             ..RawSettings::default()
         })

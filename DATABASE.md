@@ -967,13 +967,12 @@ A node that imported builder-server before it kept item curations holds its
 imported third-party items with no curation and `is_published` false: the
 release drops their stored statuses, its notice counts them, and they read
 as unpublished until the import's `collection_curation`, `item_curation` and
-`slot_usage_cheque` steps copy their curations from builder-server. Run those
-steps (`migrate.py run builder-server`, which also needs `FORUM_URL`) after
-step 3 of the rollout, before or after the release, while creator writes
-are still closed: the curation rows don't depend on the dropped columns, and
-the release records nothing for an item that already has a curation. A run
-after creator writes reopen is a catch-up run
-(`tooling/migration/sources/builder-server/MAPPING.md`, "Re-runs").
+`slot_usage_cheque` steps copy their curations from builder-server. The
+import writes only into a node whose builder rows are exactly what it left
+there, and the release changes rows it recorded, so such a node takes no
+further import: the import refuses it
+(`tooling/migration/sources/builder-server/MAPPING.md`, "Before the first
+run"). Run the release before the first import, as the rollout below does.
 
 Rollout, in order:
 
@@ -1434,14 +1433,15 @@ Rollout, in order:
 
 3. If the node takes upstream's items, run the `builder-server` import while
    creator writes are still closed, and check its log for the rows it left
-   out (`tooling/migration/sources/builder-server/MAPPING.md`). Its first
-   run refuses a node that already holds collections or items.
+   out (`tooling/migration/sources/builder-server/MAPPING.md`). Run it as
+   often as you need while writes stay closed (rehearsals, a final sync):
+   each run refreshes the node from upstream.
 4. Open creator writes (`CREATE_WRITES_ENABLED=true`).
 
-A catch-up run after creator writes are open is supported only under the
-rules in that mapping's "Re-runs": it leaves every unit the node changed as
-the node holds it, and it stops on any id the node created that upstream
-also holds.
+Once creator writes are open, upstream is frozen for the node: the import
+writes only into a node whose builder rows are exactly what it left there,
+so it refuses, before writing, a node that took builder writes, and edits
+made upstream after that are not carried over.
 
 The retype holds an exclusive lock on `builder.items` and
 `builder.uploaded_contents` while it rewrites them, about ten seconds at the
