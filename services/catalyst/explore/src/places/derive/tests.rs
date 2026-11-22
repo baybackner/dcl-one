@@ -1119,6 +1119,19 @@ impl Ratings {
         .unwrap()
     }
 
+    /// The plain text of the place's `kind` notices.
+    async fn notice(&self, position: &str, kind: &str) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT payload #>> '{blocks,1,text,text}' FROM explore.moderation_hooks \
+             WHERE channel = 'places' AND subject = $1 AND kind = $2 ORDER BY created_at",
+        )
+        .bind(super::super::parcel_place_id(position))
+        .bind(kind)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap()
+    }
+
     /// `(rating, operator)` recorded on a parcel.
     async fn record(&self, position: &str) -> Option<(String, bool)> {
         sqlx::query_as(
@@ -1458,6 +1471,7 @@ async fn a_rating_holds_for_the_same_land_owner_from_another_wallet() {
     page(Ratings::deploy(buyer, &f, &[&e, &f, &g], None, 1)).await;
     assert_eq!(t.rating(&f).await, None);
     assert_eq!(t.record(&e).await, None);
+    assert_eq!(t.kinds(&f).await, ["operator_rating_released"]);
 }
 
 /// A record written while the owner is unknown takes it on a later pass
@@ -1572,7 +1586,8 @@ async fn a_redeploy_with_an_unknown_owner_keeps_the_known_one() {
 /// once the index knows it: one by the same owner is raised to the rating
 /// it is held to (one notice), whether it recorded parcels of its own, sits
 /// within the earlier place's parcels or declares no rating; one by
-/// another owner keeps its rating and replaces the records. A record with
+/// another owner keeps its rating, replaces the records and is reported
+/// for review, as it released an operator's rating. A record with
 /// a known owner outlives the first settle, and a later pass changes
 /// nothing more.
 #[tokio::test]
@@ -1656,7 +1671,7 @@ async fn a_place_settled_with_an_unknown_owner_is_settled_again() {
     assert!(t.kinds(&p[7]).await.is_empty());
     assert_eq!(t.rating(&p[11]).await.as_deref(), Some("A"));
     assert_eq!(t.rating(&p[14]).await.as_deref(), Some("T"));
-    assert!(t.kinds(&p[14]).await.is_empty());
+    assert_eq!(t.kinds(&p[14]).await, ["operator_rating_released"]);
     assert_eq!(t.record(&p[13]).await, Some(("T".into(), false)));
 
     // Settled: another pass reports nothing more.
@@ -1664,6 +1679,7 @@ async fn a_place_settled_with_an_unknown_owner_is_settled_again() {
     assert_eq!(t.kinds(&p[2]).await, ["rating_downgrade_refused"]);
     assert_eq!(t.kinds(&p[4]).await, ["rating_downgrade_refused"]);
     assert_eq!(t.kinds(&p[11]).await, ["rating_downgrade_refused"]);
+    assert_eq!(t.kinds(&p[14]).await, ["operator_rating_released"]);
 }
 
 /// A new row held only to its own operator rating (no parcel record, no
@@ -1823,6 +1839,222 @@ async fn a_rented_parcel_keeps_its_lessor_as_owner() {
     assert_eq!(t.rating(&c).await.as_deref(), Some("R"));
     assert_eq!(t.record(&b).await, Some(("R".into(), true)));
     assert_eq!(t.owner(&c).await.as_deref(), Some(owner));
+    assert_eq!(t.kinds(&c).await, ["rating_downgrade_refused"]);
+}
+
+/// A new LAND owner's place on another parcel set releases an operator's
+/// records (clears them, or replaces them with its own rating) and is
+/// reported for review once, with a pending notice taking a later release
+/// of the same place. A creator's record, or an unknown owner, posts none.
+#[tokio::test]
+async fn a_new_owner_releasing_an_operators_rating_is_reported() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    let t = Ratings { pool: pool.clone() };
+    let parcel = |n: i32| format!("90,{n}");
+    let site = Some("https://decentraland.org/places");
+    let (owner, buyer) = (
+        "0x00000000000000000000000000000000000000a1",
+        "0x00000000000000000000000000000000000000c3",
+    );
+    let p: Vec<String> = (0..20).map(parcel).collect();
+    let all: Vec<&String> = p.iter().collect();
+    let land = land_index(&pool, &all, owner).await;
+    let page = |rows| {
+        let (pool, land) = (pool.clone(), &land);
+        async move {
+            super::upsert_page(&pool, rows, site, Some(land))
+                .await
+                .unwrap()
+        }
+    };
+    for (base, parcels) in [
+        (&p[0], vec![&p[0], &p[1]]),
+        (&p[4], vec![&p[4]]),
+        (&p[6], vec![&p[6], &p[7]]),
+        (&p[14], vec![&p[14], &p[15]]),
+    ] {
+        page(Ratings::deploy(owner, base, &parcels, None, 0)).await;
+        t.rate(base, "R", Some(&land)).await;
+        t.prune(base).await;
+    }
+    page(Ratings::deploy(
+        owner,
+        &p[10],
+        &[&p[10], &p[11]],
+        Some("A"),
+        0,
+    ))
+    .await;
+    t.prune(&p[10]).await;
+    land_index(&pool, &all, buyer).await;
+
+    // An unrated place clears the operator's records: one notice.
+    page(Ratings::deploy(
+        buyer,
+        &p[2],
+        &[&p[0], &p[1], &p[2]],
+        None,
+        1,
+    ))
+    .await;
+    assert_eq!(t.rating(&p[2]).await, None);
+    assert_eq!(t.record(&p[0]).await, None);
+    assert_eq!(t.record(&p[1]).await, None);
+    assert_eq!(t.kinds(&p[2]).await, ["operator_rating_released"]);
+    assert_eq!(
+        t.notice(&p[2], "operator_rating_released").await,
+        [format!(
+            "Released rating: R\nPrevious owner: {owner} - New owner: {buyer}\nParcels: 90,0 90,1\nUUID: {}",
+            super::super::parcel_place_id(&p[2])
+        )]
+    );
+
+    // Its next deployment releases another record within the hour: the
+    // pending notice takes it, no second one.
+    page(Ratings::deploy(
+        buyer,
+        &p[2],
+        &[&p[0], &p[1], &p[2], &p[4]],
+        None,
+        2,
+    ))
+    .await;
+    assert_eq!(t.record(&p[4]).await, None);
+    let notices = t.notice(&p[2], "operator_rating_released").await;
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].contains("Parcels: 90,4\n"), "{}", notices[0]);
+
+    // A rated place replaces them with its own rating: one notice.
+    page(Ratings::deploy(buyer, &p[8], &[&p[7], &p[8]], Some("T"), 1)).await;
+    assert_eq!(t.rating(&p[8]).await.as_deref(), Some("T"));
+    assert_eq!(t.record(&p[7]).await, Some(("T".into(), false)));
+    assert_eq!(t.kinds(&p[8]).await, ["operator_rating_released"]);
+
+    // A creator's record released the same way posts none.
+    page(Ratings::deploy(buyer, &p[12], &[&p[11], &p[12]], None, 1)).await;
+    assert_eq!(t.record(&p[11]).await, None);
+    assert!(t.kinds(&p[12]).await.is_empty());
+
+    // Nor does a place whose owner is unknown, which releases nothing.
+    upsert_page(
+        &pool,
+        Ratings::deploy(buyer, &p[16], &[&p[15], &p[16]], None, 1),
+        site,
+    )
+    .await
+    .unwrap();
+    assert_eq!(t.record(&p[15]).await, Some(("R".into(), true)));
+    assert!(t.kinds(&p[16]).await.is_empty());
+}
+
+/// An unknown owner keeps the recorded one only for the same creator, on
+/// the same place or exactly the same parcels: another creator's redeploy
+/// after a sale leaves it unknown until a later pass knows the new owner,
+/// so a previous owner's address never releases an operator's rating.
+#[tokio::test]
+async fn an_unknown_owner_keeps_the_recorded_one_only_for_the_same_creator() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    let t = Ratings { pool: pool.clone() };
+    let parcel = |n: i32| format!("92,{n}");
+    let site = Some("https://decentraland.org/places");
+    let (owner, buyer, wallet) = (
+        "0x00000000000000000000000000000000000000a1",
+        "0x00000000000000000000000000000000000000c3",
+        "0x00000000000000000000000000000000000000d4",
+    );
+    let p: Vec<String> = (0..6).map(parcel).collect();
+    let all: Vec<&String> = p.iter().collect();
+    let land = land_index(&pool, &all, owner).await;
+    let known = |rows| {
+        let (pool, land) = (pool.clone(), &land);
+        async move {
+            super::upsert_page(&pool, rows, site, Some(land))
+                .await
+                .unwrap()
+        }
+    };
+    let unknown = |rows| {
+        let pool = pool.clone();
+        async move { upsert_page(&pool, rows, site).await.unwrap() }
+    };
+
+    // The same creator on exactly the same parcels under another base.
+    known(Ratings::deploy(owner, &p[4], &[&p[4], &p[5]], None, 0)).await;
+    t.rate(&p[4], "R", Some(&land)).await;
+    t.prune(&p[4]).await;
+    unknown(Ratings::deploy(owner, &p[5], &[&p[4], &p[5]], None, 1)).await;
+    assert_eq!(t.rating(&p[5]).await.as_deref(), Some("R"));
+    assert_eq!(t.owner(&p[4]).await.as_deref(), Some(owner));
+
+    // A sale, then the buyer's redeploy and an operator's rating while
+    // the owner is unknown.
+    known(Ratings::deploy(owner, &p[0], &[&p[0], &p[1]], Some("A"), 0)).await;
+    land_index(&pool, &all, buyer).await;
+    let redeploy = || Ratings::deploy(buyer, &p[0], &[&p[0], &p[1]], None, 1);
+    unknown(redeploy()).await;
+    assert_eq!(t.owner(&p[1]).await, None);
+    t.rate(&p[0], "R", None).await;
+    assert_eq!(t.owner(&p[1]).await, None);
+
+    // A later pass knows the buyer, whose other wallet's shifted place is
+    // then held to the rating.
+    known(redeploy()).await;
+    assert_eq!(t.owner(&p[1]).await.as_deref(), Some(buyer));
+    known(Ratings::deploy(
+        wallet,
+        &p[2],
+        &[&p[1], &p[2]],
+        Some("T"),
+        2,
+    ))
+    .await;
+    assert_eq!(t.rating(&p[2]).await.as_deref(), Some("R"));
+    assert_eq!(t.record(&p[1]).await, Some(("R".into(), true)));
+    assert_eq!(t.kinds(&p[2]).await, ["rating_downgrade_refused"]);
+}
+
+/// With a LAND index, a page locks every parcel of an unchanged place it
+/// settles again (recorded while the owner was unknown), and no parcel of
+/// one recorded with a known owner.
+#[tokio::test]
+async fn a_page_locks_the_parcels_of_a_place_it_settles_again() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    let p: Vec<String> = (0..3).map(|n| format!("94,{n}")).collect();
+    let all: Vec<&String> = p.iter().collect();
+    let suspect = || Ratings::deploy("0xowner", &p[0], &[&p[0], &p[1]], Some("A"), 0);
+    let settled = || Ratings::deploy("0xowner", &p[2], &[&p[2]], Some("A"), 0);
+    upsert_page(&pool, suspect(), None).await.unwrap();
+    let land = land_index(&pool, &all, "0x00000000000000000000000000000000000000a1").await;
+    super::upsert_page(&pool, settled(), None, Some(&land))
+        .await
+        .unwrap();
+    let before: HashMap<String, (Option<String>, Option<NaiveDateTime>)> =
+        sqlx::query_as::<_, (String, Option<String>, Option<NaiveDateTime>)>(
+            "SELECT id, content_rating, deployed_at FROM explore.place",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(id, rating, at)| (id, (rating, at)))
+        .collect();
+    let rows: Vec<DerivedPlace> = suspect().into_iter().chain(settled()).collect();
+    let rows: Vec<&DerivedPlace> = rows.iter().collect();
+    let mut tx = pool.begin().await.unwrap();
+    let parcels = page_parcels(&mut tx, &rows, &before, Some(&land))
+        .await
+        .unwrap();
+    assert_eq!(parcels.locked, vec![p[0].clone(), p[1].clone()]);
+    assert_eq!(
+        parcels.recheck,
+        HashSet::from([super::super::parcel_place_id(&p[0])])
+    );
 }
 
 /// A LAND index that cannot be read leaves owners unknown: the derive page

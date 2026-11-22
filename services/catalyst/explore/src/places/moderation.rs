@@ -37,7 +37,9 @@
 //! lower is reported on the same channel ([`capture_creator_rating`]). An
 //! operator's rating of a derived place is also recorded on its parcels
 //! (`explore.place_parcel_rating`), which the derive pass holds the next
-//! deployment of that place, or a new place by its creator, to.
+//! deployment of that place, or a new place by its creator, to. A new LAND
+//! owner's place that releases such a record is reported for review
+//! ([`capture_operator_rating_release`]).
 //!
 //! The pending rating has two spellings upstream: the route schema's `PR`
 //! (`Place/schemas.ts:343`) and the code enum's `RP`
@@ -348,7 +350,7 @@ const PLACE_PARCELS: &str = r#"
 /// its parcels as an operator's, with the place, its parcel set `$5`
 /// ([`super::parcel_set_hash`]), its creator and the parcel's LAND owner
 /// (`$3` positions, `$4` owners; an unknown owner keeps the one this place
-/// recorded) in `explore.place_parcel_rating`, which the derive pass holds a
+/// recorded by the same creator) in `explore.place_parcel_rating`, which the derive pass holds a
 /// new deployment of that place, a new row on exactly its parcels, or a new
 /// row by that creator or on that owner's LAND, to.
 const OPERATOR_PARCEL_RATINGS: &str = r#"
@@ -367,7 +369,9 @@ const OPERATOR_PARCEL_RATINGS: &str = r#"
     SET content_rating = EXCLUDED.content_rating, place_id = EXCLUDED.place_id,
         parcel_set_hash = EXCLUDED.parcel_set_hash, creator_address = EXCLUDED.creator_address,
         owner_address = COALESCE(EXCLUDED.owner_address,
-            CASE WHEN r.place_id = EXCLUDED.place_id THEN r.owner_address END),
+            CASE WHEN r.place_id = EXCLUDED.place_id
+                      AND r.creator_address = EXCLUDED.creator_address
+                 THEN r.owner_address END),
         operator = true, updated_at = timezone('UTC', now())
 "#;
 
@@ -715,47 +719,100 @@ pub async fn capture_creator_rating(
         ),
         CreatorRating::Keep | CreatorRating::Set => return Ok(()),
     };
-    // One undelivered downgrade notice per row: a newer attempt replaces its
-    // message. Upgrades share their kind with the operator's, so each is kept.
+    // Upgrades share their kind with the operator's, so each is kept.
     if kind == "rating_downgrade_refused" {
-        let pending = sqlx::query(
-            "UPDATE explore.moderation_hooks SET payload = $3 WHERE channel = 'places' \
-             AND subject = $1 AND kind = $2 AND completed_at IS NULL AND attempts = 0",
-        )
-        .bind(&resolved.id)
-        .bind(kind)
-        .bind(&message)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
-        if pending > 0 {
-            return Ok(());
-        }
-        // Sent or failing: none within an hour of the row's last.
-        let at = capture_at(tx).await?;
-        sqlx::query(
-            "INSERT INTO explore.moderation_hooks \
-             (id, channel, subject, kind, payload, created_at, next_attempt_at) \
-             SELECT $1, 'places', $2, $3, $4, $5, $5 WHERE NOT EXISTS ( \
-                 SELECT 1 FROM explore.moderation_hooks WHERE channel = 'places' \
-                 AND subject = $2 AND kind = $3 AND created_at > $5 - interval '1 hour')",
-        )
-        .bind(Uuid::new_v4())
-        .bind(&resolved.id)
-        .bind(kind)
-        .bind(&message)
-        .bind(at)
-        .execute(&mut **tx)
-        .await?;
-        return Ok(());
+        return capture_throttled(tx, &resolved.id, kind, &message).await;
     }
     capture(tx, &resolved.id, kind, &message).await
+}
+
+/// One undelivered notice of `kind` per row `subject`: a newer one replaces
+/// its message; once sent or failing, none within an hour of the row's last.
+async fn capture_throttled(
+    tx: &mut Transaction<'_, Postgres>,
+    subject: &str,
+    kind: &str,
+    message: &Value,
+) -> Result<(), sqlx::Error> {
+    let pending = sqlx::query(
+        "UPDATE explore.moderation_hooks SET payload = $3 WHERE channel = 'places' \
+         AND subject = $1 AND kind = $2 AND completed_at IS NULL AND attempts = 0",
+    )
+    .bind(subject)
+    .bind(kind)
+    .bind(message)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if pending > 0 {
+        return Ok(());
+    }
+    let at = capture_at(tx).await?;
+    sqlx::query(
+        "INSERT INTO explore.moderation_hooks \
+         (id, channel, subject, kind, payload, created_at, next_attempt_at) \
+         SELECT $1, 'places', $2, $3, $4, $5, $5 WHERE NOT EXISTS ( \
+             SELECT 1 FROM explore.moderation_hooks WHERE channel = 'places' \
+             AND subject = $2 AND kind = $3 AND created_at > $5 - interval '1 hour')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(subject)
+    .bind(kind)
+    .bind(message)
+    .bind(at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// A derived place under a new LAND owner whose deployment released an
+/// operator's parcel rating: the place starts fresh, and moderators review it.
+#[derive(Debug, Clone, Copy)]
+pub struct OperatorRatingRelease<'a> {
+    pub id: &'a str,
+    pub base_position: &'a str,
+    /// The released rating (the strictest, if several).
+    pub rating: &'a str,
+    pub previous_owners: &'a [String],
+    pub new_owners: &'a [String],
+    pub parcels: &'a [&'a str],
+}
+
+fn operator_rating_released_message(release: &OperatorRatingRelease<'_>, base: &str) -> Value {
+    let row = Resolved {
+        id: release.id.to_string(),
+        world: false,
+        disabled: false,
+        disabled_reason: None,
+        title: None,
+        base_position: release.base_position.to_string(),
+        world_name: None,
+        content_rating: None,
+        active: true,
+    };
+    let (kind, link) = row_link(&row, base);
+    json!({ "blocks": [
+        { "type": "section", "text": { "type": "mrkdwn", "text": format!(":warning: A new LAND owner's {kind} released an operator rating, please review it: {link}") } },
+        { "type": "section", "text": { "type": "plain_text", "text": format!("Released rating: {}\nPrevious owner: {} - New owner: {}\nParcels: {}\nUUID: {}", release.rating, release.previous_owners.join(", "), release.new_owners.join(", "), release.parcels.join(" "), release.id) } }
+    ] })
+}
+
+/// Queues `operator_rating_released` for `release` in the derive page's
+/// transaction, linking into the places site at `base`, at most one per place
+/// per hour ([`capture_throttled`]).
+pub async fn capture_operator_rating_release(
+    tx: &mut Transaction<'_, Postgres>,
+    base: &str,
+    release: &OperatorRatingRelease<'_>,
+) -> Result<(), sqlx::Error> {
+    let message = operator_rating_released_message(release, base);
+    capture_throttled(tx, release.id, "operator_rating_released", &message).await
 }
 
 /// The rating a creator's write to the local world `key` is held to: an
 /// operator's rating (`explore.place_moderation`, which the catalogue serves
 /// first), else the world's own `stored`. Locks the operator's row.
-pub async fn world_rating_in_force(
+async fn world_rating_in_force(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
     stored: Option<String>,
@@ -772,7 +829,7 @@ pub async fn world_rating_in_force(
 
 /// Moves an operator's rating of the local world `key` to the creator's
 /// `rating` the world takes, so the catalogue serves it.
-pub async fn follow_creator_world_rating(
+async fn follow_creator_world_rating(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
     rating: &str,

@@ -487,15 +487,18 @@ edit throttle window are preserved. `(created_at,id)` supports retention order. 
 and edit-bucket columns on earlier shared development layouts without removing
 intents, and the object pass recreates the changed due/creator indexes.
 
-The places channel carries operator disables and rating upgrades, and a
+The places channel carries operator disables and rating upgrades, a
 creator's rating change: a stricter rating, which the row takes
 (`rating_upgraded`), or a laxer one, which it keeps out
-(`rating_downgrade_refused`; step `0056_explore_rating_downgrade_notice` admits
-the kind). A creator notice is captured in the transaction of the deployment
+(`rating_downgrade_refused`), and a derived place under a new LAND owner whose
+deployment released an operator's parcel rating (`operator_rating_released`;
+step `0056_explore_rating_downgrade_notice` admits both kinds). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade
 notice of the same row takes the newer message instead of a new row, and a
-row with a downgrade notice captured in the last hour gets no new row. A local
+row with a downgrade notice captured in the last hour gets no new row. A
+release notice is throttled the same way per place and carries the released
+rating, the previous and new owners and the parcels. A local
 world's or a derived place's creator rating is held to the operator's rating in
 `explore.place_moderation` when one is set, and a rating the row takes moves
 that override with it. A new deployment or a newly inserted derived place is
@@ -515,7 +518,10 @@ transfer to another address, one more indexed probe per rented token), so a
 rental does not change the owner; while that index
 is unpublished, a parcel is unindexed or the lookup fails (logged), the owner
 is unknown and only the place and the creator match; another place with an
-unknown owner then replaces no record whose owner is known. A later pass over
+unknown owner then replaces no record whose owner is known, and a redeploy
+keeps the recorded owner only for the same place or parcel set by the same
+creator (another creator leaves it unknown, since the LAND may have changed
+hands). A later pass over
 a place settled while an owner was unknown (its own record of a parcel with
 no owner, or another place's record with a known owner on its parcels)
 settles it again once the index knows the owner: it fills the owner and takes
@@ -534,7 +540,10 @@ transaction, one batched upsert for the rows whose rating the page settles
 (new deployments, new rows and rows settled again), one delete for the parcels
 of settled rows left with no rating, and one insert of the missing parcels of
 the other rated rows (an existing catalogue fills on its first pass), and one
-row per parcel for an operator's rating of a derived place; read by primary
+row per parcel for an operator's rating of a derived place; the upsert and
+the delete return the written parcels, and a page with a known owner on a
+written parcel reads that page's operator rows first (one primary-key read,
+only while the places webhook is configured) to report a release; read by primary
 key for each settled row's parcels and, once per pass, for the parcels of
 every unchanged row (rated rows only without a LAND index), plus one batched
 indexed `land_authz` owner lookup per page (the parcels it writes and those of
@@ -544,7 +553,8 @@ equals the rating, id, parcel set, creator and owner of the rated derived
 place covering it, or of the last one; an operator's row is replaced or
 cleared only by a place held to it (a place with the same parcel set always
 is), or by one on another parcel set whose known LAND owner differs from the
-row's known one; only the derive pass and the operator's place rating write it. Both
+row's known one, which captures `operator_rating_released` for that place in
+the same transaction; only the derive pass and the operator's place rating write it. Both
 writers first take transaction advisory locks on the hash buckets (at most 128)
 of the parcels they write, in one sorted order, so a page that inserts a missing
 parcel after locking the recorded ones cannot deadlock with an operator's

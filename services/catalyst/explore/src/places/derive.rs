@@ -764,8 +764,10 @@ async fn lock_page_parcels(
 /// operator's) or under a known owner other than its known one; another
 /// place with an unknown owner replaces no record with a known owner, which
 /// the page settles again once the owner is known ([`PARCEL_STATES`]). An
-/// unknown owner keeps the owner the same place (or parcel set) recorded, as
-/// `moderation::OPERATOR_PARCEL_RATINGS` does.
+/// unknown owner keeps the owner the same place (or parcel set) by the same
+/// creator recorded, as `moderation::OPERATOR_PARCEL_RATINGS` does; another
+/// creator leaves it unknown, since the LAND may have changed hands. Returns
+/// each written parcel and whether its record is an operator's.
 const RECORD_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
         (position, content_rating, place_id, parcel_set_hash, creator_address, owner_address, operator)
@@ -781,7 +783,8 @@ const RECORD_PARCEL_RATINGS: &str = r#"
         parcel_set_hash = EXCLUDED.parcel_set_hash,
         creator_address = EXCLUDED.creator_address,
         owner_address = COALESCE(EXCLUDED.owner_address,
-            CASE WHEN r.place_id = EXCLUDED.place_id OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
+            CASE WHEN (r.place_id = EXCLUDED.place_id OR r.parcel_set_hash = EXCLUDED.parcel_set_hash)
+                      AND r.creator_address = EXCLUDED.creator_address
                  THEN r.owner_address END),
         operator = EXCLUDED.operator OR (r.operator AND COALESCE(
             r.place_id = EXCLUDED.place_id OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
@@ -797,9 +800,11 @@ const RECORD_PARCEL_RATINGS: &str = r#"
           IS DISTINCT FROM (EXCLUDED.content_rating, EXCLUDED.place_id, EXCLUDED.parcel_set_hash,
                             EXCLUDED.creator_address,
                             COALESCE(EXCLUDED.owner_address,
-                                CASE WHEN r.place_id = EXCLUDED.place_id
-                                       OR r.parcel_set_hash = EXCLUDED.parcel_set_hash
+                                CASE WHEN (r.place_id = EXCLUDED.place_id
+                                           OR r.parcel_set_hash = EXCLUDED.parcel_set_hash)
+                                          AND r.creator_address = EXCLUDED.creator_address
                                      THEN r.owner_address END))
+    RETURNING r.position, r.operator
 "#;
 
 /// Clears the parcels `$1` of a place left with no rating, so a later place
@@ -807,13 +812,22 @@ const RECORD_PARCEL_RATINGS: &str = r#"
 /// record. A record with a known owner stays while `$2`, the parcel's LAND
 /// owner, is unknown; an operator's record stays unless both owners are known
 /// and differ (the LAND changed owner) and the record is of another parcel
-/// set than `$3`.
+/// set than `$3`. Returns each cleared parcel and whether its record was an
+/// operator's.
 const CLEAR_PARCEL_RATINGS: &str = "DELETE FROM explore.place_parcel_rating r \
      USING unnest($1::text[], $2::text[], $3::text[]) AS c(position, owner, parcel_set) \
      WHERE r.position = c.position \
        AND ((NOT r.operator AND (r.owner_address IS NULL OR c.owner <> '')) \
             OR (r.owner_address IS NOT NULL AND c.owner <> '' \
-                AND r.owner_address <> c.owner AND r.parcel_set_hash <> c.parcel_set))";
+                AND r.owner_address <> c.owner AND r.parcel_set_hash <> c.parcel_set)) \
+     RETURNING r.position, r.operator";
+
+/// The operator's records with a known owner on parcels `$1`, before the page
+/// writes them: `(position, rating, owner)`. Under a known new owner the
+/// write may release one ([`released_operator_ratings`]).
+const OPERATOR_RECORDS: &str = "SELECT position, content_rating, owner_address \
+     FROM explore.place_parcel_rating \
+     WHERE position = ANY($1) AND operator AND owner_address IS NOT NULL";
 
 /// The page's operator rows, locked before its places as an operator's
 /// decision locks them (`moderation::apply_with`).
@@ -875,12 +889,8 @@ async fn upsert_page(
                 )
             })
             .collect();
-    let PageParcels {
-        locked: parcels,
-        owners,
-        recheck,
-    } = page_parcels(&mut tx, &rows, &before, land).await?;
-    lock_page_parcels(&mut tx, &parcels).await?;
+    let parcels = page_parcels(&mut tx, &rows, &before, land).await?;
+    lock_page_parcels(&mut tx, &parcels.locked).await?;
     let inserted: HashMap<String, bool> = sqlx::query(UPSERT)
         .bind(rows.iter().map(|p| p.id.clone()).collect::<Vec<_>>())
         .bind(
@@ -921,14 +931,7 @@ async fn upsert_page(
             )
         })
         .collect();
-    let page = Page {
-        before: &before,
-        inserted: &inserted,
-        locked: &parcels,
-        owners: &owners,
-        recheck: &recheck,
-    };
-    settle_ratings(&mut tx, &rows, &page, notify).await?;
+    settle_ratings(&mut tx, &rows, &before, &inserted, &parcels, notify).await?;
     let fresh: Vec<(&DerivedPlace, Vec<String>)> = rows
         .iter()
         .filter(|p| inserted.get(&p.id).copied().unwrap_or(false))
@@ -1112,17 +1115,6 @@ async fn page_parcels(
     })
 }
 
-/// A page's state before its ratings settle: each row's rating and
-/// deployment time before it, which rows the upsert inserted, the locked
-/// parcels, their LAND owners and the unchanged rows settled again.
-struct Page<'a> {
-    before: &'a HashMap<String, (Option<String>, Option<NaiveDateTime>)>,
-    inserted: &'a HashMap<String, bool>,
-    locked: &'a [String],
-    owners: &'a HashMap<String, String>,
-    recheck: &'a HashSet<String>,
-}
-
 /// The creator rating rule (`places::moderation::CreatorRating`) over a page:
 /// a new deployment of an existing row, or a new row, takes the scene's rating
 /// when it raises the one held, never a laxer one. It is held to its stored
@@ -1137,20 +1129,23 @@ struct Page<'a> {
 /// parcels' missing records among `locked`, unless the page settles it again
 /// (`recheck`: settled while a parcel's owner was unknown), which may raise
 /// it to a rating now held by owner, and then reports only a change. A scene
-/// that declares no rating keeps the held one, with no notice.
+/// that declares no rating keeps the held one, with no notice. A place under
+/// a known new LAND owner that releases an operator's record (clears it, or
+/// replaces it with a creator's) is reported for review
+/// ([`released_operator_ratings`]).
 async fn settle_ratings(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rows: &[&DerivedPlace],
-    page: &Page<'_>,
+    before: &HashMap<String, (Option<String>, Option<NaiveDateTime>)>,
+    inserted: &HashMap<String, bool>,
+    parcels: &PageParcels,
     notify: Option<&str>,
 ) -> Result<()> {
-    let Page {
-        before,
-        inserted,
+    let PageParcels {
         locked,
         owners,
         recheck,
-    } = *page;
+    } = parcels;
     let redeployed = |p: &DerivedPlace| match inserted.get(&p.id) {
         Some(true) => true,
         Some(false) => before
@@ -1203,7 +1198,11 @@ async fn settle_ratings(
     }
     let (mut ids, mut ratings) = (Vec::new(), Vec::new());
     let (mut recorded, mut missing) = (Records::default(), Records::default());
-    let (mut cleared, mut cleared_sets): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let (mut cleared, mut cleared_sets, mut cleared_places): (
+        Vec<String>,
+        Vec<String>,
+        Vec<&DerivedPlace>,
+    ) = (Vec::new(), Vec::new(), Vec::new());
     for p in rows {
         let fresh = inserted.get(&p.id) == Some(&true);
         if !settled.iter().any(|s| s.id == p.id) {
@@ -1238,13 +1237,14 @@ async fn settle_ratings(
         // Settled again, the deployment was already applied: only a held
         // rating moves it, never past an operator's lowering.
         let declared = p.content_rating.as_deref();
-        let rating = match declared.filter(|_| redeployed(p)) {
-            Some(d) if CreatorRating::of(stored.as_deref(), d).applies() => Some(d.to_string()),
+        let applies = declared.map(|d| CreatorRating::of(stored.as_deref(), d).applies());
+        let rating = match (declared, applies) {
+            (Some(d), Some(true)) if redeployed(p) => Some(d.to_string()),
             _ => stored.clone(),
         };
         let code = |r: &Option<String>| r.as_deref().and_then(moderation::creator_code);
         // Settled again, only a changed rating that refused the scene's is reported.
-        let refused = declared.is_some_and(|d| !CreatorRating::of(stored.as_deref(), d).applies());
+        let refused = applies == Some(false);
         let report =
             (!fresh || is_held) && (redeployed(p) || (code(&rating) != code(&own) && refused));
         if let (Some(base), Some(stored), Some(declared), true) =
@@ -1266,6 +1266,7 @@ async fn settle_ratings(
             for position in positions_of(p) {
                 cleared.push(position);
                 cleared_sets.push(set.clone());
+                cleared_places.push(p);
             }
             continue;
         };
@@ -1287,31 +1288,119 @@ async fn settle_ratings(
                 .await?;
         }
     }
+    // Only a known new owner releases an operator's record, so without one
+    // (or without a notice to post) the prior records are not read.
+    let written: Vec<String> = cleared.iter().chain(&recorded.positions).cloned().collect();
+    let prior: HashMap<String, (String, String)> =
+        if notify.is_some() && written.iter().any(|p| owners.contains_key(p)) {
+            sqlx::query_as::<_, (String, String, String)>(OPERATOR_RECORDS)
+                .bind(&written)
+                .fetch_all(&mut **tx)
+                .await?
+                .into_iter()
+                .map(|(position, rating, owner)| (position, (rating, owner)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+    // Parcels whose operator's record the page released, with the place
+    // that released it.
+    let mut released: Vec<(String, &DerivedPlace)> = Vec::new();
     if !cleared.is_empty() {
         let cleared_owners: Vec<String> = cleared
             .iter()
             .map(|p| owners.get(p).cloned().unwrap_or_default())
             .collect();
-        sqlx::query(CLEAR_PARCEL_RATINGS)
+        let gone: HashSet<String> = sqlx::query_as::<_, (String, bool)>(CLEAR_PARCEL_RATINGS)
             .bind(&cleared)
             .bind(&cleared_owners)
             .bind(&cleared_sets)
-            .execute(&mut **tx)
-            .await?;
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .filter_map(|(position, operator)| operator.then_some(position))
+            .collect();
+        for (position, p) in cleared.iter().zip(&cleared_places) {
+            if gone.contains(position) {
+                released.push((position.clone(), *p));
+            }
+        }
     }
     for (records, overwrite) in [(&recorded, true), (&missing, false)] {
-        if !records.positions.is_empty() {
-            sqlx::query(RECORD_PARCEL_RATINGS)
-                .bind(&records.positions)
-                .bind(&records.ratings)
-                .bind(&records.places)
-                .bind(&records.creators)
-                .bind(overwrite)
-                .bind(&records.owners)
-                .bind(&records.sets)
-                .execute(&mut **tx)
-                .await?;
+        if records.positions.is_empty() {
+            continue;
         }
+        let lost: HashSet<String> = sqlx::query_as::<_, (String, bool)>(RECORD_PARCEL_RATINGS)
+            .bind(&records.positions)
+            .bind(&records.ratings)
+            .bind(&records.places)
+            .bind(&records.creators)
+            .bind(overwrite)
+            .bind(&records.owners)
+            .bind(&records.sets)
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .filter_map(|(position, operator)| (!operator).then_some(position))
+            .collect();
+        // A fill writes only parcels with no record, so only an overwrite
+        // turns an operator's record into a creator's.
+        for (position, id) in records.positions.iter().zip(&records.places) {
+            if overwrite
+                && prior.contains_key(position)
+                && lost.contains(position)
+                && let Some(p) = rows.iter().find(|p| &p.id == id)
+            {
+                released.push((position.clone(), *p));
+            }
+        }
+    }
+    if let Some(base) = notify {
+        released_operator_ratings(tx, base, &released, &prior, owners).await?;
+    }
+    Ok(())
+}
+
+/// Reports, once per place, the operator's records `released` under a known
+/// new LAND owner: the place starts fresh, and moderators review it. `prior`
+/// holds each record's rating and previous owner, `owners` the new ones.
+async fn released_operator_ratings(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    base: &str,
+    released: &[(String, &DerivedPlace)],
+    prior: &HashMap<String, (String, String)>,
+    owners: &HashMap<String, String>,
+) -> Result<()> {
+    let mut by_place: Vec<(&DerivedPlace, Vec<&str>)> = Vec::new();
+    for (position, p) in released {
+        if !prior.contains_key(position) {
+            continue;
+        }
+        match by_place.iter_mut().find(|(q, _)| q.id == p.id) {
+            Some((_, at)) => at.push(position),
+            None => by_place.push((*p, vec![position])),
+        }
+    }
+    for (p, mut parcels) in by_place {
+        parcels.sort_unstable();
+        parcels.dedup();
+        let pick = |of: &dyn Fn(&str) -> Option<String>| {
+            let mut all: Vec<String> = parcels.iter().filter_map(|q| of(q)).collect();
+            all.sort();
+            all.dedup();
+            all
+        };
+        let ratings = pick(&|q| prior.get(q).map(|(rating, _)| rating.clone()));
+        let rating = moderation::strictest(ratings.iter().map(String::as_str)).unwrap_or_default();
+        let release = moderation::OperatorRatingRelease {
+            id: &p.id,
+            base_position: &p.base_position,
+            rating,
+            previous_owners: &pick(&|q| prior.get(q).map(|(_, owner)| owner.clone())),
+            new_owners: &pick(&|q| owners.get(q).cloned()),
+            parcels: &parcels,
+        };
+        moderation::capture_operator_rating_release(tx, base, &release).await?;
     }
     Ok(())
 }

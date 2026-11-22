@@ -1553,7 +1553,7 @@ async fn earlier_event_hook_layouts_upgrade_without_losing_intents() {
 /// Step 0054 replaces the places notice-kind CHECK an earlier layout created,
 /// so a refused rating downgrade can be queued.
 #[tokio::test]
-async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
+async fn the_rating_notice_step_widens_the_earlier_kind_check() {
     let Some(old) = prepared_v2(None).await else {
         return;
     };
@@ -1586,6 +1586,7 @@ async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
         .await
     };
     assert!(insert("rating_downgrade_refused").await.is_err());
+    assert!(insert("operator_rating_released").await.is_err());
 
     let result =
         schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
@@ -1598,6 +1599,7 @@ async fn the_rating_downgrade_notice_step_widens_the_earlier_kind_check() {
             .any(|step| step == "0056_explore_rating_downgrade_notice")
     );
     insert("rating_downgrade_refused").await.unwrap();
+    insert("operator_rating_released").await.unwrap();
     insert("rating_upgraded").await.unwrap();
     assert!(insert("not_a_kind").await.is_err());
     old.drop().await;
