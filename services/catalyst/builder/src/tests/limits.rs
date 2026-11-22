@@ -706,6 +706,47 @@ async fn a_listing_past_its_bytes_or_its_readers_budget_is_refused_before_its_it
 }
 
 #[tokio::test]
+async fn every_item_answers_the_committee_member_at_most_its_cap() {
+    let Some(pool) = super::validator::own_pool().await else {
+        return;
+    };
+    let member = super::validator::address(OWNER_KEY);
+    super::support::FakeCommittee::with(&[&member])
+        .publish(&pool)
+        .await;
+    sqlx::query(
+        "INSERT INTO builder.items (id, name, eth_address, type) \
+         SELECT gen_random_uuid(), 'Item ' || g, $1, 'wearable' \
+         FROM generate_series(1, $2) g",
+    )
+    .bind(&member)
+    .bind(crate::items::listing::EVERY_ITEM_CAP as i32 + 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let registry = super::support::registry_only_index().await;
+    let app = app_over(pool, |state| {
+        state.market = Some(registry);
+        state.limits = crate::limits::Limits::unbounded();
+    })
+    .await;
+    let (status, body, _) = send(
+        &app,
+        &Call {
+            key: Some(OWNER_KEY),
+            ..Call::get("/v1/items")
+        },
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let answered: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        answered["data"].as_array().unwrap().len(),
+        crate::items::listing::EVERY_ITEM_CAP as usize
+    );
+}
+
+#[tokio::test]
 async fn a_wallets_drafts_answer_at_most_their_cap_and_cost_it_by_the_row() {
     let Some(pool) = super::validator::own_pool().await else {
         return;

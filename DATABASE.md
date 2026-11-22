@@ -1434,8 +1434,20 @@ Rollout, in order:
 3. If the node takes upstream's items, run the `builder-server` import while
    creator writes are still closed, and check its log for the rows it left
    out (`tooling/migration/sources/builder-server/MAPPING.md`). Run it as
-   often as you need while writes stay closed (rehearsals, a final sync):
-   each run refreshes the node from upstream.
+   often as you need while writes stay closed (rehearsals): each run
+   refreshes the node from upstream. A run doesn't carry upstream deletions
+   or URN swaps, so make the final sync a start-over followed by a run:
+
+   ```sh
+   psql "$DATABASE_URL" -X -f tooling/migration/sources/builder-server/start_over.sql
+   ```
+
+   In one transaction it refuses a node that took builder writes, then
+   empties the builder tables the import loads (with
+   `collection_publications` and `validation_requests`), the import's ledger
+   `dcl_migration.builder_imported` and its `builder-server` checkpoints;
+   the run that follows imports upstream as it is then (MAPPING.md, "Start
+   over"). Don't run the storage GC between the two.
 4. Open creator writes (`CREATE_WRITES_ENABLED=true`).
 
 Once creator writes are open, upstream is frozen for the node: the import

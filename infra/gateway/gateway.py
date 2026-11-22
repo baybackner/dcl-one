@@ -466,7 +466,8 @@ http {{
     map $http_upgrade $connection_keepalive {{ default upgrade; "" ""; }}
     map "$uri|$upstream_http_access_control_allow_origin" $cors_fallback {{
         "~^/builder-api/" "";
-        "~^/v1/(addresses|collections|committee|curations|drafts|info|newsletter|published-collections|rarities|storage|third-parties|validator)(/|[|])" "";
+        "~^/v1/(addresses|collections|committee|curations|drafts|info|newsletter|published-collections|rarities|storage|thirdParties|validator)(/|[|])" "";
+        "~^/v1/0x[0-9a-fA-F]{{40}}/(collections|items)[|]" "";
         "~[|]$" "*";
         default "";
     }}

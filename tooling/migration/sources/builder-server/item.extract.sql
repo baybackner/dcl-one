@@ -37,3 +37,8 @@ LEFT JOIN LATERAL (
     ORDER BY created_at DESC, id DESC
     LIMIT 1
 ) ic ON true
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM json_object_keys(CASE WHEN json_typeof(i.contents) = 'object' THEN i.contents ELSE '{}'::json END) AS f(file)
+    WHERE f.file = '' OR char_length(f.file) > 256 OR position('\' in f.file) > 0
+)

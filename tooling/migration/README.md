@@ -111,7 +111,12 @@ upstream), then open them. It writes only into a node whose builder rows
 are exactly what it left there: each step refuses, before writing, a node
 that holds a builder row the import didn't write or changed or deleted one
 it did. Once writes are open, upstream is frozen for the node, the import
-refuses, and edits made upstream later are not carried over.
+refuses, and edits made upstream later are not carried over. A run doesn't
+carry upstream deletions or URN swaps: make the final sync a start-over
+(`sources/builder-server/start_over.sql`, which refuses a node that took
+builder writes and empties the builder tables, the import's ledger and its
+checkpoints in one transaction) followed by a run, with no storage GC in
+between; see MAPPING.md "Start over".
 
 A configured `worlds-content-server` import also requires
 `--worlds-blocked-names blocked-names.json`: export its effective

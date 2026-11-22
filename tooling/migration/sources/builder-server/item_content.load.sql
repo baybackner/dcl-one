@@ -5,9 +5,20 @@ DO $lock$ BEGIN
   PERFORM 1 FROM builder.items i WHERE i.id IN (SELECT item_id FROM stage) ORDER BY i.id FOR UPDATE;
 END $lock$;
 
+CREATE TEMP TABLE refused_item ON COMMIT DROP AS
+SELECT DISTINCT item_id FROM stage WHERE file = '' OR char_length(file) > 256 OR position('\' in file) > 0;
+
+DO $refused$ DECLARE n bigint; ids text; BEGIN
+  SELECT count(*), string_agg(item_id::text, ', ' ORDER BY item_id) FILTER (WHERE rn <= 10) INTO n, ids
+    FROM (SELECT item_id, row_number() OVER (ORDER BY item_id) AS rn FROM refused_item) k;
+  IF n > 0 THEN RAISE NOTICE
+    'builder-server/item_content: % items whose contents name a file the node refuses are left out with their contents, first: %', n, ids;
+  END IF; END $refused$;
+
 CREATE TEMP TABLE current_stage ON COMMIT DROP AS
 SELECT s.* FROM stage s
-JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC';
+JOIN builder.items i ON i.id = s.item_id AND i.updated_at = s.item_updated_at AT TIME ZONE 'UTC'
+WHERE s.item_id NOT IN (SELECT item_id FROM refused_item);
 
 DO $missing$ DECLARE n bigint; BEGIN
   SELECT count(DISTINCT h.hash) INTO n

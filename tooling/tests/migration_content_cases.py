@@ -44,8 +44,8 @@ class ContentMigrationCases:
                 f"'{{}}', NULL, NULL, NULL, NULL, NULL, false, 0, NULL, NULL, '2026-01-01Z', '{updated}'")
         return collection, item
 
-    def import_builder(self, db, name, updated, contract='NULL'):
-        collection, item = self.builder_rows(name, updated, contract)
+    def import_builder(self, db, name, updated, contract='NULL', lock='NULL'):
+        collection, item = self.builder_rows(name, updated, contract, lock)
         self.content_load(db, 'builder-server', 'collection', [collection])
         self.content_load(db, 'builder-server', 'item', [item])
 
@@ -230,9 +230,11 @@ class ContentMigrationCases:
         self.import_builder(db, 'Upstream', '2026-02-01Z')
         self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
+        later_save = [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-03-01Z'"]
+        self.content_load(db, 'builder-server', 'item_content', later_save)
+        self.assertEqual(self.sql(db, f"SELECT count(*) FROM builder.item_contents WHERE item_id = '{ITEM}';\n").strip(), '0')
         self.import_builder(db, 'Upstream edited', '2026-03-01Z')
-        self.content_load(db, 'builder-server', 'item_content',
-                          [f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-03-01Z'"])
+        self.content_load(db, 'builder-server', 'item_content', later_save)
         self.assertEqual(self.sql(db, f"SELECT count(*) FROM builder.item_contents WHERE item_id = '{ITEM}';\n").strip(), '1')
 
     def test_when_an_item_was_imported_before_its_collection_it_should_join_the_collection_on_the_next_run(self):
@@ -250,22 +252,24 @@ class ContentMigrationCases:
         self.linked_item(db, item)
         collection_curation, item_curation = 'c0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000001'
 
-        def upstream(name, status, updated):
-            self.import_builder(db, name, updated)
+        def upstream(name, status, updated, lock, managers):
+            self.import_builder(db, name, updated, lock=lock)
             self.content_load(db, 'builder-server', 'virtual_third_party', [
-                self.virtual_third_party_row(provider, [OWNER], f'tp:1:{name}:', 'false', updated)])
+                self.virtual_third_party_row(provider, managers, f'tp:1:{name}:', 'false', updated)])
             self.content_load(db, 'builder-server', 'collection_curation', [
                 self.collection_curation(collection_curation, COLLECTION, status, updated=updated)])
             self.content_load(db, 'builder-server', 'item_curation', [
                 f"'{item_curation}', '{item}', '{status}', '{self.HASH}', false, '2026-01-01Z', '{updated}'"])
-        upstream('First', 'pending', '2026-02-01Z')
-        upstream('Second', 'approved', '2026-03-01Z')
+        upstream('First', 'pending', '2026-02-01Z', 'NULL', [OWNER, self.STRANGER])
+        upstream('Second', 'approved', '2026-03-01Z', "'2026-03-01 12:00'", [OWNER])
         self.assertEqual(self.sql(db, f"""SELECT (SELECT name FROM builder.collections WHERE id = '{COLLECTION}'),
+                                                 (SELECT lock FROM builder.collections WHERE id = '{COLLECTION}'),
                                                  (SELECT name FROM builder.items WHERE id = '{ITEM}'),
                                                  (SELECT raw_metadata FROM builder.virtual_third_parties),
+                                                 (SELECT managers FROM builder.virtual_third_parties),
                                                  (SELECT status FROM builder.collection_curations),
                                                  (SELECT status FROM builder.item_curations);\n""").strip(),
-                         'Second\tSecond\ttp:1:Second:\tapproved\tapproved')
+                         f'Second\t2026-03-01 12:00:00\tSecond\ttp:1:Second:\t{{{OWNER}}}\tapproved\tapproved')
 
     def linked_rows(self, item, urn_part, collection_updated='2026-02-01Z', item_updated='2026-02-01Z', name='Linked hat'):
         collection = (f"'{self.LINKED}', 'Linked', '', NULL, NULL, '{self.PROVIDER}:{urn_part}', '{self.PROVIDER}', "
@@ -292,13 +296,6 @@ class ContentMigrationCases:
         self.content_load(db, 'builder-server', 'item', [row])
         self.assertEqual(self.linked_unit(db), f"{self.PROVIDER}:caps\t{self.PROVIDER}:caps:{item[:8]} Upstream hat,"
                                                f"{self.PROVIDER}:caps:{other[:8]} Linked hat\tt")
-        self.assertEqual(self.sql(db, "SELECT count(*) FROM dcl_migration.builder_imported m JOIN builder.items i "
-                                      "ON m.step = 'item' AND m.id = i.id::text AND m.fingerprint IS DISTINCT FROM "
-                                      "md5(json_build_array(i.collection_id, i.eth_address, i.name, i.description, i.thumbnail, "
-                                      "i.video, i.type, i.rarity, i.price, i.beneficiary, i.data, i.metrics, i.utility, "
-                                      "i.mappings, i.urn_suffix, i.blockchain_item_id, i.is_published, i.in_catalyst, "
-                                      "i.total_supply, i.local_content_hash, i.content_hash, i.catalyst_content_hash, "
-                                      "i.created_at, i.updated_at, i.video_named_by)::text);\n").strip(), '0')
 
     def test_when_upstream_holds_an_item_whose_urn_differs_from_its_collections_it_should_leave_it_out(self):
         db = self.curated_world('content_builder_urn_fits')
@@ -739,7 +736,7 @@ class ContentMigrationCases:
                 (f"DELETE FROM builder.collections WHERE id = '{COLLECTION}'", COLLECTION)],
             'builder.items': [
                 (f"INSERT INTO builder.items (id, eth_address, name, type) VALUES ('{new}', '{self.STRANGER}', 'Loose', 'wearable')", new),
-                (f"UPDATE builder.items SET in_catalyst = true WHERE id = '{self.TP_ITEM}'", self.TP_ITEM),
+                (f"UPDATE builder.items SET data = '{{\"category\": \"hat\"}}' WHERE id = '{self.TP_ITEM}'", self.TP_ITEM),
                 (f"DELETE FROM builder.items WHERE id = '{self.TP_ITEM}'", self.TP_ITEM)],
             'builder.item_contents': [
                 (f"INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ('{ITEM}', 'x.png', 'bafkx', '{OWNER}')",
@@ -985,3 +982,134 @@ class ContentMigrationCases:
                 self.assertEqual(out.count(': 1 rows (inserted or upserted '), 8, out)
         self.assertEqual(self.sql(tgt, """SELECT (SELECT count(*) FROM builder.collections), (SELECT count(*) FROM builder.items),
                                                  (SELECT count(*) FROM dcl_migration.builder_imported);\n""").strip(), '0\t0\t0')
+
+    def test_when_upstream_names_a_file_the_node_refuses_it_should_leave_that_items_contents_out_and_load_the_others(self):
+        db = self.curated_world('content_builder_refused_file_name')
+        other = '7a200000-0000-4000-8000-00000000002a'
+        self.linked_item(db, other)
+        self.sql(db, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                     "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
+        said = self.content_load(db, 'builder-server', 'item_content', [
+            f"'{ITEM}', 'model.glb', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'",
+            f"'{other}', 'thumbnail.png', 'bafkamodel', '{OWNER}', 0, '2026-02-01Z'",
+            f"'{other}', 'models\\hat.glb', 'bafkamodel', '{OWNER}', 1, '2026-02-01Z'"])
+        self.assertEqual(self.sql(db, "SELECT string_agg(item_id || ' ' || file, ',' ORDER BY item_id) "
+                                      "FROM builder.item_contents;\n").strip(), f'{ITEM} model.glb', said)
+        self.assertIn(f'1 items whose contents name a file the node refuses are left out with their contents, '
+                      f'first: {other}', said)
+
+    def test_when_upstream_saved_an_item_naming_a_file_the_node_refuses_the_run_should_leave_the_item_out_and_finish(self):
+        src, tgt = self.builder_source('builder_refused_file_src'), self.content_db('builder_refused_file_tgt')
+        refused = '7a300000-0000-4000-8000-00000000003a'
+        self.sql(src, f"""INSERT INTO items VALUES ('{refused}', '{self.LINKED}', '{OWNER}', 'Cap', 'd', NULL, NULL,
+                              'wearable', NULL, NULL, NULL, '{{}}', NULL, NULL, NULL, 'cap', NULL, 0, NULL,
+                              '{{"thumbnail.png": "bafkamodel", "models\\\\hat.glb": "bafkamodel"}}',
+                              '2026-01-01', '2026-01-02');\n""")
+        self.sql(tgt, "INSERT INTO dcl_migration.blob_inventory (source, object_key, hash, size, content_type) VALUES "
+                      "('builder-server', 'bafkamodel', 'bafkamodel', 5, 'model/gltf-binary');\n")
+        env = {'BUILDER_SERVER_DATABASE_URL': self.url(src), 'TARGET_DATABASE_URL': self.url(tgt),
+               'FORUM_URL': 'https://forum.example.test'}
+        err = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, env), contextlib.redirect_stderr(err):
+            code, out = self.migrate('run', 'builder-server', sources_dir=harness.migrate.SOURCES)
+        self.assertEqual(code, 0, out + err.getvalue())
+        self.assertEqual(self.sql(tgt, "SELECT string_agg(i.id || ' ' || COALESCE(c.file, '-'), ',') FROM builder.items i "
+                                       "LEFT JOIN builder.item_contents c ON c.item_id = i.id;\n").strip(),
+                         f'{ITEM} model.glb')
+        self.assertIn(f'first: {refused}', out + err.getvalue())
+
+    def start_over(self, db):
+        self.sql(db, f"\\i {harness.migrate.psql_path(harness.migrate.SOURCES / 'builder-server' / 'start_over.sql')}\n")
+
+    def test_when_upstream_swapped_two_items_parts_a_rerun_should_leave_both_out_and_a_start_over_should_carry_both(self):
+        db = self.curated_world('content_builder_item_swap')
+        a, b = '7a000000-0000-4000-8000-00000000000a', '7b000000-0000-4000-8000-00000000000b'
+
+        def items(updated, a_part, b_part, a_name='Linked hat', b_name='Linked hat'):
+            return [self.linked_rows(a, 'hats', item_updated=updated, name=a_name)[1].replace(f':hats:{a[:8]}', f':hats:{a_part}'),
+                    self.linked_rows(b, 'hats', item_updated=updated, name=b_name)[1].replace(f':hats:{b[:8]}', f':hats:{b_part}')]
+        parts = f"SELECT string_agg(name || ' ' || substring(urn_suffix FROM '[^:]*$'), ',' ORDER BY id) " \
+                f"FROM builder.items WHERE id IN ('{a}', '{b}');\n"
+        self.content_load(db, 'builder-server', 'item', items('2026-02-01Z', 'left', 'right'))
+        swapped = items('2026-03-01Z', 'right', 'left', 'A now right', 'B now left')
+        said = self.content_load(db, 'builder-server', 'item', swapped)
+        self.assertEqual(self.sql(db, parts).strip(), 'Linked hat left,Linked hat right', said)
+        self.assertIn(f'2 items whose URN another item holds are left out, first: {a}, {b}; if upstream holds no such '
+                      f'duplicate (a swap, or a row deleted and created again), start over', said)
+        self.start_over(db)
+        self.content_load(db, 'builder-server', 'collection', [self.linked_rows(a, 'hats')[0]])
+        self.content_load(db, 'builder-server', 'item', swapped)
+        self.assertEqual(self.sql(db, parts).strip(), 'A now right right,B now left left')
+
+    def test_when_upstream_swapped_two_collections_urns_a_rerun_should_leave_both_out_and_a_start_over_should_carry_both(self):
+        db = self.curated_world('content_builder_collection_swap')
+        other = '7c000000-0000-4000-8000-00000000000c'
+        self.content_load(db, 'builder-server', 'collection', [self.linked_rows(ITEM, 'caps')[0].replace(self.LINKED, other)])
+        swapped = [self.linked_rows(ITEM, 'caps', '2026-03-01Z')[0],
+                   self.linked_rows(ITEM, 'hats', '2026-03-01Z')[0].replace(self.LINKED, other)]
+        urns = (f"SELECT string_agg(substring(urn_suffix FROM '[^:]*$'), ',' ORDER BY id) "
+                f"FROM builder.collections WHERE id IN ('{self.LINKED}', '{other}');\n")
+        said = self.content_load(db, 'builder-server', 'collection', swapped)
+        self.assertEqual(self.sql(db, urns).strip(), 'hats,caps', said)
+        self.assertIn('2 third-party collections whose URN another collection holds are left out', said)
+        self.assertIn('start over', said)
+        self.start_over(db)
+        self.content_load(db, 'builder-server', 'collection', swapped)
+        self.assertEqual(self.sql(db, urns).strip(), 'caps,hats')
+
+    def test_when_upstream_deleted_a_collection_and_created_it_again_under_its_urn_a_start_over_should_join_its_items(self):
+        db = self.curated_world('content_builder_collection_recreated')
+        item, again, new_item = ('7d000000-0000-4000-8000-00000000000d', '7e000000-0000-4000-8000-00000000000e',
+                                 '7f000000-0000-4000-8000-00000000000f')
+        self.linked_item(db, item)
+        collection = self.linked_rows(ITEM, 'hats', '2026-03-01Z')[0].replace(self.LINKED, again)
+        new_row = self.linked_rows(new_item, 'hats', item_updated='2026-03-01Z')[1].replace(self.LINKED, again)
+        joined = (f"SELECT (SELECT count(*) FROM builder.collections WHERE id = '{again}'), "
+                  f"(SELECT collection_id FROM builder.items WHERE id = '{new_item}');\n")
+        said = self.content_load(db, 'builder-server', 'collection', [collection])
+        self.content_load(db, 'builder-server', 'item', [new_row])
+        self.assertEqual(self.sql(db, joined).strip('\n'), '0\t', said)
+        self.assertIn(f'first: {again}; if upstream holds no such duplicate', said)
+        self.start_over(db)
+        self.content_load(db, 'builder-server', 'collection', [collection])
+        self.content_load(db, 'builder-server', 'item', [new_row])
+        self.assertEqual(self.sql(db, joined).strip(), f'1\t{again}')
+
+    def test_when_the_node_took_builder_writes_a_start_over_should_refuse_and_empty_nothing(self):
+        world = self.imported_world('content_builder_start_over_world')
+        for write, refusal in (
+                (f"UPDATE builder.items SET name = 'Node' WHERE id = '{self.TP_ITEM}'",
+                 f'builder.items: 1 rows, first: {self.TP_ITEM}.*import no longer applies'),
+                (f"INSERT INTO builder.collection_publications (collection_id, preparation, status) "
+                 f"VALUES ('{COLLECTION}', '{{\"revision\": 1}}', 'prepared')", 'collection publications')):
+            with self.subTest(write=write):
+                db = self.clone(world, 'content_builder_start_over_refused')
+                self.sql(db, write + ';\n')
+                before = self.builder_digest(db)
+                with self.assertRaisesRegex(harness.migrate.MigrationError, refusal):
+                    self.start_over(db)
+                self.assertEqual(self.builder_digest(db), before)
+
+    def test_when_a_node_row_appears_between_a_steps_batches_the_next_batch_should_stop_rather_than_adopt_it(self):
+        squat = '7e100000-0000-4000-8000-00000000001e'
+        collection, item = self.builder_rows('Victim', '2026-02-01Z')
+        for step_name, write, row, key in (
+                ('collection', f"INSERT INTO builder.collections (id, name, eth_address, salt) "
+                               f"VALUES ('{squat}', 'Stranger', '{self.STRANGER}', '')",
+                 collection.replace(COLLECTION, squat), 'collections_pkey'),
+                ('item', f"INSERT INTO builder.items (id, eth_address, name, type) "
+                         f"VALUES ('{squat}', '{self.STRANGER}', 'Stranger', 'wearable')",
+                 item.replace(ITEM, squat), 'items_pkey')):
+            with self.subTest(step=step_name):
+                db = self.curated_world(f'content_builder_mid_step_{step_name}')
+                self.sql(db, write + ';\n')
+                step = next(s for s in harness.migrate.load_source(harness.migrate.SOURCES / 'builder-server').steps
+                            if s.name == step_name)
+                defs = ', '.join(f'"{n}" {t}' for n, t in step.columns)
+                later_batch = ''.join(line + '\n' for line in harness.migrate.builder_checks(step, False))
+                with self.assertRaisesRegex(harness.migrate.MigrationError, key):
+                    self.sql(db, "\\set forum_url 'https://forum.example.test'\n"
+                                 f"BEGIN;\nCREATE TEMP TABLE stage ({defs}) ON COMMIT DROP;\nINSERT INTO stage VALUES ({row});\n"
+                                 f"{later_batch}{step.load.read_text()}\nCOMMIT;\n")
+                self.assertEqual(self.sql(db, f"SELECT name, eth_address FROM builder.{step_name}s WHERE id = '{squat}';\n").strip(),
+                                 f'Stranger\t{self.STRANGER}')

@@ -20,10 +20,10 @@ SELECT s.id, c.id AS collection_id, lower(s.eth_address) AS eth_address, btrim(s
        s.blockchain_item_id, s.is_published, s.total_supply, s.local_content_hash, s.content_hash,
        s.created_at AT TIME ZONE 'UTC' AS created_at, s.updated_at AT TIME ZONE 'UTC' AS updated_at,
        CASE WHEN s.video IS NOT NULL THEN lower(s.eth_address) END AS video_named_by,
-       i.id IS NOT NULL AS imported
+       m.id IS NOT NULL AS imported
 FROM stage s
 LEFT JOIN builder.collections c ON c.id = s.collection_id
-LEFT JOIN builder.items i ON i.id = s.id;
+LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item' AND m.id = s.id::text;
 
 CREATE TEMP TABLE changed_item ON COMMIT DROP AS
 SELECT s.id, i.collection_id AS unit_collection, CASE WHEN i.collection_id IS NULL THEN i.id END AS unit_item
@@ -89,7 +89,7 @@ DO $left_out$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
     FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM item_plan WHERE NOT urn_free) k;
   IF n > 0 THEN RAISE NOTICE
-    'builder-server/item: % items whose URN another item holds are left out, first: %', n, ids;
+    'builder-server/item: % items whose URN another item holds are left out, first: %; if upstream holds no such duplicate (a swap, or a row deleted and created again), start over (MAPPING.md, "Start over")', n, ids;
   END IF; END $left_out$;
 
 WITH refreshed AS (

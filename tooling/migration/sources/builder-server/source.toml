@@ -24,7 +24,8 @@ No step has a watermark: published/curation state is derived from other
 tables, so every run re-scans. dcl_migration.builder_imported records every
 row the import wrote to the builder tables it loads, with a fingerprint of
 the node row; a re-run refreshes those rows from upstream. Deletions
-upstream are not detected.
+upstream are not detected: the final sync starts over (start_over.sql,
+MAPPING.md "Start over").
 
 The import writes only into a node whose builder rows are exactly what it
 left there: each step's first batch refuses, before writing, a node holding

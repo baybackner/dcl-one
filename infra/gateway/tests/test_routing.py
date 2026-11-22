@@ -117,13 +117,22 @@ class CorsFallbackTest(unittest.TestCase):
                                     upstream_http_access_control_allow_origin=upstream)
         return request["cors_fallback"]
 
+    @staticmethod
+    def builder_root_routes():
+        """Every route of the builder's root mount (`api_routes` in builder/src/lib.rs), with sample parameters,
+        except `/v1/items...`, which the apex host gives to another area's alias."""
+        source = (Path(__file__).parents[3] / "services/catalyst/builder/src/lib.rs").read_text()
+        table = source[source.index("fn api_routes()"):source.index("fn finish(")]
+        routes = {re.sub(r"\{[^}]+\}", "x", path.replace("{address}", "0x" + "0" * 39 + "1"))
+                  for path in re.findall(r'"(/v1/[^"]*)"', table)}
+        return sorted(route for route in routes if not re.match(r"/v1/items(/|$)", route))
+
     def test_the_builder_answers_keep_the_origins_the_node_decided(self):
+        routes = self.builder_root_routes()
+        self.assertIn("/v1/thirdParties/x/slots", routes)
         for host, path in [("builder-api.example.test", "/v1/collections/x"),
                            ("example.test", "/builder-api/v1/storage/contents/x"),
-                           *(("example.test", f"/v1/{route}") for route in (
-                               "addresses/0x1/collections", "collections", "collections/x", "committee", "curations",
-                               "drafts/items", "info", "newsletter", "published-collections/x", "rarities",
-                               "storage/contents/x", "third-parties", "validator/claims"))]:
+                           *(("example.test", route) for route in routes)]:
             with self.subTest(host=host, path=path):
                 self.assertEqual(self.fallback(host, path), "")
                 self.assertEqual(self.fallback(host, path, "https://create.example.test"), "")
@@ -131,6 +140,7 @@ class CorsFallbackTest(unittest.TestCase):
     def test_every_other_answer_without_an_origin_gets_the_wildcard(self):
         for host, path in [("example.test", "/shop-api/v1/x"), ("example.test", "/v1/communities/x"),
                            ("example.test", "/v1/items/x"), ("example.test", "/v1/collectionsx"),
+                           ("example.test", "/v1/cart/items"),
                            ("places.example.test", "/api/places"), ("example.test", "/builder-apix/v1")]:
             with self.subTest(host=host, path=path):
                 self.assertEqual(self.fallback(host, path), "*")

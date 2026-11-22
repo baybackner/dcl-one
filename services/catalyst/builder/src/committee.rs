@@ -226,6 +226,14 @@ mod tests {
         assert_eq!(members(&pool).await.unwrap_err().status(), 503);
         assert!(!known_member(&pool, PENDING).await);
 
+        publish_committee_at(&pool, 210, "timezone('UTC', now()) + interval '1 hour'").await;
+        assert_eq!(
+            is_member(&pool, PENDING).await.unwrap_err().status(),
+            503,
+            "a publish stamped in the future can't tell"
+        );
+        assert!(!known_member(&pool, PENDING).await);
+
         publish_committee_at(&pool, 210, "timezone('UTC', now())").await;
         sqlx::query("ALTER TABLE shop.committee_event RENAME TO committee_event_gone")
             .execute(&pool)

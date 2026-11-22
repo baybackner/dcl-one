@@ -4,11 +4,11 @@ SELECT s.id, btrim(s.name) AS name, lower(s.eth_address) AS eth_address, s.salt,
        lower(s.linked_contract_address) AS linked_contract_address, s.linked_contract_network, s.lock,
        CASE WHEN s.web_link THEN s.forum_link END AS forum_link,
        CASE WHEN s.web_link AND s.forum_id > 0 THEN s.forum_id END AS forum_id,
-       c.id IS NOT NULL AS imported
+       m.id IS NOT NULL AS imported
 FROM (SELECT *, COALESCE(forum_link ~ '^https?://[^[:space:]]+$' AND char_length(forum_link) <= 2048
                          AND left(forum_link, char_length(:'forum_url') + 1) = :'forum_url' || '/', false) AS web_link
       FROM stage) s
-LEFT JOIN builder.collections c ON c.id = s.id;
+LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection' AND m.id = s.id::text;
 
 CREATE TEMP TABLE changed_collection ON COMMIT DROP AS
 SELECT s.id FROM incoming_collection s JOIN builder.collections c ON c.id = s.id
@@ -40,7 +40,7 @@ DO $left_out$ DECLARE n bigint; ids text; BEGIN
   SELECT count(*), string_agg(id::text, ', ' ORDER BY id) FILTER (WHERE rn <= 10) INTO n, ids
     FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM collection_urn_taken) k;
   IF n > 0 THEN RAISE NOTICE
-    'builder-server/collection: % third-party collections whose URN another collection holds are left out, first: %', n, ids;
+    'builder-server/collection: % third-party collections whose URN another collection holds are left out, first: %; if upstream holds no such duplicate (a swap, or a row deleted and created again), start over (MAPPING.md, "Start over")', n, ids;
   END IF; END $left_out$;
 
 CREATE TEMP TABLE refreshed_collection ON COMMIT DROP AS

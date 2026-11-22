@@ -58,9 +58,10 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   provider (`third_party_id`, compared exactly) holds the same item part,
   compared lowercased. A new or changed collection or item whose URN is
   taken, by a row on the node or another row of the same batch, is left
-  out. Upstream deletions aren't detected (see "Re-runs"), so an item
-  upstream deleted and created again under its URN keeps its first copy on
-  the node, and the new one is left out.
+  out. Upstream deletions aren't detected (see "Re-runs"), so an item or
+  collection upstream deleted and created again under its URN keeps its
+  first copy on the node, and the new one is left out. Two rows that swapped
+  URNs upstream are both left out. "Start over" carries both cases.
 
 ## Before the first run
 
@@ -93,8 +94,14 @@ the production size of builder-server.
 
 Each step reports in its log what it left out, by count and first ids:
 
-- A third-party collection or item whose URN another row holds: fix the
-  duplicate upstream (or accept that the row stays out), then run again.
+- A third-party collection or item whose URN another row holds: if
+  upstream holds the duplicate, fix it upstream (or accept that the row
+  stays out), then run again. If upstream holds no duplicate (two rows
+  swapped URNs, or a row was deleted and created again under its URN),
+  start over (see "Start over").
+- An item whose `contents` names a file the node refuses: fix the name
+  upstream (or accept that the item stays out), then run again (see
+  "Blobs").
 - A new item whose URN doesn't start with its collection's URN, or a changed
   one left as the node holds it: upstream holds an inconsistent item; fix it
   upstream or accept it.
@@ -177,6 +184,14 @@ object_key, hash, size)` with `source = 'builder-server'` and
 hash whose inventory size is over 250,000,000 bytes, the largest file the node keeps
 (`builder.uploaded_contents.size`; an item's video up to that size, any other file too).
 
+Upstream accepts any file name in `contents`; the node refuses an empty
+name, one over 256 characters and one with a backslash. An item whose
+`contents` names such a file is left out whole, so the node never holds an
+item whose files don't make up its content hash: `item` doesn't take that
+save (the node keeps the item's earlier save, or doesn't hold the item),
+and `item_content` writes none of its files and reports it by count and
+first ids. Once the name is fixed upstream, the next run takes the item.
+
 ## Not migrated
 
 - `projects`, `asset_packs`, `assets`, `deployments`, `pools`,
@@ -199,6 +214,11 @@ with an md5 of the node row as the import left it: collections, items,
 virtual third parties, curations, events and cheques by id, item contents by
 item id and file, upload records by uploader and hash. A step records only
 the rows it inserted or refreshed, in the batch's transaction.
+
+A step treats an upstream row as one it imported only when the ledger
+records it. A row the node created under the same id, for example between
+two batches of a step while writes were open, stops that batch on its key
+instead of taking upstream's values, and the next run refuses the node.
 
 On a later run, still with creator writes closed:
 
@@ -236,3 +256,41 @@ the contents it had (none, for an item new to that run) until the next run,
 which brings the row and then its contents to the later save. Upstream
 deletions, including files removed from an item's `contents`, are not
 detected.
+
+## Start over
+
+A re-run carries what upstream changed in place, but not what upstream
+deleted, and it checks a URN against the rows the node holds. So these stay
+as the node holds them on every later run, each reported as left out
+because another row holds its URN:
+
+- Two third-party items of one provider that swapped item parts.
+- Two third-party collections that swapped URNs.
+- A collection or item deleted upstream and created again under its URN.
+  The new collection's items are imported loose.
+
+Make the final sync a start-over followed by a run, so the node equals
+upstream whatever changed between rehearsals; start over earlier too
+whenever a run leaves rows out with no duplicate upstream. Start over only
+while creator writes have stayed closed since the first run, and don't run
+the node's storage GC until the run that follows has finished: the copied
+blobs are unreferenced in between.
+
+```sh
+psql "$TARGET_DATABASE_URL" -X -f tooling/migration/sources/builder-server/start_over.sql
+```
+
+`start_over.sql` works in one transaction:
+
+1. It runs the check from "Before the first run" and refuses, emptying
+   nothing, a node that took builder writes. It also refuses a node holding
+   a `builder.collection_publications` or `builder.validation_requests` row,
+   which only a builder write makes.
+2. It empties the nine tables the check reads, with
+   `builder.collection_publications` and `builder.validation_requests`.
+3. It deletes every row of `dcl_migration.builder_imported` and the
+   `builder-server` rows of `dcl_migration.checkpoint`.
+
+The node then holds no builder rows, and the next `migrate.py run
+builder-server` is a first run: it imports upstream as it is then. The blob
+inventory stays, so the blobs need no second copy.
