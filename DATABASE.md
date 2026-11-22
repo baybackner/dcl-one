@@ -1743,9 +1743,14 @@ The `credits-reminders` job reads progress rows of the current week and grants
 for its weekly reminders by the progress and grant primary keys. Wallets with no
 completed goal receive the do-not-miss-out reminder; wallets with both completed
 and pending goals receive the complete-goals reminder. Partial steps do not count
-as completion.
+as completion. Each season permits only one goal definition, `take-photo`, so a
+wallet cannot have both completed and pending goals in the same week: the
+complete-goals reminder is never sent with the current schema. A partially
+completed `take-photo` receives do-not-miss-out instead.
 Reminder selection does not apply enrollment, opt-out, claim-block or wallet-flag
 restrictions; grant and claim authorization still enforce their own policy.
+Program opt-out does not unsubscribe from reminders; email delivery still applies
+the recipient's notification preferences.
 Its usage reminders require progress in any week of the current or last season,
 using the progress primary-key prefix by address and season, and read claimed
 grants expiring within seven days or one day through
