@@ -8,7 +8,7 @@ use sqlx::{
 };
 const STEP: &str = "0020_social_voice_notifications";
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 47] = [
+const PREPARED_PENDING_STEPS: [&str; 49] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -41,21 +41,23 @@ const PREPARED_PENDING_STEPS: [&str; 47] = [
     "0051_explore_auth_identity_request_id",
     "0052_shop_committee_index",
     "0053_shop_bid_received_producer",
-    "0054_builder_scenes_retired",
-    "0055_shop_items_content_hash",
-    "0056_builder_collection_flags_retired",
-    "0057_builder_collection_listings",
-    "0058_builder_item_contents_order",
-    "0059_builder_item_contents_named_by",
-    "0060_builder_item_video_named_by",
-    "0061_builder_collection_lock",
-    "0062_builder_collection_forum",
-    "0063_builder_collection_forum_claim",
-    "0064_builder_linked_publications_retired",
-    "0065_builder_uploaded_video_size",
-    "0066_builder_validation_retry",
-    "0067_builder_slot_cheques_outlive_collections",
-    "0068_builder_uploaded_video_checked",
+    "0054_shop_chain_cursor_ownership",
+    "0055_shop_chain_cursor_divergence",
+    "0056_builder_scenes_retired",
+    "0057_shop_items_content_hash",
+    "0058_builder_collection_flags_retired",
+    "0059_builder_collection_listings",
+    "0060_builder_item_contents_order",
+    "0061_builder_item_contents_named_by",
+    "0062_builder_item_video_named_by",
+    "0063_builder_collection_lock",
+    "0064_builder_collection_forum",
+    "0065_builder_collection_forum_claim",
+    "0066_builder_linked_publications_retired",
+    "0067_builder_uploaded_video_size",
+    "0068_builder_validation_retry",
+    "0069_builder_slot_cheques_outlive_collections",
+    "0070_builder_uploaded_video_checked",
 ];
 const PREPARED_V2: &str = include_str!(concat!(
     env!("DCL_ONE_ROOT"),

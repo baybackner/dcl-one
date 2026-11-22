@@ -556,10 +556,11 @@ pub async fn record_committee_event(
 /// `folded_at`.
 pub async fn publish_committee_at(pool: &sqlx::PgPool, block: i64, folded_at: &str) {
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history) \
-         VALUES ('committee', 'matic', 0, {block}, {block}, {block}, {folded_at}, true) \
+        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history, chain_id) \
+         VALUES ('committee', 'matic', 0, {block}, {block}, {block}, {folded_at}, true, 137) \
          ON CONFLICT (indexer, network) DO UPDATE SET last_block = GREATEST(shop.chain_cursor.last_block, EXCLUDED.last_block), \
-           folded_block = EXCLUDED.folded_block, fold_through = EXCLUDED.fold_through, folded_at = EXCLUDED.folded_at, full_history = true"
+           folded_block = EXCLUDED.folded_block, fold_through = EXCLUDED.fold_through, folded_at = EXCLUDED.folded_at, full_history = true, \
+           chain_id = EXCLUDED.chain_id"
     )))
     .execute(pool)
     .await

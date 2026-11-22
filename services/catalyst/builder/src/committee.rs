@@ -7,8 +7,9 @@
 //!
 //! Every question reads the index afresh, so a wallet removed from the
 //! committee loses the role once the index publishes the block that removed
-//! it. An unpublished index, one published more than 30 minutes ago, or a
-//! failed read can't tell who is on the committee: [`members`] and
+//! it. An unpublished index, one not bound to Polygon (chain 137) or in
+//! quarantine, one published more than 30 minutes ago, or a failed read
+//! can't tell who is on the committee: [`members`] and
 //! [`is_member`] answer 503 then, never an empty committee, and
 //! [`known_member`] answers false.
 
@@ -26,6 +27,7 @@ const MEMBERS_SQL: &str = "\
 WITH ready AS (
   SELECT folded_block FROM shop.chain_cursor
   WHERE indexer = 'committee' AND network = 'matic' AND full_history
+    AND chain_id = 137 AND quarantined_at IS NULL
     AND folded_block IS NOT NULL
     AND folded_at <= timezone('UTC', statement_timestamp())
     AND folded_at >= timezone('UTC', statement_timestamp()) - interval '30 minutes'
@@ -50,7 +52,7 @@ pub struct Member {
 }
 
 /// The current members, lowercase and sorted; `None` while the index is
-/// unpublished or stale.
+/// unpublished, unbound, in quarantine or stale.
 pub async fn current_members<'e>(
     pool: impl sqlx::PgExecutor<'e>,
 ) -> Result<Option<Vec<String>>, sqlx::Error> {
@@ -162,6 +164,40 @@ mod tests {
             "past the published block"
         );
         assert!(known_member(&pool, MEMBER).await);
+
+        for (cursor, why) in [
+            ("chain_id = NULL", "an unadopted cursor can't tell"),
+            ("chain_id = 1", "a cursor bound to another chain can't tell"),
+            (
+                "quarantined_at = timezone('UTC', now()), quarantine_reason = 'hash differs'",
+                "a cursor in quarantine can't tell",
+            ),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE shop.chain_cursor SET {cursor} WHERE indexer = 'committee'"
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                is_member(&pool, MEMBER).await.unwrap_err().status(),
+                503,
+                "{why}"
+            );
+            assert_eq!(members(&pool).await.unwrap_err().status(), 503, "{why}");
+            assert!(!known_member(&pool, MEMBER).await, "{why}");
+            sqlx::query(
+                "UPDATE shop.chain_cursor SET chain_id = 137, quarantined_at = NULL, quarantine_reason = NULL \
+                 WHERE indexer = 'committee'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        assert!(
+            is_member(&pool, MEMBER).await.unwrap(),
+            "once bound and out of quarantine"
+        );
 
         sqlx::query("UPDATE shop.chain_cursor SET last_block = 200 WHERE indexer = 'committee'")
             .execute(&pool)

@@ -2361,8 +2361,8 @@ async fn seed(pool: &sqlx::PgPool, seed: &Seed) {
         .unwrap_or_else(|e| panic!("seed.json committee member {member}: {e}"));
     }
     sqlx::query(
-        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history) \
-         VALUES ('committee', 'matic', 0, 1, 1, 1, timezone('UTC', now()), true)",
+        "INSERT INTO shop.chain_cursor (indexer, network, start_block, last_block, folded_block, fold_through, folded_at, full_history, chain_id) \
+         VALUES ('committee', 'matic', 0, 1, 1, 1, timezone('UTC', now()), true, 137)",
     )
     .execute(pool)
     .await

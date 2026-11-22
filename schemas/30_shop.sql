@@ -377,12 +377,48 @@ CREATE TABLE shop.chain_cursor (
     full_history boolean NOT NULL,
     reorg_rewinds integer NOT NULL DEFAULT 0,
     updated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    -- The chain the history was read from, as the source proved it; NULL on
+    -- a row written before the binding until a pass proves it (not ready).
+    chain_id bigint,
+    -- Raised by the job that takes the projection, on the session holding
+    -- its lease; every write to the projection checks it before commit.
+    owner_generation bigint NOT NULL DEFAULT 0,
+    -- A history not proven on the expected chain: not walked, rewound or
+    -- published until an operator revalidates or rebuilds it.
+    quarantined_at timestamp without time zone,
+    quarantine_reason text,
+    -- Set by an operator: the owner rebuilds the projection from its start
+    -- block with its own cleanup, in a fenced transaction.
+    rebuild_requested_at timestamp without time zone,
+    -- Set when the cursor block was found on another branch than its stored
+    -- hash, with the publication withdrawn, while the recovery searches;
+    -- cleared by the rewind or by a pass that proves the cursor again.
+    -- Readers of the height without the publication skip it meanwhile.
+    diverged_at timestamp without time zone,
     PRIMARY KEY (indexer, network),
     CONSTRAINT chain_cursor_indexer_known CHECK (indexer IN ('nft', 'trade_events', 'rentals', 'mana_transfers', 'sales', 'committee')),
     CONSTRAINT chain_cursor_network_known CHECK (network IN ('ethereum', 'matic')),
     CONSTRAINT chain_cursor_fold_within_indexed CHECK (fold_through IS NULL OR fold_through <= last_block),
     CONSTRAINT chain_cursor_folded_within_indexed CHECK (folded_block IS NULL OR folded_block <= last_block),
-    CONSTRAINT chain_cursor_hash_shape CHECK (last_block_hash IS NULL OR last_block_hash ~ '^0x[0-9a-f]{64}$')
+    CONSTRAINT chain_cursor_hash_shape CHECK (last_block_hash IS NULL OR last_block_hash ~ '^0x[0-9a-f]{64}$'),
+    CONSTRAINT chain_cursor_quarantine_reason CHECK ((quarantined_at IS NULL) = (quarantine_reason IS NULL))
+);
+
+-- The points a projection's cursor committed (a window's end, read in the
+-- same bracket as its logs and proven to extend the point before it), the
+-- newest 64 per projection, written with each advance. A reorg past the
+-- confirmation depth rewinds to the newest one still on the chain instead of
+-- the start block; that rewind drops the ones past it, a full rewind or a
+-- rebuild all of them. Read only once a reorg is seen.
+CREATE TABLE shop.chain_checkpoint (
+    indexer text NOT NULL,
+    network text NOT NULL,
+    block_number bigint NOT NULL,
+    block_hash text NOT NULL,
+    block_time bigint NOT NULL,
+    PRIMARY KEY (indexer, network, block_number),
+    FOREIGN KEY (indexer, network) REFERENCES shop.chain_cursor (indexer, network) ON DELETE CASCADE,
+    CONSTRAINT chain_checkpoint_hash_shape CHECK (block_hash ~ '^0x[0-9a-f]{64}$')
 );
 
 -- The collections the nft walk has taken in, and from which block. A
@@ -16904,6 +16940,20 @@ CREATE INDEX nft_bid_seller_unknown_idx ON shop.nft_bid (network) WHERE seller I
 
 -- The fold's "open bids a later acceptance invalidated".
 CREATE INDEX nft_bid_open_idx ON shop.nft_bid (network) WHERE status = 'open';
+
+-- The nft walk's rewinds, for the bids fold: a seller inferred from the nft
+-- walk's transfers may name an owner the rewind took away, so the next fold
+-- infers again the seller of every bid created past `from_block` (a seller
+-- a sale event names stays), then deletes the rows it read. One row per nft
+-- rewind on Polygon (a reorg past the confirmation depth, or a rebuild),
+-- written in the rewind's transaction.
+CREATE TABLE shop.bid_seller_recheck (
+    id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    network text NOT NULL,
+    from_block bigint NOT NULL,
+    recorded_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    CONSTRAINT bid_seller_recheck_network_known CHECK (network IN ('ethereum', 'matic'))
+);
 
 -- The venues a sale's royalties are computed for, with the cut the pinned
 -- contracts charge (`royaltiesCutPerMillion()`, read once at start and
