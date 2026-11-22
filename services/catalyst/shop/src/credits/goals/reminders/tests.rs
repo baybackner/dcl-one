@@ -961,3 +961,147 @@ async fn usage_reconciliation_rolls_back_with_the_notification_write() {
     assert_eq!(sent(pool).await.len(), 2);
     db.drop().await;
 }
+
+/// A claimed grant whose creation and claim match the simulated timeline.
+async fn claimed_grant_at(
+    pool: &sqlx::PgPool,
+    a: &str,
+    season: i32,
+    week: i32,
+    wei: &str,
+    claimed: NaiveDateTime,
+    expires: NaiveDateTime,
+) {
+    grant(pool, a, season, week, wei, expires, true).await;
+    sqlx::query("UPDATE credits.goal_grants SET created_at=$2,claimed_at=$2 WHERE salt=$1")
+        .bind(grant_salt(a, season, week))
+        .bind(claimed)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Records the simulated run time as the creation time of new notices.
+async fn created_during(pool: &sqlx::PgPool, a: &str, kind: Kind, at: NaiveDateTime) {
+    sqlx::query("UPDATE social.notifications SET created_at=$3 WHERE address=$1 AND type=$2 AND created_at>$3")
+        .bind(a)
+        .bind(kind.notification_type())
+        .bind(at)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn usage_delivers_distinct_expiry_batches_within_one_selected_season() {
+    let Some(db) = OwnDatabase::create("usage_expiry_batches").await else {
+        return;
+    };
+    let pool = &db.pool;
+    // Consecutive seasons with three grace days; no later season before January.
+    season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
+    season(pool, 2, "2026-11-30 00:00", "2026-12-28 00:00").await;
+    sqlx::query("UPDATE credits.seasons SET grace_days=3")
+        .execute(pool)
+        .await
+        .unwrap();
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    for (n, kind, first_run, second_run) in [
+        (1, Kind::Usage, at("2026-11-30 09:00"), at("2026-12-24 09:00")),
+        (
+            2,
+            Kind::Usage24Hours,
+            at("2026-12-02 12:00"),
+            at("2026-12-30 12:00"),
+        ),
+    ] {
+        let a = wallet(pool, n).await;
+        progress(pool, &a, 1, 4, 2).await;
+        progress(pool, &a, 2, 1, 2).await;
+        let first_expiry = at("2026-12-03 00:00");
+        let second_expiry = at("2026-12-31 00:00");
+        claimed_grant_at(
+            pool,
+            &a,
+            1,
+            4,
+            "1000000000000000000",
+            at("2026-11-27 10:00"),
+            first_expiry,
+        )
+        .await;
+        assert_eq!(
+            current_or_last(pool, first_run).await.unwrap().unwrap().id,
+            2
+        );
+        assert_eq!(
+            run(&state, &gate, kind, first_run, &cancel).await.unwrap(),
+            1
+        );
+        created_during(pool, &a, kind, first_run).await;
+        assert_eq!(
+            run(&state, &gate, kind, first_run, &cancel).await.unwrap(),
+            0
+        );
+        // The first notice was read and its email sent.
+        sqlx::query("UPDATE social.notifications SET read=true,read_at=$2 WHERE address=$1")
+            .bind(&a)
+            .bind(first_run)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social.notification_deliveries d SET state='sent' FROM social.notifications n WHERE n.id=d.notification_id AND n.address=$1")
+            .bind(&a)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        claimed_grant_at(
+            pool,
+            &a,
+            2,
+            1,
+            "2000000000000000000",
+            at("2026-12-07 10:00"),
+            second_expiry,
+        )
+        .await;
+        assert_eq!(
+            current_or_last(pool, second_run).await.unwrap().unwrap().id,
+            2
+        );
+        assert_eq!(
+            run(&state, &gate, kind, second_run, &cancel).await.unwrap(),
+            1,
+            "{kind:?}: a later expiry batch in the same season must be delivered"
+        );
+        created_during(pool, &a, kind, second_run).await;
+        assert_eq!(
+            run(&state, &gate, kind, second_run, &cancel).await.unwrap(),
+            0
+        );
+
+        let rows: Vec<(bool, Value, String)> = sqlx::query_as(
+            "SELECT n.read,n.metadata,d.state FROM social.notifications n JOIN social.notification_deliveries d ON d.notification_id=n.id WHERE n.address=$1 AND n.type=$2 ORDER BY n.created_at",
+        )
+        .bind(&a)
+        .bind(kind.notification_type())
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2, "{kind:?}: one notice and delivery per batch");
+        assert!(rows[0].0);
+        assert_eq!(rows[0].1["expirationDate"], json!("December 3"));
+        assert_eq!(rows[0].1["balance"], json!(1));
+        assert_eq!(rows[0].2, "sent");
+        assert!(!rows[1].0);
+        assert_eq!(rows[1].1["expirationDate"], json!("December 31"));
+        assert_eq!(rows[1].1["balance"], json!(2));
+        assert_eq!(rows[1].2, "pending");
+    }
+    db.drop().await;
+}
