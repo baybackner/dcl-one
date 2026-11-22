@@ -415,6 +415,56 @@ class ConfigurationTest(unittest.TestCase):
                 self.assertIn("proxy_pass http://apis;", alias)
                 self.assertIn(cap, alias)
 
+    def test_notifications_ingest_cap_admits_the_service_limit(self):
+        source = (Path(__file__).parents[3] / "services/catalyst/social/src/notifications/ingest.rs").read_text()
+        expr = re.search(r"pub const MAX_BODY_BYTES: usize = ([^;]+);", source)[1]
+        self.assertRegex(expr, r"^[\d\s*+()]+$")
+        cap = f"client_max_body_size {eval(expr) // (1024 * 1024) + 1}m;"
+        cfg = gateway.settings({"GATEWAY_DOMAIN": "example.test", "GATEWAY_RESOLVERS": "127.0.0.1"})
+        table = self.production_table()
+        config = gateway.render(table, cfg, "/mime.types")
+        row = next(row for row in table["aliases"] if row["key"] == "= /notifications")
+        for host, path in [("example.test", "/notifications/notifications"),
+                           ("example.test", "/notifications"),
+                           ("notifications.example.test", "/notifications")]:
+            with self.subTest(host=host, path=path):
+                uri, _ = nginx_map.route(config, host, path)
+                location = re.search(rf"location = {re.escape(uri)} \{{\n(.*?)\n\}}", config, re.S)
+                body = location[1] if location else re.search(r"location / \{\n(.*?)\n\}", config, re.S)[1]
+                self.assertIn(cap, body)
+                self.assertIn("proxy_pass http://apis;", body)
+                self.assertIn(f"limit_conn notification_ingest_uploads {gateway.DEPLOY_CONNECTIONS_PER_ADDRESS};", body)
+                if uri == "/notifications":
+                    self.assertIn(f"rewrite ^(.*)$ {row['to'].replace('$uri', '$1')} break;", body)
+        # Other notification routes retain the server's default body cap.
+        for path in ["/notifications/read", "/notifications/broadcast", "/notifications/email",
+                     "/notifications/notifications/read", "/notifications/notifications/",
+                     "/notifications/notifications/extra"]:
+            with self.subTest(path=path):
+                for key, body in re.findall(r"^location (.+?) \{\n(.*?)\n\}", config, re.M | re.S):
+                    if key in ("= " + path, "/"):
+                        self.assertNotIn(cap, body)
+                        self.assertNotIn("limit_conn notification_ingest_uploads", body)
+
+    def test_notifications_ingest_connection_cap_counts_only_posts(self):
+        cfg = gateway.settings({"GATEWAY_RESOLVERS": "127.0.0.1"})
+        config = gateway.render(self.production_table(), cfg, "/mime.types")
+        maps = nginx_map.parse(config)
+        self.assertIn("notification_ingest_upload_key", maps)
+        self.assertIn("limit_conn_zone $notification_ingest_upload_key zone=notification_ingest_uploads:10m;", config)
+        for method in ["POST", "GET", "HEAD", "OPTIONS", "PUT", "DELETE"]:
+            with self.subTest(method=method):
+                request = nginx_map.Request(maps, request_method=method, binary_remote_addr="client-address")
+                self.assertEqual(request["notification_ingest_upload_key"],
+                                 "client-address" if method == "POST" else "")
+
+    def test_table_without_the_notifications_ingest_alias_is_rejected(self):
+        table = self.production_table()
+        gateway.check_table(table)
+        table["aliases"] = [row for row in table["aliases"] if row["key"] != "= /notifications"]
+        with self.assertRaisesRegex(ValueError, "notifications"):
+            gateway.check_table(table)
+
     def test_table_without_the_camera_reel_alias_is_rejected(self):
         table = self.production_table()
         gateway.check_table(table)

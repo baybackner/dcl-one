@@ -318,6 +318,13 @@ def client(args):
                        body=b"x" * (1024 * 1024 + 1))
     assert deployed[0] == 200, ("worlds deploy body cap", deployed)
     assert json.loads(deployed[1])["path"] == "/worlds-content-server/entities", deployed
+    for path, vhost in [("/notifications/notifications", "example.test"),
+                        ("/notifications", "example.test"),
+                        ("/notifications", "notifications.example.test")]:
+        ingested = request(public, path, vhost=vhost, method="POST", body=b"x" * (1024 * 1024 + 1))
+        assert ingested[0] == 200, ("notifications ingest body cap", vhost, path, ingested)
+        forwarded = json.loads(ingested[1])
+        assert (forwarded["upstream"], forwarded["path"]) == ("apis", "/notifications/notifications"), ingested
     for path in ["/world/w.dcl.eth/settings", "/worlds-content-server/world/w.dcl.eth/settings"]:
         updated = request(public, path, vhost="worlds-content-server.example.test" if path.startswith("/world/")
                           else "example.test", method="PUT", body=b"x" * (1024 * 1024 + 1))
