@@ -2,7 +2,7 @@
 
 ## Public URLs and image paths
 
-Set `PUBLIC_URL` to the externally reachable node base URL, including its port and any deployment prefix. Stored poster keys use the `/events-assets-099ac00` mount on the configured public base. The bind address is used for local serving. An unset `PUBLIC_URL` leaves mounted poster links relative for same-origin clients. `EVENTS_BASE_URL` identifies the public events website for sitemaps and notification page links. Configure it as the Sites origin that serves `/events`, `/events?tab=my` and `/events/edit-event/<id>`; its default `https://events.decentraland.org` must be checked against the deployed routes. It does not select the backend asset origin. Reminder, start and approval jump links keep `JUMP_IN_SITE_URL`.
+Set `PUBLIC_URL` to the externally reachable node base URL, including its port and any deployment prefix. Stored poster keys use the `/events-assets-099ac00` mount on the configured public base. The bind address is used for local serving. An unset `PUBLIC_URL` leaves mounted poster links relative for same-origin clients. `EVENTS_SITE_URL` selects the Sites origin for notification page links (`/events`, `/events?tab=my` and `/events/edit-event/<id>`), defaulting to `https://decentraland.org`. `EVENTS_BASE_URL` retains the legacy event website origin for sitemaps, world-event default posters and Slack links, defaulting to `https://events.decentraland.org`. Neither selects the backend asset origin. Reminder, start and approval jump links keep `JUMP_IN_SITE_URL`.
 
 An event created without a poster gets the old service's default (`createEvent.ts:209-224`): the parcel map `https://api.decentraland.org/v1/parcels/<x>/<y>/map.png` (the estate map `/v1/estates/<id>/map.png` once the scene's estate is known) for a land event, `EVENTS_BASE_URL/images/event-default.jpg` for a world event. The default is regenerated when the event moves and when a world event's poster is cleared; an organizer's own poster is never replaced. A row whose image is the local default `/assets/event-default.webp` expands it to `PUBLIC_URL/events/assets/event-default.webp` in responses and notifications.
 
@@ -138,3 +138,27 @@ queues one notice for the occurrence, with the count of its local `going` RSVPs,
 transaction that finishes the reminders, so an occurrence is announced at most once and
 a crash repeats neither. Delivery, retries and retention are the outbox's
 (`moderation-hook` job). Off, the reminders still go out and no Slack notice is queued.
+
+## Activation with imported event history
+
+Keep event jobs stopped on every target process until imported notification
+identity has been checked and repaired. Keep target `catalyst serve` processes
+stopped, or configure every target process with `FLEET_JOBS_ENABLED=false` during
+the cutover; this stands down all fleet jobs, not only event notifications.
+Disabling Social writes alone does not establish this prerequisite.
+
+The deployment owner must confirm whether the database previously imported
+notification history or attendance without event identity or import provenance.
+For notification history, freeze source writers and run a full
+`run notifications-workers --step notification --restart` import before enabling
+jobs. An incremental import cannot repair older rows outside its watermark.
+Verify that affected event rows carry their exact event identity. Complete the
+Events attendance import and reconciliation against the authoritative source,
+retaining later local changes.
+
+If required source records no longer exist, an earlier authoritative export is
+needed to identify the exact historical rows. The current database alone cannot
+prove that coverage. Keep jobs stopped until that evidence is reconciled or the
+deployment owner explicitly accepts the remaining historical limitation. A
+database that never ran the legacy import does not require an import repair.
+This prerequisite is operational; the worker does not enforce an import marker.

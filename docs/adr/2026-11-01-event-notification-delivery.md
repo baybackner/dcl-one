@@ -80,8 +80,10 @@ insert creates an email delivery. Keeping notification rows preserves this rule
 after intent cleanup and terminal delivery pruning.
 
 Runtime and imports use the existing `(address, broadcast_key)` uniqueness and
-hold the same sorted wallet transaction locks while adopting history and writing
-rows. An existing keyed carrier wins; otherwise the earliest exact native event
+hold the same numerically ordered wallet-bucket transaction locks while adopting
+history and writing rows. The shared 256-bucket namespace bounds retained locks
+for both recipient pages and whole-transaction imports; hash collisions serialize
+additional wallets without changing their notification identity. An existing keyed carrier wins; otherwise the earliest exact native event
 match keeps its ID, visibility, reads and delivery history. Existing duplicate
 history is not consolidated. Imports retain exact source event keys and source
 times and never create deliveries. An authoritative full notification import

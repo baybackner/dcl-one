@@ -202,6 +202,8 @@ where
 /// Event delivery opts into in-app preferences without silently changing the
 /// established behavior of other producers. Hidden rows are already read so
 /// they never enter the bell's partial unread index; email remains independent.
+/// Call once with the transaction's complete event batch to keep bucket-lock
+/// acquisition ordered across the transaction.
 pub async fn insert_event_notifications(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     batch: &[NewNotification],
@@ -212,9 +214,12 @@ pub async fn insert_event_notifications(
     let mut addresses: Vec<&str> = batch.iter().map(|n| n.address.as_str()).collect();
     addresses.sort_unstable();
     addresses.dedup();
+    // The import uses this same namespace and ordered set of 256 buckets.
+    // Whole-transaction imports retain a bounded lock set regardless of audience size.
     sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('notifications.user:' || address, 0))
-         FROM (SELECT unnest($1::text[]) AS address ORDER BY address) wallets",
+        "SELECT pg_advisory_xact_lock(1163284052, bucket)
+         FROM (SELECT DISTINCT (hashtextextended(address, 0) & 255)::integer AS bucket
+               FROM unnest($1::text[]) AS wallets(address) ORDER BY bucket) buckets",
     )
     .bind(&addresses)
     .execute(&mut **tx)

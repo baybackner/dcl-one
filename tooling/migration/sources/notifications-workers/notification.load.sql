@@ -70,9 +70,13 @@ SELECT s.id AS source_id, pg_temp.nw_ingest_id(s.type, s.address, s.event_key, s
        s.occurred_at, s.read_at, s.created_at, s.updated_at
 FROM stage s;
 
--- Runtime and import adopt the same carrier under the same wallet lock.
-SELECT pg_advisory_xact_lock(hashtextextended('notifications.user:' || address, 0))
-FROM (SELECT DISTINCT address FROM nw_notification WHERE broadcast_key IS NOT NULL ORDER BY address) wallets;
+-- Runtime and import adopt the same carrier under the same ordered bucket locks.
+DO $locks$
+BEGIN
+    PERFORM pg_advisory_xact_lock(1163284052, bucket)
+    FROM (SELECT DISTINCT (hashtextextended(address, 0) & 255)::integer AS bucket
+          FROM nw_notification WHERE broadcast_key IS NOT NULL ORDER BY bucket) buckets;
+END $locks$;
 
 UPDATE social.notifications t SET broadcast_key=c.broadcast_key
 FROM (

@@ -523,8 +523,11 @@ type. A repeated notice refreshes only when `metadata.occurredAt` is strictly
 newer; equal source times keep the first payload. Visibility and read state stay
 as first stored, and only a new row creates a delivery. Notification rows remain
 the durable deduplication evidence after intent and terminal delivery cleanup.
-Runtime and the notification import hold the same sorted wallet notification
-locks through historical identity adoption and upsert. An existing keyed carrier
+Runtime and the notification import hold the same transaction locks through
+historical identity adoption and upsert. Each wallet maps to one of 256 buckets:
+`(1163284052, (hashtextextended(address, 0) & 255)::integer)` in PostgreSQL's
+two-integer advisory namespace. Distinct buckets are locked in numeric order,
+bounding retained event locks at 256 even during whole-transaction dry runs. An existing keyed carrier
 wins; otherwise the earliest exact native event match retains its ID. Existing
 historical duplicates are not deleted. The import also recognizes exact source
 IDs, retains event keys and never creates email deliveries.

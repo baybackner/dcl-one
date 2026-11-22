@@ -107,7 +107,11 @@ the final pass is still emailed by each.
 The six event kinds (`events_starts_soon`, `events_started`, `event_created`,
 `event_approved`, `event_rejected`, `event_deleted`) use the source `event_key`,
 not the source timestamp, as event identity. The loader and runtime use the same
-sorted wallet transaction locks and keyed carrier. Existing keyed rows win;
+numerically ordered wallet-bucket transaction locks and keyed carrier. Both
+writers use the two-integer advisory key
+`(1163284052, (hashtextextended(address, 0) & 255)::integer)`, so each transaction
+retains at most 256 event locks even in a whole-transaction dry run. Hash collisions
+only serialize additional wallets. Existing keyed rows win;
 otherwise an exact source ID or native event match retains its ID, visibility,
 read state and delivery evidence. The import creates no email delivery and never
 overwrites newer source metadata on the node; equal source times keep the first

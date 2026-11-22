@@ -148,6 +148,36 @@ class ContentMigrationCases:
         self.assertEqual(self.sql(tgt, "SELECT tier_name FROM social.badge_tiers "
                                        "WHERE tier_id = 'emotionista-bronze';\n").strip(), 'Node tier')
 
+    def test_event_notice_import_bounds_locks_in_batches_and_dry_runs(self):
+        src, tgt = self.notifications_dbs()
+        self.sql(src, "DELETE FROM notifications WHERE address IS NOT NULL; INSERT INTO notifications "
+                     "SELECT md5(g::text)::uuid, 'series', 'events_started', "
+                     "'0x' || lpad(to_hex(g),40,'0'), '{}', "
+                     "1767225600000, NULL, 1767225600000, 1767225600000 "
+                     "FROM generate_series(1,1024) g;")
+        self.sql(tgt, """
+            CREATE FUNCTION public.check_notice_lock_bound() RETURNS trigger LANGUAGE plpgsql AS $f$
+            BEGIN
+              IF (SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid()
+                  AND locktype='advisory' AND granted) > 257 THEN
+                RAISE EXCEPTION 'event import retained more than 256 wallet bucket locks';
+              END IF;
+              RETURN NULL;
+            END $f$;
+            CREATE TRIGGER check_notice_lock_bound BEFORE INSERT ON social.notifications
+            FOR EACH STATEMENT EXECUTE FUNCTION public.check_notice_lock_bound();
+        """)
+        args = ('run', 'notifications-workers', '--step', 'notification', '--batch-size', '4096')
+        for dry in (True, False):
+            with self.subTest(dry_run=dry):
+                code, out = self.migrate(*args, *(('--dry-run',) if dry else ()),
+                                         sources_dir=harness.migrate.SOURCES)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.count(tgt, 'social.notifications'), 0 if dry else 1024)
+                if dry:
+                    self.assertEqual(self.sql(tgt, "SELECT to_regnamespace('dcl_migration') IS NULL;").strip(), 't')
+                self.assertEqual(self.count(tgt, 'social.notification_deliveries'), 0)
+
     def test_event_notice_import_preserves_identity_and_newer_runtime_rows(self):
         db = self.content_db('event_notice_history')
         kinds = ('events_starts_soon', 'events_started', 'event_created',

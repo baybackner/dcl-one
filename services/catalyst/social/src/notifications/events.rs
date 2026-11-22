@@ -678,6 +678,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn event_notice_lock_count_is_bounded_and_reverse_batches_complete() {
+        let pool = crate::db::scratch::isolated_pool(8)
+            .await
+            .expect("real PostgreSQL required");
+        let now = Utc::now().naive_utc();
+        let batch: Vec<NewNotification> = (0..1024)
+            .map(|i| NewNotification {
+                id: Uuid::new_v4(),
+                address: Address::parse(&format!("0x{i:040x}")).unwrap(),
+                kind: "events_started".into(),
+                metadata: json!({"eventId":"lock-series","occurredAt":js_iso(now)}),
+                occurred_at: now,
+            })
+            .collect();
+        let write = |batch: Vec<NewNotification>| {
+            let pool = pool.clone();
+            async move {
+                let mut tx = pool.begin().await.unwrap();
+                insert_event_notifications(&mut tx, &batch).await.unwrap();
+                let locks: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND granted")
+                    .fetch_one(&mut *tx).await.unwrap();
+                assert!(
+                    locks <= 256,
+                    "event writer retained {locks} locks for 1024 recipients"
+                );
+                tx.commit().await.unwrap();
+            }
+        };
+        let mut reversed = batch.clone();
+        reversed.reverse();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(write(batch), write(reversed));
+        })
+        .await
+        .expect("reverse recipient orders must not deadlock");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM social.notifications WHERE metadata->>'eventId'='lock-series'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1024);
+    }
+
+    #[tokio::test]
+    async fn event_notice_import_and_runtime_serialize_history_adoption() {
+        let pool = crate::db::scratch::isolated_pool(8)
+            .await
+            .expect("real PostgreSQL required");
+        let old_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.notifications(id,address,type,metadata,occurred_at,in_app,read,read_at) VALUES($1,$2,'event_rejected','{}','2026-01-01',false,true,'2026-01-01')")
+            .bind(old_id).bind(HOST).execute(&pool).await.unwrap();
+        let mut imported = pool.begin().await.unwrap();
+        let import_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *imported)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TEMP TABLE stage(id uuid,event_key text,address text,type text,metadata jsonb,occurred_at timestamptz,read_at timestamptz,created_at timestamptz,updated_at timestamptz) ON COMMIT DROP")
+            .execute(&mut *imported).await.unwrap();
+        sqlx::query("INSERT INTO stage VALUES($1,'import-series',$2,'event_rejected','{\"name\":\"Imported\"}','2026-01-01Z',NULL,'2026-01-01Z','2026-01-01Z')")
+            .bind(old_id).bind(HOST).execute(&mut *imported).await.unwrap();
+        let load = include_str!(concat!(
+            env!("DCL_ONE_ROOT"),
+            "/tooling/migration/sources/notifications-workers/notification.load.sql"
+        ));
+        sqlx::raw_sql(load).execute(&mut *imported).await.unwrap();
+        let mut runtime = pool.begin().await.unwrap();
+        let runtime_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *runtime)
+            .await
+            .unwrap();
+        let writer = tokio::spawn(async move {
+            let row = NewNotification {
+                id: Uuid::new_v4(),
+                address: Address::parse(HOST).unwrap(),
+                kind: "event_rejected".into(),
+                metadata: json!({"eventId":"import-series","name":"Runtime","occurredAt":"2026-02-01T00:00:00Z"}),
+                occurred_at: chrono::NaiveDate::from_ymd_opt(2026, 2, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            };
+            insert_event_notifications(&mut runtime, &[row])
+                .await
+                .unwrap();
+            runtime.commit().await.unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let blockers: Vec<i32> = sqlx::query_scalar("SELECT pg_blocking_pids($1)")
+                    .bind(runtime_pid)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                if blockers.contains(&import_pid) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("runtime must wait for the import's wallet lock");
+        imported.commit().await.unwrap();
+        writer.await.unwrap();
+        let row: (Uuid,String,bool,bool,i64) = sqlx::query_as("SELECT id,metadata->>'name',in_app,read,(SELECT count(*) FROM social.notification_deliveries d WHERE d.notification_id=n.id) FROM social.notifications n WHERE address=$1 AND type='event_rejected'")
+            .bind(HOST).fetch_one(&pool).await.unwrap();
+        assert_eq!(row, (old_id, "Runtime".into(), false, true, 0));
+    }
+
+    #[tokio::test]
     async fn recurring_event_notifies_and_emails_once_per_event() {
         let pool = crate::db::scratch::isolated_pool(8)
             .await
