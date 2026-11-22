@@ -150,6 +150,46 @@ enum ShopCommand {
         #[arg(long, env = "USER", hide_env_values = true)]
         actor: Option<String>,
     },
+    /// Compare one chain index's logs over a block range as the RPC and a
+    /// portal speaking the SQD portal protocol return them, window by
+    /// window. Read-only: a read-only database connection for the index's
+    /// filters, no lease, no write, no schema bootstrap. The RPC is
+    /// `ETH_RPC_URL` or `RPC_ENDPOINT_POLYGON` (or their `_FILE`), the portal
+    /// key `CHAIN_LOGS_PORTAL_API_KEY` (or its `_FILE`). The network, the
+    /// dataset and the RPC must name one chain, or the run is refused. A
+    /// read that fails ends the run with what was compared and the rest
+    /// uncovered. Prints one JSON report, whatever happens; exits 4 when
+    /// refused, else 1 when anything differed, else 3 when part of the range
+    /// or a compared field was not compared, else 0. Without a report, 2 is
+    /// a usage error and 1 a process setup error before the command runs (an
+    /// invalid NODE_POSTURE): a difference always prints its report.
+    CompareSources {
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
+        database_url: String,
+        #[arg(long, value_parser = ["ethereum", "matic"])]
+        net: String,
+        #[arg(long, value_parser = ["nft", "sales", "trade_events", "committee", "mana_transfers", "rentals"])]
+        indexer: String,
+        #[arg(long)]
+        from: u64,
+        #[arg(long)]
+        to: u64,
+        /// Blocks per window.
+        #[arg(long, default_value_t = 10_000)]
+        window: u64,
+        #[arg(long, env = "CHAIN_LOGS_PORTAL_URL")]
+        portal_url: String,
+        /// The portal dataset; CHAIN_LOGS_PORTAL_DATASET_<NET> when not
+        /// given, else the network's mainnet dataset.
+        #[arg(long)]
+        dataset: Option<String>,
+        #[arg(long, env = "CHAIN_LOGS_PORTAL_MAX_RPS", default_value_t = 1.0)]
+        max_rps: f64,
+        /// Report the portal as holding every log of its dataset: an
+        /// operator assertion, labelled as such.
+        #[arg(long, env = "CHAIN_LOGS_PORTAL_ASSERT_FULL_HISTORY", default_value_t = false, action = clap::ArgAction::Set)]
+        assert_full_history: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -671,6 +711,114 @@ async fn run(
             let out = rewind(&pool, &producer, from, trade_chains, actor, dry_run).await?;
             println!("{}", serde_json::to_string(&out)?);
             Ok(())
+        }
+        Command::Shop {
+            command:
+                ShopCommand::CompareSources {
+                    database_url,
+                    net,
+                    indexer,
+                    from,
+                    to,
+                    window,
+                    portal_url,
+                    dataset,
+                    max_rps,
+                    assert_full_history,
+                },
+        } => {
+            use catalyst::shop::market::chain_walk::ChainNet;
+            use catalyst::shop::market::compare_sources;
+            tracing_subscriber::fmt()
+                .with_target(false)
+                .with_writer(std::io::stderr)
+                .init();
+            // The dataset as `serve` names it: the flag, else
+            // CHAIN_LOGS_PORTAL_DATASET_<NET>, else the network's mainnet.
+            let dataset = dataset.unwrap_or_else(|| {
+                let (var, default) = match ChainNet::parse(&net) {
+                    Some(ChainNet::Ethereum) => {
+                        ("CHAIN_LOGS_PORTAL_DATASET_ETHEREUM", "ethereum-mainnet")
+                    }
+                    _ => ("CHAIN_LOGS_PORTAL_DATASET_MATIC", "polygon-mainnet"),
+                };
+                std::env::var(var)
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| default.to_string())
+            });
+            // Every outcome prints a report: a setup that cannot run is
+            // refused, never raised (an error exit would read as a difference).
+            let setup = || -> anyhow::Result<(ChainNet, String, catalyst::chain_index::portal::PortalReader)> {
+                let net = ChainNet::parse(&net).context("--net")?;
+                anyhow::ensure!(
+                    max_rps.is_finite() && max_rps > 0.0,
+                    "--max-rps (CHAIN_LOGS_PORTAL_MAX_RPS) must be above 0"
+                );
+                let rpc_var = match net {
+                    ChainNet::Ethereum => "ETH_RPC_URL",
+                    ChainNet::Matic => "RPC_ENDPOINT_POLYGON",
+                };
+                let rpc_url = catalyst::config::Config::secret_from_env(rpc_var)?
+                    .with_context(|| format!("set {rpc_var} (or {rpc_var}_FILE)"))?;
+                let key = catalyst::config::Config::secret_from_env("CHAIN_LOGS_PORTAL_API_KEY")?
+                    .and_then(catalyst::chain_index::portal::Secret::new);
+                let reader = catalyst::chain_index::portal::PortalReader::new(
+                    &portal_url,
+                    &dataset,
+                    key,
+                    max_rps,
+                )
+                .map_err(anyhow::Error::msg)?;
+                Ok((net, rpc_url, reader))
+            };
+            let report = match setup() {
+                Err(e) => compare_sources::Report::refused(
+                    &net,
+                    &indexer,
+                    &dataset,
+                    from,
+                    to,
+                    format!("{e:#}"),
+                ),
+                Ok((net_v, rpc_url, reader)) => match catalyst::http::Outbound::new(
+                    catalyst::http::HttpClientCfg::default(),
+                ) {
+                    Err(e) => compare_sources::Report::refused(
+                        &net,
+                        &indexer,
+                        &dataset,
+                        from,
+                        to,
+                        format!("the outbound client: {}", e.without_url()),
+                    ),
+                    Ok(http) => compare_sources::command(
+                        &database_url,
+                        &http.allowing_configured_provider_hosts(),
+                        compare_sources::Request {
+                            net: net_v,
+                            indexer: indexer.clone(),
+                            from,
+                            to,
+                            window,
+                            rpc_url,
+                            reader,
+                            history: if assert_full_history {
+                                catalyst::chain_index::portal::AddressHistory::AssertedByOperator
+                            } else {
+                                catalyst::chain_index::portal::AddressHistory::Unknown
+                            },
+                        },
+                    )
+                    .await,
+                },
+            };
+            println!("{}", serde_json::to_string(&report)?);
+            match report.exit_code() {
+                0 => Ok(()),
+                code => std::process::exit(code),
+            }
         }
         Command::Communities {
             command:
