@@ -490,7 +490,7 @@ intents, and the object pass recreates the changed due/creator indexes.
 The places channel carries operator disables and rating upgrades, and a
 creator's rating change: a stricter rating, which the row takes
 (`rating_upgraded`), or a laxer one, which it keeps out
-(`rating_downgrade_refused`; step `0054_explore_rating_downgrade_notice` admits
+(`rating_downgrade_refused`; step `0056_explore_rating_downgrade_notice` admits
 the kind). A creator notice is captured in the transaction of the deployment
 pass or world write that saw the change, once per new deployment or setting
 write, and only while the places webhook is configured; an unsent downgrade
@@ -899,13 +899,35 @@ Peer sync is not a backup of local state: a node taking local writes holds the o
 one writer of `social.notifications` and its `social.notification_deliveries`
 email row, for every producer: Social's own and Shop's sale, royalty, transfer,
 rental, on-chain bid (`bid_received`, `shop/src/market/bid_notices.rs`), tip,
-favorite-discount, credits and goal notices. Each batch is one statement on the
-producer's executor, so the notice commits with the producer's transaction: an
-upsert by `id` (or by `(address, broadcast_key)` for keyed notices) and, for new
-rows only, a `pending` delivery row, or `skipped` with the reason when the type has
-no template or the recipient cannot receive it. Social owns both tables, reads
-them and delivers the email; `with_emailable_kinds!` is the one list of templated
-types the writer and Social's templates share.
+favorite-discount, credits and goal notices. Writes use the producer's executor,
+so the notice commits with the producer's transaction. Ordinary batches use one
+statement and upsert by `id` (or by `(address, broadcast_key)` for keyed notices),
+refreshing metadata and occurrence time. Worlds' three quota kinds
+(`worlds_missing_resources`, `worlds_access_restricted`, `worlds_access_restored`)
+carry an explicit producer persistence policy: one first notice per wallet,
+kind and UTC date of block creation, including restoration on a later day.
+Social sorts quota notices by wallet; for each notice, the shared writer takes
+that wallet's transaction-scoped notification lock before aliasing and
+inserting. The locks remain held until transaction completion, in a namespace
+distinct from Worlds' quota locks. The writer links the
+three exact native notice IDs derived from the block's full creation timestamp
+to daily `broadcast_key` values where no daily carrier already exists before
+inserting the current notice. A linked row keeps its ID, metadata, occurrence
+time, read state and email delivery records; a new daily notice uses the
+canonical daily ID. Repeated daily keys leave that first row unchanged.
+Aliasing and insertion use the mutation's
+transaction and existing notification keys; no table or index is added.
+Only a new notification gets a `pending` delivery row, or `skipped` with the
+reason when the type has no template or the recipient cannot receive it.
+Social owns both tables, reads them and delivers the email;
+`with_emailable_kinds!` is the one list of templated types the writer and
+Social's templates share.
+
+The [quota notice identity decision](docs/adr/2026-11-21-world-quota-notice-identity.md)
+retains a cutover boundary: already closed native blocks or imported rows that
+cannot be linked from exact creation facts can overlap with the first daily
+notice. This writer does not reconstruct missing timestamps or consolidate all
+historical duplicates.
 
 ## Social realtime notification workload
 
@@ -1702,6 +1724,29 @@ The object pass creates only objects the database lacks, so it then skips the
 index. A failed concurrent build leaves an invalid index of that name: drop it
 before retrying.
 
+## Camera reel World gallery lookup
+
+World gallery requests resolve a name to scene IDs before reading public photos.
+On a cache miss, Camera Reel reads enabled scene rows from
+`explore.place_indexed` and active `explore.world_scene_place` identities joined
+to their exact `(world_name, entity_id)` deployment in `worlds.world_scenes`
+and their parent in `worlds.worlds`. A known identity takes precedence over a
+catalogue row bearing its UUID, including a retired identity. Eligible identities
+also resolve to their original catalogue IDs in the requested World, preserving
+uppercase and `urn:uuid:` spellings for photos whose `place_id` retains them.
+An alias cannot bypass the identity's eligibility checks. The World-name
+aggregate is not a scene. Listing visibility does not control photo eligibility.
+Canonical scene resolution excludes blocked Worlds and disabled scenes or
+parents through `explore.place_moderation` and catalogue state.
+
+These are read-only shared SQL edges through the existing pool. The active
+identity index's World-name prefix, deployment key and moderation primary keys
+serve the lookup; no extra projection or index is maintained. The result is a
+sorted, deduplicated ID list held under the configured cache capacity and TTL,
+so changes to scene eligibility may remain cached until expiry. GET and batch
+POST use the same resolver; photo privacy, review and deletion filters apply
+after resolution. Production lookup rates and latency have not been measured.
+
 ## Camera reel photo events workload
 
 `camera_reel.photo_events` (`schemas/50_create.sql`) is the append-only outbox
@@ -1886,8 +1931,8 @@ default, and social writes are), each a reader of tables other areas own, with o
   entity or `shop.items`;
 - `shop.sale_event` (`mint`, `bid_accepted`), `shop.trade_event` (`traded`)
   and `shop.nft_event` (`order_successful`) on Polygon by (block, log index),
-  each up to the block its index published in `shop.chain_cursor`
-  (emotionista, fashionista; one step per transaction hash, a legacy order
+  each up to the block its index published in `shop.chain_cursor`, a
+  cursor bound to chain 137 and out of quarantine (emotionista, fashionista; one step per transaction hash, a legacy order
   indexed before `nft_event.tx_hash` was recorded counted by its chain
   position until a re-index fills the hash). An off-chain good counts for
   its `beneficiary` in `trade_event.assets`; a legacy order bought by a fiat
@@ -2146,6 +2191,221 @@ each publication or archive transition appends a row to
 `social.badge_catalog_audit`; `badge_admin_audit` keeps per-wallet grants and
 revokes, whose `address` a catalog write does not have.
 
+## Market chain index cursors
+
+`shop.chain_cursor` holds one row per projection: an index (`nft`,
+`trade_events`, `rentals`, `mana_transfers`, `sales`, `committee`) on one
+network (`ethereum`, `matic`). A window commit writes it once, and so do a
+fold record, a publish and a rewind; the table stays at a dozen rows.
+`shop.chain_checkpoint` holds each projection's recovery points (see
+"Reorgs").
+
+**Ownership.** Each network has a supervisor job, `chain-walk-ethereum` and
+`chain-walk-matic`, in the process that runs the indexes. It walks each
+projection that process enables under the projection's own lease,
+`<index job>-<network>` (`nft-index-matic`, `trade-events-index-matic`,
+`rentals-index-ethereum`), so
+processes with different projections enabled share a network. Each
+projection keeps its own cadence and backoff, though one that reached the
+target may join a due companion's shared walk ahead of its own turn, so
+projections walking together go at the faster cadence. A process that runs no fleet
+jobs (`FLEET_JOBS_ENABLED=false`) takes no lease and walks nothing.
+
+The projections a supervisor holds that read the same endpoint and stand at
+the same checkpoint (block, hash, whole history) walk their windows
+together: each window is read once for all of them, and each projection
+takes the logs its own filters take and commits them with its own cursor
+advance, in its own fenced transaction, nft before sales. Each closes (folds
+and publishes) on its own. A window read they share that fails sends each
+back to its own checkpoint, alone, with what is left of its budget, and its
+walk after that is alone too, on a whole budget. A read they all need first
+(the chain id, the checkpoint's header, the head and the finalized block) is
+tried again once after half a second; if it still fails, each one's attempt
+fails and waits out its own backoff.
+
+The supervisor claims a projection on the session that holds its lease. The
+claim raises `owner_generation` in one bounded transaction
+(`statement_timeout` 2 s, `lock_timeout` 1.5 s) and creates the row when
+there is none. The supervisor keeps that generation for the lease
+acquisition. A lost lease ends the projection's pass at once, even inside a
+fold; transactions it had already committed stay, and the generation fences
+any later one.
+
+Every transaction that writes the projection ends by locking the row
+(`SELECT … FOR UPDATE`) and comparing that generation, the chain binding and
+the quarantine. On a mismatch it rolls back, so a job that lost the
+projection commits nothing. This covers:
+- the window's rows with the cursor advance (which also requires the
+  checkpoint it read, height and hash);
+- a reorg rewind, and the withdrawal of a diverged checkpoint's publication;
+- the nft backfill lane;
+- each fold, including each trade-events digest batch;
+- the fold record, the publish and its withdrawal.
+
+The lock is taken last, so it lasts only as long as the commit. A writer
+that also moves the notification producers' cursors (a rewind, a rebuild,
+the nft lane) moves them before it locks this row. A fenced
+job drops its generation, and its next pass claims again, which only works
+while it still holds the lease.
+
+**Binding.** `chain_id` is the chain the history was read from, as the
+source proved it at the claim. The walk checks the source's chain every
+pass; a source of another chain fails that projection's pass alone, which
+backs off on its own. A row from before the binding (`chain_id` NULL) is
+adopted at the start of a pass, before any lane, rewind, fold or publish,
+in two cases:
+- it has no history yet;
+- its stored last-block hash equals the source's hash at that height.
+
+Adoption is a compare-and-set on the generation and the checkpoint.
+
+**Quarantine.** A history that cannot be proven is set apart, with a
+reason, and its publication withdrawn:
+- a hash that differs;
+- history with no stored hash;
+- a binding to another chain.
+
+A source that does not answer decides nothing: the pass fails and is
+retried. A row in quarantine is not walked, rewound or published.
+
+**Readiness.** Readers trust a projection only when all of these hold:
+- the history is whole and `folded_block = last_block`;
+- `folded_at` is within 30 minutes;
+- it is bound to the chain the reader expects and is out of quarantine.
+
+Every index but `trade_events` reads mainnet only, so its readers expect
+chain 1 or 137. The readers of `trade_events` expect the chain the node
+configures (`MARKETPLACE_INDEX_CHAIN_ID_*`): the Rust readers and the
+notification producers pass it, and its verdict fragments in the listing
+SQL read the chains the process serves (`catalog::served_chains`). The
+transfer notices match the nft and trade-events indexes at the same
+heights, so they run only when both read Polygon mainnet. The tips' global
+cap evicts by the MANA index's newest block only while that cursor is bound
+and out of quarantine.
+
+**Reorgs.** Each window is read inside a bracket: the header at its end
+(`to`) before and after its logs, and between them the header at the block
+the window actually reached (an endpoint may narrow it) and the header at
+the checkpoint it extends. The walk assumes an endpoint that answers from
+one branch between two equal answers for the header at `to`. Under that
+assumption, the reached block's hash names the branch the logs came from,
+and the predecessor proves the window extends what was committed; a hash
+cannot attest logs from an endpoint that mixes branches. The nft backfill
+lanes read below the cursor, each read bracketed by the cursor block's
+header, which must stay its stored hash; each lane window's closing read
+opens the next. A window that extends a hashed checkpoint costs one header
+read more for its predecessor, and N lane windows in a pass cost N + 1
+header reads besides the pass's own check of the cursor block.
+
+Each advance records the block it reached, with its hash and time, in
+`shop.chain_checkpoint`, keeping the newest 64 per projection: per
+committed window, one delete of the points past the checkpoint it extends,
+one upsert and one delete below the newest 64; a few hundred rows in all,
+read only once a reorg is seen.
+
+A pass checks the cursor block's hash first. When it differs, or when a
+window's predecessor or a lane's bracket stands still on another branch
+than the stored hash, the publication is withdrawn at once, in a fenced
+transaction of its own on that exact checkpoint, and `diverged_at` is set;
+the rows, the recovery points and the notification cursors stay. Readers
+that use a cursor's height without its publication skip a diverged one, in
+the statement that reads its rows: the sales fold infers no seller from the
+nft walk's transfers, and the tips' global cap evicts no other sender's
+claim against the MANA index. The rewind clears `diverged_at`; when the
+chain flipped back before any rewind, the next pass that finds the cursor
+block on its stored hash clears it. The pass then reads the headers
+of the recovery points below the cursor, newest first and outside any
+transaction, and rewinds to the newest one still on the chain, keeping its
+hash and time. With none recorded, or every one compared and none on the
+chain, it rewinds to `start_block - 1`. A header read that fails rewinds
+nothing, and the next pass searches again. The search's reads count in the
+pass, but its budget does not cut them. A shared walk never searches: a
+member that diverged withdraws and recovers in a pass alone, which runs
+under no member deadline, and walks with others again once its checkpoint
+matches theirs.
+
+The rewind is one transaction: the notification producers' replay plan,
+the projection's own cleanup past the point, the producers' moves, the
+cursor's compare-and-set from the checkpoint it read, the pruning of the
+recovery points past the point, then the owner check. The next fold is a
+rebuild, as after any rewind.
+
+A sales fold may have inferred a bid's seller from an nft transfer before
+the nft walk saw the fork. So the nft walk's rewind on Polygon (also a
+rebuild) records its point in `shop.bid_seller_recheck`, in the rewind's
+transaction, with the deletion of the transfers past it: a fold that reads
+the row also reads the rewound transfers. The next bids fold reads those
+rows, infers again the seller of every bid created past the lowest point (a
+seller a sale event names stays), then deletes the rows it read; a row
+recorded meanwhile waits for the next fold. The table holds one row per nft
+rewind until a sales fold runs. After a rebuild the point is the start, so
+every seller inferred from a transfer is unset and comes back as the nft
+walk passes its bid again; nothing outside the bids fold reads
+`nft_bid.seller`.
+
+A database that gains the table starts with no recovery points. A search
+reads only the points below the cursor, and the first advance's point is
+the cursor itself, so a reorg seen before the second advance rewinds to the
+start, as after a bootstrap or a rebuild. The history it holds is trusted
+as found: the bracket certifies what is walked from then on, not rows
+already written. Each advance also drops the points past the checkpoint it
+extends, which no proven prefix holds.
+
+**Operator procedures.** Run each as one statement. Both raise the
+generation, which fences the current owner's writes in flight; its next
+pass claims the projection again and acts.
+
+- *Revalidate*, after a wrong endpoint was fixed. The history is kept and
+  the next pass proves it again:
+
+  ```sql
+  UPDATE shop.chain_cursor SET quarantined_at = NULL, quarantine_reason = NULL, chain_id = NULL,
+         owner_generation = owner_generation + 1
+   WHERE indexer = '<indexer>' AND network = '<network>' AND quarantined_at IS NOT NULL;
+  ```
+
+- *Rebuild*, a history that cannot be proven. The publication is withdrawn
+  at once. In one transaction, the owner's next pass:
+  1. plans the notification producers' replay from the state before the
+     cleanup;
+  2. runs the projection's own cleanup down to `start_block - 1`;
+  3. restarts the cursor there, bound to the chain it proved and out of
+     quarantine, and drops the projection's recovery points.
+
+  It then walks and folds again; the other network and the other
+  projections are untouched. Trade events also drop their derived verdict
+  rows, so every digest is recomputed from the stored trades.
+
+  A rebuild keeps the projection's chain and start block. It is refused in
+  three cases: the cursor's history is from another chain; it starts at
+  another block than this node's walk; or it has no binding and its
+  checkpoint hash is not the source's at that height. Then the cursor stays
+  in quarantine with the reason, and nothing is deleted, not even the
+  notification producers' positions. A source that does not answer decides
+  nothing. A database for another chain begins empty:
+
+  ```sql
+  UPDATE shop.chain_cursor SET rebuild_requested_at = timezone('UTC', now()),
+         folded_block = NULL, folded_at = NULL, owner_generation = owner_generation + 1
+   WHERE indexer = '<indexer>' AND network = '<network>';
+  ```
+
+**Deploys.** A binary from before step `0054_shop_chain_cursor_ownership`
+does not check `owner_generation`, and one from before the per-network
+supervisors takes leases named after the index alone (`nft-index`), which do
+not exclude the new ones. Stop the process that runs the indexes
+(`catalyst index`) before starting a newer one, and before rolling back. A
+deployment that runs the index process as one replica replaced with the
+`Recreate` strategy already does this. A binary from before
+`shop.chain_checkpoint` neither records nor drops recovery points, and its
+rewinds and walks can leave a point whose hash names a branch other than
+the rows below it. After running one, and before a newer binary starts
+again, clear them: `DELETE FROM shop.chain_checkpoint;`. (A newer binary's
+advance drops only the points past the checkpoint it extends, which does not
+cover a point below the cursor.) Such a binary also leaves `diverged_at` as
+it finds it; the newer binary's next pass that finds the cursor block on its
+stored hash clears it.
+
 ## Curation committee
 
 Builder's committee routes (the drafts and items of every wallet, another
@@ -2159,7 +2419,9 @@ once the endpoint answers chain id 137 (tens of rows, appended with the cursor a
 deleted past a reorg rewind). Builder reads, never writes, both tables by
 shared SQL in one statement: `shop.committee_event` (`network`,
 `block_number`, `log_index`, `member`, `is_member`) and `shop.chain_cursor`
-(`indexer`, `network`, `full_history`, `folded_block`, `folded_at`). A
+(`indexer`, `network`, `full_history`, `chain_id`, `quarantined_at`,
+`folded_block`, `folded_at`); the cursor must be bound to chain 137 and out
+of quarantine (see "Market chain index cursors"). A
 wallet is a member when its latest event (block, log index) at or below the
 published block (`folded_block`) set it, so rows a pass adds before its
 publish wait for it. Unlike the shop routes' readiness rule, it does not
