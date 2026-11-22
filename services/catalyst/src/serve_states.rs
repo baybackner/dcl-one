@@ -723,7 +723,7 @@ pub(super) fn social_states(
         pool.clone(),
         notifications::Settings {
             admin_token: non_empty(&config.social.catalyrst_notifications_admin_token),
-            events_base_url: public_url.clone(),
+            events_base_url: explore.settings.events_base_url.clone(),
             events_asset_base_url: explore.settings.events_asset_base_url.clone(),
             events_public_base: explore.settings.configured_public_base.clone(),
             signing_key: non_empty(&config.social.signing_key),
@@ -960,4 +960,85 @@ pub(super) fn social_states(
         rpc,
         segment_webhooks,
     })
+}
+
+#[cfg(test)]
+mod event_notice_configuration_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn event_email_origins_follow_the_public_site_and_keep_images_and_jump_links() {
+        let pool = crate::db::scratch::isolated_pool(4)
+            .await
+            .expect("real PostgreSQL required");
+        let directory =
+            std::env::temp_dir().join(format!("event-email-origins-{}", uuid::Uuid::new_v4()));
+        let storage = Arc::new(storage::Storage::from_config(&directory).await.unwrap());
+        let http = http::Outbound::for_tests();
+        let config = Config::parse_env_for_tests([
+            ("DATABASE_URL", "postgres://unused@127.0.0.1:1/postgres"),
+            ("PUBLIC_URL", "https://node.example.org"),
+            ("EVENTS_BASE_URL", "https://site.example.org"),
+            ("JUMP_IN_SITE_URL", "https://jump.example.org"),
+        ])
+        .unwrap();
+        let content = Arc::new(content::ContentState::new(
+            pool.clone(),
+            content::Settings::for_tests(),
+            storage.clone(),
+        ));
+        let market = Arc::new(shop::market::MarketplaceState::new(
+            pool.clone(),
+            http.clone(),
+            shop::market::Settings::for_tests(),
+        ));
+        let comms = Arc::new(comms::gatekeeper::CommsState::new(
+            pool.clone(),
+            http.clone(),
+            comms::gatekeeper::Settings::for_tests(),
+            None,
+            None,
+            Arc::new(comms::interfaces::test_support::StubPolicy::default()),
+            Arc::new(comms::interfaces::test_support::StubScenes::default()),
+            Arc::new(comms::presence::Presence::new()),
+            Arc::new(comms::interfaces::test_support::StubDirectory::default()),
+        ));
+        let mut settings = explore::Settings::for_tests();
+        settings.events_base_url = config.explore.events_base_url.clone();
+        settings.configured_public_base = config.node.public_url.clone();
+        settings.events_asset_base_url = "https://node.example.org/events".into();
+        settings.jump_in_site_url = config.explore.jump_in_site_url.clone();
+        let explore = Arc::new(explore::ExploreState::new(pool.clone(), settings, None));
+        let onboarding = Arc::new(explore::api::onboarding::OnboardingState::new(pool.clone()));
+        let recorder = comms::metrics::prometheus_builder()
+            .unwrap()
+            .build_recorder();
+        let social = social_states(
+            &config,
+            &pool,
+            &storage,
+            &http,
+            &content,
+            &market,
+            comms,
+            None,
+            &explore,
+            onboarding,
+            recorder.handle(),
+        )
+        .unwrap();
+        let settings = &social.notifications.settings;
+        assert_eq!(settings.events_base_url, "https://site.example.org");
+        assert_eq!(
+            settings.events_public_base.as_deref(),
+            Some("https://node.example.org")
+        );
+        assert_eq!(
+            settings.events_asset_base_url,
+            "https://node.example.org/events"
+        );
+        assert_eq!(settings.jump_in_site_url, "https://jump.example.org");
+        drop(social);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
