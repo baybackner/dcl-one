@@ -449,6 +449,70 @@ async fn a_contract_wallet_chain_without_an_rpc_validator_is_unavailable() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A contract wallet that refuses today and signed at the L1 block of `ENTITY_MS`.
+struct SignedAtEntityBlock;
+
+const ENTITY_MS: i64 = 1_700_000_000_000;
+
+#[async_trait]
+impl Eip1654Validator for SignedAtEntityBlock {
+    async fn validate_signature(&self, _: &str, _: &[u8], _: &[u8]) -> Result<bool, AuthError> {
+        Ok(false)
+    }
+
+    async fn validate_signature_at_block(
+        &self,
+        _: &str,
+        _: &[u8],
+        _: &[u8],
+        block: u64,
+    ) -> Result<bool, AuthError> {
+        Ok(block == ((ENTITY_MS / 1000 - fake_chain::GENESIS) / fake_chain::INTERVAL) as u64)
+    }
+}
+
+/// A local deploy's contract-wallet link refused at latest is asked again at the L1 block of
+/// the entity timestamp, as `@dcl/crypto` does; without an L1 RPC the refusal stands.
+#[tokio::test]
+async fn a_contract_wallet_is_asked_at_the_entity_block_after_latest_refuses() {
+    let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
+    let (storage, tmp) = temp_storage("eip1654-entity-block").await;
+    let with_l1 = Sources::new(
+        lazy_pool(),
+        storage.clone(),
+        Outbound::for_tests(),
+        Some(Arc::new(SignedAtEntityBlock)),
+        Settings {
+            l1_rpc_url: Some(chain.url.clone()),
+            ..mainnet()
+        },
+    );
+    let id = "bafkreientity";
+    let auth =
+        crate::sync_test_support::signed_chain_behind_contract(id, "2099-01-01T00:00:00.000Z")
+            .await;
+
+    ExternalCalls::validate_signature(&with_l1, id, &auth, ENTITY_MS)
+        .await
+        .unwrap();
+
+    let without_l1 = Sources::new(
+        lazy_pool(),
+        storage,
+        Outbound::for_tests(),
+        Some(Arc::new(SignedAtEntityBlock)),
+        Settings {
+            l1_rpc_url: None,
+            ..mainnet()
+        },
+    );
+    let err = ExternalCalls::validate_signature(&without_l1, id, &auth, ENTITY_MS)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Eip1654Rejected { .. }), "{err}");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[cfg(unix)]
 fn seal_shard(storage: &Storage, hash: &str) -> std::path::PathBuf {
     let shard = storage.root().join(crate::storage::hex_prefix(hash));

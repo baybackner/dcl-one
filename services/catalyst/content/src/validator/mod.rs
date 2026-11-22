@@ -297,13 +297,75 @@ impl ExternalCalls for Sources {
         auth_chain: &AuthChain,
         timestamp: types::Timestamp,
     ) -> Result<(), AuthError> {
-        crate::auth::verify_auth_chain_async(
+        verify_entity_chain(
             auth_chain,
             entity_id,
-            Some(timestamp),
-            self.eip1654.as_deref(),
+            timestamp,
+            self.eip1654(),
+            Some(&self.access),
         )
         .await
+    }
+}
+
+/// A local entity's chain: a contract-wallet link refused at latest is asked again at the
+/// last L1 block at or before the entity timestamp, found by the access checks' search when
+/// `access` is given.
+pub(crate) async fn verify_entity_chain(
+    auth_chain: &AuthChain,
+    entity_id: &str,
+    timestamp_ms: i64,
+    eip1654: Option<&dyn Eip1654Validator>,
+    access: Option<&onchain::OnChainAccess>,
+) -> Result<(), AuthError> {
+    let at_entity_time = eip1654
+        .zip(access)
+        .map(|(inner, access)| AtEntityTime { inner, access });
+    let eip1654 = match &at_entity_time {
+        Some(v) => Some(v as &dyn Eip1654Validator),
+        None => eip1654,
+    };
+    crate::auth::verify_entity_auth_chain(auth_chain, entity_id, timestamp_ms, eip1654).await
+}
+
+/// The node's EIP-1654 validator, its historical block taken from the access checks' L1 search.
+struct AtEntityTime<'a> {
+    inner: &'a dyn Eip1654Validator,
+    access: &'a onchain::OnChainAccess,
+}
+
+#[async_trait]
+impl Eip1654Validator for AtEntityTime<'_> {
+    async fn validate_signature(
+        &self,
+        contract_address: &str,
+        hash: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, AuthError> {
+        self.inner
+            .validate_signature(contract_address, hash, signature)
+            .await
+    }
+
+    async fn validate_signature_at_block(
+        &self,
+        contract_address: &str,
+        hash: &[u8],
+        signature: &[u8],
+        block: u64,
+    ) -> Result<bool, AuthError> {
+        self.inner
+            .validate_signature_at_block(contract_address, hash, signature, block)
+            .await
+    }
+
+    /// Without an L1 RPC the latest answer stands.
+    async fn verification_time_block(&self, timestamp_ms: i64) -> Result<Option<u64>, AuthError> {
+        match self.access.l1_block_at(timestamp_ms).await {
+            Ok(block) => Ok(block),
+            Err(ValidatorError::Unconfigured(_)) => Ok(None),
+            Err(e) => Err(AuthError::Eip1654ValidationFailed(e.to_string())),
+        }
     }
 }
 

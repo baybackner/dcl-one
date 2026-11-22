@@ -34,7 +34,6 @@ use tracing::{info, warn};
 
 use super::Denylist;
 use super::entity::{Entity, EntityType};
-use crate::auth::verify::verify_auth_chain_async;
 use crate::auth::{AuthChain, AuthError, Eip1654Validator, hash_bytes, hash_bytes_v1};
 use crate::land_authz::LandAuthzState;
 use crate::storage::Storage;
@@ -989,11 +988,17 @@ impl WriteDeployer {
         auth_chain: &AuthChain,
         timestamp: i64,
     ) -> Result<(), AuthError> {
-        verify_auth_chain_async(
+        let access = match &self.validator {
+            LocalValidation::Content(sources) => Some(sources.access()),
+            #[cfg(any(test, feature = "test-support"))]
+            LocalValidation::PartialChecks => None,
+        };
+        super::validator::verify_entity_chain(
             auth_chain,
             entity_id,
-            Some(timestamp),
+            timestamp,
             self.eip1654.as_deref(),
+            access.as_deref(),
         )
         .await
     }

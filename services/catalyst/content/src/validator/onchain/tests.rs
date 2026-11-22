@@ -888,6 +888,24 @@ async fn the_deploy_blocks_come_from_a_search_that_remembers() {
     );
 }
 
+/// A timestamp the chain has not reached yet is answered with the head; a retry reads the
+/// head again, so a block mined in between is seen.
+#[tokio::test]
+async fn head_bound_deploy_blocks_are_read_again() {
+    let chain = fake_chain::serve(|_, _| Reply::Yes(true)).await;
+    let a = access(Some(&chain.url), None);
+    let l1 = a.l1().unwrap();
+    let ahead = (chrono::Utc::now().timestamp() + 10 * 60) * 1000;
+    l1.chain.blocks_for(ahead).await.unwrap();
+    chain.clear();
+    l1.chain.blocks_for(ahead).await.unwrap();
+    assert!(
+        chain.calls().iter().any(|c| c == "eth_getBlockByNumber"),
+        "the head is read again: {:?}",
+        chain.calls()
+    );
+}
+
 const GENESIS_MS_BEFORE: i64 = (fake_chain::GENESIS - 3600) * 1000;
 
 fn block_reads(chain: &fake_chain::FakeChain) -> usize {

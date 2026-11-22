@@ -133,6 +133,12 @@ impl BlockSearch {
         )
     }
 
+    /// Whether a block after `timestamp` (unix seconds) has been read, so the last block at
+    /// or before it is final; otherwise the answer was the head and a later read may move it.
+    pub fn is_settled(&self, timestamp: i64) -> bool {
+        self.bounds(timestamp).1.is_some()
+    }
+
     /// The last block at or before `timestamp` (unix seconds); the head when
     /// the head is older, `None` before the first block. `fetch` reads one block.
     pub async fn block_at<F, Fut, E>(
@@ -224,6 +230,8 @@ mod tests {
             1000,
             "past the head: the head"
         );
+        assert!(search.is_settled(1501), "a later block was read");
+        assert!(!search.is_settled(5000), "only the head is known past 1501");
         assert_eq!(at(1000).await.unwrap().unwrap().number, 0);
         assert_eq!(at(999).await.unwrap(), None, "before the first block");
     }
