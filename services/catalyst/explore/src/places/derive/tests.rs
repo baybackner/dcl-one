@@ -1845,7 +1845,7 @@ async fn a_rented_parcel_keeps_its_lessor_as_owner() {
 /// A new LAND owner's place on another parcel set releases an operator's
 /// records (clears them, or replaces them with its own rating) and is
 /// reported for review once, with a pending notice taking a later release
-/// of the same place. A creator's record, or an unknown owner, posts none.
+/// of the same place, even when the place has an operator rating of its own. A creator's record, or an unknown owner, posts none.
 #[tokio::test]
 async fn a_new_owner_releasing_an_operators_rating_is_reported() {
     let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
@@ -1874,11 +1874,14 @@ async fn a_new_owner_releasing_an_operators_rating_is_reported() {
         (&p[4], vec![&p[4]]),
         (&p[6], vec![&p[6], &p[7]]),
         (&p[14], vec![&p[14], &p[15]]),
+        (&p[17], vec![&p[17]]),
     ] {
         page(Ratings::deploy(owner, base, &parcels, None, 0)).await;
         t.rate(base, "R", Some(&land)).await;
         t.prune(base).await;
     }
+    page(Ratings::deploy(owner, &p[18], &[&p[18]], None, 0)).await;
+    t.rate(&p[18], "T", Some(&land)).await;
     page(Ratings::deploy(
         owner,
         &p[10],
@@ -1931,6 +1934,13 @@ async fn a_new_owner_releasing_an_operators_rating_is_reported() {
     assert_eq!(t.rating(&p[8]).await.as_deref(), Some("T"));
     assert_eq!(t.record(&p[7]).await, Some(("T".into(), false)));
     assert_eq!(t.kinds(&p[8]).await, ["operator_rating_released"]);
+
+    // So does a place with an operator rating of its own, whose record
+    // replaces the other place's.
+    page(Ratings::deploy(buyer, &p[18], &[&p[17], &p[18]], None, 1)).await;
+    assert_eq!(t.rating(&p[18]).await.as_deref(), Some("T"));
+    assert_eq!(t.record(&p[17]).await, Some(("T".into(), true)));
+    assert_eq!(t.kinds(&p[18]).await, ["operator_rating_released"]);
 
     // A creator's record released the same way posts none.
     page(Ratings::deploy(buyer, &p[12], &[&p[11], &p[12]], None, 1)).await;

@@ -767,7 +767,7 @@ async fn lock_page_parcels(
 /// unknown owner keeps the owner the same place (or parcel set) by the same
 /// creator recorded, as `moderation::OPERATOR_PARCEL_RATINGS` does; another
 /// creator leaves it unknown, since the LAND may have changed hands. Returns
-/// each written parcel and whether its record is an operator's.
+/// each written parcel.
 const RECORD_PARCEL_RATINGS: &str = r#"
     INSERT INTO explore.place_parcel_rating AS r
         (position, content_rating, place_id, parcel_set_hash, creator_address, owner_address, operator)
@@ -804,7 +804,7 @@ const RECORD_PARCEL_RATINGS: &str = r#"
                                            OR r.parcel_set_hash = EXCLUDED.parcel_set_hash)
                                           AND r.creator_address = EXCLUDED.creator_address
                                      THEN r.owner_address END))
-    RETURNING r.position, r.operator
+    RETURNING r.position
 "#;
 
 /// Clears the parcels `$1` of a place left with no rating, so a later place
@@ -812,20 +812,20 @@ const RECORD_PARCEL_RATINGS: &str = r#"
 /// record. A record with a known owner stays while `$2`, the parcel's LAND
 /// owner, is unknown; an operator's record stays unless both owners are known
 /// and differ (the LAND changed owner) and the record is of another parcel
-/// set than `$3`. Returns each cleared parcel and whether its record was an
-/// operator's.
+/// set than `$3`. Returns each cleared parcel.
 const CLEAR_PARCEL_RATINGS: &str = "DELETE FROM explore.place_parcel_rating r \
      USING unnest($1::text[], $2::text[], $3::text[]) AS c(position, owner, parcel_set) \
      WHERE r.position = c.position \
        AND ((NOT r.operator AND (r.owner_address IS NULL OR c.owner <> '')) \
             OR (r.owner_address IS NOT NULL AND c.owner <> '' \
                 AND r.owner_address <> c.owner AND r.parcel_set_hash <> c.parcel_set)) \
-     RETURNING r.position, r.operator";
+     RETURNING r.position";
 
 /// The operator's records with a known owner on parcels `$1`, before the page
-/// writes them: `(position, rating, owner)`. Under a known new owner the
-/// write may release one ([`released_operator_ratings`]).
-const OPERATOR_RECORDS: &str = "SELECT position, content_rating, owner_address \
+/// writes them ([`OperatorRecord`]). Under a known new owner the write may
+/// release one ([`OperatorRecord::released_by`]).
+const OPERATOR_RECORDS: &str = "SELECT position, content_rating, owner_address, place_id, \
+     parcel_set_hash, creator_address \
      FROM explore.place_parcel_rating \
      WHERE position = ANY($1) AND operator AND owner_address IS NOT NULL";
 
@@ -1291,18 +1291,26 @@ async fn settle_ratings(
     // Only a known new owner releases an operator's record, so without one
     // (or without a notice to post) the prior records are not read.
     let written: Vec<String> = cleared.iter().chain(&recorded.positions).cloned().collect();
-    let prior: HashMap<String, (String, String)> =
+    let prior: HashMap<String, OperatorRecord> =
         if notify.is_some() && written.iter().any(|p| owners.contains_key(p)) {
-            sqlx::query_as::<_, (String, String, String)>(OPERATOR_RECORDS)
+            sqlx::query_as::<_, OperatorRecord>(OPERATOR_RECORDS)
                 .bind(&written)
                 .fetch_all(&mut **tx)
                 .await?
                 .into_iter()
-                .map(|(position, rating, owner)| (position, (rating, owner)))
+                .map(|r| (r.position.clone(), r))
                 .collect()
         } else {
             HashMap::new()
         };
+    // A written parcel whose prior operator's record the place is not held
+    // to, under a known new owner, was released (cleared, or replaced even
+    // by a place with an operator rating of its own).
+    let released_by = |position: &String, p: &DerivedPlace, set: &str| {
+        prior
+            .get(position)
+            .is_some_and(|r| r.released_by(p, set, owners.get(position).map(String::as_str)))
+    };
     // Parcels whose operator's record the page released, with the place
     // that released it.
     let mut released: Vec<(String, &DerivedPlace)> = Vec::new();
@@ -1311,17 +1319,16 @@ async fn settle_ratings(
             .iter()
             .map(|p| owners.get(p).cloned().unwrap_or_default())
             .collect();
-        let gone: HashSet<String> = sqlx::query_as::<_, (String, bool)>(CLEAR_PARCEL_RATINGS)
+        let gone: HashSet<String> = sqlx::query_scalar(CLEAR_PARCEL_RATINGS)
             .bind(&cleared)
             .bind(&cleared_owners)
             .bind(&cleared_sets)
             .fetch_all(&mut **tx)
             .await?
             .into_iter()
-            .filter_map(|(position, operator)| operator.then_some(position))
             .collect();
-        for (position, p) in cleared.iter().zip(&cleared_places) {
-            if gone.contains(position) {
+        for ((position, p), set) in cleared.iter().zip(&cleared_places).zip(&cleared_sets) {
+            if gone.contains(position) && released_by(position, p, set) {
                 released.push((position.clone(), *p));
             }
         }
@@ -1330,7 +1337,7 @@ async fn settle_ratings(
         if records.positions.is_empty() {
             continue;
         }
-        let lost: HashSet<String> = sqlx::query_as::<_, (String, bool)>(RECORD_PARCEL_RATINGS)
+        let stored: HashSet<String> = sqlx::query_scalar(RECORD_PARCEL_RATINGS)
             .bind(&records.positions)
             .bind(&records.ratings)
             .bind(&records.places)
@@ -1341,15 +1348,19 @@ async fn settle_ratings(
             .fetch_all(&mut **tx)
             .await?
             .into_iter()
-            .filter_map(|(position, operator)| (!operator).then_some(position))
             .collect();
         // A fill writes only parcels with no record, so only an overwrite
-        // turns an operator's record into a creator's.
-        for (position, id) in records.positions.iter().zip(&records.places) {
+        // replaces an operator's record.
+        let parcels = records
+            .positions
+            .iter()
+            .zip(&records.places)
+            .zip(&records.sets);
+        for ((position, id), set) in parcels {
             if overwrite
-                && prior.contains_key(position)
-                && lost.contains(position)
+                && stored.contains(position)
                 && let Some(p) = rows.iter().find(|p| &p.id == id)
+                && released_by(position, p, set)
             {
                 released.push((position.clone(), *p));
             }
@@ -1368,7 +1379,7 @@ async fn released_operator_ratings(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     base: &str,
     released: &[(String, &DerivedPlace)],
-    prior: &HashMap<String, (String, String)>,
+    prior: &HashMap<String, OperatorRecord>,
     owners: &HashMap<String, String>,
 ) -> Result<()> {
     let mut by_place: Vec<(&DerivedPlace, Vec<&str>)> = Vec::new();
@@ -1390,19 +1401,43 @@ async fn released_operator_ratings(
             all.dedup();
             all
         };
-        let ratings = pick(&|q| prior.get(q).map(|(rating, _)| rating.clone()));
+        let ratings = pick(&|q| prior.get(q).map(|r| r.content_rating.clone()));
         let rating = moderation::strictest(ratings.iter().map(String::as_str)).unwrap_or_default();
         let release = moderation::OperatorRatingRelease {
             id: &p.id,
             base_position: &p.base_position,
             rating,
-            previous_owners: &pick(&|q| prior.get(q).map(|(_, owner)| owner.clone())),
+            previous_owners: &pick(&|q| prior.get(q).map(|r| r.owner_address.clone())),
             new_owners: &pick(&|q| owners.get(q).cloned()),
             parcels: &parcels,
         };
         moderation::capture_operator_rating_release(tx, base, &release).await?;
     }
     Ok(())
+}
+
+/// An operator's parcel record before the page writes it.
+#[derive(sqlx::FromRow)]
+struct OperatorRecord {
+    position: String,
+    content_rating: String,
+    owner_address: String,
+    place_id: String,
+    parcel_set_hash: String,
+    creator_address: Option<String>,
+}
+
+impl OperatorRecord {
+    /// Whether the place `p` (parcel set `set`) writing this parcel under the
+    /// LAND owner `owner` releases the record: the owner is known and changed
+    /// and the place is not held to it (another place, parcel set and creator).
+    fn released_by(&self, p: &DerivedPlace, set: &str, owner: Option<&str>) -> bool {
+        let creator = creator_of(p);
+        owner.is_some_and(|o| o != self.owner_address)
+            && self.parcel_set_hash != set
+            && self.place_id != p.id
+            && (creator.is_empty() || self.creator_address.as_deref() != Some(creator.as_str()))
+    }
 }
 
 /// A place's creator as its parcel records keep it: the lowercase deployer
