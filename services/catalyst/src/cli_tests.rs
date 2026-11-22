@@ -69,6 +69,7 @@ fn the_operator_database_urls_are_hidden() {
             ("storage", "gc"),
             ("camera-reel", "import"),
             ("shop", "notice-rewind"),
+            ("shop", "compare-sources"),
         ] {
             let cmd = cli
                 .find_subcommand(sub)
@@ -85,7 +86,7 @@ fn the_operator_database_urls_are_hidden() {
             );
             seen += 1;
         }
-        assert_eq!(seen, 6);
+        assert_eq!(seen, 7);
     });
 }
 
