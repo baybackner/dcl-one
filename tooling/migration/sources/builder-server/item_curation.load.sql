@@ -3,9 +3,9 @@ SELECT s.id, s.item_id, s.status, lower(s.content_hash) AS content_hash, s.is_ma
        s.created_at AT TIME ZONE 'UTC' AS created_at,
        GREATEST(s.updated_at, s.created_at) AT TIME ZONE 'UTC' AS updated_at,
        s.updated_at AS upstream_updated_at,
-       k.id IS NOT NULL AS imported
+       m.id IS NOT NULL AS imported
 FROM stage s
-LEFT JOIN builder.item_curations k ON k.id = s.id
+LEFT JOIN dcl_migration.builder_imported m ON m.step = 'item_curation' AND m.id = s.id::text
 WHERE s.status IN ('pending', 'approved', 'rejected')
   AND lower(s.content_hash) ~ '^[0-9a-f]{64}$';
 

@@ -123,7 +123,7 @@ class CorsFallbackTest(unittest.TestCase):
         except `/v1/items...`, which the apex host gives to another area's alias."""
         source = (Path(__file__).parents[3] / "services/catalyst/builder/src/lib.rs").read_text()
         table = source[source.index("fn api_routes()"):source.index("fn finish(")]
-        routes = {re.sub(r"\{[^}]+\}", "x", path.replace("{address}", "0x" + "0" * 39 + "1"))
+        routes = {re.sub(r"\{[^}]+\}", "x", path.replace("{address}", "0x" + "Ab" * 20))
                   for path in re.findall(r'"(/v1/[^"]*)"', table)}
         return sorted(route for route in routes if not re.match(r"/v1/items(/|$)", route))
 

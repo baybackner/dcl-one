@@ -1,5 +1,10 @@
 \set ON_ERROR_STOP on
 BEGIN;
+SET LOCAL lock_timeout = '10s';
+LOCK TABLE builder.collections, builder.items, builder.uploaded_contents, builder.item_contents,
+           builder.virtual_third_parties, builder.collection_curations, builder.item_curations,
+           builder.collection_events, builder.slot_usage_cheques, builder.collection_publications,
+           builder.validation_requests IN ACCESS EXCLUSIVE MODE;
 \ir fingerprint.sql
 \ir node_untouched.sql
 DO $start_over$ BEGIN

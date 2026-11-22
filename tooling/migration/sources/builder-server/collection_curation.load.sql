@@ -12,9 +12,9 @@ SELECT s.id, s.collection_id, s.status,
        s.created_at AT TIME ZONE 'UTC' AS created_at,
        GREATEST(s.updated_at, s.created_at) AT TIME ZONE 'UTC' AS updated_at,
        s.updated_at AS upstream_updated_at,
-       k.id IS NOT NULL AS imported
+       m.id IS NOT NULL AS imported
 FROM stage s
-LEFT JOIN builder.collection_curations k ON k.id = s.id
+LEFT JOIN dcl_migration.builder_imported m ON m.step = 'collection_curation' AND m.id = s.id::text
 WHERE s.status IN ('pending', 'approved', 'rejected');
 
 CREATE TEMP TABLE collection_curation_plan ON COMMIT DROP AS

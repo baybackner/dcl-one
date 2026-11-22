@@ -215,10 +215,13 @@ virtual third parties, curations, events and cheques by id, item contents by
 item id and file, upload records by uploader and hash. A step records only
 the rows it inserted or refreshed, in the batch's transaction.
 
-A step treats an upstream row as one it imported only when the ledger
-records it. A row the node created under the same id, for example between
-two batches of a step while writes were open, stops that batch on its key
-instead of taking upstream's values, and the next run refuses the node.
+The `collection`, `item`, `virtual_third_party` and curation steps treat an
+upstream row as one they imported only when the ledger records it. A row the
+node created under the same id, for example between two batches of a step
+while writes were open, stops that batch on its key instead of taking
+upstream's values, and the next run refuses the node. `item_content` upserts
+names and upload records by key, so it relies on the check at the start of
+its step.
 
 On a later run, still with creator writes closed:
 
@@ -274,7 +277,9 @@ upstream whatever changed between rehearsals; start over earlier too
 whenever a run leaves rows out with no duplicate upstream. Start over only
 while creator writes have stayed closed since the first run, and don't run
 the node's storage GC until the run that follows has finished: the copied
-blobs are unreferenced in between.
+blobs are unreferenced in between. The run doesn't check the builder tree
+for them, so after a GC in that gap, delete the `builder-server` rows of
+`dcl_migration.blob_inventory` and copy the blobs again before the run.
 
 ```sh
 psql "$TARGET_DATABASE_URL" -X -f tooling/migration/sources/builder-server/start_over.sql
@@ -282,13 +287,17 @@ psql "$TARGET_DATABASE_URL" -X -f tooling/migration/sources/builder-server/start
 
 `start_over.sql` works in one transaction:
 
-1. It runs the check from "Before the first run" and refuses, emptying
+1. It locks the tables it empties, waiting at most 10 seconds for a
+   transaction that holds one and failing after that. A builder write that
+   committed while it waited is seen by the check that follows; one that
+   starts later waits for the start-over to end.
+2. It runs the check from "Before the first run" and refuses, emptying
    nothing, a node that took builder writes. It also refuses a node holding
    a `builder.collection_publications` or `builder.validation_requests` row,
    which only a builder write makes.
-2. It empties the nine tables the check reads, with
+3. It empties the nine tables the check reads, with
    `builder.collection_publications` and `builder.validation_requests`.
-3. It deletes every row of `dcl_migration.builder_imported` and the
+4. It deletes every row of `dcl_migration.builder_imported` and the
    `builder-server` rows of `dcl_migration.checkpoint`.
 
 The node then holds no builder rows, and the next `migrate.py run
