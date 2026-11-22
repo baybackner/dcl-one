@@ -1971,7 +1971,13 @@ async fn streaming_generation_limit_covers_reset_create_delete_and_cast() {
     let scene = genesis_scene();
     seed_genesis_place(&pool, &scene, None).await;
     let room = resolved_room(RealmId::Shared("main".into()), &scene.id, &scene.parcel);
-    let h = harness(pool.clone(), Some(room), PermissionDecision::Allowed, None).await;
+    let h = harness(
+        pool.clone(),
+        Some(room.clone()),
+        PermissionDecision::Allowed,
+        None,
+    )
+    .await;
     let metadata = scene_metadata(&scene);
     let access = "/scene-stream-access";
     let (status, body) = h.signed(KEY, "POST", access, &metadata, None).await;
@@ -1979,6 +1985,15 @@ async fn streaming_generation_limit_covers_reset_create_delete_and_cast() {
     for _ in 0..5 {
         let (status, body) = h.signed(KEY, "PUT", access, &metadata, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let ingresses = h.livekit.ingresses.load(Ordering::SeqCst);
+    for (method, path) in [
+        ("GET", access),
+        ("POST", access),
+        ("GET", "/cast/generate-stream-link"),
+    ] {
+        let (status, body) = h.signed(KEY, method, path, &metadata, None).await;
+        assert_eq!(status, StatusCode::OK, "reuse is exempt: {body}");
     }
     let previous: Uuid = sqlx::query_scalar(
         "SELECT id FROM social.scene_stream_access WHERE place_id=$1 AND active",
@@ -2000,12 +2015,40 @@ async fn streaming_generation_limit_covers_reset_create_delete_and_cast() {
         retained, previous,
         "a limited reset must preserve the active credential"
     );
+    assert_eq!(
+        h.livekit.ingresses.load(Ordering::SeqCst),
+        ingresses,
+        "refused reset must not mint an ingress"
+    );
+    // Expired idle credentials require replacement, which is also checked before minting.
+    sqlx::query("UPDATE social.scene_stream_access SET expiration_time=timezone('UTC',now())-interval '1 second' WHERE id=$1")
+        .bind(previous).execute(&pool).await.unwrap();
+    for (method, path) in [("POST", access), ("GET", "/cast/generate-stream-link")] {
+        let (status, body) = h.signed(KEY, method, path, &metadata, None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    }
+    assert_eq!(
+        h.livekit.ingresses.load(Ordering::SeqCst),
+        ingresses,
+        "refused idle replacement must not mint an ingress"
+    );
     let (status, body) = h.signed(KEY, "DELETE", access, &metadata, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
     for (method, path) in [("POST", access), ("GET", "/cast/generate-stream-link")] {
         let (status, body) = h.signed(KEY, method, path, &metadata, None).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     }
+    assert_eq!(
+        h.livekit.ingresses.load(Ordering::SeqCst),
+        ingresses,
+        "refused creation must not mint an ingress"
+    );
+    settled(&pool, &room.room).await;
+    assert_eq!(
+        h.livekit.deleted_ingresses.load(Ordering::SeqCst),
+        6,
+        "only six legitimately revoked ingresses are deleted"
+    );
     sqlx::query("UPDATE social.scene_stream_access SET created_at=timezone('UTC',now())-interval '61 minutes' WHERE place_id=$1")
         .bind(&scene.place_id).execute(&pool).await.unwrap();
     let (status, body) = h.signed(KEY, "POST", access, &metadata, None).await;

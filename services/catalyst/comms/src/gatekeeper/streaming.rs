@@ -534,6 +534,7 @@ async fn issue_access(
                 }
             }
         }
+        check_generation_quota(&state.pool, place_id).await?;
         // The replacement's ingress first: a LiveKit failure keeps the old credential.
         let info = mint_ingress(ingress, room).await?;
         return replace_access(
@@ -708,6 +709,7 @@ async fn create_access(
     signer: &Address,
     admin_place_key: &str,
 ) -> Result<SceneStreamAccessResponse, ApiError> {
+    check_generation_quota(pool, place_id).await?;
     let info = mint_ingress(ingress, room).await?;
     store_access(pool, ingress, place_id, room, signer, admin_place_key, info).await
 }
@@ -843,6 +845,23 @@ async fn lock_generation_place(
     Ok(())
 }
 
+/// The pre-mint check avoids known quota refusals doing external work. Insertion
+/// repeats this check under the per-place lock to enforce the bound against races.
+async fn check_generation_quota<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    place_id: &str,
+) -> Result<(), ApiError> {
+    let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM social.scene_stream_access WHERE place_id=$1 AND created_at>timezone('UTC',statement_timestamp())-interval '1 hour' LIMIT 6) recent")
+        .bind(place_id).fetch_one(executor).await?;
+    if recent >= 6 {
+        return Err(ApiError::http(
+            429,
+            "Stream keys can be generated at most six times per hour for this place. Please try again later.",
+        ));
+    }
+    Ok(())
+}
+
 /// Inserts the place's active credential for `info`'s ingress; `None` when
 /// the place already has one.
 async fn insert_access(
@@ -868,14 +887,7 @@ async fn insert_access(
     if active {
         return Ok(None);
     }
-    let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM social.scene_stream_access WHERE place_id=$1 AND created_at>timezone('UTC',statement_timestamp())-interval '1 hour' LIMIT 6) recent")
-        .bind(place_id).fetch_one(&mut *executor).await?;
-    if recent >= 6 {
-        return Err(ApiError::http(
-            429,
-            "Stream keys can be generated at most six times per hour for this place. Please try again later.",
-        ));
-    }
+    check_generation_quota(&mut *executor, place_id).await?;
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "INSERT INTO social.scene_stream_access \
              (place_id, streaming_url, streaming_key, ingress_id, room_id, generated_by, created_at, expiration_time, active, admin_place_key) \
@@ -987,6 +999,7 @@ async fn reset_access(
         let row = active_access(&state.pool, place_id)
             .await?
             .ok_or_else(|| ApiError::not_found(STREAM_ACCESS_NOT_FOUND_MSG))?;
+        check_generation_quota(&state.pool, place_id).await?;
         // The replacement's ingress first: a LiveKit failure keeps the old credential.
         // The durable intent owns the old ingress's deletion and the reset notification,
         // delivered only once the replacement credential exists; it also covers a crash.

@@ -98,9 +98,15 @@ Historical feed seeding performs cleanup without notifying old removals.
 Explore's identity trigger retains displaced exact bindings in
 `explore.world_scene_binding` (`world_name`, `entity_id`, `identity`) without
 Social writes or row locks. Comms reads that evidence after a failed legacy
-binding lookup, even if the scene retires before retry. Missing or ambiguous
-evidence remains unresolved; saved exact credential/context keys take
-precedence. No admin authority is inferred from overlapping parcels.
+binding lookup, even if the scene retires before retry. Saved exact
+credential/context keys take precedence. Original place context is captured
+before binding recovery and checkpointed before further fallible deferred work;
+a saved snapshot survives catalogue deletion and is never replaced by live data.
+SQL failures and timeouts remain pending. A successful missing or ambiguous
+canonical World binding instead records an unresolvable state and completes
+for independently established owner/permission holders and preserved recipients,
+skipping local-admin enrichment. No admin authority is inferred from overlapping
+parcels.
 
 A stream key is checked again at once when PostgreSQL announces a deployment
 or a change of a world's scenes, owner or grants (`streaming::cast::listen`;

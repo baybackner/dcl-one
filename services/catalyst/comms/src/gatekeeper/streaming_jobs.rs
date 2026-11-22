@@ -231,36 +231,35 @@ pub(super) async fn prepare(
             .as_deref()
             .and_then(crate::rooms::decode_world_scene_room)
             .is_some();
+    let mut binding_unresolvable = false;
     let event = if let Some(kind) = command.notification() {
         let result = tokio::time::timeout(Duration::from_secs(5), async {
-            if binding_pending {
-                admin_place_key = notification_admin_key(&state.pool, id, room.as_deref()).await?;
-                binding_pending = admin_place_key.is_none();
-                if binding_pending {
-                    return Err(ApiError::http(
-                        503,
-                        "stream notification binding unavailable",
-                    ));
-                }
-            }
+            // Keep the original context even if binding recovery fails or times out.
             context = RemovedPlaces::new(state.pool.clone())
                 .place(&place_id)
                 .await?;
+            if binding_pending {
+                admin_place_key = notification_admin_key(&state.pool, id, room.as_deref()).await?;
+                binding_unresolvable = admin_place_key.is_none();
+                binding_pending = false;
+            }
             let context = context
                 .as_ref()
                 .ok_or_else(|| ApiError::http(503, "stream notification context unavailable"))?;
-            recipients = super::notifications::scene_admins(
-                &state.pool,
-                context,
-                at,
-                &admin_place_key.iter().cloned().collect::<Vec<_>>(),
-            )
-            .await?;
+            if !binding_unresolvable {
+                recipients = super::notifications::scene_admins(
+                    &state.pool,
+                    context,
+                    at,
+                    &admin_place_key.iter().cloned().collect::<Vec<_>>(),
+                )
+                .await?;
+            }
             let (owner, resolved) =
                 super::notifications::recipients(state, context, &recipients).await?;
             recipients = resolved;
             recipients_resolved = true;
-            Ok(super::notifications::notification(
+            Ok::<_, ApiError>(super::notifications::notification(
                 context,
                 owner,
                 &format!("{}-{id}", kind.as_str()),
@@ -286,6 +285,7 @@ pub(super) async fn prepare(
         .unwrap_or_else(|| serde_json::json!({}));
     evidence["admin_place_key"] = serde_json::json!(admin_place_key);
     evidence["admin_binding_pending"] = serde_json::json!(binding_pending);
+    evidence["admin_binding_unresolvable"] = serde_json::json!(binding_unresolvable);
     evidence["binding_room"] = serde_json::json!(room);
     evidence["notification_at"] = serde_json::json!(at);
     let context = Some(evidence);
@@ -301,8 +301,8 @@ pub(super) async fn prepare(
 }
 
 /// Runtime notification lookup takes no publication locks and never writes a credential.
-/// Displaced bindings survive retirement. Conflicting incarnations remain unresolved;
-/// an exact key already saved on the credential always wins.
+/// Displaced bindings survive retirement. `Ok(None)` means no unique exact binding;
+/// SQL failures remain errors. A key already saved on the credential always wins.
 async fn notification_admin_key(
     pool: &PgPool,
     id: Uuid,
@@ -590,6 +590,13 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
                     .clone(),
             );
         if !row.recipients_resolved {
+            // Persist newly captured context before binding recovery can fail. Never
+            // refresh an existing snapshot from another catalogue lifetime.
+            let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET source_context=$3 WHERE access_id=$1 AND claim_token=$2 AND NOT recipients_resolved")
+                .bind(row.access_id).bind(token).bind(&saved_context).execute(&state.pool).await?;
+            if changed.rows_affected() == 0 {
+                return Err(ApiError::internal("stream cleanup lease lost"));
+            }
             // Expand scalar-era intents; a saved owner is not a complete set.
             if let Some(recipient) = &row.recipient {
                 recipients.push(recipient.clone());
@@ -600,7 +607,12 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
                 .and_then(|value| value.get("admin_place_key"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
-            if admin_key.is_none() {
+            let mut binding_unresolvable = admin_key.is_none()
+                && saved_context
+                    .get("admin_binding_unresolvable")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true);
+            if admin_key.is_none() && !binding_unresolvable {
                 let room: Option<String> = sqlx::query_scalar(
                     "SELECT room_id FROM social.scene_stream_access WHERE id=$1",
                 )
@@ -614,43 +626,43 @@ async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), Ap
                     .and_then(|value| value.get("binding_room"))
                     .and_then(serde_json::Value::as_str)
                     .or(room.as_deref());
-                admin_key = notification_admin_key(&state.pool, row.access_id, room).await?;
-                if admin_key.is_none()
+                admin_key = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    notification_admin_key(&state.pool, row.access_id, room),
+                )
+                .await
+                .map_err(|_| ApiError::internal("stream notification binding timed out"))??;
+                binding_unresolvable = admin_key.is_none()
                     && (room
                         .and_then(crate::rooms::decode_world_scene_room)
                         .is_some()
-                        || row
-                            .source_context
-                            .as_ref()
-                            .and_then(|value| value.get("admin_binding_pending"))
+                        || saved_context
+                            .get("admin_binding_pending")
                             .and_then(serde_json::Value::as_bool)
-                            == Some(true))
-                {
-                    return Err(ApiError::http(
-                        503,
-                        "stream notification binding unavailable",
-                    ));
-                }
+                            == Some(true));
             }
-            if let Some(key) = &admin_key {
-                saved_context["admin_place_key"] = serde_json::json!(key);
-                saved_context["admin_binding_pending"] = serde_json::json!(false);
-            }
+            saved_context["admin_place_key"] = serde_json::json!(admin_key);
+            saved_context["admin_binding_pending"] = serde_json::json!(false);
+            saved_context["admin_binding_unresolvable"] = serde_json::json!(binding_unresolvable);
             // Save exact evidence before another authority lookup can fail or retire.
             let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET source_context=$3 WHERE access_id=$1 AND claim_token=$2 AND NOT recipients_resolved")
                 .bind(row.access_id).bind(token).bind(&saved_context).execute(&state.pool).await?;
             if changed.rows_affected() == 0 {
                 return Err(ApiError::internal("stream cleanup lease lost"));
             }
-            recipients.extend(
-                super::notifications::scene_admins(
-                    &state.pool,
-                    &context,
-                    row.occurred_at,
-                    &admin_key.into_iter().collect::<Vec<_>>(),
-                )
-                .await?,
-            );
+            // Empty exact keys would still infer active World admins by parcel
+            // overlap. An unresolvable canonical binding must bypass that lookup.
+            if !binding_unresolvable {
+                recipients.extend(
+                    super::notifications::scene_admins(
+                        &state.pool,
+                        &context,
+                        row.occurred_at,
+                        &admin_key.into_iter().collect::<Vec<_>>(),
+                    )
+                    .await?,
+                );
+            }
             recipients.sort();
             recipients.dedup();
             let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET recipients=$3 WHERE access_id=$1 AND claim_token=$2 AND NOT recipients_resolved")
@@ -940,6 +952,11 @@ mod tests {
         // Retire before any deferred binding recovery. The sibling remains live.
         sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
             .bind(&name).execute(&state.pool).await.unwrap();
+        sqlx::query("DELETE FROM explore.place WHERE id=$1")
+            .bind(&place)
+            .execute(&state.pool)
+            .await
+            .unwrap();
         *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(2));
         let _ = cleanup_access(&state, id).await;
         let progress: (bool, i32) = sqlx::query_as("SELECT recipients_resolved,recipient_cursor FROM social.scene_stream_cleanup WHERE access_id=$1")
@@ -978,8 +995,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_fanout_retry_saves_context_before_failed_binding_lookup() {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        // Simulate an older cleanup intent without a place snapshot or saved key.
+        assert!(enqueue(&state, id, CleanupCommand::Revoke).await.unwrap());
+        sqlx::query("UPDATE social.scene_stream_access SET admin_place_key=NULL WHERE id=$1")
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET source_context=jsonb_build_object('binding_room',$2::text,'admin_binding_pending',true),recipients='{}',recipients_resolved=false,metadata=NULL WHERE access_id=$1")
+            .bind(id).bind(&room).execute(&state.pool).await.unwrap();
+        sqlx::query("ALTER TABLE explore.world_scene_binding RENAME TO test_unavailable_binding")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert!(cleanup_access(&state, id).await.is_err());
+        sqlx::query("ALTER TABLE explore.test_unavailable_binding RENAME TO world_scene_binding")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let saved: (Option<String>,bool) = sqlx::query_as("SELECT source_context->>'place_id',recipients_resolved FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(
+            saved,
+            (Some(place.clone()), false),
+            "checkpoint context even when binding SQL fails"
+        );
+        assert!(directory.streaming_notifications.lock().unwrap().is_empty());
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        sqlx::query("DELETE FROM explore.place WHERE id=$1")
+            .bind(&place)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.recipient.clone())
+            .collect();
+        assert_eq!(actual, (1..=4).map(wallet).collect());
+    }
+
+    #[tokio::test]
     async fn streaming_fanout_ambiguous_retired_binding_never_selects_a_new_incarnation() {
-        let Some((state, _, place)) = fanout_fixture(true).await else {
+        for deferred in [false, true] {
+            unresolvable_binding_fanout(true, deferred).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_missing_pre_upgrade_binding_notifies_known_managers() {
+        for deferred in [false, true] {
+            unresolvable_binding_fanout(false, deferred).await;
+        }
+    }
+
+    async fn unresolvable_binding_fanout(ambiguous: bool, deferred: bool) {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
             return;
         };
         let name = format!("{place}.dcl.eth");
@@ -990,7 +1079,7 @@ mod tests {
         let original: String = sqlx::query_scalar("SELECT identity::text FROM explore.world_scene_place WHERE world_name=$1 AND entity_id='fanout-scene'")
             .bind(&name).fetch_one(&state.pool).await.unwrap();
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by,active) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test',false)")
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
             .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
         sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
             .bind(&name).execute(&state.pool).await.unwrap();
@@ -1000,13 +1089,78 @@ mod tests {
                 .unwrap(),
             Some(original.clone())
         );
-        sqlx::query("INSERT INTO explore.world_scene_place(world_name,identity,entity_id,parcels) VALUES ($1,$2,'fanout-scene',ARRAY['50,60'])")
-            .bind(&name).bind(Uuid::new_v4()).execute(&state.pool).await.unwrap();
+        if ambiguous {
+            let replacement = Uuid::new_v4();
+            sqlx::query("INSERT INTO explore.world_scene_place(world_name,identity,entity_id,parcels) VALUES ($1,$2,'fanout-scene',ARRAY['10,20'])")
+                .bind(&name).bind(replacement).execute(&state.pool).await.unwrap();
+            sqlx::query("INSERT INTO social.scene_admins(place_id,admin_address,added_by,added_at) VALUES ($1,$2,$3,timezone('UTC',now())-interval '1 hour')")
+                .bind(replacement.to_string()).bind(wallet(11)).bind(wallet(1)).execute(&state.pool).await.unwrap();
+        } else {
+            // This retirement predates installation of the binding history trigger.
+            sqlx::query("DELETE FROM explore.world_scene_binding WHERE world_name=$1")
+                .bind(&name)
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
         assert_eq!(
             notification_admin_key(&state.pool, id, Some(&room))
                 .await
                 .unwrap(),
             None
+        );
+        if deferred {
+            sqlx::query(
+                "ALTER TABLE explore.world_scene_binding RENAME TO test_unavailable_binding",
+            )
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+        assert!(enqueue(&state, id, CleanupCommand::Revoke).await.unwrap());
+        if deferred {
+            sqlx::query(
+                "ALTER TABLE explore.test_unavailable_binding RENAME TO world_scene_binding",
+            )
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+        let evidence: (bool,bool,bool) = sqlx::query_as("SELECT (source_context->>'admin_binding_pending')::boolean,COALESCE((source_context->>'admin_binding_unresolvable')::boolean,false),recipients_resolved FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(evidence, (deferred, !deferred, !deferred));
+        *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(3));
+        let _ = cleanup_access(&state, id).await;
+        let progress: (bool,i32) = sqlx::query_as("SELECT recipients_resolved,recipient_cursor FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(progress, (true, 1));
+        let binding: (bool,bool) = sqlx::query_as("SELECT (source_context->>'admin_binding_pending')::boolean,(source_context->>'admin_binding_unresolvable')::boolean FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(binding, (false, true));
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.recipient.clone())
+            .collect();
+        assert_eq!(
+            actual,
+            [wallet(1), wallet(3), wallet(4)].into_iter().collect(),
+            "no local admins from either ambiguous incarnation or sibling"
+        );
+        assert_eq!(
+            directory
+                .streaming_attempts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|recipient| **recipient == wallet(1))
+                .count(),
+            1
         );
         sqlx::query("UPDATE social.scene_stream_access SET admin_place_key=$2 WHERE id=$1")
             .bind(id)

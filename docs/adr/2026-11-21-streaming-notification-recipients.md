@@ -24,8 +24,10 @@ does not undo revocation.
 Key cleanup bounds all notification preparation to five seconds and saves
 partial recipients, exact keys and unresolved binding obligations. Runtime
 binding reads use MVCC without publication locks; deferred resolution also
-reads inactive credentials and cannot complete while an exact native binding
-is required but unavailable.
+reads inactive credentials. Preparation captures the original place context
+before binding recovery, and deferred resolution checkpoints newly obtained
+context before further fallible lookups. Existing context snapshots always win
+over live catalogue data, including after removal or reappearance.
 
 Credentials save the exact bound scene admin namespace at issuance. Explore
 keeps exact current identity keys in both catalogue legs before final scene
@@ -41,8 +43,14 @@ binding lookup fails, revocation commits, and the scene retires before the
 first deferred retry. Comms reads this evidence and the current binding; a
 missing key resolves only when they identify exactly one namespace. A saved
 credential/context key takes precedence. Reusing an entity under different
-identities remains ambiguous and pending, never inferred from parcel overlap.
-The capture writes Explore alone and takes no Social row locks.
+identities remains ambiguous, never inferred from parcel overlap. A successful
+lookup with zero or several exact candidates records
+`admin_binding_pending=false` and `admin_binding_unresolvable=true`. That notice
+completes for independently established owner and permission holders plus any
+previously captured recipients, excluding all inferred local-admin namespaces
+for that World scene. SQL failures and timeouts remain pending and retryable;
+they do not establish absence. The capture writes Explore alone and takes no
+Social row locks.
 
 ## Consequences
 
@@ -66,7 +74,9 @@ bindings under world/identity locks. Read-only Social replicas skip this write.
 The upgrade requires stopping old writers and finishing offline imports before
 the coordinated startup, so identities cannot retire before this backfill.
 Noncanonical imported rooms and scenes already retired before the upgrade
-remain outside exact recovery; pending authority stays retryable where available.
+remain outside exact recovery. A definitive missing or ambiguous canonical
+binding uses the owner/permission-holder fallback above; failed authority
+lookups remain retryable.
 
 ## Credential issuance bound
 
@@ -78,4 +88,13 @@ admission before deactivation and insertion. Refused issuance returns HTTP 429
 and preserves the previous credential. Revocation remains available. Six allows
 an initial key and five replacements in an hour; this is a configured budget,
 not a measured production workload. A separate quota table is unnecessary
-because credential history is already retained.
+because credential history is already retained. A read-only check before
+creating a LiveKit ingress avoids that work when the quota is already exhausted;
+the locked check remains authoritative for concurrent requests. Requests that
+race can still create an unused ingress, which is then discarded.
+
+This quota adds a 429 response absent from the pinned upstream contract on
+POST/PUT stream access and Cast stream-link issuance. It is recorded as a
+compatibility difference awaiting merge approval in
+[MV-13](../../services/catalyst/tests/fixtures/conformance/social/meetings-voice.md).
+Documenting the difference does not approve it.

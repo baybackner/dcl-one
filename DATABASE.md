@@ -2675,8 +2675,11 @@ admin strings are excluded from delivery without preventing safety cleanup.
 Each credential stores its bound `admin_place_key` at issuance/reset/Cast;
 the cleanup context preserves it for later resolution. Notification preparation
 is bounded to five seconds, retains partial evidence on failure and never takes
-publication row locks. An unresolved native binding blocks recipient completion,
-including retries after credential deactivation.
+publication row locks. Original place context is captured before binding recovery
+and checkpointed before further fallible deferred lookups; saved snapshots
+survive catalogue deletion and are never refreshed from a replacement lifetime.
+Binding SQL errors and timeouts leave recipient resolution pending, including
+retries after credential deactivation.
 
 Explore owns `world_scene_binding`: one recovery fact for each distinct
 `(world_name, entity_id, identity)` displaced by identity replacement,
@@ -2688,8 +2691,13 @@ these facts survive deletion of the source identity. There is no expiry while
 legacy credentials or pending notices may need them; storage grows with
 distinct displaced bindings. Comms reads these columns together with the
 current binding, considering at most two historical identities and the one
-active identity. Without a saved exact key, more than one distinct candidate
-remains unresolved. A saved credential/context key takes precedence. The
+active identity. A saved credential/context key takes precedence. Without one,
+a successful lookup returning zero or multiple candidates records
+`admin_binding_pending=false, admin_binding_unresolvable=true` in
+`source_context`. Such canonical World notices complete for independently
+established owner and permission holders plus preserved recipients, skipping
+local-admin enrichment so parcel overlap cannot select another incarnation.
+SQL errors and timeouts remain retryable instead. The
 schema object pass installs this new table, function and trigger; imports
 retain facts through the same trigger. Production insert and retention costs
 are unmeasured.
@@ -2714,7 +2722,9 @@ Credential issuance uses retained `scene_stream_access` rows as rolling quota
 facts: six new credentials per place per hour, including reset and Cast. A
 transaction advisory lock keyed by place precedes credential writes, and the
 `scene_stream_access_place_created_idx` index bounds the recent-row probe to
-six matches. Reuse and deletion do not consume issuance. Quota refusal rolls
+six matches. A read-only check of the same count precedes LiveKit ingress
+creation on create, reset and idle replacement; the locked check remains the
+race authority. Reuse and deletion do not consume issuance. Quota refusal rolls
 back replacement and returns 429. Historical imports preserve creation times.
 The schema object pass installs the index on existing databases; it builds in
 the migration transaction, so writes wait for the build. This is a configured
