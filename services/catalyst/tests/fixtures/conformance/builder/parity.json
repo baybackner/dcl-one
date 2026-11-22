@@ -193,7 +193,7 @@
       "anchors": []
     },
     "item-list-bounds": {
-      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60. Each of those listings answers at most 64 MiB of item documents; past it 413 {ok:false, data:{maxBytes}, error:'The listing is too large, ask for it in pages'} before any item is read (the largest collection in the reference data holds 19.8 MB).",
+      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60. Each of those listings answers at most 64 MiB of item documents; past it 413 {ok:false, data:{maxBytes}, error:'The listing is too large, ask for it in pages'} before any item is read (the largest collection in the reference data holds 19.8 MB). POST /v1/collections/:id/publish of a standard collection answers its items as GET /v1/collections/:id/items answers its signer, within the same bound and read price, once the on-chain ids it assigns are kept and its notices sent: past the bound 413, over the signer's read budget 429, and a later publish answers them; upstream answers every item.",
       "captures": [],
       "anchors": []
     },
@@ -467,7 +467,7 @@
       "anchors": []
     },
     "review-timeline-unreadable-as-absent": {
-      "text": "GET /v1/collections/:id/events: a signer who holds no role on the collection and is not on the committee gets the 404 an absent collection gets (Couldn't find ... on collections, with the id and table name); upstream answers such a signer 401 Unauthorized for an existing collection, which tells it the collection exists.",
+      "text": "GET /v1/collections/:id/events: a signer who holds no role on the collection and is not on the committee gets the 404 an absent collection gets (Couldn't find ... on collections, with the id and table name); upstream answers such a signer 401 Unauthorized for an existing collection, which tells it the collection exists. While the third-party registry can't be read, a third-party collection has no known role holder, so every signer but the committee gets that 404.",
       "captures": [
         "source/498-review-events-stranger.json"
       ],
@@ -2916,9 +2916,11 @@
         "deliberate:third-party-publish-forum-after-commit",
         "deliberate:validator-pull",
         "deliberate:validator-switch",
-        "deliberate:validation-request-bounds"
+        "deliberate:validation-request-bounds",
+        "deliberate:item-list-bounds",
+        "deliberate:request-budgets"
       ],
-      "remaining_verification": "A repeat publish of more items once the first are decided (a forum post update) is covered by the node's tests, not by a capture."
+      "remaining_verification": "A repeat publish of more items once the first are decided (a forum post update) is covered by the node's tests, not by a capture. Its item answer's bound and price are covered by the node's tests (publish_answers_its_items_within_the_bounds_of_the_items_listing, a_first_publication_whose_answer_is_refused_still_records_its_review_and_tells_the_curators), not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/owner/sync",
@@ -4721,7 +4723,7 @@
         "deliberate:review-timeline-unreadable-as-absent",
         "deliberate:unauthenticated-message"
       ],
-      "remaining_verification": "Pagination bounds, a manager's read and the committee's unredacted validation ids are covered by the node's tests, not by a capture."
+      "remaining_verification": "Pagination bounds, a manager's read and the committee's unredacted validation ids are covered by the node's tests, not by a capture. A third-party collection's timeline while the registry can't be read is covered by a_stranger_cannot_tell_a_third_party_timeline_from_an_absent_one_while_the_registry_is_down, not by a capture."
     },
     {
       "id": "api_http:POST:/v1/collections/:id/comments",

@@ -2,9 +2,8 @@
 //! write (the builder drafts, uploads, curation, publication state and the
 //! newsletter opt-in; the camera-reel uploads, visibility and moderation
 //! share it). Like the social slice, this is local authority peer sync does
-//! not back up, so DATABASE.md ("Bootstrap, schema versions and local writes") requires a restore
-//! of this node's database, blobs and credentials to be demonstrated before
-//! the switch is turned on in production. Off (the default), every
+//! not back up: keeping it durable is the operator's job, and the switch
+//! alone decides whether these writes are taken. Off (the default), every
 //! `POST`/`PUT`/`PATCH`/`DELETE` answers 503 with the builder envelope and a
 //! `Retry-After`; the reads (drafts, blobs, on-chain lookups)
 //! keep answering. Nothing is exempt: the builder has no admission mint or

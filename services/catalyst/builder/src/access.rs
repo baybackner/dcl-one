@@ -1960,14 +1960,18 @@ pub async fn curate_item(
 /// `GET /v1/collections/:id/events`: the signer holds a role on the
 /// collection or is on the committee (503 while the committee can't be read
 /// for a signer without a role, whether or not the collection exists).
-/// Anyone else gets the answer an absent collection gets.
+/// While the registry can't be read nobody holds a role on a third-party
+/// collection. Anyone else gets the answer an absent collection gets.
 pub async fn read_review(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
 ) -> Result<ReviewRead, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let registry = registry_for(state, Instant::now(), &[id], &[])
+        .await
+        .ok()
+        .flatten();
     let (mut conn, view) = decision(state).await?;
     let c = collection(&mut conn, &view, id, providers(&registry)).await?;
     drop(conn);

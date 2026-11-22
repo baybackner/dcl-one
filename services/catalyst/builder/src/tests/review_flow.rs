@@ -995,6 +995,54 @@ async fn the_timeline_reads_for_its_owner_manager_and_committee_and_is_absent_to
     assert_eq!(timeline(&node, None, id, "").await.0, 401);
 }
 
+/// While the third-party registry can't be read, nobody is known to manage a
+/// third-party collection: a stranger asking for its timeline gets what an
+/// absent collection gets and the committee still reads it.
+#[tokio::test]
+async fn a_stranger_cannot_tell_a_third_party_timeline_from_an_absent_one_while_the_registry_is_down()
+ {
+    let registry = super::support::FakeRegistry::up();
+    let Some(node) = flow_node_with(Options {
+        registry: registry.clone(),
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let provider = "urn:decentraland:matic:collections-thirdparty:timeline";
+    registry.put(provider, &[&address(MANAGER_KEY)], true, false);
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address, third_party_id, urn_suffix) VALUES ($1, 'TP', $2, $3, $4)",
+    )
+    .bind(id)
+    .bind(address(MANAGER_KEY))
+    .bind(provider)
+    .bind(format!("{provider}:timeline"))
+    .execute(&node.pool)
+    .await
+    .unwrap();
+    let absent_id = Uuid::new_v4();
+    let answers = async |id: Uuid| {
+        let mut statuses = Vec::new();
+        for key in [STRANGER_KEY, CURATOR_KEY, MANAGER_KEY] {
+            statuses.push(timeline(&node, Some(key), id, "").await.0);
+        }
+        statuses
+    };
+    assert_eq!(answers(id).await, [404, 200, 200]);
+    registry.fail(true);
+    assert_eq!(answers(id).await, [404, 200, 404]);
+    assert_eq!(answers(absent_id).await, [404, 404, 404]);
+    let (_, hidden) = timeline(&node, Some(STRANGER_KEY), id, "").await;
+    let (_, missing) = timeline(&node, Some(STRANGER_KEY), absent_id, "").await;
+    assert_eq!(
+        hidden.to_string().replace(&id.to_string(), "ID"),
+        missing.to_string().replace(&absent_id.to_string(), "ID")
+    );
+}
+
 #[tokio::test]
 async fn a_creator_retries_the_automated_review_once_something_changed() {
     let Some(node) = flow_node().await else {

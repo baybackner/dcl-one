@@ -1,5 +1,4 @@
-//! Builder: the pre-publish draft store behind `builder-api.decentraland.org`
-//! (the old `catalyrst-builder` member of the `catalyrst-create` bundle):
+//! Builder: the pre-publish draft store behind `builder-api.decentraland.org`:
 //! item and collection drafts, uploaded content, the committee's item
 //! curation, standard collection publication (Polygon factory parameters
 //! prepared here, signed and submitted by the client, the receipt verified
@@ -11,21 +10,20 @@
 //! asset packs or scene files. Schema `builder` (`schemas/50_create.sql`).
 //!
 //! What it reuses: the ONE pool; the ONE `http::Outbound` client for the
-//! Polygon RPC and the newsletter forward; the ONE blob store (`storage`)
-//! for uploaded item files, by hash (an item's video streams there,
-//! [`items::video`]), which it serves itself (who
-//! may read a file is [`access::read_file`]); signed
-//! fetch through `src/auth` and the shared verifier the explore and social
-//! routes use (`shared::signed_fetch`, [`auth`]); the marketplace subgraph
-//! readers (`marketplace::graph`) where the old code read the squid
-//! ([`onchain`]); the shop's copy of the Polygon collections subgraph,
-//! read by shared SQL, for a collection's published and approved state
-//! ([`chain_state`]: 503 while the copy can't tell) and the chain facts a
-//! collection's body and listings merge ([`collections`]). The one
-//! client it does not share is [`guarded_client`]: guarded as the shared
-//! one, but it follows no redirect, so a credential it carries never
-//! reaches another host; the terms-of-service forward to the warehouse
-//! ([`terms`]), the Slack notices and the forum take it. Every write goes behind
+//! Polygon RPC; the ONE blob store (`storage`) for uploaded item files, by
+//! hash (an item's video streams there, [`items::video`]), which it serves
+//! itself (who may read a file is [`access::read_file`]); signed fetch
+//! through `src/auth` and the shared verifier the explore and social routes
+//! use (`shared::signed_fetch`, [`auth`]); the marketplace subgraph readers
+//! (`marketplace::graph`) for the curation console's listing ([`onchain`]);
+//! the shop's copy of the Polygon collections subgraph, read by shared SQL,
+//! for a collection's published and approved state ([`chain_state`]: 503
+//! while the copy can't tell) and the chain facts a collection's body and
+//! listings merge ([`collections`]). The one client it does not share is
+//! [`guarded_client`]: guarded as the shared one, but it follows no
+//! redirect, so a credential it carries never reaches another host; the
+//! terms-of-service forward to the warehouse ([`terms`]), the newsletter
+//! forward, the Slack notices and the forum take it. Every write goes behind
 //! `CREATE_WRITES_ENABLED` ([`writes`], default false, 503 with
 //! `Retry-After`, built the way `social::writes` gates the social writes).
 //!
@@ -38,28 +36,14 @@
 //! constant-time, fails closed) or a `BUILDER_ADMIN_ADDRESSES` signer; chain
 //! writes are prepared here and signed and submitted by the client, the
 //! receipt verified over the Polygon RPC; a slot cheque is verified only;
-//! v2 never holds a signing key.
+//! the node never holds a signing key. The signed-fetch window is the shared
+//! verifier's 60 seconds, and `BUILDER_POLYGON_RPC_URL` must be https to a
+//! public host, so a plaintext verifier can't be fed a fake receipt.
 //!
-//! Deviations from the old crate, all deliberate: the signed-fetch window is
-//! the shared verifier's 60 seconds (the old required path allowed 30
-//! minutes); the
-//! subgraph readers replace the squid side pool (empty curation listings
-//! without a collections subgraph, as the old node answered without its
-//! pool); `BUILDER_POLYGON_RPC_URL`
-//! must be https to a public host (a plaintext verifier could be fed a fake
-//! receipt).
-//!
-//! Not carried, by the plan: `dcl-scene-cli` and what only it consumes
-//! (`dcl-scene-authoring`, `dcl-preview-tunnel`,
-//! `dcl-preview-tunnel-protocol`) and `catalyrst-deploy-signer` (a local
-//! one-shot tool). Left out with the port: the old `ts-rs` bindings export
-//! (the sites generate their types from the old crate until the web tier
-//! moves), and the per-service `/ping` at the root (it answers under the
-//! `/builder-api` prefix; the content server owns the root).
-//!
-//! Mount: `serve` merges [`root_router`] at the root (the old
-//! `builder-api.` vhost paths) and nests [`router`] under `/builder-api`
-//! (the old gateway prefix, stripped by nginx before it reached the bundle).
+//! Mount: `serve` merges [`root_router`] at the root (the
+//! `builder-api.` host's paths) and nests [`router`] under `/builder-api`
+//! (the gateway's prefix); `/ping` answers only under that prefix, because
+//! the content server owns the root's.
 
 pub(crate) use catalyst_chain_index as chain_index;
 pub(crate) use catalyst_content as content;
@@ -166,7 +150,7 @@ impl std::fmt::Debug for WarehouseForward {
     }
 }
 
-/// The environment as `Config` hands it over (the old env names).
+/// The environment as `Config` hands it over.
 #[derive(Clone, Default)]
 pub struct RawSettings {
     /// `CREATE_WRITES_ENABLED` (false).
@@ -312,7 +296,7 @@ fn non_empty(value: &Option<String>) -> Option<String> {
 }
 
 impl Settings {
-    /// Lowercased, trimmed, blanks dropped: the old `Config::from_env` rule.
+    /// Lowercased, trimmed, blanks dropped.
     pub fn admin_addresses_from(raw: &str) -> Vec<String> {
         raw.split(',')
             .map(|s| s.trim().to_ascii_lowercase())

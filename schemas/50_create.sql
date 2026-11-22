@@ -69,6 +69,7 @@ CREATE TABLE builder.collections (
     forum_claimed_at timestamp without time zone,
     CONSTRAINT collections_pkey PRIMARY KEY (id),
     CONSTRAINT collections_contract_address_key UNIQUE (contract_address),
+    CONSTRAINT collections_contract_address_lowercase_check CHECK (contract_address = lower(contract_address)),
     CONSTRAINT collections_eth_address_lowercase_check CHECK (eth_address = lower(eth_address)),
     CONSTRAINT collections_name_check CHECK (name = btrim(name) AND name <> ''),
     CONSTRAINT collections_salt_len_check CHECK (salt IS NULL OR char_length(salt) <= 128),

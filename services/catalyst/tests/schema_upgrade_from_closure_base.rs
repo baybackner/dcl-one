@@ -11,7 +11,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use catalyst::schema_migrate::{self, MigrateError};
 
 /// The steps a prepared version-2 database has not recorded.
-const PREPARED_PENDING_STEPS: [&str; 49] = [
+const PREPARED_PENDING_STEPS: [&str; 50] = [
     "0018_event_hook_compatibility",
     "0019_event_hook_admin_priority",
     "0023_social_referral_pending_reward",
@@ -61,6 +61,7 @@ const PREPARED_PENDING_STEPS: [&str; 49] = [
     "0068_builder_validation_retry",
     "0069_builder_slot_cheques_outlive_collections",
     "0070_builder_uploaded_video_checked",
+    "0071_builder_collection_contract_lowercase",
 ];
 type LedgerRow = (String, String, bool, chrono::NaiveDateTime);
 /// id, category, is_tier, criteria_steps, published, created_at
@@ -2115,6 +2116,22 @@ const BUILDER_COLLECTION_FLAGS_RETIRED: &str = include_str!(concat!(
 
 const BUILDER_COLLECTION_FLAGS_STEP: &str = "0058_builder_collection_flags_retired";
 
+fn linked_forum_release() -> String {
+    include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/releases/builder-linked-forum-retired.sql"
+    ))
+    .replace("\\set ON_ERROR_STOP on\n", "")
+}
+
+fn linked_publications_release() -> String {
+    include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/schemas/releases/builder-linked-publications-retired.sql"
+    ))
+    .replace("\\set ON_ERROR_STOP on\n", "")
+}
+
 /// The columns, constraints and indexes of `tables`, as the catalog shows
 /// them, in column order.
 async fn layout(pool: &PgPool, tables: &[&str]) -> serde_json::Value {
@@ -2181,6 +2198,14 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
     .execute(pool)
     .await
     .expect("a draft holds its computed contract once the step dropped the check");
+    sqlx::raw_sql(
+        "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
+         VALUES ('11111111-1111-4111-8111-000000000003', '{\"revision\":\"r\"}', '{}', '0x' || repeat('01', 32), 'submitted', \
+           jsonb_build_object('qty', 1, 'salt', '0x' || repeat('01', 32), 'signature', '0x' || repeat('ab', 64) || '1b'))",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     let before = collection_rows(pool).await;
     let stop_on_error = "\\set ON_ERROR_STOP on\n";
     assert_eq!(
@@ -2213,6 +2238,31 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
     schema_migrate::migrate(pool, catalyst::db::SCHEMA_SQL, catalyst::db::MIGRATIONS_SQL)
         .await
         .unwrap();
+
+    release_result(pool, &linked_forum_release()).await.unwrap();
+    let linked = async || -> (bool, i64) {
+        sqlx::query_as(
+            "SELECT to_regclass('builder.linked_collection_publications') IS NOT NULL, \
+                    (SELECT count(*) FROM builder.slot_usage_cheques)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    let refused = release_result(pool, &linked_publications_release())
+        .await
+        .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("run builder-collection-flags-retired.sql first"),
+        "{refused}"
+    );
+    assert_eq!(
+        (linked().await, flags().await),
+        ((true, 0), 2),
+        "the publications release waits for the flags release, which reads its table"
+    );
 
     sqlx::query(
         "INSERT INTO builder.collections (id, name, eth_address, is_published) \
@@ -2255,6 +2305,10 @@ async fn the_builder_collection_flags_release_waits_for_its_step_then_drops_the_
     release_result(pool, &item_curation_release())
         .await
         .unwrap();
+    release_result(pool, &linked_publications_release())
+        .await
+        .unwrap();
+    assert_eq!(linked().await, (false, 1), "its submitted cheque is kept");
 
     let Some(fresh) = with_schema(catalyst::db::SCHEMA_SQL).await else {
         return;

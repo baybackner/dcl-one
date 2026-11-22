@@ -20,8 +20,9 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   (`third_party_id:urn_suffix`) for a linked collection; the collections-v2 urn
   of the contract for a published standard collection; NULL otherwise.
 - `collections.contract_address`: the CREATE2 address upstream computed for
-  every standard collection's draft, lowercased; NULL for a linked
-  collection. `publication_pending` starts false: it marks the node's own
+  every standard collection's draft, lowercased, as the node's schema
+  requires (`collections_contract_address_lowercase_check`); NULL for a
+  linked collection. `publication_pending` starts false: it marks the node's own
   publication in progress.
 - `collections.lock`: the owner's last lock as upstream stores it; it holds
   for a day from that instant.

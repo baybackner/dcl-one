@@ -159,31 +159,6 @@ pub async fn publish(
     if named.is_empty() {
         return Err(refused(400, "Tried to publish no TP items", id));
     }
-    let named_hashes: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT item_id, hash FROM builder.item_contents WHERE item_id = ANY($1)")
-            .bind(&request.items)
-            .fetch_all(&mut *tx)
-            .await?;
-    let mut held = std::collections::HashMap::new();
-    let mut lost = std::collections::HashSet::new();
-    for (item, hash) in named_hashes {
-        let stored = match held.get(&hash) {
-            Some(stored) => *stored,
-            None => {
-                let stored = state
-                    .items
-                    .blobs
-                    .exist(&hash)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                held.insert(hash, stored);
-                stored
-            }
-        };
-        if !stored {
-            lost.insert(item);
-        }
-    }
     if request.cheque.qty.and_then(|q| usize::try_from(q).ok()) != Some(named.len()) {
         return Err(refused(
             400,
@@ -225,6 +200,31 @@ pub async fn publish(
             "The third party collection already has published items. It can't be updated.",
             id,
         ));
+    }
+    let named_hashes: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT item_id, hash FROM builder.item_contents WHERE item_id = ANY($1)")
+            .bind(&request.items)
+            .fetch_all(&mut *tx)
+            .await?;
+    let mut held = std::collections::HashMap::new();
+    let mut lost = std::collections::HashSet::new();
+    for (item, hash) in named_hashes {
+        let stored = match held.get(&hash) {
+            Some(stored) => *stored,
+            None => {
+                let stored = state
+                    .items
+                    .blobs
+                    .exist(&hash)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                held.insert(hash, stored);
+                stored
+            }
+        };
+        if !stored {
+            lost.insert(item);
+        }
     }
     let mut submitted = Vec::with_capacity(named.len());
     for item in &named {

@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use bytes::Bytes;
 use serde_json::{Value, json};
 
@@ -80,6 +81,7 @@ pub async fn publish(
     State(state): State<SharedState>,
     Signed(signer): Signed,
     Path(id): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiData<Value>>, ApiError> {
     let sync = access::sync_collection(&state, &signer, &id).await?;
@@ -105,7 +107,14 @@ pub async fn publish(
             forum_posts::publish_topic(&state, &grant, &items).await;
             serde_json::to_value(published)
         }
-        Err(sync) => serde_json::to_value(lifecycle::publish(&state, &sync).await?),
+        Err(sync) => {
+            let listing = crate::limits::Listing {
+                state: &state,
+                headers: &headers,
+                signer: signer.as_str(),
+            };
+            serde_json::to_value(lifecycle::publish(&state, &sync, &listing).await?)
+        }
     };
     Ok(Json(ApiData::ok(published.map_err(|e| {
         ApiError::internal(format!("publish answer: {e}"))

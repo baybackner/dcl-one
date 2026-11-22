@@ -70,5 +70,6 @@ bounded by the request it answers.
   rejections. It can't approve, can't act on a collection it wasn't asked
   about, can't overrule a curator and can't create requests.
 - The dApp's review screens work against the node unchanged.
-- The committee listing doesn't yet tell collections in an automated review
-  apart from the ones waiting for a curator.
+- While the flow is on, the committee listing's `auto_reviewing` status
+  lists the standard collections in an automated review, and its `pending`,
+  `to_review` and `under_review` statuses leave them out.

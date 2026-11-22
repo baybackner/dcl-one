@@ -4,6 +4,8 @@ SET LOCAL lock_timeout = '10s';
 DO $$
 DECLARE
     unfit bigint;
+    submitted bigint;
+    copied bigint;
 BEGIN
     IF to_regclass('meta.schema_steps') IS NULL OR NOT EXISTS (
         SELECT 1 FROM meta.schema_steps WHERE step = '0066_builder_linked_publications_retired'
@@ -21,6 +23,13 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'run builder-linked-forum-retired.sql first';
     END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'builder' AND table_name = 'collections'
+          AND column_name IN ('is_published', 'is_approved')
+    ) THEN
+        RAISE EXCEPTION 'run builder-collection-flags-retired.sql first';
+    END IF;
     LOCK TABLE builder.collections, builder.linked_collection_publications, builder.slot_usage_cheques
         IN SHARE ROW EXCLUSIVE MODE;
     EXECUTE $q$
@@ -31,7 +40,7 @@ BEGIN
           OR lower(p.cheque->>'signature') !~ '^0x[0-9a-f]{128}(00|01|1b|1c)$'
           OR jsonb_typeof(p.cheque->'qty') IS DISTINCT FROM 'number'
           OR (p.cheque->>'qty')::numeric NOT BETWEEN 1 AND 2147483647
-          OR (p.cheque->>'qty')::numeric <> trunc((p.cheque->>'qty')::numeric))
+          OR (p.cheque->>'qty')::numeric <> trunc((p.cheque->>'qty')::numeric)) IS NOT FALSE
     $q$ INTO unfit;
     IF unfit > 0 THEN
         RAISE EXCEPTION '% submitted linked publications hold a cheque a slot cheque row cannot keep', unfit;
@@ -48,6 +57,14 @@ BEGIN
         WHERE p.status = 'submitted'
         ON CONFLICT (third_party_id, salt) DO NOTHING
     $q$;
+    GET DIAGNOSTICS copied = ROW_COUNT;
+    EXECUTE $q$
+        SELECT count(*) FROM builder.linked_collection_publications WHERE status = 'submitted'
+    $q$ INTO submitted;
+    IF copied < submitted THEN
+        RAISE NOTICE '% submitted cheques were not copied: their provider already holds a cheque with the same salt',
+            submitted - copied;
+    END IF;
     UPDATE builder.collections SET publication_pending = false
     WHERE third_party_id IS NOT NULL AND publication_pending;
     DROP TABLE builder.linked_collection_publications;

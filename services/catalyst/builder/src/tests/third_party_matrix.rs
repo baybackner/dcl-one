@@ -900,7 +900,9 @@ async fn a_manager_the_registry_stops_listing_loses_the_item_it_saved() {
 }
 
 /// One cell of the registry-down column: `op` on a fresh fixture of `p`
-/// as `caller` while the registry answers an error.
+/// as `caller` while the registry answers an error. Every decision answers
+/// 503 but the review timeline's, which knows no role holder of the
+/// collection then: the committee reads it and anyone else finds it absent.
 async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> Option<String> {
     let mut failures = Vec::new();
     let f = fixture(w, p).await;
@@ -916,14 +918,20 @@ async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> O
         false,
     );
     let readable_anyway = op == ReadFile && caller == Creator;
+    let expected = match (op, caller) {
+        (ReviewEvents, Committee) => StatusCode::OK,
+        (ReviewEvents, _) => StatusCode::NOT_FOUND,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
     let changed = snapshot(&w.pool).await != before;
     super::cells::record(|| {
         format!(
-            "registry down\t{op:?}\t{p:?}\t{caller:?}\t\t503 unless readable_anyway={readable_anyway}\t{}\twrite=true",
+            "registry down\t{op:?}\t{p:?}\t{caller:?}\t\t{} unless readable_anyway={readable_anyway}\t{}\twrite=true",
+            expected.as_u16(),
             status.as_u16()
         )
     });
-    if status != StatusCode::SERVICE_UNAVAILABLE && !readable_anyway {
+    if status != expected && !readable_anyway {
         failures.push(format!("{op:?} {p:?} {caller:?}: {status} {answer}"));
     }
     if changed {

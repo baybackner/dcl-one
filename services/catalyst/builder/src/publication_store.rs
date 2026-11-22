@@ -17,7 +17,7 @@ use super::chain_state;
 use super::http::ApiError;
 use super::items::ItemsComponent;
 use super::publication::{
-    PublicationPreparation, SNAPSHOT_QUERY, already_published, mark_missing_bytes, prepare,
+    PublicationPreparation, SNAPSHOT_QUERY, mark_missing_bytes, prepare, refuse_before_snapshot,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -88,6 +88,7 @@ impl ItemsComponent {
                 return Ok(prior);
             }
         }
+        refuse_before_snapshot(&mut tx, &view, id, signer).await?;
         sqlx::query("SELECT id FROM builder.items WHERE collection_id=$1 ORDER BY id FOR UPDATE")
             .bind(id)
             .fetch_all(&mut *tx)
@@ -97,9 +98,6 @@ impl ItemsComponent {
             .bind(signer)
             .fetch_one(&mut *tx)
             .await?;
-        if chain_state::published(&mut tx, &view, id).await? {
-            return Err(already_published());
-        }
         mark_missing_bytes(&self.blobs, &mut snapshot).await?;
         let preparation = prepare(snapshot, signer)?;
         if preparation.revision != revision {

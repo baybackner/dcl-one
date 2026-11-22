@@ -19,8 +19,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::support::{
-    FakeCommittee, FakeOracle, OWNER_KEY, committee_index, contents_of, save_collection,
-    saved_item, signed_map, temp_storage, unique, upload, wallet,
+    FakeCommittee, FakeOracle, FakeRegistry, OWNER_KEY, contents_of, registry_index,
+    save_collection, saved_item, signed_map, temp_storage, unique, upload, wallet,
 };
 use crate::shared::validator_signature::{SIGNATURE_HEADER, TIMESTAMP_HEADER, sign};
 
@@ -101,6 +101,8 @@ pub(super) struct Options {
     pub(super) writes: bool,
     pub(super) storage: Option<Arc<crate::storage::Storage>>,
     pub(super) unbounded: bool,
+    pub(super) registry: FakeRegistry,
+    pub(super) tune: fn(&mut crate::State),
 }
 
 impl Default for Options {
@@ -110,6 +112,8 @@ impl Default for Options {
             writes: true,
             storage: None,
             unbounded: false,
+            registry: FakeRegistry::up(),
+            tune: |_| {},
         }
     }
 }
@@ -186,7 +190,7 @@ pub(super) async fn node_over(pool: PgPool, options: Options) -> Node {
         storage.clone(),
         Arc::default(),
         dcl_http::Outbound::for_tests(),
-        Some(committee_index(&committee).await),
+        Some(registry_index(&committee, &options.registry).await),
         None,
         crate::Settings {
             writes_enabled: options.writes,
@@ -210,6 +214,7 @@ pub(super) async fn node_over(pool: PgPool, options: Options) -> Node {
     if options.unbounded {
         state.limits = crate::limits::Limits::unbounded();
     }
+    (options.tune)(&mut state);
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
@@ -674,6 +679,46 @@ async fn a_first_publication_records_one_request_for_its_items() {
     assert_eq!(
         node.slack.texts(),
         vec![published_notice(id, "First publication", 2)]
+    );
+}
+
+/// A first publication whose answer is refused, its items past what their
+/// listing may answer, records its review request and tells the curators,
+/// once however often it is repeated.
+#[tokio::test]
+async fn a_first_publication_whose_answer_is_refused_still_records_its_review_and_tells_the_curators()
+ {
+    set_clock(DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap());
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let node = node_over(
+        pool,
+        Options {
+            tune: |state| state.limits.listing_bytes = 1,
+            ..Options::default()
+        },
+    )
+    .await;
+    let (id, items) = draft(&node, "Refused answer", 2).await;
+    let (status, body) = publish(&node, id, 2).await;
+    assert_eq!(
+        (status, body["error"].clone()),
+        (413, json!("The listing is too large, ask for it in pages"))
+    );
+    let recorded = requests(&node.pool, id).await;
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|r| (r.1.as_str(), r.2.clone()))
+            .collect::<Vec<_>>(),
+        [("publish", items)]
+    );
+    assert_eq!(publish(&node, id, 2).await.0, 413);
+    node.state.notices.settled().await;
+    assert_eq!(
+        node.slack.texts(),
+        vec![published_notice(id, "Refused answer", 2)]
     );
 }
 

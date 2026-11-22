@@ -27,7 +27,8 @@ pub struct CreateConfig {
 
     /// The newsletter service's API base (public http(s)) a subscription is
     /// forwarded to; the forward needs all three newsletter settings, and
-    /// without them a subscription is only stored.
+    /// without them a subscription is answered and goes nowhere. The node
+    /// stores none.
     #[arg(long, env = "NEWSLETTER_SERVICE_URL")]
     pub newsletter_service_url: Option<String>,
 

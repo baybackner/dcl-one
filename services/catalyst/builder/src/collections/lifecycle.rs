@@ -21,6 +21,7 @@ use crate::curation::slack::Notice;
 use crate::http::{ApiError, Subject};
 use crate::items::listing::ItemsOut;
 use crate::items::save::forget_unnamed;
+use crate::limits::Listing;
 use crate::validator;
 
 const CHAIN_UNKNOWN: &str = "The collection's chain state is not available. Try again later.";
@@ -244,7 +245,13 @@ async fn snapshot(conn: &mut sqlx::PgConnection, id: Uuid) -> Result<Snapshot, A
 /// Polygon RPC's item count at the stored address does. 401 while neither
 /// can tell (the client retries), 409 for a place at or past the chain's
 /// count. A collection whose items all hold their ids answers as it is.
-pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, ApiError> {
+/// Its items are answered as their listing answers `listing`'s reader, after
+/// the ids are kept and the notices sent.
+pub async fn publish(
+    state: &State,
+    sync: &CollectionSync,
+    listing: &Listing<'_>,
+) -> Result<Published, ApiError> {
     let id = sync.id();
     let before = {
         let mut conn = state.items.pool().acquire().await?;
@@ -321,15 +328,9 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         first_publication = first;
     }
     let read = sync.full_read();
-    let published = Published {
-        collection: state.items.collection(&read).await?,
-        items: state
-            .items
-            .collection_items(&read, &ListQuery::parse(None), None)
-            .await?,
-    };
-    if first_publication && published.collection.get("is_approved") != Some(&Value::Bool(true)) {
-        let name = published.collection["name"].as_str().unwrap_or_default();
+    let collection = state.items.collection(&read).await?;
+    let name = collection["name"].as_str().unwrap_or_default();
+    if first_publication && collection.get("is_approved") != Some(&Value::Bool(true)) {
         state.notices.send(
             &state.guarded,
             id,
@@ -341,10 +342,13 @@ pub async fn publish(state: &State, sync: &CollectionSync) -> Result<Published, 
         );
     }
     if let Some(notice) = validation {
-        let name = published.collection["name"].as_str().unwrap_or_default();
         state
             .notices
             .send(&state.guarded, id, name, sync.signer(), notice);
     }
-    Ok(published)
+    let items = state
+        .items
+        .collection_items(&read, &ListQuery::parse(None), Some(listing))
+        .await?;
+    Ok(Published { collection, items })
 }

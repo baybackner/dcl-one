@@ -333,17 +333,12 @@ async fn a_collection_is_published_by_the_copy_its_own_receipt_or_a_minted_item(
     );
 
     let contract = random_address();
-    let copied = builder_collection(
-        &mut tx,
-        false,
-        Some(&contract.to_uppercase().replace("0X", "0x")),
-    )
-    .await;
+    let copied = builder_collection(&mut tx, false, Some(&contract)).await;
     copy_row(&mut tx, "matic", &contract, false, &[]).await;
     assert_eq!(
         derived(&mut tx, copied.id).await,
         (true, false),
-        "on chain by the copy alone, whatever case the builder row holds"
+        "on chain by the copy alone"
     );
     let approved_contract = random_address();
     let approved = builder_collection(&mut tx, false, Some(&approved_contract)).await;

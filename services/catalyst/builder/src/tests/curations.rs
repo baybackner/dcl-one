@@ -477,6 +477,27 @@ async fn a_forum_link_is_an_https_url_and_a_forum_id_comes_with_one() {
     .await;
 }
 
+/// A standard collection's contract address is kept lowercase, so its
+/// unique key holds for the lowercased address every read joins on.
+#[tokio::test]
+async fn a_collection_contract_address_is_stored_lowercase() {
+    let Some(pool) = scratch_pool(2).await else {
+        return;
+    };
+    let c = collection(&pool, false).await;
+    let contract = format!("0x{}abcdef01", c.simple());
+    let set = |address: &str| {
+        format!("UPDATE builder.collections SET contract_address = '{address}' WHERE id = '{c}'")
+    };
+    refused(
+        &pool,
+        &set(&format!("0x{}", contract[2..].to_uppercase())),
+        "collections_contract_address_lowercase_check",
+    )
+    .await;
+    accepted(&pool, &set(&contract)).await;
+}
+
 #[tokio::test]
 async fn a_forum_claim_is_held_only_by_a_collection_without_a_link() {
     let Some(pool) = scratch_pool(2).await else {
@@ -643,6 +664,55 @@ async fn the_linked_publications_release_keeps_each_submitted_cheque_and_repeats
             .unwrap()
         )]
     );
+}
+
+/// A submitted linked publication whose cheque lacks its salt or its
+/// signature is refused by name, and the release changes nothing.
+#[tokio::test]
+async fn the_linked_publications_release_refuses_a_cheque_missing_a_field() {
+    let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+        return;
+    };
+    legacy_linked_publications(&pool, false).await;
+    let submitted = collection(&pool, true).await;
+    let salt = format!("0x{}", "01".repeat(32));
+    let signature = format!("0x{}1b", "ab".repeat(64));
+    for cheque in [
+        json!({ "qty": 1, "signature": signature }),
+        json!({ "qty": 1, "salt": salt }),
+    ] {
+        sqlx::query(
+            "INSERT INTO builder.linked_collection_publications (collection_id, preparation, snapshot, salt, status, cheque) \
+             VALUES ($1, '{\"revision\":\"r\"}', '{}', $2, 'submitted', $3) \
+             ON CONFLICT (collection_id) DO UPDATE SET cheque = EXCLUDED.cheque",
+        )
+        .bind(submitted)
+        .bind(&salt)
+        .bind(&cheque)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let error = sqlx::raw_sql(sqlx::AssertSqlSafe(linked_release()))
+            .execute(&mut *conn)
+            .await
+            .unwrap_err();
+        sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+        assert!(
+            error.to_string().contains(
+                "1 submitted linked publications hold a cheque a slot cheque row cannot keep"
+            ),
+            "{cheque}: {error}"
+        );
+    }
+    let kept: (bool, i64) = sqlx::query_as(
+        "SELECT to_regclass('builder.linked_collection_publications') IS NOT NULL, \
+                (SELECT count(*) FROM builder.slot_usage_cheques)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept, (true, 0));
 }
 
 #[tokio::test]

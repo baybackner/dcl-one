@@ -64,6 +64,7 @@ struct Options {
     now: fn() -> DateTime<Utc>,
     warehouse: Option<String>,
     writes: bool,
+    tune: fn(&mut crate::State),
 }
 
 impl Default for Options {
@@ -74,6 +75,7 @@ impl Default for Options {
             now: Utc::now,
             warehouse: None,
             writes: true,
+            tune: |_| {},
         }
     }
 }
@@ -116,6 +118,7 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
     .unwrap();
     state.now = options.now;
     state.guarded = dcl_http::Outbound::for_tests();
+    (options.tune)(&mut state);
     let state = Arc::new(state);
     let app = Router::new()
         .merge(crate::root_router(state.clone()))
@@ -1504,6 +1507,56 @@ async fn publish_reads_the_copy_when_it_holds_the_collection() {
     );
 }
 
+/// The standard publish answers the collection's items the way its items
+/// listing does, measured before their documents load: where the listing is
+/// too large the publish is refused too, after the ids it assigned are
+/// kept, and a later publish answers them.
+#[tokio::test]
+async fn publish_answers_its_items_within_the_bounds_of_the_items_listing() {
+    let Some(pool) = own_pool().await else {
+        return;
+    };
+    let bounded = node_over(
+        pool.clone(),
+        Options {
+            tune: |state| {
+                state.limits = crate::limits::Limits::unbounded();
+                state.limits.listing_bytes = 1;
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let (id, _, _) = draft(&bounded, 3).await;
+    let contract = contract_of(&pool, id).await;
+    copy_holds(&pool, &contract, &address(OWNER_KEY), &[], &[0, 1, 2]).await;
+    let mut answers = Vec::new();
+    for (method, path) in [
+        ("GET", format!("/v1/collections/{id}/items")),
+        ("POST", format!("/v1/collections/{id}/publish")),
+    ] {
+        let (status, body) = call(&bounded.app, Some(OWNER_KEY), method, &path, None).await;
+        answers.push((status, body["error"].clone()));
+    }
+    let too_large = (413, json!("The listing is too large, ask for it in pages"));
+    assert_eq!(answers, [too_large.clone(), too_large]);
+    assert_eq!(
+        chain_ids(&pool, id).await,
+        vec![Some("0".into()), Some("1".into()), Some("2".into())]
+    );
+    let open = node_over(pool.clone(), Options::default()).await;
+    let (status, body) = call(
+        &open.app,
+        Some(OWNER_KEY),
+        "POST",
+        &format!("/v1/collections/{id}/publish"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["items"].as_array().map(Vec::len), Some(3));
+}
+
 #[tokio::test]
 async fn concurrent_publish_calls_ask_the_rpc_once() {
     let oracle = FakeOracle::default();
@@ -1913,7 +1966,13 @@ async fn a_committee_member_dropped_before_the_publish_writes_nothing() {
             .await;
             super::support::publish_committee_at(&node.pool, 10, "timezone('UTC', now())").await;
         }
-        let published = crate::collections::lifecycle::publish(&node.state, &sync).await;
+        let headers = axum::http::HeaderMap::new();
+        let listing = crate::limits::Listing {
+            state: &node.state,
+            headers: &headers,
+            signer: &address(COMMITTEE_KEY),
+        };
+        let published = crate::collections::lifecycle::publish(&node.state, &sync, &listing).await;
         outcomes.push((
             published.err().map(|e| e.status()),
             chain_ids(&node.pool, id).await,

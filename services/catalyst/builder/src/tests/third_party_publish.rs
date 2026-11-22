@@ -393,6 +393,29 @@ async fn every_refusal_answers_before_anything_is_written() {
     .execute(&w.pool)
     .await
     .unwrap();
+    let unreadable = item(
+        &w,
+        id,
+        &format!("{provider}:c{}:unreadable", id.simple()),
+        Some(11),
+    )
+    .await;
+    let faulty = dcl_auth::hash_bytes_v1(b"a stored file the store can't read");
+    tokio::fs::create_dir_all(
+        crate::storage::resolve_file_path(w.state.items.blobs.root(), &faulty).unwrap(),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "WITH recorded AS (INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($2, 1, $3)) \
+         INSERT INTO builder.item_contents (item_id, file, hash, named_by) VALUES ($1, 'model.glb', $2, $3)",
+    )
+    .bind(unreadable)
+    .bind(&faulty)
+    .bind(address(MANAGER_KEY))
+    .execute(&w.pool)
+    .await
+    .unwrap();
     let used = salt();
     let (status, _) = call(
         &w.app,
@@ -480,6 +503,15 @@ async fn every_refusal_answers_before_anything_is_written() {
             "another quantity",
             Some(MANAGER_KEY),
             json!({ "itemIds": both, "cheque": good(1) }),
+            (
+                400,
+                "The check quantity is different from the amount of published items".into(),
+            ),
+        ),
+        (
+            "another quantity, before any file is looked up",
+            Some(MANAGER_KEY),
+            json!({ "itemIds": [items[0], unreadable], "cheque": good(1) }),
             (
                 400,
                 "The check quantity is different from the amount of published items".into(),

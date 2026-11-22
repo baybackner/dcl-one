@@ -68,18 +68,51 @@ impl ItemsComponent {
         }
         let mut conn = self.pool.acquire().await?;
         let view = chain_state::for_decision(&mut conn).await?;
+        refuse_before_snapshot(&mut conn, &view, id, signer).await?;
         let mut snapshot: Value = sqlx::query_scalar(SNAPSHOT_QUERY)
             .bind(id)
             .bind(signer)
             .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| ApiError::not_found("Collection not found"))?;
-        if chain_state::published(&mut conn, &view, id).await? {
-            return Err(already_published());
-        }
         mark_missing_bytes(&self.blobs, &mut snapshot).await?;
         prepare(snapshot, signer)
     }
+}
+
+/// The most items a standard publication takes.
+const MAX_ITEMS: usize = 50;
+
+/// Refuses, before its snapshot loads item documents, probes the store or
+/// locks item rows: an absent collection of `signer`'s, a published one,
+/// and one holding no item or more than [`MAX_ITEMS`].
+pub(super) async fn refuse_before_snapshot(
+    conn: &mut sqlx::PgConnection,
+    view: &chain_state::DecisionView,
+    id: uuid::Uuid,
+    signer: &str,
+) -> Result<(), ApiError> {
+    let items: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM (SELECT 1 FROM builder.items WHERE collection_id = c.id LIMIT $3) i) \
+         FROM builder.collections c WHERE c.id = $1 AND c.eth_address = $2",
+    )
+    .bind(id)
+    .bind(signer)
+    .bind(MAX_ITEMS as i64 + 1)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+    if chain_state::published(conn, view, id).await? {
+        return Err(already_published());
+    }
+    if !(1..=MAX_ITEMS as i64).contains(&items) {
+        return Err(outside_item_range());
+    }
+    Ok(())
+}
+
+fn outside_item_range() -> ApiError {
+    ApiError::bad_request("Publish a collection containing 1 to 50 items")
 }
 
 /// Marks `missing_content` on each item of `snapshot` that names a hash
@@ -117,7 +150,7 @@ pub(super) async fn mark_missing_bytes(
     Ok(())
 }
 
-pub(super) fn already_published() -> ApiError {
+fn already_published() -> ApiError {
     ApiError::bad_request("Collection has already been published")
 }
 
@@ -150,10 +183,8 @@ pub(super) fn prepare(snapshot: Value, signer: &str) -> Result<PublicationPrepar
     let rows = snapshot["items"]
         .as_array()
         .ok_or_else(|| ApiError::bad_request("Collection items are missing"))?;
-    if rows.is_empty() || rows.len() > 50 {
-        return Err(ApiError::bad_request(
-            "Publish a collection containing 1 to 50 items",
-        ));
+    if rows.is_empty() || rows.len() > MAX_ITEMS {
+        return Err(outside_item_range());
     }
     let items = rows
         .iter()

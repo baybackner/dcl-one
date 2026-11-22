@@ -1034,14 +1034,16 @@ in flight doesn't keep its collection's drafts at 423.
 
 With the new binary serving and a verified backup, run
 `schemas/releases/builder-linked-publications-retired.sql` after
-`builder-linked-forum-retired.sql`. It copies the cheque of each `submitted`
-row into `builder.slot_usage_cheques` (lowercased, `v` stored as 27 or 28,
-`created_at` the row's `updated_at`, a salt its provider already used
-skipped), clears `publication_pending` on third-party collections again and
-drops the table, in one transaction with a 10 s lock timeout. It refuses,
-changing nothing, a database without step 0066, one that still holds the
-linked forum column, and one with a submitted row whose cheque a cheque row
-can't keep. A second run notes the table is gone. Until it runs,
+`builder-collection-flags-retired.sql` and `builder-linked-forum-retired.sql`.
+It copies the cheque of each `submitted` row into `builder.slot_usage_cheques`
+(lowercased, `v` stored as 27 or 28, `created_at` the row's `updated_at`, a
+salt its provider already used skipped and counted in a notice), clears
+`publication_pending` on third-party collections again and drops the table,
+in one transaction with a 10 s lock timeout. It refuses, changing nothing, a
+database without step 0066, one that still holds the linked forum column or
+the builder collection flags (whose release reads this table), and one with a
+submitted row whose cheque a cheque row can't keep, a missing field included.
+A second run notes the table is gone. Until it runs,
 `approvalData` answers 401 for a collection whose only cheque is in that
 table.
 
@@ -1132,6 +1134,11 @@ Invariants:
   curation (`builder.item_curations`). The node's own records close the window
   between a deployment and the copy's next pass. `publication_pending` stays
   a stored state of the node's flow, not a published flag.
+- `builder.collections.contract_address` is stored lowercase
+  (`collections_contract_address_lowercase_check`; step
+  `0071_builder_collection_contract_lowercase` sets it on an applied
+  database), so its unique key holds for the lowercased address every read
+  joins on.
 - Approved is the copy's `is_approved` for a standard collection. A
   third-party collection, which has no contract, is never approved.
 - A published collection begins no publication and takes no draft write.
