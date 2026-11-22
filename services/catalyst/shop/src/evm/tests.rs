@@ -649,6 +649,38 @@ async fn a_trusted_proxys_internal_client_address_is_not_one_relay_bucket() {
     }
 }
 
+/// A Teredo, 6to4 or NAT64 address a trusted proxy forwards is one real client: it gets its own
+/// relay bucket, while an address in another /64 and /48 is still served.
+#[tokio::test]
+async fn transition_prefix_client_addresses_get_a_relay_bucket() {
+    for client in [
+        "2001:0:4136:e378::1",
+        "2002:cb00:7109::1",
+        "64:ff9b::cb00:7109",
+    ] {
+        let settings = Settings {
+            trusted_proxy_cidrs: vec!["10.0.0.0/8".parse().unwrap()],
+            ..Settings::for_tests()
+        };
+        let app = pinned_relay(settings);
+        exhaust_relay_window(&app, "10.0.0.2", Some(client)).await;
+        assert_eq!(
+            post_from(&app, "10.0.0.2", Some(client), "{}".into())
+                .await
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "{client}"
+        );
+        assert_eq!(
+            post_from(&app, "10.0.0.2", Some("2606:4700:9::1"), "{}".into())
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST,
+            "{client}"
+        );
+    }
+}
+
 /// A limited caller is answered before its body is read: a body that never arrives does not hold
 /// the refusal back.
 #[tokio::test]

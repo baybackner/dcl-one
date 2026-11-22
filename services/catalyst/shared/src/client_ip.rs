@@ -125,14 +125,6 @@ pub fn peer_client_ip(
 /// `trusted_proxies` (an unlisted gateway's own address would put every client
 /// in one bucket). A trusted proxy's `X-Real-IP` is returned canonical, even when
 /// internal; [`public_client_ip`] skips that too.
-pub fn distinct_client_ip(
-    headers: &HeaderMap,
-    peer: Option<std::net::SocketAddr>,
-    trusted_proxies: &[ipnet::IpNet],
-) -> Option<String> {
-    distinct_client_addr(headers, peer, trusted_proxies).map(|ip| ip.to_string())
-}
-
 fn distinct_client_addr(
     headers: &HeaderMap,
     peer: Option<std::net::SocketAddr>,
@@ -145,10 +137,10 @@ fn distinct_client_addr(
     (!is_internal(ip)).then_some(ip)
 }
 
-/// [`distinct_client_ip`] only when it is public ([`is_non_public`]): a trusted
+/// [`distinct_client_addr`] only when it is public ([`is_non_public`]): a trusted
 /// proxy's internal `X-Real-IP` (an unlisted load balancer in front of the
 /// gateway) or a reserved one (such as Cloudflare's Pseudo IPv4 `240.0.0.0/4`)
-/// names no one client.
+/// names no one client. NAT64, Teredo and 6to4 clients are counted.
 pub fn public_client_ip(
     headers: &HeaderMap,
     peer: Option<std::net::SocketAddr>,
@@ -159,10 +151,12 @@ pub fn public_client_ip(
         .map(|ip| ip.to_string())
 }
 
-/// [`is_internal`] or a special-purpose range that names no single client:
-/// `0.0.0.0/8`, `192.0.0.0/24`, benchmarking `198.18.0.0/15`, reserved `240.0.0.0/4`, NAT64
-/// (`64:ff9b::/96`, `64:ff9b:1::/48`), Teredo `2001::/32` and 6to4 `2002::/16`.
-/// Keep in sync with `NON_PUBLIC_NETWORKS` in `infra/gateway/gateway.py`.
+/// [`is_internal`] or a reserved IPv4 range that names no single client:
+/// `0.0.0.0/8`, `192.0.0.0/24`, benchmarking `198.18.0.0/15` and reserved `240.0.0.0/4`.
+/// NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), Teredo `2001::/32` and 6to4 `2002::/16`
+/// sources are real clients, so they stay limitable. `NON_PUBLIC_NETWORKS` in
+/// `infra/gateway/gateway.py` is a superset for another question: which networks may
+/// never be a trusted proxy, so it also lists those transition prefixes.
 pub fn is_non_public(ip: IpAddr) -> bool {
     if is_internal(ip) {
         return true;
@@ -172,19 +166,13 @@ pub fn is_non_public(ip: IpAddr) -> bool {
             let [a, b, c, _] = v4.octets();
             a == 0 || (a == 192 && b == 0 && c == 0) || (a == 198 && b & 0xfe == 18) || a >= 240
         }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            (s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0; 4])
-                || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)
-                || (s[0] == 0x2001 && s[1] == 0)
-                || s[0] == 0x2002
-        }
+        IpAddr::V6(_) => false,
     }
 }
 
 /// Loopback, unspecified, private (RFC 1918, CGNAT, IPv6 ULA) or link-local.
-/// Kept narrow: an untrusted peer here is not limited, and 6to4 or Teredo peers
-/// are real clients; [`is_non_public`] is the wider set.
+/// Kept narrow: an untrusted peer here is not limited; [`is_non_public`] adds
+/// the reserved IPv4 ranges.
 pub fn is_internal(ip: std::net::IpAddr) -> bool {
     match ip.to_canonical() {
         std::net::IpAddr::V4(v4) => {
@@ -270,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_client_ip_skips_internal_peers_unless_trusted() {
+    fn distinct_client_addr_skips_internal_peers_unless_trusted() {
         let peer = |ip: &str| Some(std::net::SocketAddr::new(ip.parse().unwrap(), 1));
         let real = headers(&[("x-real-ip", "203.0.113.9")]);
         for internal in [
@@ -285,23 +273,23 @@ mod tests {
             "::ffff:10.0.0.5",
         ] {
             assert_eq!(
-                distinct_client_ip(&real, peer(internal), &[]),
+                distinct_client_addr(&real, peer(internal), &[]),
                 None,
                 "{internal}"
             );
         }
         assert_eq!(
-            distinct_client_ip(&real, peer("198.51.100.4"), &[]).as_deref(),
-            Some("198.51.100.4")
+            distinct_client_addr(&real, peer("198.51.100.4"), &[]),
+            Some("198.51.100.4".parse().unwrap())
         );
-        assert_eq!(distinct_client_ip(&real, None, &[]), None);
+        assert_eq!(distinct_client_addr(&real, None, &[]), None);
         let trusted = ["10.0.0.0/8".parse().unwrap()];
         assert_eq!(
-            distinct_client_ip(&real, peer("10.0.0.5"), &trusted).as_deref(),
-            Some("203.0.113.9")
+            distinct_client_addr(&real, peer("10.0.0.5"), &trusted),
+            Some("203.0.113.9".parse().unwrap())
         );
         assert_eq!(
-            distinct_client_ip(&HeaderMap::new(), peer("10.0.0.5"), &trusted),
+            distinct_client_addr(&HeaderMap::new(), peer("10.0.0.5"), &trusted),
             None
         );
     }
@@ -319,7 +307,7 @@ mod tests {
         ] {
             let real = headers(&[("x-real-ip", internal)]);
             assert!(
-                distinct_client_ip(&real, peer("10.0.0.5"), &trusted).is_some(),
+                distinct_client_addr(&real, peer("10.0.0.5"), &trusted).is_some(),
                 "{internal}"
             );
             assert_eq!(
@@ -341,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn public_client_ip_skips_reserved_ranges_a_trusted_proxy_forwards() {
+    fn public_client_ip_skips_reserved_ranges_and_counts_transition_prefixes() {
         let peer = |ip: &str| Some(std::net::SocketAddr::new(ip.parse().unwrap(), 1));
         let trusted = ["10.0.0.0/8".parse().unwrap()];
         for reserved in [
@@ -351,10 +339,6 @@ mod tests {
             "198.19.255.254",
             "240.0.0.1",
             "255.255.255.255",
-            "64:ff9b::cb00:7109",
-            "64:ff9b:1::1",
-            "2001:0:4136:e378::1",
-            "2002:cb00:7109::1",
         ] {
             let ip: IpAddr = reserved.parse().unwrap();
             assert!(is_non_public(ip), "{reserved}");
@@ -372,6 +356,10 @@ mod tests {
             "198.20.0.1",
             "239.255.255.255",
             "64:ff9b:2::1",
+            "64:ff9b::cb00:7109",
+            "64:ff9b:1::1",
+            "2001:0:4136:e378::1",
+            "2002:cb00:7109::1",
             "2001:db8::1",
             "2001:1::1",
             "2003::1",

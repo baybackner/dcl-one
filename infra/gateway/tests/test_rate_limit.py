@@ -229,6 +229,12 @@ class ClientAddressHeaderTest(unittest.TestCase):
             with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ValueError, "CF-Connecting-IP"):
                 render(GATEWAY_TRUSTED_PROXY_CIDRS=cidrs, GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
 
+    def test_cf_connecting_ip_refuses_transition_prefixes_as_proxies(self):
+        # The API counts Teredo, 6to4 and NAT64 clients, but the gateway still never trusts them as a proxy.
+        for cidrs in ["2001:0:4136:e378::1", "2002:cb00:7109::/48", "64:ff9b::cb00:7109", "64:ff9b:1::/64"]:
+            with self.subTest(cidrs=cidrs), self.assertRaisesRegex(ValueError, "only Cloudflare's public ranges"):
+                render(GATEWAY_TRUSTED_PROXY_CIDRS=cidrs, GATEWAY_CLIENT_IP_HEADER="CF-Connecting-IP")
+
     def test_cf_connecting_ip_refuses_public_networks_outside_cloudflare(self):
         # A public load balancer passes a client's own CF-Connecting-IP through too.
         for cidrs in ["203.0.113.0/24", "173.245.48.0/20 198.51.100.7", "173.245.48.0/19", "104.16.0.0/12",

@@ -49,8 +49,16 @@ edge shares that edge's limits. The supported topologies are:
   NAT64, 6to4 or Teredo network, or any network outside the Cloudflare ranges
   it ships (`CLOUDFLARE_NETWORKS` in `gateway.py`; update that list when
   Cloudflare publishes a change). With Cloudflare, set Pseudo IPv4 to off
-  or "Add header": "Overwrite headers" puts a derived IPv4 address in
-  `CF-Connecting-IP`, and the IPv6 /64 and /48 grouping no longer applies.
+  or "Add header": "Overwrite headers" puts a derived `240.0.0.0/4` address in
+  `CF-Connecting-IP` for every IPv6 client, and the API skips reserved
+  addresses, so those clients get no per-client limit at all.
+  Trusting Cloudflare's ranges does not make the header unforgeable: those
+  ranges carry every Cloudflare customer's traffic, and a Worker's subrequest to
+  a non-Cloudflare destination carries a `CF-Connecting-IP` the Worker chose. This
+  mode therefore also requires that only your own zone reaches the gateway:
+  Authenticated Origin Pulls with the gateway's TLS terminator checking the zone
+  certificate, a Cloudflare Tunnel, or an origin firewall that admits only your
+  zone's traffic.
 - A load balancer in front of the gateway, with or without Cloudflare in front
   of it: keep the default `X-Forwarded-For` and list the load balancer's network
   and the CDN's ranges. The gateway walks `X-Forwarded-For` back past listed
@@ -68,8 +76,14 @@ edge shares that edge's limits. The supported topologies are:
 A gateway behind an unlisted private load balancer sees that load balancer as
 every client. Its forwarded `X-Real-IP` is then internal, which names no single
 client: the relay, place report, tip forward, trade post and comms WebSocket
-per-client limits skip it, as they skip a reserved address (such as Cloudflare's
-Pseudo IPv4 `240.0.0.0/4`), and only their other limits apply.
+per-client limits skip it, as they skip a reserved IPv4 address (`0.0.0.0/8`,
+`192.0.0.0/24`, `198.18.0.0/15` and `240.0.0.0/4`, which includes Cloudflare's
+Pseudo IPv4), and only their other limits apply. NAT64 (`64:ff9b::/96`,
+`64:ff9b:1::/48`), Teredo (`2001::/32`) and 6to4 (`2002::/16`) clients are
+counted like any public address, IPv6 by /64 and /48: every NAT64 client shares
+one bucket, every client of one Teredo server shares one, and 6to4 clients are
+grouped by their embedded IPv4 address. The gateway still never trusts those
+prefixes as a proxy.
 
 Place reports count against the reporter's wallet and, when its address is
 public (a trusted proxy's public `X-Real-IP`, or a public peer), its network.

@@ -1,4 +1,5 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BOOK } from "@shop/payment/fixtures";
@@ -31,7 +32,7 @@ describe("when the free cancellation of a listing is refused", () => {
         },
       ],
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm" }));
   };
 
   beforeEach(() => {
