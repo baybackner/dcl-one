@@ -2074,6 +2074,114 @@ async fn a_mutation_reaches_only_the_rooms_of_the_place_it_is_authorized_on() {
     );
 }
 
+/// The moderator gate reads the `platform_user_moderators` flag on every
+/// check: a wallet dropped from the refreshed document is refused at once,
+/// and the env list applies only while no document is held.
+#[tokio::test]
+async fn a_revoked_platform_moderator_is_refused_without_a_restart() {
+    use super::auth::{ModeratorMode, authorize_moderator};
+    use super::moderation::handlers::moderator_creds;
+    use crate::shared::feature_flags::Snapshot;
+    use crate::shared::signed_fetch::SignedPath;
+
+    fn flags(enabled: bool, variant_enabled: bool, wallets: &str) -> serde_json::Value {
+        serde_json::json!({
+            "flags": { "dapps-platform_user_moderators": enabled },
+            "variants": { "dapps-platform_user_moderators": {
+                "name": "list",
+                "enabled": variant_enabled,
+                "payload": { "type": "string", "value": wallets }
+            } }
+        })
+    }
+    async fn admitted(state: &CommsState) -> bool {
+        let signed_headers = signed(KEY, "get", "/bans", "{}").await;
+        authorize_moderator(
+            &moderator_creds(state),
+            &signed_headers,
+            "get",
+            &SignedPath::local("/bans"),
+            ModeratorMode::Read,
+            None,
+            None,
+        )
+        .await
+        .is_ok()
+    }
+
+    let wallet = address_of(KEY);
+    let other = address_of(OUTSIDER_KEY);
+    let state = lazy_state(Settings {
+        moderator_addresses: vec![Address::parse(&wallet).unwrap()],
+        ..Settings::for_tests()
+    });
+    assert!(admitted(&state).await, "no flags attached: the env list");
+
+    let snapshot = Arc::new(Snapshot::empty());
+    state.set_platform_moderator_flags(snapshot.clone());
+    assert!(
+        admitted(&state).await,
+        "no document fetched yet: the env list"
+    );
+
+    snapshot.replace_sourced(
+        flags(
+            true,
+            true,
+            &format!("{other},\n{}", wallet.to_uppercase().replace("0X", "0x")),
+        ),
+        true,
+    );
+    assert!(admitted(&state).await, "listed in the flag");
+
+    snapshot.replace_sourced(flags(true, true, &other), true);
+    assert!(
+        !admitted(&state).await,
+        "revoked in the flag, though still in the env list"
+    );
+
+    snapshot.replace_sourced(flags(false, true, &wallet), true);
+    assert!(
+        !admitted(&state).await,
+        "a disabled flag lists no moderator"
+    );
+
+    snapshot.replace_sourced(flags(true, false, &wallet), true);
+    assert!(
+        !admitted(&state).await,
+        "a disabled variant lists no moderator"
+    );
+
+    let key = "dapps-platform_user_moderators";
+    for (variant, case) in [
+        (
+            serde_json::Value::Null,
+            "a missing variant lists no moderator",
+        ),
+        (
+            serde_json::json!({ "enabled": true, "payload": { "value": ["0x"] } }),
+            "a non-string payload lists no moderator",
+        ),
+        (
+            serde_json::json!({ "payload": { "value": wallet.clone() } }),
+            "a variant without `enabled` lists no moderator",
+        ),
+    ] {
+        let mut doc = flags(true, true, &wallet);
+        let variants = doc["variants"].as_object_mut().unwrap();
+        if variant.is_null() {
+            variants.remove(key);
+        } else {
+            variants.insert(key.to_string(), variant);
+        }
+        snapshot.replace_sourced(doc, true);
+        assert!(!admitted(&state).await, "{case}");
+    }
+
+    snapshot.replace_sourced(flags(true, true, &wallet), true);
+    assert!(admitted(&state).await, "granted again without a restart");
+}
+
 #[tokio::test]
 async fn the_moderator_routes_need_the_token_or_a_listed_wallet() {
     let Some(pool) = scratch().await else { return };
