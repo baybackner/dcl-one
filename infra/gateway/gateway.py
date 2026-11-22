@@ -276,12 +276,15 @@ def render(table, cfg, mime):
 
     notification_upload = (f"client_max_body_size {NOTIFICATIONS_INGEST_CAP}; "
                            f"limit_conn notification_ingest_uploads {DEPLOY_CONNECTIONS_PER_ADDRESS};")
+    notification_body_guard = "if ($notification_ingest_body_rejected) { return 400; }\n"
     for row in table["aliases"]:
         rewrite = alias_rewrite(row)
         # These aliases belong to APIs. Re-selecting a location after the
         # rewrite could send /social/... to the Sites /social page instead.
         extra = notification_upload if row["key"] == NOTIFICATIONS_INGEST_ALIAS else ""
-        locations += location(row["key"], f"rewrite {rewrite} break;\n" + proxy("apis", extra))
+        # The guard must run before `break` stops this location's rewrite directives.
+        guard = notification_body_guard if row["key"] == NOTIFICATIONS_INGEST_ALIAS else ""
+        locations += location(row["key"], guard + f"rewrite {rewrite} break;\n" + proxy("apis", extra))
     # Worlds deploys reach these matches already rewritten under their host prefix.
     # The content deploy zone is only a coarse abuse guard: 200 at once, then
     # 5 r/s per address, above the content server's own per-client burst limit
@@ -362,7 +365,7 @@ def render(table, cfg, mime):
                                       + proxy("apis", camera_upload))
     # Producers' bearer tokens are checked after nginx buffers the body. Only POSTs
     # count toward the connection cap; GET on these paths reads the inbox.
-    locations += location("= /notifications/notifications", proxy("apis", notification_upload))
+    locations += location("= /notifications/notifications", notification_body_guard + proxy("apis", notification_upload))
     # Both badges host forms reach this already rewritten under /badges. The admin
     # check is a bearer token the app reads after nginx buffers the body, so
     # concurrent uploads are capped as on the deploy routes.
@@ -589,6 +592,13 @@ http {{
     # Inbox reads share these paths but do not count toward the POST upload cap.
     map $request_method $notification_ingest_upload_key {{ POST $binary_remote_addr; default ""; }}
     limit_conn_zone $notification_ingest_upload_key zone=notification_ingest_uploads:10m;
+    # Reject non-POST bodies from headers before proxy buffering, including chunked
+    # bodies without Content-Length. Empty and all-zero lengths keep inbox reads free.
+    map "$request_method:$http_content_length:$http_transfer_encoding" $notification_ingest_body_rejected {{
+        default 1;
+        "~^POST:" 0;
+        "~^[^:]+:0*:$" 0;
+    }}
     limit_conn_zone $storage_write_key zone=storage_uploads:10m;
     limit_conn_status 429;
     proxy_http_version 1.1;

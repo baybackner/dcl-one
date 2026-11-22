@@ -415,7 +415,7 @@ class ConfigurationTest(unittest.TestCase):
                 self.assertIn("proxy_pass http://apis;", alias)
                 self.assertIn(cap, alias)
 
-    def test_notifications_ingest_cap_admits_the_service_limit(self):
+    def test_notification_ingest_cap_admits_the_service_limit(self):
         source = (Path(__file__).parents[3] / "services/catalyst/social/src/notifications/ingest.rs").read_text()
         expr = re.search(r"pub const MAX_BODY_BYTES: usize = ([^;]+);", source)[1]
         self.assertRegex(expr, r"^[\d\s*+()]+$")
@@ -446,7 +446,7 @@ class ConfigurationTest(unittest.TestCase):
                         self.assertNotIn(cap, body)
                         self.assertNotIn("limit_conn notification_ingest_uploads", body)
 
-    def test_notifications_ingest_connection_cap_counts_only_posts(self):
+    def test_notification_ingest_connection_cap_counts_only_posts(self):
         cfg = gateway.settings({"GATEWAY_RESOLVERS": "127.0.0.1"})
         config = gateway.render(self.production_table(), cfg, "/mime.types")
         maps = nginx_map.parse(config)
@@ -457,8 +457,25 @@ class ConfigurationTest(unittest.TestCase):
                 request = nginx_map.Request(maps, request_method=method, binary_remote_addr="client-address")
                 self.assertEqual(request["notification_ingest_upload_key"],
                                  "client-address" if method == "POST" else "")
+        self.assertIn("notification_ingest_body_rejected", maps)
+        for method in ["POST", "GET", "HEAD", "OPTIONS", "PUT", "DELETE"]:
+            for length, encoding, has_body in [("", "", False), ("0", "", False), ("00", "", False),
+                                               ("1", "", True), ("16777216", "", True),
+                                               ("", "chunked", True), ("0", "chunked", True)]:
+                with self.subTest(method=method, length=length, encoding=encoding):
+                    request = nginx_map.Request(maps, request_method=method,
+                                                http_content_length=length, http_transfer_encoding=encoding)
+                    self.assertEqual(request["notification_ingest_body_rejected"],
+                                     "1" if method != "POST" and has_body else "0")
+        guard = "if ($notification_ingest_body_rejected) { return 400; }"
+        for path in ["/notifications", "/notifications/notifications"]:
+            body = re.search(rf"location = {re.escape(path)} \{{\n(.*?)\n\}}", config, re.S)[1]
+            self.assertIn(guard, body)
+            self.assertLess(body.index(guard), body.index("proxy_pass"))
+            if path == "/notifications":
+                self.assertLess(body.index(guard), body.index("rewrite"), "rewrite break must not skip the guard")
 
-    def test_table_without_the_notifications_ingest_alias_is_rejected(self):
+    def test_table_without_the_notification_ingest_alias_is_rejected(self):
         table = self.production_table()
         gateway.check_table(table)
         table["aliases"] = [row for row in table["aliases"] if row["key"] != "= /notifications"]
