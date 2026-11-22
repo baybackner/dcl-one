@@ -75,10 +75,12 @@
 //! undo is refused and records nothing. A refund is granted back once,
 //! keyed on the refund it undoes, whichever reversal applies it.
 //!
-//! An operator's credit, refund and reversal are audited with the admin's
-//! `audit_actor_description()` as actor and `"source": "operator"`. Apple's
-//! credit and reversal are audited as actor `apple`, its refund's charge-back
-//! as `system`, each with `"source": "apple"`.
+//! Every operator credit, refund and reversal it applies is audited with the
+//! admin's `audit_actor_description()` as actor and `"source": "operator"`:
+//! a refund of a held purchase as `iap.refund`, a charge-back of nothing as a
+//! zero `revoke`, a reversal that holds the purchase again as `iap.hold`.
+//! Apple's credit, refund charge-back and reversal are audited as actor
+//! `apple` with `"source": "apple"`. A refused action records nothing.
 //!
 //! The account token is derived from the wallet address, so a purchase is
 //! credited to the wallet its token names whichever device bought it, and
@@ -278,10 +280,10 @@ impl<'a> Refunder<'a> {
         }
     }
 
-    /// The revoke's audit actor; Apple's refund is audited as the system.
+    /// The revoke's audit actor.
     fn actor(self) -> &'a str {
         match self {
-            Self::Apple(_) => super::store::SYSTEM_ACTOR,
+            Self::Apple(_) => IAP_ACTOR,
             Self::Operator { actor, .. } => actor,
         }
     }
@@ -932,7 +934,7 @@ impl Credits {
         let refunded: bool = row.get("refunded");
         let credited: bool = row.get("credited");
         match (status.as_str(), address) {
-            ("held", _) => {
+            ("held", address) => {
                 sqlx::query(
                     "UPDATE credits.iap_transactions \
                      SET status = 'refunded', held_reason = NULL, refund_ref = $2, refund_reason = $3, \
@@ -945,6 +947,20 @@ impl Credits {
                 .bind(reason)
                 .execute(&mut *tx)
                 .await?;
+                // Nothing was credited, so no revoke records the operator's refund.
+                if let Refunder::Operator { actor, .. } = by {
+                    let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref, "reason": reason, "held": true });
+                    Self::audit(
+                        &mut *tx,
+                        super::store::AuditEntry {
+                            action: "iap.refund",
+                            actor,
+                            target: address.as_deref(),
+                            detail: &detail,
+                        },
+                    )
+                    .await?;
+                }
                 tx.commit().await?;
                 Ok(RefundOutcome::HeldRefunded)
             }
@@ -1005,6 +1021,20 @@ impl Credits {
         by: Refunder<'_>,
     ) -> Result<RefundOutcome, ApiError> {
         if super::money::CreditAmount::parse_positive(charged).is_err() {
+            // Nothing to revoke: the operator's refund is still recorded.
+            if let Refunder::Operator { actor, .. } = by {
+                let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref, "reason": reason, "txRef": grant_key(transaction_id), "chargedBack": "0", "removed": "0", "shortfall": "0", "amount": "0" });
+                Self::audit(
+                    &mut *tx,
+                    super::store::AuditEntry {
+                        action: "revoke",
+                        actor,
+                        target: Some(&address),
+                        detail: &detail,
+                    },
+                )
+                .await?;
+            }
             tx.commit().await?;
             return Ok(RefundOutcome::Reversed {
                 address,
@@ -1145,6 +1175,28 @@ impl Credits {
                 .bind(HoldReason::RefundReversed.as_str())
                 .execute(&mut *tx)
                 .await?;
+                if let Reverser::Operator { actor, .. } = by {
+                    let row = row.as_ref();
+                    let detail = json!({
+                        "source": by.source(),
+                        "transactionId": transaction_id,
+                        "refundRef": row.and_then(|r| r.get::<Option<String>, _>("undone_refund_ref")),
+                        "reversalRef": reversal_ref,
+                        "held": true,
+                    });
+                    Self::audit(
+                        &mut *tx,
+                        super::store::AuditEntry {
+                            action: "iap.hold",
+                            actor,
+                            target: row
+                                .and_then(|r| r.get::<Option<String>, _>("address"))
+                                .as_deref(),
+                            detail: &detail,
+                        },
+                    )
+                    .await?;
+                }
                 release(&mut tx, notification).await?;
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::Uncredited);

@@ -3520,8 +3520,119 @@ async fn an_operator_credit_and_refund_are_audited_as_the_operator() {
         audits_of(&pool, &id).await,
         vec![
             audit("grant", "apple", "apple"),
-            audit("revoke", "system", "apple")
+            audit("revoke", "apple", "apple")
         ]
+    );
+}
+
+#[tokio::test]
+async fn every_operator_app_store_action_it_applies_is_audited() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let state = test_state(
+        pool.clone(),
+        StateCfg {
+            iap: Some(iap(&c, open_limits())),
+            ..StateCfg::default()
+        },
+    );
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let capped = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1,
+            ..open_limits()
+        },
+    );
+    let operator = format!("token:{}", super::admin::ADMIN_TOKEN_ENV);
+    let w = scratch_wallet();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let refund = |id: &str, refund_id: &str| json!({ "appleTransactionId": id, "refundId": refund_id, "reason": "support" });
+
+    // A held purchase refunded by the operator: nothing credited, still audited.
+    let held = tx_id();
+    let signed = c.transaction(&held, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&capped, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["held"], true, "{out}");
+    let path = "/credits/credits/iap/refund";
+    let (status, _, out) = send(&app, "POST", path, bearer(), Some(refund(&held, "r-held"))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["held"], true, "{out}");
+    assert_eq!(
+        audits_of(&pool, &held).await,
+        vec![audit("iap.refund", &operator, "operator")]
+    );
+
+    // A refund of a purchase never credited, held again by the operator's reversal.
+    let rehold = tx_id();
+    let signed = c.transaction(&rehold, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&app, c.notification("REFUND", Some(signed))).await;
+    assert_eq!(out["action"], "unknown_credit", "{out}");
+    let (status, out) = operator_reverse(
+        &app,
+        &rehold,
+        "v-rehold",
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["held"], true, "{out}");
+    assert_eq!(row(&pool, &rehold).await.unwrap().0, "held");
+    assert_eq!(
+        audits_of(&pool, &rehold).await,
+        vec![audit("iap.hold", &operator, "operator")]
+    );
+
+    // An operator refund that charges back nothing.
+    let bought = buy(&app, &c, &w, 1).await;
+    let zero = signed_field(&bought[0], "transactionId");
+    let outcome = state
+        .credits
+        .refund_iap(
+            &zero,
+            None,
+            "r-zero",
+            "support",
+            Some(1),
+            Refunder::Operator {
+                actor: "token:test",
+                override_reversal: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&outcome, super::iap::RefundOutcome::Reversed { removed, .. } if removed == "0"),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        audits_of(&pool, &zero).await,
+        vec![
+            audit("grant", "apple", "apple"),
+            audit("revoke", "token:test", "operator")
+        ]
+    );
+
+    // Refused actions record nothing.
+    let paid = signed_field(&buy(&app, &c, &w, 1).await[0], "transactionId");
+    let unknown = tx_id();
+    let (status, _, out) = send(&app, "POST", path, bearer(), Some(refund(&unknown, "r-x"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
+    let (status, out) = operator_reverse(&app, &unknown, "v-x", now_ms).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
+    assert!(audits_of(&pool, &unknown).await.is_empty());
+    let (status, out) = operator_reverse(&app, &paid, "v-paid", now_ms).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    let (status, _, out) = send(&app, "POST", path, bearer(), Some(refund(&held, "r-again"))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(
+        audits_of(&pool, &paid).await,
+        vec![audit("grant", "apple", "apple")]
+    );
+    assert_eq!(
+        audits_of(&pool, &held).await,
+        vec![audit("iap.refund", &operator, "operator")]
     );
 }
 

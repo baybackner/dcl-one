@@ -1618,9 +1618,12 @@ the `status = 'held'` partial index). Rows are one per purchase.
 The credit's `grant`, the charge-back's `revoke` and the reversal's `grant`
 and `user.unblock` rows in `ops.admin_audit` name who applied them: an
 operator's credit, refund or reversal the admin
-(`audit_actor_description()`) with `"source": "operator"`; Apple's credit
-and reversal actor `apple`, its refund's charge-back actor `system`, each
-with `"source": "apple"`.
+(`audit_actor_description()`) with `"source": "operator"`; Apple's credit,
+refund charge-back and reversal actor `apple` with `"source": "apple"`.
+Every operator action applied leaves a row: a refund of a held purchase an
+`iap.refund`, a refund that charges back nothing a zero `revoke`, a reversal
+that holds an uncredited purchase again an `iap.hold`. A refused operator
+action (400, 404 or 409) records nothing.
 
 `credits.iap_account_tokens` maps an `appAccountToken` (a one-way
 derivation of the wallet, `credits::apple::account_token`) to its wallet:
