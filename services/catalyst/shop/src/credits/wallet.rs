@@ -444,6 +444,10 @@ impl Credits {
     /// reported as `shortfall`, and the debit is split PAID-FIRST (a purchase
     /// grants paid credits, so a charged-back pack does not eat credits earned
     /// by playing) as `consume` rows so the signed ledger sum keeps matching.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the reversal's fields and its audit actor, each used once"
+    )]
     pub(crate) async fn revoke_in_tx(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -452,6 +456,7 @@ impl Credits {
         tx_ref: &str,
         reason: &str,
         detail: &serde_json::Value,
+        actor: &str,
     ) -> Result<RevokeOutcome, ApiError> {
         let amount = CreditAmount::parse_positive(amount)?;
         let amount = amount.as_str();
@@ -479,7 +484,7 @@ impl Credits {
                 &mut **tx,
                 AuditEntry {
                     action: "revoke",
-                    actor: SYSTEM_ACTOR,
+                    actor,
                     target: Some(address),
                     detail: &detail,
                 },
@@ -577,7 +582,7 @@ impl Credits {
             .bind(tx_ref)
             .bind("consume")
             .bind("revoke")
-            .bind(SYSTEM_ACTOR)
+            .bind(actor)
             .bind(&detail)
             .execute(&mut **tx)
             .await?;

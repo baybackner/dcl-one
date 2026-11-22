@@ -49,11 +49,11 @@ use serde_json::{Value as JsonValue, json};
 use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::admin::{RequireAdmin, normalize_address, paginate};
-use crate::credits::apple::{Transaction, VerifyError, signed_ahead};
+use crate::credits::apple::{NOTIFICATION_MAX_FUTURE_SECS, Transaction, VerifyError, signed_ahead};
 use crate::credits::errors::ApiError;
 use crate::credits::iap::{
-    CapReason, Channel, CreditOutcome, HoldReason, Iap, Notice, Purchase, RefundOutcome,
-    ReinstateOutcome, Reverser,
+    CapReason, Channel, CreditOutcome, HoldReason, Iap, Notice, Purchase, RefundOutcome, Refunder,
+    ReinstateOutcome, Reverser, UPSTREAM_REFUND_REF,
 };
 use crate::types::UsdCents;
 
@@ -139,8 +139,10 @@ pub async fn webhook(
                     uuid,
                     &reason,
                     t.revocation_percentage,
-                    notice,
-                    false,
+                    Refunder::Apple(Notice {
+                        uuid,
+                        signed_date_ms: notification.signed_date_ms,
+                    }),
                 )
                 .await?
             {
@@ -433,7 +435,7 @@ fn validate_id(name: &str, v: &str) -> Result<(), ApiError> {
 
 /// Operator credit of one App Store transaction, by its product (never an amount).
 pub async fn admin_credit(
-    _admin: RequireAdmin,
+    admin: RequireAdmin,
     State(state): State<SharedState>,
     body: Result<Json<AdminCreditBody>, JsonRejection>,
 ) -> Result<Json<JsonValue>, ApiError> {
@@ -442,6 +444,7 @@ pub async fn admin_credit(
     let address = normalize_address(&b.user_address)?;
     validate_id("appleTransactionId", &b.apple_transaction_id)?;
     validate_id("appleProductId", &b.apple_product_id)?;
+    let actor = admin.audit_actor_description();
     let outcome = state
         .credits
         .credit_iap(
@@ -454,7 +457,7 @@ pub async fn admin_credit(
                 product_id: &b.apple_product_id,
                 quantity: b.quantity,
                 revoked: false,
-                channel: Channel::Operator,
+                channel: Channel::Operator(&actor),
                 notice: None,
                 signed_date_ms: None,
             },
@@ -499,7 +502,7 @@ pub struct AdminRefundBody {
 }
 
 pub async fn admin_refund(
-    _admin: RequireAdmin,
+    admin: RequireAdmin,
     State(state): State<SharedState>,
     body: Result<Json<AdminRefundBody>, JsonRejection>,
 ) -> Result<Json<JsonValue>, ApiError> {
@@ -507,9 +510,16 @@ pub async fn admin_refund(
     let Json(b) = body.map_err(|e| ApiError::bad_request(e.body_text()))?;
     validate_id("appleTransactionId", &b.apple_transaction_id)?;
     validate_id("refundId", &b.refund_id)?;
+    // The import's marker of an upstream purchase; as a refund id no reversal could undo it.
+    if b.refund_id == UPSTREAM_REFUND_REF {
+        return Err(ApiError::bad_request(format!(
+            "refundId {UPSTREAM_REFUND_REF} is reserved"
+        )));
+    }
     if b.reason.is_empty() || b.reason.len() > 200 {
         return Err(ApiError::bad_request("reason must be 1 to 200 characters"));
     }
+    let actor = admin.audit_actor_description();
     match state
         .credits
         .refund_iap(
@@ -518,8 +528,10 @@ pub async fn admin_refund(
             &b.refund_id,
             &b.reason,
             None,
-            None,
-            b.override_reversal,
+            Refunder::Operator {
+                actor: &actor,
+                override_reversal: b.override_reversal,
+            },
         )
         .await?
     {
@@ -573,9 +585,10 @@ pub async fn admin_reversal(
     validate_id("reversalId", &b.reversal_id)?;
     // A future date would make every later Apple decision stale.
     if signed_ahead(b.signed_date, now().saturating_mul(1000)) {
-        return Err(ApiError::bad_request(
-            "signedDate is more than 5 minutes ahead of this node's clock",
-        ));
+        return Err(ApiError::bad_request(format!(
+            "signedDate is more than {} minutes ahead of this node's clock",
+            NOTIFICATION_MAX_FUTURE_SECS / 60
+        )));
     }
     let uuid = format!("operator:{}", b.reversal_id);
     let actor = admin.audit_actor_description();

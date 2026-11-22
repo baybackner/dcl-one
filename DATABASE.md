@@ -1604,8 +1604,8 @@ before it broadcasts) when `available` covers the unexpired credits that leaves
 unqueued (a claimed or sent one is final: a broadcast that failed before it
 reached the chain still counts its attempt, so that revocation is never
 withdrawn), lifts the block it raised when `available`
-covers the wallet's live pledges (an `ops.admin_audit` `user.unblock` row, actor
-`apple`), and returns the row to `paid` (or clears an `imported` row's refund).
+covers the wallet's live pledges (an `ops.admin_audit` `user.unblock` row),
+and returns the row to `paid` (or clears an `imported` row's refund).
 A `refunded` row never credited (not an imported upstream marker) becomes
 `held` (`refund_reversed`) and commits before the credit runs in its own
 transaction, so a credit that fails leaves the purchase held, and a
@@ -1615,6 +1615,13 @@ orders (`address, created_at DESC`, rows this node credited), the caps
 `imported`) and the operator's held list (`GET /credits/credits/iap/held`,
 the `status = 'held'` partial index). Rows are one per purchase.
 
+The credit's `grant`, the charge-back's `revoke` and the reversal's `grant`
+and `user.unblock` rows in `ops.admin_audit` name who applied them: an
+operator's credit, refund or reversal the admin
+(`audit_actor_description()`) with `"source": "operator"`; Apple's credit
+and reversal actor `apple`, its refund's charge-back actor `system`, each
+with `"source": "apple"`.
+
 `credits.iap_account_tokens` maps an `appAccountToken` (a one-way
 derivation of the wallet, `credits::apple::account_token`) to its wallet:
 written by `/iap/register` and an allowed `/iap/quote` (insert; a repeat,
@@ -1623,9 +1630,10 @@ find the wallet. One row per wallet.
 
 The credits-server import (`tooling/migration`) writes each upstream USD-rail
 App Store transaction as `imported` with its wallet, cents and upstream time
-(counted by the caps, charged back by a later refund) and any other as a `refunded` row
-without a wallet, and copies the account tokens, all insert-only, so a
-purchase credited upstream is never credited again. It reads after upstream's
+(counted by the caps, charged back by a later refund) and any other as a
+`refunded` row without a wallet (`refund_ref` `credits-server`, which an
+operator refund id cannot take), and copies the account tokens, all
+insert-only, so a purchase credited upstream is never credited again. It reads after upstream's
 App Store routes stop writing.
 
 Invariants: a transaction id credits at most once and never after a refund;
@@ -1667,8 +1675,8 @@ row, only when `(signed_at, notification_uuid)` (the uuid compared bytewise)
 is not ordered before the recorded pair (`ON CONFLICT ... WHERE`, primary
 key), so a retry of the recorded notification still applies and two
 decisions signed in the same millisecond end alike in either delivery order;
-Apple's reversal writes it even when the purchase is still `paid` or has no row
-yet. A refund or reversal ordered before the recorded decision applies
+Apple's reversal writes it even when the purchase is still `paid` or has no
+row yet. A refund or reversal ordered before the recorded decision applies
 nothing and keeps its uuid record, so a reversal delivered before the refund
 it undoes keeps that refund from charging the wallet, and a reversal of an
 earlier refund never undoes a later one. A revoked transaction (from the
@@ -1678,11 +1686,11 @@ nothing. An operator reversal carries the `signedDate` of the
 node's clock) under the uuid `operator:<reversalId>`, and is compared and
 recorded like Apple's; one ordered before the recorded decision answers 409.
 An operator reversal of a transaction with no row (404) or with no refund to
-undo (409) writes nothing, so it never makes a later Apple refund stale. An operator refund is
-not signed by Apple, so it writes nothing; it reads the table and answers
-409 while the latest decision is a reversal, unless the request sets
-`overrideReversal`. One row per transaction that Apple refunded or
-reversed, kept like its `iap_transactions` row.
+undo (409) writes nothing, so it never makes a later Apple refund stale. An
+operator refund is not signed by Apple, so it writes nothing; it reads the
+table and answers 409 while the latest decision is a reversal, unless the
+request sets `overrideReversal`. One row per transaction that Apple
+refunded or reversed, kept like its `iap_transactions` row.
 
 The bootstrap defines the four tables; an existing database gains them from
 the object pass, so no step exists.

@@ -35,8 +35,9 @@
 //! (Apple's notification uuid, an operator's refund id) applies once, even
 //! after a reversal. A transaction is charged back once, as credits-server
 //! does: a refund with another reference of a transaction already refunded
-//! is recorded and logged, not charged back again. A refund of a transaction never credited, or held,
-//! leaves a `refunded` row that keeps it from being credited later; an operator refund of an unknown id
+//! is recorded and logged, not charged back again. A refund of a
+//! transaction never credited, or held, leaves a `refunded` row that keeps
+//! it from being credited later; an operator refund of an unknown id
 //! records nothing. A refund Apple reverses (`REFUND_REVERSED`) grants back
 //! what was charged back, withdraws its revocations not sent yet while the
 //! balance covers the credits left unqueued, lifts a block it raised once
@@ -56,10 +57,11 @@
 //!
 //! Apple's latest refund decision per transaction (a `REFUND` or a
 //! `REFUND_REVERSED`, with its `signedDate`) is kept in
-//! `credits.iap_refund_decisions`, written under the transaction lock; Apple's
-//! is written even when the purchase is not refunded or has no row yet. Decisions are
-//! ordered by `signedDate`, then by notification uuid (bytewise), so two
-//! signed in the same millisecond end the same in either delivery order. A
+//! `credits.iap_refund_decisions`, written under the transaction lock;
+//! Apple's is written even when the purchase is not refunded or has no row
+//! yet. Decisions are ordered by `signedDate`, then by notification uuid
+//! (bytewise), so two signed in the same millisecond end the same in either
+//! delivery order. A
 //! refund or reversal ordered before the recorded decision is stale: it is
 //! recorded under its uuid and applies nothing, so a reversal delivered
 //! before its refund keeps that refund from charging the wallet. An operator
@@ -70,8 +72,13 @@
 //! does, for a `REFUND_REVERSED` too old to deliver: it names that
 //! reversal's `signedDate`, is ordered against the recorded decision like
 //! Apple's and is recorded as the latest decision; one with no refund to
-//! undo is refused and records nothing. A refund is granted back
-//! once, keyed on the refund it undoes, whichever reversal applies it.
+//! undo is refused and records nothing. A refund is granted back once,
+//! keyed on the refund it undoes, whichever reversal applies it.
+//!
+//! An operator's credit, refund and reversal are audited with the admin's
+//! `audit_actor_description()` as actor and `"source": "operator"`. Apple's
+//! credit and reversal are audited as actor `apple`, its refund's charge-back
+//! as `system`, each with `"source": "apple"`.
 //!
 //! The account token is derived from the wallet address, so a purchase is
 //! credited to the wallet its token names whichever device bought it, and
@@ -92,6 +99,8 @@ use super::store::Credits;
 use crate::types::UsdCents;
 
 pub const IAP_ACTOR: &str = "apple";
+/// `refund_ref` of an upstream purchase the import kept without a wallet.
+pub const UPSTREAM_REFUND_REF: &str = "credits-server";
 /// The most units one signed transaction is credited for.
 pub const MAX_QUANTITY: i64 = 10;
 const DAILY_LOCK: &str = "apple-iap-daily";
@@ -216,18 +225,72 @@ pub fn parse_catalog(raw: &str) -> anyhow::Result<HashMap<String, i64>> {
 
 /// Which path credited a transaction (`credits.iap_transactions.credited_by`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Channel {
+pub enum Channel<'a> {
     Notification,
     Device,
-    Operator,
+    /// An admin, audited as its `audit_actor_description()`.
+    Operator(&'a str),
 }
 
-impl Channel {
+impl<'a> Channel<'a> {
     fn as_str(self) -> &'static str {
         match self {
             Self::Notification => "notification",
             Self::Device => "device",
-            Self::Operator => "operator",
+            Self::Operator(_) => "operator",
+        }
+    }
+
+    fn actor(self) -> &'a str {
+        match self {
+            Self::Operator(actor) => actor,
+            Self::Notification | Self::Device => IAP_ACTOR,
+        }
+    }
+
+    /// The audit detail's `source`.
+    fn source(self) -> &'static str {
+        match self {
+            Self::Operator(_) => "operator",
+            Self::Notification | Self::Device => "apple",
+        }
+    }
+}
+
+/// Who refunds a transaction.
+#[derive(Debug, Clone, Copy)]
+pub enum Refunder<'a> {
+    /// Apple's `REFUND`, recorded with its effects and ordered as a decision.
+    Apple(Notice<'a>),
+    /// An admin, audited as `actor`. It records no decision and is refused
+    /// while Apple's latest decision is a reversal, unless `override_reversal`.
+    Operator {
+        actor: &'a str,
+        override_reversal: bool,
+    },
+}
+
+impl<'a> Refunder<'a> {
+    fn notification(self) -> Option<Notice<'a>> {
+        match self {
+            Self::Apple(n) => Some(n),
+            Self::Operator { .. } => None,
+        }
+    }
+
+    /// The revoke's audit actor; Apple's refund is audited as the system.
+    fn actor(self) -> &'a str {
+        match self {
+            Self::Apple(_) => super::store::SYSTEM_ACTOR,
+            Self::Operator { actor, .. } => actor,
+        }
+    }
+
+    /// The audit detail's `source`.
+    fn source(self) -> &'static str {
+        match self {
+            Self::Apple(_) => "apple",
+            Self::Operator { .. } => "operator",
         }
     }
 }
@@ -295,7 +358,7 @@ pub struct Purchase<'a> {
     /// `None` (an operator credit only): the held row's quantity, else 1.
     pub quantity: Option<i64>,
     pub revoked: bool,
-    pub channel: Channel,
+    pub channel: Channel<'a>,
     /// The notification that delivered it, if any.
     pub notice: Option<Notice<'a>>,
     /// The transaction's own `signedDate`, in milliseconds since the epoch.
@@ -701,7 +764,7 @@ impl Credits {
             (None, None) => return hold(tx, &p, None, None, HoldReason::UnknownWallet).await,
         };
         // An operator credits a held purchase as Apple signed it, never as the request names it.
-        if let (Channel::Operator, Some((product, quantity))) = (p.channel, &held_as)
+        if let (Channel::Operator(_), Some((product, quantity))) = (p.channel, &held_as)
             && (product != p.product_id || p.quantity.is_some_and(|q| Some(q) != *quantity))
         {
             return Err(ApiError::conflict(format!(
@@ -723,7 +786,7 @@ impl Credits {
 
         // An operator credit is how a purchase refused by a wallet cap is reconciled.
         let limits = match p.channel {
-            Channel::Operator => Limits {
+            Channel::Operator(_) => Limits {
                 wallet_total_cents: 0,
                 wallet_daily_cents: 0,
                 ..iap.limits
@@ -767,7 +830,7 @@ impl Credits {
             return Err(ApiError::conflict("this transaction is already settled"));
         }
         let detail = json!({
-            "source": "apple",
+            "source": p.channel.source(),
             "transactionId": p.transaction_id,
             "productId": p.product_id,
             "quantity": quantity,
@@ -781,7 +844,7 @@ impl Credits {
                 amount: &credits.to_string(),
                 kind: "purchase",
                 reason: Some("app store purchase"),
-                actor: Some(IAP_ACTOR),
+                actor: Some(p.channel.actor()),
                 idempotency_key: Some(&key),
                 detail: &detail,
                 studio_name: None,
@@ -801,11 +864,7 @@ impl Credits {
     /// for a transaction never seen. `percentage` is the refunded share in
     /// thousandths of a percent; `None` refunds all of it. An operator refund
     /// while Apple's latest decision is a reversal answers `Superseded` unless
-    /// `override_reversal`.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the notification's fields and the operator's override, each used once"
-    )]
+    /// it overrides the reversal.
     pub async fn refund_iap(
         &self,
         transaction_id: &str,
@@ -813,9 +872,9 @@ impl Credits {
         refund_ref: &str,
         reason: &str,
         percentage: Option<i64>,
-        notice: Option<Notice<'_>>,
-        override_reversal: bool,
+        by: Refunder<'_>,
     ) -> Result<RefundOutcome, ApiError> {
+        let notice = by.notification();
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
@@ -839,8 +898,10 @@ impl Credits {
             tx.commit().await?;
             return Ok(RefundOutcome::Superseded);
         }
-        if notice.is_none()
-            && !override_reversal
+        if let Refunder::Operator {
+            override_reversal: false,
+            ..
+        } = by
             && matches!(
                 latest_decision(&mut tx, transaction_id).await?,
                 Some((Decision::Reversal, _))
@@ -906,8 +967,16 @@ impl Credits {
                 .bind(percentage)
                 .fetch_one(&mut *tx)
                 .await?;
-                self.charge_back_iap(tx, transaction_id, address, &charged, refund_ref, reason)
-                    .await
+                self.charge_back_iap(
+                    tx,
+                    transaction_id,
+                    address,
+                    &charged,
+                    refund_ref,
+                    reason,
+                    by,
+                )
+                .await
             }
             // One refund per transaction, as credits-server: another reference
             // of a refunded credit is recorded, not charged back again.
@@ -921,6 +990,10 @@ impl Credits {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the refunded row's fields, each used once"
+    )]
     async fn charge_back_iap(
         &self,
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
@@ -929,6 +1002,7 @@ impl Credits {
         charged: &str,
         refund_ref: &str,
         reason: &str,
+        by: Refunder<'_>,
     ) -> Result<RefundOutcome, ApiError> {
         if super::money::CreditAmount::parse_positive(charged).is_err() {
             tx.commit().await?;
@@ -939,8 +1013,7 @@ impl Credits {
                 revocations: 0,
             });
         }
-        let detail =
-            json!({ "source": "apple", "transactionId": transaction_id, "refundRef": refund_ref });
+        let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref });
         let was_blocked: Option<bool> = sqlx::query_scalar(
             "SELECT is_blocked_for_claiming FROM credits.wallets WHERE address = $1 FOR UPDATE",
         )
@@ -955,6 +1028,7 @@ impl Credits {
                 &grant_key(transaction_id),
                 reason,
                 &detail,
+                by.actor(),
             )
             .await?;
         // What was actually removed: a reversed refund grants back this, not the shortfall.
@@ -1006,39 +1080,34 @@ impl Credits {
         transaction_id: &str,
         by: Reverser<'_>,
     ) -> Result<ReinstateOutcome, ApiError> {
-        let notice = by.notification();
+        let notification = by.notification();
         let reversal_ref = by.notice().uuid;
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, &grant_key(transaction_id)).await?;
         lock_wallet_of(&mut tx, transaction_id).await?;
-        claim(&mut tx, notice).await?;
+        claim(&mut tx, notification).await?;
         let row = sqlx::query(
-            "SELECT status, address, credited_by, revoked_credits::text AS revoked, raised_block, \
-                    refunded_at IS NOT NULL AS refunded, refund_ref AS undone_refund_ref, \
-                    refund_ref IS NOT DISTINCT FROM 'credits-server' AS upstream \
+            "SELECT status, address, credited_by IS NOT NULL AS credited, revoked_credits::text AS revoked, \
+                    raised_block, refunded_at IS NOT NULL AS refunded, refund_ref AS undone_refund_ref, \
+                    refund_ref IS NOT DISTINCT FROM $2 AS upstream \
              FROM credits.iap_transactions WHERE transaction_id = $1 FOR UPDATE",
         )
         .bind(transaction_id)
+        .bind(UPSTREAM_REFUND_REF)
         .fetch_optional(&mut *tx)
         .await?;
+        let undo = Undo::of(row.as_ref());
         // An operator reversal that would change nothing records no decision,
         // so it never makes a later Apple refund stale. Apple's is recorded
         // either way: a reversal delivered before its refund must still order it.
-        if let Reverser::Operator { .. } = by {
-            let Some(row) = &row else {
-                tx.rollback().await?;
-                return Ok(ReinstateOutcome::Unknown);
-            };
-            let status: String = row.get("status");
-            let reversible = match status.as_str() {
-                "refunded" => !row.get::<bool, _>("upstream"),
-                "imported" => row.get::<bool, _>("refunded"),
-                _ => false,
-            };
-            if !reversible {
-                tx.rollback().await?;
-                return Ok(ReinstateOutcome::NotRefunded);
-            }
+        if let Reverser::Operator { .. } = by
+            && !matches!(undo, Undo::Rehold | Undo::Grant { .. })
+        {
+            tx.rollback().await?;
+            return Ok(match undo {
+                Undo::Unknown => ReinstateOutcome::Unknown,
+                _ => ReinstateOutcome::NotRefunded,
+            });
         }
         // Signed before the latest decision (a refund or reversal): it applies nothing.
         if !record_decision(
@@ -1054,26 +1123,17 @@ impl Credits {
             return Ok(ReinstateOutcome::Superseded);
         }
         // The decision commits; the credit that follows records the notification.
-        let Some(row) = row else {
-            release(&mut tx, notice).await?;
-            tx.commit().await?;
-            return Ok(ReinstateOutcome::Uncredited);
-        };
-        let status: String = row.get("status");
-        let address: Option<String> = row.get("address");
-        let credited = row.get::<Option<String>, _>("credited_by").is_some();
-        let address = match status.as_str() {
-            "held" => {
-                release(&mut tx, notice).await?;
+        let (address, credits, raised_block, undone_refund_ref) = match undo {
+            Undo::Unknown | Undo::Held => {
+                release(&mut tx, notification).await?;
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::Uncredited);
             }
-            // An upstream purchase's marker (the import) is never cleared.
-            "refunded" if row.get::<bool, _>("upstream") => {
+            Undo::NotRefunded => {
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::NotRefunded);
             }
-            "refunded" if !credited => {
+            Undo::Rehold => {
                 // Held, not deleted: a failed credit after this commit leaves the purchase held.
                 sqlx::query(
                     "UPDATE credits.iap_transactions \
@@ -1085,27 +1145,24 @@ impl Credits {
                 .bind(HoldReason::RefundReversed.as_str())
                 .execute(&mut *tx)
                 .await?;
-                release(&mut tx, notice).await?;
+                release(&mut tx, notification).await?;
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::Uncredited);
             }
-            "refunded" | "imported" if row.get::<bool, _>("refunded") => address,
-            _ => None,
+            Undo::Grant {
+                address,
+                credits,
+                raised_block,
+                undone_refund_ref,
+            } => (address, credits, raised_block, undone_refund_ref),
         };
-        let Some(address) = address else {
-            tx.commit().await?;
-            return Ok(ReinstateOutcome::NotRefunded);
-        };
-        let credits: String = row.get("revoked");
         // One grant per refund undone, whichever reversal names it. Every
         // refund that sets `refunded_at` also sets `refund_ref`.
-        let undone_refund_ref: String = row
-            .get::<Option<String>, _>("undone_refund_ref")
-            .ok_or_else(|| {
-                ApiError::Internal(format!(
-                    "refunded app store transaction {transaction_id} has no refund reference"
-                ))
-            })?;
+        let undone_refund_ref = undone_refund_ref.ok_or_else(|| {
+            ApiError::Internal(format!(
+                "refunded app store transaction {transaction_id} has no refund reference"
+            ))
+        })?;
         sqlx::query(
             "UPDATE credits.iap_transactions \
              SET status = CASE WHEN status = 'refunded' THEN 'paid' ELSE status END, revoked_credits = 0, refunded_cents = 0, refund_ref = NULL, refund_reason = NULL, \
@@ -1136,8 +1193,8 @@ impl Credits {
                     },
                 )
                 .await?;
-            // Unreachable: `refund_iap` applies a `refund_ref` once, so its grant
-            // key is new. Dropping `tx` on this error rolls back the UPDATE above.
+            // Unreachable unless the grant key was already used: `refund_iap` applies a
+            // `refund_ref` once. Dropping `tx` on this error rolls back the UPDATE above.
             if granted.replayed {
                 return Err(ApiError::Internal(format!(
                     "app store refund {undone_refund_ref} of {transaction_id} was already granted back"
@@ -1161,7 +1218,7 @@ impl Credits {
         .execute(&mut *tx)
         .await?
         .rows_affected();
-        if row.get::<bool, _>("raised_block") {
+        if raised_block {
             let lifted = sqlx::query(
                 "UPDATE credits.wallets SET is_blocked_for_claiming = false, updated_at = timezone('UTC', now()) \
                  WHERE address = $1 AND is_blocked_for_claiming AND available * $2::numeric >= ( \
@@ -1269,6 +1326,51 @@ impl Credits {
     }
 }
 
+/// What a reversal does to a transaction's row, decided once before its
+/// decision is recorded.
+enum Undo {
+    /// No row: Apple's reversal arrived first; an operator's is refused.
+    Unknown,
+    /// Paid but not credited yet: the credit that follows decides.
+    Held,
+    /// A refund of a purchase never credited: the row is held again.
+    Rehold,
+    /// A refund of a credited (or imported) purchase: granted back.
+    Grant {
+        address: String,
+        credits: String,
+        raised_block: bool,
+        undone_refund_ref: Option<String>,
+    },
+    /// Nothing to undo: not refunded, or an upstream marker never cleared.
+    NotRefunded,
+}
+
+impl Undo {
+    fn of(row: Option<&sqlx::postgres::PgRow>) -> Self {
+        let Some(row) = row else {
+            return Self::Unknown;
+        };
+        let status: String = row.get("status");
+        let refunded: bool = row.get("refunded");
+        match status.as_str() {
+            "held" => Self::Held,
+            "refunded" if row.get::<bool, _>("upstream") => Self::NotRefunded,
+            "refunded" if !row.get::<bool, _>("credited") => Self::Rehold,
+            "refunded" | "imported" if refunded => match row.get::<Option<String>, _>("address") {
+                Some(address) => Self::Grant {
+                    address,
+                    credits: row.get("revoked"),
+                    raised_block: row.get("raised_block"),
+                    undone_refund_ref: row.get("undone_refund_ref"),
+                },
+                None => Self::NotRefunded,
+            },
+            _ => Self::NotRefunded,
+        }
+    }
+}
+
 /// Records a paid purchase that was not credited as `held` (not for an
 /// operator credit, which is not Apple-signed) and answers why.
 async fn hold(
@@ -1278,7 +1380,7 @@ async fn hold(
     value: Option<(i64, i64)>,
     reason: HoldReason,
 ) -> Result<CreditOutcome, ApiError> {
-    if p.channel == Channel::Operator {
+    if matches!(p.channel, Channel::Operator(_)) {
         return Ok(CreditOutcome::Held(reason));
     }
     if reason.retried() {

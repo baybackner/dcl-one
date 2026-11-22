@@ -13,7 +13,7 @@ use sqlx::PgPool;
 
 use super::apple::testkit::{Chain, ChainSpec, chain};
 use super::apple::{Environment, account_token};
-use super::iap::{Iap, Limits};
+use super::iap::{Iap, Limits, Refunder};
 use super::tests::{StateCfg, Wallet, app, call, pool, scratch_wallet, send, test_state};
 use crate::auth::{AuthLink, AuthLinkType};
 use crate::shared::signed_fetch::{
@@ -2599,8 +2599,10 @@ async fn refunds_and_reversals_lock_the_wallet_before_the_transaction_row() {
                         "r1",
                         "apple_refund:test",
                         None,
-                        None,
-                        false,
+                        Refunder::Operator {
+                            actor: "test",
+                            override_reversal: false,
+                        },
                     )
                     .await
                     .map(|_| ())
@@ -3448,4 +3450,158 @@ async fn a_revoked_transaction_signed_before_a_reversal_leaves_the_purchase_held
     let (_, out) = call(&app, &w, "post", verify, &[], Some(body)).await;
     assert_eq!(out["code"], "revoked_transaction", "{out}");
     assert_eq!(row(&pool, &id).await.unwrap().0, "refunded");
+}
+
+/// `(action, actor, source)` of the credits audit rows about `id`, by action.
+async fn audits_of(pool: &PgPool, id: &str) -> Vec<(String, String, String)> {
+    sqlx::query_as(
+        "SELECT action, actor, detail->>'source' FROM ops.admin_audit \
+         WHERE domain = 'credits' AND detail->>'transactionId' = $1 ORDER BY action",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+fn audit(action: &str, actor: &str, source: &str) -> (String, String, String) {
+    (action.to_string(), actor.to_string(), source.to_string())
+}
+
+#[tokio::test]
+async fn an_operator_credit_and_refund_are_audited_as_the_operator() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let capped = setup_with_admin(
+        &pool,
+        &c,
+        Limits {
+            wallet_total_cents: 1,
+            ..open_limits()
+        },
+    );
+    let operator = format!("token:{}", super::admin::ADMIN_TOKEN_ENV);
+    let w = scratch_wallet();
+
+    // A purchase held for a cap, credited and refunded by the operator.
+    let held = tx_id();
+    let signed = c.transaction(&held, PRODUCT, Some(&w.address));
+    let (_, out) = notify(&capped, c.notification("ONE_TIME_CHARGE", Some(signed))).await;
+    assert_eq!(out["held"], true, "{out}");
+    let credit =
+        json!({ "userAddress": w.address, "appleTransactionId": held, "appleProductId": PRODUCT });
+    let (status, _, out) = send(&app, "POST", "/credits/credits/iap", bearer(), Some(credit)).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let refund = json!({ "appleTransactionId": held, "refundId": "r-op", "reason": "support" });
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap/refund",
+        bearer(),
+        Some(refund),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(
+        audits_of(&pool, &held).await,
+        vec![
+            audit("grant", &operator, "operator"),
+            audit("revoke", &operator, "operator")
+        ]
+    );
+
+    // Apple's credit and refund keep their actors.
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let (_, out) = notify(&app, c.notification("REFUND", Some(bought[0].clone()))).await;
+    assert_eq!(out["action"], "refunded", "{out}");
+    assert_eq!(
+        audits_of(&pool, &id).await,
+        vec![
+            audit("grant", "apple", "apple"),
+            audit("revoke", "system", "apple")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_operator_refund_cannot_take_the_upstream_marker() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let bought = buy(&app, &c, &w, 1).await;
+    let id = signed_field(&bought[0], "transactionId");
+    let refund =
+        json!({ "appleTransactionId": id, "refundId": "credits-server", "reason": "support" });
+    let (status, _, out) = send(
+        &app,
+        "POST",
+        "/credits/credits/iap/refund",
+        bearer(),
+        Some(refund),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    assert_eq!(row(&pool, &id).await.unwrap().0, "paid");
+    assert_eq!(available(&pool, &w.address).await, "100");
+}
+
+#[tokio::test]
+async fn an_operator_reversal_of_an_imported_purchase_needs_a_refund_to_undo() {
+    let Some(pool) = pool().await else { return };
+    let c = chain(ChainSpec::default());
+    let app = setup_with_admin(&pool, &c, open_limits());
+    let w = scratch_wallet();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let (refunded, unrefunded, upstream) = (tx_id(), tx_id(), tx_id());
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions \
+             (transaction_id, product_id, address, credits, amount_cents, status, \
+              revoked_credits, refunded_cents, refund_ref, refund_reason, refunded_at, refund_refs) \
+         VALUES ($1, $2, $3, 100, 1000, 'imported', 100, 1000, 'r-up', 'refunded upstream', \
+                 timezone('UTC', now()), ARRAY['r-up'])",
+    )
+    .bind(&refunded)
+    .bind(PRODUCT)
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions (transaction_id, product_id, address, credits, amount_cents, status) \
+         VALUES ($1, $2, $3, 100, 1000, 'imported')",
+    )
+    .bind(&unrefunded)
+    .bind(PRODUCT)
+    .bind(&w.address)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO credits.iap_transactions (transaction_id, product_id, status, refund_ref, refund_reason, refunded_at) \
+         VALUES ($1, $2, 'refunded', 'credits-server', 'credited upstream', timezone('UTC', now()))",
+    )
+    .bind(&upstream)
+    .bind(PRODUCT)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Not refunded, or an upstream marker: refused, and no decision is left.
+    for id in [&unrefunded, &upstream] {
+        let (status, out) = operator_reverse(&app, id, "v-none", now_ms).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{out}");
+        assert_eq!(decisions(&pool, id).await, 0);
+    }
+    assert_eq!(row(&pool, &upstream).await.unwrap().0, "refunded");
+
+    // A refunded import is granted back and stays imported.
+    let (status, out) = operator_reverse(&app, &refunded, "v-up", now_ms).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["credits"], "100", "{out}");
+    assert_eq!(decisions(&pool, &refunded).await, 1);
+    assert_eq!(row(&pool, &refunded).await.unwrap().0, "imported");
+    assert_eq!(available(&pool, &w.address).await, "100");
 }
