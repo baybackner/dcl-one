@@ -1757,8 +1757,23 @@ grants expiring within seven days or one day through
 the partial index on `credits.goal_grants (expires_at) WHERE claimed_at IS NOT
 NULL`, which the object pass creates on existing databases. Credits with any
 consumption are excluded. Weekly notifications are keyed per wallet, season and
-week; usage notifications aggregate and key per wallet and originating grant
-season, so a rerun inserts nothing.
+week; usage notifications aggregate all eligible grants per wallet and key by
+the current or last season, independently of each grant's origin. The shared
+writer reconciles old origin-season keys in the same transaction as its upsert,
+under a per-wallet notification advisory lock. An existing selected-season key
+wins; otherwise one same-kind notice created since that season began carries
+the selected key, retaining its ID, creation time, read state and delivery
+records. Metadata refreshes to the combined balance; no new delivery is created.
+Exact old keys from all started seasons are checked through the address/key
+unique index, including when their grants have expired or been consumed. Other
+historical notices remain intact. Notices first created before the selected
+season do not suppress its new notice. Delivery retention does not remove the
+notification used for reconciliation. Retire writers using origin-season keys
+before running the corrected leased job; those writers do not take its
+notification lock.
+
+The [usage notice identity decision](docs/adr/2026-11-22-credits-usage-notice-identity.md)
+defines this reconciliation and rollout boundary.
 
 The worker runs through the existing leased job registry under the Ops write
 gate. Receipts survive photo deletion and event retention; changing visibility

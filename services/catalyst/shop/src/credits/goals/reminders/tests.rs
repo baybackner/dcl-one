@@ -124,9 +124,12 @@ async fn grant(
     expires: NaiveDateTime,
     claimed: bool,
 ) {
-    let salt = format!("0x{}{}", "0".repeat(24), &a[2..]);
+    let salt = grant_salt(a, season, week);
     sqlx::query("INSERT INTO credits.goal_grants(address,season_id,week_id,goal_id,salt,chain_id,contract,credit_hash,amount_wei,signature,created_at,expires_at,claimed_at) VALUES($1,$2,$3,'take-photo',$4,137,$5,$4,$6::numeric,'0x',$7,$8,$9)")
         .bind(a).bind(season).bind(week).bind(&salt).bind(MANAGER).bind(wei).bind(now() - TimeDelta::days(1)).bind(expires).bind(claimed.then(now)).execute(pool).await.unwrap();
+}
+fn grant_salt(a: &str, season: i32, week: i32) -> String {
+    format!("0x{season:012x}{week:012x}{}", &a[2..])
 }
 async fn sent(pool: &sqlx::PgPool) -> Vec<(String, String, Value)> {
     sqlx::query_as("SELECT type,address,metadata FROM social.notifications WHERE type LIKE 'credits_reminder_%' ORDER BY type,address")
@@ -398,7 +401,7 @@ async fn reminders_pick_eligible_wallets_once_with_source_metadata() {
     let used = wallet(pool, 7).await;
     progress(pool, &used, 1, 3, 2).await;
     grant(pool, &used, 1, 3, "1000000000000000000", in_3d, true).await;
-    let salt = format!("0x{}{}", "0".repeat(24), &used[2..]);
+    let salt = grant_salt(&used, 1, 3);
     sqlx::query("INSERT INTO credits.usages(chain_id,block_number,log_index,contract,tx_hash,sender,credit_id,salt,credit_value,credit_expires_at,value_wei) VALUES(137,1,0,$1,$2,$3,$2,$2,1,0,1)")
         .bind(MANAGER).bind(&salt).bind(&used).execute(pool).await.unwrap();
     // No progress row this week: dormant, or only last week's row.
@@ -531,7 +534,7 @@ async fn usage_reminders_follow_the_credits_season_and_the_allowlist() {
         keys,
         vec![
             format!("{listed}-do-not-miss-out-reminder-2-2"),
-            format!("{listed}-usage-reminder-1"),
+            format!("{listed}-usage-reminder-2"),
         ]
     );
     db.drop().await;
@@ -684,5 +687,277 @@ async fn cancellation_stops_a_kind_between_pages() {
     assert!(ran.lock().is_empty());
     // At most the page in flight when cancelled (two rows under test).
     assert!(sent(pool).await.len() <= 2);
+    db.drop().await;
+}
+
+async fn usage_seasons(pool: &sqlx::PgPool) {
+    season(pool, 1, "2026-09-01 00:00", "2026-10-01 00:00").await;
+    season(pool, 2, "2026-10-01 00:00", "2026-11-09 00:00").await;
+    season(pool, 3, "2026-11-09 00:00", "2026-12-21 00:00").await;
+}
+
+async fn mixed_usage_grants(pool: &sqlx::PgPool, n: u8) -> String {
+    let a = wallet(pool, n).await;
+    progress(pool, &a, 3, 1, 0).await;
+    for (season, amount) in [(1, "1000000000000000000"), (2, "2000000000000000000")] {
+        progress(pool, &a, season, 1, 2).await;
+        grant(
+            pool,
+            &a,
+            season,
+            1,
+            amount,
+            now() + TimeDelta::hours(12),
+            true,
+        )
+        .await;
+    }
+    a
+}
+
+#[tokio::test]
+async fn usage_combines_origin_seasons_and_serializes_selected_season_delivery() {
+    let Some(db) = OwnDatabase::create("usage_combined").await else {
+        return;
+    };
+    let pool = &db.pool;
+    usage_seasons(pool).await;
+    for n in 1..=5 {
+        let address = mixed_usage_grants(pool, n).await;
+        if n != 4 {
+            let details = match n {
+                1 => json!({"ignore_all_email":true}),
+                2 => json!({"message_type":{"credits_reminder_usage":{"email":false}}}),
+                3 => json!({"message_type":{"credits_reminder_usage_24_hours":{"email":false}}}),
+                _ => json!({}),
+            };
+            sqlx::query("INSERT INTO social.subscriptions(address,email,details) VALUES($1,'recipient@example.invalid',$2)")
+                .bind(address).bind(details).execute(pool).await.unwrap();
+        }
+    }
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    for kind in [Kind::Usage, Kind::Usage24Hours] {
+        let (a, b) = tokio::join!(
+            run(&state, &gate, kind, now(), &cancel),
+            run(&state, &gate, kind, now(), &cancel),
+        );
+        assert_eq!(a.unwrap() + b.unwrap(), 5);
+        assert_eq!(run(&state, &gate, kind, now(), &cancel).await.unwrap(), 0);
+    }
+    let rows: Vec<(String, String, Value, Uuid)> =
+        sqlx::query_as("SELECT address,broadcast_key,metadata,id FROM social.notifications")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 10);
+    for (address, key, metadata, id) in rows {
+        assert!(
+            key == Kind::Usage.key(&address, 3, None)
+                || key == Kind::Usage24Hours.key(&address, 3, None)
+        );
+        assert_eq!(id, Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()));
+        assert_eq!(metadata["balance"], json!(3));
+        assert_eq!(metadata["expirationDate"], json!("November 19"));
+    }
+    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM social.notification_deliveries")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(deliveries, 10);
+    let deliveries: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT n.address,n.type,d.state FROM social.notifications n JOIN social.notification_deliveries d ON d.notification_id=n.id",
+    ).fetch_all(pool).await.unwrap();
+    for (address, kind, state) in deliveries {
+        let skipped = address == addr(1)
+            || address == addr(4)
+            || (address == addr(2) && kind == Kind::Usage.notification_type())
+            || (address == addr(3) && kind == Kind::Usage24Hours.notification_type());
+        assert_eq!(state, if skipped { "skipped" } else { "pending" });
+    }
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn usage_reconciles_old_keys_without_recreating_deliveries() {
+    let Some(db) = OwnDatabase::create("usage_reconcile").await else {
+        return;
+    };
+    let pool = &db.pool;
+    usage_seasons(pool).await;
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    for (kind_index, kind) in [Kind::Usage, Kind::Usage24Hours].into_iter().enumerate() {
+        for scenario in 1..=8 {
+            let a = mixed_usage_grants(pool, kind_index as u8 * 10 + scenario).await;
+            let old_key = kind.key(&a, 1, None);
+            send(&state, kind, &a, &old_key, json!({"balance":1}), now())
+                .await
+                .unwrap();
+            let old_id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, old_key.as_bytes());
+            let created = if scenario == 6 {
+                at("2026-10-15 09:00")
+            } else {
+                at("2026-11-10 09:00")
+            };
+            sqlx::query(
+                "UPDATE social.notifications SET created_at=$2,read=true,read_at=$2 WHERE id=$1",
+            )
+            .bind(old_id)
+            .bind(created)
+            .execute(pool)
+            .await
+            .unwrap();
+            let delivery_state = match scenario {
+                2 => "sent",
+                3 => "failed",
+                4 => "skipped",
+                _ => "pending",
+            };
+            sqlx::query("UPDATE social.notification_deliveries SET state=$2,attempts=2,last_error='preserved' WHERE notification_id=$1")
+                .bind(old_id).bind(delivery_state).execute(pool).await.unwrap();
+            if scenario == 8 {
+                // Terminal delivery retention must not make the notice new again.
+                sqlx::query("DELETE FROM social.notification_deliveries WHERE notification_id=$1")
+                    .bind(old_id)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            let selected = kind.key(&a, 3, None);
+            if scenario == 5 {
+                send(&state, kind, &a, &selected, json!({"balance":2}), now())
+                    .await
+                    .unwrap();
+            }
+            if scenario == 7 {
+                // This old key still counts even when its own grant no longer qualifies.
+                sqlx::query(
+                    "UPDATE credits.goal_grants SET expires_at=$2 WHERE address=$1 AND season_id=1",
+                )
+                .bind(&a)
+                .bind(now())
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        }
+        let (first, second) = tokio::join!(
+            run(&state, &gate, kind, now(), &cancel),
+            run(&state, &gate, kind, now(), &cancel),
+        );
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(run(&state, &gate, kind, now(), &cancel).await.unwrap(), 0);
+        for scenario in 1..=8 {
+            let a = addr(kind_index as u8 * 10 + scenario);
+            let key = kind.key(&a, 3, None);
+            let (id, metadata): (Uuid, Value) = sqlx::query_as("SELECT id,metadata FROM social.notifications WHERE address=$1 AND broadcast_key=$2")
+                .bind(&a).bind(&key).fetch_one(pool).await.unwrap();
+            let old_key = kind.key(&a, 1, None);
+            let old_id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, old_key.as_bytes());
+            assert_eq!(
+                metadata["balance"],
+                json!(if scenario == 7 { 2 } else { 3 })
+            );
+            assert_eq!(
+                id,
+                if scenario == 5 || scenario == 6 {
+                    Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes())
+                } else {
+                    old_id
+                }
+            );
+            if scenario == 8 {
+                let deliveries: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM social.notification_deliveries WHERE notification_id=$1",
+                )
+                .bind(old_id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                assert_eq!(deliveries, 0);
+                continue;
+            }
+            let (read, created, state, attempts, error): (bool, NaiveDateTime, String, i32, String) = sqlx::query_as(
+                "SELECT n.read,n.created_at,d.state,d.attempts,d.last_error FROM social.notifications n JOIN social.notification_deliveries d ON d.notification_id=n.id WHERE n.id=$1",
+            ).bind(old_id).fetch_one(pool).await.unwrap();
+            assert!(read);
+            assert_eq!(
+                created,
+                if scenario == 6 {
+                    at("2026-10-15 09:00")
+                } else {
+                    at("2026-11-10 09:00")
+                }
+            );
+            assert_eq!(
+                state,
+                match scenario {
+                    2 => "sent",
+                    3 => "failed",
+                    4 => "skipped",
+                    _ => "pending",
+                }
+            );
+            assert_eq!(attempts, 2);
+            assert_eq!(error, "preserved");
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM social.notification_deliveries d JOIN social.notifications n ON n.id=d.notification_id WHERE n.address=$1 AND n.type=$2")
+                .bind(&a).bind(kind.notification_type()).fetch_one(pool).await.unwrap();
+            assert_eq!(count, if scenario == 5 || scenario == 6 { 2 } else { 1 });
+        }
+    }
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn usage_reconciliation_rolls_back_with_the_notification_write() {
+    let Some(db) = OwnDatabase::create("usage_reconcile_rollback").await else {
+        return;
+    };
+    let pool = &db.pool;
+    usage_seasons(pool).await;
+    let a = mixed_usage_grants(pool, 1).await;
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    for kind in [Kind::Usage, Kind::Usage24Hours] {
+        let old_key = kind.key(&a, 1, None);
+        send(&state, kind, &a, &old_key, json!({"balance":1}), now())
+            .await
+            .unwrap();
+    }
+    sqlx::query("CREATE FUNCTION fail_usage_refresh() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN IF NEW.metadata->>'balance'='3' THEN RAISE EXCEPTION 'injected aggregate failure'; END IF; RETURN NEW; END$$")
+        .execute(pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER fail_usage_refresh BEFORE INSERT OR UPDATE ON social.notifications FOR EACH ROW EXECUTE FUNCTION fail_usage_refresh()")
+        .execute(pool).await.unwrap();
+    for kind in [Kind::Usage, Kind::Usage24Hours] {
+        assert!(run(&state, &gate, kind, now(), &cancel).await.is_err());
+        let keys: Vec<String> = sqlx::query_scalar(
+            "SELECT broadcast_key FROM social.notifications WHERE address=$1 AND type=$2",
+        )
+        .bind(&a)
+        .bind(kind.notification_type())
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(keys, vec![kind.key(&a, 1, None)]);
+    }
+    sqlx::query("DROP TRIGGER fail_usage_refresh ON social.notifications")
+        .execute(pool)
+        .await
+        .unwrap();
+    for kind in [Kind::Usage, Kind::Usage24Hours] {
+        assert_eq!(run(&state, &gate, kind, now(), &cancel).await.unwrap(), 0);
+    }
+    assert_eq!(sent(pool).await.len(), 2);
     db.drop().await;
 }

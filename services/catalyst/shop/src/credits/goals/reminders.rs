@@ -106,6 +106,23 @@ fn links(shop_base_url: &str) -> (String, String) {
     (format!("{origin}/play"), shop)
 }
 
+fn notification(
+    kind: Kind,
+    address: &str,
+    key: &str,
+    metadata: Value,
+    now: NaiveDateTime,
+) -> Result<crate::shared::notifications::NewNotification, ApiError> {
+    Ok(crate::shared::notifications::NewNotification {
+        id: Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()),
+        address: crate::shared::identity::Address::parse(address)
+            .map_err(|_| ApiError::Internal("invalid reminder address".into()))?,
+        kind: kind.notification_type().into(),
+        occurred_at: now,
+        metadata,
+    })
+}
+
 async fn send(
     state: &SharedState,
     kind: Kind,
@@ -114,14 +131,7 @@ async fn send(
     metadata: Value,
     now: NaiveDateTime,
 ) -> Result<bool, ApiError> {
-    let notification = crate::shared::notifications::NewNotification {
-        id: Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()),
-        address: crate::shared::identity::Address::parse(address)
-            .map_err(|_| ApiError::Internal("invalid reminder address".into()))?,
-        kind: kind.notification_type().into(),
-        occurred_at: now,
-        metadata,
-    };
+    let notification = notification(kind, address, key, metadata, now)?;
     let n = crate::shared::notifications::insert_keyed_notification(
         &state.credits.pool,
         key,
@@ -185,8 +195,9 @@ async fn weekly(
     Ok(sent)
 }
 
-/// Claimed, unused goal credits expiring within the window, one aggregate per
-/// pass, keyed to the season the credits come from.
+/// Claimed, unused goal credits expiring within the window, aggregated per
+/// recipient and keyed to the selected season. Reconcile prior origin keys
+/// created during that season without creating another delivery.
 async fn usage(
     state: &SharedState,
     gate: &Gate,
@@ -203,7 +214,14 @@ async fn usage(
         TimeDelta::days(1)
     };
     let marketplace = links(&state.settings.shop_base_url).1;
-    let rows = sqlx::query("SELECT g.address, g.season_id, sum(g.amount_wei)::text AS amount, max(g.expires_at) AS expires FROM credits.goal_grants g WHERE g.claimed_at IS NOT NULL AND g.expires_at>$1 AND g.expires_at<=$2 AND EXISTS(SELECT 1 FROM credits.goal_progress p WHERE p.address=g.address AND p.season_id=$3) AND NOT EXISTS(SELECT 1 FROM credits.usages u WHERE u.salt=g.salt AND u.chain_id=g.chain_id AND u.contract=g.contract AND u.credit_id=g.credit_hash AND u.sender=g.address) GROUP BY g.address, g.season_id ORDER BY g.address, g.season_id")
+    // Include seasons whose grants have since expired or been consumed: their
+    // existing notices still count toward this selected season's delivery.
+    let origin_seasons: Vec<i32> =
+        sqlx::query_scalar("SELECT id FROM credits.seasons WHERE start_date <= $1")
+            .bind(now)
+            .fetch_all(&state.credits.pool)
+            .await?;
+    let rows = sqlx::query("SELECT g.address, sum(g.amount_wei)::text AS amount, max(g.expires_at) AS expires FROM credits.goal_grants g WHERE g.claimed_at IS NOT NULL AND g.expires_at>$1 AND g.expires_at<=$2 AND EXISTS(SELECT 1 FROM credits.goal_progress p WHERE p.address=g.address AND p.season_id=$3) AND NOT EXISTS(SELECT 1 FROM credits.usages u WHERE u.salt=g.salt AND u.chain_id=g.chain_id AND u.contract=g.contract AND u.credit_id=g.credit_hash AND u.sender=g.address) GROUP BY g.address ORDER BY g.address")
         .bind(now).bind(now + window).bind(season.id).fetch_all(&state.credits.pool).await?;
     let mut sent = 0;
     for chunk in rows.chunks(PAGE as usize) {
@@ -223,8 +241,23 @@ async fn usage(
             } else {
                 json!({"expirationDate":date,"balance":balance,"link":marketplace})
             };
-            let key = kind.key(&address, row.get("season_id"), None);
-            sent += u64::from(send(state, kind, &address, &key, metadata, now).await?);
+            let key = kind.key(&address, season.id, None);
+            let previous_keys: Vec<_> = origin_seasons
+                .iter()
+                .map(|id| kind.key(&address, *id, None))
+                .collect();
+            let notification = notification(kind, &address, &key, metadata, now)?;
+            let mut transaction = state.credits.pool.begin().await?;
+            let inserted = crate::shared::notifications::insert_reconciled_keyed_notification(
+                &mut transaction,
+                &key,
+                &notification,
+                &previous_keys,
+                season.start_date,
+            )
+            .await?;
+            transaction.commit().await?;
+            sent += inserted;
         }
     }
     Ok(sent)
