@@ -229,6 +229,10 @@ class WorldsMigrationCases:
         self.assertEqual(self.sql(db,"SELECT active FROM explore.world_scene_place WHERE entity_id='later-import';").strip(),'t')
         self.assertEqual(self.sql(db,"SELECT active FROM explore.world_scene_place WHERE identity='11111111-1111-4111-8111-111111111111';").strip(),'f')
         self.assertEqual(self.sql(db,"SELECT cardinality(removal_admin_keys) FROM explore.place WHERE id='gone.eth';").strip(),'2')
+        self.assertEqual(self.sql(db,"SELECT entity_id,identity::text FROM explore.world_scene_binding WHERE world_name='gone.eth';").strip(),
+                         'last\t11111111-1111-4111-8111-111111111111')
+        self.sql(db, 'BEGIN;\n' + stage + self.migration_sql('worlds-content-server','world_scene','load') + '\nCOMMIT;')
+        self.assertEqual(self.sql(db,"SELECT count(*) FROM explore.world_scene_binding WHERE world_name='gone.eth';").strip(), '1')
         self.sql(db,"UPDATE explore.place SET disabled=true WHERE id='gone.eth';")
         self.assertEqual(self.sql(db,"SELECT cardinality(admin_keys) FROM explore.place_removal_pending WHERE place_id='gone.eth';").strip(),'2')
         self.assertEqual(self.sql(db,"SELECT '99999999-9999-4999-8999-999999999999'=ANY(admin_keys) FROM explore.place_removal_pending WHERE place_id='gone.eth';").strip(),'f')

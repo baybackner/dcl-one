@@ -301,7 +301,8 @@ pub(super) async fn prepare(
 }
 
 /// Runtime notification lookup takes no publication locks and never writes a credential.
-/// Startup backfill preserves legacy bindings before writers can retire their identities.
+/// Displaced bindings survive retirement. Conflicting incarnations remain unresolved;
+/// an exact key already saved on the credential always wins.
 async fn notification_admin_key(
     pool: &PgPool,
     id: Uuid,
@@ -312,7 +313,9 @@ async fn notification_admin_key(
         .as_ref()
         .map(|(world, scene)| (Some(world.key()), Some(scene.as_str())))
         .unwrap_or((None, None));
-    sqlx::query_scalar("SELECT COALESCE(admin_place_key,(SELECT identity::text FROM explore.world_scene_place WHERE world_name=$2 AND entity_id=$3 AND active)) FROM social.scene_stream_access WHERE id=$1")
+    sqlx::query_scalar("WITH historical AS (SELECT identity FROM explore.world_scene_binding WHERE world_name=$2 AND entity_id=$3 LIMIT 2), \
+        bindings AS (SELECT identity FROM historical UNION SELECT identity FROM explore.world_scene_place WHERE world_name=$2 AND entity_id=$3 AND active) \
+        SELECT COALESCE(admin_place_key,(SELECT min(identity::text) FROM bindings HAVING count(*)=1)) FROM social.scene_stream_access WHERE id=$1")
         .bind(id).bind(world).bind(scene).fetch_optional(pool).await.map(Option::flatten)
 }
 
@@ -908,6 +911,115 @@ mod tests {
                 .bind(place).execute(&state.pool).await.unwrap();
         }
         id
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_failed_binding_recovers_after_retirement_before_first_retry() {
+        let Some((state, directory, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test')")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        let mut locked = state.pool.begin().await.unwrap();
+        sqlx::query("LOCK explore.world_scene_place IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locked)
+            .await
+            .unwrap();
+        let revoked = enqueue(&state, id, CleanupCommand::Revoke).await.unwrap();
+        locked.rollback().await.unwrap();
+        assert!(revoked);
+        let facts: (bool, bool, bool) = sqlx::query_as("SELECT a.active,c.recipients_resolved,(c.source_context->>'admin_binding_pending')::boolean FROM social.scene_stream_access a JOIN social.scene_stream_cleanup c ON c.access_id=a.id WHERE a.id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(facts, (false, false, true));
+        // Retire before any deferred binding recovery. The sibling remains live.
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        *directory.fail_streaming_recipient.lock().unwrap() = Some(wallet(2));
+        let _ = cleanup_access(&state, id).await;
+        let progress: (bool, i32) = sqlx::query_as("SELECT recipients_resolved,recipient_cursor FROM social.scene_stream_cleanup WHERE access_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(
+            progress,
+            (true, 1),
+            "capture the retired binding before delivery"
+        );
+        sqlx::query("UPDATE social.scene_stream_cleanup SET due_at=timezone('UTC',now()) WHERE access_id=$1")
+            .bind(id).execute(&state.pool).await.unwrap();
+        let _ = cleanup_access(&state, id).await;
+        let actual: std::collections::BTreeSet<_> = directory
+            .streaming_notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.recipient.clone())
+            .collect();
+        assert_eq!(
+            actual,
+            (1..=4).map(wallet).collect(),
+            "retired bound-scene admins must survive the first failed recovery; exclude sibling admins"
+        );
+        assert_eq!(
+            directory
+                .streaming_attempts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|recipient| **recipient == wallet(1))
+                .count(),
+            1,
+            "accepted notices must not be replayed after the saved cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_fanout_ambiguous_retired_binding_never_selects_a_new_incarnation() {
+        let Some((state, _, place)) = fanout_fixture(true).await else {
+            return;
+        };
+        let name = format!("{place}.dcl.eth");
+        let room = crate::rooms::worlds_service_scene_room(
+            &crate::world_identity::WorldName::parse(&name).unwrap(),
+            &crate::world_identity::SceneId::parse("fanout-scene").unwrap(),
+        );
+        let original: String = sqlx::query_scalar("SELECT identity::text FROM explore.world_scene_place WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).fetch_one(&state.pool).await.unwrap();
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO social.scene_stream_access(id,place_id,room_id,streaming_url,streaming_key,generated_by,active) VALUES ($1,$2,$3,'rtmp://example.invalid/live','test','test',false)")
+            .bind(id).bind(&place).bind(&room).execute(&state.pool).await.unwrap();
+        sqlx::query("UPDATE explore.world_scene_place SET active=false,entity_id=NULL WHERE world_name=$1 AND entity_id='fanout-scene'")
+            .bind(&name).execute(&state.pool).await.unwrap();
+        assert_eq!(
+            notification_admin_key(&state.pool, id, Some(&room))
+                .await
+                .unwrap(),
+            Some(original.clone())
+        );
+        sqlx::query("INSERT INTO explore.world_scene_place(world_name,identity,entity_id,parcels) VALUES ($1,$2,'fanout-scene',ARRAY['50,60'])")
+            .bind(&name).bind(Uuid::new_v4()).execute(&state.pool).await.unwrap();
+        assert_eq!(
+            notification_admin_key(&state.pool, id, Some(&room))
+                .await
+                .unwrap(),
+            None
+        );
+        sqlx::query("UPDATE social.scene_stream_access SET admin_place_key=$2 WHERE id=$1")
+            .bind(id)
+            .bind(&original)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            notification_admin_key(&state.pool, id, Some(&room))
+                .await
+                .unwrap(),
+            Some(original)
+        );
     }
 
     #[tokio::test]

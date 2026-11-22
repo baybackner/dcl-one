@@ -2676,7 +2676,25 @@ Each credential stores its bound `admin_place_key` at issuance/reset/Cast;
 the cleanup context preserves it for later resolution. Notification preparation
 is bounded to five seconds, retains partial evidence on failure and never takes
 publication row locks. An unresolved native binding blocks recipient completion,
-including retries after credential deactivation. `scene_stream_cleanup`
+including retries after credential deactivation.
+
+Explore owns `world_scene_binding`: one recovery fact for each distinct
+`(world_name, entity_id, identity)` displaced by identity replacement,
+retirement or deletion. Its row trigger inserts the old exact binding in the
+identity transaction, with no Social writes or row locks. A rollback retains
+neither transition nor evidence. The primary key in that order supports the
+exact world/entity probe and makes replay idempotent. There is no FK because
+these facts survive deletion of the source identity. There is no expiry while
+legacy credentials or pending notices may need them; storage grows with
+distinct displaced bindings. Comms reads these columns together with the
+current binding, considering at most two historical identities and the one
+active identity. Without a saved exact key, more than one distinct candidate
+remains unresolved. A saved credential/context key takes precedence. The
+schema object pass installs this new table, function and trigger; imports
+retain facts through the same trigger. Production insert and retention costs
+are unmeasured.
+
+`scene_stream_cleanup`
 keeps the complete `recipients`, `recipients_resolved` bit and guarded
 `recipient_cursor`. Each Social acceptance advances one cursor under the
 current claim token, so a bounded pass resumes after its accepted prefix.
@@ -2685,9 +2703,10 @@ cannot suppress an unfinished expiry suffix, including an uncheckpointed accepta
 Social deduplicates by recipient, kind and event identity. Reset-to-revoke
 conversion retains the complete recipient set and starts the new kind at zero.
 
-Existing credentials without a saved admin key can recover only a current
-applicable identity. Already retired pre-cutover scenes and overwritten
-pre-cutover grant history have no exact recovery evidence. Existing scalar
+Existing credentials without a saved admin key can recover a unique exact
+current or retained binding, including after credential deactivation and scene
+retirement. Scenes retired before binding capture existed and overwritten
+pre-cutover grant history may have no exact recovery evidence. Existing scalar
 cleanup recipients are preserved while remaining authority classes resolve;
 an existing scalar value alone never marks the snapshot complete.
 

@@ -1644,6 +1644,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_binding_objects_preserve_existing_identity_and_transaction_history() {
+        let Some(pool) = crate::scratch::pool(2).await else {
+            return;
+        };
+        let schema = format!("binding_upgrade_{}", uuid::Uuid::new_v4().simple());
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}; CREATE TABLE {schema}.world_scene_place(world_name text,identity uuid,entity_id text,active boolean); INSERT INTO {schema}.world_scene_place VALUES ('test.eth','11111111-1111-4111-8111-111111111111','old',true)")))
+            .execute(&pool).await.unwrap();
+        let objects = plan(crate::SCHEMA_SQL)
+            .unwrap()
+            .into_iter()
+            .filter(|p| match &p.step {
+                Step::Create {
+                    object: Object::Relation(name),
+                    ..
+                } => name == "explore.world_scene_binding",
+                Step::Create {
+                    object: Object::Function { schema, name },
+                    ..
+                } => schema == "explore" && name == "retain_world_scene_binding",
+                Step::Create {
+                    object: Object::Trigger { name, table },
+                    ..
+                } => name == "world_scene_binding_retained" && table == "explore.world_scene_place",
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            objects.len(),
+            3,
+            "all recovery objects must be in the upgrade plan"
+        );
+        for object in objects {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(
+                object.sql.replace("explore.", &format!("{schema}.")),
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {schema}.world_scene_place SET entity_id='rolled-back'"
+        )))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {schema}.world_scene_binding"
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 0,
+            "rolled-back publication must not leave recovery evidence"
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("UPDATE {schema}.world_scene_place SET entity_id='new'; UPDATE {schema}.world_scene_place SET active=false,entity_id=NULL; UPDATE {schema}.world_scene_place SET active=true,entity_id='new'; DELETE FROM {schema}.world_scene_place")))
+            .execute(&pool).await.unwrap();
+        let bindings: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT entity_id,identity::text FROM {schema}.world_scene_binding ORDER BY entity_id"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            bindings,
+            vec![
+                ("new".into(), "11111111-1111-4111-8111-111111111111".into()),
+                ("old".into(), "11111111-1111-4111-8111-111111111111".into())
+            ]
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn existing_catalogue_migration_installs_removal_triggers_and_seeds_once() {
         let Some(pool) = crate::scratch::pool(2).await else {
             return;

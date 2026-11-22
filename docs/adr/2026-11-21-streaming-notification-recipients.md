@@ -32,8 +32,17 @@ keeps exact current identity keys in both catalogue legs before final scene
 retirement when no backing scenes remain, and freezes them with active keys
 into each removal event. The world row lock serializes publication; identity
 locks precede catalogue writes. Actual scene insertion clears only catalogue
-evidence, because an imported identity can precede its backing scene. No new
-historical authority table or grant reconstruction by overlap is introduced.
+evidence, because an imported identity can precede its backing scene.
+
+Explore also retains each displaced exact `(world_name, entity_id, identity)`
+binding in `world_scene_binding`, in the transaction that replaces, retires or
+deletes that identity. This preserves the namespace even if a legacy key's
+binding lookup fails, revocation commits, and the scene retires before the
+first deferred retry. Comms reads this evidence and the current binding; a
+missing key resolves only when they identify exactly one namespace. A saved
+credential/context key takes precedence. Reusing an entity under different
+identities remains ambiguous and pending, never inferred from parcel overlap.
+The capture writes Explore alone and takes no Social row locks.
 
 ## Consequences
 
@@ -43,6 +52,12 @@ cleanup. Existing scalar recipients are expanded rather than treated as a
 complete set. Exact retired namespaces and overwritten grant history from
 before this evidence existed cannot always be recovered. Complete snapshots
 remain immutable across permission edits, scene re-adds and delivery retries.
+Binding facts are retained without expiry because unresolved credentials and
+cleanup intents can outlive scene publication. Their count grows with distinct
+displaced bindings. The primary key supports exact lookup and idempotent
+capture. The schema object pass installs the new table, function and trigger
+on existing databases without rewriting credentials. Information destroyed
+before capture was installed cannot be reconstructed.
 
 Before exposing writers, a Social-writing serve process scans active native
 credentials with missing admin keys in bounded UUID batches, decodes their

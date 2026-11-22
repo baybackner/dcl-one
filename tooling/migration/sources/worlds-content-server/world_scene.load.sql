@@ -1,3 +1,5 @@
+-- Identity changes also retain exact displaced bindings through the schema
+-- trigger; replay preserves that recovery evidence without duplicating facts.
 -- A DEPLOYED scene names its entity file (entity_id) and content files by
 -- hash; `migrate.py blobs` copies them into the store and records each in
 -- dcl_migration.blob_inventory, or in blob_missing when upstream lost it (the

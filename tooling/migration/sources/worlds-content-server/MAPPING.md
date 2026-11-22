@@ -201,3 +201,9 @@ The final retirement snapshots active admin namespaces into both catalogue
 legs before periodic removal. Identities imported ahead of their backing
 scenes are not retired by an unrelated batch. Real scene insertion clears
 catalogue removal evidence while queued removal events retain theirs.
+
+Identity updates and retirements also write `explore.world_scene_binding`
+through its schema trigger. Exact displaced `(world_name, entity_id, identity)`
+facts survive replay, retirement and deletion; imports never clear them.
+These facts support deferred legacy streaming notices without assigning
+a sibling scene or inferring authority from parcel overlap.

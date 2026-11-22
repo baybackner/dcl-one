@@ -25,6 +25,33 @@ CREATE UNIQUE INDEX world_scene_place_deployment_idx
 -- The unique index's world prefix also bounds overlap probes, orphan sweeps
 -- and the parked-scope quota check to the active scenes in one world.
 
+-- Exact displaced bindings let legacy stream notices recover their admin
+-- namespace after retirement or redeployment. Distinct incarnations remain
+-- distinct evidence: a reader must refuse an ambiguous entity, never guess.
+-- No FK: these recovery facts survive deletion of the source identity too.
+CREATE TABLE explore.world_scene_binding (
+    world_name text NOT NULL,
+    entity_id text NOT NULL,
+    identity uuid NOT NULL,
+    CONSTRAINT world_scene_binding_pkey PRIMARY KEY (world_name, entity_id, identity)
+);
+
+CREATE FUNCTION explore.retain_world_scene_binding() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.active AND (TG_OP = 'DELETE' OR NOT NEW.active
+        OR (OLD.world_name, OLD.entity_id, OLD.identity)
+           IS DISTINCT FROM (NEW.world_name, NEW.entity_id, NEW.identity)) THEN
+        INSERT INTO explore.world_scene_binding (world_name, entity_id, identity)
+        VALUES (OLD.world_name, OLD.entity_id, OLD.identity)
+        ON CONFLICT DO NOTHING;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER world_scene_binding_retained AFTER UPDATE OR DELETE ON explore.world_scene_place
+FOR EACH ROW EXECUTE FUNCTION explore.retain_world_scene_binding();
+
 -- Upgrade copy, NOT a recovery/rebuild source: this executes whenever the
 -- shared table is newly created, not once for the lifetime of the database.
 -- After cutover the legacy table is stale. Never drop/recreate the shared table
