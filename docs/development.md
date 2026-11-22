@@ -228,11 +228,14 @@ across the shards, and each shard starts its longest binaries first. A binary
 without a recorded time keeps its place in the byte-order cut (every third from
 the shard's own). Refresh the times from a recent `main` run (the `finished in`
 of each binary's summary line on Linux) when binaries are added or change much.
-The Linux leg of shard 3 also runs `make scene-cli-test`: `dcl-scene-cli` and the
-scene toolchain crates that `NODE_CRATES` leaves out, with Node from `setup-node`
-because the CI shell has none (`apps/dcl-scene-cli/docs/testing.md`). It does not
-run on macOS, where six of its tests fail, mostly on the `/var` to `/private/var`
-temp symlink and the case-insensitive file system.
+The Scene CLI tests job runs `make scene-cli-test` beside the shards, on the
+Rust job's condition: `dcl-scene-cli` and the scene toolchain crates that
+`NODE_CRATES` leaves out, with Node from `setup-node` because the CI shell has
+none (`apps/dcl-scene-cli/docs/testing.md`). It restores the dependency cache
+that shard 1 saves without saving one of its own, starts its own compiler cache
+server, and the CI gate requires it. It does not run on macOS, where six of its
+tests fail, mostly on the `/var` to `/private/var` temp symlink and the
+case-insensitive file system.
 Two more labels work the same way: `ci:desktop` builds the Creator Hub desktop
 app for macOS, Windows and Linux on a PR and attaches its test builds, and
 `ci:linux` builds Linux alone. `release:creator-hub` is read after the merge:
@@ -303,7 +306,7 @@ policy (`library/ui/figma/test/workflows.test.ts`).
 | `RUNNER_LINUX_X86_UBUNTU_22_04_16CORE` | `ubuntu-22.04-16core` | 1 | bevy-explorer-ci |
 | `RUNNER_LINUX_X86_UBUNTU_24_04` | `ubuntu-24.04` | 5 | bevy-explorer-ci, bevy-explorer-scenes, creator-hub-e2e, uuav-native, uuav-verify |
 | `RUNNER_LINUX_X86_UBUNTU_24_04_16CORE` | `ubuntu-24.04-16core` | 3 | bevy-explorer-ci (3) |
-| `RUNNER_LINUX_X86` | `ubuntu-26.04` | 48 | apis-sites-compile (2), apis-sites-images (4), bevy-explorer-benchmark (2), bevy-explorer-ci (4), bevy-explorer-ci-status (3), bevy-explorer-e2e, bevy-explorer-headless, bevy-explorer-images (2), bevy-explorer-scenes, creator-hub-asset-packs (2), creator-hub-build, creator-hub-ci (2), creator-hub-inspector, creator-hub-lint, creator-hub-tests, creator-hub-typechecking, development (6), gateway-images, protocol, sdk (2), social-captures, social-voice-release, structure (2), ui-library (2), uuav-native (2), uuav-verify |
+| `RUNNER_LINUX_X86` | `ubuntu-26.04` | 49 | apis-sites-compile (2), apis-sites-images (4), bevy-explorer-benchmark (2), bevy-explorer-ci (4), bevy-explorer-ci-status (3), bevy-explorer-e2e, bevy-explorer-headless, bevy-explorer-images (2), bevy-explorer-scenes, creator-hub-asset-packs (2), creator-hub-build, creator-hub-ci (2), creator-hub-inspector, creator-hub-lint, creator-hub-tests, creator-hub-typechecking, development (7), gateway-images, protocol, sdk (2), social-captures, social-voice-release, structure (2), ui-library (2), uuav-native (2), uuav-verify |
 | `RUNNER_LINUX_ARM` | `ubuntu-26.04-arm` | 4 | apis-sites-compile, apis-sites-images, bevy-explorer-images, gateway-images |
 | `RUNNER_WINDOWS` | `windows-2025` | 3 | bevy-explorer-e2e, uuav-native, uuav-verify |
 | `RUNNER_WINDOWS_16CORE` | `windows-2025-16core` | 2 | bevy-explorer-ci, bevy-explorer-headless-build |

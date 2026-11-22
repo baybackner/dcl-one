@@ -35,7 +35,7 @@ MACOS = ('tooling/dev*', 'tooling/catalyst-test*', 'tooling/tests/test_catalyst_
 LINUX_ONLY = ('apps/sites/**', 'apps/ui3/**', 'apps/dcl-scene-cli/**',
               'tooling/*.py', 'tooling/tests/**', 'tooling/migration/**', 'services/catalyst/**', 'library/**', 'schemas/**')
 # What the Rust job reads besides the paths its Rust sources name: the crates it compiles (the scene CLI's
-# tests run in one Linux shard), the SQL, protocol
+# tests run in the Scene CLI tests job, on the same plan), the SQL, protocol
 # and API contract they embed, the toolchain, the dev shell and stack, and the scripts and tests
 # dev-test.sh runs. A pull request runs the Rust tests only when it changes one of these or a named path.
 RUST_INPUTS = ('services/catalyst/**', 'apps/dcl-scene-cli/**', 'library/dcl-*/**', 'library/vendor/rusty_enet/**',
