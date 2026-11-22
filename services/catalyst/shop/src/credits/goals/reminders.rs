@@ -1,6 +1,7 @@
 // from: credits-server@origin/main:src/logic/workers/reminder-email-sender.ts, worker-manager.ts; notifications-workers@origin/main:processor/src/logic/event-parser.ts
 //! Credits reminders: five scheduled notices per user, keyed per season (and
-//! week) so reruns, restarts and lease handovers never send one twice.
+//! week, or expiry for usage) so reruns, restarts and lease handovers never
+//! send one twice.
 use super::{Gate, NOTIFICATION_NAMESPACE, Season, SharedState, gate};
 use crate::credits::errors::ApiError;
 use crate::jobs::{Jobs, PeriodicCfg};
@@ -71,6 +72,16 @@ impl Kind {
             Some(week) => format!("{address}-{}-{season}-{week}", self.sub_type()),
             None => format!("{address}-{}-{season}", self.sub_type()),
         }
+    }
+    /// A usage notice's identity: the selected season's key qualified by the
+    /// aggregate's full expiry (UTC microseconds since the epoch), so a later
+    /// batch within the same season gets its own notice.
+    fn usage_key(self, address: &str, season: i32, expires: NaiveDateTime) -> String {
+        format!(
+            "{}-expiry-{}",
+            self.key(address, season, None),
+            expires.and_utc().timestamp_micros()
+        )
     }
 }
 
@@ -196,8 +207,11 @@ async fn weekly(
 }
 
 /// Claimed, unused goal credits expiring within the window, aggregated per
-/// recipient and keyed to the selected season. Reconcile prior origin keys
-/// created during that season without creating another delivery.
+/// recipient and keyed to the selected season and the aggregate's expiry.
+/// A notice under an earlier unqualified key (origin or selected season) is
+/// reused only when it announced the same expiry date and was created after
+/// both the season start and the opening of this expiry's window; it keeps
+/// its delivery, and other batches are never absorbed.
 async fn usage(
     state: &SharedState,
     gate: &Gate,
@@ -215,7 +229,7 @@ async fn usage(
     };
     let marketplace = links(&state.settings.shop_base_url).1;
     // Include seasons whose grants have since expired or been consumed: their
-    // existing notices still count toward this selected season's delivery.
+    // unqualified keys may still carry this batch's existing notice.
     let origin_seasons: Vec<i32> =
         sqlx::query_scalar("SELECT id FROM credits.seasons WHERE start_date <= $1")
             .bind(now)
@@ -241,11 +255,13 @@ async fn usage(
             } else {
                 json!({"expirationDate":date,"balance":balance,"link":marketplace})
             };
-            let key = kind.key(&address, season.id, None);
+            let key = kind.usage_key(&address, season.id, expires);
             let previous_keys: Vec<_> = origin_seasons
                 .iter()
                 .map(|id| kind.key(&address, *id, None))
                 .collect();
+            let created_since = season.start_date.max(expires - window);
+            let same_batch = json!({"expirationDate": date});
             let notification = notification(kind, &address, &key, metadata, now)?;
             let mut transaction = state.credits.pool.begin().await?;
             let inserted = crate::shared::notifications::insert_reconciled_keyed_notification(
@@ -253,7 +269,8 @@ async fn usage(
                 &key,
                 &notification,
                 &previous_keys,
-                season.start_date,
+                created_since,
+                &same_batch,
             )
             .await?;
             transaction.commit().await?;

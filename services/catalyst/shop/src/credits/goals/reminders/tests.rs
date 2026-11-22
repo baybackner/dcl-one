@@ -35,6 +35,30 @@ fn keys_are_per_season_and_week_like_the_source() {
 }
 
 #[test]
+fn usage_keys_carry_the_full_expiry() {
+    let expires = at("2026-12-03 00:00");
+    assert_eq!(
+        Kind::Usage.usage_key("0xa", 2, expires),
+        "0xa-usage-reminder-2-expiry-1796256000000000"
+    );
+    assert_eq!(
+        Kind::Usage24Hours.usage_key("0xa", 2, expires),
+        "0xa-usage-24-hours-reminder-2-expiry-1796256000000000"
+    );
+    // Expiries on the same day, down to the microsecond, are distinct notices.
+    let later = expires + TimeDelta::microseconds(1);
+    assert_ne!(
+        Kind::Usage.usage_key("0xa", 2, expires),
+        Kind::Usage.usage_key("0xa", 2, later)
+    );
+    let ids = |e| {
+        let key = Kind::Usage.usage_key("0xa", 2, e);
+        Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes())
+    };
+    assert_ne!(ids(expires), ids(later));
+}
+
+#[test]
 fn balances_render_like_format_ether() {
     assert_eq!(ether_number("100000000000000000000").unwrap(), json!(100));
     assert_eq!(ether_number("1500000000000000000").unwrap(), json!(1.5));
@@ -467,7 +491,7 @@ async fn reminders_pick_eligible_wallets_once_with_source_metadata() {
     let keys: Vec<String> = sqlx::query_scalar("SELECT broadcast_key FROM social.notifications WHERE type LIKE 'credits_reminder_%' ORDER BY broadcast_key")
         .fetch_all(pool).await.unwrap();
     assert!(keys.contains(&format!("{untouched}-do-not-miss-out-reminder-1-3")));
-    assert!(keys.contains(&format!("{tomorrow}-usage-24-hours-reminder-1")));
+    assert!(keys.contains(&Kind::Usage24Hours.usage_key(&tomorrow, 1, in_12h)));
     assert_eq!(keys.len(), 9);
 
     // Weekly reminders stop once the season is over.
@@ -534,7 +558,7 @@ async fn usage_reminders_follow_the_credits_season_and_the_allowlist() {
         keys,
         vec![
             format!("{listed}-do-not-miss-out-reminder-2-2"),
-            format!("{listed}-usage-reminder-2"),
+            Kind::Usage.usage_key(&listed, 2, now() + TimeDelta::days(2)),
         ]
     );
     db.drop().await;
@@ -690,6 +714,14 @@ async fn cancellation_stops_a_kind_between_pages() {
     db.drop().await;
 }
 
+/// Inside both usage windows of a batch expiring twelve hours after `now()`.
+const IN_WINDOW: &str = "2026-11-19 00:05";
+
+/// What an unqualified-key writer stored for the batch expiring after `now()`.
+fn old_usage_metadata() -> Value {
+    json!({"expirationDate":"November 19","balance":1})
+}
+
 async fn usage_seasons(pool: &sqlx::PgPool) {
     season(pool, 1, "2026-09-01 00:00", "2026-10-01 00:00").await;
     season(pool, 2, "2026-10-01 00:00", "2026-11-09 00:00").await;
@@ -755,9 +787,10 @@ async fn usage_combines_origin_seasons_and_serializes_selected_season_delivery()
             .unwrap();
     assert_eq!(rows.len(), 10);
     for (address, key, metadata, id) in rows {
+        let expires = now() + TimeDelta::hours(12);
         assert!(
-            key == Kind::Usage.key(&address, 3, None)
-                || key == Kind::Usage24Hours.key(&address, 3, None)
+            key == Kind::Usage.usage_key(&address, 3, expires)
+                || key == Kind::Usage24Hours.usage_key(&address, 3, expires)
         );
         assert_eq!(id, Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()));
         assert_eq!(metadata["balance"], json!(3));
@@ -797,14 +830,14 @@ async fn usage_reconciles_old_keys_without_recreating_deliveries() {
         for scenario in 1..=8 {
             let a = mixed_usage_grants(pool, kind_index as u8 * 10 + scenario).await;
             let old_key = kind.key(&a, 1, None);
-            send(&state, kind, &a, &old_key, json!({"balance":1}), now())
+            send(&state, kind, &a, &old_key, old_usage_metadata(), now())
                 .await
                 .unwrap();
             let old_id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, old_key.as_bytes());
             let created = if scenario == 6 {
                 at("2026-10-15 09:00")
             } else {
-                at("2026-11-10 09:00")
+                at(IN_WINDOW)
             };
             sqlx::query(
                 "UPDATE social.notifications SET created_at=$2,read=true,read_at=$2 WHERE id=$1",
@@ -830,7 +863,7 @@ async fn usage_reconciles_old_keys_without_recreating_deliveries() {
                     .await
                     .unwrap();
             }
-            let selected = kind.key(&a, 3, None);
+            let selected = kind.usage_key(&a, 3, now() + TimeDelta::hours(12));
             if scenario == 5 {
                 send(&state, kind, &a, &selected, json!({"balance":2}), now())
                     .await
@@ -857,7 +890,7 @@ async fn usage_reconciles_old_keys_without_recreating_deliveries() {
         assert_eq!(run(&state, &gate, kind, now(), &cancel).await.unwrap(), 0);
         for scenario in 1..=8 {
             let a = addr(kind_index as u8 * 10 + scenario);
-            let key = kind.key(&a, 3, None);
+            let key = kind.usage_key(&a, 3, now() + TimeDelta::hours(12));
             let (id, metadata): (Uuid, Value) = sqlx::query_as("SELECT id,metadata FROM social.notifications WHERE address=$1 AND broadcast_key=$2")
                 .bind(&a).bind(&key).fetch_one(pool).await.unwrap();
             let old_key = kind.key(&a, 1, None);
@@ -894,7 +927,7 @@ async fn usage_reconciles_old_keys_without_recreating_deliveries() {
                 if scenario == 6 {
                     at("2026-10-15 09:00")
                 } else {
-                    at("2026-11-10 09:00")
+                    at(IN_WINDOW)
                 }
             );
             assert_eq!(
@@ -931,10 +964,15 @@ async fn usage_reconciliation_rolls_back_with_the_notification_write() {
     let cancel = CancellationToken::new();
     for kind in [Kind::Usage, Kind::Usage24Hours] {
         let old_key = kind.key(&a, 1, None);
-        send(&state, kind, &a, &old_key, json!({"balance":1}), now())
+        send(&state, kind, &a, &old_key, old_usage_metadata(), now())
             .await
             .unwrap();
     }
+    sqlx::query("UPDATE social.notifications SET created_at=$1")
+        .bind(at(IN_WINDOW))
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query("CREATE FUNCTION fail_usage_refresh() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN IF NEW.metadata->>'balance'='3' THEN RAISE EXCEPTION 'injected aggregate failure'; END IF; RETURN NEW; END$$")
         .execute(pool).await.unwrap();
     sqlx::query("CREATE TRIGGER fail_usage_refresh BEFORE INSERT OR UPDATE ON social.notifications FOR EACH ROW EXECUTE FUNCTION fail_usage_refresh()")
@@ -994,24 +1032,13 @@ async fn created_during(pool: &sqlx::PgPool, a: &str, kind: Kind, at: NaiveDateT
 
 #[tokio::test]
 async fn usage_delivers_distinct_expiry_batches_within_one_selected_season() {
-    let Some(db) = OwnDatabase::create("usage_expiry_batches").await else {
-        return;
-    };
-    let pool = &db.pool;
-    // Consecutive seasons with three grace days; no later season before January.
-    season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
-    season(pool, 2, "2026-11-30 00:00", "2026-12-28 00:00").await;
-    sqlx::query("UPDATE credits.seasons SET grace_days=3")
-        .execute(pool)
-        .await
-        .unwrap();
-    let state = enabled(pool);
-    let gate = gate(&state, &mut pool.acquire().await.unwrap())
-        .await
-        .unwrap();
-    let cancel = CancellationToken::new();
     for (n, kind, first_run, second_run) in [
-        (1, Kind::Usage, at("2026-11-30 09:00"), at("2026-12-24 09:00")),
+        (
+            1,
+            Kind::Usage,
+            at("2026-11-30 09:00"),
+            at("2026-12-24 09:00"),
+        ),
         (
             2,
             Kind::Usage24Hours,
@@ -1019,7 +1046,28 @@ async fn usage_delivers_distinct_expiry_batches_within_one_selected_season() {
             at("2026-12-30 12:00"),
         ),
     ] {
+        let Some(db) = OwnDatabase::create("usage_expiry_batches").await else {
+            return;
+        };
+        let pool = &db.pool;
+        // Consecutive seasons with three grace days; no later season before January.
+        season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
+        season(pool, 2, "2026-11-30 00:00", "2026-12-28 00:00").await;
+        sqlx::query("UPDATE credits.seasons SET grace_days=3")
+            .execute(pool)
+            .await
+            .unwrap();
+        let state = enabled(pool);
+        let gate = gate(&state, &mut pool.acquire().await.unwrap())
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
         let a = wallet(pool, n).await;
+        sqlx::query("INSERT INTO social.subscriptions(address,email,details) VALUES($1,'recipient@example.invalid','{}')")
+            .bind(&a)
+            .execute(pool)
+            .await
+            .unwrap();
         progress(pool, &a, 1, 4, 2).await;
         progress(pool, &a, 2, 1, 2).await;
         let first_expiry = at("2026-12-03 00:00");
@@ -1102,6 +1150,288 @@ async fn usage_delivers_distinct_expiry_batches_within_one_selected_season() {
         assert_eq!(rows[1].1["expirationDate"], json!("December 31"));
         assert_eq!(rows[1].1["balance"], json!(2));
         assert_eq!(rows[1].2, "pending");
+        db.drop().await;
     }
+}
+
+/// A notice an unqualified-key writer created for a batch, with its delivery.
+async fn old_writer_notice(
+    state: &SharedState,
+    kind: Kind,
+    a: &str,
+    key: &str,
+    expiration_date: &str,
+    created: NaiveDateTime,
+    delivery: &str,
+) -> Uuid {
+    let metadata = json!({"expirationDate":expiration_date,"balance":1});
+    assert!(send(state, kind, a, key, metadata, created).await.unwrap());
+    let id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes());
+    let pool = &state.credits.pool;
+    sqlx::query("UPDATE social.notifications SET created_at=$2,read=$3,read_at=CASE WHEN $3 THEN $2 END WHERE id=$1")
+        .bind(id)
+        .bind(created)
+        .bind(delivery == "sent")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE social.notification_deliveries SET state=$2 WHERE notification_id=$1")
+        .bind(id)
+        .bind(delivery)
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// (key, id, read, delivery state) of a wallet's notices of one kind.
+async fn notices(
+    pool: &sqlx::PgPool,
+    a: &str,
+    kind: Kind,
+) -> Vec<(String, Uuid, bool, Option<String>)> {
+    sqlx::query_as("SELECT n.broadcast_key,n.id,n.read,d.state FROM social.notifications n LEFT JOIN social.notification_deliveries d ON d.notification_id=n.id WHERE n.address=$1 AND n.type=$2 ORDER BY n.broadcast_key")
+        .bind(a)
+        .bind(kind.notification_type())
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn usage_upgrade_reuses_only_the_matching_batch_alias() {
+    for (kind, in_first, in_second) in [
+        (Kind::Usage, at("2026-11-30 09:00"), at("2026-12-24 09:00")),
+        (
+            Kind::Usage24Hours,
+            at("2026-12-02 12:00"),
+            at("2026-12-30 12:00"),
+        ),
+    ] {
+        let Some(db) = OwnDatabase::create("usage_upgrade_aliases").await else {
+            return;
+        };
+        let pool = &db.pool;
+        season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
+        season(pool, 2, "2026-11-30 00:00", "2026-12-28 00:00").await;
+        sqlx::query("UPDATE credits.seasons SET grace_days=3")
+            .execute(pool)
+            .await
+            .unwrap();
+        let state = enabled(pool);
+        let gate = gate(&state, &mut pool.acquire().await.unwrap())
+            .await
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let first_expiry = at("2026-12-03 00:00");
+        let second_expiry = at("2026-12-31 00:00");
+        let setup = |n: u8| async move {
+            let a = wallet(pool, n).await;
+            sqlx::query("INSERT INTO social.subscriptions(address,email,details) VALUES($1,'recipient@example.invalid','{}')")
+                .bind(&a)
+                .execute(pool)
+                .await
+                .unwrap();
+            progress(pool, &a, 1, 4, 2).await;
+            progress(pool, &a, 2, 1, 2).await;
+            claimed_grant_at(
+                pool,
+                &a,
+                1,
+                4,
+                "1000000000000000000",
+                at("2026-11-27 10:00"),
+                first_expiry,
+            )
+            .await;
+            a
+        };
+
+        // Upgraded while the first batch is still open: two old-writer
+        // aliases announce it; the earliest carries the new key.
+        let open = setup(1).await;
+        let origin = kind.key(&open, 1, None);
+        let unqualified = kind.key(&open, 2, None);
+        let carried = old_writer_notice(
+            &state,
+            kind,
+            &open,
+            &origin,
+            "December 3",
+            in_first - TimeDelta::minutes(30),
+            "sent",
+        )
+        .await;
+        let leftover = old_writer_notice(
+            &state,
+            kind,
+            &open,
+            &unqualified,
+            "December 3",
+            in_first - TimeDelta::minutes(20),
+            "pending",
+        )
+        .await;
+        assert_eq!(
+            run(&state, &gate, kind, in_first, &cancel).await.unwrap(),
+            0
+        );
+        // Balance growth with the same expiry refreshes the same notice.
+        progress(pool, &open, 1, 5, 2).await;
+        claimed_grant_at(
+            pool,
+            &open,
+            1,
+            5,
+            "1000000000000000000",
+            at("2026-11-28 10:00"),
+            first_expiry,
+        )
+        .await;
+        assert_eq!(
+            run(&state, &gate, kind, in_first, &cancel).await.unwrap(),
+            0
+        );
+        let first_key = kind.usage_key(&open, 2, first_expiry);
+        let balance: Value =
+            sqlx::query_scalar("SELECT metadata->'balance' FROM social.notifications WHERE id=$1")
+                .bind(carried)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(balance, json!(2));
+
+        // First corrected run after the old batch expired: its notice stays
+        // historical under its unqualified key.
+        let expired = setup(2).await;
+        let historical = kind.key(&expired, 2, None);
+        let historical_id = old_writer_notice(
+            &state,
+            kind,
+            &expired,
+            &historical,
+            "December 3",
+            in_first,
+            "sent",
+        )
+        .await;
+
+        for a in [&open, &expired] {
+            claimed_grant_at(
+                pool,
+                a,
+                2,
+                1,
+                "2000000000000000000",
+                at("2026-12-07 10:00"),
+                second_expiry,
+            )
+            .await;
+        }
+        let (x, y) = tokio::join!(
+            run(&state, &gate, kind, in_second, &cancel),
+            run(&state, &gate, kind, in_second, &cancel),
+        );
+        assert_eq!(x.unwrap() + y.unwrap(), 2, "{kind:?}");
+        // A restarted job (fresh run memory) sends nothing again.
+        let again = pass(&state, &Ran::default(), in_second, &cancel)
+            .await
+            .unwrap();
+        assert!(again.contains(&(kind, 0)), "{kind:?}: {again:?}");
+
+        let second_key = kind.usage_key(&open, 2, second_expiry);
+        let second_id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, second_key.as_bytes());
+        assert_ne!(second_id, carried);
+        let mut expected = vec![
+            (first_key, carried, true, Some("sent".to_string())),
+            (unqualified, leftover, false, Some("pending".to_string())),
+            (second_key, second_id, false, Some("pending".to_string())),
+        ];
+        expected.sort();
+        assert_eq!(notices(pool, &open, kind).await, expected, "{kind:?}");
+
+        let new_key = kind.usage_key(&expired, 2, second_expiry);
+        let new_id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, new_key.as_bytes());
+        let mut expected = vec![
+            (historical, historical_id, true, Some("sent".to_string())),
+            (new_key, new_id, false, Some("pending".to_string())),
+        ];
+        expected.sort();
+        assert_eq!(notices(pool, &expired, kind).await, expected, "{kind:?}");
+        db.drop().await;
+    }
+}
+
+#[tokio::test]
+async fn usage_alias_announcing_another_date_does_not_absorb_a_later_batch() {
+    let Some(db) = OwnDatabase::create("usage_alias_other_date").await else {
+        return;
+    };
+    let pool = &db.pool;
+    season(pool, 1, "2026-11-02 00:00", "2026-11-30 00:00").await;
+    season(pool, 2, "2026-11-30 00:00", "2026-12-28 00:00").await;
+    let state = enabled(pool);
+    let gate = gate(&state, &mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    let a = wallet(pool, 1).await;
+    progress(pool, &a, 2, 1, 2).await;
+    progress(pool, &a, 2, 2, 2).await;
+    claimed_grant_at(
+        pool,
+        &a,
+        2,
+        1,
+        "1000000000000000000",
+        at("2026-11-30 10:00"),
+        at("2026-12-03 00:00"),
+    )
+    .await;
+    // The old writer announced the earlier batch inside the later one's window.
+    let old_key = Kind::Usage.key(&a, 2, None);
+    let old_id = old_writer_notice(
+        &state,
+        Kind::Usage,
+        &a,
+        &old_key,
+        "December 3",
+        at("2026-12-01 09:00"),
+        "sent",
+    )
+    .await;
+    let later = at("2026-12-05 00:00");
+    claimed_grant_at(
+        pool,
+        &a,
+        2,
+        2,
+        "2000000000000000000",
+        at("2026-12-02 10:00"),
+        later,
+    )
+    .await;
+    let cancel = CancellationToken::new();
+    let run_at = at("2026-12-04 09:00");
+    assert_eq!(
+        run(&state, &gate, Kind::Usage, run_at, &cancel)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        run(&state, &gate, Kind::Usage, run_at, &cancel)
+            .await
+            .unwrap(),
+        0
+    );
+    let key = Kind::Usage.usage_key(&a, 2, later);
+    let id = Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes());
+    // Without a subscription the new email is skipped; the old one stays sent.
+    let mut expected = vec![
+        (old_key, old_id, true, Some("sent".to_string())),
+        (key, id, false, Some("skipped".to_string())),
+    ];
+    expected.sort();
+    assert_eq!(notices(pool, &a, Kind::Usage).await, expected);
     db.drop().await;
 }
