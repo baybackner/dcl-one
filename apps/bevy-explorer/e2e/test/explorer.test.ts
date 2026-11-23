@@ -109,10 +109,11 @@ describe('Explorer', () => {
     assert.deepEqual(fake.sent('reload'), ['/reload --current --wait --timeout-seconds 30', '/reload --current --wait --timeout-seconds 5'])
   })
 
+  // the arrival gets what the teleport's own reply left of the timeout
   test('teleport times out with the last state when the player never arrives', async () => {
     const fake = new FakeConsole({ world_state: () => world({ arrivals: 1, inWorld: false }), teleport: JSON.stringify({ ...settled, arrived: false, settled: false }) })
     const explorer = new Explorer(fake)
-    await assert.rejects(explorer.teleport(1, 2, { timeoutMs: 300 }), /timed out after 300 ms waiting for the arrival at 1,2; last: .*"inWorld":false/)
+    await assert.rejects(explorer.teleport(1, 2, { timeoutMs: 300 }), /timed out after (300|2\d\d) ms waiting for the arrival at 1,2; last: .*"inWorld":false/)
   })
 
   test('community chat commands: the message, the channel edits, and the state', async () => {
