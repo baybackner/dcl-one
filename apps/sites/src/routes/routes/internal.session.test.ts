@@ -1,5 +1,5 @@
 import { RouterContextProvider } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { sessionMiddleware } from "@/core/lib/telemetry/session";
 
@@ -18,9 +18,24 @@ async function get(cookie = "") {
 }
 
 describe("internal.session loader", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("answers the public Sites Segment transport, with the root loader's env precedence", async () => {
+    vi.stubEnv("SEGMENT_WRITE_KEY", "runtime-key");
+    vi.stubEnv("VITE_SEGMENT_WRITE_KEY", "baked-key");
+    vi.stubEnv("SEGMENT_API_HOST", "");
+    vi.stubEnv("VITE_SEGMENT_API_HOST", "evs.example.test/v1");
+    expect(await (await get("sid=s")).json()).toMatchObject({ segmentWriteKey: "runtime-key", segmentApiHost: "evs.example.test/v1" });
+  });
+
+  it("answers an empty transport when none is configured", async () => {
+    for (const name of ["SEGMENT_WRITE_KEY", "VITE_SEGMENT_WRITE_KEY", "SEGMENT_API_HOST", "VITE_SEGMENT_API_HOST"]) vi.stubEnv(name, "");
+    expect(await (await get("sid=s")).json()).toMatchObject({ segmentWriteKey: "", segmentApiHost: "" });
+  });
+
   it("answers the visitor's existing sid and sets no cookie", async () => {
     const response = await get("sid=existing-sid");
-    expect(await response.json()).toEqual({ sid: "existing-sid", userId: null });
+    expect(await response.json()).toMatchObject({ sid: "existing-sid", userId: null });
     expect(response.headers.get("Set-Cookie")).toBeNull();
   });
 
@@ -36,8 +51,8 @@ describe("internal.session loader", () => {
   });
 
   it("answers the verified wallet only, not the display one", async () => {
-    expect(await (await get(`sid=s; dcl_wallet=${WALLET}`)).json()).toEqual({ sid: "s", userId: null });
-    expect(await (await get(`sid=s; dcl_wallet_verified=${WALLET}`)).json()).toEqual({ sid: "s", userId: WALLET });
+    expect(await (await get(`sid=s; dcl_wallet=${WALLET}`)).json()).toMatchObject({ sid: "s", userId: null });
+    expect(await (await get(`sid=s; dcl_wallet_verified=${WALLET}`)).json()).toMatchObject({ sid: "s", userId: WALLET });
   });
 
   it("sets the cookie itself when no middleware ran", async () => {

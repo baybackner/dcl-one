@@ -13,9 +13,9 @@ vi.hoisted(() =>
 );
 
 const page = vi.hoisted(() => vi.fn());
-vi.mock("./track", () => ({ page }));
+vi.mock("./track", () => ({ page, adoptSitesSegmentConfig: vi.fn() }));
 
-import { isOutsideLegacySites, isPageTrackingExempt, useNotFoundPageView, usePageView, useRoutePageView, type PageView } from "./page-view";
+import { isOutsideLegacySites, isPageTrackingExempt, lookupSession, useNotFoundPageView, usePageView, useRoutePageView, type PageView } from "./page-view";
 
 // A view a test sets once its "data" arrives, as a page reading it from a query does.
 let pendingView: PageView | null = null;
@@ -202,13 +202,42 @@ describe("useNotFoundPageView", () => {
   }
 
   // `root` null: the cold 404 of a URL no route matches, rendered without the root loader's data.
-  function renderAt(path: string, notFound: boolean, root: { sid?: string | null } | null = { sid: "sid-1" }) {
+  function renderAt(path: string, notFound: boolean, root: { sid?: string | null } | null = { sid: "sid-1" }, strict = false) {
     const router = createMemoryRouter(
       [{ id: "root", path: "*", loader: () => root, Component: () => <NotFoundAt notFound={notFound} />, HydrateFallback: () => null }],
       { initialEntries: [path] },
     );
-    render(<RouterProvider router={router} />);
+    const tree = <RouterProvider router={router} />;
+    render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   }
+
+  it("looks the session up once under StrictMode, and sends with the sid that one response set", async () => {
+    renderAt("/missing/strict", true, null, true);
+    await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(page.mock.calls[0]?.[2]).toEqual({ sid: "fetched-sid", userId: "0xverified" });
+  });
+
+  it("shares one lookup between concurrent 404 views, then looks up afresh once it settled", async () => {
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const first = lookupSession();
+    const second = lookupSession();
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    answer(Response.json({ sid: "s-1", userId: "0xold" }));
+    expect(await first).toEqual({ sid: "s-1", userId: "0xold" });
+    fetchMock.mockResolvedValueOnce(Response.json({ sid: "s-1", userId: null }));
+    expect(await lookupSession()).toEqual({ sid: "s-1", userId: "" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("looks up afresh after a failed lookup", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    expect(await lookupSession()).toBeNull();
+    expect(await lookupSession()).toEqual({ sid: "fetched-sid", userId: "0xverified" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   // The root error boundary renders it in place of the app, so the default page(pathname) is not sent with it.
   it("sends the 404's own page view with the root session, without fetching one", async () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useRouteLoaderData } from "react-router";
 
-import { page } from "./track";
+import { adoptSitesSegmentConfig, page } from "./track";
 
 /** A Segment page call's name and properties, as the legacy site's `usePageViewTracking` took them. */
 export type PageView = { name: string; properties?: Record<string, unknown> };
@@ -98,18 +98,40 @@ export function useRoutePageView(): void {
 
 export const SESSION_ENDPOINT = "/internal/session";
 
-/** The visitor's session from `/internal/session`; null when it cannot be read. */
-async function fetchSession(): Promise<{ sid: string; userId: string } | null> {
+type FetchedSession = { sid: string; userId: string };
+
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/**
+ * The visitor's session from `/internal/session`, null when it cannot be read. Its Segment transport
+ * fills what the document lacks, before anyone sends with it.
+ */
+async function fetchSession(): Promise<FetchedSession | null> {
   try {
     const response = await fetch(SESSION_ENDPOINT, { credentials: "same-origin", cache: "no-store" });
     if (!response.ok) return null;
-    const body = (await response.json()) as { sid?: unknown; userId?: unknown } | null;
-    const sid = typeof body?.sid === "string" ? body.sid : "";
+    const body = (await response.json()) as Record<string, unknown> | null;
+    const sid = text(body?.sid);
     if (!sid) return null;
-    return { sid, userId: typeof body?.userId === "string" ? body.userId : "" };
+    adoptSitesSegmentConfig({ segmentWriteKey: text(body?.segmentWriteKey), segmentApiHost: text(body?.segmentApiHost) });
+    return { sid, userId: text(body?.userId) };
   } catch {
     return null;
   }
+}
+
+/**
+ * One lookup at a time for the document: a first visit without a cookie would otherwise mint one sid
+ * per request (StrictMode's replayed effect, two consumers), and a response cannot be unsent once its
+ * cookie is set. Cleared once settled, so a later lookup reads the wallet afresh.
+ */
+let sessionLookup: Promise<FetchedSession | null> | null = null;
+
+export function lookupSession(): Promise<FetchedSession | null> {
+  sessionLookup ??= fetchSession().finally(() => {
+    sessionLookup = null;
+  });
+  return sessionLookup;
 }
 
 /**
@@ -126,7 +148,7 @@ export function useNotFoundPageView(notFound: boolean): void {
   useEffect(() => {
     if (!needsSession) return;
     let live = true;
-    void fetchSession().then((session) => {
+    void lookupSession().then((session) => {
       if (live && session) setFetched(session);
     });
     return () => {

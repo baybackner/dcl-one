@@ -21,6 +21,7 @@ import type { ThirdwebAuthResult } from "./thirdweb/api";
 import type { WalletConnectSession } from "./walletconnect";
 import type { AuthIdentity, SignedFetchMetadata } from "./types";
 import { detectWallets, hasWallet, selectWallet, type DetectedWallet } from "./wallet";
+import { postAuthCallback } from "./session-change";
 
 async function identityFromInApp(
   auth: Pick<ThirdwebAuthResult, "token" | "walletAddress">,
@@ -215,12 +216,8 @@ export function useAuth(): UseAuth {
     const magicEnded = import("./magic-session").then(({ endMagicSession }) => endMagicSession()).catch(() => {});
     clearStored();
     forgetSignIn();
-    void fetch("/auth/callback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signout: true }),
-      keepalive: true,
-    }).catch(() => {});
+    // Clears the verified-wallet cookie, then reloads root's data so the next page view has no userId.
+    void postAuthCallback({ signout: true }, { keepalive: true, revalidate: true });
     // A caller about to leave the page (switching accounts) waits for Magic, but never long.
     await Promise.race([magicEnded, new Promise<void>((resolve) => setTimeout(resolve, MAGIC_LOGOUT_WAIT_MS))]);
   }, []);
