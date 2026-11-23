@@ -15,14 +15,20 @@ vi.hoisted(() => {
   });
 });
 
+const signIn = vi.hoisted(() => ({ openSignIn: vi.fn() }));
+vi.mock("../../components/auth/signin-store", () => ({ openSignIn: signIn.openSignIn }));
+
 import CreateCommunity from "./CreateCommunity";
 
 const trackCtx = { sid: "sid-1", story: "landings/create-community" as const, variant: "wizard" };
 
-function setup(create = vi.fn().mockResolvedValue({ id: "c 1", name: "Builders", privacy: "public", visibility: "all" })) {
+// `null` renders the page signed out.
+function setup(
+  create: ReturnType<typeof vi.fn> | null = vi.fn().mockResolvedValue({ id: "c 1", name: "Builders", privacy: "public", visibility: "all" }),
+) {
   const router = createMemoryRouter(
     [
-      { path: "/communities/new", element: <CreateCommunity trackCtx={trackCtx} create={create} signedOut={false} track={vi.fn()} /> },
+      { path: "/communities/new", element: <CreateCommunity trackCtx={trackCtx} create={create ?? undefined} signedOut={!create} track={vi.fn()} /> },
       { path: "/social", element: <p>social home</p> },
       { path: "/social/communities/:id", element: <p>community page</p> },
     ],
@@ -83,6 +89,22 @@ describe("CreateCommunity", () => {
       expect(screen.getByRole("textbox", { name: /Community name/i })).toHaveValue("Builders");
       expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("We build");
       expect(sessionStorage.getItem("dcl.create-community.draft")).toBeNull();
+    });
+  });
+
+  describe("when a signed-out visitor leaves the description blank and signs in", () => {
+    it("should keep the description blank across the round trip", async () => {
+      setup(null);
+      await userEvent.type(screen.getByRole("textbox", { name: /Community name/i }), "Builders");
+      await userEvent.click(screen.getByRole("button", { name: "Create" }));
+      expect(signIn.openSignIn).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(sessionStorage.getItem("dcl.create-community.draft")!)).toMatchObject({ name: "Builders", description: "" });
+      cleanup();
+      await act(async () => {
+        setup();
+      });
+      expect(screen.getByRole("textbox", { name: /Community name/i })).toHaveValue("Builders");
+      expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("");
     });
   });
 });

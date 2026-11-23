@@ -23,10 +23,11 @@ const DRAFT_KEY = "dcl.create-community.draft";
  * typed form and goes to sign in; while the session is still being restored nothing is sent.
  */
 export function submitWith(create: CreateFn | undefined, { signedOut, trackCtx, track = defaultTrack }: SubmitOptions) {
-  return async (input: CommunityCreateInput): Promise<CreateResult> => {
+  return async (input: CommunityCreateInput, typed: CommunityCreateInput = input): Promise<CreateResult> => {
     if (!create) {
       if (!signedOut) throw new Error("Still checking your sign-in. Try again in a moment.");
-      saveDraft(input);
+      // What the visitor typed, so a blank description comes back blank; the fallback is applied when sending.
+      saveDraft(typed);
       openSignIn();
       throw new Error("Sign in to create a community.");
     }

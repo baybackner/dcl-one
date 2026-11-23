@@ -35,6 +35,13 @@ describe("submitWith", () => {
       expect(track).not.toHaveBeenCalled();
     });
 
+    it("should keep the form as typed, not the description the submit fills in", async () => {
+      const sent = { ...input, description: "Builders" };
+      const typed = { ...input, description: "" };
+      await expect(submitWith(undefined, { signedOut: true, trackCtx })(sent, typed)).rejects.toThrow("Sign in");
+      expect(takeDraft()).toEqual(typed);
+    });
+
     it("should still open the sign-in when the tab refuses storage", async () => {
       vi.stubGlobal("sessionStorage", {
         setItem: () => {

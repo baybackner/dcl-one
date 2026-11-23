@@ -30,8 +30,12 @@ export type CommunityCreateInput = {
 type CreateFailure = { status?: number; message?: string }
 
 export type CommunityCreateProps<R> = {
-  /** Sends the community to the server. A 401 whose message says the account has no NAME shows the NAME gate. */
-  create: (input: CommunityCreateInput) => Promise<R>
+  /**
+   * Sends the community to the server. `input` is what is sent: trimmed, with the name standing in for a
+   * blank description. `typed` is the form exactly as typed, for keeping a draft. A 401 whose message says
+   * the account has no NAME shows the NAME gate.
+   */
+  create: (input: CommunityCreateInput, typed: CommunityCreateInput) => Promise<R>
   /**
    * Called with `true` and what `create` resolved to after a community is created, and with `false` when
    * the reader cancels. The caller then stops rendering the dialog; until it does, a created form stays locked.
@@ -69,12 +73,16 @@ export default function CommunityCreate<R>({
     setBusy(true)
     setErr('')
     try {
-      const result = await create({
-        name: name.trim(),
-        description: desc.trim() || name.trim(),
+      const typed: CommunityCreateInput = {
+        name,
+        description: desc,
         privacy: membership,
         visibility: discoverable ? 'all' : 'unlisted'
-      })
+      }
+      const result = await create(
+        { ...typed, name: name.trim(), description: desc.trim() || name.trim() },
+        typed
+      )
       // A second press must not create the community again while the caller moves on.
       setCreated(true)
       onDone?.(true, result)

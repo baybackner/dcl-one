@@ -49,7 +49,7 @@ describe('CommunityCreate', () => {
       const { create, onDone } = setup()
       await userEvent.type(nameField(), '  Builders  ')
       await userEvent.click(createButton())
-      expect(create).toHaveBeenCalledWith({
+      expect(create.mock.calls[0]?.[0]).toEqual({
         name: 'Builders',
         description: 'Builders',
         privacy: 'public',
@@ -70,7 +70,7 @@ describe('CommunityCreate', () => {
         screen.getByRole('switch', { name: 'Show the community in the directory' })
       )
       await userEvent.click(createButton())
-      expect(create).toHaveBeenCalledWith({
+      expect(create.mock.calls[0]?.[0]).toEqual({
         name: 'Builders',
         description: 'We build',
         privacy: 'private',
@@ -179,7 +179,7 @@ describe('CommunityCreate', () => {
         screen.getByRole('switch', { name: 'Show the community in the directory' })
       ).not.toBeChecked()
       await userEvent.click(createButton())
-      expect(create).toHaveBeenCalledWith({
+      expect(create.mock.calls[0]?.[0]).toEqual({
         name: 'Builders',
         description: 'We build',
         privacy: 'private',
@@ -204,6 +204,18 @@ describe('CommunityCreate', () => {
       const fields = screen.getAllByRole('textbox', { name: /Community name/i })
       expect(fields).toHaveLength(2)
       expect(fields[0]).not.toBe(fields[1])
+    })
+  })
+
+  describe('when the description is left blank', () => {
+    it('should send the name as the description and hand over the form as typed', async () => {
+      const { create } = setup()
+      await userEvent.type(nameField(), '  Builders ')
+      await userEvent.click(createButton())
+      expect(create).toHaveBeenCalledWith(
+        { name: 'Builders', description: 'Builders', privacy: 'public', visibility: 'all' },
+        { name: '  Builders ', description: '', privacy: 'public', visibility: 'all' }
+      )
     })
   })
 })
