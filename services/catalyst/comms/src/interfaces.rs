@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 
-use crate::access::{Access, AccessType, LandOperators, SceneRef, WorldAdmission};
+use crate::access::{Access, AccessType, Holds, LandOperators, SceneRef, WorldAdmission};
 use crate::rooms::{ActiveDeployment, ResolveError, ResolvedRoom, RoomRequest};
 use crate::shared::identity::{Address, AuthorityNotEstablished, PermissionDecision};
 use crate::world_identity::{Parcel, ParcelSet, SceneId, WorldName};
@@ -65,8 +65,9 @@ pub trait AccessPolicy: Send + Sync {
     ) -> Result<Access, AuthorityNotEstablished>;
     /// Whether the worlds operator block list holds `actor` out.
     async fn is_blocked(&self, actor: &Address) -> Result<bool, AuthorityNotEstablished>;
-    /// Whether `actor` administers `scene`.
-    async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> PermissionDecision;
+    /// Whether `actor` administers `scene`: an explicit admin, else the owner
+    /// the source names, else [`Holds::NoOwnerSource`] when none does.
+    async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> Holds;
     /// The owner and every deployment/streaming grantee of `world` whose
     /// grant is world-wide or touches `parcels`: the wallets a scene ban may
     /// not target.
@@ -422,7 +423,7 @@ pub mod test_support {
         pub world_owner: Result<Option<Address>, AuthorityNotEstablished>,
         pub access: Result<Access, AuthorityNotEstablished>,
         pub blocked: Result<bool, AuthorityNotEstablished>,
-        pub admin: PermissionDecision,
+        pub admin: Holds,
         pub land: Result<Option<Arc<Option<LandOperators>>>, AuthorityNotEstablished>,
         pub protected: Result<BTreeSet<Address>, AuthorityNotEstablished>,
         pub grantees: Result<BTreeSet<Address>, AuthorityNotEstablished>,
@@ -437,7 +438,7 @@ pub mod test_support {
                 world_owner: Ok(None),
                 access: Ok(Access::Allowed(AccessGrant::Unrestricted)),
                 blocked: Ok(false),
-                admin: PermissionDecision::refused("stub: not an admin"),
+                admin: PermissionDecision::refused("stub: not an admin").into(),
                 land: Ok(None),
                 protected: Ok(BTreeSet::new()),
                 grantees: Ok(BTreeSet::new()),
@@ -499,10 +500,13 @@ pub mod test_support {
             self.blocked.as_ref().copied().map_err(copy)
         }
 
-        async fn is_admin(&self, _scene: &SceneRef<'_>, _actor: &Address) -> PermissionDecision {
+        async fn is_admin(&self, _scene: &SceneRef<'_>, _actor: &Address) -> Holds {
             match &self.admin {
-                PermissionDecision::Allowed => PermissionDecision::Allowed,
-                PermissionDecision::Refused(error) => PermissionDecision::Refused(copy(error)),
+                Holds::Decided(PermissionDecision::Allowed) => PermissionDecision::Allowed.into(),
+                Holds::Decided(PermissionDecision::Refused(error)) => {
+                    PermissionDecision::Refused(copy(error)).into()
+                }
+                Holds::NoOwnerSource => Holds::NoOwnerSource,
             }
         }
 

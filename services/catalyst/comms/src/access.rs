@@ -1,11 +1,12 @@
 //! The access vocabulary of a world join: what `worlds::policy::Policy`
 //! returns ([`Access`] with its [`AccessGrant`] and [`Ban`]) and the settings and
 //! documents it decides over ([`AccessType`],
-//! [`SceneRef`], [`LandOperators`]). Types only, no I/O: the decisions stay in
+//! [`SceneRef`], [`LandOperators`]), and the answer of its scene decision
+//! ([`Holds`]). Types only, no I/O: the decisions stay in
 //! worlds, the vocabulary lives here so `comms` can name them without
 //! depending on it.
 
-use crate::shared::identity::Address;
+use crate::shared::identity::{Address, AuthorityNotEstablished, PermissionDecision};
 use crate::world_identity::{Parcel, ParcelSet, SceneId, WorldName};
 
 /// `worlds.worlds.access_type`.
@@ -142,6 +143,51 @@ impl SceneRef<'_> {
     pub fn place(&self) -> &str {
         match self {
             Self::World { place, .. } | Self::Genesis { place, .. } => place,
+        }
+    }
+}
+
+pub const NOT_OWNER_OR_ADMIN_MSG: &str = "signer is not an owner or admin of this scene";
+
+/// Whether an actor holds a scene: the answer of
+/// `worlds::policy::Policy::is_admin` and of the scene decisions over it.
+#[derive(Debug)]
+pub enum Holds {
+    Decided(PermissionDecision),
+    /// No grant admits the actor, and no source named the owner of the place
+    /// for this decision: a LAND index that is not ready (or not read) with
+    /// no marketplace reader, a NAME world with no names reader. A request
+    /// reads it as the refusal ([`From`]). It is no evidence that the actor
+    /// does not own the place.
+    NoOwnerSource,
+}
+
+impl Holds {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Decided(PermissionDecision::Allowed))
+    }
+
+    /// A refusal for lack of authority, with an owner source or without.
+    pub fn lacks_authority(&self) -> bool {
+        use AuthorityNotEstablished::RefusedLacksAuthority as Lacks;
+        matches!(
+            self,
+            Self::NoOwnerSource | Self::Decided(PermissionDecision::Refused(Lacks { .. }))
+        )
+    }
+}
+
+impl From<PermissionDecision> for Holds {
+    fn from(decision: PermissionDecision) -> Self {
+        Self::Decided(decision)
+    }
+}
+
+impl From<Holds> for PermissionDecision {
+    fn from(holds: Holds) -> Self {
+        match holds {
+            Holds::Decided(decision) => decision,
+            Holds::NoOwnerSource => Self::refused(NOT_OWNER_OR_ADMIN_MSG),
         }
     }
 }

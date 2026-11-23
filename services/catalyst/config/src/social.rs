@@ -503,7 +503,9 @@ pub struct SocialConfig {
     #[arg(long, env = "CAST_BOT_BIN")]
     pub cast_bot_bin: Option<std::path::PathBuf>,
 
-    /// Cast presentations running at once on this node; 0 is unlimited.
+    /// Cast presentations running at once on this node; 0 is unlimited. One
+    /// presentation takes about 150 MiB (its bot 112) and 0.03 to 0.2 of a
+    /// core, so the default, upstream's, takes about 1.5 GiB and 2 cores.
     #[arg(long, env = "MAX_CONCURRENT_PRESENTATIONS", default_value_t = 10)]
     pub max_concurrent_presentations: usize,
 

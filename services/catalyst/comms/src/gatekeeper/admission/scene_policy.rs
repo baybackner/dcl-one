@@ -404,6 +404,12 @@ pub async fn scene_owner_or_admin_decision(
     place: &PlaceLookup<'_>,
     signer: &Address,
 ) -> PermissionDecision {
+    owner_or_admin(state, place, signer).await.into()
+}
+
+/// [`scene_owner_or_admin_decision`], with the refusal that had no owner
+/// source set apart ([`Holds::NoOwnerSource`]).
+async fn owner_or_admin(state: &CommsState, place: &PlaceLookup<'_>, signer: &Address) -> Holds {
     let place_id = place.place_id();
     let place_row = match place.get().await {
         Ok(row) => row,
@@ -418,7 +424,8 @@ pub async fn scene_owner_or_admin_decision(
                     store: "explore.place",
                     reason_for_operators: error.to_string(),
                 },
-            );
+            )
+            .into();
         }
     };
     let empty = ParcelSet::new();
@@ -438,11 +445,10 @@ pub async fn scene_owner_or_admin_decision(
         },
     };
     match state.policy.is_admin(&scene_ref, signer).await {
-        PermissionDecision::Allowed => PermissionDecision::Allowed,
-        PermissionDecision::Refused(AuthorityNotEstablished::RefusedLacksAuthority { .. }) => {
-            PermissionDecision::refused(NOT_OWNER_OR_ADMIN_MSG)
-        }
-        undetermined => undetermined,
+        Holds::Decided(PermissionDecision::Refused(
+            AuthorityNotEstablished::RefusedLacksAuthority { .. },
+        )) => PermissionDecision::refused(NOT_OWNER_OR_ADMIN_MSG).into(),
+        answered => answered,
     }
 }
 
@@ -457,23 +463,35 @@ pub async fn scene_manager_decision(
     place: &PlaceLookup<'_>,
     signer: &Address,
 ) -> PermissionDecision {
-    match scene_owner_or_admin_decision(state, place, signer).await {
-        PermissionDecision::Refused(AuthorityNotEstablished::RefusedLacksAuthority { .. }) => {}
-        decided => return decided,
+    scene_manager(state, place, signer).await.into()
+}
+
+/// [`scene_manager_decision`] for the recheck of a stream key: a refusal
+/// keeps what the owner-or-admin decision said of the owner source
+/// ([`Holds::NoOwnerSource`]).
+pub(crate) async fn scene_manager(
+    state: &CommsState,
+    place: &PlaceLookup<'_>,
+    signer: &Address,
+) -> Holds {
+    let refused = owner_or_admin(state, place, signer).await;
+    if !refused.lacks_authority() {
+        return refused;
     }
     let undetermined = |store: &'static str, reason: String| {
         PermissionDecision::Refused(AuthorityNotEstablished::UndeterminedStoreUnavailable {
             store,
             reason_for_operators: reason,
         })
+        .into()
     };
     match place.get().await {
         Ok(Some(row)) => match holds_extended_permission(state, row, signer).await {
-            Ok(true) => PermissionDecision::Allowed,
-            Ok(false) => PermissionDecision::refused(NOT_OWNER_OR_ADMIN_MSG),
+            Ok(true) => PermissionDecision::Allowed.into(),
+            Ok(false) => refused,
             Err(error) => undetermined("scene permission grants", error.to_string()),
         },
-        Ok(None) => PermissionDecision::refused(NOT_OWNER_OR_ADMIN_MSG),
+        Ok(None) => refused,
         Err(error) => undetermined("explore.place", error.to_string()),
     }
 }

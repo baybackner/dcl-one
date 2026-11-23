@@ -28,7 +28,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use sqlx::Row;
 
-use crate::access::{Access, LandOperators, SceneRef, WorldAdmission};
+use crate::access::{Access, Holds, LandOperators, SceneRef, WorldAdmission};
 use crate::shared::cache::TtlMap;
 use crate::world_identity::{Parcel, ParcelSet, SceneId, WorldName, is_world_realm_name};
 use crate::{Address, AuthorityNotEstablished, PermissionDecision};
@@ -46,7 +46,7 @@ pub const PLACE_LOOKUP_UNAVAILABLE_MSG: &str =
     "the place catalog is unavailable, so this request cannot be bound to its room";
 const PLACE_MISMATCH_MSG: &str =
     "place_id does not match the realm and parcel this request is signed for";
-pub const NOT_OWNER_OR_ADMIN_MSG: &str = "signer is not an owner or admin of this scene";
+pub use crate::access::NOT_OWNER_OR_ADMIN_MSG;
 
 const LEASE_AUTHORIZATIONS_TTL: Duration = Duration::from_secs(300);
 const NAMES_TTL: Duration = Duration::from_secs(300);
@@ -65,13 +65,13 @@ pub(crate) use lookup::{
 };
 #[path = "scene_policy.rs"]
 mod policy;
-pub(crate) use policy::try_get_lease_holders_for_parcels;
 pub use policy::{
     SceneCaches, WorldAccess, ensure_target_not_protected, get_extra_addresses,
     get_lease_holders_for_parcels, has_world_access_permission, holds_extended_permission,
     names_for, scene_manager_decision, scene_owner_or_admin_decision, try_get_extra_addresses,
     world_access,
 };
+pub(crate) use policy::{scene_manager, try_get_lease_holders_for_parcels};
 #[path = "scene_effects.rs"]
 mod effects;
 pub use effects::{RoomContext, add_admin, add_ban, remove_admin, remove_ban, resolve_rooms};

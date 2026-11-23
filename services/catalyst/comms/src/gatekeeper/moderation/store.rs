@@ -217,6 +217,25 @@ impl Moderation {
         Ok(granter.and_then(|granter| Address::parse(&granter).ok()))
     }
 
+    /// Whether `admin` held a grant on `place_id` at `at` that was removed
+    /// after it: the record that an authority in force at `at` ended.
+    pub async fn admin_removed_since(
+        &self,
+        place_id: &str,
+        admin: &Address,
+        at: NaiveDateTime,
+    ) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM social.scene_admins WHERE place_id = $1 AND admin_address = $2 \
+             AND NOT active AND added_at <= $3 AND removed_at >= $3)",
+        )
+        .bind(place_id)
+        .bind(admin)
+        .bind(at)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     /// A database fault is an undetermined authority, not "not an admin".
     pub async fn admin_decision(&self, place_id: &str, admin: &Address) -> PermissionDecision {
         let found: Result<bool, sqlx::Error> =

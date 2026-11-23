@@ -36,6 +36,7 @@ use super::livekit::IngressClient;
 use super::moderation::context::Context;
 use super::moderation::store::PLATFORM_BANNED_MSG;
 use super::{CommsState, SharedState};
+use crate::access::Holds;
 use crate::rooms::{ResolvedRoom, RoomRequest};
 use crate::shared::signed_fetch::SignedPath;
 use crate::world_identity::{Parcel, RealmId, WorldName};
@@ -136,6 +137,7 @@ pub async fn scene_stream_access(
     State(state): State<SharedState>,
     OriginalUri(uri): OriginalUri,
     method: Method,
+    switch: Option<axum::Extension<crate::writes::Switch>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if !state.livekit.configured {
@@ -208,8 +210,8 @@ pub async fn scene_stream_access(
         let place = key_authority(&state, &place_id, world, bound.place);
         (place_id, place, Some(bound.room), scene)
     };
-    let mut decision = scene::scene_manager_decision(&state, &place, &sf.signer).await;
-    if lacks_authority(&decision) {
+    let mut decision = scene::scene_manager(&state, &place, &sf.signer).await;
+    if decision.lacks_authority() {
         // A world's scene admin may revoke the key it may reset: the signed
         // scene when it is the world's current deployment.
         let world_scene = match scene {
@@ -225,7 +227,7 @@ pub async fn scene_stream_access(
             decision = world_scene_admin(&state, &place, &world_scene, &sf.signer, decision).await;
         }
     }
-    match decision {
+    match PermissionDecision::from(decision) {
         PermissionDecision::Allowed => {}
         PermissionDecision::Refused(AuthorityNotEstablished::RefusedLacksAuthority { .. }) => {
             return Err(forbidden(NOT_AUTHORIZED_TO_STREAM_MSG));
@@ -236,8 +238,14 @@ pub async fn scene_stream_access(
     let ingress = state.ingress();
     if method == Method::GET {
         // A key the place no longer holds (its scene redeployed, its minter
-        // without the place) is never the one answered.
-        cast::recheck_keys(&state, cast::Keys::Place(&place_id)).await;
+        // without the place) is never the one answered. With the social
+        // writes switch off this read revokes nothing: it answers as a place
+        // with no key.
+        if crate::writes::side_writes_on(switch) {
+            cast::recheck_keys(&state, cast::Keys::Place(&place_id)).await;
+        } else if cast::place_key_ends(&state, &place_id).await {
+            return Err(ApiError::not_found(STREAM_ACCESS_NOT_FOUND_MSG));
+        }
     }
     match method {
         Method::GET => match active_access(&state.pool, &place_id).await? {
@@ -352,10 +360,10 @@ pub(super) async fn key_decision(
     authority: &PlaceLookup<'_>,
     world_scene: Option<&str>,
     signer: &Address,
-) -> PermissionDecision {
-    let decision = scene::scene_manager_decision(state, authority, signer).await;
+) -> Holds {
+    let decision = scene::scene_manager(state, authority, signer).await;
     match world_scene {
-        Some(scene) if lacks_authority(&decision) => {
+        Some(scene) if decision.lacks_authority() => {
             world_scene_admin(state, authority, scene, signer, decision).await
         }
         _ => decision,
@@ -376,23 +384,25 @@ pub(super) fn lacks_authority(decision: &PermissionDecision) -> bool {
 /// place can be granted, and upstream's admin of a world's place holds its stream
 /// key. A grantee restricted to some parcels may grant `/scene-admin` on its
 /// scene, so an admin it granted (or one granted by another scene admin)
-/// stays refused: the grant never widens its granter's authority.
+/// stays refused: the grant never widens its granter's authority. A granter
+/// refused with no owner source ([`Holds::NoOwnerSource`]) is that answer.
 async fn world_scene_admin(
     state: &CommsState,
     authority: &PlaceLookup<'_>,
     scene: &str,
     signer: &Address,
-    refused: PermissionDecision,
-) -> PermissionDecision {
+    refused: Holds,
+) -> Holds {
     let granter = match state.moderation.active_admin_granter(scene, signer).await {
         Ok(Some(granter)) => granter,
         Ok(None) => return refused,
-        Err(error) => return PermissionDecision::undetermined("social.scene_admins", &error),
+        Err(error) => {
+            return PermissionDecision::undetermined("social.scene_admins", &error).into();
+        }
     };
-    match scene::scene_manager_decision(state, authority, &granter).await {
-        PermissionDecision::Allowed => PermissionDecision::Allowed,
-        decision if lacks_authority(&decision) => refused,
-        undetermined => undetermined,
+    match scene::scene_manager(state, authority, &granter).await {
+        Holds::Decided(decision) if lacks_authority(&decision) => refused,
+        answered => answered,
     }
 }
 
@@ -561,18 +571,35 @@ pub(super) async fn barred(
     state: &CommsState,
     wallet: &Address,
     device_id: Option<&str>,
-) -> Result<Option<&'static str>, ApiError> {
+) -> Result<Option<Barred>, ApiError> {
     let now = chrono::Utc::now().naive_utc();
     let (policy, bans) = (state.policy.as_ref(), state.bans.as_ref());
     let ban =
         crate::gatekeeper::moderation::admission_ban(policy, bans, wallet, None, device_id, now);
     Ok(match ban.await? {
-        Some(_) => Some(BANNED),
-        None if state.deny_list.is_denied(wallet.as_str()).await => Some("on the deny list"),
+        Some(_) => Some(Barred::Banned),
+        None if state.deny_list.is_denied(wallet.as_str()).await => Some(Barred::Denied),
         None => None,
     })
 }
-const BANNED: &str = "banned from the platform";
+
+/// Why a wallet is [`barred`].
+#[derive(Clone, Copy)]
+pub(super) enum Barred {
+    /// A platform ban of the wallet or its device.
+    Banned,
+    /// The deny list holds the wallet.
+    Denied,
+}
+
+impl Barred {
+    pub(super) fn why(self) -> &'static str {
+        match self {
+            Self::Banned => "banned from the platform",
+            Self::Denied => "on the deny list",
+        }
+    }
+}
 
 /// Refuses a [`barred`] wallet: 403 for a platform ban, `denied` for the deny list.
 async fn refuse_barred(
@@ -583,11 +610,11 @@ async fn refuse_barred(
 ) -> Result<(), ApiError> {
     match barred(state, signer, device_id).await? {
         None => Ok(()),
-        Some(BANNED) => {
+        Some(Barred::Banned) => {
             tracing::warn!(address = %signer, "rejected a stream key request from a platform-banned user");
             Err(forbidden(PLATFORM_BANNED_MSG))
         }
-        Some(_) => Err(denied),
+        Some(Barred::Denied) => Err(denied),
     }
 }
 

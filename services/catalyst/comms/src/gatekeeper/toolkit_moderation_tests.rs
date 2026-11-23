@@ -495,12 +495,13 @@ impl AccessPolicy for ActorPolicy {
     async fn is_blocked(&self, _: &Address) -> Result<bool, AuthorityNotEstablished> {
         Ok(false)
     }
-    async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> PermissionDecision {
+    async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> crate::access::Holds {
         if self.unavailable {
-            return PermissionDecision::undetermined("policy fixture", &sqlx::Error::PoolClosed);
+            return PermissionDecision::undetermined("policy fixture", &sqlx::Error::PoolClosed)
+                .into();
         }
         if actor.as_str() == address_of(KEY) {
-            return PermissionDecision::Allowed;
+            return PermissionDecision::Allowed.into();
         }
         match &self.pool {
             Some(pool) => {
@@ -510,6 +511,7 @@ impl AccessPolicy for ActorPolicy {
             }
             None => PermissionDecision::refused("not authorized"),
         }
+        .into()
     }
     async fn protected_addresses(
         &self,

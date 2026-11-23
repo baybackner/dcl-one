@@ -2608,7 +2608,10 @@ a cleaned row deleted, and the place's `place_removal_state` row with it once
 neither catalogue holds the place and no pending row for it remains. Its context lookups read
 `explore.place_indexed`, joined to `content.active_pointers` and
 `content.deployments` for shared-scene rooms, by primary key or world name.
-Neither table has an FK: queue rows outlive catalogue deletion.
+Neither table has an FK: queue rows outlive catalogue deletion. Its cleanup
+of a removed place also reads `explore.world_scene_place`,
+`explore.place_world_local` and `explore.place`, to find the grants and the
+bans that end: "Scene admin grants" and "Scene bans" below.
 
 ## Scene admin grants
 
@@ -2621,7 +2624,9 @@ that scene storage uses.
 
 Workload: one primary-key read for each scene-signed gatekeeper request of a
 wallet that is not the owner (`Policy::is_admin`: `/scene-admin`, `/scene-bans`,
-`/scene-stream-access`, `/cast/*`, the stream key recheck), and one read of a
+`/scene-stream-access`, `/cast/*`, the stream key recheck, which reads the
+row once more when no source names the owner of the place:
+`Moderation::admin_removed_since`), and one read of a
 place's rows (tens at most) for `GET /scene-admin`, for a room metadata
 refresh and for each streaming notice (a Genesis place's base parcel, the
 place of a world key's scene or, for a world removal, of each active scene,
@@ -2639,9 +2644,26 @@ Invariants:
   removal (`added_at`; a cleanup that runs late keeps the later ones): those
   on the places of the active scenes of a world (`explore.world_scene_place`
   by `world_name` on `world_scene_place_deployment_idx`; the id of a world
-  place is the world name or an imported id, never the key of a grant), or
-  those on the base parcel of a Genesis place when no enabled `explore.place`
-  row (`world`, `disabled`, `base_position`) has that base. A retired
+  place is the world name or an imported id, never the key of a grant) when
+  no enabled world row of that name remains in `explore.place_world_local`
+  or `explore.place` (`world`, `disabled`, `lower(world_name)` on
+  `place_world_local_world_name_col_idx` and `place_world_name_col_idx`: the
+  local row of a world displaces its mirrored row, and the world stands), or
+  those on the effective base parcel of a Genesis place (the resolver's
+  `ParcelSet::effective_base` of the positions and the declared base in the
+  removal row) when no enabled `explore.place` row (`world`, `disabled`) has
+  that effective base: the rows that hold the parcel (`raw->'positions'` on
+  `place_positions_path_gin`), each compared by `social.scene_base_parcel` of
+  its positions and `base_position`, and the rows with no list of positions
+  or an empty one, which stand on their `base_position` as the removal feed
+  reads them. No index serves `base_position`: that half is one scan of
+  `explore.place` for each statement (26,198 rows in 20 ms on a synced
+  node, 2026-11-23; no enabled Genesis row there lacks the list). Both
+  statements build the probe from one fragment (`no_place_on`). A list that
+  holds the parcel in another spelling (`"1, 2"`) is not found: the mirror
+  stores such upstream documents (21 of 24,449 enabled Genesis rows on that
+  node). The notices of a Genesis place read the admins on the same key
+  (`streaming::notifications::genesis_key`). A retired
   world-scene identity is not bound to a deployment again, so no request
   reads its grants.
 - The release script `schemas/releases/scene-admin-place-keys.sql` moves the
@@ -2665,9 +2687,9 @@ Invariants:
   that window no request reads them and they stay (tens of rows at most).
 - `social.scene_base_parcel(parcels, declared_base)` is the one SQL copy of
   the effective base parcel that the room resolver computes
-  (`ParcelSet::effective_base`). The release script and the import loads of
-  scene admins and scene bans call it; `the_sql_base_parcel_is_the_resolvers`
-  compares the two.
+  (`ParcelSet::effective_base`). The release script, the import loads of
+  scene admins and scene bans and the place removal cleanup call it;
+  `the_sql_base_parcel_is_the_resolvers` compares the two.
 
 ## Scene bans
 
@@ -2696,8 +2718,10 @@ Invariants:
 - The cleanup of a removed place deletes the bans made before the removal
   (`banned_at`), in the transaction that revokes its admin grants: the rows on
   the place id, the `<world>:<base>` rows of the world (any base, so replaced
-  scenes too), or the rows on the base parcel of a Genesis place when no
-  enabled `explore.place` row has that base.
+  scenes too) when no enabled world row of that name remains (the same two
+  probes as for the grants), or the rows on the effective base parcel of a
+  Genesis place when no enabled `explore.place` row has that effective base
+  (the same key and probe as for the grants).
 - The release script `schemas/releases/genesis-scene-ban-keys.sql` moves the
   bans of Genesis deployments that are not deleted (`deleter_deployment IS
   NULL`, as the resolver reads them, unpublished ones too) from the entity id
@@ -2753,7 +2777,15 @@ place (`split_part(room_id, ':', 3)` or `starts_with(room_id, ...)` over the
 active rows, hundreds at most) and one authority decision for each key found,
 usually none. The check of every key at a subscription is one authority
 decision for each active key: a LAND or NAME read, or a world permission
-read, each bounded by its own timeout.
+read, each bounded by its own timeout. A refusal ends a key only when the
+decision had a source for the owner of the place. The decision reads that
+source one time: for a Genesis key the LAND index cursor
+(`land_authz.index_cursor`, one row) in the snapshot of its ownership read;
+for a world the names reader is configured or not, and no row is read. A
+refusal with no source reads the minter's row of `social.scene_admins` by
+primary key (`active`, `added_at`, `removed_at`): a grant in force when the
+key was made (`created_at`) and removed after that ends the key. With no
+such row the key stays and its publisher tokens answer 503.
 
 Invariants:
 
@@ -2776,6 +2808,27 @@ Not announced: a LAND owner or operator change, a NAME transfer until the
 owner reconcile writes `worlds.worlds.owner`, a ban. The key job and the check
 on each use cover them. A scene admin removal checks the key in its own
 request.
+
+Social writes switch: with `SOCIAL_WRITES_ENABLED` off the social gate refuses
+each `POST`, `PUT`, `PATCH` and `DELETE` of the gatekeeper, the publisher
+tokens included, except four `POST` paths that stay open
+(`OPEN_WHILE_DISABLED` in `services/catalyst/social/src/writes.rs`):
+`/get-scene-adapter`, `/get-server-scene-adapter`, `/island-refresh` and
+`/livekit-webhook`. Two request paths then still write
+`social.scene_stream_access`, and neither reads the switch:
+
+- `POST /livekit-webhook`: an ingress event sets `streaming`,
+  `streaming_start_time` and `streaming_state_version` of the active key of
+  that ingress (`streaming::ingress_event`).
+- `GET /cast/generate-stream-link`: it mints a key, and checks the key of the
+  place before, as with the switch on.
+
+`GET /scene-stream-access` reads the switch and then writes nothing: a key
+that ends is not revoked, and the answer is that of a place with no key.
+`/get-scene-adapter` reads the switch too and skips its connection record.
+The gatekeeper jobs do not read the switch: the key job, the listener, the
+expiry of keys, the stream state reconciliation, the cleanup and the place
+removal cleanup write in the process that holds each lease.
 
 ## Stream state reconciliation
 

@@ -30,6 +30,19 @@ pub(in crate::gatekeeper) fn place_info(context: &PlaceContext) -> scene::PlaceI
     }
 }
 
+/// The key of the grants and the bans of a Genesis place: the effective base
+/// of its scene, as the room resolver reads it, not the base that the
+/// catalogue row declares. The removal cleanup and the notices read the one
+/// key.
+pub(in crate::gatekeeper) fn genesis_key(context: &PlaceContext) -> String {
+    let parcels = place_info(context).positions;
+    let parcels = parcels.iter().filter_map(|p| Parcel::parse(p).ok());
+    parcels
+        .collect::<crate::world_identity::ParcelSet>()
+        .effective_base(Some(&context.base_position))
+        .map_or_else(|| context.base_position.clone(), |base| base.canonical())
+}
+
 /// What a streaming notice is about, which decides the scene admins it
 /// reaches besides the place's owner and operators.
 pub(in crate::gatekeeper) enum Scope<'a> {
@@ -42,7 +55,8 @@ pub(in crate::gatekeeper) enum Scope<'a> {
 
 /// Everyone a streaming notice for `context` goes to, `owner` included, as
 /// upstream's `getAdminsAndExtraAddresses`: for a Genesis place its scene
-/// admins (granted on its base parcel) and the LAND owner, operators and
+/// admins (granted on its effective base parcel, [`genesis_key`]) and the
+/// LAND owner, operators and
 /// managers; for a world its owner, the deployment/streaming grantees of its
 /// parcels, and the scene admins of the key's scene (of every active scene
 /// for a removal) whose granter still holds the world-wide authority
@@ -68,12 +82,10 @@ pub(in crate::gatekeeper) async fn recipients(
         .filter(|_| context.world)
         .and_then(|name| WorldName::parse(name).ok());
     let Some(world) = world else {
-        if !context.world
-            && let Ok(base) = Parcel::parse(&context.base_position)
-        {
+        if !context.world {
             let admins = state
                 .moderation
-                .notice_admins(&base.canonical(), revoked_at)
+                .notice_admins(&genesis_key(context), revoked_at)
                 .await?;
             out.extend(admins.iter().filter_map(|(a, _)| Address::parse(a).ok()));
         }
@@ -324,11 +336,11 @@ pub(in crate::gatekeeper) mod test_support {
         async fn is_blocked(&self, _: &Address) -> Result<bool, AuthorityNotEstablished> {
             Ok(false)
         }
-        async fn is_admin(&self, _: &SceneRef<'_>, actor: &Address) -> PermissionDecision {
+        async fn is_admin(&self, _: &SceneRef<'_>, actor: &Address) -> crate::access::Holds {
             if actor == &self.owner {
-                PermissionDecision::Allowed
+                PermissionDecision::Allowed.into()
             } else {
-                PermissionDecision::refused("not the owner")
+                PermissionDecision::refused("not the owner").into()
             }
         }
         async fn protected_addresses(

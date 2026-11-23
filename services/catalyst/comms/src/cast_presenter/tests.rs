@@ -45,6 +45,8 @@ struct FakeBot {
     exited: AtomicBool,
     /// While set, `shutdown` waits for it.
     shutdown_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// Before it ended, the bot reported that LiveKit closed its connection.
+    disconnected: AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -74,12 +76,13 @@ impl BotLink for FakeBot {
         self.sent.lock().unwrap().push(Sent::Metadata(metadata));
         Ok(())
     }
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> bool {
         let gate = self.shutdown_gate.lock().unwrap().clone();
         if let Some(gate) = gate {
             gate.notified().await;
         }
         self.sent.lock().unwrap().push(Sent::Shutdown);
+        !self.exited.load(Ordering::SeqCst) || self.disconnected.load(Ordering::SeqCst)
     }
 }
 
@@ -145,6 +148,12 @@ impl FakeLauncher {
         let (bot, room) = bots.last_mut().expect("a bot");
         bot.exited.store(true, Ordering::SeqCst);
         *room = None;
+    }
+    /// LiveKit closes the last bot's connection: the bot reports it and ends.
+    fn disconnect_last(&self) {
+        let (bot, _) = self.bots.lock().unwrap().last().cloned().expect("a bot");
+        bot.disconnected.store(true, Ordering::SeqCst);
+        self.exit_last();
     }
 }
 
@@ -1160,11 +1169,8 @@ impl super::bot::Rooms for TestRooms {
     }
 }
 
-/// A killed bot says nothing and LiveKit keeps its participant: the node
-/// sends `presentation:stopped` in its place and removes it. A bot that
-/// left by itself is not removed.
-#[tokio::test]
-async fn a_bot_that_ends_without_leaving_is_removed_from_its_room() {
+/// Gives `presenter` a room service that records its calls.
+async fn recorded_rooms(presenter: &Presenter) -> Arc<Mutex<Vec<(String, Value)>>> {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let seen = calls.clone();
     let record = move |uri: axum::http::Uri, axum::Json(body): axum::Json<Value>| {
@@ -1175,13 +1181,21 @@ async fn a_bot_that_ends_without_leaving_is_removed_from_its_room() {
     let connect_url = format!("ws://{}", listener.local_addr().unwrap());
     let app = axum::Router::new().fallback(record);
     crate::shared::task::spawn_with(async move { axum::serve(listener, app).await.unwrap() });
-
-    let (presenter, launcher, info) = presenting(1).await;
     let own = LiveKitTarget {
         connect_url,
         ..target()
     };
     presenter.set_room_service(Arc::new(TestRooms(reqwest::Client::new(), own)));
+    calls
+}
+
+/// A killed bot says nothing and LiveKit keeps its participant: the node
+/// sends `presentation:stopped` in its place and removes it. A bot that
+/// left by itself is not removed.
+#[tokio::test]
+async fn a_bot_that_ends_without_leaving_is_removed_from_its_room() {
+    let (presenter, launcher, info) = presenting(1).await;
+    let calls = recorded_rooms(&presenter).await;
     presenter.stop(&info.id).await;
     assert!(calls.lock().unwrap().is_empty());
 
@@ -1208,6 +1222,26 @@ async fn a_bot_that_ends_without_leaving_is_removed_from_its_room() {
             ),
         ]
     );
+}
+
+/// LiveKit closed the bot's connection: the room was deleted, the bot was
+/// removed, or a bot of the same token started on another node and has its
+/// identity now. The bot reports it and is out of the room: the node sends
+/// nothing and removes nobody. A creation that fails with its bot connected
+/// has the bot leave, and removes nobody either.
+#[tokio::test]
+async fn a_bot_that_livekit_disconnected_is_not_evicted() {
+    let (presenter, launcher, _) = presenting(1).await;
+    let calls = recorded_rooms(&presenter).await;
+    let (bot, _) = launcher.last();
+    launcher.disconnect_last();
+    settle_until(|| bot.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    assert_eq!(presenter.active_sessions(), 0);
+    assert_eq!(*calls.lock().unwrap(), []);
+
+    let no_pdf = presenter.create(b"no PDF".to_vec(), &GOOD, "b.pdf", None);
+    assert!(no_pdf.await.is_err());
+    assert_eq!(*calls.lock().unwrap(), []);
 }
 
 #[tokio::test]
@@ -1790,6 +1824,18 @@ async fn the_json_path_holds_one_slot_from_the_check_to_the_session() {
     assert!(presenter.reserve(&GOOD).is_err());
 }
 
+/// `cast-bot` links no crate of the node: the bot identity prefix in its
+/// source, which keeps other bots out of the audience count, is this one.
+#[test]
+fn the_bot_names_the_bot_identity_prefix() {
+    let bot = include_str!(concat!(
+        env!("DCL_ONE_ROOT"),
+        "/services/catalyst/cast-bot/src/main.rs"
+    ));
+    let prefix = super::session::BOT_IDENTITY_PREFIX;
+    assert!(bot.contains(&format!("!identity.starts_with({prefix:?})")));
+}
+
 #[test]
 fn only_presentation_bot_tokens_of_this_livekit_pass() {
     let own = target();
@@ -2270,6 +2316,40 @@ async fn a_presentation_goes_live_on_a_real_livekit() {
     assert_eq!(in_room().await, both[..1], "the killed bot is in the room");
     assert_eq!(presenter.active_sessions(), 1);
     presenter.stop(&kept.id).await;
+
+    // Another node starts a token whose bot runs here: LiveKit gives the new
+    // bot the place of the first, which reports it. The first session ends,
+    // and its node leaves the new bot in the room.
+    let other_node = Presenter::new(
+        Arc::new(super::bot::ProcessLauncher {
+            binary: bot_bin.clone().into(),
+        }),
+        presenter.livekit().clone(),
+        10,
+        None,
+    );
+    other_node.set_room_service(rooms.clone());
+    presenter
+        .create(test_pdf(1), &token, "First.pdf", None)
+        .await
+        .unwrap();
+    let second = other_node
+        .create(test_pdf(1), &token, "Second.pdf", None)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if presenter.active_sessions() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(presenter.active_sessions(), 0, "the displaced session");
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(other_node.active_sessions(), 1, "the new bot was removed");
+    }
+    assert_eq!(in_room().await, ["presentation-bot:room:access:1"]);
+    other_node.stop(&second.id).await;
 
     // LiveKit goes away: the bot reports it and exits, and the session ends.
     let info = presenter

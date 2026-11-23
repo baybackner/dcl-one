@@ -12,7 +12,7 @@ import type {
   ShareScreenFn,
 } from "../cast-stream/machine";
 import { StreamerStage, useCastTracks } from "./CastStage";
-import { joinCast, probeDevices, type CastSession, type Publish } from "./session";
+import { joinCast, onRoomLost, probeDevices, type CastSession, type Publish } from "./session";
 
 /** The name a streamer who typed none is shown with. */
 const DEFAULT_STREAMER_NAME = "Speaker";
@@ -99,14 +99,15 @@ export default function LiveCastStream({
   );
 
   const bindConnectionLost = useCallback(
-    (onLost: () => void) =>
-      bindSession(session, (s) => {
+    (onLost: (removed: boolean) => void) => {
+      if (!session) return () => {};
+      return onRoomLost(session, (removed) => {
         // Our own leave clears the ref first; anything else is a lost room.
-        if (s.disconnected() && sessionRef.current === s) {
-          sessionRef.current = null;
-          onLost();
-        }
-      }),
+        if (sessionRef.current !== session) return;
+        sessionRef.current = null;
+        onLost(removed);
+      });
+    },
     [session],
   );
 
@@ -128,6 +129,7 @@ export default function LiveCastStream({
   const micOn = tracks.some((t) => t.local && t.source === "microphone" && !t.muted);
   const camOn = tracks.some((t) => t.local && t.source === "camera" && !t.muted);
   const audioBlocked = session ? !session.canPlaybackAudio() : false;
+  const reconnecting = session ? session.reconnecting() !== null : false;
 
   const live = useMemo<LiveBindings>(
     () => ({
@@ -144,6 +146,7 @@ export default function LiveCastStream({
       devicesBusy: toggling,
       audioBlocked,
       enableAudio: () => void session?.startAudio(),
+      reconnecting,
     }),
     [
       goLive,
@@ -157,6 +160,7 @@ export default function LiveCastStream({
       toggling,
       toggle,
       audioBlocked,
+      reconnecting,
     ],
   );
 

@@ -1090,7 +1090,7 @@ async fn canonical_stream_route_creates_and_persists_ingress_for_the_joined_scen
         ));
     state.scenes = Arc::new(Catalogue);
     state.policy = Arc::new(StubPolicy {
-        admin: PermissionDecision::Allowed,
+        admin: PermissionDecision::Allowed.into(),
         ..Default::default()
     });
     state.livekit.configured = true;
@@ -1107,6 +1107,7 @@ async fn canonical_stream_route_creates_and_persists_ingress_for_the_joined_scen
             State(state.clone()),
             at("/scene-stream-access"),
             axum::http::Method::POST,
+            None,
             signed(KEY, "post", "/scene-stream-access", &metadata.to_string()).await,
         )
         .await
@@ -1136,6 +1137,7 @@ async fn canonical_stream_route_creates_and_persists_ingress_for_the_joined_scen
         State(state.clone()),
         at("/scene-stream-access"),
         axum::http::Method::POST,
+        None,
         signed(KEY, "post", "/scene-stream-access", &foreign.to_string()).await,
     )
     .await
@@ -1541,7 +1543,7 @@ impl crate::interfaces::AccessPolicy for PerWalletPolicy {
         &self,
         scene: &crate::access::SceneRef<'_>,
         actor: &Address,
-    ) -> PermissionDecision {
+    ) -> crate::access::Holds {
         self.inner.is_admin(scene, actor).await
     }
     async fn protected_addresses(

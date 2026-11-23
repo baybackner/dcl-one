@@ -62,7 +62,7 @@ Cast publishes into the scene's own LiveKit room, the one `/get-scene-adapter` h
 | `PUT /scene-stream-access` | `reset-…:86-150` | `G/streaming.rs:373-398` | MATCH for 404 (no active credential); a concurrent change inside the reset answers 500, not compared with upstream (MV-9) | `C/tests/gatekeeper_policy.rs` |
 | `DELETE /scene-stream-access` | `remove-…:42-65` | `G/streaming.rs:400-413` | MATCH | `C/tests/gatekeeper_policy.rs` |
 | Platform bans on stream access (0a6b095) | `add-…:51-59` | `G/streaming.rs:131-136,225-247` | MATCH | `C/comms/src/gatekeeper/streaming.rs` tests |
-| Ingress webhooks, 4 h TTL, stale-flag reconcile (cdd006c), key expiry deadline (1e7d0f2), notifications | `adapters/streaming-ttl-checker.ts`, `streaming-key-ttl-checker.ts` | `G/streaming.rs:914-942`; `G/streaming_jobs.rs:28-60,150-152,272-325` (leased jobs, durable cleanup queue); `G/streaming_notifications.rs` `recipients` | MATCH: an expired key is kept while the broadcast live at its deadline runs and retired by the first key pass after it ends; a broadcast started after the deadline is cut; notices: each notice goes to the place's owner, its active scene admins and LAND owner, operators and managers (Genesis), or the world owner, the deployment/streaming grantees of its parcels and the scene admins of the key's scene whose granter holds the world-wide authority (with per-scene world keys, #1948, exactly the admins who hold the key; before it, an admin of another scene of the world may also hold it and is not told), deduplicated, as `GK/adapters/scene-admins.ts:14-84`; a place removal also tells the grants its cleanup revoked, on every scene of the world; a key revoked because its scene was undeployed tells no world scene admin | `G/streaming_jobs.rs` tests; `an_expired_key_is_retired_after_its_broadcast_ends`; `a_broadcast_restarted_after_the_deadline_loses_the_expired_key`; `a_broadcast_live_at_the_deadline_is_still_capped_at_four_hours`; `G/streaming_jobs.rs` and `G/streaming_notifications.rs` tests; `removing_a_scene_admin_revokes_the_key_it_generated` |
+| Ingress webhooks, 4 h TTL, stale-flag reconcile (cdd006c), key expiry deadline (1e7d0f2), notifications | `adapters/streaming-ttl-checker.ts`, `streaming-key-ttl-checker.ts` | `G/streaming.rs:942-979`; `G/streaming_jobs.rs:28-59,149-151,271-324` (leased jobs, durable cleanup queue); `G/streaming_notifications.rs` `recipients` | MATCH: an expired key is kept while the broadcast live at its deadline runs and retired by the first key pass after it ends; a broadcast started after the deadline is cut; notices: each notice goes to the place's owner, its active scene admins and LAND owner, operators and managers (Genesis), or the world owner, the deployment/streaming grantees of its parcels and the scene admins of the key's scene whose granter holds the world-wide authority (with per-scene world keys, #1948, exactly the admins who hold the key; before it, an admin of another scene of the world may also hold it and is not told), deduplicated, as `GK/adapters/scene-admins.ts:14-84`; a place removal also tells the grants its cleanup revoked, on every scene of the world; a key revoked because its scene was undeployed tells no world scene admin | `G/streaming_jobs.rs` tests; `an_expired_key_is_retired_after_its_broadcast_ends`; `a_broadcast_restarted_after_the_deadline_loses_the_expired_key`; `a_broadcast_live_at_the_deadline_is_still_capped_at_four_hours`; `G/streaming_jobs.rs` and `G/streaming_notifications.rs` tests; `removing_a_scene_admin_revokes_the_key_it_generated` |
 
 Cast differences from upstream (each pinned by a test in `G/cast_tests.rs`):
 
@@ -130,7 +130,7 @@ the mic, hanging up, raising a hand, promoting, demoting, kicking and ending a s
 - The Bevy explorer plays streams: it classifies remote tracks by identity (`stream:`,
   `presentation-bot:`, ingress, screen share; `B/crates/comms/src/livekit/track/plugin.rs:156-193`)
   and shows the priority track on `livekit-video://current-stream`
-  (`B/crates/livestream_manager/src/plugin.rs:345-400`, `B/crates/av/src/video_player.rs:151`).
+  (`B/crates/livestream_manager/src/plugin.rs:372-427`, `B/crates/av/src/video_player.rs:137`).
 - It publishes only the microphone (`B/crates/comms/src/livekit/mic.rs:706`); scene tokens allow only
   the microphone, as upstream. Screen sharing is meant to go through the Cast web app.
 - `apps/sites` serves the streamer at `/cast/s/:token` and the watcher at `/cast/w/:location`
@@ -187,10 +187,14 @@ MV-1 to MV-4 (Cast routes, watcher token, the `apps/sites` streamer and watcher,
      participant, so two bots in one room keep each other alive.
    - A bot token runs one presentation: the same token again answers 409 `This token already has a
      presentation` until the first stops. Upstream starts it, and LiveKit drops the first bot. With a
-     token each, a room holds several presentations, as upstream.
+     token each, a room holds several presentations, as upstream. The 409 is one process's: on another
+     API replica the token starts as upstream, the first bot reports that LiveKit dropped it, and its
+     session ends without a message to the room.
    - A bot whose process ends without leaving is removed from its room at once, after the node sends
      `presentation:stopped` through the room service. Upstream leaves it to LiveKit, which keeps the
-     participant and its last slide about 20 s.
+     participant and its last slide about 20 s. A bot that LiveKit disconnected (room deleted,
+     participant removed, its token started again) is not removed and the node sends nothing: viewers
+     see the bot leave, or the new bot in its place.
    - PDFs render with hayro, not pdfjs: pixels differ, and annotation appearance streams are not drawn.
    - `ws://` LiveKit URLs are accepted on loopback hosts.
    - The SSRF resolver reads the hosts file.
@@ -209,7 +213,10 @@ MV-1 to MV-4 (Cast routes, watcher token, the `apps/sites` streamer and watcher,
      track and no `slideVideos[i].source`.
    - `/api/drive-video` and `/ping`.
    Not run: a scene client presenting through the Admin Toolkit; the Unity Explorer composing a
-   presentation of this node. No client of this tree sends `presenterIdentity` or the claim. The APIs image carries `cast-bot` and
+   presentation of this node. The Cast streamer page of this tree sends the claim when the bot
+   shows a slide whose presenter is not in the room
+   (`apps/sites/src/features/social/cast-live/presenter.ts`); no client of this tree sends
+   `presenterIdentity`. The APIs image carries `cast-bot` and
    sets `CAST_BOT_BIN` (`infra/containers/README.md`).
 6. **MV-6: The Bevy client ignores a moderator mute.** P1, S. `sync_local`
    (`B/crates/comms/src/voice_chat/state.rs:738-754`) reads role and speaker but not `muted`; a speaker

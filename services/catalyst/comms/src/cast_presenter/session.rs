@@ -22,6 +22,10 @@
 //! A bot that ends without leaving (its process killed) says nothing, and
 //! LiveKit keeps its participant and last slide for about 20 s: the node
 //! sends `presentation:stopped` in its place and removes the participant.
+//! A bot that reports `disconnected` is out of its room, and viewers see it
+//! leave: the node sends nothing and removes nobody. The 409 is this
+//! process's: another node starts the same token, its bot takes the
+//! identity, and viewers see that presentation in place of the first.
 //!
 //! The PDF load and each render run on [`RENDER_THREADS`] blocking threads
 //! at most. A render waits up to [`RENDER_WAIT`] for a thread; with none
@@ -463,8 +467,9 @@ impl Presenter {
         let _ = self.room_service.set(rooms);
     }
 
-    /// For a bot that ended without leaving: `last` goes to its room, then
-    /// its participant is removed (no error when it left by itself).
+    /// For a bot that ended without leaving ([`BotLink::shutdown`] says so):
+    /// `last` goes to its room, then its participant is removed. Never for
+    /// a bot that left: the identity can be another node's bot by then.
     async fn evict(&self, seat: &Seat, last: Option<&[u8]>) {
         let Some(rooms) = self.room_service.get() else {
             return;
@@ -619,8 +624,9 @@ impl Presenter {
         let session = match started.await {
             Ok(session) => session,
             Err(e) => {
-                bot.shutdown().await;
-                self.evict(&slot.seat, None).await;
+                if !bot.shutdown().await {
+                    self.evict(&slot.seat, None).await;
+                }
                 return Err(e);
             }
         };
@@ -784,10 +790,10 @@ impl Presenter {
 
     /// Stops a session: removed first, then `presentation:stopped`, then the
     /// bot disconnects. Stopping a stopped session does nothing. A bot that
-    /// cannot send `presentation:stopped` is evicted. Its token stays taken
-    /// (409) until the bot has shut down, and is free once this returns: a
-    /// retry with the same token gets a bot this cleanup no longer touches,
-    /// as the eviction removes the participant by that token's identity.
+    /// ended without leaving is evicted. Its token stays taken (409) until
+    /// the bot has shut down, and is free once this returns: a retry with the
+    /// same token gets a bot this cleanup no longer touches, as the eviction
+    /// removes the participant by that token's identity.
     pub async fn stop(&self, id: &str) {
         let Some(session) = self.sessions.lock().unwrap().remove(id) else {
             return;
@@ -799,11 +805,14 @@ impl Presenter {
         };
         let scene_id = session.state.lock().await.scene_id.clone();
         let packet = wire::encode_packet(&wire::stopped_message(id), &scene_id);
-        if let Err(e) = session.bot.publish_data(packet.clone()).await {
+        let sent = session.bot.publish_data(packet.clone()).await;
+        if let Err(e) = &sent {
             tracing::warn!(presentation = %id, "stop broadcast failed: {e}");
-            self.evict(&session.seat, Some(&packet)).await;
         }
-        session.bot.shutdown().await;
+        if !session.bot.shutdown().await {
+            let unsent = sent.is_err().then_some(packet.as_slice());
+            self.evict(&session.seat, unsent).await;
+        }
         tracing::info!(presentation = %id, "presentation stopped");
     }
 

@@ -13,13 +13,13 @@ A grant is on the place of the scene, read from the active deployment by the roo
 
 - A redeploy writes no row. A redeploy of the same place keeps every grant; a scene on a different place starts without admins.
 - An owner change writes no row. Ownership is read when a request arrives.
-- The cleanup of a removed place revokes the grants made before the removal: for a world place, those on the places of the world's active scenes; for a Genesis place, those on its base parcel when no enabled place has that base.
+- The cleanup of a removed place revokes the grants made before the removal: for a world place, those on the places of the world's active scenes when no enabled place of that world remains; for a Genesis place, those on its effective base parcel when no enabled place has that effective base.
 - A lookup of a catalogue place or of a whole world carries a key that no grant has, so a grant on one scene never decides for the world.
 - The release script `schemas/releases/scene-admin-place-keys.sql` moves the grants of active deployments from the entity id to the place. An entity that is active in several places gives each place the grant. Rows of entities that are not deployed stay with their old key, and no request reads them.
 - The move changes the key of live rows, so it is not a numbered step: an API from before the change reads and writes grants by entity id. Old replicas stop before `catalyst schema migrate`, the script runs after it, and `catalyst serve` refuses startup while a grant of an active deployment has the entity key.
 - Genesis scene bans use the same place (`ResolvedRoom::ban_key`); world scene bans keep their `<world>:<base parcel>` key. The removal cleanup deletes the bans on the same keys, and `schemas/releases/genesis-scene-ban-keys.sql` moves the Genesis bans of active deployments, behind the startup guard `ensure_genesis_scene_ban_release`.
 - Grants and bans stay with the place across a change of owner: a new owner of the LAND inherits the old owner's admins and bans while a place stays on that base parcel, and can list and remove them. The releases move the grants and bans of an unpublished deployment (not deleted, no pointers) to its base parcel too, so they apply to whichever scene later stands on that parcel.
-- `social.scene_base_parcel` is the one SQL copy of the resolver's effective base parcel. The release script and the imports of production scene admins and scene bans call it.
+- `social.scene_base_parcel` is the one SQL copy of the resolver's effective base parcel. The release script, the imports of production scene admins and scene bans and the cleanup of a removed place (`services/catalyst/comms/src/gatekeeper/moderation/maintenance.rs`) call it.
 
 ## Consequences
 
