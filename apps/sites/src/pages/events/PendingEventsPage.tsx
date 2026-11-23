@@ -15,13 +15,13 @@ import { invalidateEventsAfterWrite } from "@/data/lib/catalyst/places/events-pa
 import {
   editEventHref, eventAdminKeys, eventOccurrence, eventReviewStatus, moderateEvent, moderationQueueQuery, type ManagedEvent,
 } from "@/data/lib/catalyst/places/event-management";
-import { useEventsFooterCopy } from "../../events/locale";
-import { openSignIn } from "../../components/auth/signin-store";
-import SitesLayout from "../../components/chrome/SitesLayout";
-import { AdminAccessGate } from "./AdminAccessGate";
-import { EventAdminTabs } from "./EventAdminTabs";
-import { useEventAdmin, type EventAdminAccess } from "./useEventAdmin";
-import { useToast } from "./useToast";
+import { useEventsFooterCopy } from "@/features/events/locale";
+import { openSignIn } from "@/features/components/auth/signin-store";
+import SitesLayout from "@/features/components/chrome/SitesLayout";
+import { AdminAccessGate } from "@/features/explorer/event-management/AdminAccessGate";
+import { EventAdminTabs } from "@/features/explorer/event-management/EventAdminTabs";
+import { useEventAdmin, type EventAdminAccess } from "@/features/explorer/event-management/useEventAdmin";
+import { useToast } from "@/features/explorer/event-management/useToast";
 import styles from "./PendingEventsPage.module.css";
 
 /** The Users and Pending pages render in English, as decentraland.org's (its admin copy has no translations). */
@@ -77,6 +77,18 @@ function PendingQueue({ access }: { access: EventAdminAccess }) {
   const openId = params.get("id");
   const review = openId ? [...pending, ...recentlyApproved].find((event) => event.id === openId) ?? null : null;
   const now = new Date();
+  // A link (a notification, a shared URL) can name an event another moderator has handled since, or one
+  // this account does not review: once the queue answers without it, say so and drop the id.
+  const unlisted = Boolean(openId) && queue.isSuccess && review === null;
+  useEffect(() => {
+    if (!unlisted) return;
+    setToast({ message: adminCopy.pending.notListed, tone: "error" });
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("id");
+      return next;
+    }, { replace: true, preventScrollReset: true });
+  }, [unlisted, setParams, setToast]);
 
   function select(id: string | null) {
     setError(null);

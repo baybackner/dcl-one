@@ -6,16 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { CatalystError, postJSON, signedGetJSON } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
-import { openSignIn } from "../../components/auth/signin-store";
-import { CREATOR, currentPath, fakeEventsApi, makeEvent, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "./admin.test-utils";
+import { openSignIn } from "@/features/components/auth/signin-store";
+import { CREATOR, currentPath, fakeEventsApi, makeEvent, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "@/features/explorer/event-management/admin.test-utils";
 import PendingEventsPage from "./PendingEventsPage";
 
 const auth = vi.hoisted(() => ({ identity: null as AuthIdentity | null, isConnected: false }));
 vi.hoisted(() => { Object.assign(window, { __vite_plugin_react_preamble_installed__: true }); });
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => auth }));
 vi.mock("@/data/lib/auth/session", () => ({ getIdentity: () => auth.identity }));
-vi.mock("../../components/auth/signin-store", () => ({ openSignIn: vi.fn() }));
-vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock("@/features/components/auth/signin-store", () => ({ openSignIn: vi.fn() }));
+vi.mock("@/features/components/chrome/SitesLayout", () => ({ default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock("@/data/lib/catalyst/client", async (original) => ({
   ...await original<typeof import("@/data/lib/catalyst/client")>(),
   postJSON: vi.fn(), signedGetJSON: vi.fn(),
@@ -205,6 +205,18 @@ describe("when opening the Pending Events page", () => {
     expect(within(recent).getByText("Approved")).toBeTruthy();
   });
 
+  it("should fade only the pending event's cover, keeping its text and status at full contrast", async () => {
+    renderAdminPage(<PendingEventsPage />, PATH);
+    const pending = await screen.findByRole("region", { name: "Pending Events" });
+    const card = (await within(pending).findByRole("link", { name: "Moon concert" })).closest("li")!;
+    const faded = card.querySelectorAll("[data-dimmed]");
+    expect(faded).toHaveLength(1);
+    expect(faded[0]!.contains(within(card).getByRole("link", { name: "Moon concert" }))).toBe(false);
+    expect(faded[0]!.contains(within(card).getByText("Pending"))).toBe(false);
+    const recent = screen.getByRole("region", { name: "Recently Approved (Last 24hs)" });
+    expect(recent.querySelector("[data-dimmed]")).toBeNull();
+  });
+
   describe("and nothing waits for approval", () => {
     beforeEach(() => { api.events = []; });
 
@@ -245,6 +257,44 @@ describe("when opening the Pending Events page", () => {
   it("should open the review a deep link names", async () => {
     renderAdminPage(<PendingEventsPage />, `${PATH}?id=pending-one`);
     expect(await screen.findByRole("dialog", { name: "Moon concert" })).toBeTruthy();
+  });
+
+  describe("and a deep link names an event the queue no longer holds", () => {
+    beforeEach(() => { renderAdminPage(<PendingEventsPage />, `${PATH}?id=handled-elsewhere&from=email`); });
+
+    it("should say so and drop the id from the URL, keeping the other parameters", async () => {
+      expect(await screen.findByText("That event is no longer waiting for review.")).toBeTruthy();
+      await waitFor(() => expect(currentPath()).toBe(`${PATH}?from=email`));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("and a deep link names an event while the queue fails to load", () => {
+    beforeEach(() => {
+      api.failNext.events = new CatalystError("Queue unavailable", EVENTS, 503);
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=pending-one`);
+    });
+
+    it("should keep the id for the retry instead of calling the event gone", async () => {
+      expect(await screen.findByText("Queue unavailable")).toBeTruthy();
+      expect(currentPath()).toBe(`${PATH}?id=pending-one`);
+      expect(screen.queryByText("That event is no longer waiting for review.")).toBeNull();
+    });
+  });
+
+  describe("and the account also manages users but the list of grants fails", () => {
+    beforeEach(() => {
+      api.profile.permissions = [...api.profile.permissions, "edit_any_profile"];
+      api.profiles = [api.profile];
+      api.failNext.profiles = new CatalystError("Grants unavailable", "/events/api/profiles/settings", 503);
+    });
+
+    it("should still list the pending events, without reading the grants", async () => {
+      renderAdminPage(<PendingEventsPage />, PATH);
+      expect(await screen.findByRole("link", { name: "Moon concert" })).toBeTruthy();
+      expect(screen.queryByText("Grants unavailable")).toBeNull();
+      expect(readsOf("/events/api/profiles/settings")).toBe(0);
+    });
   });
 
   it("should offer no moderation for an event already approved", async () => {

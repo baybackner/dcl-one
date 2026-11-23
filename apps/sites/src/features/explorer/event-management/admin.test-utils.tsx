@@ -46,7 +46,7 @@ export type FakeEventsApi = {
    */
   settings?: Record<string, EventProfile>;
   /** Fails the next request of each kind once, with this error. */
-  failNext: Partial<Record<"profile" | "events" | "moderate" | "settings" | "save", Error>>;
+  failNext: Partial<Record<"profile" | "profiles" | "events" | "moderate" | "settings" | "save", Error>>;
 };
 
 /**
@@ -65,6 +65,7 @@ export function fakeEventsApi(api: FakeEventsApi) {
       return { ok: true, data: api.profile } as never;
     }
     if (path === "/events/api/profiles/settings") {
+      take("profiles");
       if (api.profiles === "forbidden") throw new CatalystError("Forbidden", path, 403);
       return { ok: true, data: api.profiles } as never;
     }
