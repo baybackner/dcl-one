@@ -15,13 +15,17 @@
 //! and download. A room runs one presentation (upstream keeps both): a new
 //! bot token of the room's active Cast credential takes the slot of the
 //! room's session, which stops at once. Until its bot has shut down, that
-//! session still counts against the limit as retiring, so repeated shares
-//! never run more bots than there are slots. A token of a revoked or
-//! rotated credential replaces nothing: its creation fails (401) when the
-//! room has a presentation as it is admitted. The new bot publishes its track only
-//! once the replaced one has announced its stop. Two creations of one room in
-//! flight together both run; the one admitted last stops the other, after
-//! checking its credential again. LiveKit gives a second bot of a token the
+//! session still counts against the limit as retiring: the new bot connects
+//! while the replaced one shuts down, so a handover runs one bot beyond the
+//! limit, and repeated shares are refused (429) until the replaced bots are
+//! gone. A token of a revoked or rotated credential replaces nothing: on a
+//! full node it is refused (429), otherwise its creation fails (401) when the
+//! room has a presentation as it is admitted. The new bot publishes its track
+//! only once the replaced one has announced its stop. Two creations of one
+//! room in flight together both run; the one admitted last stops the other,
+//! after checking its credential again. A session sends nothing once its stop
+//! has begun ([`Session::ended`]), so a session replaced while it is created
+//! never names itself after its successor. LiveKit gives a second bot of a token the
 //! place of the first, so a token that holds a slot answers 409 until its
 //! presentation stops, and stops nothing.
 //! A creation runs in its own task, so a client that goes away mid-request
@@ -265,6 +269,10 @@ struct Session {
     room: watch::Receiver<RoomState>,
     /// When the reaper last saw a participant.
     last_active: Mutex<Instant>,
+    /// Set by the stop before it announces `presentation:stopped`; a state
+    /// is published under this lock only while it is unset, so none follows
+    /// the stop.
+    ended: tokio::sync::Mutex<bool>,
 }
 
 /// The sessions of this node.
@@ -752,7 +760,11 @@ impl Presenter {
         Self::announced(self.retire(replaced)).await;
         tracing::info!(presentation = %id, slides = session.slide_count, "presentation created");
         session.broadcast_state().await;
-        crate::shared::task::spawn(self.clone().run(session.clone(), connected.data));
+        // Replaced by a newer presentation of its room while it waited: its
+        // stop owns the bot, and it sent no state.
+        if self.is_live(&id) {
+            crate::shared::task::spawn(self.clone().run(session.clone(), connected.data));
+        }
         Ok(PresentationInfo {
             id,
             file_name: session.file_name.clone(),
@@ -816,6 +828,7 @@ impl Presenter {
             }),
             room,
             last_active: Mutex::new(Instant::now()),
+            ended: tokio::sync::Mutex::new(false),
         }))
     }
 
@@ -928,11 +941,15 @@ impl Presenter {
             seats: &self.seats,
             identity: &session.seat.identity,
         };
-        let scene_id = session.state.lock().await.scene_id.clone();
-        let packet = wire::encode_packet(&wire::stopped_message(id), &scene_id);
-        if let Err(e) = session.bot.publish_data(packet.clone()).await {
-            tracing::warn!(presentation = %id, "stop broadcast failed: {e}");
-            self.evict(&session.seat, Some(&packet)).await;
+        {
+            let mut ended = session.ended.lock().await;
+            *ended = true;
+            let scene_id = session.state.lock().await.scene_id.clone();
+            let packet = wire::encode_packet(&wire::stopped_message(id), &scene_id);
+            if let Err(e) = session.bot.publish_data(packet.clone()).await {
+                tracing::warn!(presentation = %id, "stop broadcast failed: {e}");
+                self.evict(&session.seat, Some(&packet)).await;
+            }
         }
         if let Some(announced) = announced {
             let _ = announced.send(());
@@ -1007,7 +1024,12 @@ impl Session {
     }
 
     /// `presentation:state` to the room, then the same state in the bot's metadata.
+    /// Nothing once the session's stop has begun.
     async fn broadcast_state(&self) {
+        let ended = self.ended.lock().await;
+        if *ended {
+            return;
+        }
         let (snapshot, scene_id) = {
             let state = self.state.lock().await;
             (self.snapshot(&state), state.scene_id.clone())
@@ -1020,6 +1042,7 @@ impl Session {
         if let Err(e) = self.bot.update_metadata(metadata).await {
             tracing::warn!(presentation = %self.id, "metadata update failed: {e}");
         }
+        drop(ended);
     }
 
     /// The command in a packet, when its sender is a presenter. Only a

@@ -45,6 +45,9 @@ struct FakeBot {
     exited: AtomicBool,
     /// While set, `shutdown` waits for it.
     shutdown_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// While set, `publish_data` waits for it, and `publish_waiting` is set.
+    publish_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    publish_waiting: AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -62,6 +65,11 @@ impl BotLink for FakeBot {
         Ok(())
     }
     async fn publish_data(&self, packet: Vec<u8>) -> anyhow::Result<()> {
+        let gate = self.publish_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.publish_waiting.store(true, Ordering::SeqCst);
+            gate.notified().await;
+        }
         anyhow::ensure!(!self.exited.load(Ordering::SeqCst), "bot exited");
         self.sent.lock().unwrap().push(Sent::Data(packet));
         let hook = self.on_first_data.lock().unwrap().take();
@@ -1368,8 +1376,9 @@ async fn a_new_presentation_replaces_its_rooms_running_one() {
     assert!(presenter.reserve(&GOOD).await.is_ok());
 }
 
-/// A replaced bot holds its slot until it has shut down: repeated shares of
-/// one room on a full node never run more bots than there are slots.
+/// A replaced bot holds its slot until it has shut down: the handover runs
+/// one bot beyond the limit, and further shares of the room on a full node
+/// are refused until the replaced bot is gone.
 #[tokio::test]
 async fn a_replaced_bot_holds_its_slot_until_it_shut_down() {
     let launcher = FakeLauncher::new(json!({}));
@@ -1409,6 +1418,53 @@ async fn a_replaced_bot_holds_its_slot_until_it_shut_down() {
         json!({"type": "presentation:stopped", "id": second.id})
     );
     assert_eq!(presenter.active_sessions(), 1);
+}
+
+/// A creation replaced while it waits for its own predecessor's stop sends
+/// no state: A, reserved in an empty room, replaces P when admitted and
+/// waits for P's stop; B replaces A meanwhile and goes live. Once P's stop
+/// is out, A says nothing, so clients end on B.
+#[tokio::test]
+async fn a_creation_replaced_while_it_waits_sends_no_state() {
+    let launcher = FakeLauncher::new(json!({}));
+    let presenter = Presenter::new(launcher.clone(), target(), 3, None);
+    presenter.set_room_service(TestRooms::offline());
+    let token_a = bot_token("access:a");
+    let slot_a = presenter.reserve(&token_a).await.unwrap();
+    presenter
+        .create(test_pdf(1), &bot_token("access:p"), "p.pdf", None)
+        .await
+        .unwrap();
+    let (p_bot, _) = launcher.last();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *p_bot.publish_gate.lock().unwrap() = Some(gate.clone());
+    let creating_a = tokio::spawn({
+        let presenter = presenter.clone();
+        async move {
+            presenter
+                .create_reserved(slot_a, test_pdf(1), &token_a, "a.pdf", None)
+                .await
+        }
+    });
+    settle_until(|| p_bot.publish_waiting.load(Ordering::SeqCst)).await;
+    let (a_bot, _) = launcher.last();
+    let b = presenter
+        .create(test_pdf(1), &bot_token("access:b"), "b.pdf", None)
+        .await
+        .unwrap();
+    let (b_bot, _) = launcher.last();
+    settle_until(|| a_bot.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    gate.notify_one();
+    let a = creating_a.await.unwrap().unwrap();
+    settle().await;
+    let a_messages: Vec<Value> = data_messages(&a_bot).into_iter().map(|m| m.0).collect();
+    assert_eq!(
+        a_messages,
+        [json!({"type": "presentation:stopped", "id": a.id})]
+    );
+    assert_eq!(states(&b_bot).first().unwrap()["id"], b.id);
+    assert_eq!(presenter.active_sessions(), 1);
+    assert!(!b_bot.sent.lock().unwrap().contains(&Sent::Shutdown));
 }
 
 /// A bot token of a revoked or rotated Cast credential, still signed and
