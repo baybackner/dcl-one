@@ -11,7 +11,7 @@ use common::{
         PrimaryPlayerRes, PrimaryUser,
     },
 };
-use comms::{global_crdt::ForeignPlayer, BlockedOrBanned, Transport, TransportType};
+use comms::{global_crdt::ForeignPlayer, BlockedOrBanned, Transport};
 use dcl_component::{
     proto_components::sdk::components::{
         pb_input_modifier, AvatarControlType, AvatarModifierType, PbAvatarModifierArea,
@@ -399,19 +399,13 @@ fn manage_foreign_player_visibility(
     mut players: Query<(
         &mut Visibility,
         &ForeignPlayer,
-        Option<&PlayerModifiers>,
+        &PlayerModifiers,
         Has<BlockedOrBanned>,
     )>,
     transports: Query<&Transport>,
 ) {
     for (mut visibility, player, modifiers, moderated) in &mut players {
-        let visible = !moderated
-            && !modifiers.is_some_and(|modifiers| modifiers.hide)
-            && player.transports.iter().any(|&entity| {
-                transports
-                    .get(entity)
-                    .is_ok_and(|transport| transport.transport_type == TransportType::Pulse)
-            });
+        let visible = !moderated && !modifiers.hide && player.has_pulse_transport(&transports);
         visibility.set_if_neq(if visible {
             Visibility::Inherited
         } else {
@@ -465,7 +459,7 @@ mod tests {
             PlayerUpdate,
         },
         scene_topics::SceneTopicTraffic,
-        SceneRoomConnection, ServerSceneRooms,
+        SceneRoomConnection, ServerSceneRooms, TransportType,
     };
     use dcl_component::proto_components::kernel::comms::rfc4;
     use system_bridge::SystemApi;
@@ -546,6 +540,10 @@ mod tests {
             .query_filtered::<Entity, With<ForeignPlayer>>()
             .single(app.world())
             .unwrap();
+        app.world_mut()
+            .entity_mut(player)
+            .insert(PlayerModifiers::default());
+        app.update();
         let visibility = |app: &App| *app.world().get::<Visibility>(player).unwrap();
         assert_eq!(visibility(&app), Visibility::Inherited);
         let initial = app.world().get::<ForeignPlayer>(player).unwrap();
@@ -566,9 +564,7 @@ mod tests {
         assert!(retained.transports.contains(&websocket));
         assert_eq!(visibility(&app), Visibility::Hidden);
 
-        app.world_mut()
-            .entity_mut(player)
-            .insert((BlockedOrBanned, PlayerModifiers::default()));
+        app.world_mut().entity_mut(player).insert(BlockedOrBanned);
         join_pulse(7.0, 2.0);
         app.update();
         assert_eq!(visibility(&app), Visibility::Hidden);

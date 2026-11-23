@@ -39,7 +39,7 @@ use crate::{
     chat_reaction::{canonical_message_id, received_emoji, ChatReactionEvent},
     scene_rooms::SceneRooms,
     scene_topics::SceneTopicRouter,
-    Transport,
+    Transport, TransportType,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -547,6 +547,17 @@ pub struct ForeignPlayer {
     pub scene_id: SceneEntityId,
     pub profile_version: u32,
     audio_sender: mpsc::Sender<ForeignAudioData>,
+}
+
+impl ForeignPlayer {
+    /// Whether the player belongs to a Pulse transport that still exists.
+    pub fn has_pulse_transport(&self, transports: &Query<&Transport>) -> bool {
+        self.transports.iter().any(|&entity| {
+            transports
+                .get(entity)
+                .is_ok_and(|transport| transport.transport_type == TransportType::Pulse)
+        })
+    }
 }
 
 pub enum ChannelControl {

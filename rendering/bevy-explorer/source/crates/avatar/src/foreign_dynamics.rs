@@ -250,8 +250,7 @@ struct PlayerTargetPosition {
     // matching emote (DoubleJump / Glide); None resets a previously-applied remote state
     // back to Idle so the picker reclaims.
     remote_move_kind: Option<MoveKind>,
-    /// This target came from a teleport (discontinuous reposition) — snap straight to it rather than
-    /// interpolating across the gap. Cleared by the next ordinary movement packet.
+    /// First placement or a discontinuous target, as reported by the movement debug panel.
     teleport: bool,
     /// A discontinuity still needs to reach the rendered pose, even if a newer delta arrived
     /// in the same frame.
