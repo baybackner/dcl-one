@@ -4,7 +4,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // The library component is transformed with React Refresh outside a route module; its preamble is stubbed.
 vi.hoisted(() => {
@@ -19,12 +19,13 @@ const signIn = vi.hoisted(() => ({ openSignIn: vi.fn() }));
 vi.mock("../../components/auth/signin-store", () => ({ openSignIn: signIn.openSignIn }));
 
 import CreateCommunity from "./CreateCommunity";
+import type { CreateFn } from "./submit";
 
 const trackCtx = { sid: "sid-1", story: "landings/create-community" as const, variant: "wizard" };
 
 // `null` renders the page signed out.
 function setup(
-  create: ReturnType<typeof vi.fn> | null = vi.fn().mockResolvedValue({ id: "c 1", name: "Builders", privacy: "public", visibility: "all" }),
+  create: Mock<CreateFn> | null = vi.fn<CreateFn>().mockResolvedValue({ id: "c 1", name: "Builders", privacy: "public", visibility: "all" }),
 ) {
   const router = createMemoryRouter(
     [
