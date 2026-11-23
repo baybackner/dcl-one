@@ -600,7 +600,9 @@ fn use_stylized_skybox(
 }
 
 /// Copies the model into the material: what the compute model reads, so the screen and the cube
-/// show one sky.
+/// show one sky. Every frame, on purpose: the sky's time moves every frame, so the material is
+/// re-prepared (a new uniform buffer and bind group) every frame anyway. It is one small uniform
+/// on one material.
 fn update_sky_material(
     atmosphere: Res<AtmosphereModel>,
     images: Res<Assets<Image>>,
