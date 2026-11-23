@@ -23,14 +23,21 @@ let pending = 0;
 /** The change a root reload was last asked for. */
 let requested = 0;
 let revalidateRoot: (() => void) | null = null;
+/** A reload was asked for before the router could take it (the page had not hydrated yet). */
+let reloadBeforeMount = false;
 /** The change carrying the server's answer to a sign-out; 0 while none has answered. */
 let signOutAnswered = 0;
 
-/** Marks the session changed, and reloads the page's data now when `revalidate` is set. */
+/**
+ * Marks the session changed, and reloads the page's data now when `revalidate` is set; asked before
+ * the router is mounted, the reload runs as soon as it is.
+ */
 export function markSessionChanged(opts: { revalidate?: boolean } = {}): void {
   generation += 1;
   pending = generation;
-  if (opts.revalidate) revalidateRoot?.();
+  if (!opts.revalidate) return;
+  if (revalidateRoot) revalidateRoot();
+  else reloadBeforeMount = true;
 }
 
 /** For root's shouldRevalidate: true while a change has not reached root's data. */
@@ -106,6 +113,10 @@ export function useSessionChangeRevalidation(): void {
   useEffect(() => {
     const revalidate = () => void latest.current.revalidate();
     revalidateRoot = revalidate;
+    if (reloadBeforeMount) {
+      reloadBeforeMount = false;
+      revalidate();
+    }
     return () => {
       if (revalidateRoot === revalidate) revalidateRoot = null;
     };
