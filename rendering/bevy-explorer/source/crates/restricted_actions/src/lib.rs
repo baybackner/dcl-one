@@ -2040,6 +2040,16 @@ fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// What the prompt and the use report show of a copied text, which can be a secret: its length
+/// only.
+fn clipboard_preview(text: &str) -> String {
+    match text.chars().count() {
+        0 => "empty text".to_owned(),
+        1 => "text of 1 character".to_owned(),
+        len => format!("text of {len} characters"),
+    }
+}
+
 pub fn handle_copy_to_clipboard(
     mut events: EventReader<RpcCallEvent>,
     scenes: Query<&RendererSceneContext>,
@@ -2068,7 +2078,7 @@ pub fn handle_copy_to_clipboard(
             PermissionType::CopyToClipboard,
             *scene,
             (text.clone(), response.clone()),
-            Some(format!("\"{}\"", text.clone())),
+            Some(clipboard_preview(text)),
             false,
         );
     }
@@ -3387,5 +3397,17 @@ mod signed_fetch_body_tests {
         assert_eq!(signed_fetch_tld("decentraland.zone"), "zone");
         assert_eq!(signed_fetch_tld("decentraland.today"), "today");
         assert_eq!(signed_fetch_tld("custom.example"), "org");
+    }
+}
+
+#[cfg(test)]
+mod clipboard_preview_tests {
+    use super::clipboard_preview;
+
+    #[test]
+    fn the_preview_gives_the_length_and_no_character_of_the_text() {
+        assert_eq!(clipboard_preview("k3yS3cr3t0x9"), "text of 12 characters");
+        assert_eq!(clipboard_preview("é"), "text of 1 character");
+        assert_eq!(clipboard_preview(""), "empty text");
     }
 }

@@ -1219,7 +1219,8 @@ export interface ItemPurchaseStateRequest {
 
 /** Which scope an Allow/Deny applies to. `once` = just this request (dismissing the prompt);
  *  `visit` = this request, and the page answers the same scene's later requests of the type the
- *  same way until the player leaves the scene or reloads it; the rest persist a rule in the engine. */
+ *  same way until the player leaves the scene or reloads it (a refused copy is sent as `once`:
+ *  the next copy asks again); the rest persist a rule in the engine. */
 export type PermissionLevelChoice = 'once' | 'visit' | 'scene' | 'realm' | 'global'
 
 /** Scope of a rule written from the permissions review (page → scene): the "Always for …" levels

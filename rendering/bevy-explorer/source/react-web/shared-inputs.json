@@ -6653,7 +6653,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "4fb82f82c49c4ad04f691c4c64377465ad46175ac7365c5c8babc4d2c90463d0"
+      "sha256": "4f5335134c5733584edaf2b3a176685564a5094e29378e6a81c4ac568e6b794e"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -10225,7 +10225,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "b9a31b39981ec92fa3d9633b87abdfd25f7b3fa396a86e2d2829ea8832899401"
+      "sha256": "63abee4ce11f392345c7e3e69e28e24af181daacadbba4a9b442f84526f29911"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -10905,7 +10905,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
-      "sha256": "03c157c1028c234d9e9a6b6ba807627f6d071cae38e2d8cbb415357e9d0d20b8"
+      "sha256": "f200b581fc7d56991d0afebbc3218daea9490067ae8c2bc6f932e25a0aa87e9b"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/photoMode.test.tsx",

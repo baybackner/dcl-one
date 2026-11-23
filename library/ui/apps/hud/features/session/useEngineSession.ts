@@ -3542,6 +3542,8 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
       setPermissionQueue((q) => {
         const req = q.find((r) => r.id === id)
         if (req) {
+          // a copy follows the player's own click: Deny refuses this one, only an "Always …" Deny lasts
+          if (!allow && level === 'visit' && req.ty === 'CopyToClipboard') level = 'once'
           // a dismissed prompt ('once') is no answer: the scene asks again, its refusal has no row
           if (level === 'once') answeredPermissions.current.set(`${req.scene}|${req.ty}`, null)
           else answerPermission({ ty: req.ty, sceneName: req.sceneName, scene: req.scene, realm: req.realm }, allow, level)

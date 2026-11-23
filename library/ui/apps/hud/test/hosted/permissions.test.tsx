@@ -2,9 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderSettled, renderSession, enterAsGuest } from '../harness'
-import { PermissionDialog } from '../../features/permissions/PermissionDialog'
+import { PermissionDialog, openPermissionDialog } from '../../features/permissions/PermissionDialog'
 import { Sidebar } from '../../features/sidebar/Sidebar'
-import { PopupHost, resetPopups } from '../../design'
+import { PopupHost, closeTopPopup, resetPopups } from '../../design'
 import { fakeSession } from '../harness'
 import type { PermissionRequestMessage, PermissionUsedMessage } from '@explorer-core/engine/protocol'
 import type { PermissionSubject } from '../../features/session/useEngineSession'
@@ -27,6 +27,9 @@ const USED: PermissionUsedMessage = {
   realm: 'https://realm-provider.decentraland.org/main',
   allowed: false
 }
+
+// the engine sends the length of the text a scene copies, never the text
+const COPY: PermissionRequestMessage = { ...REQ, ty: 'CopyToClipboard', additional: 'text of 12 characters' }
 
 const SCENE_INFO = { kind: 'sceneInfo', title: 'Genesis Plaza', scene: 'bafkscenehash' } as const
 const RULES = { scene: [], realm: [{ ty: 'Fetch', allow: 'Allow' as const }], global: [{ ty: 'OpenUrl', allow: 'Deny' as const }] }
@@ -206,6 +209,19 @@ describe('permissions domain', () => {
     expect(h.session().permissions.pending.map((r) => r.id)).toEqual([9])
   })
 
+  it('a refused copy is that request only: the next copy asks again; an "Always for Scene" deny is stored', async () => {
+    const h = renderSession()
+    await enter(h)
+    h.driver.emit(COPY)
+    h.driver.emit({ ...COPY, id: 8 })
+    act(() => h.session().permissions.resolve(7, false, 'visit'))
+    expect(h.driver.sentOf('permissionResolve')).toMatchObject([{ id: 7, allow: false, level: 'once' }])
+    expect(h.session().permissions.visit).toHaveLength(0)
+    expect(h.session().permissions.pending.map((r) => r.id)).toEqual([8])
+    act(() => h.session().permissions.resolve(8, false, 'scene'))
+    expect(h.driver.last('permissionResolve')).toMatchObject({ id: 8, allow: false, level: 'scene' })
+  })
+
   it('a withdrawn request is dropped from the queue without a decision', async () => {
     const h = renderSession()
     await enter(h)
@@ -247,6 +263,37 @@ describe('PermissionDialog', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'Always for Realm' }))
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }))
     expect(onResolve).toHaveBeenCalledWith(false, 'realm')
+  })
+})
+
+describe('copy prompt', () => {
+  afterEach(() => act(() => resetPopups()))
+
+  const open = async (): Promise<ReturnType<typeof vi.fn>> => {
+    const resolve = vi.fn()
+    await renderSettled(<PopupHost />)
+    act(() => void openPermissionDialog(COPY, resolve))
+    return resolve
+  }
+
+  it('names the action and shows the length of the text', async () => {
+    await open()
+    expect(screen.getByRole('alertdialog', { name: 'Scene permission request' }).textContent).toContain(
+      'The scene Genesis Plaza wants permission to copy text into the clipboardtext of 12 characters'
+    )
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Deny', 'Allow'])
+  })
+
+  it('Escape refuses that request with no lasting decision', async () => {
+    const resolve = await open()
+    act(() => closeTopPopup()) // the session's Cancel (Escape) path
+    expect(resolve.mock.calls).toEqual([[7, false, 'once']])
+  })
+
+  it('a click outside refuses that request with no lasting decision', async () => {
+    const resolve = await open()
+    await userEvent.click(screen.getByRole('alertdialog').parentElement!.parentElement!)
+    expect(resolve.mock.calls).toEqual([[7, false, 'once']])
   })
 })
 
