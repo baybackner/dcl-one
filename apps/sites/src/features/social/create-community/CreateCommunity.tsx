@@ -2,11 +2,12 @@ import { useEffect, useRef } from "react";
 import { useMachine } from "@xstate/react";
 import { useSearchParams } from "react-router";
 
-import CommunityCreate from "@ui/explorer/components/CommunityCreate";
-import "@ui/explorer/components/communitycreate.css";
+import CommunityCreate from "@dcl/one-ui/apps/sites/social/CommunityCreate";
+import { siteUrl } from "@web-core/site";
 
 import type { TrackContext } from "@/core/lib/telemetry/track";
 import { validateStep, type CommunityDraft, type OwnedPlace } from "@/data/lib/catalyst/social/create-community";
+import { submitWith } from "./submit";
 import { communityMachine, resolveCommunitySnapshot, slugToState, stateToSlug, type CommunityStateId, type CreateFn, type TrackFn } from "./machine";
 
 type CreateCommunityProps = {
@@ -93,8 +94,7 @@ function CreateCommunityInner({
 
   return (
     <div className="create-community">
-      <CommunityCreate />
+      <CommunityCreate create={submitWith(create)} contentPolicyUrl={siteUrl("/content")} />
     </div>
   );
 }
-
