@@ -10205,6 +10205,15 @@ mod compare_sources_tests {
         assert_eq!(r.compared, [(101, 200), (201, 300), (301, 400)]);
         assert!(r.uncovered.is_empty());
         assert_eq!(r.totals.missing + r.totals.extra + r.totals.mismatch, 0);
+        // The fixture's three logs, one per window, on both sides.
+        assert_eq!((r.totals.rpc_logs, r.totals.portal_logs), (3, 3));
+        assert_eq!(
+            r.windows
+                .iter()
+                .map(|w| (w.outcome.rpc_logs, w.outcome.portal_logs))
+                .collect::<Vec<_>>(),
+            [(1, 1), (1, 1), (1, 1)]
+        );
         assert!(r.sends.rpc_requests > 0 && r.sends.portal.pages >= 3);
         assert_eq!(r.windows[0].filter_fingerprint.len(), 64);
         db.drop().await;
@@ -10256,6 +10265,7 @@ mod compare_sources_tests {
         let r = compare(&db, &rpc, &portal, 101, 400).await;
         assert_eq!((r.outcome, r.exit_code()), ("different", 1));
         assert_eq!(r.totals.missing, 1);
+        assert_eq!((r.totals.rpc_logs, r.totals.portal_logs), (3, 2));
         assert!(r.different && !r.incomplete);
         db.drop().await;
     }
