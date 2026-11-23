@@ -12,13 +12,40 @@ export class BuilderServerError extends Error {
   status: number
   /** The error envelope's `data`, when the server sent one. */
   data?: unknown
+  /** The error envelope's `error`: the server's own words, when it sent them. */
+  reason?: string
+  /** Seconds the server asked to wait before retrying (`Retry-After`), when the page can read it. */
+  retryAfterSecs?: number
 
-  constructor(message: string, status: number, data?: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    data?: unknown,
+    { reason, retryAfterSecs }: { reason?: string; retryAfterSecs?: number } = {}
+  ) {
     super(message)
     this.name = 'BuilderServerError'
     this.status = status
     this.data = data
+    this.reason = reason
+    this.retryAfterSecs = retryAfterSecs
   }
+}
+
+const BOUND_STATUSES = [408, 413, 429, 503, 507]
+
+/** A request the node refused at one of its bounds: its own words, and the seconds it asked to wait. */
+export type BoundRefusal = { message: string; retryAfterSecs?: number }
+
+/** The node's refusal at one of its bounds (a body, a budget, an upload place, its store), when it said why. */
+export function boundRefusal(error: unknown): BoundRefusal | null {
+  if (!(error instanceof BuilderServerError) || !error.reason || !BOUND_STATUSES.includes(error.status)) return null
+  return { message: error.reason, retryAfterSecs: error.retryAfterSecs }
+}
+
+function retryAfterSecs(response: Response): number | undefined {
+  const seconds = Number(response.headers.get('Retry-After'))
+  return Number.isInteger(seconds) && seconds > 0 ? seconds : undefined
 }
 
 /**
@@ -64,7 +91,8 @@ export async function request<T>(
     throw new BuilderServerError(
       parsed.error ?? `builder-server request failed: ${method} ${path} (${response.status})`,
       response.status,
-      parsed.data
+      parsed.data,
+      { reason: parsed.error, retryAfterSecs: retryAfterSecs(response) }
     )
   }
   return parsed.data as T

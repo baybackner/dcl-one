@@ -34,11 +34,12 @@ import { thumbnailValidationKey, useThumbnailValidation } from '../../hooks/useT
 import { useCatalystItemSizes } from '../../hooks/useItemSize'
 import { SaveInProgressError, useExclusiveSave } from '../../hooks/useExclusiveSave'
 import { fetchStoredThumbnail, useSaveItem, type SaveItemVariables } from '../../hooks/useSaveItem'
+import { useRefusalText } from '../../hooks/useRefusalText'
 import { captureError } from '@/data/lib/creators/monitoring'
 import { springBonesFetcher } from '../../hooks/useSpringBones'
 import { useTranslation } from '@/data/lib/creators/intl'
 import type { AvatarAttributes } from '@/data/lib/creators/avatar'
-import { BuilderServerError, COLLECTION_LOCKED_STATUS } from '@/data/lib/creators/builder'
+import { BuilderServerError, boundRefusal, COLLECTION_LOCKED_STATUS } from '@/data/lib/creators/builder'
 import {
   canManageCollectionItems,
   canViewCollection,
@@ -113,6 +114,7 @@ type PendingNavigation = { kind: 'item'; item: Item } | { kind: 'away'; to: stri
 
 const ItemEditorPage = () => {
   const { t } = useTranslation()
+  const refusalText = useRefusalText()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -504,11 +506,14 @@ const ItemEditorPage = () => {
     return saved
   }
 
-  // A locked collection is the creator's to wait out, an item over its size limit the creator's to slim down;
-  // anything else is ours to look into.
   function reportSaveError(error: unknown, flow: 'item_save' | 'item_file_change') {
     if (isItemTooBigError(error)) {
       showToast(t('add_items_modal.file_error.size_exceeded', error.messageParams), { type: 'error' })
+      return
+    }
+    const refused = refusalText(boundRefusal(error))
+    if (refused) {
+      showToast(refused, { type: 'error' })
       return
     }
     console.error('Item save failed:', error)
@@ -714,7 +719,10 @@ const ItemEditorPage = () => {
       <div className={styles.workspace} data-testid="item-editor-page">
         <section className={styles.statePanel} data-testid="item-editor-error">
           <h2 className={styles.stateTitle}>{t('collection_detail_page.error.title')}</h2>
-          <p className={styles.stateText}>{t('collection_detail_page.error.description')}</p>
+          <p className={styles.stateText}>
+            {refusalText(boundRefusal(collectionQuery.error ?? itemsQuery.error ?? thirdParty.error)) ??
+              t('collection_detail_page.error.description')}
+          </p>
           <Button
             type="button"
             variant="secondary"

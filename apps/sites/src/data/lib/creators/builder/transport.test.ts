@@ -2,7 +2,7 @@
 import '../test/setup'
 import { rejection } from '../test/rejection'
 import { describe, it, expect, afterEach, beforeEach, vi, type Mock } from 'vitest'
-import { BuilderServerError, baseUrl, isRefusedRequest, request } from './transport'
+import { BuilderServerError, baseUrl, boundRefusal, isRefusedRequest, request } from './transport'
 
 vi.mock('../auth', () => ({
   signedFetch: vi.fn()
@@ -47,6 +47,43 @@ describe('request', () => {
   it('accepts an envelope without data when the endpoint answers none', async () => {
     signedFetchMock.mockResolvedValue(jsonResponse({ ok: true }))
     await expect(request(ADDRESS, 'POST', '/items/i1/files', '', new FormData(), false)).resolves.toBeUndefined()
+  })
+})
+
+describe('boundRefusal', () => {
+  async function refused(status: number, body: unknown, headers: Record<string, string> = {}) {
+    signedFetchMock.mockResolvedValue({ ...jsonResponse(body, false, status), headers: new Headers(headers) })
+    return rejection(request(ADDRESS, 'POST', '/items/i1/files', '', new FormData(), false))
+  }
+
+  it.each([408, 413, 429, 503, 507])("should be the node's own reason for a %i at one of its bounds", async status => {
+    const error = await refused(status, { ok: false, data: {}, error: 'The upload is too large' })
+    expect(boundRefusal(error)).toEqual({ message: 'The upload is too large' })
+  })
+
+  it('should carry the seconds the node asked to wait', async () => {
+    const error = await refused(
+      429,
+      { ok: false, data: {}, error: 'Too many file uploads of this wallet in progress' },
+      { 'Retry-After': '30' }
+    )
+    expect(boundRefusal(error)).toEqual({
+      message: 'Too many file uploads of this wallet in progress',
+      retryAfterSecs: 30
+    })
+  })
+
+  it('should be nothing for an answer that is not the envelope, such as a gateway page', async () => {
+    signedFetchMock.mockResolvedValue({ ok: false, status: 503, json: () => Promise.reject(new Error('<html>')) })
+    expect(boundRefusal(await rejection(request(ADDRESS, 'GET', '/collections/a1b2')))).toBeNull()
+  })
+
+  it('should be nothing for an envelope without its reason', async () => {
+    expect(boundRefusal(await refused(503, { ok: false, data: {} }))).toBeNull()
+  })
+
+  it('should be nothing for a failure that is no bound of the node', async () => {
+    expect(boundRefusal(await refused(500, { ok: false, data: {}, error: 'Internal server error' }))).toBeNull()
   })
 })
 
