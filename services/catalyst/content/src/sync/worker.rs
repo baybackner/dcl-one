@@ -92,6 +92,8 @@ pub struct SyncSettings {
     pub item_replay_interval: Option<Duration>,
     /// `SYNC_ITEM_REPLAY_PAGE_PAUSE_MS`: the pause between a pass's pages.
     pub item_replay_page_pause: Duration,
+    /// [`RetryFailedConfig::discard_overtaken`]: `CONTENT_HISTORY_PRUNE_ENABLED`.
+    pub discard_overtaken: bool,
 }
 
 impl SyncSettings {
@@ -192,6 +194,7 @@ impl SyncSettings {
             item_replay_page_pause: Duration::from_millis(
                 config.content.sync_item_replay_page_pause_ms,
             ),
+            discard_overtaken: config.content.content_history_prune_enabled,
         }))
     }
 }
@@ -456,6 +459,7 @@ impl Leader {
         let limits = memory_limits();
         let deployer = Arc::new(LiveSyncDeployer::with_limits(
             self.pool.clone(),
+            self.storage.clone(),
             settings.flush_concurrency,
             limits,
             self.validation.clone(),
@@ -547,6 +551,7 @@ impl Leader {
                 max_retries: settings.max_retries,
                 retry_concurrency: settings.retry_concurrency,
                 prune_ttl_days: settings.prune_ttl_days,
+                discard_overtaken: settings.discard_overtaken,
             },
             FailedDeploymentDeps {
                 pool: self.pool.clone(),
@@ -646,6 +651,8 @@ pub struct FailedDeploymentSettings {
     pub max_retries: u32,
     pub retry_concurrency: usize,
     pub prune_ttl_days: i64,
+    /// [`RetryFailedConfig::discard_overtaken`]: `CONTENT_HISTORY_PRUNE_ENABLED`.
+    pub discard_overtaken: bool,
 }
 
 impl FailedDeploymentSettings {
@@ -655,6 +662,7 @@ impl FailedDeploymentSettings {
             max_retries: config.content.max_failed_deployment_retries,
             retry_concurrency: config.content.sync_retry_concurrency,
             prune_ttl_days: config.content.retry_failed_prune_ttl_days,
+            discard_overtaken: config.content.content_history_prune_enabled,
         }
     }
 }
@@ -737,6 +745,7 @@ fn spawn_failed_deployment_jobs(
             RetryFailedConfig {
                 max_retries: settings.max_retries,
                 retry_concurrency: settings.retry_concurrency,
+                discard_overtaken: settings.discard_overtaken,
                 ..Default::default()
             },
             deps.client,
@@ -803,6 +812,7 @@ pub fn start_failed_deployments(
         let jobs = registry.clone();
         let deployer = Arc::new(LiveSyncDeployer::with_limits(
             pool.clone(),
+            storage.clone(),
             crate::sync_deployer::DEFAULT_FLUSH_CONCURRENCY,
             memory_limits(),
             validation.clone(),
@@ -1045,6 +1055,28 @@ mod tests {
         let err =
             memory_limits_from_config(&config(&["--sync-inflight-bytes-max", "0"])).unwrap_err();
         assert!(err.to_string().contains("SYNC_INFLIGHT_BYTES_MAX"), "{err}");
+    }
+
+    #[test]
+    fn only_history_pruning_discards_overtaken_retries() {
+        let sync = [
+            "--sync-enabled",
+            "--sync-source",
+            "https://peer.example/content",
+        ];
+        let keeps = SyncSettings::from_config(&config(&sync)).unwrap().unwrap();
+        assert!(!keeps.discard_overtaken);
+        assert!(!FailedDeploymentSettings::from_config(&config(&[])).discard_overtaken);
+        let mut prunes = sync.to_vec();
+        prunes.extend(["--content-history-prune-enabled", "true"]);
+        let prunes = config(&prunes);
+        assert!(
+            SyncSettings::from_config(&prunes)
+                .unwrap()
+                .unwrap()
+                .discard_overtaken
+        );
+        assert!(FailedDeploymentSettings::from_config(&prunes).discard_overtaken);
     }
 
     #[test]

@@ -9,7 +9,6 @@ use crate::SharedState;
 use crate::access::{self, FileRead};
 use crate::auth::MaybeSigned;
 use crate::content::formatters::{ParsedRange, parse_range_header};
-use crate::content::get_content::detect_content_type;
 use crate::handlers::svg;
 use crate::http::ApiError;
 use crate::storage::OpenedContent;
@@ -18,6 +17,53 @@ const PUBLIC: &str = "public,max-age=31536000,immutable";
 const PRIVATE: &str = "private, no-store";
 const NO_STORE: &str = "no-store";
 const SNIFF_BYTES: u64 = 16;
+
+/// The media type a file's first bytes carry: the binary signatures an item
+/// file holds (images, glTF, video, audio, zip), else
+/// `application/octet-stream`.
+fn detect_content_type(first_bytes: &[u8]) -> &'static str {
+    if first_bytes.len() >= 8 {
+        if first_bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return "image/png";
+        }
+        if first_bytes.starts_with(&[0x67, 0x6C, 0x54, 0x46]) {
+            return "model/gltf-binary";
+        }
+        if &first_bytes[4..8] == b"ftyp" {
+            return "video/mp4";
+        }
+    }
+    if first_bytes.len() >= 3 && first_bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if first_bytes.starts_with(b"GIF8") {
+        return "image/gif";
+    }
+    if first_bytes.starts_with(b"ID3")
+        || (first_bytes.len() >= 2
+            && first_bytes[0] == 0xFF
+            && matches!(first_bytes[1], 0xFB | 0xFA | 0xF3 | 0xF2 | 0xE3 | 0xE2))
+    {
+        return "audio/mpeg";
+    }
+    if first_bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        return "application/zip";
+    }
+    if first_bytes.len() >= 12 && first_bytes.starts_with(b"RIFF") {
+        match &first_bytes[8..12] {
+            b"WEBP" => return "image/webp",
+            b"WAVE" => return "audio/wav",
+            _ => {}
+        }
+    }
+    if first_bytes.starts_with(b"OggS") {
+        return "audio/ogg";
+    }
+    if first_bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return "video/webm";
+    }
+    "application/octet-stream"
+}
 
 /// Whether a file's first bytes may open an XML document.
 fn markup(head: &[u8]) -> bool {

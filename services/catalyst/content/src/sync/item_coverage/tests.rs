@@ -193,6 +193,7 @@ impl Fixture {
         let pool = self.pool().clone();
         let deployer = Arc::new(LiveSyncDeployer::new(
             pool.clone(),
+            self.storage.clone(),
             2,
             SyncValidation::AuthChainOnly,
         ));
@@ -1042,6 +1043,7 @@ async fn start_leader(f: &mut Fixture, interval: Option<Duration>) -> Arc<crate:
             max_retries: 3,
             retry_concurrency: 1,
             prune_ttl_days: 7,
+            discard_overtaken: false,
         },
         f.pool().clone(),
         f.storage.clone(),
