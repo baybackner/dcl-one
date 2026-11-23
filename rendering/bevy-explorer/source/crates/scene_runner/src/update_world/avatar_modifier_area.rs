@@ -392,6 +392,7 @@ fn update_avatar_modifier_area(
     active_hide_areas.retain(|ent, _| scenes.contains(ent));
 }
 
+// The primary user's visibility is managed by user_input::manage_player_visibility.
 // Pulse supplies the avatar pose. Other transports can keep the player in their rosters
 // for voice and room messages while the avatar and its nametag are hidden.
 fn manage_foreign_player_visibility(

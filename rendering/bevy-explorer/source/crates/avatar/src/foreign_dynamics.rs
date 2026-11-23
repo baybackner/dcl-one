@@ -19,7 +19,6 @@ use scene_runner::{update_world::mesh_collider::SceneColliderData, ContainingSce
 /// A backward jump beyond this reads as a server restart (the Pulse `server_tick` resets to ~0), so
 /// we re-sync to it instead of freezing; smaller backward steps are reordered/duplicate datagrams.
 const TIMESTAMP_RESET_SECS: f64 = 60.0;
-const INITIAL_PACKET_INTERVAL_SECS: f32 = 0.01;
 
 /// Time constant for dead-reckoning a foreign avatar past its last observation. The extrapolated
 /// offset saturates at `velocity * COAST_SECS` instead of growing with the silence, and the
@@ -92,6 +91,7 @@ impl Plugin for PlayerMovementPlugin {
                 update_foreign_user_actual_position,
             )
                 .chain()
+                // Apply the rejoin pose before PostLoop visibility can reveal the avatar.
                 .after(process_transport_updates)
                 // the jump take-off clip restarts on the frame `jump_time` is set, so the
                 // animation must see that frame
@@ -324,7 +324,8 @@ fn update_foreign_user_target_position(
                     const LAG_DECAY_SECS: f32 = 1.5;
                     let delta = (ev.time - pos.time) as f32;
                     let update_freq = if ev.teleport {
-                        INITIAL_PACKET_INTERVAL_SECS
+                        // The gap across a discontinuity does not measure the stream's cadence.
+                        pos.update_freq
                     } else {
                         LAG_DECAY_SECS
                             / ((LAG_DECAY_SECS - delta).max(0.0) / pos.update_freq
@@ -380,7 +381,7 @@ fn update_foreign_user_target_position(
                         velocity: Some(ev.velocity),
                         translation: bevy_trans.translation,
                         rotation: bevy_trans.rotation,
-                        update_freq: INITIAL_PACKET_INTERVAL_SECS,
+                        update_freq: 0.01,
                         grounded: ev.grounded,
                         remote_move_kind: ev.remote_move_kind,
                         // First placement: snap from the spawn position rather than travel from it.
@@ -721,8 +722,8 @@ mod tests {
         let target = app.world().get::<PlayerTargetPosition>(avatar).unwrap();
         assert_eq!(target.timestamp, Some(144.6));
         assert!(
-            target.update_freq < 0.2,
-            "interval was {}",
+            (0.09..0.11).contains(&target.update_freq),
+            "expected the pre-reconnect cadence, got {}",
             target.update_freq
         );
         let rendered = app.world().get::<Transform>(avatar).unwrap();

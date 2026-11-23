@@ -573,7 +573,8 @@ impl Plugin for PulsePlugin {
                 // re-announce that `follow_realm` may send can't carry the previous realm's one.
                 resolve_lsd_realm,
                 follow_realm,
-                // Process membership and its initial pose in the same update.
+                // On the threaded executor, the drain could empty the channel between a join
+                // and its snapshot. Finish pumping before applying membership.
                 pump_pulse.before(process_transport_updates),
                 drain_pulse_outbox,
             )
