@@ -338,7 +338,7 @@ impl Chain {
     }
 
     /// The blocks of an entity timestamp, searched once per timestamp while
-    /// the memo holds them; only answers a later block has settled are kept.
+    /// the memo holds them; only final answers are kept.
     async fn blocks_for(&self, timestamp_ms: i64) -> Result<Blocks, ValidatorError> {
         if let Some((found, blocks)) = self.memo.lock().get(&timestamp_ms)
             && found.elapsed() < BLOCKS_MEMO_TTL
@@ -359,7 +359,7 @@ impl Chain {
             }),
         };
         // A head-bound answer moves as blocks are mined: a retry must read the head again.
-        if !self.search.is_settled(upper) {
+        if !(self.search.is_final(upper, at) && self.search.is_final(lower, before)) {
             return Ok(blocks);
         }
         let mut memo = self.memo.lock();
