@@ -12,6 +12,10 @@ import type {
   CommunityVoiceStatus,
   ConnectivitySnapshot,
   HomeScene,
+  MapPinInfo,
+  OutfitData,
+  OutfitSlotData,
+  OutfitsData,
   PlatformBanNotice,
   PortableInfo,
   SatelliteView,
@@ -21,6 +25,8 @@ import type {
   VoiceChatState,
   WelcomeState,
   WorldAccessVerdict,
+  ItemPurchaseItem,
+  ItemPurchaseState,
 } from './generated'
 import type { AvatarLook } from './avatarEquip'
 
@@ -269,11 +275,13 @@ export type PageToScene =
   | GetMapRequest
   | GetHomeSceneRequest
   | SetHomeSceneRequest
+  | ClearHomeSceneRequest
   | GetWelcomeRequest
   | ShowLookRequest
   | AcceptWelcomeRequest
   | OpenLegalRequest
   | OpenExternalUrlRequest
+  | GetSatelliteTileRequest
   | TeleportRequest
   | ChangeRealmRequest
   | MinimapConfigRequest
@@ -282,6 +290,7 @@ export type PageToScene =
   | ResetPermissionsRequest
   | GetPermissionRulesRequest
   | WorldPasswordResolveRequest
+  | ItemPurchaseStateRequest
   | EditorSceneRequest
   | EngineViewportRequest
   | InteractableAreaMessage
@@ -747,6 +756,8 @@ export interface GetUserProfileRequest {
   kind: 'getUserProfile'
   address: string
   extras?: boolean
+  /** Optional for older HUDs. All replies to this read echo the same ID. */
+  requestId?: number
 }
 
 /** A fetched user's passport (kept separate from the local `profile` message so it
@@ -754,6 +765,8 @@ export interface GetUserProfileRequest {
 export interface UserProfileMessage {
   kind: 'userProfile'
   address: string
+  /** Echoed from the read it answers. Older bridges omit it. */
+  requestId?: number
   profile: Profile | null
 }
 
@@ -765,16 +778,20 @@ export interface ProfileChangedMessage {
   version: number
 }
 
-/** Edit the local player's own profile (passport edit mode). Every field is optional and an
- *  omitted one is left as it is, so this carries one save, not the whole profile. `links` and
- *  `info`, when present, replace their whole section — that's how a link or a field is cleared. */
+/** Edit the local player's own profile. Omitted sections are unchanged. Links replace the list. */
 export interface SaveProfileRequest {
   kind: 'saveProfile'
+  requestId?: number
+  /** Account whose Passport was edited. Older HUDs omit it. */
+  address?: string
   /** Display name. The bridge resolves whether it's a claimed (owned NFT) name. */
   name?: string
   description?: string
   links?: { title: string; url: string }[]
+  /** Complete about-me section. A missing key is cleared. Older bridges read this snapshot. */
   info?: ProfileInfo
+  /** Changed about-me keys. An empty string clears one field. Takes precedence over the snapshot. */
+  infoPatch?: ProfileInfo
   /** A claimed name's colour, sRGB channels 0–1. The engine applies it only while the name is
    *  claimed; an unclaimed name keeps its derived colour. */
   nameColor?: { r: number; g: number; b: number }
@@ -784,12 +801,17 @@ export interface SaveProfileRequest {
  *  reported rather than silently leaving the HUD showing something that was never stored. */
 export interface ProfileSavedMessage {
   kind: 'profileSaved'
+  requestId?: number
+  /** The edited login ended; discard any edits queued for that session. */
+  accountChanged?: true
   ok: boolean
+  /** Latest committed own profile, or null when the engine has none. */
+  profile?: Profile | null
   error?: string
 }
 
-/** A `saveProfile` without the wire tag — what the UI hands the session. */
-export type ProfileEdit = Omit<SaveProfileRequest, 'kind'>
+/** Changes from the form. The session also sends a full about-me snapshot to older bridges. */
+export type ProfileEdit = Omit<SaveProfileRequest, 'kind' | 'requestId' | 'address' | 'info'>
 
 /** The claimed (NFT) names this account owns — the display-name picker's options. */
 export interface GetOwnedNamesRequest {
@@ -799,6 +821,8 @@ export interface GetOwnedNamesRequest {
 export interface OwnedNamesMessage {
   kind: 'ownedNames'
   names: string[]
+  /** The lookup failed, so `names` is empty but not known to be. */
+  failed?: boolean
 }
 
 /** Mirrors the engine's BaseNotification (metadata varies by type). */
@@ -890,11 +914,16 @@ export interface HomeSceneMessage extends HomeScene {
   kind: 'homeScene'
 }
 
-/** Pin the home scene: a parcel of `realm` (answered with `homeScene`). */
+/** Pin the signed-in account's home scene: a parcel of `realm` (answered with `homeScene`). */
 export interface SetHomeSceneRequest {
   kind: 'setHomeScene'
   realm: string
   parcel: { x: number; y: number }
+}
+
+/** Leave the signed-in account with no home (answered with `homeScene`, `pinned` false). */
+export interface ClearHomeSceneRequest {
+  kind: 'clearHomeScene'
 }
 
 /** What the welcome page must show for the signed-in account (answered with `welcome`). */
@@ -946,6 +975,25 @@ export interface ExternalUrlOpenedMessage {
   kind: 'externalUrlOpened'
   requestId: number
   ok: boolean
+}
+
+/** One deep-zoom satellite detail tile of the full-screen map. `path` is relative to the tile
+ *  source (`sections/{sx}%2C{sy}/{version}/{level}/{i}%2C{j}.ktx2`); the engine decodes the
+ *  Basis KTX2 file and answers with a SatelliteTileMessage. */
+export interface GetSatelliteTileRequest {
+  kind: 'getSatelliteTile'
+  requestId: number
+  path: string
+}
+
+/** The answer to a GetSatelliteTileRequest: `data` is the tile as base64 JPEG bytes (no `data:`
+ *  prefix) when `ok`; otherwise `error` says why, including a build without tile decoding. */
+export interface SatelliteTileMessage {
+  kind: 'satelliteTile'
+  requestId: number
+  ok: boolean
+  data?: string
+  error?: string
 }
 
 export interface WelcomeAcceptedMessage {
@@ -1115,6 +1163,13 @@ export interface PortablesMessage {
   portables: PortableInfo[]
 }
 
+/** The map pins of portable experiences (scene → page, from getMapPinsStream): the whole list
+ *  on subscribe and on every change. */
+export interface MapPinsMessage {
+  kind: 'mapPins'
+  pins: MapPinInfo[]
+}
+
 /** The engine needs a password to enter the world the player is travelling to (scene → page).
  *  Shown as the password dialog; answered with worldPasswordResolve. Re-sent with an `error` when
  *  an answer was refused (wrong password, too many attempts). There is only ever one open prompt:
@@ -1147,6 +1202,25 @@ export interface WorldPasswordWithdrawnMessage {
 export interface WorldPasswordResolveRequest {
   kind: 'worldPasswordResolve'
   password: string | null
+}
+
+/** A scene asked to open the purchase confirmation for one item (scene → page). The engine has
+ *  applied its gates; the HUD answers with itemPurchaseState, at once with whether it can show the
+ *  confirmation and, if it can, once more with how it ended. One request is in flight at a time. */
+export interface ItemPurchaseRequestMessage {
+  kind: 'itemPurchaseRequest'
+  /** Engine-assigned request id, echoed in each itemPurchaseState. */
+  id: number
+  /** The collection item the scene's urn names; null when it names none (the purchase fails). */
+  item: ItemPurchaseItem | null
+}
+
+/** The HUD's report on an item purchase request (page → scene → SystemApi): `accepted` or
+ *  `unavailable` first, then for an accepted request exactly one of the outcomes. */
+export interface ItemPurchaseStateRequest {
+  kind: 'itemPurchaseState'
+  id: number
+  state: ItemPurchaseState
 }
 
 /** Which scope an Allow/Deny applies to. `once` = just this request (dismissing the prompt);
@@ -1230,6 +1304,9 @@ export interface EngineViewportRequest {
    *  what turns it into the physical pixels the scene should actually render — without it a
    *  render target has to assume the worst display and oversample everywhere else. */
   dpr?: number
+  /** Avatar preview region only: the part of `rect` (same units) the avatar is framed in, as it
+   *  would be in a rect of that height centred there. The backdrop still fills `rect`. Absent: all of it. */
+  focus?: { x: number; y: number; width: number; height: number }
   /** A `LOBBY_STAGE_PRESETS` id; lobby region only. */
   stagePreset?: string
   /** Lobby region only: the pages that borrow the stage leave the avatar still. */
@@ -1282,11 +1359,14 @@ export interface CommunityFriend {
   hasClaimedName: boolean
 }
 
-/** A page request's handler threw, so its reply never came (scene → page). */
+/** A page request's handler threw while handling the request (scene → page). */
 export interface RequestFailedMessage {
   kind: 'requestFailed'
   request: PageToScene['kind']
   error: string
+  /** Correlation for a failed getUserProfile request that carried a request ID. */
+  profileRead?: { address: string; requestId: number }
+  profileSaveId?: number
 }
 
 /** Deploying the Backpack's look was rejected (scene → page). */
@@ -1643,6 +1723,9 @@ export interface CommunityPlace {
   likeRate?: number
   /** The signed-in user owns the place: an owner or moderator may unlink it from the card. */
   isMine?: boolean
+  /** The places service's own row (signed: with the user's votes and favourite), when it was read:
+   *  the card's hover actions, JUMP IN and Place Detail act on it. */
+  detail?: DiscoverPlace
 }
 
 /** Unlink a place from a community (page → scene → signed DELETE to the social-api). */
@@ -1817,8 +1900,20 @@ export interface CommunityPresenceMessage {
   online: boolean
 }
 
-/** Play a UI sound (page → scene → engine): a chat line landing, or one that mentions the user. */
-export type UiSound = 'chatMessage' | 'chatMention'
+/** Play a UI sound (page → scene → engine). A chat line landing in the selected conversation
+ *  (`chatMessage`, or `chatMention` when it mentions the user) or in any other one
+ *  (`chatUnfocused`), a line sent, a change of the chat input's text, an emoji or suggestion
+ *  taken or the emoji panel opening, and the chat's buttons. */
+export type UiSound =
+  | 'chatMessage'
+  | 'chatMention'
+  | 'chatUnfocused'
+  | 'chatSend'
+  | 'chatInput'
+  | 'chatEmoji'
+  | 'buttonPress'
+  | 'buttonHover'
+  | 'buttonClose'
 export interface PlayUiSoundRequest {
   kind: 'playUiSound'
   sound: UiSound
@@ -2188,35 +2283,28 @@ export interface RGBColor {
   b: number
 }
 
-/** A saved avatar look (backpack Outfits tab). The shape mirrors the catalyst `outfits` entity's
- *  per-slot outfit so a saved look can later be deployed unchanged (Phase 2); Phase 1 persists
- *  these locally (localStorage in the bridge scene). */
-export interface Outfit {
-  bodyShape: string
-  eyes: { color: RGBColor }
-  hair: { color: RGBColor }
-  skin: { color: RGBColor }
-  wearables: string[]
-  forceRender: string[]
-}
+/** A saved avatar look (backpack Outfits tab): one slot of the player's catalyst `outfits`
+ *  entity, which the bridge scene has the engine deploy (a guest's last for the session). */
+export type Outfit = OutfitData
 
-/** One saved outfit at a fixed slot index (0-based). */
-export interface OutfitSlot {
-  slot: number
-  outfit: Outfit
-  /** A picture of the outfit worn (PNG data URL), kept on this device only. */
-  thumbnail?: string
-}
+/** One saved outfit at a fixed slot index (0-based), with a picture of it worn (PNG data URL)
+ *  kept on this device only. */
+export type OutfitSlot = OutfitSlotData & { thumbnail?: string }
 
 /** The player's saved outfits + owned DCL names that unlock extra slots (beyond the 5 free). */
-export interface OutfitsMetadata {
-  outfits: OutfitSlot[]
-  namesForExtraSlots: string[]
-}
+export type OutfitsMetadata = Omit<OutfitsData, 'outfits'> & { outfits: OutfitSlot[] }
 
 export interface OutfitsMessage {
   kind: 'outfits'
   metadata: OutfitsMetadata
+}
+
+/** A save or delete of a saved outfit was refused, so the outfits stay as they were (scene → page). */
+export interface OutfitSaveFailedMessage {
+  kind: 'outfitSaveFailed'
+  slot: number
+  action: 'save' | 'delete'
+  message: string
 }
 
 export interface GetOutfitsRequest {
@@ -2509,6 +2597,7 @@ export type SceneToPage =
   | CatalogPageMessage
   | GiftingPageMessage
   | OutfitsMessage
+  | OutfitSaveFailedMessage
   | OutfitHistoryMessage
   | CommunitiesMessage
   | CommunityBrowseMessage
@@ -2551,6 +2640,7 @@ export type SceneToPage =
   | WelcomeMessage
   | WelcomeAcceptedMessage
   | ExternalUrlOpenedMessage
+  | SatelliteTileMessage
   | PlayerPoseMessage
   | RealmInfoMessage
   | SceneInfoMessage
@@ -2566,9 +2656,11 @@ export type SceneToPage =
   | PermissionRulesMessage
   | WorldPasswordRequestMessage
   | WorldPasswordWithdrawnMessage
+  | ItemPurchaseRequestMessage
   | PlatformBanMessage
   | EditorSceneResultMessage
   | PortablesMessage
+  | MapPinsMessage
 
 // ---- events ----------------------------------------------------------------
 

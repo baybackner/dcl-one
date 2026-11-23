@@ -9,7 +9,8 @@ import { useAuth } from "@/data/lib/auth/context";
 import { eventsQuery } from "@/data/lib/community/queries";
 
 import { openSignIn } from "../../components/auth/signin-store";
-import { creatorWallets, eventHref, upcomingCardProps, type Zone } from "../../events/view";
+import type { Zone } from "../../components/event-schedule";
+import { creatorWallets, eventHref, upcomingCardProps } from "../../events/view";
 import { useCreatorProfiles } from "../../events/useCreatorProfiles";
 import { REMIND_FAILED, useEventReminders } from "../../events/useEventReminders";
 import styles from "./CommunityLists.module.css";
@@ -42,7 +43,7 @@ export function CommunityEvents({ communityId, now: initialNow }: { communityId:
   const events = useMemo(() => query.data?.pages.flatMap((page) => page.events) ?? [], [query.data]);
   const groups = useMemo(() => [creatorWallets(events)], [events]);
   const profiles = useCreatorProfiles(groups);
-  const reminders = useEventReminders(identity, () => openSignIn({ inPlace: true }));
+  const reminders = useEventReminders(identity, () => openSignIn());
   const loader = useLoadMore(
     Boolean(query.hasNextPage) && !query.isFetchNextPageError,
     query.isFetchingNextPage, () => void query.fetchNextPage());

@@ -245,6 +245,15 @@
   transform-origin: 0 0;
 }
 
+/* As .poiPin, but centred on the anchor: the quest pin is round. */
+.questPin {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  transform: scale(calc(1 / var(--map-scale))) rotate(calc(var(--map-yaw) * -1deg)) translate(-50%, -50%);
+  transform-origin: 0 0;
+}
+
 /* Same inverse transform as the pin, offset below the anchor instead of above it. */
 .poiLabel {
   position: absolute;
@@ -364,10 +373,10 @@
   display: flex;
   flex: none;
   align-items: center;
-  justify-content: center;
   gap: 10px;
   height: 40px;
-  padding: 0;
+  margin-inline: calc(4px - var(--minimap-pad));
+  padding: 0 12px 0 13px;
   border: 0;
   border-radius: var(--r-control);
   background: var(--fill-3);
@@ -375,8 +384,14 @@
   font: inherit;
   font-size: var(--type-14);
   font-weight: var(--fw-bold);
+  text-align: left;
   text-transform: uppercase;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.jumpBack > svg {
+  flex: none;
 }
 
 .jumpBack:hover {

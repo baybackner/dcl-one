@@ -1,5 +1,10 @@
+#![forbid(unsafe_code)]
+
 pub mod agent_commands;
 pub mod explorer_ui;
+mod home;
+mod item_purchase;
+mod map_pins;
 pub mod portables;
 pub mod smart_wearables;
 pub mod teleport;
@@ -45,7 +50,7 @@ use comms::{
 use console::DoAddConsoleCommand;
 use copypwasmta::{ClipboardContext, ClipboardProvider};
 use dcl_component::proto_components::kernel::comms::rfc4;
-use explorer_ui::{open_explorer_ui, track_explorer_ui, ExplorerUiState};
+use explorer_ui::{open_explorer_ui, recent_user_gesture, track_explorer_ui, ExplorerUiState};
 use http::Uri;
 use ipfs::{
     ipfs_path::{IpfsPath, IpfsType},
@@ -133,6 +138,9 @@ impl Plugin for RestrictedActionsPlugin {
         app.add_plugins(smart_wearables::SmartWearablesPlugin);
         app.add_plugins(portables::PortablesPlugin);
         app.add_plugins(world_access::WorldAccessPlugin);
+        app.add_plugins(home::HomePlugin);
+        app.add_plugins(map_pins::MapPinsPlugin);
+        app.add_plugins(item_purchase::ItemPurchasePlugin);
     }
 }
 
@@ -213,7 +221,6 @@ fn cancel_active_move(
     commands.entity(entity).remove::<ActivePlayerMove>();
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn handle_player_move_requests(
     mut commands: Commands,
     mut events: EventReader<RpcCallEvent>,
@@ -355,8 +362,6 @@ pub fn handle_player_move_requests(
     }
 }
 
-#[allow(clippy::type_complexity)]
-#[allow(clippy::too_many_arguments)]
 fn apply_player_move(
     commands: &mut Commands,
     player_entity: Entity,
@@ -376,6 +381,10 @@ fn apply_player_move(
     teleport_events: &mut EventWriter<PlayerTeleported>,
     now: f64,
 ) {
+    #[allow(
+        clippy::unwrap_used,
+        reason = "PrimaryUser is a mandatory singleton; a missing player is an engine bug"
+    )]
     let (_, mut player_transform, mut dynamics, maybe_active) = player.single_mut().unwrap();
     if let Some(active) = maybe_active {
         cancel_active_move(
@@ -491,7 +500,6 @@ fn announce_returned_to_world(
     }
 }
 
-#[allow(clippy::type_complexity)]
 pub fn update_player_move(
     mut commands: Commands,
     mut player: Query<
@@ -625,6 +633,10 @@ pub fn move_camera(
 
         let (yaw, pitch, roll) = facing.to_euler(EulerRot::YXZ);
 
+        #[allow(
+            clippy::unwrap_used,
+            reason = "PrimaryCamera is a mandatory singleton; a missing camera is an engine bug"
+        )]
         let mut camera = camera.single_mut().unwrap();
         camera.yaw = yaw;
         camera.pitch = pitch;
@@ -889,7 +901,6 @@ fn resolve_portable_urn(urn: &str, realm_url: &str) -> Result<(String, String), 
 
 type SpawnResponseChannel = Option<RpcResultSender<Result<SpawnResponse, String>>>;
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn spawn_portable(
     mut commands: Commands,
     current_portables: Res<PortableScenes>,
@@ -1279,8 +1290,8 @@ fn list_portables(
     }
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn get_user_data(
+    mut system_events: EventReader<SystemApi>,
     profile: Res<CurrentUserProfile>,
     others: Query<(&ForeignPlayer, &UserProfile)>,
     me: Res<Wallet>,
@@ -1298,10 +1309,30 @@ fn get_user_data(
     mut profile_manager: ProfileManager,
     contexts: Res<CrdtContexts>,
 ) {
-    for (user, scene, response) in events.read().filter_map(|ev| match &ev.call {
-        RpcCall::GetUserData { user, response } => Some((user, ev.origin.scene(), response)),
+    let scene_reads = events.read().filter_map(|event| match &event.call {
+        RpcCall::GetUserData { user, response } => {
+            Some((user.as_ref(), event.origin.scene(), response))
+        }
         _ => None,
-    }) {
+    });
+    let system_reads = system_events.read().filter_map(|event| {
+        let SystemApi::GetUserProfile { address, response } = event else {
+            return None;
+        };
+        if let Some(owner) = me
+            .address()
+            .filter(|owner| address.as_h160() == Some(*owner))
+        {
+            let committed = profile
+                .peer_profile()
+                .filter(|profile| profile.content.eth_address.as_h160() == Some(owner));
+            response.send(committed.map(|profile| profile.content.clone()).ok_or(()));
+            return None;
+        }
+        // The system UI runs on clients, where nearby players share one context.
+        Some((Some(address), None, response))
+    });
+    for (user, scene, response) in scene_reads.chain(system_reads) {
         debug!("process get_user_data for {:?}", scene);
         match user {
             None => match profile.profile.as_ref() {
@@ -1571,8 +1602,6 @@ fn event_player_disconnected(
     });
 }
 
-#[allow(clippy::type_complexity)]
-#[allow(clippy::too_many_arguments)]
 fn event_player_moved_scene(
     mut enter_senders: Local<HashMap<Entity, RpcEventSender>>,
     mut leave_senders: Local<HashMap<Entity, RpcEventSender>>,
@@ -1902,7 +1931,6 @@ fn show_nft_dialog(
     }
 }
 
-#[allow(clippy::type_complexity)]
 pub fn handle_eth_async(
     mut events: EventReader<RpcCallEvent>,
     scenes: Query<&RendererSceneContext>,
@@ -1941,15 +1969,13 @@ pub fn handle_eth_async(
             continue;
         }
 
-        let last_action_time = scenes
-            .get(*scene)
-            .ok()
-            .and_then(|scene| scene.last_action_event)
-            .unwrap_or_default();
-        if last_action_time < time.elapsed_secs_f64() - 1.0 {
+        let context = scenes.get(*scene).ok();
+        if !context.is_some_and(|context| recent_user_gesture(context, &time)) {
             response.send(Err(format!(
                 "no recent user activity (last action {}, time {}).",
-                last_action_time,
+                context
+                    .and_then(|context| context.last_action_event)
+                    .unwrap_or_default(),
                 time.elapsed_secs_f64()
             )));
             continue;
@@ -2028,15 +2054,13 @@ pub fn handle_copy_to_clipboard(
         }
         _ => None,
     }) {
-        let last_action_time = scenes
-            .get(*scene)
-            .ok()
-            .and_then(|scene| scene.last_action_event)
-            .unwrap_or_default();
-        if last_action_time < time.elapsed_secs_f64() - 1.0 {
+        let context = scenes.get(*scene).ok();
+        if !context.is_some_and(|context| recent_user_gesture(context, &time)) {
             response.send(Err(format!(
                 "no recent user activity (last action {}, time {}).",
-                last_action_time,
+                context
+                    .and_then(|context| context.last_action_event)
+                    .unwrap_or_default(),
                 time.elapsed_secs_f64()
             )));
             continue;
@@ -2071,7 +2095,6 @@ pub fn handle_copy_to_clipboard(
     }
 }
 
-#[allow(clippy::type_complexity)]
 pub fn handle_texture_size(
     mut events: EventReader<RpcCallEvent>,
     ipfas: IpfsAssetServer,
@@ -2163,7 +2186,6 @@ enum PortableAction {
     Kill,
 }
 
-#[allow(clippy::type_complexity)]
 #[derive(Resource, Default)]
 struct PendingPortableCommands(
     Vec<(
@@ -2365,7 +2387,6 @@ fn signed_fetch_is_guest(server: bool, profile: Option<&UserProfile>) -> Result<
         .ok_or_else(|| "no player identity!".to_owned())
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn handle_sign_request(
     mut events: EventReader<RpcCallEvent>,
     mut system_events: EventReader<SystemApi>,
@@ -2544,7 +2565,6 @@ fn reads_local_realm_origin(filename: &str, realm: &CurrentRealm) -> bool {
             .is_some_and(|(target, realm)| target.origin() == realm.origin())
 }
 
-#[allow(clippy::type_complexity)]
 fn handle_read_file(
     mut events: EventReader<RpcCallEvent>,
     mut tasks: Local<
@@ -2617,7 +2637,6 @@ fn handle_read_file(
     })
 }
 
-#[allow(clippy::type_complexity)]
 fn handle_entity_definition(
     mut events: EventReader<RpcCallEvent>,
     mut tasks: Local<
@@ -2658,7 +2677,6 @@ fn handle_entity_definition(
     })
 }
 
-#[allow(clippy::type_complexity)]
 pub fn process_startup_scenes(
     mut startup_scenes: ResMut<StartupScenes>,
     mut tasks: Local<Vec<(usize, Task<Result<(String, PortableSource), String>>)>>,
@@ -2737,6 +2755,106 @@ pub fn process_startup_scenes(
 
     if tasks.is_empty() {
         *done = true;
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn system_and_scene_self_reads_during_an_optimistic_edit() {
+    use bevy::asset::io::memory::MemoryAssetReader;
+    use bevy_console::{ConsoleCommandEntered, ConsoleConfiguration};
+    use common::structs::AppConfig;
+    use comms::{global_crdt::ProfileEvent, profile::UserProfilePlugin};
+    use ipfs::IpfsResource;
+
+    let owner = Address::repeat_byte(7);
+    let address = format!("{owner:#x}");
+    let mut wallet = Wallet::default();
+    wallet.finalize_remote(
+        owner,
+        owner,
+        vec![common::structs::ChainLink {
+            ty: "SIGNER".into(),
+            payload: address.clone(),
+            signature: String::new(),
+        }],
+        false,
+    );
+    let mut current = CurrentUserProfile::default();
+    let saved = SerializedProfile {
+        eth_address: address.clone(),
+        name: "Saved".into(),
+        version: 1,
+        ..default()
+    };
+    current.adopt_server_profile(UserProfile {
+        version: 1,
+        content: saved.clone(),
+        ..default()
+    });
+    // Hold the upload so both reads observe the same pending edit.
+    current.deploy_held = true;
+
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, AssetPlugin::default(), UserProfilePlugin))
+        .insert_resource(wallet)
+        .insert_resource(current)
+        .init_resource::<AppConfig>()
+        .init_resource::<ConsoleConfiguration>()
+        .add_event::<ConsoleCommandEntered>()
+        .add_event::<PrintConsoleLine>()
+        .add_event::<ProfileEvent>()
+        .insert_resource(IpfsResource {
+            inner: Arc::new(IpfsIo::new(
+                false,
+                Box::new(MemoryAssetReader { root: default() }),
+                None,
+                default(),
+                1,
+                tokio::sync::mpsc::unbounded_channel().0,
+            )),
+        })
+        .add_event::<RpcCallEvent>()
+        .add_event::<SystemApi>()
+        .add_systems(Update, get_user_data);
+    let scene = app.world_mut().spawn_empty().id();
+    let shared = app.world_mut().spawn_empty().id();
+    let mut contexts = CrdtContexts::default();
+    contexts.0.insert(String::new(), shared);
+    app.insert_resource(contexts);
+
+    let (reply, mut save) = RpcResultSender::channel();
+    app.world_mut().send_event(SystemApi::SetAvatar(
+        address.clone(),
+        serde_json::from_value(json!({ "profileExtras": { "description": "Edited" } })).unwrap(),
+        reply,
+    ));
+    app.update();
+    assert!(save.poll_once().unwrap().is_none());
+
+    let (send, mut system) = RpcResultSender::channel();
+    app.world_mut().send_event(SystemApi::GetUserProfile {
+        address: address.clone(),
+        response: send,
+    });
+    let scene_reads = [None, Some(address)].map(|user| {
+        let (response, recv) = RpcResultSender::channel();
+        app.world_mut().send_event(RpcCallEvent {
+            origin: RpcOrigin::Scene {
+                entity: scene,
+                hash: "parcel".into(),
+            },
+            call: RpcCall::GetUserData { user, response },
+        });
+        recv
+    });
+    app.update();
+
+    assert_eq!(system.try_recv().unwrap(), Ok(saved));
+    for mut read in scene_reads {
+        let edited = read.try_recv().unwrap().unwrap();
+        assert_eq!(edited.version, 2);
+        assert_eq!(edited.extra_fields["description"], "Edited");
     }
 }
 
