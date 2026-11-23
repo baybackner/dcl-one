@@ -289,13 +289,7 @@ pub fn validate_auth_requests(
 /// `catalyst pulse`: tracing, the Prometheus exporter, and the server assembled from the
 /// environment; returns when the loop ends.
 pub async fn run_from_env() -> anyhow::Result<()> {
-    run_from_env_with_generation(None).await
-}
-
-pub async fn run_from_env_with_generation(
-    generation: Option<Arc<dyn crate::interfaces::PulseGeneration>>,
-) -> anyhow::Result<()> {
-    run_from_env_with_generation_until(generation, std::future::pending()).await
+    run_from_env_with_generation_until(None, std::future::pending()).await
 }
 
 pub async fn run_from_env_with_generation_until(

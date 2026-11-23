@@ -1267,7 +1267,7 @@ impl PulseServer {
         .await?;
         tracing::info!(%bind, "catalyrst-pulse listening (enet)");
         let transports = Transports::enet_only(enet, ENET_CAPACITY as u32);
-        self.run_on(transports, tick_ms).await
+        self.serve(transports, tick_ms).await
     }
 
     pub async fn run_with_webtransport(
@@ -1310,10 +1310,6 @@ impl PulseServer {
     }
 
     pub async fn serve(self, transports: Transports, tick_ms: u64) -> anyhow::Result<()> {
-        self.run_on(transports, tick_ms).await
-    }
-
-    async fn run_on(self, transports: Transports, tick_ms: u64) -> anyhow::Result<()> {
         self.run_inspected(transports, tick_ms, None, std::future::pending())
             .await
     }

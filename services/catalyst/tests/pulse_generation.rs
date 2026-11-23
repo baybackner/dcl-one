@@ -78,6 +78,9 @@ async fn pulse_process_disconnects_enet_peers_on_unix_signals() {
         })
         .await
         .expect("Pulse startup timed out");
+        let stdout_drain = tokio::spawn(async move {
+            tokio::io::copy(&mut lines.into_inner(), &mut tokio::io::sink()).await
+        });
 
         let mut client = Host::bind(HostConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
@@ -146,7 +149,7 @@ async fn pulse_process_disconnects_enet_peers_on_unix_signals() {
                 .unwrap()
                 .success()
         );
-        let (received_notice, status) = tokio::join!(
+        let (received_notice, status, drained) = tokio::join!(
             async {
                 timeout_at(wire_deadline, async {
                     while !matches!(
@@ -159,8 +162,13 @@ async fn pulse_process_disconnects_enet_peers_on_unix_signals() {
                     && Instant::now() < wire_deadline
             },
             timeout(Duration::from_secs(10), child.wait()),
+            timeout(Duration::from_secs(10), stdout_drain),
         );
         let status = status.expect("Pulse did not shut down").unwrap();
+        drained
+            .expect("Pulse stdout did not close")
+            .expect("Pulse stdout reader task failed")
+            .expect("could not drain Pulse stdout");
         assert!(
             status.success(),
             "Pulse exited after {signal} with {status}"
