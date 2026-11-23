@@ -15,6 +15,7 @@ type Content = { children: NamedContent } | { label: NamedContent } | Accessible
 type Variant =
   | 'primary'
   | 'secondary'
+  | 'secondaryLight'
   | 'outline'
   | 'dark'
   | 'text'

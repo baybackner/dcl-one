@@ -11,6 +11,7 @@ import {
   GeneralPublic
 } from '../../../foundations/icons'
 import { Button } from '../shared/Button/Button'
+import { Button as SharedButton } from '../../../components/Button/Button'
 import { EventCardHost } from '../../../components/EventCard/EventCard'
 import { hostOf } from './cards'
 import type { EventCardCreator, EventCardTime, JumpIn, RemindControl } from './types'
@@ -206,15 +207,16 @@ function EventDetailModal(props: EventDetailModalProps) {
         <div className={styles.actions}>
           {live && jumpIn ? <JumpInButton jumpIn={jumpIn} /> : null}
           {!live && remind ? (
-            <Button
-              variant={remind.active ? 'primary' : 'tertiary'}
+            <SharedButton
+              variant={remind.active ? 'primary' : 'secondaryLight'}
+              size="md"
+              startIcon={<GeneralBell size={20} aria-hidden="true" />}
               aria-pressed={remind.active}
               disabled={remind.pending}
               onClick={remind.onToggle}
             >
-              <GeneralBell size={20} aria-hidden="true" />
               {text('Remind me')}
-            </Button>
+            </SharedButton>
           ) : null}
           {calendarHref ? (
             <a

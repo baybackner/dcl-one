@@ -68,6 +68,20 @@
     --button-hover: var(--dcl-transparencies-white-20);
     --button-pressed: var(--dcl-transparencies-white-20);
   }
+  .root[data-variant='secondaryLight'] {
+    --button-background: var(--dcl-transparencies-white-10);
+    --button-color: var(--dcl-text-primary);
+    --button-hover: var(--dcl-transparencies-white-20);
+    --button-pressed: color-mix(in srgb, var(--dcl-neutrals-white) 5%, transparent);
+    --button-icon-size: 24px;
+    border-width: 0;
+  }
+  .root[data-variant='secondaryLight'][data-size='md'] {
+    --button-icon-size: 20px;
+  }
+  .root[data-variant='secondaryLight'][data-size='sm'] {
+    --button-icon-size: 16px;
+  }
   .root[data-variant='dark'] {
     --button-background: var(--dcl-transparencies-black-40);
     --button-hover: var(--dcl-neutrals-black);
@@ -186,8 +200,8 @@
     justify-content: center;
   }
   .icon svg {
-    width: 1.25em;
-    height: 1.25em;
+    width: var(--button-icon-size, 1.25em);
+    height: var(--button-icon-size, 1.25em);
   }
   .spinner {
     position: absolute;

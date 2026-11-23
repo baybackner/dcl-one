@@ -19,6 +19,7 @@ import layout from './layout.module.css'
 const variants = [
   'primary',
   'secondary',
+  'secondaryLight',
   'outline',
   'dark',
   'text',
