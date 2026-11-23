@@ -186,7 +186,7 @@ impl Plugin for AvatarRenderPlugin {
         app.init_resource::<SessionGraphics>();
         // read by emote playback; the Explorer's input crate initialises it too
         app.init_resource::<common::structs::SceneDrivenAnimationFeedback>();
-        app.init_resource::<processing_timing::AvatarProcessingRun>();
+        app.add_plugins(processing_timing::AvatarProcessingTimingPlugin);
         app.add_plugins(MaskMaterialPlugin);
         app.add_plugins(AvatarAnimationPlugin);
         app.add_plugins(spring_bones::SpringBonesPlugin);
@@ -243,7 +243,6 @@ impl Plugin for AvatarPlugin {
         app.add_plugins(PointAtIkPlugin);
         app.add_plugins(PointAtMarkerPlugin);
         app.add_plugins(pause_hidden::PauseHiddenAvatarsPlugin);
-        app.add_plugins(processing_timing::AvatarProcessingTimingPlugin);
         app.add_systems(
             Update,
             (
@@ -1523,7 +1522,7 @@ pub struct PreviousAvatar(Entity);
 
 /// An avatar's emission for one channel of a glTF emissive factor, in the toon lighting's output
 /// units (lit white is 1): the factor times 5, taken as a linear value with no gamma decode, times
-/// 2.5, so a factor of 1 emits 12.5. toon.wgsl undoes bound_material's x10 lift.
+/// 2.5, so a factor of 1 emits 12.5. toon.wgsl undoes bound_material's x5 lift.
 fn avatar_emission(factor: f32) -> f32 {
     factor.max(0.0) * 5.0 * 2.5
 }

@@ -29,9 +29,9 @@
 #import bevy_pbr::{clustered_forward, clustered_forward::ClusterableObjectIndexRanges, environment_map, lighting}
 #endif
 
-// undoes bound_material.wgsl's x10 lift: an avatar material's emissive is already its emission
+// undoes bound_material.wgsl's x5 lift: an avatar material's emissive is already its emission
 // in output units, where lit white is 1 (avatar::avatar_emission)
-const EMISSIVE_SCALE: f32 = 0.1;
+const EMISSIVE_SCALE: f32 = 0.2;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
