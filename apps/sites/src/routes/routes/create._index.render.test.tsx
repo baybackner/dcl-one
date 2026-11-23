@@ -20,7 +20,10 @@ vi.mock("@/features/creators/components/SubNav", () => ({ SubNav: () => null }))
 
 import CreateRoute from "./create._index";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  landing.mockClear();
+});
 
 function renderCreate(routeData: { sid?: string } | null) {
   const router = createMemoryRouter(
@@ -43,7 +46,7 @@ function renderCreate(routeData: { sid?: string } | null) {
     { initialEntries: ["/create"] },
   );
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );

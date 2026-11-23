@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -50,12 +51,12 @@ it("links each installer button to the page that starts that installer, a click 
 });
 
 describe("legacy download Clicks (inventory 2.1.a)", () => {
-  const clickOf = (name: string | RegExp, android = false) => {
+  const clickOf = async (name: string | RegExp, android = false) => {
     render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={android} downloads={null} sid="s1" />);
     const link = screen.getAllByRole("link", { name }).at(-1)!;
     // A link with no handler of its own would navigate jsdom away.
     link.addEventListener("click", (e) => e.preventDefault());
-    fireEvent.click(link);
+    await userEvent.setup().click(link);
     expect(track).toHaveBeenCalledTimes(1);
     const [event, props, ctx] = vi.mocked(track).mock.calls[0]!;
     expect(event).toBe("Click");
@@ -63,33 +64,33 @@ describe("legacy download Clicks (inventory 2.1.a)", () => {
     return props as Record<string, unknown>;
   };
 
-  it("row 18: the main installer button is place Download, with no os", () => {
-    const props = clickOf("Download for Windows");
+  it("row 18: the main installer button is place Download, with no os", async () => {
+    const props = await clickOf("Download for Windows");
     expect(props).toMatchObject({ place: "Download", event: "Download", download_target: "desktop_installer" });
     expect(props).not.toHaveProperty("os");
     expect(props.click_id).toEqual(expect.any(String));
   });
 
-  it("row 19: Epic", () => {
-    expect(clickOf("Download on Epic Games")).toMatchObject({ place: "download-page", event: "Download", download_target: "epic" });
+  it("row 19: Epic", async () => {
+    expect(await clickOf("Download on Epic Games")).toMatchObject({ place: "download-page", event: "Download", download_target: "epic" });
   });
 
-  it("row 20: the other system's installer, with no os", () => {
-    const props = clickOf("macOS");
+  it("row 20: the other system's installer, with no os", async () => {
+    const props = await clickOf("macOS");
     expect(props).toMatchObject({ place: "download-page", event: "Download", download_target: "desktop_installer" });
     expect(props).not.toHaveProperty("os");
   });
 
-  it("row 21: the iOS icon", () => {
-    expect(clickOf("iOS")).toMatchObject({ place: "download-page", event: "Download", download_target: "app_store", os: "iOS" });
+  it("row 21: the iOS icon", async () => {
+    expect(await clickOf("iOS")).toMatchObject({ place: "download-page", event: "Download", download_target: "app_store", os: "iOS" });
   });
 
-  it("row 22: the Google Play icon", () => {
-    expect(clickOf("Google Play")).toMatchObject({ place: "download-page", event: "Download", download_target: "google_play", os: "Android" });
+  it("row 22: the Google Play icon", async () => {
+    expect(await clickOf("Google Play")).toMatchObject({ place: "download-page", event: "Download", download_target: "google_play", os: "Android" });
   });
 
-  it("row 23: the phone layout's Google Play badge on Android", () => {
-    expect(clickOf(/Get it on Google Play/, true)).toMatchObject({
+  it("row 23: the phone layout's Google Play badge on Android", async () => {
+    expect(await clickOf(/Get it on Google Play/, true)).toMatchObject({
       place: "download-page",
       event: "Download",
       download_target: "google_play",
@@ -97,8 +98,8 @@ describe("legacy download Clicks (inventory 2.1.a)", () => {
     });
   });
 
-  it("row 24: the phone layout's App Store badge elsewhere", () => {
-    expect(clickOf(/Download on the App Store/)).toMatchObject({
+  it("row 24: the phone layout's App Store badge elsewhere", async () => {
+    expect(await clickOf(/Download on the App Store/)).toMatchObject({
       place: "download-page",
       event: "Download",
       download_target: "app_store",
