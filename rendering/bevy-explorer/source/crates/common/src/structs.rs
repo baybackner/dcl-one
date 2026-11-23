@@ -1105,7 +1105,7 @@ impl Default for GraphicsSettings {
             // FXAA, not MSAA, so depth of field stays on (see `DofSetting::apply_to_camera`)
             msaa: AaSetting::FxaaHigh,
             fps_target: 60,
-            // one 4096 cascade (`visuals`), so a short distance keeps its texels small
+            // one cascade, so a short distance keeps its texels small (`sun_shadow_map_size`)
             shadow_distance: 20.0,
             // one cascade
             shadow_settings: ShadowSetting::Low,
@@ -1333,6 +1333,22 @@ pub fn sun_cascades(setting: ShadowSetting, distance: f32) -> Option<CascadeShad
         overlap_proportion: 0.2,
         minimum_distance: MIN_CASCADE,
     })
+}
+
+/// The longest shadow distance at which Low's one cascade uses the 2048 map: there a texel covers
+/// what a 4096 texel covers at twice the distance.
+pub const SUN_SMALL_MAP_DISTANCE: f32 = 40.0;
+
+/// The sun's shadow map size, in texels along one side of each cascade's map. High's four cascades
+/// each cover a slice of the shadow distance, so 2048 is enough. Low's one cascade spreads its map
+/// over the whole distance: 2048 while the distance is short, 4096 past `SUN_SMALL_MAP_DISTANCE`,
+/// where a smaller map loses the avatars' shadows (see decisions.md).
+pub fn sun_shadow_map_size(setting: ShadowSetting, distance: f32) -> usize {
+    match setting {
+        ShadowSetting::High => 2048,
+        ShadowSetting::Off | ShadowSetting::Low if distance <= SUN_SMALL_MAP_DISTANCE => 2048,
+        ShadowSetting::Off | ShadowSetting::Low => 4096,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -2719,6 +2735,25 @@ mod tests {
         // a distance under the minimum still yields a strictly increasing config
         let tiny = sun_cascades(ShadowSetting::High, 0.05).unwrap();
         assert!(tiny.bounds.windows(2).all(|w| w[0] < w[1]) && tiny.bounds[0] > MIN_CASCADE);
+    }
+
+    #[test]
+    fn the_sun_shadow_map_is_4096_only_for_one_cascade_over_a_long_distance() {
+        assert_eq!(sun_shadow_map_size(ShadowSetting::Low, 20.0), 2048);
+        assert_eq!(
+            sun_shadow_map_size(ShadowSetting::Low, SUN_SMALL_MAP_DISTANCE),
+            2048
+        );
+        assert_eq!(sun_shadow_map_size(ShadowSetting::Low, 100.0), 4096);
+        for distance in [20.0, 100.0, 200.0, 300.0] {
+            assert_eq!(sun_shadow_map_size(ShadowSetting::High, distance), 2048);
+        }
+        // the default settings are in the short range
+        let graphics = GraphicsSettings::default();
+        assert_eq!(
+            sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance),
+            2048
+        );
     }
 
     #[test]

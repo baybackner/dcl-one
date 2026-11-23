@@ -89,10 +89,14 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   shadows. On the 1024 map, acne showed below a normal bias of 0.5 on Low and about 1 on High
   (Genesis Plaza, low sun), so both qualities keep bevy's 0.02 m depth and 1.8 texel normal
   bias.
-- **Sun shadow map stays at 4096.** Unity's main shadow resolution is 1024. Low's single
-  cascade spreads that over the whole shadow distance, and the bias is in texels, so past about
-  75 m on 1024 the avatar's shadow disappeared, and on 2048 it was a smudge at the feet. 4096
-  keeps it.
+- **Sun shadow map is 2048, or 4096 for one cascade past 40 m.** Unity's main shadow resolution
+  is 1024. High's four cascades each cover a slice of the shadow distance: at 100 m and 200 m,
+  2048 per cascade looked the same as 4096 and the frame took about 10 ms less (web, Apple M1,
+  Genesis Plaza); 1024 saved 2 ms more and softened the contact shadows. Low's single cascade
+  spreads its map over the whole shadow distance, and the bias is in texels. At 20 m, 2048
+  looked the same as 4096 and took about 6 ms less. At 100 m the avatar's shadow went soft on
+  2048 and was a smudge at the feet on 1024, and 4096 cost under 1 ms. So Low uses 4096 past
+  40 m (`sun_shadow_map_size`), where a 2048 texel is as large as a 4096 texel at 80 m.
 - **Sun shadows hold a floor past the shadow distance.** URP fades the shadow out completely at
   the shadow distance. We fade over the same squared-distance curve, but towards a partial
   shadow (`CASCADE_FAR_SHADOW` in `shadow_softening.wgsl`) that holds past the distance, so the
@@ -781,11 +785,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   the one every saved config migrates to, except jiggle bones, which stay off by default (see the
   spring bones ADR). Anti-aliasing and depth of field differ (next entry). Bloom is Low in every
   preset, closer to Unity's look than High. Medium's sun shadow distance is 20 m, not 60 m: Medium
-  has one cascade on a 4096 map (above), so at 60 m each texel is three times as large and the
-  shadows break up. The presets leave out Unity's scene distance (in parcels, where far scenes
-  load as LODs; here imposters draw them and the load distance stays the player's), the landscape
-  distance (read only at startup; its default is Medium's 1000 m), current-scene streams and HDR
-  (always on). The preset is not stored: the HUD reads it off the settings, and any difference
+  has one cascade (above), so at 60 m each texel is three times as large as at 20 m on the same
+  map and the shadows break up. The presets leave out Unity's scene distance (in parcels, where
+  far scenes load as LODs; here imposters draw them and the load distance stays the player's),
+  the landscape distance (read only at startup; its default is Medium's 1000 m), current-scene
+  streams and HDR (always on). The preset is not stored: the HUD reads it off the settings, and
+  any difference
   shows as Custom.
 - **Depth of field yields to MSAA.** The fork's transparent focus texture takes the sample count
   of the resolved main texture, so a multisampled transparent pass with depth of field fails

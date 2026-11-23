@@ -37,9 +37,9 @@ use bevy_console::ConsoleCommand;
 use common::{
     sets::SetupSets,
     structs::{
-        sun_cascades, AppConfig, DofConfig, FogSetting, PrimaryCamera, PrimaryCameraRes,
-        PrimaryUser, SceneGlobalLight, StageLight, TimeOfDay, AMBIENT_BRIGHTNESS_DEFAULT,
-        PRIMARY_AVATAR_LIGHT_LAYER,
+        sun_cascades, sun_shadow_map_size, AppConfig, DofConfig, FogSetting, PrimaryCamera,
+        PrimaryCameraRes, PrimaryUser, SceneGlobalLight, StageLight, TimeOfDay,
+        AMBIENT_BRIGHTNESS_DEFAULT, PRIMARY_AVATAR_LIGHT_LAYER,
     },
 };
 use console::DoAddConsoleCommand;
@@ -64,7 +64,11 @@ pub struct VisualsPlugin {
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(debug_panel::VisualsDebugPanelPlugin);
-        app.insert_resource(DirectionalLightShadowMap { size: 4096 })
+        let graphics = common::structs::GraphicsSettings::default();
+        let size = sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance);
+        app.init_resource::<SunShadowMapOverride>()
+            .add_systems(Update, apply_sun_shadow_map_size);
+        app.insert_resource(DirectionalLightShadowMap { size })
             .init_resource::<SceneGlobalLight>()
             .init_resource::<FogDensity>()
             .insert_resource(CloudCover {
@@ -493,6 +497,28 @@ pub(crate) const SUN_SHADOW_BIAS: (f32, f32) = (
     DirectionalLight::DEFAULT_SHADOW_DEPTH_BIAS,
     DirectionalLight::DEFAULT_SHADOW_NORMAL_BIAS,
 );
+
+/// The sun's shadow map size set live by `/shadow_map`, in place of the shadow settings'
+/// (`sun_shadow_map_size`).
+#[derive(Resource, Default)]
+pub struct SunShadowMapOverride(pub Option<usize>);
+
+/// Keeps the sun's shadow map at the size for the shadow quality and distance, or at the
+/// `/shadow_map` override.
+fn apply_sun_shadow_map_size(
+    config: Res<AppConfig>,
+    size_override: Res<SunShadowMapOverride>,
+    mut map: ResMut<DirectionalLightShadowMap>,
+) {
+    let graphics = &config.graphics;
+    let size = size_override
+        .0
+        .unwrap_or_else(|| sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance));
+    // only write when it changes: a write reallocates every cascade's map
+    if map.size != size {
+        map.size = size;
+    }
+}
 
 /// The sun shadow biases set live by `/shadowbias`, in place of `SUN_SHADOW_BIAS`.
 #[derive(Resource, Default)]
