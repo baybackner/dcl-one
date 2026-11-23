@@ -5,7 +5,7 @@ import MpLaunchForm from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/Mp
 import MpLiveRunView from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/MpLiveRunView";
 import MpReportView, { type MpPerfSeries } from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/MpReportView";
 import MpUnpaired from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/MpUnpaired";
-import MpReplayDialog from "@ui/creatorhub/mp/MpReplayDialog";
+import MpReplayDialog from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/MpReplayDialog";
 import type { MpLane, MpLaunchRequest } from "@web-core/multiplayer-test/rules";
 import {
   MpSidecar,

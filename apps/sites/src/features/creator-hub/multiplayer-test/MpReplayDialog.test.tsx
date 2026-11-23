@@ -1,0 +1,149 @@
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FALLBACK_PROFILES } from "@web-core/multiplayer-test/rules";
+import type { MpReplayOutcome } from "@web-core/multiplayer-test/types";
+import MpReplayDialog from "@dcl/one-ui/apps/sites/creator-hub/multiplayer-test/MpReplayDialog";
+
+// The library component is transformed with React Refresh outside a route module; its preamble is stubbed.
+vi.hoisted(() => {
+  Object.assign(window, {
+    __vite_plugin_react_preamble_installed__: true,
+    $RefreshSig$: () => (type: unknown) => type,
+    $RefreshReg$: () => {},
+  });
+});
+
+const outcome = (over: Partial<MpReplayOutcome> = {}): MpReplayOutcome => ({
+  id: null,
+  tier: "a",
+  hash: "h-1",
+  decisionHash: null,
+  ...over,
+});
+
+describe("MpReplayDialog", () => {
+  afterEach(() => {
+    cleanup();
+    vi.resetAllMocks();
+  });
+
+  describe("when the form is submitted with the defaults", () => {
+    it("should request an offline replay with the first profile and seed 42", async () => {
+      const onSubmit = vi.fn();
+      render(<MpReplayDialog runId="r1" profiles={["lan", "3g"]} onSubmit={onSubmit} onClose={vi.fn()} />);
+      expect(screen.getByRole("dialog", { name: "Replay run r1" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Replay offline" }));
+      expect(onSubmit).toHaveBeenCalledWith({ tier: "a", profile: "lan", seed: 42 });
+    });
+  });
+
+  describe("when the live tier, another profile and a seed are chosen", () => {
+    it("should request a live reproduction with them", async () => {
+      const onSubmit = vi.fn();
+      render(<MpReplayDialog runId="r1" profiles={["lan", "3g"]} onSubmit={onSubmit} onClose={vi.fn()} />);
+      await userEvent.click(screen.getByRole("radio", { name: /Reproduce \(live/ }));
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Network profile" }), "3g");
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Seed" }), { target: { value: "7" } });
+      await userEvent.click(screen.getByRole("button", { name: "Reproduce live" }));
+      expect(onSubmit).toHaveBeenCalledWith({ tier: "b", profile: "3g", seed: 7 });
+    });
+  });
+
+  describe("when the seed is cleared", () => {
+    it("should send seed 0", async () => {
+      const onSubmit = vi.fn();
+      render(<MpReplayDialog runId="r1" profiles={["lan"]} onSubmit={onSubmit} onClose={vi.fn()} />);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Seed" }), { target: { value: "" } });
+      await userEvent.click(screen.getByRole("button", { name: "Replay offline" }));
+      expect(onSubmit).toHaveBeenCalledWith({ tier: "a", profile: "lan", seed: 0 });
+    });
+  });
+
+  describe("when the sidecar lists no profiles", () => {
+    it("should offer the fallback profiles", () => {
+      render(<MpReplayDialog runId="r1" profiles={[]} onSubmit={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByRole("combobox", { name: "Network profile" })).toHaveValue(FALLBACK_PROFILES[0]);
+      expect(screen.getAllByRole("option")).toHaveLength(FALLBACK_PROFILES.length);
+    });
+  });
+
+  describe("when a request is in flight", () => {
+    it("should disable both actions and refuse Escape", () => {
+      const onSubmit = vi.fn();
+      const onClose = vi.fn();
+      render(<MpReplayDialog runId="r1" profiles={["lan"]} requesting onSubmit={onSubmit} onClose={onClose} />);
+      expect(screen.getByRole("button", { name: "Working…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.submit(screen.getByRole("radiogroup").closest("form")!);
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("when the replay request failed", () => {
+    it("should announce the error and keep the form", () => {
+      render(
+        <MpReplayDialog runId="r1" profiles={["lan"]} error="Refused (409)" onSubmit={vi.fn()} onClose={vi.fn()} />,
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent("Refused (409)");
+      expect(screen.getByRole("button", { name: "Replay offline" })).toBeEnabled();
+    });
+  });
+
+  describe("when an offline replay finished", () => {
+    it("should show the hashes and close from the Close action", async () => {
+      const onClose = vi.fn();
+      render(
+        <MpReplayDialog
+          runId="r1"
+          profiles={["lan"]}
+          outcome={outcome({ decisionHash: "d-1" })}
+          onSubmit={vi.fn()}
+          onClose={onClose}
+        />,
+      );
+      expect(screen.getByText("Replay (exact, offline) finished")).toBeInTheDocument();
+      expect(screen.getByText("h-1")).toBeInTheDocument();
+      expect(screen.getByText("d-1")).toBeInTheDocument();
+      expect(screen.queryByRole("radiogroup")).toBeNull();
+      const actions = screen.getAllByRole("button", { name: "Close" });
+      expect(actions).toHaveLength(2); // the corner button and the action
+      await userEvent.click(actions.find((button) => button.dataset.mpAction === "close-replay")!);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("should show a dash when the sidecar returned no hash", () => {
+      render(
+        <MpReplayDialog
+          runId="r1"
+          profiles={["lan"]}
+          outcome={outcome({ hash: null })}
+          onSubmit={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(screen.getByText("\u{2014}")).toBeInTheDocument();
+      expect(screen.queryByText("Decision-log hash")).toBeNull();
+    });
+  });
+
+  describe("when a live reproduction started", () => {
+    it("should name the new run", () => {
+      render(
+        <MpReplayDialog
+          runId="r1"
+          profiles={["lan"]}
+          outcome={outcome({ tier: "b", id: "r2", hash: null })}
+          onSubmit={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(screen.getByText("Reproduce (live, same conditions) started")).toBeInTheDocument();
+      expect(screen.getByText("r2")).toBeInTheDocument();
+    });
+  });
+});
