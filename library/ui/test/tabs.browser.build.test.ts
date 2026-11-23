@@ -120,3 +120,125 @@ describe('when valid route captions use narrow and wide glyphs', () => {
       ).toEqual(before)
     })
 })
+
+type Bar = {
+  height: number
+  image: string
+  size: string
+  position: string
+  shadow: string
+  transform: string
+  animations: string[]
+}
+const primaryBar = 'linear-gradient(rgb(255, 45, 85), rgb(255, 45, 85))'
+const bars = (selector: string) =>
+  evaluate<Bar[]>(
+    `[...document.querySelectorAll(${JSON.stringify(selector)})].map(e=>{const s=getComputedStyle(e);return{height:e.getBoundingClientRect().height,image:s.backgroundImage.split('), linear')[0]+(s.backgroundImage.includes('), linear')?')':''),size:s.backgroundSize.split(',')[0],position:s.backgroundPosition.split(',')[0],shadow:s.boxShadow,transform:s.transform,animations:e.getAnimations().map(a=>a.transitionProperty??a.animationName)}})`
+  )
+const settled = () =>
+  evaluate(
+    '(async()=>{for(let n=0;n<120&&document.getAnimations().length;n++)await new Promise(r=>requestAnimationFrame(r))})()'
+  )
+async function click(selector: string) {
+  const point = await evaluate<{ x: number; y: number }>(
+    `(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`
+  )
+  for (const type of ['mousePressed', 'mouseReleased'] as const)
+    await browser.session.send('Input.dispatchMouseEvent', {
+      type,
+      ...point,
+      button: 'left',
+      clickCount: 1
+    })
+}
+async function media(features: { name: string; value: string }[]) {
+  await browser.session.send('Emulation.setEmulatedMedia', { features })
+}
+
+describe('when a tab is selected', () => {
+  // The selected bar the tabs drew before it moved: 4px of primary along the tab's bottom edge (the route tabs lift it
+  // 9px on phones), the height of each variant, and no bar on the other tab.
+  for (const width of [390, 1440])
+    it(`should end in the same underline as before the motion at ${width}`, async () => {
+      await media([])
+      await ready(width)
+      await click('#underline [role=tab]:nth-child(2)')
+      await click('#mobile [role=tab]:nth-child(2)')
+      await click('#compact [role=tab]:nth-child(2)')
+      await settled()
+      for (const [selector, height] of [
+        ['#underline [role=tab]', 64],
+        ['#mobile [role=tab]', 35],
+        ['#compact [role=tab]', width < 1024 ? 64 : 46]
+      ] as const) {
+        const [other, selected] = await bars(selector)
+        expect(selected).toEqual({
+          height,
+          image: primaryBar,
+          size: '100% 4px',
+          position: '0px 100%',
+          shadow: 'none',
+          transform: 'none',
+          animations: []
+        })
+        expect(other!.size).toBe('0% 4px')
+      }
+      const [route, current] = await bars('#tabs a')
+      expect(current).toMatchObject({
+        height: width < 768 ? 44 : 64,
+        image: primaryBar,
+        size: '100% 4px',
+        position: width < 768 ? '0px calc(100% - 9px)' : '0px 100%'
+      })
+      expect(route!.size).toBe('0% 4px')
+    })
+
+  it('should grow the new bar and pop the new pill', async () => {
+    await media([{ name: 'prefers-reduced-motion', value: 'no-preference' }])
+    await ready(1440)
+    await click('#underline [role=tab]:nth-child(2)')
+    await click('#pill [role=tab]:nth-child(2)')
+    const [, underline] = await bars('#underline [role=tab]')
+    expect(underline!.animations).toContain('background-size')
+    expect(underline!.position).toBe('50% 100%')
+    const [, pill] = await bars('#pill [role=tab]')
+    expect(pill!.animations.some((name) => name.includes('pillPop'))).toBe(true)
+  })
+
+  it('should apply the selected state at once when motion is reduced', async () => {
+    await media([{ name: 'prefers-reduced-motion', value: 'reduce' }])
+    await ready(1440)
+    await click('#underline [role=tab]:nth-child(2)')
+    await click('#pill [role=tab]:nth-child(2)')
+    const [, underline] = await bars('#underline [role=tab]')
+    expect(underline).toMatchObject({ size: '100% 4px', position: '0px 100%', animations: [] })
+    // Only the colour transitions the pill had before the motion remain.
+    const [, pill] = await bars('#pill [role=tab]')
+    expect(pill).toMatchObject({ transform: 'none', animations: ['background-color', 'color'] })
+    // Hovering a pill does not scale it either.
+    await browser.session.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      ...(await evaluate<{ x: number; y: number }>(
+        `(()=>{const r=document.querySelector('#pill [role=tab]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`
+      ))
+    })
+    await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+    expect((await bars('#pill [role=tab]'))[0]!.transform).toBe('none')
+    expect(
+      await evaluate('getComputedStyle(document.querySelector("#tabs a")).transitionDuration')
+    ).toBe('0s')
+    await media([])
+  })
+
+  it('should draw the selected bar in the system highlight when colours are forced', async () => {
+    await media([{ name: 'forced-colors', value: 'active' }])
+    await ready(1440)
+    const highlight = await evaluate<string>(
+      `(()=>{const p=document.createElement('span');p.style.forcedColorAdjust='none';p.style.color='Highlight';document.body.append(p);const c=getComputedStyle(p).color;p.remove();return c})()`
+    )
+    const [, selected] = await bars('#underline [role=tab]')
+    expect(selected!.image).toBe(`linear-gradient(${highlight}, ${highlight})`)
+    expect((await bars('#tabs a'))[1]!.image).toBe(`linear-gradient(${highlight}, ${highlight})`)
+    await media([])
+  })
+})
