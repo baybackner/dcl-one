@@ -6,8 +6,9 @@
 //! At most one read runs at a time, in a task of its own: it finishes and
 //! keeps its answer (a failure or a panic included) even when every caller
 //! that waited on it went away. [`Kept::get`] waits for it; [`Kept::get_since`]
-//! accepts only a read that started at or after a given instant, whatever its
-//! lifetime.
+//! accepts only a read that started at or after a [`Since`], whatever its
+//! lifetime: a write's decision takes a read that started after it began, a
+//! read-only decision also one that started up to [`READ_WINDOW`] before.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -20,6 +21,27 @@ use tokio::time::Instant;
 pub const FAILURE_TTL: Duration = Duration::from_secs(30);
 /// The whole read, every page, call and retry included.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long before a read-only decision began a read may have started and
+/// still answer it ([`Since::read`]).
+pub const READ_WINDOW: Duration = Duration::from_secs(5);
+
+/// The oldest read start a decision accepts.
+#[derive(Debug, Clone, Copy)]
+pub struct Since(Instant);
+
+impl Since {
+    /// A write's decision: a read that started after it began.
+    pub fn write() -> Self {
+        Self(Instant::now())
+    }
+
+    /// A read-only decision: a read that started up to [`READ_WINDOW`]
+    /// before it began.
+    pub fn read() -> Self {
+        let now = Instant::now();
+        Self(now.checked_sub(READ_WINDOW).unwrap_or(now))
+    }
+}
 
 struct Cache<T> {
     good: Option<(Instant, T)>,
@@ -139,7 +161,7 @@ impl<T: Clone + Send + 'static> Kept<T> {
     /// one (and starting it when none runs); `None` when the source can't
     /// tell. Concurrent callers share the read in flight when it started in
     /// time.
-    pub async fn get_since<F>(&self, since: Instant, read: impl Fn() -> F) -> Option<T>
+    pub async fn get_since<F>(&self, since: Since, read: impl Fn() -> F) -> Option<T>
     where
         F: Future<Output = Option<T>> + Send + 'static,
     {
@@ -149,7 +171,7 @@ impl<T: Clone + Send + 'static> Kept<T> {
             settled.as_mut().enable();
             {
                 let mut cache = self.shared.cache();
-                if cache.good_started.is_some_and(|started| started >= since)
+                if cache.good_started.is_some_and(|started| started >= since.0)
                     && let Some((_, value)) = &cache.good
                 {
                     return Some(value.clone());
@@ -182,6 +204,9 @@ impl<T: Clone + Send + 'static> Kept<T> {
     pub(crate) fn backdate(&self, by: Duration) {
         let mut cache = self.shared.cache();
         if let Some((at, _)) = cache.good.as_mut() {
+            *at = at.checked_sub(by).unwrap();
+        }
+        if let Some(at) = cache.good_started.as_mut() {
             *at = at.checked_sub(by).unwrap();
         }
         if let Some(at) = cache.failed.as_mut() {
@@ -219,8 +244,8 @@ mod tests {
         let kept = Kept::new(Duration::from_secs(3600));
         let hits = Arc::new(AtomicUsize::new(0));
         let read = counting(&hits, Duration::ZERO, true);
-        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(1));
-        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(2));
+        assert_eq!(kept.get_since(Since::write(), &read).await, Some(1));
+        assert_eq!(kept.get_since(Since::write(), &read).await, Some(2));
         assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 
@@ -228,7 +253,7 @@ mod tests {
     async fn questions_asked_before_a_read_started_share_it() {
         let kept = Arc::new(Kept::new(Duration::from_secs(3600)));
         let hits = Arc::new(AtomicUsize::new(0));
-        let since = Instant::now();
+        let since = Since::write();
         let mut waiting = Vec::new();
         for _ in 0..20 {
             let kept = kept.clone();
@@ -250,11 +275,11 @@ mod tests {
         let first = {
             let kept = kept.clone();
             let read = counting(&hits, Duration::from_millis(100), true);
-            tokio::spawn(async move { kept.get_since(Instant::now(), read).await })
+            tokio::spawn(async move { kept.get_since(Since::write(), read).await })
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
         let read = counting(&hits, Duration::from_millis(10), true);
-        assert_eq!(kept.get_since(Instant::now(), read).await, Some(2));
+        assert_eq!(kept.get_since(Since::write(), read).await, Some(2));
         assert_eq!(first.await.unwrap(), Some(1));
     }
 
@@ -263,11 +288,45 @@ mod tests {
         let kept = Kept::new(Duration::from_secs(3600));
         let hits = Arc::new(AtomicUsize::new(0));
         let failing = counting(&hits, Duration::ZERO, false);
-        assert_eq!(kept.get_since(Instant::now(), &failing).await, None);
-        assert_eq!(kept.get_since(Instant::now(), &failing).await, None);
+        assert_eq!(kept.get_since(Since::write(), &failing).await, None);
+        assert_eq!(kept.get_since(Since::write(), &failing).await, None);
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         kept.backdate(FAILURE_TTL);
         let read = counting(&hits, Duration::ZERO, true);
-        assert_eq!(kept.get_since(Instant::now(), &read).await, Some(2));
+        assert_eq!(kept.get_since(Since::write(), &read).await, Some(2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_decisions_at_once_share_one_read_and_one_within_the_window_issues_none() {
+        let kept = Arc::new(Kept::new(Duration::ZERO));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let both: Vec<_> = (0..2)
+            .map(|_| {
+                let kept = kept.clone();
+                let read = counting(&hits, Duration::from_millis(50), true);
+                tokio::spawn(async move { kept.get_since(Since::read(), read).await })
+            })
+            .collect();
+        for answer in both {
+            assert_eq!(answer.await.unwrap(), Some(1));
+        }
+        tokio::time::advance(READ_WINDOW - Duration::from_millis(100)).await;
+        let read = counting(&hits, Duration::ZERO, true);
+        assert_eq!(kept.get_since(Since::read(), &read).await, Some(1));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        assert_eq!(kept.get_since(Since::read(), &read).await, Some(2));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_decision_just_after_a_read_takes_a_read_of_its_own() {
+        let kept = Kept::new(Duration::ZERO);
+        let hits = Arc::new(AtomicUsize::new(0));
+        let read = counting(&hits, Duration::ZERO, true);
+        assert_eq!(kept.get_since(Since::read(), &read).await, Some(1));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(kept.get_since(Since::write(), &read).await, Some(2));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 }

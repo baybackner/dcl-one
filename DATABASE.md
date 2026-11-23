@@ -141,10 +141,13 @@ lists before taking the lock and, under it, only the rows written since; a
 lock still busy after 30 s ends the run, and uploads that wrote no file go
 without it. An upload a newer deployment overtook is released the same way
 within its request, which takes the lock only if it is free and otherwise
-marks the upload expired for the cleanup's next run. Builder's item file and
-video uploads also take the shared side, at most 5 s and then 503, before
-checking whether a blob is stored in the builder's tree and hold it until the
-`builder.uploaded_contents` row naming it commits. The other writers that commit a row naming a blob do
+marks the upload expired for the cleanup's next run. Builder's item file
+uploads store their blobs in the builder's tree first, as a content deploy
+does, then take the shared side, at most 5 s and then 503, re-check every
+blob (503 when the collector removed one) and hold it until the
+`builder.uploaded_contents` rows naming them commit. Video uploads take the
+shared side the same way before checking whether the blob is stored and hold
+it until its row commits. The other writers that commit a row naming a blob do
 the same through `gc::store_for_row` (the shared side, at most 5 s, then the
 blob stored unless present, in the row's transaction): the camera-reel
 import, community thumbnails and contents, MLS blobs, cached profile images,
@@ -1845,8 +1848,10 @@ Invariants:
   collections of one provider create one row and the second save decides
   on it.
 - The registry read runs before any connection is taken and is never
-  retried inside a transaction; a write decides again inside its
-  transaction from that same read.
+  retried inside a transaction; a write decides on a read that started
+  after it began and decides again inside its transaction from that same
+  read. A read-only decision also takes a read that started up to
+  `kept::READ_WINDOW` (5 seconds) before it.
 - Measured at the reference size (51,745 collections, 34 third-party,
   116,190 items, 7 rows): every statement above under 6 ms.
 

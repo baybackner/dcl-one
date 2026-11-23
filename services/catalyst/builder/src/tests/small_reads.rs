@@ -94,6 +94,7 @@ async fn rarities_merge_the_subgraph_with_the_oracle_and_are_kept() {
     let subgraph = FakeCommittee::with(&[]);
     subgraph.set_rarities(Some(&[("common", USD, "100000"), ("epic", USD, "1000")]));
     let oracle = FakeOracle::with(&[("common", "4000000000000000000"), ("epic", "5")]);
+    oracle.hold_rarities_until(2);
     let app = rarities_app(&subgraph, Some(&oracle)).await;
     let all = json!({
         "ok": true,
@@ -120,10 +121,17 @@ async fn rarities_merge_the_subgraph_with_the_oracle_and_are_kept() {
         );
     }
     assert_eq!(subgraph.rarity_hits(), 1, "one read answers the minute");
+    let mut asked = oracle.asked();
+    asked.sort();
     assert_eq!(
-        oracle.asked(),
+        asked,
         ["common", "epic"],
         "the oracle is asked once per listed rarity, never for a name from the path"
+    );
+    assert_eq!(
+        oracle.most_rarities_at_once(),
+        2,
+        "the listed rarities are asked at once"
     );
 }
 
@@ -611,10 +619,31 @@ async fn addresses_list_only_published_standard_contracts() {
         );
         let (_, _, body) = get(
             &d.app,
+            &format!("{mount}/v1/addresses?tag={tag}&page=3&limit=1"),
+        )
+        .await;
+        assert_eq!(
+            body,
+            json!({ "ok": true, "data": { "total": 1, "limit": 1, "pages": 1, "page": 3, "results": [] } }),
+            "a page past the last still counts the matches"
+        );
+        let (_, _, body) = get(
+            &d.app,
             &format!("{mount}/v1/addresses?tag={tag}&is_published=false"),
         )
         .await;
         assert_eq!(body, json!({ "ok": true, "data": [] }));
+        let sorted = |body: Value| {
+            let mut listed: Vec<String> = serde_json::from_value(body["data"].clone()).unwrap();
+            listed.sort();
+            listed
+        };
+        let (_, _, every) = get(&d.app, &format!("{mount}/v1/addresses")).await;
+        assert_eq!(sorted(every.clone()).len(), 2, "{every}");
+        for query in ["tag=", "page=1", "page=2"] {
+            let (_, _, body) = get(&d.app, &format!("{mount}/v1/addresses?{query}")).await;
+            assert_eq!(sorted(body), sorted(every.clone()), "{query}");
+        }
         let (status, _, body) = get(&d.app, &format!("{mount}/v1/addresses?status=nope")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }

@@ -25,7 +25,7 @@ const ORIGINS: &str =
     r" regex:^https://(.{1,50}\.)?decentraland\.example$ ; https://partner.example ;";
 const HASH: &str = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy";
 const EXPOSED: &str =
-    "etag,cache-control,content-language,content-type,expires,last-modified,pragma";
+    "etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after";
 const METHODS: &str = "GET,HEAD,POST,PUT,PATCH,DELETE";
 
 fn raw(origin: Option<&str>, method: Option<&str>) -> crate::RawSettings {
@@ -320,6 +320,7 @@ fn the_settings_are_read_as_builder_server_is_deployed_and_refuse_what_the_node_
     }
 }
 
+/// A page on a listed origin reads the refusal and when to try again.
 #[tokio::test]
 async fn a_listed_origin_reads_the_refusal_of_a_node_whose_writes_are_off() {
     let mut raw = raw(Some(ORIGINS), None);
@@ -331,5 +332,12 @@ async fn a_listed_origin_reads_the_refusal_of_a_node_whose_writes_are_off() {
     ] {
         let (status, headers, _) = answer(&app, request("PUT", &path, Some(DAPP))).await;
         assert_eq!((status, allowed(&headers)), (503, Some(DAPP)), "{path}");
+        assert!(headers.contains_key("retry-after"), "{path}");
+        assert!(
+            headers
+                .get("access-control-expose-headers")
+                .is_some_and(|v| v.to_str().unwrap().split(',').any(|h| h == "retry-after")),
+            "{path}"
+        );
     }
 }

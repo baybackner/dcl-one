@@ -190,9 +190,9 @@ describe('executeUpload', () => {
   })
 
   it("keeps the node's words of the failure it shows when a later operation fails for another reason", async () => {
-    const reason = 'The content store is being collected; retry shortly'
+    const reason = 'The upload is too large'
     saveItemMock
-      .mockRejectedValueOnce(new BuilderServerError(reason, 503, {}, { reason }))
+      .mockRejectedValueOnce(new BuilderServerError(reason, 413, {}, { reason }))
       .mockRejectedValueOnce(new BuilderServerError('boom', 500))
     const result = await executeUpload('0xowner', await planUpload([draft('a'), draft('b')], []))
     expect(result.refusal).toEqual({ message: reason })

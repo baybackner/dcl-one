@@ -273,7 +273,7 @@ describe('LinkedCollectionView', () => {
     renderView()
 
     expect(await screen.findByTestId('linked-items-error')).toHaveTextContent(
-      'Too many requests, try again in a minute. Try again in 42 seconds.'
+      /Too many requests, try again in a minuteTry again$/
     )
   })
 

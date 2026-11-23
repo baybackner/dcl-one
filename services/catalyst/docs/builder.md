@@ -213,6 +213,7 @@ step, or a bound of the review, validator or outside-service areas).
 | Rows `GET /v1/items` answers | 1,000 | `items::listing::EVERY_ITEM_CAP` |
 | Rows the committee's collection listing or the public search answers | 1,000 | `collections::listing::COMMITTEE_CAP` |
 | Rows an address's collection listing answers | 5,000 | `collections::listing::ADDRESS_CAP` |
+| How long before a read-only decision a third-party registry read may have started and still answer it (a write's decision takes only a read that started after it began) | 5 seconds | `kept::READ_WINDOW` |
 | Characters of a collection search's `q` | 256 | `collections::listing::Q_MAX` |
 | Assignees a collection listing filters by | 20 | `collections::listing::MAX_ASSIGNEES` |
 | Tags a collection listing filters by | 5 | `collections::listing::MAX_TAGS` |
@@ -240,8 +241,6 @@ step, or a bound of the review, validator or outside-service areas).
 | Characters of a subscription's `source` | 100 | `handlers::newsletter::MAX_SOURCE` |
 | Body of a validator claim or lease | 4 KiB | `handlers::validator::SMALL_BODY` |
 | Body of a validator verdict | 5 MiB | `handlers::validator::VERDICT_BODY` |
-| Largest file read whole to tell whether it's an SVG image | 1 MiB | `handlers::svg::MAX_BYTES` |
-| Element depth of a file served as an SVG image | 256 | `handlers::svg::MAX_DEPTH` |
 | Characters of a third-party id in a path | 512 | `handlers::third_parties::ID_MAX` |
 | Body of a video upload | 251,048,576 bytes | `items::video::BODY_LIMIT` |
 | Bytes a video upload's form may hold besides the video's | 64 KiB | `items::video::FRAMING_BYTES` |

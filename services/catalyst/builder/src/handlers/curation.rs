@@ -16,6 +16,7 @@ use crate::curation::rows::{
 use crate::curation::transitions::Status;
 use crate::curation::writes;
 use crate::http::{ApiData, ApiError};
+use crate::kept::Since;
 use crate::onchain::{self, CommitteeMemberOut, ReviewRowOut};
 
 /// `data` payload of `GET /v1/collections/curation`.
@@ -204,7 +205,7 @@ pub async fn collection_curation(
     Signed(signer): Signed,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let curator = access::curate_collection(&state, &signer, &id).await?;
+    let curator = access::curate_collection(&state, &signer, &id, Since::read()).await?;
     let mut conn = state.items.pool().acquire().await?;
     Ok(maybe(
         rows::newest_of_collection(&mut conn, curator.collection()).await?,
@@ -254,7 +255,7 @@ pub async fn collection_item_curations(
     headers: HeaderMap,
 ) -> Result<Json<ApiData<Vec<ItemCurationOut>>>, ApiError> {
     let items = item_ids(query.as_deref())?;
-    let curator = access::curate_collection(&state, &signer, &id).await?;
+    let curator = access::curate_collection(&state, &signer, &id, Since::read()).await?;
     let mut conn = state.items.pool().acquire().await?;
     let rows =
         rows::newest_of_collection_items(&mut conn, curator.collection(), items.as_deref()).await?;
@@ -270,7 +271,7 @@ pub async fn item_curation(
     Signed(signer): Signed,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let curator = access::curate_item(&state, &signer, &id).await?;
+    let curator = access::curate_item(&state, &signer, &id, Since::read()).await?;
     let mut conn = state.items.pool().acquire().await?;
     let item = curator.item().unwrap_or_default();
     Ok(maybe(rows::newest_of_item(&mut conn, item).await?))
@@ -295,7 +296,7 @@ pub async fn update_collection_curation(
     body: Bytes,
 ) -> Result<Json<ApiData<CollectionCurationOut>>, ApiError> {
     let curation = curation_of(&body)?;
-    let curator = access::curate_collection(&state, &signer, &id).await?;
+    let curator = access::curate_collection(&state, &signer, &id, Since::write()).await?;
     let update = writes::parse_update(&curation)?;
     if update.content_hash.is_some() {
         return Err(ApiError::bad_request("Invalid schema"));
@@ -312,7 +313,7 @@ pub async fn request_collection_curation(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ApiData<CollectionCurationOpened>>, ApiError> {
-    let curator = access::curate_collection(&state, &signer, &id).await?;
+    let curator = access::curate_collection(&state, &signer, &id, Since::write()).await?;
     let body: Value = if body.is_empty() {
         json!({})
     } else {
@@ -332,7 +333,7 @@ pub async fn update_item_curation(
     body: Bytes,
 ) -> Result<Json<ApiData<ItemCurationOut>>, ApiError> {
     let curation = curation_of(&body)?;
-    let curator = access::curate_item(&state, &signer, &id).await?;
+    let curator = access::curate_item(&state, &signer, &id, Since::write()).await?;
     let update = writes::parse_update(&curation)?;
     Ok(Json(ApiData::ok(
         writes::update_item(&state, curator, update).await?,
@@ -346,7 +347,7 @@ pub async fn request_item_curation(
     Signed(signer): Signed,
     Path(id): Path<String>,
 ) -> Result<Json<ApiData<ItemCurationOpened>>, ApiError> {
-    let curator = access::curate_item(&state, &signer, &id).await?;
+    let curator = access::curate_item(&state, &signer, &id, Since::write()).await?;
     Ok(Json(ApiData::ok(writes::open_item(&state, curator).await?)))
 }
 

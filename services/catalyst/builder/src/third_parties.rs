@@ -3,11 +3,13 @@
 //! (`builder.virtual_third_parties`) that stand for a provider the registry
 //! doesn't have yet, as builder-server keeps them.
 //!
-//! A decision takes only a registry read that started after the decision
-//! began ([`ThirdParties::registry`], [`crate::kept::Kept::get_since`]): one
-//! read runs at a time and every request waiting when it started shares it,
-//! so a manager the registry no longer lists loses access as soon as the
-//! subgraph has indexed the change. A node with no registry subgraph, or a
+//! A write's decision takes only a registry read that started after the
+//! decision began, a read-only one also a read that started up to
+//! [`crate::kept::READ_WINDOW`] before it ([`ThirdParties::registry`],
+//! [`Since`]): one read runs at a time and every request waiting when it
+//! started shares it, so a manager the registry no longer lists loses its
+//! writes as soon as the subgraph has indexed the change, and its reads
+//! within the window. A node with no registry subgraph, or a
 //! read that fails, can't tell: 503, kept [`crate::kept::FAILURE_TTL`], and
 //! never an answer from an older read. No read holds a database connection.
 
@@ -17,12 +19,11 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use sqlx::PgConnection;
-use tokio::time::Instant;
 
 use crate::chain_index::ChainIndex;
 use crate::chain_index::third_parties::{LinkedContract, Provider};
 use crate::http::ApiError;
-use crate::kept::{FETCH_TIMEOUT, Kept};
+use crate::kept::{FETCH_TIMEOUT, Kept, Since};
 
 /// Every provider of the registry, sorted by id.
 pub type Registry = Arc<Vec<Provider>>;
@@ -46,12 +47,20 @@ impl ThirdParties {
     pub async fn registry(
         &self,
         market: Option<&Arc<ChainIndex>>,
-        since: Instant,
+        since: Since,
     ) -> Result<Registry, ApiError> {
         self.kept
             .get_since(since, || fetch(market.cloned()))
             .await
             .ok_or_else(unavailable)
+    }
+}
+
+#[cfg(test)]
+impl ThirdParties {
+    /// Ages the kept read past every read-only decision's window.
+    pub(crate) fn outdate(&self) {
+        self.kept.backdate(crate::kept::READ_WINDOW);
     }
 }
 
@@ -73,6 +82,19 @@ async fn fetch(market: Option<Arc<ChainIndex>>) -> Option<Registry> {
     };
     tracing::warn!(error = %error, "builder third-party registry read failed; third-party decisions answer 503");
     None
+}
+
+/// Locks the provider `id` for the transaction: every write of its virtual
+/// third party, and every save or publish that decides on it, takes this
+/// lock before it reads the row.
+pub async fn lock_provider(conn: &mut PgConnection, id: &str) -> Result<(), ApiError> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
+    )
+    .bind(id)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// The registry's record of `id`, compared exactly.

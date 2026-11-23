@@ -4,15 +4,17 @@
 //! the body is read part by part and refused once it passes a bound, and each
 //! file is hashed and compared with the hash it was sent under before
 //! anything is stored. File names and part content types are never read.
-//! Then, in one transaction with the item locked, the decision runs again,
-//! every hash must be one the item names under a name other than its
-//! video's (the video comes through `/videos` and its MP4 check), and the
-//! bytes go to the blob store with a record of who uploaded them
-//! (`builder.uploaded_contents`, one row per hash and uploader), under the
-//! store's shared lock ([`lock_store_shared`], 503 past its wait), so a
-//! collector's unlink batch either sees the record or leaves the upload to
-//! store again. A file no item names is never
-//! stored, and a file's records go once no item names it
+//! Every hash must be one the item names under a name other than its
+//! video's (the video comes through `/videos` and its MP4 check); then the
+//! bytes go to the blob store, with no connection or lock held. In one
+//! transaction with the item locked, the decision and the names are checked
+//! again, and each file gets a record of who uploaded it (`builder.uploaded_contents`, one
+//! row per hash and uploader) under the store's shared lock
+//! ([`lock_store_shared`], 503 past its wait), only once it is still stored
+//! (503 otherwise, as content's deployer answers a file collected in
+//! between). A file no item names is never stored; a stored file no record
+//! names (an upload refused once its bytes were stored) is the collector's,
+//! as is one whose records go once no item names it
 //! ([`super::save::forget_unnamed`]).
 
 use axum::extract::Multipart;
@@ -51,12 +53,14 @@ pub(super) async fn lock_store_shared(conn: &mut sqlx::PgConnection) -> Result<(
     gc::lock_store_shared_within(conn, gc::SHARED_LOCK_WAIT)
         .await
         .map_err(|e| match e {
-            GcError::LockTimeout => {
-                ApiError::service_unavailable("The content store is being collected; retry shortly")
-            }
+            GcError::LockTimeout => store_collected(),
             GcError::Database(e) => e.into(),
             e => ApiError::internal(e.to_string()),
         })
+}
+
+fn store_collected() -> ApiError {
+    ApiError::service_unavailable("The content store is being collected; retry shortly")
 }
 
 pub(crate) fn too_large() -> ApiError {
@@ -110,50 +114,41 @@ pub async fn read(mut multipart: Multipart) -> Result<Vec<(String, Bytes)>, ApiE
 }
 
 impl ItemsComponent {
-    /// Stores `files`, each a hash the item names, for the item `change` was
-    /// decided for.
+    /// Stores `files`, each a hash the item names, then records them for the
+    /// item `change` was decided for, under the store lock's shared side,
+    /// once the decision and the names hold again; a file the collector
+    /// removed in between answers 503 and records nothing.
     pub async fn save_item_files(
         &self,
         change: &ItemChange,
         files: Vec<(String, Bytes)>,
     ) -> Result<(), ApiError> {
         let id = change.id();
+        {
+            let mut conn = self.pool.acquire().await?;
+            for (hash, _) in &files {
+                named(&mut conn, id, hash).await?;
+            }
+        }
+        let mut sizes = Vec::with_capacity(files.len());
+        for (hash, bytes) in files {
+            sizes.push((hash.clone(), bytes.len() as i64));
+            if !self.exists(&hash).await? {
+                self.blobs
+                    .store(&hash, bytes)
+                    .await
+                    .map_err(|e| ApiError::internal(format!("storing {hash}: {e}")))?;
+            }
+        }
         let mut tx = self.pool.begin().await?;
         let view = chain_state::for_decision(&mut tx).await?;
         lock_item(&mut tx, id, None).await?;
         access::confirm_item_change(&mut tx, &view, change).await?;
         lock_store_shared(&mut tx).await?;
-        for (hash, bytes) in files {
-            let (named, as_file): (bool, bool) = sqlx::query_as(
-                "SELECT count(*) > 0, count(*) FILTER (WHERE file <> $3) > 0 \
-                 FROM builder.item_contents WHERE item_id = $1 AND hash = $2",
-            )
-            .bind(id)
-            .bind(&hash)
-            .bind(VIDEO_FILE)
-            .fetch_one(&mut *tx)
-            .await?;
-            if !named {
-                return Err(ApiError::bad_request("The item does not name this file")
-                    .with_data(json!({ "hash": hash })));
-            }
-            if !as_file {
-                return Err(ApiError::bad_request(
-                    "The video is uploaded through the videos route",
-                )
-                .with_data(json!({ "hash": hash })));
-            }
-            let size = bytes.len() as i64;
-            if !self
-                .blobs
-                .exist(&hash)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            {
-                self.blobs
-                    .store(&hash, bytes)
-                    .await
-                    .map_err(|e| ApiError::internal(format!("storing {hash}: {e}")))?;
+        for (hash, size) in sizes {
+            named(&mut tx, id, &hash).await?;
+            if !self.exists(&hash).await? {
+                return Err(store_collected());
             }
             sqlx::query(
                 "INSERT INTO builder.uploaded_contents (hash, size, uploaded_by) VALUES ($1, $2, $3) \
@@ -168,4 +163,35 @@ impl ItemsComponent {
         tx.commit().await?;
         Ok(())
     }
+
+    async fn exists(&self, hash: &str) -> Result<bool, ApiError> {
+        self.blobs
+            .exist(hash)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))
+    }
+}
+
+/// The item names `hash` under a name other than its video's (400 otherwise).
+async fn named(conn: &mut sqlx::PgConnection, id: uuid::Uuid, hash: &str) -> Result<(), ApiError> {
+    let (named, as_file): (bool, bool) = sqlx::query_as(
+        "SELECT count(*) > 0, count(*) FILTER (WHERE file <> $3) > 0 \
+         FROM builder.item_contents WHERE item_id = $1 AND hash = $2",
+    )
+    .bind(id)
+    .bind(hash)
+    .bind(VIDEO_FILE)
+    .fetch_one(conn)
+    .await?;
+    if !named {
+        return Err(ApiError::bad_request("The item does not name this file")
+            .with_data(json!({ "hash": hash })));
+    }
+    if !as_file {
+        return Err(
+            ApiError::bad_request("The video is uploaded through the videos route")
+                .with_data(json!({ "hash": hash })),
+        );
+    }
+    Ok(())
 }

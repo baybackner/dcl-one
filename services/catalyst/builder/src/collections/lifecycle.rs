@@ -90,7 +90,7 @@ pub async fn guard_address_change(
 /// waits while its lock holds or the node publishes it (423). The items go
 /// with it, their contents and the upload records no other item names, and
 /// the provider's virtual third party once no collection of the provider is
-/// left.
+/// left (builder-server's `delete_virtual_third_party_trigger`).
 pub async fn delete(state: &State, manage: &CollectionManage) -> Result<(), ApiError> {
     let id = manage.id();
     let stored: Option<(bool, Option<String>)> = sqlx::query_as(
@@ -154,12 +154,7 @@ pub async fn delete(state: &State, manage: &CollectionManage) -> Result<(), ApiE
     .fetch_one(&mut *tx)
     .await?;
     if let Some(provider) = provider {
-        sqlx::query(
-            "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
-        )
-        .bind(&provider)
-        .execute(&mut *tx)
-        .await?;
+        crate::third_parties::lock_provider(&mut tx, &provider).await?;
         sqlx::query(
             "DELETE FROM builder.virtual_third_parties WHERE id = $1 \
              AND NOT EXISTS (SELECT 1 FROM builder.collections WHERE third_party_id = $1)",
@@ -309,19 +304,17 @@ pub async fn publish(
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
-        for (place, (item, _)) in now.items.iter().enumerate() {
-            sqlx::query(
-                "UPDATE builder.items SET blockchain_item_id = $2, is_published = true, urn_suffix = $3, \
-                 updated_at = timezone('UTC', now()) WHERE id = $1",
-            )
-            .bind(item)
-            .bind(place.to_string())
-            .bind(format!("urn:decentraland:matic:collections-v2:{contract}:{place}"))
-            .execute(&mut *tx)
-            .await?;
-        }
+        let items: Vec<Uuid> = now.items.iter().map(|(item, _)| *item).collect();
+        sqlx::query(
+            "UPDATE builder.items i SET blockchain_item_id = (p.place - 1)::text, is_published = true, \
+             urn_suffix = $2 || (p.place - 1), updated_at = timezone('UTC', now()) \
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS p(id, place) WHERE i.id = p.id",
+        )
+        .bind(&items)
+        .bind(format!("urn:decentraland:matic:collections-v2:{contract}:"))
+        .execute(&mut *tx)
+        .await?;
         if first && !now.approved {
-            let items: Vec<Uuid> = now.items.iter().map(|(item, _)| *item).collect();
             validation = validator::on_publish(&mut tx, state, id, &items, sync.signer()).await?;
         }
         tx.commit().await?;

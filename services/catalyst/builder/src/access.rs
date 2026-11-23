@@ -71,14 +71,13 @@ use serde_json::json;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use tokio::time::Instant;
-
 use crate::SharedState;
 use crate::chain_index::third_parties::Provider;
 use crate::chain_state::{self, DecisionView};
 use crate::curation::ITEM_CURATED;
 use crate::http::{ApiError, Subject};
 use crate::items::urn::ThirdPartyItemUrn;
+use crate::kept::Since;
 use crate::shared::signed_fetch::Signer;
 use crate::third_parties::{self, Registry, has_manager};
 
@@ -614,7 +613,7 @@ pub(crate) fn provider_managers(
 /// `since`; `None` when none is. Holds no connection while it reads.
 async fn registry_for(
     state: &SharedState,
-    since: Instant,
+    since: Since,
     collections: &[Uuid],
     items: &[Uuid],
 ) -> Result<Option<Registry>, ApiError> {
@@ -637,7 +636,7 @@ fn providers(registry: &Option<Registry>) -> Option<&[Provider]> {
     registry.as_ref().map(|r| r.as_slice())
 }
 
-async fn registry(state: &SharedState, since: Instant) -> Result<Registry, ApiError> {
+async fn registry(state: &SharedState, since: Since) -> Result<Registry, ApiError> {
     state
         .third_parties
         .registry(state.market.as_ref(), since)
@@ -770,7 +769,7 @@ pub fn wallet(signer: &Signer) -> Wallet {
 /// builder-server's `getThirdParties(manager)` lists that
 /// [`provider_managers`] admits it to. Reads the registry.
 pub async fn managing(state: &SharedState, signer: &Signer) -> Result<Wallet, ApiError> {
-    let registry = registry(state, Instant::now()).await?;
+    let registry = registry(state, Since::read()).await?;
     let mut conn = state.items.pool().acquire().await?;
     let listed = third_parties::managed_by(&mut conn, &registry, signer.as_str()).await?;
     let providers = listed
@@ -831,7 +830,7 @@ pub async fn manage_provider(
     signer: &Signer,
     id: &str,
 ) -> Result<ProviderManage, ApiError> {
-    let registry = registry(state, Instant::now()).await?;
+    let registry = registry(state, Since::read()).await?;
     let listed: Option<Vec<String>> =
         sqlx::query_scalar("SELECT managers FROM builder.virtual_third_parties WHERE id = $1")
             .bind(id)
@@ -968,7 +967,7 @@ pub async fn read_collection(
     raw: &str,
 ) -> Result<CollectionRead, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let registry = registry_for(state, Since::read(), &[id], &[]).await?;
     let mut conn = state.items.pool().acquire().await?;
     let view = match chain_state::for_decision(&mut conn).await {
         Ok(view) => view,
@@ -1025,7 +1024,7 @@ pub async fn collection_items(
     status: Option<&str>,
 ) -> Result<CollectionRead, ApiError> {
     let registry = match Uuid::parse_str(raw) {
-        Ok(id) => registry_for(state, Instant::now(), &[id], &[]).await?,
+        Ok(id) => registry_for(state, Since::read(), &[id], &[]).await?,
         Err(_) => None,
     };
     let (mut conn, view) = decision(state).await?;
@@ -1098,7 +1097,7 @@ pub async fn read_item(
     raw: &str,
 ) -> Result<ItemRead, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[], &[id]).await?;
+    let registry = registry_for(state, Since::read(), &[], &[id]).await?;
     let (mut conn, view) = decision(state).await?;
     let i = item(&mut conn, id)
         .await?
@@ -1137,7 +1136,7 @@ pub async fn edit_collection(
     id: Uuid,
     provider: Option<&str>,
 ) -> Result<CollectionEdit, ApiError> {
-    let since = Instant::now();
+    let since = Since::write();
     let registry = match provider {
         Some(_) => Some(registry(state, since).await?),
         None => registry_for(state, since, &[id], &[]).await?,
@@ -1225,7 +1224,7 @@ pub async fn save_item(
 ) -> Result<ItemSave, ApiError> {
     let registry = registry_for(
         state,
-        Instant::now(),
+        Since::write(),
         &intent.collection.into_iter().collect::<Vec<_>>(),
         &[id],
     )
@@ -1600,7 +1599,7 @@ pub async fn change_item(
         id,
         signer: signer.as_str().to_string(),
         at: (state.now)(),
-        registry: registry_for(state, Instant::now(), &[], &[id]).await?,
+        registry: registry_for(state, Since::write(), &[], &[id]).await?,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_item_change(&mut conn, &view, &change).await?;
@@ -1697,7 +1696,7 @@ pub async fn manage_collection(
         id,
         signer: signer.as_str().to_string(),
         at: (state.now)(),
-        registry: registry_for(state, Instant::now(), &[id], &[]).await?,
+        registry: registry_for(state, Since::write(), &[id], &[]).await?,
     };
     let (mut conn, view) = decision(state).await?;
     confirm_collection_manage(&mut conn, &view, &manage).await?;
@@ -1795,7 +1794,7 @@ pub async fn sync_collection(
     raw: &str,
 ) -> Result<CollectionSync, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let registry = registry_for(state, Since::write(), &[id], &[]).await?;
     let (mut conn, view) = decision(state).await?;
     let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
@@ -1921,13 +1920,15 @@ pub async fn curation_scope(
 /// The curation routes of the collection `raw`: the collection must exist
 /// (404) and be published (409), then the signer must hold a role on it or
 /// be on the committee (401).
+/// A curation read decides on [`Since::read`], a write on [`Since::write`].
 pub async fn curate_collection(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
+    since: Since,
 ) -> Result<Curator, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let registry = registry_for(state, since, &[id], &[]).await?;
     let (mut conn, view) = decision(state).await?;
     let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
@@ -1940,13 +1941,15 @@ pub async fn curate_collection(
 /// The curation routes of the item `raw`: its collection must exist (404)
 /// and be published (409), then the signer must hold a role on its
 /// collection or be on the committee (401).
+/// A curation read decides on [`Since::read`], a write on [`Since::write`].
 pub async fn curate_item(
     state: &SharedState,
     signer: &Signer,
     raw: &str,
+    since: Since,
 ) -> Result<Curator, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[], &[id]).await?;
+    let registry = registry_for(state, since, &[], &[id]).await?;
     let (mut conn, view) = decision(state).await?;
     let not_found = || curation_not_found(signer.as_str());
     let i = item(&mut conn, id).await?.ok_or_else(not_found)?;
@@ -1968,7 +1971,7 @@ pub async fn read_review(
     raw: &str,
 ) -> Result<ReviewRead, ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[])
+    let registry = registry_for(state, Since::read(), &[id], &[])
         .await
         .ok()
         .flatten();
@@ -2052,7 +2055,7 @@ async fn reviewed(
     raw: &str,
 ) -> Result<(Uuid, Collection, Option<Registry>), ApiError> {
     let id = parse(raw)?;
-    let registry = registry_for(state, Instant::now(), &[id], &[]).await?;
+    let registry = registry_for(state, Since::write(), &[id], &[]).await?;
     let (mut conn, view) = decision(state).await?;
     let c = collection(&mut conn, &view, id, providers(&registry))
         .await?
@@ -2562,7 +2565,7 @@ pub async fn read_file(
     if !dcl_auth::is_canonical_cid(hash) || state.denylist.contains(hash) {
         return Ok(None);
     }
-    let since = Instant::now();
+    let since = Since::read();
     let (public, own, named): FileAnswer = sqlx::query_as(sqlx::AssertSqlSafe(file_read_sql()))
         .bind(hash)
         .bind(signer.map(Signer::as_str))

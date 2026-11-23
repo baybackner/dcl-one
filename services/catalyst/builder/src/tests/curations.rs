@@ -1085,6 +1085,7 @@ async fn an_address_listing_of_published_collections_counts_a_curated_third_part
     let pool = store.pool().clone();
     let (curated, uncurated) = (collection(&pool, true).await, collection(&pool, true).await);
     let i = item(&pool, curated).await;
+    item(&pool, curated).await;
     item(&pool, uncurated).await;
     curate(&pool, i, "pending", "2025-01-01").await;
     let wallet = crate::access::granted::managing(OWNER, &[PROVIDER]);

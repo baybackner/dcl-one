@@ -219,6 +219,16 @@ async fn an_upload_past_a_bound_or_unlike_its_item_stores_nothing() {
     )
     .await;
     assert_eq!(saved.0, 200, "{saved:?}");
+    let (status, body) = send(
+        &app,
+        OWNER_KEY,
+        "POST",
+        &format!("/v1/items/{id}/files"),
+        Body::from("{}"),
+        "application/json",
+    )
+    .await;
+    assert_eq!(status, 400, "an upload that is not multipart: {body}");
 
     let other = b"a file the item doesn't name".to_vec();
     let other_hash = dcl_auth::hash_bytes_v1(&other);
@@ -354,7 +364,7 @@ async fn a_draft_file_is_not_served_or_announced_by_the_content_server() {
 }
 
 #[tokio::test]
-async fn a_forgotten_file_uploaded_again_while_the_collector_unlinks_it_keeps_its_bytes() {
+async fn a_forgotten_file_the_collector_unlinks_during_its_upload_is_refused_until_sent_again() {
     let Some(app) = app().await else {
         return;
     };
@@ -409,9 +419,85 @@ async fn a_forgotten_file_uploaded_again_while_the_collector_unlinks_it_keeps_it
     app.state.items.blobs.delete_strict(&hash).await.unwrap();
     batch.commit().await.unwrap();
 
-    assert_eq!(again.await.unwrap().0, 200);
+    let refused = again.await.unwrap();
+    assert_eq!(
+        (refused.0, refused.1["error"].as_str()),
+        (
+            503,
+            Some("The content store is being collected; retry shortly")
+        )
+    );
+    assert!(uploaders(&app.pool, &hash).await.is_empty());
+    assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await.0, 200);
     assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
     assert!(app.state.items.blobs.exist(&hash).await.unwrap());
+}
+
+#[tokio::test]
+async fn an_uploads_bytes_are_stored_before_it_takes_the_items_lock() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let model = format!("a model stored before its lock {}", Uuid::new_v4()).into_bytes();
+    let hash = dcl_auth::hash_bytes_v1(&model);
+    let id = Uuid::new_v4();
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{id}"),
+        &item(id, OWNER_KEY, None, &[("model.glb", &hash)], None),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+    let mut holder = app.pool.begin().await.unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT 1 FROM builder.items WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let uploading = tokio::spawn({
+        let router = app.router.clone();
+        let (pool, state) = (app.pool.clone(), app.state.clone());
+        let (model, hash) = (model.clone(), hash.clone());
+        async move {
+            let app = App {
+                pool,
+                state,
+                router,
+                content: Router::new(),
+            };
+            upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+            )
+            .bind(holder_pid)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+            if waiting > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the upload waits on the item's row");
+    assert!(
+        app.state.items.blobs.exist(&hash).await.unwrap(),
+        "the bytes were written before the upload took the item's lock"
+    );
+    assert!(uploaders(&app.pool, &hash).await.is_empty());
+    holder.rollback().await.unwrap();
+    assert_eq!(uploading.await.unwrap().0, 200);
+    assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
 }
 
 #[tokio::test]
@@ -449,7 +535,10 @@ async fn item_files_behind_a_long_unlink_batch_answer_503() {
         )
     );
     assert!(uploaders(&app.pool, &hash).await.is_empty());
-    assert!(!app.state.items.blobs.exist(&hash).await.unwrap());
+    assert!(
+        app.state.items.blobs.exist(&hash).await.unwrap(),
+        "the refused upload's bytes stay unrecorded for the collector"
+    );
 
     assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await.0, 200);
     assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
@@ -796,6 +885,7 @@ async fn listing_filters_reach_the_database_as_values() {
         ),
         ("page=-1&limit=5", 400),
         ("page=1&limit=-5", 400),
+        ("collectionId=null&collectionId=null", 400),
     ] {
         let (got, body) = send(
             &app,
@@ -870,6 +960,94 @@ async fn linked_collection(app: &App, key: &str, name: &str) -> (Uuid, String) {
     .await
     .unwrap();
     (id, urn)
+}
+
+#[tokio::test]
+async fn a_save_without_a_collection_id_keeps_the_items_collection() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let owner = address(OWNER_KEY);
+    let collection = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO builder.collections (id, name, eth_address) VALUES ($1, 'Kept in', $2)",
+    )
+    .bind(collection)
+    .bind(&owner)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let id = Uuid::new_v4();
+    let hash = dcl_auth::hash_bytes_v1(b"kept in its collection");
+    let mut body = item(
+        id,
+        OWNER_KEY,
+        Some(collection),
+        &[("model.glb", &hash)],
+        None,
+    );
+    assert_eq!(
+        put(&app, OWNER_KEY, &format!("/v1/items/{id}"), &body)
+            .await
+            .0,
+        200
+    );
+    body["item"]
+        .as_object_mut()
+        .unwrap()
+        .remove("collection_id");
+    let (got, answer) = put(&app, OWNER_KEY, &format!("/v1/items/{id}"), &body).await;
+    assert_eq!(got, 200, "{answer}");
+    let stored: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM builder.items WHERE id = $1")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, Some(collection));
+}
+
+#[tokio::test]
+async fn a_save_by_urn_is_refused_with_builder_servers_data() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let hash = dcl_auth::hash_bytes_v1(b"refused by urn");
+    let contents = [("model.glb", hash.as_str())];
+    let (mine, my_urn) = linked_collection(&app, OWNER_KEY, "refusals").await;
+    let path = format!("{my_urn}:scarf");
+    let id = Uuid::new_v4();
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{id}"),
+        &item(id, OWNER_KEY, Some(mine), &contents, Some(&path)),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+
+    let mut without_urn = item(id, OWNER_KEY, Some(mine), &contents, None);
+    without_urn["item"]["urn"] = Value::Null;
+    let (got, body) = put(&app, OWNER_KEY, &format!("/v1/items/{path}"), &without_urn).await;
+    assert_eq!(
+        (got, &body["data"]),
+        (400, &json!({ "urlId": path, "bodyId": null })),
+        "{body}"
+    );
+
+    let other = Uuid::new_v4();
+    let (got, body) = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{path}"),
+        &item(other, OWNER_KEY, Some(mine), &contents, Some(&path)),
+    )
+    .await;
+    assert_eq!(
+        (got, &body["data"]),
+        (409, &json!({ "urn": path })),
+        "{body}"
+    );
 }
 
 #[tokio::test]

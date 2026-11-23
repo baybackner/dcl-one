@@ -11,7 +11,8 @@
 //! answer.
 //!
 //! A listed origin is echoed in `Access-Control-Allow-Origin` with
-//! builder-server's exposed headers; any other origin gets no allow-origin;
+//! builder-server's exposed headers and `Retry-After`, which the node's
+//! refusals at its bounds carry; any other origin gets no allow-origin;
 //! every answer varies by `Origin`; no answer allows credentials, since
 //! signatures, not cookies, authorize. A preflight is answered here, before
 //! the request budgets, the signature and the database, allowing the
@@ -54,7 +55,7 @@ const ALLOWED_HEADERS: [&str; 17] = [
     "authorization",
 ];
 
-const EXPOSED_HEADERS: [&str; 7] = [
+const EXPOSED_HEADERS: [&str; 8] = [
     "etag",
     "cache-control",
     "content-language",
@@ -62,6 +63,7 @@ const EXPOSED_HEADERS: [&str; 7] = [
     "expires",
     "last-modified",
     "pragma",
+    "retry-after",
 ];
 
 #[derive(Clone, Debug)]

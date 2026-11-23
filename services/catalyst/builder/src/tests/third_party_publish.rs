@@ -244,6 +244,12 @@ async fn a_provider_manager_submits_the_named_items_with_its_cheque() {
     );
     let curations = data["itemCurations"].as_array().unwrap();
     assert_eq!(curations.len(), 2);
+    assert!(
+        curations
+            .iter()
+            .any(|c| c["created_at"] == data["collection"]["created_at"]),
+        "the collection's dates are its first curated item's curation: {data}"
+    );
     for curation in curations {
         assert_eq!(curation["status"], "pending");
         assert_eq!(curation["is_mapping_complete"], false);
@@ -1432,12 +1438,21 @@ async fn an_approval_records_only_the_content_the_committee_names() {
     assert_eq!(newest_curation(&w, item).await, ("approved".into(), edited));
 }
 
-/// Approval data never attests content the committee did not see: an item
-/// whose content differs from its pending curation's is refused by name.
+/// A save through the node moves the pending curation to the saved content,
+/// so approval data answers it, as builder-server does; a pending curation
+/// whose content the item no longer holds, which only rows written outside
+/// the node's saves (an import) can leave, is refused by name.
 #[tokio::test]
 async fn approval_data_refuses_an_item_whose_content_left_its_pending_curation() {
     let Some(w) = world().await else { return };
-    let (id, item, _) = submitted(&w).await;
+    let (id, item, urn) = submitted(&w).await;
+    let edited = edit(&w, id, item, &urn, "saved after submitting").await;
+    let (status, body) = get(&w.app, Some(COMMITTEE_KEY), approval(id)).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["data"]["content_hashes"][item.to_string()],
+        json!(edited)
+    );
     sqlx::query("UPDATE builder.items SET local_content_hash = $2 WHERE id = $1")
         .bind(item)
         .bind("e".repeat(64))

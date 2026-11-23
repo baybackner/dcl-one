@@ -102,9 +102,15 @@ source is down.
   registry (`thirdParties`, every provider, approved or not, with its
   managers, merkle root, item allowance, approval, kind and metadata)
   through the chain index's subgraph client, under a 10-second bound, from
-  `THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL`. A decision accepts only a read
-  that started after the decision began. One read runs at a time and every
-  decision waiting when it started shares it. A record the node can't read
+  `THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL`. A write's decision, and every
+  check a write repeats inside its transaction, accepts only a read that
+  started after the decision began, so a manager the registry stops
+  listing loses its writes as soon as the subgraph indexes the change. A
+  read-only decision (the grants behind `GET` routes, the public search's
+  provider flags included) also accepts a read that started up to 5
+  seconds before it, so a page's concurrent reads share one registry read
+  and a removed manager keeps reading for at most that long. One read runs
+  at a time and every decision waiting when it started shares it. A record the node can't read
   (a field outside the shapes the registry answers, such as a manager that
   is not an address) stays in the registry as a provider nobody manages:
   no managers, not approved, no item allowance, logged once with its id.

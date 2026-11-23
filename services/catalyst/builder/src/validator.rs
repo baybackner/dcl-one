@@ -24,6 +24,7 @@
 
 pub mod claims;
 
+use crate::shared::writes::PassGate;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -618,7 +619,8 @@ where
 /// after [`KEPT_FOR`] and the seen signatures whose window has passed.
 /// Nothing while creator writes are off.
 pub async fn sweep(state: &State) -> anyhow::Result<()> {
-    if !state.settings.writes_enabled {
+    static GATE: PassGate = PassGate::new("builder-validation-requests");
+    if !GATE.allows(state.settings.writes_enabled) {
         return Ok(());
     }
     let now = (state.now)().naive_utc();

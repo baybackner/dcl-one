@@ -1,5 +1,4 @@
-// from: tests/support/db.rs (the scratch database), catalyrst/crates/catalyrst-builder/tests/*.rs (each old file built its own pool, store, auth chain and cleanup; shared here)
-//! Shared fixtures of the builder's copied contract tests: the process's
+//! Shared fixtures of the builder's tests: the process's
 //! scratch database (`db::scratch`, skipped without
 //! `CATALYST_TEST_DATABASE_URL`) with a throwaway blob store, an
 //! explorer-style auth chain minted from a known key, and the row cleanup
@@ -778,9 +777,33 @@ pub struct FakeOracle {
     code_reads: Arc<std::sync::atomic::AtomicUsize>,
     down: Arc<std::sync::atomic::AtomicBool>,
     other_chain: Arc<std::sync::atomic::AtomicBool>,
+    rarity_calls: Arc<RarityCalls>,
+}
+
+#[derive(Default)]
+struct RarityCalls {
+    open: std::sync::atomic::AtomicUsize,
+    most_open: std::sync::atomic::AtomicUsize,
+    hold_until: std::sync::atomic::AtomicUsize,
+    opened: tokio::sync::Notify,
 }
 
 impl FakeOracle {
+    /// Holds each rarity answer, for at most two seconds, until `open`
+    /// rarity calls are open at once.
+    pub fn hold_rarities_until(&self, open: usize) {
+        self.rarity_calls
+            .hold_until
+            .store(open, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The most rarity calls that were open at once.
+    pub fn most_rarities_at_once(&self) -> usize {
+        self.rarity_calls
+            .most_open
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn with(prices: &[(&str, &str)]) -> Self {
         let fake = Self::default();
         fake.set(Some(prices));
@@ -892,6 +915,24 @@ impl FakeOracle {
                     && call["to"].as_str().map(str::to_ascii_lowercase).as_deref()
                         == Some(RARITIES_WITH_ORACLE) =>
             {
+                use std::sync::atomic::Ordering::SeqCst;
+                let calls = &fake.rarity_calls;
+                let open = calls.open.fetch_add(1, SeqCst) + 1;
+                calls.most_open.fetch_max(open, SeqCst);
+                calls.opened.notify_waiters();
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        let opened = calls.opened.notified();
+                        tokio::pin!(opened);
+                        opened.as_mut().enable();
+                        if calls.open.load(SeqCst) >= calls.hold_until.load(SeqCst) {
+                            break;
+                        }
+                        opened.await;
+                    }
+                })
+                .await;
+                calls.open.fetch_sub(1, SeqCst);
                 fake.asked.lock().unwrap().push(asked.rarity.clone());
                 match prices.get(&asked.rarity) {
                     Some(price) => {

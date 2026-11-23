@@ -159,6 +159,33 @@ describe('prepareLinkedApproval', () => {
     ).rejects.toMatchObject({ reason: 'changed' })
   })
 
+  describe('when the node refuses the approval data because items changed since they were submitted', () => {
+    let deps: ReturnType<typeof prepareDeps>
+
+    beforeEach(() => {
+      deps = prepareDeps([item('1'), item('2')], approvalData())
+      deps.fetchApprovalData.mockRejectedValueOnce(
+        new BuilderServerError('The items changed since they were submitted for review', 409, {
+          id: collection.id,
+          itemIds: ['1']
+        })
+      )
+    })
+
+    it('should tell the curator only the creator can fix it', async () => {
+      await expect(prepareLinkedApproval(collection, deps)).rejects.toMatchObject({ reason: 'unsubmitted' })
+    })
+  })
+
+  describe('when the node refuses the approval data for another reason', () => {
+    it('should pass the refusal on', async () => {
+      const deps = prepareDeps([item('1'), item('2')], approvalData())
+      const refusal = new BuilderServerError('Collection is not Third Party', 409, { id: collection.id })
+      deps.fetchApprovalData.mockRejectedValueOnce(refusal)
+      await expect(prepareLinkedApproval(collection, deps)).rejects.toBe(refusal)
+    })
+  })
+
   it('leaves out an approved hash the Catalyst does not hold, such as content saved while it was being approved', async () => {
     const data = approvalData()
     const deps = prepareDeps([item('1'), item('2')], data)

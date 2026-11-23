@@ -40,7 +40,11 @@ The builder answers items as `github.com/decentraland/builder-server` at
   `Retry-After` at once). It reads the body within its bounds, hashes each
   file, refuses a file whose bytes don't match the hash, whose item doesn't
   name it or that the item names only as its `video.mp4` (a video comes
-  through `/videos` and its container check), and only then stores it. A
+  through `/videos` and its container check), and only then stores it,
+  holding no connection or row lock while it writes. It records the files
+  in one transaction with the item locked, once the decision, the names and
+  the stored bytes still hold (a file the blob collector removed in between
+  answers 503, as a content deployment does). A
   record the videos route writes is marked as a video
   (`builder.uploaded_contents.video`); both publications take, for an item's
   `video.mp4`, no other record, and an approval pins only such a video, so

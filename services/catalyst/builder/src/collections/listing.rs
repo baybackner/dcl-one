@@ -37,10 +37,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
+use crate::kept::Since;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, QueryBuilder};
-use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::access::{OnCommittee, Wallet};
@@ -235,8 +235,9 @@ pub(crate) fn page(q: &ListQuery, cap: i64) -> Result<Page, ApiError> {
         return Err(ApiError::bad_request("Invalid pagination")
             .with_data(json!({ "page": q.all("page"), "limit": q.all("limit") })));
     }
+    let paged = page.filter(|p| *p > 0 && limit.is_some_and(|l| l > 0));
     let limit = limit.map_or(cap, |l| l.min(cap));
-    Ok(match page.filter(|p| *p > 0 && limit > 0) {
+    Ok(match paged {
         Some(page) => Page {
             limit,
             offset: limit.saturating_mul(page - 1),
@@ -477,7 +478,10 @@ impl Listing {
             )),
             None => {}
         }
-        let tags: Vec<String> = q.all("tag").iter().map(|t| t.to_lowercase()).collect();
+        let tags: Vec<String> = match q.all("tag").as_slice() {
+            [""] => Vec::new(),
+            tags => tags.iter().map(|t| t.to_lowercase()).collect(),
+        };
         if tags.len() > MAX_TAGS {
             return Err(invalid("Too many tags", json!({ "max": MAX_TAGS })));
         }
@@ -740,6 +744,32 @@ fn listing_row(r: ListedRow, programmatic: Option<bool>) -> CollectionListingRow
     }
 }
 
+/// The listing's rows; a third-party row of a provider the registry has
+/// carries the provider's `is_programmatic`, so a page that holds one reads
+/// the registry after its rows, with no connection held.
+async fn programmatic_rows(
+    rows: Vec<ListedRow>,
+    third_parties: &ThirdParties,
+    market: Option<&Arc<ChainIndex>>,
+) -> Result<Vec<CollectionListingRowOut>, ApiError> {
+    let registry = match rows.iter().any(|r| r.collection.third_party()) {
+        true => Some(third_parties.registry(market, Since::read()).await?),
+        false => None,
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let programmatic = r
+                .collection
+                .provider()
+                .zip(registry.as_deref())
+                .and_then(|(id, registry)| provider(registry, id))
+                .map(|p| p.is_programmatic);
+            listing_row(r, programmatic)
+        })
+        .collect())
+}
+
 impl ItemsComponent {
     async fn list(
         &self,
@@ -848,10 +878,8 @@ impl ItemsComponent {
         Ok(body)
     }
 
-    /// `GET /v1/collections` for a committee member: a third-party row of
-    /// a provider the registry has carries the provider's `is_programmatic`,
-    /// so a page that holds one reads the registry after its rows, with no
-    /// connection held.
+    /// `GET /v1/collections` for a committee member, each row with its
+    /// provider's `is_programmatic` ([`programmatic_rows`]).
     pub async fn committee_collections(
         &self,
         request: &CommitteeListing,
@@ -859,32 +887,24 @@ impl ItemsComponent {
         market: Option<&Arc<ChainIndex>>,
     ) -> Result<Value, ApiError> {
         let (rows, total, _) = self.list(&request.listing, true).await?;
-        let registry = match rows.iter().any(|r| r.collection.third_party()) {
-            true => Some(third_parties.registry(market, Instant::now()).await?),
-            false => None,
-        };
-        let results: Vec<CollectionListingRowOut> = rows
-            .into_iter()
-            .map(|r| {
-                let programmatic = r
-                    .collection
-                    .provider()
-                    .zip(registry.as_deref())
-                    .and_then(|(id, registry)| provider(registry, id))
-                    .map(|p| p.is_programmatic);
-                listing_row(r, programmatic)
-            })
-            .collect();
+        let results = programmatic_rows(rows, third_parties, market).await?;
         Self::envelope(&request.listing, results, total, None)
     }
 
     /// `GET /v1/collections?q=..&is_published=true` for anyone: the public
-    /// rows of published collections.
-    pub async fn public_collections(&self, search: &PublicSearch) -> Result<Value, ApiError> {
+    /// rows of published collections, each with its provider's
+    /// `is_programmatic` ([`programmatic_rows`]).
+    pub async fn public_collections(
+        &self,
+        search: &PublicSearch,
+        third_parties: &ThirdParties,
+        market: Option<&Arc<ChainIndex>>,
+    ) -> Result<Value, ApiError> {
         let (rows, total, _) = self.list(&search.listing, true).await?;
-        let results: Vec<Value> = rows
+        let results: Vec<Value> = programmatic_rows(rows, third_parties, market)
+            .await?
             .into_iter()
-            .map(|r| project(listing_row(r, None), Some(PUBLIC_LISTING)))
+            .map(|r| project(r, Some(PUBLIC_LISTING)))
             .collect::<Result<_, _>>()?;
         Self::envelope(&search.listing, results, total, None)
     }
@@ -980,15 +1000,17 @@ mod tests {
             }
         );
         assert_eq!(p("page=1&limit=99999").unwrap().limit, COMMITTEE_CAP);
-        assert_eq!(
-            p("page=1&limit=100000").unwrap(),
-            Page {
-                limit: COMMITTEE_CAP,
-                offset: 0,
-                page: Some(1)
-            }
-        );
-        assert_eq!(p("page=1&limit=abc").unwrap().page, Some(1));
+        for unpaged in ["page=1&limit=100000", "page=1&limit=abc", "page=2"] {
+            assert_eq!(
+                p(unpaged).unwrap(),
+                Page {
+                    limit: COMMITTEE_CAP,
+                    offset: 0,
+                    page: None
+                },
+                "{unpaged}"
+            );
+        }
         assert_eq!(
             p("page=99999999999999999999&limit=10").unwrap().offset,
             i64::MAX

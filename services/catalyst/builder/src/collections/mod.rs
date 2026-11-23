@@ -70,6 +70,7 @@ pub const PUBLIC_LISTING: &[&str] = &[
     "linked_contract_network",
     "is_mapping_complete",
     "item_count",
+    "is_programmatic",
     "urn",
 ];
 

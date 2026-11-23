@@ -10,7 +10,6 @@ pub mod publication;
 pub mod review;
 pub mod small_reads;
 pub mod storage;
-pub mod svg;
 pub mod third_parties;
 pub mod validator;
 

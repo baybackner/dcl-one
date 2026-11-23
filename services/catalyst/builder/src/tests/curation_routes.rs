@@ -756,6 +756,35 @@ async fn decisions_write_the_review_fields_and_the_timeline_as_builder_server_do
     assert_eq!(audits(&n.pool, id).await, 6);
 }
 
+#[tokio::test]
+async fn an_empty_assignee_unassigns_the_review_as_builder_server_does() {
+    let Some(n) = node(Options::default()).await else {
+        return;
+    };
+    let id = standard(&n.pool, "Unassigned").await;
+    collection_curation(&n.pool, id, "pending").await;
+    let path = format!("/v1/collections/{id}/curation");
+    for assignee in [address(COMMITTEE_KEY), String::new()] {
+        let (status, answer) = call(
+            &n.app,
+            Some(COMMITTEE_KEY),
+            "PATCH",
+            &path,
+            Some(json!({ "curation": { "assignee": assignee } })),
+        )
+        .await;
+        assert_eq!(status, 200, "{answer}");
+    }
+    let assignee: Option<String> = sqlx::query_scalar(
+        "SELECT assignee FROM builder.collection_curations WHERE collection_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&n.pool)
+    .await
+    .unwrap();
+    assert_eq!(assignee, None);
+}
+
 /// Who builder-server's curation routes never admit: a wallet the current
 /// committee no longer lists, though it is the curation's assignee and
 /// reviewer, and an `ADMIN_ADDRESSES` wallet, on a published collection and
@@ -1291,9 +1320,14 @@ async fn a_role_lost_after_the_decision_writes_nothing() {
     )
     .await
     .unwrap();
-    let curator = crate::access::curate_collection(&n.state, &owner, &id.to_string())
-        .await
-        .unwrap();
+    let curator = crate::access::curate_collection(
+        &n.state,
+        &owner,
+        &id.to_string(),
+        crate::kept::Since::write(),
+    )
+    .await
+    .unwrap();
     sqlx::query(
         "UPDATE shop.collections SET creator = $2 WHERE contract_address = (SELECT contract_address FROM builder.collections WHERE id = $1)",
     )
@@ -1438,6 +1472,7 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
         &n.state,
         &signer_of(COMMITTEE_KEY, &path).await,
         &id.to_string(),
+        crate::kept::Since::write(),
     )
     .await
     .unwrap();
@@ -1445,6 +1480,7 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
         &n.state,
         &signer_of(FORMER_KEY, &path).await,
         &id.to_string(),
+        crate::kept::Since::write(),
     )
     .await
     .unwrap();
@@ -1454,6 +1490,7 @@ async fn a_committee_member_dropped_after_the_decision_writes_nothing() {
             &n.state,
             &signer_of(OWNER_KEY, &path).await,
             &id.to_string(),
+            crate::kept::Since::write(),
         )
         .await
         .unwrap(),

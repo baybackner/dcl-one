@@ -9,7 +9,6 @@ use crate::SharedState;
 use crate::access::{self, FileRead};
 use crate::auth::MaybeSigned;
 use crate::content::formatters::{ParsedRange, parse_range_header};
-use crate::handlers::svg;
 use crate::http::ApiError;
 use crate::storage::OpenedContent;
 
@@ -65,12 +64,6 @@ fn detect_content_type(first_bytes: &[u8]) -> &'static str {
     "application/octet-stream"
 }
 
-/// Whether a file's first bytes may open an XML document.
-fn markup(head: &[u8]) -> bool {
-    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
-    head.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
-}
-
 /// The one refusal of both routes, for a private file as for an absent one.
 fn refused() -> Response {
     (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_STORE)]).into_response()
@@ -78,9 +71,9 @@ fn refused() -> Response {
 
 /// `GET` and `HEAD /v1/storage/contents/:hash`: a file [`access::read_file`]
 /// grants, streamed from the node's blob store, with `Range`. The type comes
-/// from the file's bytes, never from its upload (a well-formed SVG document
-/// is `image/svg+xml`, [`svg::is_svg`]); a type that isn't a media type is an
-/// attachment, and every answer is `nosniff` and sandboxed. An unsigned answer is cached publicly (a hash names its bytes
+/// from the file's bytes, never from its upload; a type that isn't a media
+/// type, a document of any kind included, is an attachment, and every answer
+/// is `nosniff` and sandboxed. An unsigned answer is cached publicly (a hash names its bytes
 /// for good); a signed one is `private, no-store`; a refusal is a 404 kept
 /// by no cache.
 pub async fn get_storage_content(
@@ -112,17 +105,11 @@ async fn serve(
 ) -> Result<Response, ApiError> {
     let total = opened.size;
     let internal = |e: crate::storage::StorageError| ApiError::internal(e.to_string());
-    let mut head = opened
+    let head = opened
         .read_range(0, SNIFF_BYTES - 1)
         .await
         .map_err(internal)?;
-    let mut content_type = detect_content_type(&head);
-    if content_type == "application/octet-stream" && total <= svg::MAX_BYTES && markup(&head) {
-        head = opened.read_range(0, total - 1).await.map_err(internal)?;
-        if svg::is_svg(&head) {
-            content_type = "image/svg+xml";
-        }
-    }
+    let content_type = detect_content_type(&head);
     let range = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())

@@ -304,8 +304,9 @@ impl Settings {
             .collect()
     }
 
-    /// The old `Config::from_env` checks over [`RawSettings`], plus the
-    /// upstream guards every configured endpoint passes in v2.
+    /// The settings from [`RawSettings`]; a configured value the builder
+    /// can't use safely (an invalid or unsafe endpoint, a malformed id) is
+    /// an error.
     pub fn parse(raw: RawSettings) -> anyhow::Result<Self> {
         let polygon_rpc_url = non_empty(&raw.polygon_rpc_url);
         if let Some(url) = &polygon_rpc_url {

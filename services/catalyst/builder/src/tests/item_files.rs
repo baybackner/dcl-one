@@ -1367,8 +1367,10 @@ async fn published(f: &Files, bytes: &[u8]) -> Answer {
     .await
 }
 
+/// Stored files are served inert (ADR `2026-11-21-stored-files-served-inert`):
+/// an SVG, scripted or not, and any other document is an attachment.
 #[tokio::test]
-async fn a_well_formed_svg_is_an_inline_image_and_anything_else_stays_an_attachment() {
+async fn an_svg_or_any_other_document_is_an_attachment() {
     let committee = FakeCommittee::down();
     let Some(f) = files(&committee).await else {
         return;
@@ -1379,60 +1381,17 @@ async fn a_well_formed_svg_is_an_inline_image_and_anything_else_stays_an_attachm
         tag("thumbnail")
     );
     let scripted = format!(
-        "<?xml version=\"1.0\"?>{}<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script><![CDATA[x]]></svg>",
+        "<?xml version=\"1.0\"?>{}<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>",
         tag("scripted")
     );
     let html = format!(
         "<html><body>{}<svg xmlns=\"http://www.w3.org/2000/svg\"></svg></body></html>",
         tag("html")
     );
-    let malformed = format!(
-        "{}<svg xmlns=\"http://www.w3.org/2000/svg\"><g></svg>",
-        tag("malformed")
-    );
-    let entity = format!(
-        "<?xml version=\"1.0\"?><!DOCTYPE svg [<!ENTITY a \"aaaa\">]>{}<svg xmlns=\"http://www.w3.org/2000/svg\">&a;</svg>",
-        tag("entity")
-    );
-    let huge = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\">{}{}</svg>",
-        tag("huge"),
-        "<g/>".repeat(300_000)
-    );
-    let no_namespace = format!("<svg>{}</svg>", tag("no namespace"));
-    for (label, bytes, content_type, disposition) in [
-        ("svg", svg, "image/svg+xml", ""),
-        ("svg with a script", scripted, "image/svg+xml", ""),
-        (
-            "html holding an svg",
-            html,
-            "application/octet-stream",
-            "attachment",
-        ),
-        (
-            "malformed svg",
-            malformed,
-            "application/octet-stream",
-            "attachment",
-        ),
-        (
-            "svg with a dtd",
-            entity,
-            "application/octet-stream",
-            "attachment",
-        ),
-        (
-            "svg past the bound",
-            huge,
-            "application/octet-stream",
-            "attachment",
-        ),
-        (
-            "svg without its namespace",
-            no_namespace,
-            "application/octet-stream",
-            "attachment",
-        ),
+    for (label, bytes) in [
+        ("svg", svg),
+        ("svg with a script", scripted),
+        ("html holding an svg", html),
     ] {
         let got = published(&f, bytes.as_bytes()).await;
         assert_eq!(got.status, StatusCode::OK, "{label}");
@@ -1443,7 +1402,12 @@ async fn a_well_formed_svg_is_an_inline_image_and_anything_else_stays_an_attachm
                 got.header(header::X_CONTENT_TYPE_OPTIONS),
                 got.header(header::CONTENT_SECURITY_POLICY),
             ),
-            (content_type, disposition, "nosniff", "sandbox"),
+            (
+                "application/octet-stream",
+                "attachment",
+                "nosniff",
+                "sandbox"
+            ),
             "{label}"
         );
         assert_eq!(got.body, bytes.as_bytes(), "{label}");

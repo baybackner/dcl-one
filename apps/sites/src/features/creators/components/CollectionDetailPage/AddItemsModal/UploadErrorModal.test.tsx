@@ -24,14 +24,12 @@ describe('UploadErrorModal', () => {
 
   describe('when the node refused the upload at one of its bounds', () => {
     beforeEach(() => {
-      refusal = { message: 'The content store is being collected; retry shortly' }
+      refusal = { message: 'The upload is too large' }
     })
 
     it("should say the node's own reason instead of the generic copy", () => {
       renderModal()
-      expect(screen.getByTestId('upload-error-modal-description')).toHaveTextContent(
-        /^The content store is being collected; retry shortly$/
-      )
+      expect(screen.getByTestId('upload-error-modal-description')).toHaveTextContent(/^The upload is too large$/)
     })
 
     it('should offer Try again', async () => {
@@ -53,15 +51,28 @@ describe('UploadErrorModal', () => {
       })
     })
 
+    describe('and its words already say when to try again', () => {
+      beforeEach(() => {
+        refusal = { message: 'Too many requests, try again in a minute', retryAfterSecs: 30 }
+      })
+
+      it("should say the node's words alone", () => {
+        renderModal()
+        expect(screen.getByTestId('upload-error-modal-description')).toHaveTextContent(
+          /^Too many requests, try again in a minute$/
+        )
+      })
+    })
+
     describe('and the wait is longer than a minute', () => {
       beforeEach(() => {
-        refusal = { message: 'Writes are paused', retryAfterSecs: 3600 }
+        refusal = { message: 'Too many file uploads of this wallet in progress', retryAfterSecs: 3600 }
       })
 
       it('should tell the wait in minutes', () => {
         renderModal()
         expect(screen.getByTestId('upload-error-modal-description')).toHaveTextContent(
-          /^Writes are paused\. Try again in 60 minutes\.$/
+          /^Too many file uploads of this wallet in progress\. Try again in 60 minutes\.$/
         )
       })
     })

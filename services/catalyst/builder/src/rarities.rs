@@ -8,7 +8,8 @@
 //!
 //! The subgraph goes through the shared client
 //! (`chain_index::graph::graph_query`); the oracle is asked once per listed
-//! name, never for a name a request brings. The whole read is kept
+//! name, every name at once (at most [`MAX_RARITIES`]), never for a name a
+//! request brings. The whole read is kept
 //! [`RARITIES_TTL`] ([`crate::kept`]). A read that fails, a list that is
 //! empty, longer than [`MAX_RARITIES`] or malformed, or an oracle answer for
 //! another name can't tell: 503, never an empty list.
@@ -153,7 +154,7 @@ async fn read(
         return Err(format!("subgraph answered {} rarities", listed.len()));
     }
     let rpc = Rpc::new(http, &rpc).with_timeout(FETCH_TIMEOUT);
-    let mut rarities = Vec::with_capacity(listed.len());
+    let mut rows = Vec::with_capacity(listed.len());
     for row in listed {
         let text = |key: &str| {
             row.get(key)
@@ -169,34 +170,40 @@ async fn read(
         ) else {
             return Err("subgraph answered a malformed rarity".into());
         };
-        let call = getRarityByNameCall {
-            rarity: name.clone(),
-        };
-        let answer = rpc
-            .call_hex(
-                "eth_call",
-                json!([{ "to": RARITIES_WITH_ORACLE, "data": hex::encode_prefixed(call.abi_encode()) }, "latest"]),
-            )
-            .await
-            .map_err(|e| format!("oracle read of {name}: {e}"))?;
-        let bytes =
-            hex::decode(&answer).map_err(|_| format!("oracle answered no hex for {name}"))?;
-        let oracle = getRarityByNameCall::abi_decode_returns(&bytes)
-            .map_err(|_| format!("oracle answered no rarity for {name}"))?;
-        if oracle.name != name {
-            return Err(format!("oracle answered another rarity for {name}"));
-        }
-        let mana: U256 = oracle.price;
-        rarities.push(Rarity {
-            id,
-            name,
-            price: usd.clone(),
-            max_supply,
-            prices: Prices {
-                mana: mana.to_string(),
-                usd,
-            },
-        });
+        rows.push((id, name, usd, max_supply));
     }
-    Ok(rarities)
+    futures::future::try_join_all(rows.into_iter().map(|(id, name, usd, max_supply)| {
+        let rpc = &rpc;
+        async move {
+            let call = getRarityByNameCall {
+                rarity: name.clone(),
+            };
+            let answer = rpc
+                .call_hex(
+                    "eth_call",
+                    json!([{ "to": RARITIES_WITH_ORACLE, "data": hex::encode_prefixed(call.abi_encode()) }, "latest"]),
+                )
+                .await
+                .map_err(|e| format!("oracle read of {name}: {e}"))?;
+            let bytes =
+                hex::decode(&answer).map_err(|_| format!("oracle answered no hex for {name}"))?;
+            let oracle = getRarityByNameCall::abi_decode_returns(&bytes)
+                .map_err(|_| format!("oracle answered no rarity for {name}"))?;
+            if oracle.name != name {
+                return Err(format!("oracle answered another rarity for {name}"));
+            }
+            let mana: U256 = oracle.price;
+            Ok(Rarity {
+                id,
+                name,
+                price: usd.clone(),
+                max_supply,
+                prices: Prices {
+                    mana: mana.to_string(),
+                    usd,
+                },
+            })
+        }
+    }))
+    .await
 }

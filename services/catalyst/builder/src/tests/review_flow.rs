@@ -1033,6 +1033,7 @@ async fn a_stranger_cannot_tell_a_third_party_timeline_from_an_absent_one_while_
     };
     assert_eq!(answers(id).await, [404, 200, 200]);
     registry.fail(true);
+    node.state.third_parties.outdate();
     assert_eq!(answers(id).await, [404, 200, 404]);
     assert_eq!(answers(absent_id).await, [404, 404, 404]);
     let (_, hidden) = timeline(&node, Some(STRANGER_KEY), id, "").await;

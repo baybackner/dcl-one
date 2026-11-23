@@ -188,12 +188,12 @@
       ]
     },
     "item-upload-bounds": {
-      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed; a body that hasn't arrived 5 minutes after the node began reading it answers 408 The upload timed out and frees its place. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same upload source (an IPv6 address widened to its /48) has eight. Once the body has arrived, an upload waits at most 5 seconds for the blob collector to end an unlink batch, then answers 503 {ok:false, data:{}, error:'The content store is being collected; retry shortly'} and stores nothing. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
+      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed; a body that hasn't arrived 5 minutes after the node began reading it answers 408 The upload timed out and frees its place. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same upload source (an IPv6 address widened to its /48) has eight. Once the body has arrived, an upload waits at most 5 seconds for the blob collector to end an unlink batch, then answers 503 {ok:false, data:{}, error:'The content store is being collected; retry shortly'} and records nothing. The node stores an upload's files before it takes the item's lock, as its content deploys do, and records them only while each is still stored: a file the collector removed in between answers the same 503, and the files of a refused upload stay unrecorded until the collector removes them. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
       "captures": [],
       "anchors": []
     },
     "item-list-bounds": {
-      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60. Each of those listings answers at most 64 MiB of item documents; past it 413 {ok:false, data:{maxBytes}, error:'The listing is too large, ask for it in pages'} before any item is read (the largest collection in the reference data holds 19.8 MB). POST /v1/collections/:id/publish of a standard collection answers its items as GET /v1/collections/:id/items answers its signer, within the same bound and read price, once the on-chain ids it assigns are kept and its notices sent: past the bound 413, over the signer's read budget 429, and a later publish answers them; upstream answers every item.",
+      "text": "GET /v1/collections/:id/items and GET /v1/:address/items: the node answers at most 20,000 items per response, with or without page and limit, a page's limit above that answered as 20,000, orders an address's items by creation then id, and refuses a negative page or limit, a repeated query parameter and a collectionId that is neither a UUID nor null with 400; GET /v1/items, the committee's, answers what upstream answers (every item of every kind, with its chain state) bounded to the 1,000 oldest by creation then id, standard items first. Upstream answers up to 100,000 rows per response, every item on GET /v1/items, and an address's items in the database's order. github.com/decentraland/builder at 0ffcfbbb never calls GET /v1/items: its fetchItems takes an address (src/modules/item/actions.ts, src/lib/api/builder.ts), so the bound only reaches other committee tooling. The largest collection in the reference data holds 12,665 items and the largest owner 12,669; the old builder web asks for pages of 1 to 60. Each of those listings answers at most 64 MiB of item documents; past it 413 {ok:false, data:{maxBytes}, error:'The listing is too large, ask for it in pages'} before any item is read (the largest collection in the reference data holds 19.8 MB). POST /v1/collections/:id/publish of a standard collection answers its items as GET /v1/collections/:id/items answers its signer, within the same bound and read price, once the on-chain ids it assigns are kept and its notices sent: past the bound 413, over the signer's read budget 429, and a later publish answers them; upstream answers every item.",
       "captures": [],
       "anchors": []
     },
@@ -203,7 +203,7 @@
       "anchors": []
     },
     "item-files-from-disk": {
-      "text": "GET and HEAD /v1/storage/contents/:hash: upstream answers every request with 301 to its bucket (<bucket>/contents/<hash>, a text/plain body naming the target, an immutable public Cache-Control). The node keeps item files on its own disk and answers a file it serves itself: 200, or 206 for a Range, with the file's bytes and its Content-Type read from the bytes, never from the upload (an attachment unless it is a media type, always nosniff and sandboxed), cached publicly for an unsigned request and private, no-store for a signed one. A client that follows the redirect receives the same bytes.",
+      "text": "GET and HEAD /v1/storage/contents/:hash: upstream answers every request with 301 to its bucket (<bucket>/contents/<hash>, a text/plain body naming the target, an immutable public Cache-Control). The node keeps item files on its own disk and answers a file it serves itself: 200, or 206 for a Range, with the file's bytes and its Content-Type read from the bytes, never from the upload (an attachment unless it is a media type, an SVG or any other document included, always nosniff and sandboxed, as the node serves every stored file), cached publicly for an unsigned request and private, no-store for a signed one. A client that follows the redirect receives the same bytes. Upstream's bucket answers the type the upload named, so a browser draws an SVG thumbnail from it and not from the node; 2 of the 116,190 items in the production data the import was measured on have an SVG thumbnail.",
       "captures": [
         "source/248-storage-published-unsigned.json",
         "source/249-storage-published-head.json",
@@ -522,7 +522,7 @@
       "anchors": []
     },
     "cors-allow-list": {
-      "text": "Every builder route answers a cross-origin request from CORS_ORIGIN's list as upstream does: a listed origin is echoed in Access-Control-Allow-Origin, another origin gets none, answers vary by Origin and none allows credentials. The node writes the header names of Vary and Access-Control-Expose-Headers in lowercase; its preflight answers 200 (upstream 204) without Access-Control-Expose-Headers, allows the methods the routes answer (or CORS_METHOD's) and the headers they read (content-type, range, x-identity-timestamp, x-identity-metadata, x-identity-auth-chain-0 to -9, the validator's two signature headers, authorization) where upstream allows *, and lets a browser keep it for a day. Unset, CORS_ORIGIN is the Decentraland front-ends and http://localhost:<port> (upstream: every origin); a CORS_ORIGIN pattern the node can't compile, a list that names nothing or a CORS_METHOD method the routes don't answer stops the node at startup.",
+      "text": "Every builder route answers a cross-origin request from CORS_ORIGIN's list as upstream does: a listed origin is echoed in Access-Control-Allow-Origin, another origin gets none, answers vary by Origin and none allows credentials. The node writes the header names of Vary and Access-Control-Expose-Headers in lowercase and also exposes Retry-After, which its refusals at its bounds and its write switch carry (upstream sends none); its preflight answers 200 (upstream 204) without Access-Control-Expose-Headers, allows the methods the routes answer (or CORS_METHOD's) and the headers they read (content-type, range, x-identity-timestamp, x-identity-metadata, x-identity-auth-chain-0 to -9, the validator's two signature headers, authorization) where upstream allows *, and lets a browser keep it for a day. Unset, CORS_ORIGIN is the Decentraland front-ends and http://localhost:<port> (upstream: every origin); a CORS_ORIGIN pattern the node can't compile, a list that names nothing or a CORS_METHOD method the routes don't answer stops the node at startup.",
       "captures": [
         "source/516-cors-listed-origin.json",
         "source/517-cors-foreign-origin.json",
@@ -613,6 +613,61 @@
       "text": "PUT /v1/collections/:id: a third-party save that changes an unpublished collection's URN moves its items' URNs to the new prefix and refuses with 409 {ok:false, data:{id, urn}, error:\"The collection's items would take URNs the catalyst already holds\"} when an item would move onto a URN this node's content holds with an active entity, and with 503 while this node can't tell an unused URN (it isn't its own content authority and its wearable and emote history isn't covered); the items keep their URNs. Upstream derives its items' URNs from the collection's and asks no catalyst.",
       "captures": [],
       "anchors": []
+    },
+    "approval-data-unsubmitted-content": {
+      "text": "GET /v1/collections/:id/approvalData: a pending item whose newest curation names content the item no longer holds is refused with 409 {ok:false, data:{id, itemIds}, error:'The items changed since they were submitted for review'} instead of attested. A save through the node moves the pending curation to the saved content, so only rows written outside the node's saves, such as imported ones, meet it. Upstream answers the curated hash whatever the item holds. /create shows the curator that only the creator can fix it, as for the same mismatch it finds itself.",
+      "captures": [],
+      "anchors": []
+    },
+    "create-writes-switch": {
+      "text": "Every write: with the node's creator write switch (CREATE_WRITES_ENABLED) off, the default, the node answers every POST, PUT, PATCH and DELETE with 503 {ok:false, data:{}, error:'creator writes are disabled on this node (CREATE_WRITES_ENABLED=false)'} and Retry-After: 3600, before its signature, budgets and database, naming the switch as every other write switch of the node does for its operator; reads keep answering. Upstream has no such switch. /create shows its own copy for this 503: it shows a 503's own words only for an item's file or video upload, which it sends once the item's save succeeded.",
+      "captures": [],
+      "anchors": []
+    },
+    "storage-signature-checked": {
+      "text": "GET and HEAD /v1/storage/contents/:hash and GET /v1/storage/contents/:hash/exists: a request whose auth chain does not verify (an expired delegated key, a clock outside the signature window) answers 401 {ok:false, data:{message}, error:'Unauthenticated'}, a published file's included; a request without an auth chain is anonymous. Upstream reads no signature on these routes. The node serves an unpublished item's files to their signers only (item-files-private-until-published), so a chain it can't verify is refused, not read as anonymous, which would answer a signer's own draft file as absent.",
+      "captures": [],
+      "anchors": []
+    },
+    "terms-forwarded-later": {
+      "text": "POST /v1/collections/:id/tos: the node keeps the acceptance and answers 200 also while the warehouse refuses it, can't be reached or is unset; the leased builder-terms-forward job delivers it later. Upstream answers 500 {ok:false, error:\"The TOS couldn't be recorded\"} and keeps nothing, so the old builder web asks the creator to accept again.",
+      "captures": [],
+      "anchors": []
+    },
+    "listing-page-past-the-last": {
+      "text": "GET /v1/collections, GET /v1/addresses and GET /v1/:address/collections: a page past the last answers the matches' total and pages with no results. Upstream reads the total from the page's first row, so such a page answers total 0 and pages 0.",
+      "captures": [],
+      "anchors": []
+    },
+    "third-party-collection-dates-from-curation": {
+      "text": "PUT /v1/collections/:id and POST /v1/collections/:id/publish of a third-party collection: the collection in the answer takes its created_at, updated_at and reviewed_at from its first curated item's newest curation, as GET /v1/collections/:id answers it. Upstream's PUT answers the stored row's dates and its publish the dates of a curation it just created.",
+      "captures": [],
+      "anchors": []
+    },
+    "published-filter-splits": {
+      "text": "GET /v1/collections, GET /v1/addresses and GET /v1/:address/collections with is_published: a collection is published once one of its items is minted or curated, and unpublished otherwise, so is_published=true and is_published=false never list the same collection. Upstream's is_published=false also lists a third-party collection some of whose items are not curated, and a standard collection with an unminted item and no curation, though some of its items are minted.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-decided-by-its-collection": {
+      "text": "GET /v1/items/:id and the item curation routes: an item in a collection is decided by its collection (its owner, an on-chain manager, a manager of its provider); the wallet the item's row names decides only for an item with no collection. Upstream also admits the wallet the item's row names, so a provider manager the registry stopped listing keeps reading and curating the items it saved last.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-save-keeps-its-collection": {
+      "text": "PUT /v1/items/:idOrURN for a stored item whose body leaves out collection_id: the node keeps the item in its collection and saves it. Upstream reads the missing key as moving the item out of its collection and refuses it (401 for a move its signer may not make, 409 once the collection is published). A null collection_id moves the item out on both.",
+      "captures": [],
+      "anchors": []
+    },
+    "item-upload-multipart-only": {
+      "text": "POST /v1/items/:id/files with a body that is not multipart/form-data: the node answers 400 and stores nothing. Upstream answers 200 {ok:true} and stores nothing.",
+      "captures": [],
+      "anchors": []
+    },
+    "third-party-registry-read-window": {
+      "text": "Every read the third-party registry decides (a third-party collection's or item's body, items, curations, files and timeline, an address's listings and drafts, the third-party listings and the provider flags of the committee's listing and the public search): the node accepts a registry read that started up to 5 seconds before the request, so concurrent reads share one and a manager the registry stopped listing keeps reading for at most that long. Every write decides on a read that started after it began. Upstream reads the registry afresh for every request.",
+      "captures": [],
+      "anchors": []
     }
   },
   "operations": [
@@ -632,11 +687,11 @@
           "scope": "GET from an origin CORS_ORIGIN does not list.",
           "replay": [
             "header access-control-allow-origin: fixture=\"*\" candidate=\"https://attacker.example\"",
-            "header access-control-expose-headers: fixture=\"*\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\""
+            "header access-control-expose-headers: fixture=\"*\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\""
           ],
           "explained_by": {
             "header access-control-allow-origin: fixture=\"*\" candidate=\"https://attacker.example\"": "deliberate:cors-public-routes",
-            "header access-control-expose-headers: fixture=\"*\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\"": "deliberate:cors-public-routes"
+            "header access-control-expose-headers: fixture=\"*\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\"": "deliberate:cors-public-routes"
           }
         },
         {
@@ -726,13 +781,19 @@
           "path": "services/catalyst/builder/src/tests/limits.rs",
           "test": "an_addresss_items_cost_their_reader_by_the_row",
           "scope": "60 rows charged to the signer and to the source."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "listing_filters_reach_the_database_as_values",
+          "scope": "Filters reach the statement as values; a negative page or limit and a repeated collectionId answer 400."
         }
       ],
       "gaps": [
         "deliberate:item-list-bounds",
         "deliberate:chain-copy-lag",
         "deliberate:catalyst-is-this-node",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "A registry manager listing its provider's items."
     },
@@ -962,6 +1023,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/476-item-deployed-minted-owner.json",
           "scope": "The owner reads a minted standard item the catalyst holds.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "a_manager_the_registry_stops_listing_loses_the_item_it_saved",
+          "scope": "A former provider manager loses the item it saved: its body, its files, its listings and its curations."
         }
       ],
       "gaps": [
@@ -972,7 +1038,9 @@
         "deliberate:unauthenticated-message",
         "deliberate:catalyst-is-this-node",
         "deliberate:item-curation-reopen-later-reads",
-        "deliberate:item-read-on-chain-manager"
+        "deliberate:item-read-on-chain-manager",
+        "deliberate:item-decided-by-its-collection",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the catalyst state; the bodies of items the catalyst holds were compared for a third-party item never curated, a curated one and a minted standard one."
     },
@@ -1168,7 +1236,8 @@
         "deliberate:item-list-bounds",
         "deliberate:catalyst-is-this-node",
         "deliberate:item-curation-reopen-later-reads",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "The synced and mappingStatus filters over items with curations."
     },
@@ -1432,6 +1501,21 @@
           "path": "services/catalyst/builder/src/tests/items.rs",
           "test": "a_third_party_urn_in_the_path_reaches_exactly_one_item",
           "scope": "A save at a third-party URN reaches the item with that provider and item part, whatever the case of the collection part; an item part in another case reaches none (404)."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "a_save_without_a_collection_id_keeps_the_items_collection",
+          "scope": "A save without collection_id answers 200 and leaves the item in its collection."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "a_save_by_urn_is_refused_with_builder_servers_data",
+          "scope": "A save by URN answers bodyId null for a null body URN and no id in a URN conflict, as upstream."
         }
       ],
       "gaps": [
@@ -1444,7 +1528,9 @@
         "deliberate:chain-copy-lag",
         "deliberate:catalyst-is-this-node",
         "deliberate:request-budgets",
-        "deliberate:wallet-draft-bounds"
+        "deliberate:wallet-draft-bounds",
+        "deliberate:create-writes-switch",
+        "deliberate:item-save-keeps-its-collection"
       ],
       "remaining_verification": "The lock and a registry manager's accepted saves."
     },
@@ -1498,13 +1584,19 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/352-item-delete-curated.json",
           "scope": "DELETE /items/{id} signed by the provider's manager, a curated third-party item.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:owner-is-the-chain-creator",
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
-        "deliberate:managers-from-chain-only"
+        "deliberate:managers-from-chain-only",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A registry manager's delete of a never-curated item."
     },
@@ -1645,6 +1737,26 @@
           "path": "services/catalyst/builder/src/tests/items.rs",
           "test": "item_files_behind_a_long_unlink_batch_answer_503",
           "scope": "An upload behind an unlink batch that outlasts the store lock wait answers 503 and stores nothing; the same upload succeeds once the batch ends."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "an_uploads_bytes_are_stored_before_it_takes_the_items_lock",
+          "scope": "The upload stores its bytes before it waits on the item row another session holds, and records them once that lock is released."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "a_forgotten_file_the_collector_unlinks_during_its_upload_is_refused_until_sent_again",
+          "scope": "A file the collector unlinks between the store and the record answers 503 and records nothing; sent again, it is stored and recorded."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "an_upload_past_a_bound_or_unlike_its_item_stores_nothing",
+          "scope": "A JSON body answers 400 before any part is read."
         }
       ],
       "gaps": [
@@ -1655,7 +1767,9 @@
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only",
-        "deliberate:wallet-storage-bound"
+        "deliberate:wallet-storage-bound",
+        "deliberate:create-writes-switch",
+        "deliberate:item-upload-multipart-only"
       ],
       "remaining_verification": "The lock and a registry manager's uploads; the bounds, which no capture holds, are held by the cited tests."
     },
@@ -1782,6 +1896,11 @@
           "path": "services/catalyst/builder/src/tests/item_videos.rs",
           "test": "a_video_behind_a_long_unlink_batch_answers_503_and_frees_its_place_and_spool",
           "scope": "A video behind an unlink batch that outlasts the store lock wait answers 503, stores nothing, frees its place and leaves no spool file; the same upload succeeds once the batch ends."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -1793,7 +1912,8 @@
         "deliberate:chain-copy-lag",
         "deliberate:access-checks-never-write",
         "deliberate:managers-from-chain-only",
-        "deliberate:wallet-storage-bound"
+        "deliberate:wallet-storage-bound",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Uploads by an on-chain manager and a registry manager, and the bounds, which no capture holds (a body over 250 MB)."
     },
@@ -2084,6 +2204,11 @@
           "path": "services/catalyst/builder/src/tests/review_flow.rs",
           "test": "the_committee_sorts_the_most_relevant_collections_first",
           "scope": "MOST_RELEVANT: to review, under review, approved, rejected, the rest, newest first within each."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "the_public_search_answers_a_linked_collection_with_its_providers_programmatic_flag",
+          "scope": "The public search answers a third-party row with its provider's is_programmatic, as upstream."
         }
       ],
       "gaps": [
@@ -2092,7 +2217,10 @@
         "deliberate:committee-unavailable",
         "deliberate:managers-from-chain-only",
         "deliberate:polygon-mainnet-collections",
-        "deliberate:review-running-is-an-open-request"
+        "deliberate:review-running-is-an-open-request",
+        "deliberate:listing-page-past-the-last",
+        "deliberate:published-filter-splits",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -2349,6 +2477,21 @@
           "path": "services/catalyst/builder/src/tests/review_flow.rs",
           "test": "an_address_lists_and_counts_each_collection_by_its_newest_curation_and_the_chain",
           "scope": "each status and the counts from the newest curation and the chain: rejected, approved with changes under review, approved off chain, never curated and reviewed, waiting, first review, draft."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/curations.rs",
+          "test": "an_address_listing_of_published_collections_counts_a_curated_third_party_one",
+          "scope": "A third-party collection with one of two items curated is listed as published only."
+        },
+        {
+          "path": "services/catalyst/builder/src/kept.rs",
+          "test": "read_decisions_at_once_share_one_read_and_one_within_the_window_issues_none",
+          "scope": "Two read decisions at once share one registry read; one within the window reads nothing; one past it reads again."
+        },
+        {
+          "path": "services/catalyst/builder/src/kept.rs",
+          "test": "a_write_decision_just_after_a_read_takes_a_read_of_its_own",
+          "scope": "A write decision right after a read decision takes a read that started after it."
         }
       ],
       "gaps": [
@@ -2362,7 +2505,10 @@
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:query-never-overrides",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:listing-page-past-the-last",
+        "deliberate:published-filter-splits",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -2771,6 +2917,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/471-collection-third-party-published-manager.json",
           "scope": "Signed by the provider's manager after its items were submitted through publish.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "a_manager_the_registry_stops_listing_is_refused_its_next_write_and_its_reads_past_the_window",
+          "scope": "A manager the registry stops listing is refused its next publish at once and its reads once the window has passed."
         }
       ],
       "gaps": [
@@ -2783,7 +2934,8 @@
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:unauthenticated-message",
-        "deliberate:query-never-overrides"
+        "deliberate:query-never-overrides",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "A collection whose first curated item by id is not the one curated last."
     },
@@ -2915,6 +3067,16 @@
             "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"📦 New Third Party items ready for review: <https://creators.example.org/collections/editor?collection=c011ec71-0000-4000-8000-000000000406&reviewing=true|Reused wearables> by <https://creators.example.org/shop/items/creator/0x1257bf35fafebbfc08ea47903e1f7c36ecda48c0|0x1257...48c0> (1 item).\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]": "deliberate:cheque-salt-reused",
             "forum.length: baseline=1 candidate=0": "deliberate:cheque-salt-reused"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_publish.rs",
+          "test": "a_provider_manager_submits_the_named_items_with_its_cheque",
+          "scope": "The publish answer's collection carries the dates of one of the curations it created."
         }
       ],
       "gaps": [
@@ -2928,7 +3090,9 @@
         "deliberate:validator-switch",
         "deliberate:validation-request-bounds",
         "deliberate:item-list-bounds",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:create-writes-switch",
+        "deliberate:third-party-collection-dates-from-curation"
       ],
       "remaining_verification": "A repeat publish of more items once the first are decided (a forum post update) is covered by the node's tests, not by a capture. Its item answer's bound and price are covered by the node's tests (publish_answers_its_items_within_the_bounds_of_the_items_listing, a_first_publication_whose_answer_is_refused_still_records_its_review_and_tells_the_curators), not by a capture."
     },
@@ -2957,12 +3121,18 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/293-collection-owner-sync-stranger.json",
           "scope": "POST /collections/{id}/owner/sync signed by a wallet with no role on the draft.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:owner-sync-stores-nothing",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A sync by a committee member, which the matrix tests hold."
     },
@@ -3011,13 +3181,25 @@
           "path": "services/catalyst/builder/src/tests/lifecycle.rs",
           "test": "a_delivery_that_predates_a_merge_leaves_the_merged_acceptance_waiting",
           "scope": "A delivery sent before a newer acceptance merged in leaves the merged acceptance waiting for its own delivery."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "a_failed_forward_keeps_the_acceptance_and_a_later_pass_delivers_it_once",
+          "scope": "A refused forward keeps the acceptance and answers 200; the next pass delivers it once."
         }
       ],
       "gaps": [
         "deliberate:invalid-body-detail",
         "deliberate:access-checks-never-write",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:terms-acceptance-bounds"
+        "deliberate:terms-acceptance-bounds",
+        "deliberate:create-writes-switch",
+        "deliberate:terms-forwarded-later"
       ],
       "remaining_verification": "What the warehouse receives is not part of a capture; the node's forward is held to upstream's body by its own tests."
     },
@@ -3083,6 +3265,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/285-collection-lock-unknown.json",
           "scope": "POST /collections/{id}/lock of an id no collection has.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -3090,7 +3277,8 @@
         "deliberate:unauthenticated-message",
         "deliberate:access-checks-never-write",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A lock by the chain creator of a transferred collection, which the node admits as its owner."
     },
@@ -3139,12 +3327,18 @@
           "explained_by": {
             "data.message value": "deliberate:unauthenticated-message"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_publish.rs",
+          "test": "approval_data_refuses_an_item_whose_content_left_its_pending_curation",
+          "scope": "A save through the node answered with its new hash; an imported mismatch refused with 409 and the item ids."
         }
       ],
       "gaps": [
         "deliberate:unauthenticated-message",
         "deliberate:committee-unavailable",
-        "deliberate:third-party-registry-unavailable"
+        "deliberate:third-party-registry-unavailable",
+        "deliberate:approval-data-unsubmitted-content"
       ],
       "remaining_verification": "None for the cases captured; the content hashes of an item submitted twice are covered by the node's tests."
     },
@@ -3661,6 +3855,16 @@
           "path": "services/catalyst/builder/src/tests/third_party_publish.rs",
           "test": "a_rename_never_moves_an_item_onto_a_urn_the_content_holds",
           "scope": "A URN change that would move an item onto a URN the node's content holds refused with 409; the items keep their URNs."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/collections/save.rs",
+          "test": "a_standard_save_needs_initialize_data_naming_the_signer",
+          "scope": "An empty data answers 200 ok:false 'Could not get data from request' as a missing one does, as upstream."
         }
       ],
       "gaps": [
@@ -3679,7 +3883,9 @@
         "deliberate:cors-allow-list",
         "deliberate:wallet-draft-bounds",
         "deliberate:request-budgets",
-        "deliberate:collection-urn-change-keeps-deployed-urns"
+        "deliberate:collection-urn-change-keeps-deployed-urns",
+        "deliberate:create-writes-switch",
+        "deliberate:third-party-collection-dates-from-curation"
       ],
       "remaining_verification": "The lock's 423 waits for the lifecycle change."
     },
@@ -3723,12 +3929,18 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/335-collection-delete-last-of-provider.json",
           "scope": "DELETE /collections/{id} signed by the manager of a virtual third party, its provider's only collection. Recorded from github.com/decentraland/builder-server at 98897af by tooling/builder-server-capture.cjs.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:access-checks-never-write",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:chain-copy-lag"
+        "deliberate:chain-copy-lag",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A delete of a submitted third-party collection, which the node's own tests hold."
     },
@@ -3788,13 +4000,20 @@
           "path": "services/catalyst/builder/src/tests/limits.rs",
           "test": "the_addresses_listing_costs_its_source_as_fifty_reads",
           "scope": "Two listings spend a source budget of 102; another source unaffected."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/small_reads.rs",
+          "test": "addresses_list_only_published_standard_contracts",
+          "scope": "A page past the last answers total 1 and pages 1 with no results; an empty tag and a page without a limit filter and page nothing, as upstream."
         }
       ],
       "gaps": [
         "deliberate:addresses-published-only",
         "deliberate:collection-list-bounds",
         "deliberate:chain-copy-lag",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:listing-page-past-the-last",
+        "deliberate:published-filter-splits"
       ],
       "remaining_verification": "Review filters and sorts are shared with GET /v1/collections and compared there."
     },
@@ -3856,7 +4075,8 @@
         "deliberate:curation-list-bounds",
         "deliberate:fixed-capture-clock",
         "deliberate:unauthenticated-message",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -3912,7 +4132,8 @@
         "deliberate:committee-unavailable",
         "deliberate:curation-list-bounds",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:request-budgets"
+        "deliberate:request-budgets",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4012,7 +4233,8 @@
         "deliberate:committee-unavailable",
         "deliberate:curation-invalid-id",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:fixed-capture-clock"
+        "deliberate:fixed-capture-clock",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4170,6 +4392,16 @@
           "explained_by": {
             "data.created_at and data.updated_at differ": "deliberate:fixed-capture-clock"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/curation_routes.rs",
+          "test": "an_empty_assignee_unassigns_the_review_as_builder_server_does",
+          "scope": "An empty assignee unassigns, as upstream."
         }
       ],
       "gaps": [
@@ -4180,7 +4412,8 @@
         "deliberate:curation-unknown-key",
         "deliberate:fixed-capture-clock",
         "deliberate:invalid-body-detail",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4249,6 +4482,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/415-collection-curation-request-after-rejection.json",
           "scope": "POST /collections/{id}/curation signed by the owner after its collection's rejection: a review requested again.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -4260,7 +4498,8 @@
         "deliberate:owner-is-the-chain-creator",
         "deliberate:validator-pull",
         "deliberate:validator-switch",
-        "deliberate:validation-request-bounds"
+        "deliberate:validation-request-bounds",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4324,12 +4563,18 @@
           "explained_by": {
             "forum[1].body.raw: baseline=\"The collection has been assigned to @admins\" candidate=\"The collection has been assigned to @​admins\"": "deliberate:forum-reply-mentions"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:forum-reply-mentions",
         "deliberate:forum-reply-fields",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Production forum capability and API credentials remain unverified. Concurrent claims, accepted-but-lost responses, bounded replies, and upstream failures are covered by node tests rather than captures."
     },
@@ -4393,7 +4638,9 @@
       "gaps": [
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
-        "deliberate:owner-is-the-chain-creator"
+        "deliberate:owner-is-the-chain-creator",
+        "deliberate:item-decided-by-its-collection",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4490,6 +4737,11 @@
             "error extra": "deliberate:item-curation-reopened-by-the-committee",
             "ok value": "deliberate:item-curation-reopened-by-the-committee"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -4498,7 +4750,9 @@
         "deliberate:curation-input",
         "deliberate:item-curation-reopened-by-the-committee",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:item-approval-names-content"
+        "deliberate:item-approval-names-content",
+        "deliberate:create-writes-switch",
+        "deliberate:item-decided-by-its-collection"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4548,13 +4802,20 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/427-item-curation-request-stranger.json",
           "scope": "POST /items/{id}/curation signed by a wallet with no role.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
         "deliberate:owner-is-the-chain-creator",
-        "deliberate:item-approval-names-content"
+        "deliberate:item-approval-names-content",
+        "deliberate:create-writes-switch",
+        "deliberate:item-decided-by-its-collection"
       ],
       "remaining_verification": "None for the cases its captures cover."
     },
@@ -4597,6 +4858,11 @@
           "path": "services/catalyst/builder/src/tests/limits.rs",
           "test": "a_review_caller_over_its_minute_waits_even_with_the_flow_off",
           "scope": "30 writes across the three write routes and 120 timeline reads, then 429; another wallet unaffected; the wait."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -4604,7 +4870,8 @@
         "deliberate:review-running-is-an-open-request",
         "deliberate:review-timeline-from-requests",
         "deliberate:validator-pull",
-        "deliberate:review-rate-limit-shape"
+        "deliberate:review-rate-limit-shape",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Retries after a verdict, a too-large collection, a curator's rejection and the daily bound are covered by the node's tests, not by a capture."
     },
@@ -4665,13 +4932,19 @@
             "ok value": "deliberate:fixed-capture-clock",
             "slack: fixture=[{\"channel\":\"curation-example\",\"text\":\"Human review requested for collection \\\"Items on chain\\\" (c011ec71-0000-4000-8000-000000000302) https://creators.example.org/collections/c011ec71-0000-4000-8000-000000000302.\",\"unfurl_links\":false,\"unfurl_media\":false}] candidate=[]": "deliberate:fixed-capture-clock"
           }
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:curation-notice-inert-text",
         "deliberate:fixed-capture-clock",
         "deliberate:review-flow-switch",
-        "deliberate:review-text-bounds"
+        "deliberate:review-text-bounds",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Concurrent appeals and the daily bounds are covered by the node's tests, not by a capture."
     },
@@ -4731,7 +5004,8 @@
       "gaps": [
         "deliberate:review-flow-switch",
         "deliberate:review-timeline-unreadable-as-absent",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "Pagination bounds, a manager's read and the committee's unredacted validation ids are covered by the node's tests, not by a capture. A third-party collection's timeline while the registry can't be read is covered by a_stranger_cannot_tell_a_third_party_timeline_from_an_absent_one_while_the_registry_is_down, not by a capture."
     },
@@ -4765,12 +5039,18 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/503-review-comment-blank.json",
           "scope": "POST /collections/{id}/comments with a message of spaces.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
         "deliberate:review-flow-switch",
         "deliberate:review-text-bounds",
-        "deliberate:review-access-before-body"
+        "deliberate:review-access-before-body",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A closed review, an unpublished collection, a foreign item and the daily bounds are covered by the node's tests, not by a capture."
     },
@@ -4864,11 +5144,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/516-cors-listed-origin.json",
           "scope": "Unsigned GET from an origin CORS_ORIGIN lists (the capture runs upstream and the node with the same list).",
           "replay": [
-            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\"",
+            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\"",
             "header vary: fixture=\"Origin\" candidate=\"origin\""
           ],
           "explained_by": {
-            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\"": "deliberate:cors-allow-list",
+            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\"": "deliberate:cors-allow-list",
             "header vary: fixture=\"Origin\" candidate=\"origin\"": "deliberate:cors-allow-list"
           }
         },
@@ -4876,11 +5156,11 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/517-cors-foreign-origin.json",
           "scope": "Unsigned GET from an origin CORS_ORIGIN does not list.",
           "replay": [
-            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\"",
+            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\"",
             "header vary: fixture=\"Origin\" candidate=\"origin\""
           ],
           "explained_by": {
-            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma\"": "deliberate:cors-allow-list",
+            "header access-control-expose-headers: fixture=\"ETag,Cache-Control,Content-Language,Content-Type,Expires,Last-Modified,Pragma\" candidate=\"etag,cache-control,content-language,content-type,expires,last-modified,pragma,retry-after\"": "deliberate:cors-allow-list",
             "header vary: fixture=\"Origin\" candidate=\"origin\"": "deliberate:cors-allow-list"
           }
         }
@@ -4942,7 +5222,8 @@
       ],
       "gaps": [
         "deliberate:third-parties-listed-to-their-managers",
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "Providers with linked contracts in the registry's metadata."
     },
@@ -5005,7 +5286,8 @@
         }
       ],
       "gaps": [
-        "deliberate:third-party-claims"
+        "deliberate:third-party-claims",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "Slots after a third-party publication the node records."
     },
@@ -5056,7 +5338,9 @@
           "replay": []
         }
       ],
-      "gaps": [],
+      "gaps": [
+        "deliberate:third-party-registry-read-window"
+      ],
       "remaining_verification": "A registry record with a merkle root and linked contracts."
     },
     {
@@ -5089,10 +5373,16 @@
           "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
           "test": "only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party",
           "scope": "A wallet the virtual third party lists but the registry's unapproved record leaves out neither changes nor removes it (401); a wallet both list does."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
-        "deliberate:virtual-third-party-changes"
+        "deliberate:virtual-third-party-changes",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "A removal while the registry can't tell: the node answers 503 where upstream answers 200 with ok:false."
     },
@@ -5131,11 +5421,22 @@
           "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
           "test": "only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party",
           "scope": "A wallet the virtual third party lists but the registry's unapproved record leaves out neither changes nor removes it (401); a wallet both list does."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
+          "test": "a_virtual_third_partys_manager_sets_it_programmatic_whatever_else_the_body_holds",
+          "scope": "A body with isProgrammatic and another key sets the flag, as upstream."
         }
       ],
       "gaps": [
         "deliberate:invalid-body-detail",
-        "deliberate:virtual-third-party-changes"
+        "deliberate:virtual-third-party-changes",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "An update of a virtual third party whose provider the registry already lists."
     },
@@ -5248,10 +5549,16 @@
           "path": "services/catalyst/tests/fixtures/conformance/builder/source/451-collection-post-third-party-again.json",
           "scope": "POST /collections/{id}/post signed by the provider's manager of a third-party collection that has its forum post.",
           "replay": []
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
-        "deliberate:unauthenticated-message"
+        "deliberate:unauthenticated-message",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Production forum capability and API credentials remain unverified. Concurrent claims, a topic the forum made whose link was not stored (made again after the claim lapses: a standard collection's under a title naming its contract, a third-party collection's refused by its taken title), bounded replies, and upstream failures are covered by node tests rather than captures."
     },
@@ -5353,12 +5660,24 @@
           "path": "services/catalyst/builder/src/tests/item_files.rs",
           "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
           "scope": "The node's answer to GET for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "an_svg_or_any_other_document_is_an_attachment",
+          "scope": "A published SVG, a scripted SVG and an HTML file: each an application/octet-stream attachment, nosniff and sandboxed."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "a_signature_that_does_not_verify_is_refused_whatever_the_hash",
+          "scope": "A chain that does not verify answers 401 for any hash, published or not."
         }
       ],
       "gaps": [
         "deliberate:item-files-absent",
         "deliberate:item-files-from-disk",
-        "deliberate:item-files-private-until-published"
+        "deliberate:item-files-private-until-published",
+        "deliberate:storage-signature-checked",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "A Range request. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
@@ -5386,10 +5705,17 @@
           "path": "services/catalyst/builder/src/tests/item_files.rs",
           "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
           "scope": "The node's answer to HEAD for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "a_signature_that_does_not_verify_is_refused_whatever_the_hash",
+          "scope": "A chain that does not verify answers 401 for any hash, published or not."
         }
       ],
       "gaps": [
-        "deliberate:item-files-from-disk"
+        "deliberate:item-files-from-disk",
+        "deliberate:storage-signature-checked",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "Compare a HEAD of a draft's file signed and unsigned. The capture keeps content-type, cache-control and location only, so X-Content-Type-Options, Content-Security-Policy, Content-Disposition and Content-Length rest on services/catalyst/builder/src/tests/item_files.rs."
     },
@@ -5428,10 +5754,17 @@
           "path": "services/catalyst/builder/src/tests/item_files.rs",
           "test": "each_caller_reads_an_item_file_only_as_the_published_rule_decides",
           "scope": "The node's answer to the exists probe for every caller and file state, a third-party item with a pending, approved and rejected item curation included."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_files.rs",
+          "test": "a_signature_that_does_not_verify_is_refused_whatever_the_hash",
+          "scope": "A chain that does not verify answers 401 for any hash, published or not."
         }
       ],
       "gaps": [
-        "deliberate:item-files-exists-private"
+        "deliberate:item-files-exists-private",
+        "deliberate:storage-signature-checked",
+        "deliberate:third-party-registry-read-window"
       ],
       "remaining_verification": "The signed probe of a draft's file by a wallet with no role."
     },
@@ -5519,6 +5852,11 @@
           "path": "services/catalyst/builder/src/tests/cors.rs",
           "test": "a_listed_origin_reads_the_answers_and_any_other_origin_does_not_at_both_mounts",
           "scope": "Listed, exact and foreign origins on a signed route, a write, a validator route, the file probe and this route, at both mounts."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/write_gate.rs",
+          "test": "with_writes_off_every_write_is_refused_on_both_mounts_and_reads_answer",
+          "scope": "With writes off: every write route refused with 503, the builder envelope and Retry-After, at both mounts; reads answer."
         }
       ],
       "gaps": [
@@ -5526,7 +5864,8 @@
         "deliberate:newsletter-forward-failure",
         "deliberate:newsletter-budgets",
         "deliberate:request-budgets",
-        "deliberate:cors-allow-list"
+        "deliberate:cors-allow-list",
+        "deliberate:create-writes-switch"
       ],
       "remaining_verification": "Compare the live newsletter service's answers; the clients that call the route today (the explorer HUD's sign-up and the Sites and Shop footers) send unsigned JSON {email, source}."
     }

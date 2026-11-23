@@ -133,7 +133,10 @@ async fn list_collections(
         }
         None => {
             let search = PublicSearch::new(&q, review_flow)?.ok_or_else(|| unauthorized_for(""))?;
-            let found = state.items.public_collections(&search).await?;
+            let found = state
+                .items
+                .public_collections(&search, &state.third_parties, state.market.as_ref())
+                .await?;
             crate::limits::charge(
                 state,
                 headers,

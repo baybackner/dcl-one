@@ -98,6 +98,7 @@ pub fn parse_update(curation: &Value) -> Result<Update, ApiError> {
             "assignee" => {
                 update.assignee = Some(match value {
                     Value::Null => None,
+                    Value::String(s) if s.is_empty() => None,
                     Value::String(s) => Some(s.to_ascii_lowercase()),
                     _ => return Err(invalid_schema()),
                 })

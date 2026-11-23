@@ -175,11 +175,8 @@ impl Deployment {
 /// The checks a standard save makes before it asks who the signer is:
 /// `data` present and no claim of publication.
 pub fn standard_request(save: &CollectionSave, signer: &str) -> Result<(), ApiError> {
-    let Some(data) = &save.data else {
+    if save.data.as_deref().is_none_or(str::is_empty) {
         return Err(ApiError::http(200, "Could not get data from request"));
-    };
-    if data.is_empty() {
-        return Err(invalid_data(save, signer));
     }
     if save.claims_publication {
         return Err(
@@ -361,12 +358,7 @@ impl ItemsComponent {
         };
         claim.execute(&mut *tx).await?;
         if let Some((provider, _)) = provider {
-            sqlx::query(
-                "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
-            )
-            .bind(provider)
-            .execute(&mut *tx)
-            .await?;
+            crate::third_parties::lock_provider(&mut tx, provider).await?;
         }
         let previous_contract: Option<(Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT linked_contract_address, linked_contract_network FROM builder.collections WHERE id = $1",
@@ -656,19 +648,19 @@ mod tests {
     fn a_standard_save_needs_initialize_data_naming_the_signer() {
         let owner = "0xc1aba94a79ca07d9d15a62ff5c9b382777e0c70e";
         let mut save = parse(&body(valid())).unwrap();
-        save.data = None;
-        let missing = standard_deployment(&save, owner).err().unwrap();
-        assert_eq!(
-            (missing.status(), missing.to_string().as_str()),
-            (200, "Could not get data from request")
-        );
-        for data in ["", "0x00"] {
-            save.data = Some(data.into());
-            let refused = standard_deployment(&save, owner).err().unwrap();
+        for data in [None, Some(String::new())] {
+            save.data = data;
+            let missing = standard_request(&save, owner).err().unwrap();
             assert_eq!(
-                (refused.status(), refused.to_string().as_str()),
-                (409, "Cannot upsert a collection without a valid data")
+                (missing.status(), missing.to_string().as_str()),
+                (200, "Could not get data from request")
             );
         }
+        save.data = Some("0x00".into());
+        let refused = standard_deployment(&save, owner).err().unwrap();
+        assert_eq!(
+            (refused.status(), refused.to_string().as_str()),
+            (409, "Cannot upsert a collection without a valid data")
+        );
     }
 }

@@ -95,6 +95,16 @@ async function generateTree(hashes: string[]) {
   return generateTree(hashes)
 }
 
+/** The node's 409 for pending items whose content differs from what was submitted: only the creator can fix it. */
+function refuseUnsubmitted(error: unknown): never {
+  const itemIds =
+    error instanceof BuilderServerError && error.status === 409 && (error.data as { itemIds?: unknown })?.itemIds
+  if (Array.isArray(itemIds)) {
+    throw new ApprovalError('unsubmitted', `Items ${itemIds.join(', ')} have changes that were not submitted`)
+  }
+  throw error
+}
+
 /**
  * What the approval needs: the pending items, their proofs and whether the root transaction is due. The cheque
  * must cover the items the Catalyst doesn't hold yet, since items pushed again don't take a slot.
@@ -106,7 +116,7 @@ export async function prepareLinkedApproval(
 ): Promise<LinkedApprovalPlan> {
   const [pendingItems, approvalData, curations, registryRoot, deployedHashes] = await Promise.all([
     deps.fetchPendingItems(collection.id),
-    deps.fetchApprovalData(collection.id),
+    deps.fetchApprovalData(collection.id).catch(refuseUnsubmitted),
     deps.fetchItemCurations(collection.id),
     deps.fetchRegistryRoot(),
     deps.fetchDeployedHashes(collection.id)
@@ -117,13 +127,8 @@ export async function prepareLinkedApproval(
   }
   const unhashed = pendingItems.find(item => !approvalData.contentHashes[item.id])
   if (unhashed) throw new ApprovalError('missing_hash', `Item ${unhashed.id} has no curated content hash`)
-  // The root goes on chain before anything is deployed, so every pending leaf must be the content the curator has on
-  // screen: the hash the curation recorded, the item's current hash and the hash of the item itself must all agree.
-  // An item saved after it was submitted can't be approved until the creator submits it again: reviewing won't help.
   const unsubmitted = pendingItems.find(item => approvalData.contentHashes[item.id] !== item.currentContentHash)
   if (unsubmitted) throw new ApprovalError('unsubmitted', `Item ${unsubmitted.id} has changes that were not submitted`)
-  // The Catalyst takes no preview video in a linked item, yet the curated hash includes it: approving would spend the
-  // cheque on a root whose items can never deploy. The creator has to upload them again without it.
   const withVideo = pendingItems.filter(item => VIDEO_PATH in item.contents)
   if (withVideo.length > 0) {
     throw new ApprovalError('has_video', `${withVideo.length} items have a preview video`, withVideo)
@@ -135,10 +140,6 @@ export async function prepareLinkedApproval(
 
   const newItems = pendingItems.filter(item => !item.isApproved).length
 
-  // Only approved content and the pending content verified above may be provable: a rejected or superseded hash in
-  // the root would let content nobody approved reach the Catalyst. An approved hash also has to be what the Catalyst
-  // holds: builder-server records the hash an item has when approved, which a save at that moment can swap for
-  // content nobody reviewed.
   const pendingIds = new Set(pendingItems.map(item => item.id))
   const leaves = Object.entries(approvalData.contentHashes)
     .filter(
@@ -147,7 +148,6 @@ export async function prepareLinkedApproval(
     )
     .map(([, hash]) => hash)
   const tree = await generateTree(leaves)
-  // A root the registry already holds was set by an earlier attempt, which consumed the cheque with it.
   const needsRoot = !sameRoot(registryRoot || approvalData.root, tree.merkleRoot)
   if (needsRoot && !approvalData.chequeWasConsumed && approvalData.cheque.qty < newItems) {
     throw new ApprovalError('invalid_cheque', `The cheque covers ${approvalData.cheque.qty} items, ${newItems} are new`)

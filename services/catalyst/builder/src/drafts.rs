@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -283,6 +282,7 @@ impl ItemsComponent {
         .await?)
     }
 
+    #[cfg(test)]
     pub async fn uploaded_content_exists(&self, hash: &str) -> Result<bool, ApiError> {
         Ok(sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM builder.uploaded_contents WHERE hash=$1)",
@@ -292,8 +292,9 @@ impl ItemsComponent {
         .await?)
     }
 
-    /// The accepted upload's bytes, whole, for tests.
-    pub async fn uploaded_content(&self, hash: &str) -> Result<Option<Bytes>, ApiError> {
+    /// The accepted upload's bytes, whole.
+    #[cfg(test)]
+    pub async fn uploaded_content(&self, hash: &str) -> Result<Option<bytes::Bytes>, ApiError> {
         if !self.uploaded_content_exists(hash).await? {
             return Ok(None);
         }

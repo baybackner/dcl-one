@@ -3,10 +3,12 @@
 //! approve a third-party collection's submitted items. The newest cheque,
 //! each item's newest curation's content hash (the client builds the
 //! merkle tree over them), the provider's registry root and whether the
-//! registry already consumed the cheque. An item whose content differs from
-//! its pending curation's is refused (409) rather than attested. The rows
-//! are read first; the registry is read holding no connection, and 503 when
-//! it can't tell.
+//! registry already consumed the cheque. A save through the node moves the
+//! pending curation's hash to the saved content, so the hash answered is the
+//! item's current one; a pending curation whose hash the item no longer
+//! holds, which only rows written outside the node's saves (an import) can
+//! leave, is refused (409) rather than attested. The rows are read first;
+//! the registry is read holding no connection, and 503 when it can't tell.
 
 use std::collections::BTreeMap;
 
@@ -100,7 +102,7 @@ pub async fn approval_data(state: &State, read: &ApprovalRead) -> Result<Approva
         .ok_or_else(|| ApiError::internal(format!("stored cheque of {id} unreadable")))?;
     let registry = state
         .third_parties
-        .registry(state.market.as_ref(), tokio::time::Instant::now())
+        .registry(state.market.as_ref(), crate::kept::Since::write())
         .await?;
     let market = state
         .market

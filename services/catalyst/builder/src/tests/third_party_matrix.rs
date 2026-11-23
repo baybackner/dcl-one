@@ -282,6 +282,7 @@ async fn fixture(w: &World, provider: Provider) -> Fixture {
     .execute(&w.pool)
     .await
     .unwrap();
+    w.state.third_parties.outdate();
     Fixture {
         provider: provider_id,
         collection,
@@ -744,7 +745,8 @@ async fn each_caller_gets_its_providers_answer_on_every_third_party_operation() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
+async fn a_manager_the_registry_stops_listing_is_refused_its_next_write_and_its_reads_past_the_window()
+ {
     let Some(w) = world().await else { return };
     let f = fixture(&w, Approved).await;
     let former = address(FORMER_KEY);
@@ -772,7 +774,6 @@ async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
     assert_eq!(as_former(path.clone()).await, StatusCode::OK);
     w.registry
         .set(&f.provider, "managers", json!([Manager.address()]));
-    assert_eq!(as_former(path).await, StatusCode::UNAUTHORIZED);
     let (_, publish, body) = Publish.request(&f, Manager);
     let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let digest = crate::cheques::digest(&f.provider, 1, salt.parse().unwrap());
@@ -802,6 +803,8 @@ async fn a_manager_the_registry_stops_listing_is_refused_on_the_next_request() {
         .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(snapshot(&w.pool).await, before);
+    w.state.third_parties.outdate();
+    assert_eq!(as_former(path).await, StatusCode::UNAUTHORIZED);
 }
 
 /// A manager the registry stops listing loses the third-party item it last
@@ -866,6 +869,7 @@ async fn a_manager_the_registry_stops_listing_loses_the_item_it_saved() {
     assert_eq!(sees(Creator).await, (200, 200, true, true), "while listed");
     w.registry
         .set(&f.provider, "managers", json!([Manager.address()]));
+    w.state.third_parties.outdate();
     assert_eq!(
         sees(Creator).await,
         (401, 404, false, false),
@@ -908,6 +912,7 @@ async fn registry_down_cell(w: &World, op: Op, p: Provider, caller: Caller) -> O
     let f = fixture(w, p).await;
     prepare(w, op, &f).await;
     w.registry.fail(true);
+    w.state.third_parties.outdate();
     let before = snapshot(&w.pool).await;
     let (status, answer) = send_op(w, op, &f, caller).await;
     w.registry.fail(false);
@@ -1052,6 +1057,7 @@ async fn an_unreadable_registry_record_grants_its_provider_to_nobody() {
     w.registry
         .put(&f.provider, &[&Holder.address()], true, false);
     w.registry.set(&f.provider, "root", json!("0x12"));
+    w.state.third_parties.outdate();
     for caller in [Holder, Stranger] {
         let (method, path, body) = CreateCollection.request(&f, caller);
         let (status, answer) = call(&w.app, caller, method, &path, body).await;
@@ -1318,4 +1324,56 @@ async fn only_a_manager_both_lists_name_changes_or_removes_a_virtual_third_party
             StatusCode::OK
         )
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_virtual_third_partys_manager_sets_it_programmatic_whatever_else_the_body_holds() {
+    let Some(w) = world().await else { return };
+    let f = fixture(&w, Claimed).await;
+    let (status, body) = call(
+        &w.app,
+        Holder,
+        "PATCH",
+        &format!("/v1/thirdParties/{}", f.provider),
+        Some(json!({ "isProgrammatic": true, "name": "ignored" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let programmatic: bool = sqlx::query_scalar(
+        "SELECT is_programmatic FROM builder.virtual_third_parties WHERE id = $1",
+    )
+    .bind(&f.provider)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert!(programmatic);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_public_search_answers_a_linked_collection_with_its_providers_programmatic_flag() {
+    let Some(w) = world().await else { return };
+    let f = fixture(&w, Approved).await;
+    w.registry
+        .put(&f.provider, &[&Manager.address()], true, true);
+    w.state.third_parties.outdate();
+    prepare(&w, ItemCurationRequest, &f).await;
+    let name: String = sqlx::query_scalar("SELECT name FROM builder.collections WHERE id = $1")
+        .bind(f.collection)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    let (status, body) = call(
+        &w.app,
+        Anonymous,
+        "GET",
+        &format!(
+            "/v1/collections?q={}&is_published=true",
+            name.trim_start_matches("Linked ")
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"][0]["urn"], json!(f.collection_urn), "{body}");
+    assert_eq!(body["data"][0]["is_programmatic"], json!(true), "{body}");
 }

@@ -266,6 +266,7 @@ impl Default for Limits {
 
 impl Limits {
     /// A million tokens a minute in every budget.
+    #[cfg(test)]
     pub fn unbounded() -> Self {
         let all = || budget(1_000_000, MINUTE);
         Self {

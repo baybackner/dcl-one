@@ -130,12 +130,7 @@ pub async fn publish(
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
-    )
-    .bind(grant.provider())
-    .execute(&mut *tx)
-    .await?;
+    third_parties::lock_provider(&mut tx, grant.provider()).await?;
     let view = chain_state::for_decision(&mut tx).await?;
     access::confirm_third_party_publish(&mut tx, &view, grant).await?;
     if request.items.len() as i128 > free_slots(&mut tx, grant).await? {

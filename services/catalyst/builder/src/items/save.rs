@@ -71,7 +71,7 @@ fn representations_named(input: &ItemInput) -> bool {
         })
 }
 
-fn not_matching(path: &str, body: Option<&str>) -> ApiError {
+fn not_matching(path: &str, body: Option<Option<&str>>) -> ApiError {
     let mut data = serde_json::json!({ "urlId": path });
     if let Some(body) = body {
         data["bodyId"] = body.into();
@@ -95,10 +95,10 @@ pub async fn prepare(
     let body_urn = input.urn.clone().flatten();
     match &path_urn {
         Some(_) if body_urn.as_deref() != Some(path) => {
-            return Err(not_matching(path, body_urn.as_deref()));
+            return Err(not_matching(path, input.urn.as_ref().map(Option::as_deref)));
         }
         None if input.id.as_deref() != Some(path) => {
-            return Err(not_matching(path, input.id.as_deref()));
+            return Err(not_matching(path, input.id.as_deref().map(Some)));
         }
         _ => {}
     }
@@ -108,6 +108,7 @@ pub async fn prepare(
         )
         .with_data(serde_json::json!({ "id": path })));
     }
+    let path_names_id = path_urn.is_none();
     let by_urn = input.id.is_none().then_some(path_urn).flatten();
     let pool = state.items.pool();
     let stored_id: Option<Uuid> = match (&by_urn, &input.id) {
@@ -196,7 +197,7 @@ pub async fn prepare(
             rarity: input.rarity.clone().flatten(),
             urn,
             id_given: input.id.is_some(),
-            path_id: input.id.is_some().then(|| path.to_string()),
+            path_id: path_names_id.then(|| path.to_string()),
         },
     })
 }

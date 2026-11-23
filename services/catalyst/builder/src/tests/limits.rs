@@ -1191,7 +1191,7 @@ async fn new_drafts_saved_at_once_stay_within_the_wallets_bound() {
 #[test]
 fn the_builder_doc_states_each_bound_the_code_enforces() {
     use crate::collections::{listing as cl, publish_third_party, save as cs};
-    use crate::handlers::{curation as hc, newsletter, svg, third_parties as htp, validator as hv};
+    use crate::handlers::{curation as hc, newsletter, third_parties as htp, validator as hv};
     use crate::items::{listing as il, places, save as is, schema, upload, video};
     use crate::limits as l;
     fn grouped(n: u64) -> String {
@@ -1391,6 +1391,7 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
             "collections::listing::ADDRESS_CAP",
             count(cl::ADDRESS_CAP as u64),
         ),
+        ("kept::READ_WINDOW", span(crate::kept::READ_WINDOW)),
         ("collections::listing::Q_MAX", count(cl::Q_MAX as u64)),
         (
             "collections::listing::MAX_ASSIGNEES",
@@ -1460,8 +1461,6 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
             "handlers::validator::VERDICT_BODY",
             binary(hv::VERDICT_BODY as u64),
         ),
-        ("handlers::svg::MAX_BYTES", binary(svg::MAX_BYTES)),
-        ("handlers::svg::MAX_DEPTH", count(svg::MAX_DEPTH as u64)),
         ("handlers::third_parties::ID_MAX", count(htp::ID_MAX as u64)),
         ("items::video::BODY_LIMIT", bytes(video::BODY_LIMIT as u64)),
         ("items::video::FRAMING_BYTES", binary(video::FRAMING_BYTES)),

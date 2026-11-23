@@ -4,17 +4,17 @@
 //! no connection held; a write locks the provider and decides again inside
 //! its transaction.
 
+use crate::kept::Since;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde_json::{Map, Value, json};
-use tokio::time::Instant;
 
 use crate::SharedState;
 use crate::access;
 use crate::auth::Signed;
 use crate::http::{ApiData, ApiError};
 use crate::third_parties::{
-    has_manager, managed_by, provider, provider_view, virtual_by_id, virtual_view,
+    has_manager, lock_provider, managed_by, provider, provider_view, virtual_by_id, virtual_view,
 };
 
 pub(crate) const ID_MAX: usize = 512;
@@ -36,7 +36,7 @@ pub async fn list(
 ) -> Result<Json<ApiData<Vec<Value>>>, ApiError> {
     let registry = state
         .third_parties
-        .registry(state.market.as_ref(), Instant::now())
+        .registry(state.market.as_ref(), Since::read())
         .await?;
     let mut conn = state.items.pool().acquire().await?;
     let listed = managed_by(&mut conn, &registry, signer.as_str()).await?;
@@ -58,7 +58,7 @@ pub async fn get(
     }
     let registry = state
         .third_parties
-        .registry(state.market.as_ref(), Instant::now())
+        .registry(state.market.as_ref(), Since::read())
         .await?;
     if let Some(record) = provider(&registry, &id) {
         return Ok(Json(ApiData::ok(provider_view(record))));
@@ -110,19 +110,6 @@ pub async fn slots(
     })))
 }
 
-async fn lock_provider(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: &str,
-) -> Result<(), ApiError> {
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('builder.virtual_third_parties:' || $1, 0))",
-    )
-    .bind(id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 /// `DELETE /v1/thirdParties/:id` (`removeVirtualThirdParty`): a manager of
 /// the virtual third party that also manages the provider
 /// ([`access::changes_virtual_third_party`]) removes it once the registry
@@ -137,7 +124,7 @@ pub async fn delete(
     if id.len() > ID_MAX {
         return Err(missing(&id));
     }
-    let since = Instant::now();
+    let since = Since::write();
     {
         let mut conn = state.items.pool().acquire().await?;
         match virtual_by_id(&mut conn, &id).await? {
@@ -183,8 +170,8 @@ pub async fn delete(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `PATCH /v1/thirdParties/:id` (`updateThirdParty`): the body is exactly
-/// `{isProgrammatic: boolean}` (400 otherwise); a manager of the virtual
+/// `PATCH /v1/thirdParties/:id` (`updateThirdParty`): the body holds
+/// `isProgrammatic`, a boolean (400 otherwise), and anything else is ignored; a manager of the virtual
 /// third party that also manages the provider
 /// ([`access::changes_virtual_third_party`]) sets it; a missing one is 404,
 /// another signer 401, 503 while the registry can't be read.
@@ -197,7 +184,6 @@ pub async fn update(
     let programmatic = body
         .as_ref()
         .and_then(|Json(body)| body.as_object())
-        .filter(|fields| fields.len() == 1)
         .and_then(|fields: &Map<String, Value>| fields.get("isProgrammatic"))
         .and_then(Value::as_bool)
         .ok_or_else(|| ApiError::bad_request("Invalid request body"))?;
@@ -206,7 +192,7 @@ pub async fn update(
     }
     let registry = state
         .third_parties
-        .registry(state.market.as_ref(), Instant::now())
+        .registry(state.market.as_ref(), Since::write())
         .await?;
     let mut tx = state.items.pool().begin().await?;
     lock_provider(&mut tx, &id).await?;
