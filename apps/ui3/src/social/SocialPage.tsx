@@ -220,6 +220,7 @@ export default function SocialPage({ viewer, communityId, postId, request, onSel
         }}
         onDone={() => setCreating(false)}
         contentPolicyUrl={siteUrl("/content")}
+        nameClaimUrl="/shop/names"
       />}
     </ChromeShell>
   );

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 import { Button } from '../../../components/Button/Button'
 import { Dropdown } from '../../../components/Dropdown/Dropdown'
@@ -29,40 +29,55 @@ export type CommunityCreateInput = {
 /** The failure a `create` call rejects with: the server's message and, for an HTTP error, its status. */
 type CreateFailure = { status?: number; message?: string }
 
-export type CommunityCreateProps = {
+export type CommunityCreateProps<R> = {
   /** Sends the community to the server. A 401 whose message says the account has no NAME shows the NAME gate. */
-  create: (input: CommunityCreateInput) => Promise<unknown>
-  /** Called with `true` after a community is created, `false` when the reader cancels. */
-  onDone?: (created: boolean) => void
+  create: (input: CommunityCreateInput) => Promise<R>
+  /**
+   * Called with `true` and what `create` resolved to after a community is created, and with `false` when
+   * the reader cancels. The caller then stops rendering the dialog; until it does, a created form stays locked.
+   */
+  onDone?: (created: boolean, result?: R) => void
+  /** Values to start from, such as a draft kept across a sign-in. */
+  initial?: Partial<CommunityCreateInput>
   contentPolicyUrl: string
+  /** Where the NAME gate's main action leads to get a NAME. */
+  nameClaimUrl: string
 }
 
-export default function CommunityCreate({
+export default function CommunityCreate<R>({
   create,
   onDone,
-  contentPolicyUrl
-}: CommunityCreateProps) {
+  initial,
+  contentPolicyUrl,
+  nameClaimUrl
+}: CommunityCreateProps<R>) {
+  const nameId = useId()
+  const descId = useId()
   const [gated, setGated] = useState(false)
-  const [name, setName] = useState('')
-  const [desc, setDesc] = useState('')
-  const [membership, setMembership] = useState<Membership>('public')
-  const [discoverable, setDiscoverable] = useState(true)
+  const [name, setName] = useState(initial?.name ?? '')
+  const [desc, setDesc] = useState(initial?.description ?? '')
+  const [membership, setMembership] = useState<Membership>(initial?.privacy ?? 'public')
+  const [discoverable, setDiscoverable] = useState(initial?.visibility !== 'unlisted')
   const [busy, setBusy] = useState(false)
+  const [created, setCreated] = useState(false)
   const [err, setErr] = useState('')
   const incomplete = !name.trim()
+  const locked = busy || created
 
   const submit = async () => {
-    if (incomplete || busy) return
+    if (incomplete || locked) return
     setBusy(true)
     setErr('')
     try {
-      await create({
+      const result = await create({
         name: name.trim(),
         description: desc.trim() || name.trim(),
         privacy: membership,
         visibility: discoverable ? 'all' : 'unlisted'
       })
-      onDone?.(true)
+      // A second press must not create the community again while the caller moves on.
+      setCreated(true)
+      onDone?.(true, result)
     } catch (e) {
       const failure = (e ?? {}) as CreateFailure
       if (failure.status === 401 && /doesn't have any names/i.test(failure.message ?? '')) {
@@ -117,7 +132,7 @@ export default function CommunityCreate({
             <Button variant="secondary" onClick={() => setGated(false)}>
               Maybe later
             </Button>
-            <Button onClick={() => setGated(false)}>Get a NAME</Button>
+            <Button href={nameClaimUrl}>Get a NAME</Button>
           </>
         }
       />
@@ -128,13 +143,13 @@ export default function CommunityCreate({
     <Modal
       title="Create a Community"
       onClose={() => onDone?.(false)}
-      dismissible={!busy}
+      dismissible={!locked}
       actions={
         <>
-          <Button variant="secondary" onClick={() => onDone?.(false)} disabled={busy}>
+          <Button variant="secondary" onClick={() => onDone?.(false)} disabled={locked}>
             Cancel
           </Button>
-          <Button aria-disabled={incomplete || busy} onClick={submit}>
+          <Button aria-disabled={incomplete || locked} onClick={submit}>
             {busy ? 'Creating\u{2026}' : 'Create'}
           </Button>
         </>
@@ -184,14 +199,14 @@ export default function CommunityCreate({
         </div>
 
         <div className={styles.group}>
-          <label className={styles.label} htmlFor="ccr-name">
+          <label className={styles.label} htmlFor={nameId}>
             Community name{' '}
             <span className={styles.required} aria-hidden="true">
               *
             </span>
           </label>
           <input
-            id="ccr-name"
+            id={nameId}
             className={styles.input}
             maxLength={30}
             placeholder="Write here"
@@ -202,11 +217,11 @@ export default function CommunityCreate({
         </div>
 
         <div className={styles.group}>
-          <label className={styles.label} htmlFor="ccr-desc">
+          <label className={styles.label} htmlFor={descId}>
             Description
           </label>
           <input
-            id="ccr-desc"
+            id={descId}
             className={styles.input}
             maxLength={240}
             placeholder="What's your community about?"

@@ -4,9 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import CommunityCreate from './CommunityCreate'
 
 const POLICY = 'https://example.org/content'
+const NAMES = '/shop/names'
 
 function setup(create = vi.fn().mockResolvedValue({ id: 'c1' }), onDone = vi.fn()) {
-  render(<CommunityCreate create={create} onDone={onDone} contentPolicyUrl={POLICY} />)
+  render(
+    <CommunityCreate
+      create={create}
+      onDone={onDone}
+      contentPolicyUrl={POLICY}
+      nameClaimUrl={NAMES}
+    />
+  )
   return { create, onDone }
 }
 
@@ -47,7 +55,7 @@ describe('CommunityCreate', () => {
         privacy: 'public',
         visibility: 'all'
       })
-      expect(onDone).toHaveBeenCalledWith(true)
+      expect(onDone).toHaveBeenCalledWith(true, { id: 'c1' })
     })
   })
 
@@ -125,7 +133,7 @@ describe('CommunityCreate', () => {
       expect(create).toHaveBeenCalledTimes(1)
       expect(onDone).not.toHaveBeenCalled()
       await act(async () => resolve({ id: 'c1' }))
-      expect(onDone).toHaveBeenCalledWith(true)
+      expect(onDone).toHaveBeenCalledWith(true, { id: 'c1' })
     })
   })
 
@@ -135,6 +143,67 @@ describe('CommunityCreate', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       expect(onDone).toHaveBeenCalledWith(false)
       expect(create).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('after the community is created', () => {
+    it('should keep the form locked so a second press does not create it again', async () => {
+      const { create } = setup()
+      await userEvent.type(nameField(), 'Builders')
+      await userEvent.click(createButton())
+      expect(createButton()).toHaveAttribute('aria-disabled', 'true')
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+      await userEvent.click(createButton())
+      expect(create).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('when the form starts from a kept draft', () => {
+    it('should show the draft and send it as it stands', async () => {
+      const create = vi.fn().mockResolvedValue({ id: 'c1' })
+      render(
+        <CommunityCreate
+          create={create}
+          initial={{
+            name: 'Builders',
+            description: 'We build',
+            privacy: 'private',
+            visibility: 'unlisted'
+          }}
+          contentPolicyUrl={POLICY}
+          nameClaimUrl={NAMES}
+        />
+      )
+      expect(nameField()).toHaveValue('Builders')
+      expect(
+        screen.getByRole('switch', { name: 'Show the community in the directory' })
+      ).not.toBeChecked()
+      await userEvent.click(createButton())
+      expect(create).toHaveBeenCalledWith({
+        name: 'Builders',
+        description: 'We build',
+        privacy: 'private',
+        visibility: 'unlisted'
+      })
+    })
+  })
+
+  describe('when the NAME gate offers a NAME', () => {
+    it('should link to the NAME page', async () => {
+      setup(vi.fn().mockRejectedValue({ status: 401, message: "The user doesn't have any names" }))
+      await userEvent.type(nameField(), 'Builders')
+      await userEvent.click(createButton())
+      expect(screen.getByRole('link', { name: 'Get a NAME' })).toHaveAttribute('href', NAMES)
+    })
+  })
+
+  describe('when two forms are on the page', () => {
+    it('should label each field with its own input', () => {
+      setup()
+      setup()
+      const fields = screen.getAllByRole('textbox', { name: /Community name/i })
+      expect(fields).toHaveLength(2)
+      expect(fields[0]).not.toBe(fields[1])
     })
   })
 })
