@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useRouteLoaderData } from "react-router";
 
 import { adoptSitesSegmentConfig, page } from "./track";
+import { trackedUserDropped } from "./tracked-user";
 
 /** A Segment page call's name and properties, as the legacy site's `usePageViewTracking` took them. */
 export type PageView = { name: string; properties?: Record<string, unknown> };
@@ -55,7 +56,8 @@ type RootSession = { sid?: string | null; analyticsUserId?: string | null };
 /** The root loader's session id and Segment `userId` (the server-verified wallet only). */
 function useRootSession(): { sid: string; userId: string } {
   const root = useRouteLoaderData("root") as RootSession | undefined;
-  return { sid: root?.sid ?? "", userId: root?.analyticsUserId ?? "" };
+  // A sign-out in progress leaves the account out before root's data has caught up.
+  return { sid: root?.sid ?? "", userId: trackedUserDropped() ? "" : (root?.analyticsUserId ?? "") };
 }
 
 /**

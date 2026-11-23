@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useRevalidator, useRouteLoaderData } from "react-router";
 
+import { dropTrackedUser, restoreTrackedUser } from "@/core/lib/telemetry/tracked-user";
+
 /**
  * The verified-wallet cookie (`dcl_wallet_verified`) changes only through `POST /auth/callback`, a
  * plain fetch the router never sees, so root's data (the session's verified wallet, which page views
@@ -21,6 +23,8 @@ let pending = 0;
 /** The change a root reload was last asked for. */
 let requested = 0;
 let revalidateRoot: (() => void) | null = null;
+/** The change carrying the server's answer to a sign-out; 0 while none has answered. */
+let signOutAnswered = 0;
 
 /** Marks the session changed, and reloads the page's data now when `revalidate` is set. */
 export function markSessionChanged(opts: { revalidate?: boolean } = {}): void {
@@ -38,7 +42,22 @@ export function sessionChangePending(): boolean {
 
 /** Root's data reloaded: the change a reload was asked for has reached it. */
 export function sessionChangeApplied(): void {
+  // Root's data read after the sign-out's answer has no verified wallet: it takes over from the drop.
+  if (signOutAnswered && requested >= signOutAnswered) {
+    signOutAnswered = 0;
+    restoreTrackedUser();
+  }
   if (pending && requested === pending) pending = 0;
+}
+
+/**
+ * A sign-out starts: page views leave the account out from now on, without waiting for the server,
+ * and root's data is read again on the next navigation. Call it before posting the sign-out.
+ */
+export function beginSignOut(): void {
+  signOutAnswered = 0;
+  dropTrackedUser();
+  markSessionChanged();
 }
 
 /**
@@ -59,9 +78,17 @@ export async function postAuthCallback(
       ...(opts.keepalive ? { keepalive: true } : {}),
     });
   } catch {
+    // A sign-out that never reached the server keeps the account left out (the visitor asked to sign
+    // out) and the reload beginSignOut asked for.
     return null;
   }
   markSessionChanged({ revalidate: opts.revalidate });
+  if ("signout" in body) signOutAnswered = generation;
+  else {
+    // A sign-in replaces whatever sign-out was in progress.
+    signOutAnswered = 0;
+    restoreTrackedUser();
+  }
   return response;
 }
 
