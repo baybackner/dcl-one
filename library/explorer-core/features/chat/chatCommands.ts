@@ -183,6 +183,9 @@ const teleported = (p: { x: number; y: number }): string => `🟢 You teleported
 const REALM_URL = /^https?:\/\//i
 /** The names `/goto` reads as Genesis City, in any case. */
 const GENESIS_NAMES: ReadonlySet<string> = new Set(['genesis', 'main'])
+/** Where a travel to Genesis City lands when it names no parcel: Genesis Plaza. The realm's own
+ *  spawn is the account's home, which may be anywhere. */
+const GENESIS_PLAZA = { x: 0, y: 0 }
 
 /**
  * A parcel alone is a Genesis City parcel, reached by a realm change from a world, unless `local`.
@@ -228,7 +231,7 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
   }
   const world = toGenesis || url ? undefined : name
   const reply = world != null ? `🟢 Welcome to the ${world} world!` : `🟢 Welcome to ${toGenesis ? 'Genesis City' : name}!`
-  return { kind: 'travel', realm, parcel: target.parcel ?? undefined, spawnPoint, reply, world }
+  return { kind: 'travel', realm, parcel: target.parcel ?? (toGenesis ? GENESIS_PLAZA : undefined), spawnPoint, reply, world }
 }
 
 /** Parse a raw chat input into an action. Non-`/` lines pass through as `send`. */

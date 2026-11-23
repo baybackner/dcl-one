@@ -170,11 +170,11 @@ describe('resolveGoto', () => {
   })
 
   it('genesis and main, in any case, are Genesis City', () => {
-    // no world's name to blame for a failure
-    expect(resolve('genesis', inWorld)).toEqual({ kind: 'travel', realm: GENESIS, parcel: undefined, spawnPoint: undefined, reply: '🟢 Welcome to Genesis City!', world: undefined })
+    // no world's name to blame for a failure; with no parcel named, Genesis Plaza
+    expect(resolve('genesis', inWorld)).toEqual({ kind: 'travel', realm: GENESIS, parcel: { x: 0, y: 0 }, spawnPoint: undefined, reply: '🟢 Welcome to Genesis City!', world: undefined })
     expect(resolve('Genesis', inWorld)).toMatchObject({ kind: 'travel', realm: GENESIS, reply: '🟢 Welcome to Genesis City!' })
     expect(resolve('GENESIS', inGenesis)).toEqual({ kind: 'reply', message: '🟡 You are already in GENESIS!' })
-    expect(resolve('main', inWorld)).toEqual({ kind: 'travel', realm: GENESIS, parcel: undefined, spawnPoint: undefined, reply: '🟢 Welcome to Genesis City!', world: undefined })
+    expect(resolve('main', inWorld)).toEqual({ kind: 'travel', realm: GENESIS, parcel: { x: 0, y: 0 }, spawnPoint: undefined, reply: '🟢 Welcome to Genesis City!', world: undefined })
     expect(resolve('Main/100,100', inWorld)).toMatchObject({ kind: 'travel', realm: GENESIS, parcel: { x: 100, y: 100 }, world: undefined })
     // a parcel of the city, held to its bounds, and a teleport from inside it
     expect(resolve('main/200,200', inWorld)).toEqual({ kind: 'reply', message: '🔴 Error: Parcel (200, 200) is outside of the bounds.' })

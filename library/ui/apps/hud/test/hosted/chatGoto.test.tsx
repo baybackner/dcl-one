@@ -173,10 +173,9 @@ describe("chat's /goto", () => {
     act(() => h.session().chat.send('/goto boedo'))
     // on the way to boedo, Genesis City is a realm change again: it takes the place of boedo's
     act(() => h.session().chat.send('/goto genesis'))
-    expect(h.driver.sentOf('changeRealm')).toEqual([
-      { kind: 'changeRealm', realm: 'boedo.dcl.eth', travelId: 2 },
-      { kind: 'changeRealm', realm: DEFAULT_REALM, travelId: 3 }
-    ])
+    expect(h.driver.sentOf('changeRealm')).toEqual([{ kind: 'changeRealm', realm: 'boedo.dcl.eth', travelId: 2 }])
+    // to Genesis Plaza, as it names no parcel
+    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: DEFAULT_REALM, x: 0, y: 0, travelId: 3 }])
     expect(systemLines(h)).toEqual([CANCELED])
     act(() => h.driver.emit({ kind: 'travelResult', travelId: 3, realm: DEFAULT_REALM, ok: true }))
     expect(systemLines(h).at(-1)).toBe('🟢 Welcome to Genesis City!')
@@ -184,9 +183,9 @@ describe("chat's /goto", () => {
     // on the way to a world its own parcel is that travel again, and a parcel alone is Genesis City's
     act(() => h.session().chat.send('/goto mana'))
     act(() => h.session().chat.send('/goto mana/3,4'))
-    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: 'mana.dcl.eth', x: 3, y: 4, travelId: 5 }])
+    expect(h.driver.sentOf('teleport')[1]).toEqual({ kind: 'teleport', realm: 'mana.dcl.eth', x: 3, y: 4, travelId: 5 })
     act(() => h.session().chat.send('/goto 10,20'))
-    expect(h.driver.sentOf('teleport')[1]).toEqual({ kind: 'teleport', realm: DEFAULT_REALM, x: 10, y: 20, travelId: 6 })
+    expect(h.driver.sentOf('teleport')[2]).toEqual({ kind: 'teleport', realm: DEFAULT_REALM, x: 10, y: 20, travelId: 6 })
   })
 
   it('to a place inside the realm travelled to is that travel again, so one that fails moves nobody', async () => {
@@ -214,10 +213,8 @@ describe("chat's /goto", () => {
     inGenesis(h)
     act(() => h.session().chat.send('/goto https://other.example/main'))
     act(() => h.session().chat.send('/goto genesis'))
-    expect(h.driver.sentOf('changeRealm')).toEqual([
-      { kind: 'changeRealm', realm: 'https://other.example/main', travelId: 2 },
-      { kind: 'changeRealm', realm: DEFAULT_REALM, travelId: 3 }
-    ])
+    expect(h.driver.sentOf('changeRealm')).toEqual([{ kind: 'changeRealm', realm: 'https://other.example/main', travelId: 2 }])
+    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: DEFAULT_REALM, x: 0, y: 0, travelId: 3 }])
   })
 
   it('a travel to an address that tells no kind leaves the realm to the engine to report', async () => {
