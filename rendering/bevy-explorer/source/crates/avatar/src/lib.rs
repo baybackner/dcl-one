@@ -86,6 +86,8 @@ pub mod spring_bones;
 mod two_bone_ik;
 
 #[cfg(test)]
+mod outline_emission;
+#[cfg(test)]
 mod tests;
 
 #[cfg(feature = "explorer")]

@@ -14,7 +14,7 @@
 
 #import "embedded://shaders/simplex.wgsl"::simplex_noise_3d
 #import "embedded://shaders/bound_material_effect.wgsl"::{camera_dither, reveal_discard, toon_outline}
-#import "embedded://shaders/toon.wgsl"::{facial_feature_lighting, toon_lighting}
+#import "embedded://shaders/toon.wgsl"::{facial_feature_lighting, toon_emission, toon_lighting}
 #import "embedded://shaders/shadow_softening.wgsl"::soften_directional_shadow
 #import "embedded://shaders/scene_bounds.wgsl"::{scene_bounds, scene_outside_amount, SCENE_DITHER_CAPSULE}
 
@@ -175,30 +175,25 @@ fn fragment(
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
     // apply lighting
+    // the toon light models leave out the emission, added after the avatar outline
+    var toon_emitted = vec3<f32>(0.0);
     if (pbr_input.material.flags & bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         if (mesh_tag & #{FACIAL_FEATURE_MESH_TAG}) != 0u {
             // the eyes, eyebrows and mouth without a mask texture: the face features' own
             // light model, by the ambient light (toon.wgsl)
             out.color = facial_feature_lighting(pbr_input);
+            toon_emitted = toon_emission(pbr_input);
         } else if (mesh_tag & #{TOON_MESH_TAG}) != 0u {
             // avatars: cel shading, a light model of its own (toon.wgsl) lit by the sun and
             // the ambient light; the sun's cast shadow pushes surfaces towards the shades
             out.color = toon_lighting(pbr_input);
+            toon_emitted = toon_emission(pbr_input);
         } else {
             out.color = apply_pbr_lighting(pbr_input);
         }
     } else {
         // invert tonemapping for unlit materials
         out.color = approximate_inverse_tone_mapping(pbr_input.material.base_color, view.color_grading); 
-    }
-
-    if should_discard {
-        out.color.a = out.color.a * 0.5;
-        out.color.r = 4.0;
-    } else {
-        if noise < outside_amt / 2.0 {
-            out.color = mix(out.color, vec4(10.0, 1.0, 0.0, 1.0), (outside_amt / 2.0 - noise) / 0.125);
-        }
     }
 
     let view_z = -view_transformations::depth_ndc_to_view_z(in.position.z);
@@ -222,6 +217,20 @@ fn fragment(
             sample_index,
             dither_opacity,
         );
+    }
+
+    // the emission goes on after the line, which only darkens the lit surface: Unity draws its
+    // outline as a hull outside the mesh, so a glowing mesh glows to its edge, and a mesh a pixel
+    // or two across (a particle) is not all line
+    out.color = vec4<f32>(out.color.rgb + toon_emitted, out.color.a);
+
+    if should_discard {
+        out.color.a = out.color.a * 0.5;
+        out.color.r = 4.0;
+    } else {
+        if noise < outside_amt / 2.0 {
+            out.color = mix(out.color, vec4(10.0, 1.0, 0.0, 1.0), (outside_amt / 2.0 - noise) / 0.125);
+        }
     }
 
     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)

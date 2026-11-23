@@ -122,7 +122,8 @@ fn toon_irradiance(normal: vec3<f32>, world_position: vec3<f32>, clusterable_obj
 }
 #endif
 
-// the emission, in output units (see toon_lighting)
+// the emission, in output units (see toon_lighting). The lighting functions leave it out:
+// bound_material.wgsl adds it after the avatar outline, which only darkens the lit surface
 fn toon_emission(pbr_input: PbrInput) -> vec3<f32> {
     // emissive alpha is the exposure weight, as in bevy_pbr: bound_material
     // writes 0, so the emission is already in output units and must not be
@@ -160,7 +161,7 @@ fn facial_feature_lighting(pbr_input: PbrInput) -> vec4<f32> {
     );
 #endif
     let light = max(ambient, vec3(0.0)) * FACIAL_AMBIENT_GAIN;
-    let color = base_color.rgb * light * unit + toon_emission(pbr_input);
+    let color = base_color.rgb * light * unit;
     return vec4<f32>(color, base_color.a);
 }
 
@@ -242,8 +243,7 @@ fn toon_lighting(pbr_input: PbrInput) -> vec4<f32> {
         * saturate(1.0 + RIM_MASK_LEVEL);
 
     // the rim adds on top of the lit colours
-    var color = (base_color.rgb * diffuse + rim * light) * unit;
-    color += toon_emission(pbr_input);
+    let color = (base_color.rgb * diffuse + rim * light) * unit;
 
     return vec4<f32>(color, base_color.a);
 }
