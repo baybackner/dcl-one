@@ -15,6 +15,7 @@ vi.hoisted(() =>
 const page = vi.hoisted(() => vi.fn());
 vi.mock("./track", () => ({ page, adoptSitesSegmentConfig: vi.fn() }));
 
+import { dropTrackedUser, restoreTrackedUser } from "./tracked-user";
 import { isOutsideLegacySites, isPageTrackingExempt, lookupSession, useNotFoundPageView, usePageView, useRoutePageView, type PageView } from "./page-view";
 
 // A view a test sets once its "data" arrives, as a page reading it from a query does.
@@ -252,6 +253,20 @@ describe("useNotFoundPageView", () => {
     await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledWith("/internal/session", expect.objectContaining({ cache: "no-store" }));
     expect(page).toHaveBeenCalledWith("Not Found", { path: "/missing/deep/thing" }, { sid: "fetched-sid", userId: "0xverified" });
+  });
+
+  it("sends a cold 404 anonymously while a sign-out is in progress, even when the fetched session still names the wallet", async () => {
+    dropTrackedUser();
+    try {
+      fetchMock.mockResolvedValueOnce(Response.json({ sid: "fetched-sid", userId: "0xold" }));
+      renderAt("/missing/after/signout", true, null, true);
+      await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+      await act(async () => {});
+      expect(page).toHaveBeenCalledTimes(1);
+      expect(page.mock.calls[0]?.[2]).toEqual({ sid: "fetched-sid" });
+    } finally {
+      restoreTrackedUser();
+    }
   });
 
   it("sends nothing, and does not throw, when the session cannot be fetched", async () => {

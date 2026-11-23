@@ -56,13 +56,14 @@ type RootSession = { sid?: string | null; analyticsUserId?: string | null };
 /** The root loader's session id and Segment `userId` (the server-verified wallet only). */
 function useRootSession(): { sid: string; userId: string } {
   const root = useRouteLoaderData("root") as RootSession | undefined;
-  // A sign-out in progress leaves the account out before root's data has caught up.
-  return { sid: root?.sid ?? "", userId: trackedUserDropped() ? "" : (root?.analyticsUserId ?? "") };
+  return { sid: root?.sid ?? "", userId: root?.analyticsUserId ?? "" };
 }
 
 /**
  * Sends `page(name, properties)` for `view` once per pathname, name and properties. A null view sends
  * nothing and forgets the last one, so leaving to an untracked page and coming back counts again.
+ * A sign-out in progress leaves the account out at the moment of sending, whichever session (root's
+ * or a fetched one) supplied it.
  */
 function useSendPageView(view: PageView | null | undefined, sid: string, userId: string): void {
   const { pathname } = useLocation();
@@ -76,7 +77,8 @@ function useSendPageView(view: PageView | null | undefined, sid: string, userId:
     if (!sid || sent.current === key) return;
     sent.current = key;
     const [, name, properties] = JSON.parse(key) as [string, string, Record<string, unknown>];
-    page(name, properties, { sid, ...(userId ? { userId } : {}) });
+    const user = trackedUserDropped() ? "" : userId;
+    page(name, properties, { sid, ...(user ? { userId: user } : {}) });
   }, [key, sid, userId]);
 }
 

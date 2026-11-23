@@ -83,6 +83,9 @@ export async function postAuthCallback(
     return null;
   }
   markSessionChanged({ revalidate: opts.revalidate });
+  // Only a successful answer settles the change: after a failed one (a 5xx, a gateway error) the
+  // cookie may be unchanged, so a sign-out keeps the account left out and a sign-in restores nothing.
+  if (!response.ok) return response;
   if ("signout" in body) signOutAnswered = generation;
   else {
     // A sign-in replaces whatever sign-out was in progress.

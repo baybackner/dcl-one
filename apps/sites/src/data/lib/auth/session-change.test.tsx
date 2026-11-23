@@ -11,8 +11,11 @@ vi.hoisted(() =>
   }),
 );
 
+import { restoreTrackedUser, trackedUserDropped } from "@/core/lib/telemetry/tracked-user";
+
 import {
   AUTH_CALLBACK_PATH,
+  beginSignOut,
   markSessionChanged,
   postAuthCallback,
   sessionChangeApplied,
@@ -32,6 +35,7 @@ function Root() {
 
 describe("session change", () => {
   beforeEach(() => {
+    restoreTrackedUser();
     if (sessionChangePending()) sessionChangeApplied();
   });
   afterEach(() => {
@@ -46,6 +50,19 @@ describe("session change", () => {
     expect(response?.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledWith(AUTH_CALLBACK_PATH, expect.objectContaining({ method: "POST", body: '{"token":"expired"}' }));
     expect(sessionChangePending()).toBe(true);
+  });
+
+  it("lets only a successful sign-in restore an account a sign-out left out", async () => {
+    beginSignOut();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("error", { status: 500 })));
+    await postAuthCallback({ token: "t" });
+    expect(trackedUserDropped()).toBe(true);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: false }, { status: 401 })));
+    await postAuthCallback({ token: "expired" });
+    expect(trackedUserDropped()).toBe(true);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: true })));
+    await postAuthCallback({ token: "good" });
+    expect(trackedUserDropped()).toBe(false);
   });
 
   it("does not mark a post that never reached the server", async () => {

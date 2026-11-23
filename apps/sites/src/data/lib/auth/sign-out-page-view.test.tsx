@@ -137,6 +137,35 @@ describe("page views around a sign-out", () => {
     expect(viewsOf("/events")[1]?.[2]).toEqual({ sid: "visitor-sid" });
   });
 
+  it("keeps the account out after a sign-out answered by a delayed 502 that cleared no cookie", async () => {
+    const { router, rootLoader, view } = setup();
+    await view.findByText("mounted");
+    await waitFor(() => expect(viewsOf("/events")).toHaveLength(1));
+
+    act(() => {
+      void auth!.disconnect();
+    });
+    await waitFor(() => expect(answer).not.toBeNull());
+    await act(() => router.navigate("/help"));
+    await waitFor(() => expect(viewsOf("/help")).toHaveLength(1));
+
+    // A gateway error: no Set-Cookie, so the verified cookie survives.
+    const loadsBefore = rootLoader.mock.calls.length;
+    const keep = cookies;
+    await act(async () => {
+      answer!(new Response("bad gateway", { status: 502 }));
+      // Restored in the same tick, before any continuation of the answer runs.
+      cookies = keep;
+    });
+    await waitFor(() => expect(rootLoader.mock.calls.length).toBeGreaterThan(loadsBefore));
+    await act(async () => {});
+
+    await act(() => router.navigate("/events"));
+    await waitFor(() => expect(viewsOf("/events")).toHaveLength(2));
+    expect(viewsOf("/events")[1]?.[2]).toEqual({ sid: "visitor-sid" });
+    expect(viewsOf("/help")).toHaveLength(1);
+  });
+
   it("names no account after a sign-out whose post failed, and nothing waits on it", async () => {
     const { router, view } = setup();
     await view.findByText("mounted");
