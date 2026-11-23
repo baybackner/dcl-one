@@ -8,8 +8,6 @@
 import {
   addCents,
   addMana,
-  chargeForQuote,
-  mulCents,
   subCents,
   wholeCreditsFloor,
   ZERO_CENTS,
@@ -18,7 +16,7 @@ import {
   type UsdCents,
 } from "../model/money";
 import { offerQuote } from "../model/purchase";
-import type { PaymentMethod, Session } from "../model/settlement";
+import { hasWallet, type PaymentMethod, type Session } from "../model/settlement";
 import { lineUnits, partitionCart, type CartGroup, type LineRefusal, type PricedLine } from "./partition";
 
 export type CartSplitLine = {
@@ -76,12 +74,27 @@ function as(entry: PricedLine, method: PaymentMethod): PricedLine {
   return { line: { ...entry.line, method }, offer: entry.offer };
 }
 
+type Alone = {
+  /** Nothing but a Credits group's unit cap refuses the line. */
+  pays: boolean;
+  /** What checkout charges for it in Credits (each unit rounded up to a whole credit), when Credits pay it. */
+  charged: UsdCents | null;
+  overflow: boolean;
+};
+
 /**
- * Whether `method` can pay the line. A Credits group's unit cap is not the line's own: a line over it alone still goes
- * where the walk puts it, and the parts' partition refuses it there.
+ * The line partitioned alone with `method`, as checkout would. A Credits group's unit cap is not the line's own: a line
+ * over it alone still goes where the walk puts it, and the parts' partition refuses it there.
  */
-function pays(entry: PricedLine, method: PaymentMethod, session: Session): boolean {
-  return partitionCart([as(entry, method)], session, quiet).refused.every((r) => r.code === "groupTooLarge");
+function alone(entry: PricedLine, method: PaymentMethod, session: Session): Alone {
+  const { groups, refused } = partitionCart([as(entry, method)], session, quiet);
+  const pays = refused.every((r) => r.code === "groupTooLarge");
+  const total = groups[0]?.total;
+  return {
+    pays,
+    charged: pays && total?.method === "credits" ? total.charged : null,
+    overflow: refused.some((r) => r.code === "amountOverflow"),
+  };
 }
 
 /** Across groups, partitionCart's totals keep the last sum that fit; a plan needs the whole one. */
@@ -91,17 +104,10 @@ function manaTotal(groups: CartGroup[]): ManaWei | null {
   return sum;
 }
 
-/** The line's cost in Credits as partitionCart charges it: each unit rounded up to a whole credit. */
-function creditsCost(entry: PricedLine): UsdCents | null {
-  const quote = entry.offer ? offerQuote(entry.offer, "credits") : null;
-  const charge = quote?.method === "credits" ? chargeForQuote(quote.quoted) : null;
-  return charge === null ? null : mulCents(charge, lineUnits(entry.line));
-}
-
 export function planCartSplit(priced: PricedLine[], session: Session, balances: CartSplitBalances): CartSplitResult {
   const no = (refusal: CartSplitRefusal): CartSplitResult => ({ ok: false, refusal });
   if (priced.length === 0) return no({ reason: "empty" });
-  if (session.kind !== "web3") return no({ reason: "noWallet" });
+  if (!hasWallet(session)) return no({ reason: "noWallet" });
   const ids = new Set<string>();
   for (const { line } of priced) {
     if (ids.has(line.id)) return no({ reason: "duplicateLine", lineId: line.id });
@@ -109,14 +115,16 @@ export function planCartSplit(priced: PricedLine[], session: Session, balances: 
   }
 
   const lanes = priced.map((entry) => {
-    const cost = pays(entry, "credits", session) ? creditsCost(entry) : null;
-    return { entry, cost, manaPays: pays(entry, "mana", session) };
+    const byCredits = alone(entry, "credits", session);
+    const byMana = alone(entry, "mana", session);
+    return { entry, cost: byCredits.charged, manaPays: byMana.pays, overflow: byCredits.overflow || byMana.overflow };
   });
   const none = lanes.find((l) => l.cost === null && !l.manaPays);
-  if (none) return no({ reason: "noMethod", lineId: none.entry.line.id });
+  if (none) return no(none.overflow ? { reason: "overflow" } : { reason: "noMethod", lineId: none.entry.line.id });
 
   // Lines only Credits can pay come first: without them covered there is no split.
-  const balance = balances.creditsBalance > 0 ? balances.creditsBalance : ZERO_CENTS;
+  const given = balances.creditsBalance;
+  const balance = Number.isSafeInteger(given) && given > 0 ? given : ZERO_CENTS;
   let required: UsdCents | null = ZERO_CENTS;
   for (const { cost, manaPays } of lanes) {
     if (cost !== null && !manaPays && required !== null) required = addCents(required, cost);
@@ -131,6 +139,11 @@ export function planCartSplit(priced: PricedLine[], session: Session, balances: 
   // Then, in cart order: a line whose cost fits what is left goes to Credits. The first that does not fit and can be split
   // takes the whole credits left, and MANA pays every line after it. One that cannot be split (several units, a price the
   // node does not split) goes to MANA, and the walk goes on.
+  // The walk does not count a Credits group's units, on purpose. A line the balance covers goes to Credits even if its group
+  // then passes the cap, and the parts' partition refuses the plan naming that line, rather than the walk moving it to MANA
+  // unasked. So the result is not monotonic in the balance: more Credits can mean no plan where fewer would send that line to
+  // MANA and give one. The in-world cart never meets this: it holds at most `MAX_PURCHASE_UNITS` units (`cart/lines.ts`),
+  // the same 30.
   for (const { entry, cost, manaPays } of lanes) {
     if (cost !== null && !manaPays) {
       credits.push(entry);

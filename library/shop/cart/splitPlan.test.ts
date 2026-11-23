@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chargeForQuote, manaFromWhole, usdCents, type ManaWei } from "../model/money";
+import { chargeForQuote, manaFromWhole, usdCents, type ManaWei, type UsdCents } from "../model/money";
 import type { CartLine, PurchaseOffer } from "../model/purchase";
 import type { MissingFact, PaymentMethod, Quote } from "../model/settlement";
 import { creatorOrder, ITEM, parcelResale, SIGNED_OUT, storeMint, web2, web3 } from "../payment/fixtures";
@@ -210,6 +210,8 @@ describe("planCartSplit: a cart's Credits and MANA parts", () => {
     const market = creditsOnly(creatorOrder(s));
     const cents = [line("store", store), line("market", market), line("m", mint({ cents: null }))];
     expect(plan(cents, Number.MAX_SAFE_INTEGER)).toEqual({ ok: false, refusal: { reason: "overflow" } });
+    const twice = [line("twice", creditsOnly(mint({ cents: 10 })), 2), line("m", mint({ cents: null }))];
+    expect(plan(twice, 100), "one line's own charge, not a line no method pays").toEqual({ ok: false, refusal: { reason: "overflow" } });
 
     const maxWei = ((1n << 256n) - 1n) as ManaWei;
     const manaOnly = (offer: PurchaseOffer): PurchaseOffer => ({ ...offer, quotes: [{ method: "mana", amount: maxWei }] });
@@ -220,6 +222,7 @@ describe("planCartSplit: a cart's Credits and MANA parts", () => {
 
   it("places every line once with all its units, and takes no more Credits than the balance", () => {
     const quotes = [7, 10, 11, 20, 95, 115, 201, 499];
+    const outcomes = new Map<string, number>();
     for (let seed = 0; seed < 400; seed++) {
       const cart = Array.from({ length: 1 + (seed % 6) }, (_, i) => {
         const pick = (seed * 7 + i * 13) % 97;
@@ -229,6 +232,8 @@ describe("planCartSplit: a cart's Credits and MANA parts", () => {
       });
       const balance = (seed * 37) % 900;
       const result = plan(cart, balance);
+      const outcome = result.ok ? (result.plan.split ? "split" : "whole") : result.refusal.reason;
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
       if (!result.ok) continue;
       const { credits, split, mana, creditsCents } = result.plan;
       const placed = [...credits, ...(split ? [split.lineId] : []), ...mana];
@@ -249,6 +254,22 @@ describe("planCartSplit: a cart's Credits and MANA parts", () => {
       }, 0);
       expect(creditsCents).toBe(charged + (split?.legCents ?? 0));
       expect(creditsCents).toBeLessThanOrEqual(balance);
+    }
+    // A planner that refused every cart would check nothing above. So at least 50 of these carts must get a plan with a split
+    // line and 50 one without, and the rest must be refused for reasons these carts can give (no line lacks both methods, none
+    // sits in a group over the cap, no MANA balance is passed).
+    expect([...outcomes.keys()].filter((o) => !["split", "whole", "creditsShort", "noCreditsPart", "noManaPart"].includes(o))).toEqual([]);
+    expect(outcomes.get("split") ?? 0, "plans with a split line").toBeGreaterThanOrEqual(50);
+    expect(outcomes.get("whole") ?? 0, "plans of whole lines only").toBeGreaterThanOrEqual(50);
+  });
+
+  it("takes a balance that is not a whole number of cents as no Credits", () => {
+    const cart = [line("creditsOnly", mint({ cents: 100, mana: null })), line("either", mint({ cents: 200 }))];
+    for (const given of [Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2, Number.NaN, 12.5, -10]) {
+      expect(planCartSplit(cart, s, { creditsBalance: given as UsdCents }), String(given)).toEqual({
+        ok: false,
+        refusal: { reason: "creditsShort", required: 100, balance: 0 },
+      });
     }
   });
 
