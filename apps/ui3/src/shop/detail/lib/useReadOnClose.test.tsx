@@ -41,4 +41,17 @@ describe("useReadOnClose", () => {
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledOnce();
   });
+
+  it("reads once, at once, when the purchase's outcome arrives after the page unmounted", () => {
+    const read = vi.fn();
+    const { result, unmount } = renderHook(() => useReadOnClose(read));
+    const { arm } = result.current;
+    // Back while the sale's receipt was awaited: nothing armed yet, so the unmount reads nothing.
+    unmount();
+    expect(read).not.toHaveBeenCalled();
+    arm();
+    expect(read).toHaveBeenCalledOnce();
+    arm();
+    expect(read).toHaveBeenCalledOnce();
+  });
 });

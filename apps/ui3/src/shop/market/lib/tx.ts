@@ -60,11 +60,11 @@ export class WalletAccountChangedError extends Error {
   }
 }
 
-/** An earlier MANA approval decision for the same account and spender has not ended (its wallet request may be stuck). */
+/** An earlier MANA approval decision for the same account and spender has not ended (a wallet prompt, or its receipt). */
 export class ApprovalBusyError extends Error {
   override name = "ApprovalBusyError";
   constructor() {
-    super("Another MANA approval for this account is still open in your wallet. Finish or reject it there, then try again. Nothing was sent.");
+    super("Another MANA approval for this account is still in progress. Try again after it finishes. This attempt sent nothing.");
   }
 }
 
