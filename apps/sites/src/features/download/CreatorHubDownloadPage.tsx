@@ -42,7 +42,7 @@ export default function CreatorHubDownloadPage({
   secondary,
 }: Props) {
   const [offered, setOffered] = useState({ primary, others: secondary });
-  const onDownload = useCreatorHubDownloadClick(sid);
+  const onDownload = useCreatorHubDownloadClick(sid, "download-page");
   const viewed = useRef<string | null>(null);
 
   useEffect(() => {

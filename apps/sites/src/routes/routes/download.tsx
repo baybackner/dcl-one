@@ -29,6 +29,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 }
 
 export default function Download({ loaderData }: Route.ComponentProps) {
-  const { primary, secondary, android, downloads } = loaderData;
-  return <DownloadPage primary={primary} secondary={secondary} android={android} downloads={downloads} />;
+  const { sid, primary, secondary, android, downloads } = loaderData;
+  return <DownloadPage primary={primary} secondary={secondary} android={android} downloads={downloads} sid={sid} />;
 }

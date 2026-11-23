@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { track } from "@/core/lib/telemetry/track";
 
 import DownloadPage from "./DownloadPage";
 import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
@@ -10,10 +12,19 @@ vi.hoisted(() => Object.assign(window, { __vite_plugin_react_preamble_installed_
 vi.mock("../components/chrome/SitesLayout", () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("@dcl/one-ui/components/AppChrome/chrome-auth", () => ({ useChromeAuth: () => ({ signedIn: false, account: null, name: null, onSignIn: () => {} }) }));
 
-afterEach(cleanup);
+vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
+vi.mock("@/data/lib/download/mac-chip", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/data/lib/download/mac-chip")>()),
+  detectMacChip: vi.fn(() => "intel"),
+}));
+
+afterEach(() => {
+  cleanup();
+  vi.mocked(track).mockReset();
+});
 
 it("links home through the decorative 48px Decentraland logo", () => {
-  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads={null} />);
+  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads={null} sid="s1" />);
   const home = screen.getAllByRole("link", { name: "Decentraland" }).find((a) => a.getAttribute("href") === "/");
   const logo = home!.querySelector("img");
   expect(logo!.getAttribute("alt")).toBe("");
@@ -25,14 +36,72 @@ const WINDOWS = { os: "windows", arch: "amd64", url: "https://installers.test/De
 const MACOS = { os: "macos", arch: "arm64", url: "https://installers.test/Decentraland_installer.dmg" } as const;
 
 it("names the page with level 1 headings only, one for each layout", () => {
-  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads="+438K" />);
+  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads="+438K" sid="s1" />);
   const headings = screen.getAllByRole("heading");
   expect(headings.map((h) => h.tagName)).toEqual(["H1", "H1"]);
   expect(new Set(headings.map((h) => h.textContent)).size).toBe(1);
 });
 
-it("links each installer button to the page that starts that installer, with no click handler in the way", () => {
-  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads={null} />);
+it("links each installer button to the page that starts that installer, a click only reporting itself", () => {
+  render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={false} downloads={null} sid="s1" />);
   expect(screen.getByRole("link", { name: "Download for Windows" }).getAttribute("href")).toBe("/download_success?os=Windows&arch=amd64");
   expect(screen.getByRole("link", { name: "macOS" }).getAttribute("href")).toBe("/download_success?os=macOS&arch=arm64");
+});
+
+describe("legacy download Clicks (inventory 2.1.a)", () => {
+  const clickOf = (name: string | RegExp, android = false) => {
+    render(<DownloadPage primary={WINDOWS} secondary={MACOS} android={android} downloads={null} sid="s1" />);
+    const link = screen.getAllByRole("link", { name }).at(-1)!;
+    // A link with no handler of its own would navigate jsdom away.
+    link.addEventListener("click", (e) => e.preventDefault());
+    fireEvent.click(link);
+    expect(track).toHaveBeenCalledTimes(1);
+    const [event, props, ctx] = vi.mocked(track).mock.calls[0]!;
+    expect(event).toBe("Click");
+    expect(ctx).toEqual({ sid: "s1", legacy: true, conversion: true });
+    return props as Record<string, unknown>;
+  };
+
+  it("row 18: the main installer button is place Download, with no os", () => {
+    const props = clickOf("Download for Windows");
+    expect(props).toMatchObject({ place: "Download", event: "Download", download_target: "desktop_installer" });
+    expect(props).not.toHaveProperty("os");
+    expect(props.click_id).toEqual(expect.any(String));
+  });
+
+  it("row 19: Epic", () => {
+    expect(clickOf("Download on Epic Games")).toMatchObject({ place: "download-page", event: "Download", download_target: "epic" });
+  });
+
+  it("row 20: the other system's installer, with no os", () => {
+    const props = clickOf("macOS");
+    expect(props).toMatchObject({ place: "download-page", event: "Download", download_target: "desktop_installer" });
+    expect(props).not.toHaveProperty("os");
+  });
+
+  it("row 21: the iOS icon", () => {
+    expect(clickOf("iOS")).toMatchObject({ place: "download-page", event: "Download", download_target: "app_store", os: "iOS" });
+  });
+
+  it("row 22: the Google Play icon", () => {
+    expect(clickOf("Google Play")).toMatchObject({ place: "download-page", event: "Download", download_target: "google_play", os: "Android" });
+  });
+
+  it("row 23: the phone layout's Google Play badge on Android", () => {
+    expect(clickOf(/Get it on Google Play/, true)).toMatchObject({
+      place: "download-page",
+      event: "Download",
+      download_target: "google_play",
+      os: "Android",
+    });
+  });
+
+  it("row 24: the phone layout's App Store badge elsewhere", () => {
+    expect(clickOf(/Download on the App Store/)).toMatchObject({
+      place: "download-page",
+      event: "Download",
+      download_target: "app_store",
+      os: "iOS",
+    });
+  });
 });

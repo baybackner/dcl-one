@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { HeroDownloads } from "@/data/lib/download/creator-hub.server";
 import { detectMacChip, isTouchMac, preferChip } from "@/data/lib/download/mac-chip";
-import { useCreatorHubDownloadClick } from "../download/creator-hub-click";
+import { trackCreatorHubClick, useCreatorHubDownloadClick } from "../download/creator-hub-click";
 import CreatorHubDownload from "../download/CreatorHubDownload";
 
 import { copy } from "./content";
@@ -26,11 +26,15 @@ type Props = {
 export default function HeroDownload({ downloads, sid }: Props) {
   const [offered, setOffered] = useState(downloads);
   useEffect(() => setOffered(downloads && forThisDevice(downloads)), [downloads]);
-  const onDownload = useCreatorHubDownloadClick(sid);
+  const onDownload = useCreatorHubDownloadClick(sid, "create-hero");
 
   if (!offered) {
     return (
-      <a className={`${styles.cta} ${styles.ctaDesktop}`} href={CREATOR_HUB_DOWNLOAD}>
+      <a
+        className={`${styles.cta} ${styles.ctaDesktop}`}
+        href={CREATOR_HUB_DOWNLOAD}
+        onClick={() => trackCreatorHubClick("create-hero", sid)}
+      >
         <span className={styles.ctaLabel}>{copy.downloadCreatorHub}</span>
       </a>
     );

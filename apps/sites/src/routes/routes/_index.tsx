@@ -13,6 +13,8 @@ import { WeeklyRituals } from "@dcl/one-ui/apps/sites/home/WeeklyRituals";
 import { ComeHangOut } from "@dcl/one-ui/apps/sites/home/ComeHangOut";
 import { homeEventHref } from "@/features/home/links";
 import { homeDownloadActions } from "@/features/home/actions";
+import { withDownloadClicks } from "@/features/home/download-clicks";
+import { trackDownloadClick } from "@/features/download/download-click";
 import { whatsOnCards } from "@/features/home/cards.server";
 import { detectPlatform } from "@/features/download/options";
 import {
@@ -82,11 +84,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     track("lp_discover_viewed", {}, { sid, story: STORY });
   }, [sid]);
 
-  const { hero, hangOut, store, alternateStore } = homeDownloadActions(
-    platform,
-    downloads,
-    installers,
-    copy.download,
+  const { hero, hangOut, store, alternateStore, hangOutStore } = withDownloadClicks(
+    homeDownloadActions(platform, downloads, installers, copy.download),
+    (click) => trackDownloadClick(click, sid),
   );
   const labels = {
     previous: copy.slides.previous,
@@ -155,7 +155,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           title={copy.hangOut}
           background={<AnimatedBackground />}
           actions={hangOut}
-          store={store}
+          store={hangOutStore}
         />
       </main>
     </SitesLayout>
