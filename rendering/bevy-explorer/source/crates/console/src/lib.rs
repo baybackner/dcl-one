@@ -11,6 +11,8 @@ use std::sync::Mutex;
 
 mod debug_panel;
 pub use debug_panel::{AddDebugSection, DebugInput, DebugInputKind, DebugSection};
+pub mod line;
+pub mod reply;
 
 /// Whether this build carries the debug tools that must never reach production (`/wear`). CI
 /// builds with `BEVY_DEBUG_TOOLS=1` for pull requests and for desktop builds of a ref other than

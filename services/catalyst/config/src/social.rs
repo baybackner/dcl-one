@@ -235,10 +235,6 @@ pub struct SocialConfig {
     #[arg(long, env = "COMMUNITIES_CDN_URL")]
     pub communities_cdn_url: Option<String>,
 
-    /// Archipelago stats base URL for the onlyOnline member filter; unset renders everyone offline.
-    #[arg(long, env = "ARCHIPELAGO_STATS_URL")]
-    pub archipelago_stats_url: Option<String>,
-
     /// Require places added to a community to be owned by the caller per the mirrored places catalogue
     /// (on by default, as upstream always checks; `false` skips the check).
     #[arg(long, env = "COMMUNITIES_PLACES_OWNERSHIP_CHECK", default_value_t = true, action = clap::ArgAction::Set)]
@@ -539,7 +535,8 @@ pub struct SocialConfig {
     #[arg(long, env = "MODERATOR_TOKEN", hide_env_values = true)]
     pub moderator_token: Option<String>,
 
-    /// Comma/space-separated wallets allowed on the user-moderation routes by signed fetch.
+    /// Comma/space-separated wallets allowed on the user-moderation routes by signed fetch,
+    /// only while no `platform_user_moderators` flag document (`FF_URL`) is held.
     #[arg(long, env = "PLATFORM_USER_MODERATORS", default_value = "")]
     pub platform_user_moderators: String,
 
