@@ -5,10 +5,21 @@
 // A line's cost in Credits is what partitionCart charges for it: each unit's quote up to the next whole credit, times its
 // units. S's Credits part is the whole credits left, against the line's unit quote as quoted (not rounded up).
 
-import { addCents, chargeForQuote, mulCents, subCents, wholeCreditsFloor, ZERO_CENTS, type ManaWei, type UsdCents } from "../model/money";
+import {
+  addCents,
+  addMana,
+  chargeForQuote,
+  mulCents,
+  subCents,
+  wholeCreditsFloor,
+  ZERO_CENTS,
+  ZERO_MANA,
+  type ManaWei,
+  type UsdCents,
+} from "../model/money";
 import { offerQuote } from "../model/purchase";
 import type { PaymentMethod, Session } from "../model/settlement";
-import { lineUnits, partitionCart, type LineRefusal, type PricedLine } from "./partition";
+import { lineUnits, partitionCart, type CartGroup, type LineRefusal, type PricedLine } from "./partition";
 
 export type CartSplitLine = {
   lineId: string;
@@ -31,6 +42,8 @@ export type CartSplitPlan = {
 
 export type CartSplitRefusal =
   | { reason: "empty" }
+  /** Only a session with a web3 wallet pays MANA, so only it can have a split. */
+  | { reason: "noWallet" }
   | { reason: "duplicateLine"; lineId: string }
   /** Neither Credits nor MANA can pay this line: the cart has no split. */
   | { reason: "noMethod"; lineId: string }
@@ -38,6 +51,8 @@ export type CartSplitRefusal =
   | { reason: "creditsShort"; required: UsdCents; balance: UsdCents }
   /** The parts, partitioned as checkout would, refuse these lines (a Credits group over its unit cap, say). */
   | { reason: "refused"; refusals: LineRefusal[] }
+  /** A sum of the plan does not fit its type: no plan is given on a total that cannot be told. */
+  | { reason: "overflow" }
   /** Credits pay nothing: the cart pays as it does without a split. */
   | { reason: "noCreditsPart" }
   /** Credits pay everything: the cart pays as it does without a split. */
@@ -61,8 +76,19 @@ function as(entry: PricedLine, method: PaymentMethod): PricedLine {
   return { line: { ...entry.line, method }, offer: entry.offer };
 }
 
+/**
+ * Whether `method` can pay the line. A Credits group's unit cap is not the line's own: a line over it alone still goes
+ * where the walk puts it, and the parts' partition refuses it there.
+ */
 function pays(entry: PricedLine, method: PaymentMethod, session: Session): boolean {
-  return partitionCart([as(entry, method)], session, quiet).ok;
+  return partitionCart([as(entry, method)], session, quiet).refused.every((r) => r.code === "groupTooLarge");
+}
+
+/** Across groups, partitionCart's totals keep the last sum that fit; a plan needs the whole one. */
+function manaTotal(groups: CartGroup[]): ManaWei | null {
+  let sum: ManaWei | null = ZERO_MANA;
+  for (const { total } of groups) if (total.method === "mana" && sum !== null) sum = addMana(sum, total.amount);
+  return sum;
 }
 
 /** The line's cost in Credits as partitionCart charges it: each unit rounded up to a whole credit. */
@@ -75,6 +101,7 @@ function creditsCost(entry: PricedLine): UsdCents | null {
 export function planCartSplit(priced: PricedLine[], session: Session, balances: CartSplitBalances): CartSplitResult {
   const no = (refusal: CartSplitRefusal): CartSplitResult => ({ ok: false, refusal });
   if (priced.length === 0) return no({ reason: "empty" });
+  if (session.kind !== "web3") return no({ reason: "noWallet" });
   const ids = new Set<string>();
   for (const { line } of priced) {
     if (ids.has(line.id)) return no({ reason: "duplicateLine", lineId: line.id });
@@ -90,10 +117,11 @@ export function planCartSplit(priced: PricedLine[], session: Session, balances: 
 
   // Lines only Credits can pay come first: without them covered there is no split.
   const balance = balances.creditsBalance > 0 ? balances.creditsBalance : ZERO_CENTS;
-  let required = ZERO_CENTS;
+  let required: UsdCents | null = ZERO_CENTS;
   for (const { cost, manaPays } of lanes) {
-    if (cost !== null && !manaPays) required = addCents(required, cost) ?? (Number.MAX_SAFE_INTEGER as UsdCents);
+    if (cost !== null && !manaPays && required !== null) required = addCents(required, cost);
   }
+  if (required === null) return no({ reason: "overflow" });
   if (required > balance) return no({ reason: "creditsShort", required, balance });
   let left = subCents(balance, required)!;
 
@@ -137,12 +165,15 @@ export function planCartSplit(priced: PricedLine[], session: Session, balances: 
   const refusals = [...byCredits.refused, ...byMana.refused].map(inCart).sort((a, b) => a.index - b.index);
   if (refusals.length > 0) return no({ reason: "refused", refusals });
 
+  const manaRequired = manaTotal(byMana.groups);
+  if (manaRequired === null) return no({ reason: "overflow" });
   const manaBalance = balances.manaBalance;
-  if (manaBalance != null && byMana.totals.mana > manaBalance) {
-    return no({ reason: "manaShort", required: byMana.totals.mana, balance: manaBalance });
+  if (manaBalance != null && manaRequired > manaBalance) {
+    return no({ reason: "manaShort", required: manaRequired, balance: manaBalance });
   }
 
-  const creditsCents = addCents(byCredits.totals.credits.charged, split?.legCents ?? ZERO_CENTS)!;
+  // Every line in `credits` cost what it took from what was left, and the split line its part: what the plan takes.
+  const creditsCents = subCents(balance, left)!;
   const lineIds = (lines: PricedLine[]) => lines.map((e) => e.line.id);
   return { ok: true, plan: { credits: lineIds(credits), split, mana: lineIds(mana), creditsCents } };
 }

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { chargeForQuote, manaFromWhole, usdCents, type ManaWei } from "../model/money";
 import type { CartLine, PurchaseOffer } from "../model/purchase";
 import type { MissingFact, PaymentMethod, Quote } from "../model/settlement";
-import { creatorOrder, ITEM, parcelResale, storeMint, web2, web3 } from "../payment/fixtures";
+import { creatorOrder, ITEM, parcelResale, SIGNED_OUT, storeMint, web2, web3 } from "../payment/fixtures";
 import { lineUnits, type PricedLine } from "./partition";
 import { planCartSplit, type CartSplitResult } from "./splitPlan";
 
@@ -155,22 +155,67 @@ describe("planCartSplit: a cart's Credits and MANA parts", () => {
       ok: false,
       refusal: { reason: "noCreditsPart" },
     });
-    expect(planCartSplit(cart, web2(), { creditsBalance: usdCents(300) }), "no MANA without a web3 wallet").toEqual({
-      ok: false,
-      refusal: { reason: "noManaPart" },
+  });
+
+  it("only a session with a web3 wallet has a split, a Credits-and-MANA-lines one included", () => {
+    for (const session of [web2(), SIGNED_OUT]) {
+      // A web2 session's MANA quote is still served, with a wallet required: a cart could otherwise put the parcel in MANA.
+      const cart = [line("mint", storeMint(session)), line("parcel", parcelResale(session))];
+      expect(planCartSplit(cart, session, { creditsBalance: usdCents(120) }), session.kind).toEqual({
+        ok: false,
+        refusal: { reason: "noWallet" },
+      });
+    }
+    expect(planned(plan([line("mint", storeMint(s)), line("parcel", parcelResale(s))], 120))).toEqual({
+      credits: ["mint"],
+      split: null,
+      mana: ["parcel"],
+      creditsCents: 120,
     });
   });
 
   it("keeps every Credits group within 30 units, naming the lines where they sit in the cart", () => {
     const cart = [line("m", mint({ cents: null })), line("a", mint({ cents: 10 }), 16), line("b", mint({ cents: 10 }), 16)];
-    const result = plan(cart, 10_000);
-    expect(result.ok).toBe(false);
-    if (result.ok || result.refusal.reason !== "refused") throw new Error("expected refused lines");
-    expect(result.refusal.refusals.map((r) => [r.lineId, r.index, r.code])).toEqual([
+    const refused = (result: CartSplitResult) => {
+      if (result.ok || result.refusal.reason !== "refused") throw new Error(`expected refused lines: ${JSON.stringify(result)}`);
+      return result.refusal.refusals.map((r) => [r.lineId, r.index, r.code]);
+    };
+    expect(refused(plan(cart, 10_000))).toEqual([
       ["a", 1, "groupTooLarge"],
       ["b", 2, "groupTooLarge"],
     ]);
     expect(planned(plan([...cart.slice(0, 2), line("b", mint({ cents: 10 }), 14)], 10_000)).credits, "30 units fit").toEqual(["a", "b"]);
+
+    const alone = [line("one", mint({ cents: 10 })), line("many", mint({ cents: 10 }), 31), line("m", mint({ cents: null }))];
+    expect(refused(plan(alone, 320)), "a line over the cap on its own, within the balance").toEqual([
+      ["one", 0, "groupTooLarge"],
+      ["many", 1, "groupTooLarge"],
+    ]);
+    expect(planned(plan(alone, 100)), "one the balance does not cover goes to MANA, which has no cap").toEqual({
+      credits: ["one"],
+      split: null,
+      mana: ["many", "m"],
+      creditsCents: 10,
+    });
+  });
+
+  it("gives no plan on a sum that does not fit, across groups included", () => {
+    const huge = usdCents(5_000_000_000_000_000);
+    const creditsOnly = (offer: PurchaseOffer): PurchaseOffer => ({
+      ...offer,
+      quotes: [{ method: "credits", quoted: huge }],
+      unavailable: [{ method: "mana", missing: "manaUsdRate" }],
+    });
+    const store = creditsOnly(mint({ cents: 10 }));
+    const market = creditsOnly(creatorOrder(s));
+    const cents = [line("store", store), line("market", market), line("m", mint({ cents: null }))];
+    expect(plan(cents, Number.MAX_SAFE_INTEGER)).toEqual({ ok: false, refusal: { reason: "overflow" } });
+
+    const maxWei = ((1n << 256n) - 1n) as ManaWei;
+    const manaOnly = (offer: PurchaseOffer): PurchaseOffer => ({ ...offer, quotes: [{ method: "mana", amount: maxWei }] });
+    const wei = [line("k", mint({ cents: 100 })), line("mint", manaOnly(mint({ cents: null }))), line("parcel", manaOnly(parcelResale(s)))];
+    expect(plan(wei, 100, maxWei)).toEqual({ ok: false, refusal: { reason: "overflow" } });
+    expect(plan(wei, 100), "with no MANA balance to check either").toEqual({ ok: false, refusal: { reason: "overflow" } });
   });
 
   it("places every line once with all its units, and takes no more Credits than the balance", () => {
