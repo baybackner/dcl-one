@@ -575,6 +575,9 @@ describe('the in-world purchase with MANA', () => {
       await vi.waitFor(() => expect(p.shown.filter((s) => s.view.step === 'method')).toHaveLength(2))
       const again = p.shown.at(-1)!
       expect((again.view as { split: { credits: number } }).split.credits).toBe(2)
+      // It says why the parts changed; the first look didn't.
+      expect(again.view).toMatchObject({ notice: 'Your Credits balance changed, so the split was updated.' })
+      expect(first.view).not.toHaveProperty('notice')
       expect(w.relay.posts).toHaveLength(0)
     })
 
