@@ -1,6 +1,5 @@
-// Unity's Stars v2 and shooting stars (`SkyLut.hlsl`), added at screen resolution before bloom:
-// at the end of the main pass where the view has depth of field, else before the transparent
-// pass (see stars.rs). Each pixel of
+// Unity's Stars v2 and shooting stars (`SkyLut.hlsl`), added at screen resolution: after depth of
+// field where the view has it, else before the transparent pass (see stars.rs). Each pixel of
 // clear sky looks up the star cells around its view direction on a cube grid, so a star keeps
 // one angular size everywhere. Unity draws the stars inside its sky shader, under the clouds;
 // here the sky cube's alpha, its cloud cover, fades them. Unity adds them before its sky's last

@@ -1,14 +1,11 @@
 //! Unity's Stars v2 and shooting stars, drawn at screen resolution instead of being baked into
 //! the sky cubemap and blurred with it. See `stars.wgsl`.
 //!
-//! Every view draws them before bloom, so they glow as Unity's do in its sky: its night stars
-//! are several times brighter than white, and the glow is what shows their twinkle and the
-//! shooting stars' trails. Depth of field, which runs after bloom, leaves them sharp: it keeps the
-//! sky (cleared depth) in focus. A view with depth of field draws them at the end of the main pass
-//! and dims them behind transparent geometry by its coverage in DoF's transparent focus texture.
-//! Any other view, which includes every MSAA view (depth of field yields to MSAA), has no such
-//! coverage, so it draws them before the transparent pass, into the multisampled target, and
-//! transparent geometry then covers them as it covers the sky.
+//! A view with depth of field draws them after depth of field, so they stay pin sharp, and dims
+//! them behind transparent geometry by its coverage in DoF's transparent focus texture. Any other
+//! view, which includes every MSAA view (depth of field yields to MSAA), has no such coverage, so
+//! it draws them before the transparent pass, into the multisampled target, and transparent
+//! geometry then covers them as it covers the sky.
 
 use bevy::{
     core_pipeline::{
@@ -57,6 +54,7 @@ use bevy_atmosphere::{
     prelude::{AtmosphereCamera, AtmosphereModel},
 };
 use common::sky_preset::{evaluate_by_phase, STARS_V2};
+use scene_material::highlight::HighlightLabel;
 
 use crate::stylized_sky::StylizedSky;
 
@@ -98,7 +96,15 @@ impl Plugin for StarsPlugin {
                 ),
             )
             .add_render_graph_node::<ViewNodeRunner<StarsNode<false>>>(Core3d, StarsLabel)
-            .add_render_graph_edges(Core3d, (Node3d::EndMainPass, StarsLabel, Node3d::Bloom));
+            .add_render_graph_edges(
+                Core3d,
+                (
+                    Node3d::DepthOfField,
+                    HighlightLabel,
+                    StarsLabel,
+                    Node3d::Tonemapping,
+                ),
+            );
     }
 
     fn finish(&self, app: &mut App) {
@@ -321,7 +327,7 @@ impl SpecializedRenderPipeline for StarsPipeline {
             depth_stencil: None,
             multisample: MultisampleState {
                 // without the focus texture the stars draw into the main pass's (multisampled)
-                // target; with it, onto the resolved frame at the end of the main pass
+                // target; with it, onto the resolved frame after depth of field
                 count: if key.focus { 1 } else { key.samples },
                 ..default()
             },
@@ -380,8 +386,7 @@ fn prepare_stars_pipelines(
     }
 }
 
-/// The stars at the end of the main pass, for views with depth of field's transparent focus
-/// texture.
+/// The stars after depth of field, for views with its transparent focus texture.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 struct StarsLabel;
 
@@ -545,8 +550,7 @@ mod tests {
 
     /// Every variant of the star pipeline compiles, and each of the pass's three places (a plain
     /// view, a multisampled one and one with depth of field) lights stars on a clear night sky
-    /// and none once a scene sets their brightness to nothing. Under depth of field the stars
-    /// still bloom, as Unity's do in its sky: the glow lights pixels around them.
+    /// and none once a scene sets their brightness to nothing.
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn stars_pipelines_compile() {
@@ -559,6 +563,7 @@ mod tests {
             },
             render::{
                 camera::RenderTarget,
+                render_graph::EmptyNode,
                 render_resource::{Extent3d, TextureDimension},
                 view::screenshot::{Screenshot, ScreenshotCaptured},
             },
@@ -599,17 +604,19 @@ mod tests {
         let mut app = sky_test_app(64);
         app.init_resource::<crate::environment::SceneEnvironment>()
             .init_resource::<Captured>();
+        // the pass sits after the highlight pass, which this app does not draw
+        app.sub_app_mut(RenderApp)
+            .add_render_graph_node::<EmptyNode>(Core3d, HighlightLabel);
         app.add_plugins(StarsPlugin);
         start_sky(&mut app);
 
         // each view looks straight up, a pixel about a twelfth of a degree across
         let views = [
-            ("plain", Msaa::Off, false, false),
-            ("multisampled", Msaa::Sample4, false, false),
-            ("depth of field", Msaa::Off, true, false),
-            ("depth of field and bloom", Msaa::Off, true, true),
+            ("plain", Msaa::Off, false),
+            ("multisampled", Msaa::Sample4, false),
+            ("depth of field", Msaa::Off, true),
         ]
-        .map(|(label, msaa, depth_of_field, bloom)| {
+        .map(|(label, msaa, depth_of_field)| {
             let mut target = Image::new_fill(
                 Extent3d {
                     width: 512,
@@ -645,10 +652,6 @@ mod tests {
                     max_circle_of_confusion_diameter: 20.0,
                     sensor_height: 0.06,
                 });
-            }
-            if bloom {
-                // the client's high setting, which thresholds at 1 as Unity's sky volume does
-                camera.insert(platform::scatter_bloom());
             }
             (label, target)
         });
@@ -689,7 +692,6 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
-        let mut lit = Vec::new();
         for ((label, target), night) in views.into_iter().zip(night) {
             // pixel by pixel, as the default sky has its disc overhead
             let bare = capture(&mut app, &target);
@@ -698,22 +700,8 @@ mod tests {
                 .zip(&bare)
                 .filter(|(&night, &bare)| night > bare.saturating_add(40))
                 .count();
-            // and any light the stars add, which counts their glow
-            let glow = night
-                .iter()
-                .zip(&bare)
-                .filter(|(&night, &bare)| night > bare.saturating_add(8))
-                .count();
-            println!("{label}: {stars} star pixels, {glow} with their glow");
+            println!("{label}: {stars} star pixels");
             assert!(stars > 20, "{label}: {stars} star pixels");
-            lit.push(glow);
         }
-        // the glow around each star lights pixels the sharp star does not
-        assert!(
-            lit[3] > lit[2] * 3 / 2,
-            "bloom lit {} pixels around the stars against {} without it",
-            lit[3],
-            lit[2]
-        );
     }
 }

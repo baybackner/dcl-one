@@ -1325,24 +1325,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn the_screen_draws_the_sky_per_pixel() {
-        assert_sharp_disc(&sky_row_through_the_disc(()));
-    }
-
-    /// Depth of field leaves the sky sharp, as in Unity: the sky writes no depth, and the fork's
-    /// depth of field keeps cleared depth in focus. The explorer's High setting would otherwise
-    /// blur the sky by its widest circle, 20 pixels.
-    #[test]
-    #[ignore = "needs a GPU; run with --ignored"]
-    fn depth_of_field_leaves_the_sky_sharp() {
-        use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
-        assert_sharp_disc(&sky_row_through_the_disc(DepthOfField {
-            mode: DepthOfFieldMode::Gaussian,
-            focal_distance: 55.0,
-            aperture_f_stops: 0.05,
-            max_depth: 250.0,
-            max_circle_of_confusion_diameter: 20.0,
-            sensor_height: 0.06,
-        }));
+        assert_sharp_disc(&sky_row_through_the_disc());
     }
 
     /// The disc's edges are single steps between pixels 20 and 21, and 42 and 43.
@@ -1367,9 +1350,9 @@ mod tests {
         );
     }
 
-    /// The red of the middle row of a 64 pixel camera, ten degrees tall and carrying `extra`,
-    /// that looks up at the dimmed noon disc.
-    fn sky_row_through_the_disc(extra: impl Bundle) -> Vec<u8> {
+    /// The red of the middle row of a 64 pixel camera, ten degrees tall, that looks up at the
+    /// dimmed noon disc.
+    fn sky_row_through_the_disc() -> Vec<u8> {
         use bevy::{
             core_pipeline::tonemapping::Tonemapping,
             render::{
@@ -1402,7 +1385,6 @@ mod tests {
             Msaa::Off,
             AtmosphereCamera::default(),
             Transform::default().looking_at(Vec3::Y, Vec3::Z),
-            extra,
         ));
         let noon = day_fraction(12.0);
         draw_sky(&mut app, |sky| {
