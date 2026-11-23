@@ -10,6 +10,31 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Toon MASK wearables.** Unity alpha-blends after the cutoff, so thin masked lines look
   fine there and fat and black here. Bevy stays glTF-spec-correct (MASK is binary). We don't
   match.
+- **Toon avatars are fogged.** Like everything else; Unity's toon computes a fog factor its
+  fragment never applies.
+- **Toon avatars take only the sun.** No point or spot light reaches them, as in Unity, whose
+  toon additional-light loop is commented out.
+- **The toon ambient floor is the sky envmap's irradiance.** It stands in for Unity's
+  spherical harmonics, read up and down, and without the world's dielectric factor, as Unity reads
+  `ShadeSH9` raw. Avatars in shade sit about 4% above a white world surface; that matches Unity
+  and is not to be removed.
+- **Without the sky envmap, toon avatars take the view's flat ambient.** Such a view (the
+  Backpack preview, a photo booth) has no Trilight ambient. The Backpack is lit flat; a booth
+  carries a one-light-unit key light, or its avatars would sit at the night floor.
+- **Face features are lit by the ambient alone.** As Unity's facial shader: no sun and no bands,
+  so they are brighter than the body at noon and darker at night. A view without the sky envmap
+  takes the noon horizon colour, since its flat ambient would light them twentyfold. They keep
+  the body's outline, which Unity's face shader does not draw.
+- **The toon outline is a screen-space line, not an inverted hull.** It keeps Unity's colour,
+  width falloff and 8 m cutoff. Kept differences: the cutoff is per mesh, not per avatar; an
+  overlap shallower than the edge threshold gets no line, so a curved surface draws none on
+  itself; creases inside the silhouette darken, which the look relies on; and an orthographic
+  view (the Backpack) skips the cutoff, in place of Unity's preview flag.
+- **A hovered avatar glows through the shared highlight pass.** Unity's colour, opacity, width
+  and 0.1 s fade, through the pass scene entities use, so the glow shows through what stands in
+  front and ignores the camera dither and the ghost reveal. Kept differences: every opaque or
+  alpha-tested mesh under the player glows, an emote's props included, where Unity lists the
+  wearables only; an avatar shown with `ShowOnlyWearables` glows like any other.
 - **Day and night (#1467).** An explicit, stopped HUD time beats scene time; restarting the
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest
@@ -45,7 +70,29 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   horizon.
 - **Emissive strength.** Unity never parses `KHR_materials_emissive_strength`; bevy honours
   it, spec-correctly. Content authored against Unity can glow (the Nekko cat at 65x). Dropping
-  the extension is not the fix; the long-term answer is still open.
+  the extension is not the fix; the long-term answer is still open. A glTF emissive factor of 1
+  draws five times as bright as a lit white surface, and the strength multiplies that.
+- **A Material that names a glTF keeps the glTF's rules.** An SDK unlit material is opaque
+  unless it has an alpha texture, whose brightness scales the alpha, and an SDK PBR emissive
+  colour is drawn as it is, as in Unity. A glTF's own unlit material cuts out or blends through
+  its texture's alpha, and its emissive factor is tinted by its base colour texture. The
+  material the engine writes to a scene for a glTF has to draw the same once the scene sends it
+  back with one field changed, and the SDK fields cannot say either thing. So a Material with a
+  `gltf` reference reads `alpha_test`, the diffuse alpha and the emissive by the glTF's rules;
+  one without it, which includes `GltfNodeModifiers`, reads them by the SDK's. The imposter
+  bake applies the same alpha-texture and emissive rules, so a scene keeps its look when its
+  imposter takes over.
+  A normal map follows the texture, not the reference: an SDK `bumpTexture` has its green
+  channel pointing down the image and a glTF's normal map up, so the glTF's own normal map
+  keeps its orientation when it comes back, and a bump texture the scene puts in its place is
+  read as the SDK's.
+- **High bloom scatters at 0.5.** Unity's settings name 0.3; at 0.3 the glow around a bright
+  surface here is about half as strong as Unity draws it, and 0.5 matches its captures
+  (`BLOOM_SCATTER`).
+- **Alpha test and blend premultiplies the whole base colour.** The alpha multiplies the base
+  colour before lighting, and a metal's reflectance is its base colour, so a transparent metal's
+  reflections thin with it where Unity keeps them. Keeping them needs the diffuse and specular
+  terms split inside the lighting functions.
 - **Sky preset curves are linear.** The fog colour, light colour, light intensity and Trilight
   ambient keys are interpolated linearly; Unity's curve tangents are not carried.
 - **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
@@ -101,7 +148,8 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   nearest parcel (not its corner); a scene behind the rendering camera counts four times
   farther in the tick queue (no once-a-second cap, no frozen far scenes). Request slots go to
   the head of the best-ranked queue (one per scene, wearable or emote hash, and one for requests
-  with no hash): the player's own wearables and the emotes they play, then the player's scenes,
+  with no hash): the player's own wearables and the emotes they play or have equipped, then the
+  player's scenes,
   then the other avatars' wearables and emotes, then the
   other scenes, the last two by parcel ring, in front before behind, then raw distance; then
   requests no scene or avatar owns (no hash, or a hash nobody holds), oldest first; last, the
@@ -233,6 +281,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   go to that deployment's asset-bundle registry instead. This path is to be removed once those
   catalysts serve the route. See the
   [ADR](../../../../docs/adr/2026-11-04-explorer-profiles-from-the-catalyst.md).
+- **Overlapping profile saves (#1453).** The engine applies editor patches in arrival order.
+  Each upload carries the edits accepted before it starts, and those callers share its result.
+  Later edits build on the last confirmed profile. The local avatar previews them immediately,
+  while peers and the player's Passport read the confirmed version. [Profile ADR](../../../../docs/adr/2026-11-04-explorer-profiles-from-the-catalyst.md)
 - **Own profile versions never repeat.** unity-explorer's `SelfProfile` numbers an edit one above
   the profile it holds, so after a failed publish puts the old profile back, the next edit reuses
   the failed version. A failed deploy may still have reached the server, and a peer that read it
@@ -599,6 +651,8 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
     the image turns black when the source gives up or a non-looping source ends, and keeps the
     last frame while a reopen is pending, so a short drop shows no black flash; the failed source
     is detached meanwhile. A non-looping source that ends reports `VsNone`, as in unity-explorer.
+    A source the scene clears (an empty `src`, such as the Admin Toolkit's Deactivate) shows black
+    at once on native and web, whatever played before.
 
   Native (FFmpeg) has no reopen: its first error ends playback. A non-looping source that ends
   there reports `VsPaused` and keeps its last frame, where the web reports `VsNone` and clears it.
@@ -630,12 +684,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   switch (on by default, for the session) shows or hides them on the full map and the minimap. A
   pin stands on the centre of its parcel, its position rounded halves to even; it is never
   clustered, its title and description are not drawn, and a click opens the place panel for its
-  parcel. It shows the scene's own icon, a content file of the scene, cut round on a white disc;
-  with no such file (another texture kind, a src that parses as a url, a missing file, or an image
-  that fails to load) it shows the default quest pin, so a scene can't make the HUD request a host
-  of its choosing. The icon resolves again only when its src changes, and a moved pin keeps its
-  icon. The title is cut to 100 characters. unity-explorer loads that icon only under
-  `alfa-map-pins-custom-icons`, and otherwise always shows its default pin. The pin doesn't pulse.
+  parcel. It always shows the default quest pin: the pin's texture is not read, so a scene can't
+  make the HUD request a host of its choosing. unity-explorer loads the scene's own icon only
+  under `alfa-map-pins-custom-icons`, and otherwise always shows its default pin. The title is cut
+  to 100 characters. The pin doesn't pulse.
   This explorer loads no global portable experience at startup: unity-explorer loads the quests'
   one (`globalpx.dcl.eth`) from `alfa-global-portable-experiences`; here it is loaded with the
   launch option (`--portables` or `?portables=`, e.g. `basiccontroller.dcl.eth;globalpx.dcl.eth`).
@@ -644,11 +696,23 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   skip the arrival spot when the player stops on it or reaches it sideways, so the route never
   ends. The arrival rule itself is the same: within about 5.6 m of the destination parcel's
   centre, then "You have arrived to your destination" and the pin goes.
-- **Home can be set, not cleared, and is one for the install.** unity-explorer's Set as Home also
-  takes the home back, and it keeps one home per wallet. Here the engine keeps one home in its
-  config, parcel 0,0 of the default realm until one is set, and the place panel's and the place
-  detail's buttons and the minimap's switch only set it: the switch reads on where the player
-  stands in their home, and can't be turned off.
+- **Home belongs to the account, and can be taken back.** As in unity-explorer, the engine keeps
+  one home per wallet address in its config, and Set as Home on the place that is home (the place
+  panel's and the place detail's buttons, the minimap's switch) takes it back. An account with
+  no home has no home pin and no Set as Home on, and starts on parcel 0,0 of the default realm.
+  Before sign-in the home is the stored sign-in's account's, else the last account's. A home an
+  install kept before homes were per account goes to the first account that signs in. A guest
+  with no account (a scene preview's `?guest=1`, `/login_guest`) has a new address each session,
+  so it is no account here: it reads the home that applies before sign-in, is not offered Set as
+  Home, and neither takes nor writes a home. A guest account signs in and keeps its home like any
+  other account.
+- **Jump back to Genesis City lands on the home parcel, else on 0,0.** The minimap's button in a
+  World travels to the default realm naming a parcel: the account's home when it is in Genesis
+  City, Genesis Plaza otherwise; `/goto genesis` always names 0,0. A realm change that names no
+  parcel keeps the player's parcel, clamped to the new realm's map, which from a World is a parcel
+  of that World's grid. unity-explorer lands the button on its start parcel, read once at launch
+  (a launch position, the home parcel, or `alfa-genesis-spawn-parcel`); here the home is read when
+  the button is pressed, so a home set during the session counts.
 - **Home is set from the map's place panel, the place detail and the minimap's menu.** The place
   detail, opened from the lobby's cards and the Places page, saves the place's base parcel (a
   World, its name) and offers start and exit navigation for a Genesis City place; a Jump in there
@@ -737,6 +801,17 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   Distance. Bevy has one sea plane, a single opaque quad that casts no shadows, so hiding it would
   save almost nothing, and the water material draws without fog, so nothing would soften it
   appearing and disappearing.
+- **The wave ocean is not ported.** Unity's ocean (a wave grid, foam and an alpha-blended surface)
+  was ported and compared in the same views, and it looked worse than Bevy's current sea, so the
+  sea stays as it is.
+- **The lens flare's rings are procedural, and its random copies use a hash.** Unity draws the
+  rings from URP's sample textures, which are not carried; Bevy draws bands of colour measured
+  from them (radius, width and brightness per channel, and the partial ring's arc). Unity places
+  the copies with its seeded random generator.
+- **The lens flare sees transparent surfaces only through depth of field.** Its occlusion test
+  reads the depth buffer and, where the view has depth of field's transparent focus texture, the
+  transparent coverage in it. A view without that texture (every MSAA view) is hidden only by
+  opaque geometry, not by imposters. The flare is off while a scene hides the sun and moon discs.
 - **Graphics presets set fewer settings than Unity's, and four differently.** Low, Medium and High
   carry Unity's values for the frame rate, VSync, render scale, avatar outline, jiggle bones, sun
   shadow quality, the Low and High shadow distances and scene lights; Medium is the default and
@@ -782,6 +857,21 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **glTF occlusion textures are ignored.** Scene materials drop a glTF's occlusion texture, so
   baked ambient occlusion does not darken the ambient light. The Unity client's scene shader
   does not sample it either, and content is authored against that look.
+- **Colliders are bounded by the scene's rectangle, meshes by its parcels.** A scene collider is
+  off as a whole while its box reaches outside the rectangle around the scene's parcels or above
+  the scene's height limit; the shaders clip meshes to the parcels themselves. One large collider
+  often covers an irregular scene's whole footprint: Genesis Plaza's ground and building colliders
+  span the notches its road scenes sit in, and a test against the parcels would turn them off as
+  a whole. Unity (`333aa8826979186f1380058cc75f74b9630e4879`) tests the same rectangle, with the
+  same allowance at the edge. The height limit splits the same way: colliders take one limit from
+  the scene's whole parcel count, as Unity does, while the shaders clip each connected group of
+  parcels at its own, so over a scene in several pieces a collider can be solid above the height
+  its mesh is drawn to (two parcels apart: meshes to 20 m, colliders to 31.7 m). The box tested
+  for a mesh collider is the mesh's own box turned with the collider, which can be larger than the
+  mesh: a wall that runs diagonally in its own model can turn off while it is still inside the
+  rectangle. Triggers are not tested in either client. Preview, loopback and editor runs draw
+  out-of-bounds geometry and leave its colliders on too, so a creator can stand on, bump into
+  and select what reaches outside; every other run turns them off.
 - **The map carries over upstream's marker rules as they are**, so the two clients' maps match.
   A place of several parcels is marked on the parcel a walk over them stops at, which depends on
   their order and is not always the middle one; a cluster stands half a parcel south-west of the
@@ -841,10 +931,13 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   preview, a definitive failure (404 and similar) is remembered for that URL when read by hash.
   A catalyst only activates an entity once it holds all of its files, so the answer is final.
   Other reads and failures keep the 10 s retry. Preview asks again on every read (#727).
-- **A content download that does not match its hash fails the read**, so bytes that are not the
-  file the scene named never reach a loader. It is a failure like a dropped transfer, asked for
-  again after 10 s, not a missing file. A name the check cannot verify is read as before, uncached.
-  Measured first: no correct file of 4574 from live scenes, worlds, wearables and emotes failed it.
+- **A download checked against its content hash fails on a mismatch.** The failure follows
+  the 10 s retry window for dropped transfers. The read that starts the download determines
+  whether to check its bytes. Other reads joining the same URL share its result, which can be
+  unchecked if the first read used a URL key or a name the check cannot verify. A read under an
+  unverifiable content name stays uncached. The content-hash cache serves every origin, so it
+  accepts only verified bytes. All 4574 sampled files from live scenes, worlds,
+  wearables and emotes matched.
 - **Camera layers are identified by entity**, not by an explicit layer number; the cleanup in
   #1320 waits on the protocol change.
 - **`-logFile` with one dash is accepted** (rewritten to `--log-file` before clap, `main.rs`):
@@ -942,3 +1035,20 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   have to be pulled by every Explorer build and matched by every check that hashes the build's
   inputs. The build fails on a file that is an LFS pointer. Revisit if the landscape folder
   (`crates/assets/src/assets/landscape`) reaches tens of MB.
+- **Avatar processing has no frame budget.** `process_avatar` processes every avatar whose parts
+  are written, whole, in the frame it becomes ready, outside the instantiation slice. It was
+  measured before deciding (web build in Chrome, 60 fps target, 64 and 200 demo avatars in base
+  wearables spawned at once and then re-dressed three times). The scene spawner writes avatar
+  parts under the slice, so avatars become ready one or two a frame, at most five: the longest
+  frame of avatar processing took 1.7 ms against a slice of 4.17 ms, and an avatar takes 0.35 ms
+  at the median. That is well under a slice of its own, so a gate would only move a millisecond
+  or two of work to a later frame. The `instantiation/avatar_processing` diagnostic and the
+  Instantiation section of the debug panel show the smoothed cost; with `spawn_timing=debug` in
+  the log filter, each frame that took a millisecond or more is logged. Reopen with a
+  measurement of a frame of avatar processing over the slice, taken on an idle machine: with a
+  compile running alongside, single avatars took up to 43 ms in frames of 100 to 500 ms. Not
+  measured: what the scene spawner, glTF processing and avatar processing take together in a
+  frame (avatars become ready in frames where the spawner has used the slice, so at worst about
+  a slice plus the avatar work); the commands `process_avatar` queues, which are applied after
+  it; wearables much heavier than the base set; a target above 60 fps (the slice is 1.7 ms at
+  144 fps); and the native client.

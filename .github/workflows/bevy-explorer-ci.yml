@@ -9,6 +9,7 @@
       - apps/bevy-explorer/**
       - tooling/dev-regressions*
       - tooling/bevy-ci.py
+      - tooling/bevy-dead-code-check.py
       - tooling/ci_paths.py
       - tooling/bevy-mtimes.py
       - tooling/bevy-workspace-lints.py
@@ -43,6 +44,8 @@
       - library/**
       - apps/sites/**
       - apps/ui3/**
+      # the bridge scene's install copies it (react-web/bridge-scene/pnpm-workspace.yaml)
+      - apps/creator-hub/packages/zip-extract/**
       - tooling/image-*
       - tooling/ci-publication.py
       - tooling/tests/test_ci_publication.py
@@ -58,6 +61,7 @@
       - apps/bevy-explorer/**
       - tooling/dev-regressions*
       - tooling/bevy-ci.py
+      - tooling/bevy-dead-code-check.py
       - tooling/ci_paths.py
       - tooling/bevy-mtimes.py
       - tooling/bevy-workspace-lints.py
@@ -92,6 +96,8 @@
       - library/**
       - apps/sites/**
       - apps/ui3/**
+      # the bridge scene's install copies it (react-web/bridge-scene/pnpm-workspace.yaml)
+      - apps/creator-hub/packages/zip-extract/**
       - tooling/image-*
       - tooling/ci-publication.py
       - tooling/tests/test_ci_publication.py
@@ -136,6 +142,8 @@ jobs:
           python3 -m unittest discover -s tooling/tests -p 'test_bevy_*.py' -v
           python3 -m unittest discover -s tooling/tests -p 'test_play_*.py' -v
           python3 -m unittest discover -s tooling/tests -p 'test_upstream_*.py' -v
+      - name: Reject suppressed dead code
+        run: python3 tooling/bevy-dead-code-check.py
       - name: Check the avatar preview boot contract
         run: node --experimental-vm-modules --test rendering/avatar-preview/tools/preview-*.test.mjs
       - name: Check the CI status comment scripts

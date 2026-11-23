@@ -17,7 +17,6 @@ export type {
 export {
   decentralandNavigation,
   decentralandNavigationSection,
-  decentralandNavSections,
   decentralandPublicNavSections
 } from './components/NavBar/NavBar.navigation'
 export type {
@@ -31,6 +30,7 @@ export { Button } from './components/Button/Button'
 export type { ButtonProps } from './components/Button/Button'
 
 export * from './components/CardActionButton/CardActionButton'
+export * from './components/CommunityCard/CommunityCard'
 export * from './components/CopyFeedback/CopyFeedback'
 export * from './components/EventCard/EventCard'
 export * from './components/JumpInCTA/JumpInCTA'
@@ -65,6 +65,12 @@ export type { InputExplorerNamesProps } from './components/InputExplorerNames/In
 export { InputWebCreatorTools } from './components/InputWebCreatorTools/InputWebCreatorTools'
 export type { InputWebCreatorToolsProps } from './components/InputWebCreatorTools/InputWebCreatorTools'
 
+export { WebSelect, WebTextarea } from './components/InputField/InputFieldWebControls'
+export type {
+  WebSelectProps,
+  WebTextareaProps
+} from './components/InputField/InputFieldWebControls'
+
 export { Switch } from './components/Switch/Switch'
 export type { SwitchProps } from './components/Switch/Switch'
 
@@ -95,3 +101,23 @@ export type { ModalProps } from './components/Modal/Modal'
 
 export { Toast } from './components/Toast/Toast'
 export type { ToastProps, ToastVariant } from './components/Toast/Toast'
+
+export { ProgressBar } from './components/ProgressBar/ProgressBar'
+export type { ProgressBarProps } from './components/ProgressBar/ProgressBar'
+
+export { Dropdown } from './components/Dropdown/Dropdown'
+export type {
+  DropdownMultipleProps,
+  DropdownOption,
+  DropdownProps,
+  DropdownSingleProps
+} from './components/Dropdown/Dropdown'
+
+export { ItemLabel } from './components/ItemLabel/ItemLabel'
+export type { ItemLabelProps, ItemLabelVariant } from './components/ItemLabel/ItemLabel'
+
+export { ConnectionStatus } from './components/ProfilePic/ConnectionStatus'
+export type {
+  ConnectionStatusProps,
+  ConnectionStatusValue
+} from './components/ProfilePic/ConnectionStatus'

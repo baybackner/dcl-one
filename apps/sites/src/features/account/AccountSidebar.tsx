@@ -1,7 +1,7 @@
 import { useId, type ComponentType } from "react";
 import { Link } from "react-router";
 
-import { useChromeAuth } from "@ui/web/frames/chrome-auth";
+import { useChromeAuth } from "@dcl/one-ui/components/AppChrome/chrome-auth";
 
 import {
   GeneralGift,
@@ -13,8 +13,8 @@ import {
 } from "@dcl/one-ui/foundations/icons";
 
 import { shortAddress } from "@/data/lib/catalyst/format/address";
-import { CopyAddress } from "../components/CopyAddress";
-import { useBrokenImage } from "../profile/useBrokenImage";
+import { CopyAddress } from "@dcl/one-ui/apps/sites/CopyAddress";
+import { useBrokenImage } from "@dcl/one-ui/apps/sites/useBrokenImage";
 
 import styles from "./AccountSidebar.module.css";
 import type { AccountLinkState } from "./AccountLayout";
