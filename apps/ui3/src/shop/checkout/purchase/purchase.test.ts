@@ -39,6 +39,7 @@ import { AFTER_PENDING, resumeCheckout, runGroup, runGroups, splitPriceOf, watch
 import { computePaymentOptions, distributeCreditsAcrossUnits, findOption, hasPayableOption } from "./payment-options";
 import type { RailContext } from "./rail";
 import { createSpendGuard } from "@shop/checkout/purchase/spend-guard";
+import { RefusedBeforeWallet } from "../chain/wallet";
 
 function memoryStorage(): CartStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -790,13 +791,16 @@ describe("a kept credits group the wallet was handed", () => {
   };
   const abort = () => Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
   const cancelledAfter = () => Object.assign(new Error("Request cancelled after broadcast"), { code: 4900 });
-  // A wallet's own 4100 after it sent proves nothing: only the page's guard refusing before the wallet does.
+  // A wallet's own 4100 after it sent proves nothing: only the page's guard refusing before the wallet does, and a wallet's
+  // error named as the guard's, with its code, is still the wallet's.
   const walletUnauthorized = () => Object.assign(new Error("Unauthorized"), { code: 4100 });
+  const namedAsTheGuard = () => Object.assign(new Error("Refused"), { name: "WalletRefusal", code: 4100 });
 
   it.each([
     ["an abort", abort],
     ["a 4900 that says cancelled", cancelledAfter],
     ["a wallet's own 4100", walletUnauthorized],
+    ["a wallet's error named and coded as the guard's", namedAsTheGuard],
   ])("sent, then %s instead of its hash: held, its credit kept, on its own transaction and after the relay's refusal", async (_, error) => {
     const direct = await harness();
     sendsThenThrows(direct, error());
@@ -816,7 +820,7 @@ describe("a kept credits group the wallet was handed", () => {
     const h = await harness();
     const original = h.wallet.request.bind(h.wallet);
     h.wallet.request = (async (args: { method: string; params?: unknown[] }) => {
-      if (args.method === "eth_sendTransaction") throw Object.assign(new Error("Your sign-in changed meanwhile."), { name: "WalletRefusal", code: 4100 });
+      if (args.method === "eth_sendTransaction") throw Object.assign(new RefusedBeforeWallet("Your sign-in changed meanwhile."), { code: 4100 });
       return original(args as never);
     }) as typeof h.wallet.request;
     expect(await runGroup(kept(h, { gasless: false }), h.group, h.resolved)).toMatchObject({ status: "failed" });

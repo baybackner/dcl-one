@@ -111,6 +111,15 @@ export function isPendingTxError(err: unknown): boolean {
 }
 
 /**
+ * A request the page itself refused before handing it to the wallet (a guard over the provider, such as /play's
+ * walletGuard): it never reached the wallet. Only this class says so, by identity: a wallet's own error with the same name
+ * or code proves nothing.
+ */
+export class RefusedBeforeWallet extends Error {
+  override name = "RefusedBeforeWallet";
+}
+
+/**
  * The buyer turned the request down in the wallet (EIP-1193 4001, or ethers' ACTION_REJECTED): the one answer to a
  * transaction handed to the wallet that proves it was not sent. Any other failure there (4900 disconnected, 4901,
  * -32002, -32603, no code) may come after the wallet broadcast it.

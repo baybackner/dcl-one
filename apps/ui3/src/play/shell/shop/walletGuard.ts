@@ -29,13 +29,17 @@ import type { Eip1193Provider } from '../../../data/auth/wallet'
 import { COLLECTION_STORE_ABI, CREDITS_MANAGER_ABI, ERC20_ABI, MARKETPLACE_ABI } from '@shop/checkout/chain/abi'
 import { requireContracts, type ContractInfo } from '../../../shop/checkout/chain/contracts'
 import { chainIdSalt, DOMAIN_TYPE, metaTxType } from '../../../shop/checkout/chain/metatx'
+import { RefusedBeforeWallet } from '../../../shop/checkout/chain/wallet'
 import { ASSET_TYPE } from '../../../shop/checkout/purchase/encoding'
 import type { ChainId } from '@shop/model/chain'
 import { AMOY_ADD_PARAMS } from '../../../shop/wallet/chain'
 import type { TrustedManager } from './config'
 
-/** A refused request, in EIP-1193's terms: 4100 unauthorized, 4200 unsupported. */
-export class WalletRefusal extends Error {
+/**
+ * A refused request, in EIP-1193's terms: 4100 unauthorized, 4200 unsupported. Always refused here, before the wallet is
+ * handed anything: a `RefusedBeforeWallet`, which is how the checkout tells it from an answer of the wallet's.
+ */
+export class WalletRefusal extends RefusedBeforeWallet {
   override name = 'WalletRefusal'
   constructor(
     message: string,

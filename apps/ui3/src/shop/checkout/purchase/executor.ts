@@ -26,7 +26,7 @@ import type { GroupFailure, GroupProgress, PurchaseState } from "@shop/model/pur
 import { authorizeUsdCreditGroup, cancelUsdIntents, fetchUserPurchases, type SignedSession } from "@shop/credits/credits";
 import { gaslessEnabled } from "../chain/config";
 import { isGaslessUnavailable, isSignatureDeclined } from "../chain/metatx";
-import { isPendingTxError, isRevertedTxError, isWalletRefusal } from "../chain/wallet";
+import { isPendingTxError, isRevertedTxError, isWalletRefusal, RefusedBeforeWallet } from "../chain/wallet";
 import { AuthorizationKind, getAuthorizationStatus, needsApprovalStep, ensureAuthorization, type ShopAuthorization } from "../lib/authorizations";
 import { friendlyError, isRejection, relayLimitText } from "../lib/errors";
 import { isWrongNetworkError } from "../lib/network";
@@ -117,13 +117,11 @@ function progressOf(store: CartStore, keyId: string): GroupProgress | null {
 }
 
 /**
- * The page's own guard refused the request before handing it to the wallet (/play's walletGuard `WalletRefusal`, EIP-1193
- * 4100 or 4200): it never reached the wallet. Only that error says so; the same codes from a wallet prove nothing here.
+ * The page's own guard refused the request before handing it to the wallet: it never reached the wallet. Known by the
+ * error's class only (`RefusedBeforeWallet`): a wallet's error with the same name or code proves nothing here.
  */
 function refusedBeforeWallet(e: unknown): boolean {
-  if (!e || typeof e !== "object") return false;
-  const { name, code } = e as { name?: unknown; code?: unknown };
-  return name === "WalletRefusal" && (code === 4100 || code === 4200);
+  return e instanceof RefusedBeforeWallet;
 }
 
 function failureFor(e: unknown, kind?: GroupFailure["kind"]): GroupFailure {
