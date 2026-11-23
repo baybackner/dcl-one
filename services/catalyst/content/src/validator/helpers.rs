@@ -347,6 +347,8 @@ mod tests {
         assert!(!is_relative_thumbnail_path("thumb\u{0}nail.png"));
         assert!(!is_relative_thumbnail_path("thumb\u{1b}nail.png"));
         assert!(!is_relative_thumbnail_path("\u{feff}thumbnail.png"));
+        assert!(!is_relative_thumbnail_path("\u{a0}thumbnail.png"));
+        assert!(!is_relative_thumbnail_path("thumbnail.png\u{3000}"));
     }
 
     #[test]
