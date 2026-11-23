@@ -3,7 +3,7 @@
 // running.md ("Test commands") describes it. Specs never see which transport carries the line.
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { type Console, ConsoleError, redact, redactLine, replaceSecrets, secretsOf } from './console.ts'
+import { CONSOLE_SPACE, type Console, ConsoleError, redact, redactLine, replaceSecrets, secretsOf } from './console.ts'
 import { type AuthIdentity, encodeIdentity } from './identity.ts'
 import { type Selector, describeSelector, selectorArg, toSelectorObject } from './selectors.ts'
 import { sleep, until } from './wait.ts'
@@ -534,10 +534,13 @@ export type MouseButton = 'left' | 'right' | 'middle'
 /** A console word the engine splits back into the same argument (`crates/console/src/line.rs`):
  *  quoted when it is empty or holds whitespace or a double quote. */
 export function quoteWord(word: string): string {
-  return word === '' || /[\s"]/.test(word) ? `"${word.replace(/[\\"]/g, '\\$&')}"` : word
+  return word === '' || word.includes('"') || CONSOLE_SPACE.test(word) ? `"${word.replace(/[\\"]/g, '\\$&')}"` : word
 }
 
-/** `/screenshot` options; any of them makes the reply JSON (`CapturedShot`). */
+/** `/screenshot` options; any of them makes the reply JSON (`CapturedShot`). The engine has no
+ *  flag for the JSON reply alone, so `screenshot({})` sends `--max-width 1920`: a frame wider
+ *  than 1920 px (a HiDPI window) comes back scaled down, and `frame` names the size captured.
+ *  The bare `screenshot()` is the full-size PNG. */
 export interface ScreenshotOptions {
   /** 64 to 1920 */
   maxWidth?: number
@@ -572,7 +575,8 @@ export interface CaptureSequenceOptions extends ScreenshotOptions {
   count?: number
   /** 0.05 to 2, default 0.5 */
   intervalSeconds?: number
-  /** native only: the folder the engine writes to */
+  /** native only: the folder the engine writes to; give each sequence its own, or read
+   *  `staleFrames` */
   dir?: string
   /** where frames kept in the engine's memory (the web client's) are written; `savedTo` names each file */
   saveTo?: string
@@ -609,6 +613,9 @@ export interface CaptureSequence {
   frames: CapturedFrame[]
   note: string
   info?: string
+  /** frame files in `directory` this sequence did not write (a reused `dir`); absent when none */
+  staleFrames?: number
+  warning?: string
 }
 
 /** `/capture_state`: the capture gate. */
@@ -1033,8 +1040,9 @@ export class Explorer {
     return { before: match[1]!, after: match[2]!, speed: Number(match[3]) }
   }
 
-  /** The engine's frame as PNG bytes (the canvas on the web, the HUD included natively); with
-   *  options, the scaled image and its caption. Refused while another capture runs. */
+  /** The engine's frame as PNG bytes at full size (the canvas on the web, the HUD included
+   *  natively); with options, the scaled image and its caption, and with an empty options object
+   *  the image at most 1920 px wide (see `ScreenshotOptions`). Refused while another capture runs. */
   async screenshot(): Promise<Buffer>
   async screenshot(options: ScreenshotOptions): Promise<CapturedShot>
   async screenshot(options?: ScreenshotOptions): Promise<Buffer | CapturedShot> {

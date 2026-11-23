@@ -335,12 +335,15 @@ State, in every build:
   (base64), `format` (`png`, or `jpg` at quality 75), `width`, `height`, `frame` (the size
   captured, device pixels), `screen` (as `/entity_screen_position`'s), `parcel`, `worldOnly`,
   `blendWaitMs`, and `caption`, e.g. `640x325 (screen 1600x813, frame 3200x1626) full-view
-  capture at parcel (149,149)`. `--max-width` (64 to 1920) scales down, never up, on the CPU off
-  the main thread. `--world-only` hides the native HUD and every scene's window UI while the
-  capture runs (UI drawn to a texture stays); what `/show_ui` chose returns when it ends. A
-  capture first waits two frames, then while the camera is in a transition (a virtual camera
-  handing back, a mode area), at most 1.5 s: the caption then ends `, waited N ms for the camera
-  blend` or `, camera still blending after 1500 ms -- the frame may be mid-transition`. On the
+  capture at parcel (149,149)`. `--max-width` (64 to 1920) scales down, never up, on the CPU:
+  off the main thread natively, on the engine's own thread on the web, where a large encode can
+  cost a frame. `--world-only` hides the native HUD and every scene's window UI while the
+  capture runs (UI drawn to a texture stays); what `/show_ui` chose, before or during the
+  capture, shows when it ends. Every capture, the bare one included, first waits two frames,
+  then while the camera is in a timed transition (a virtual camera handing back, a mode area;
+  an instant cut is none), at most 1.5 s: the caption then ends `, waited N ms for the camera
+  blend` or `, camera still blending after N ms -- the frame may be mid-transition`, `N` being
+  `blendWaitMs`. On the
   web the capture is the engine's canvas, never the page's HUD, and the reply's `info` says so.
   One capture runs at a time: another `/screenshot` or `/capture_sequence` fails with
   `{"refused": "a capture is already in progress (<holder>); retry when it completes", "cause":
@@ -349,14 +352,20 @@ State, in every build:
   [--dir <path>]`: `count` frames (1 to 20, default 5) `S` seconds apart (0.05 to 2, default
   0.5; the burst spans at most 20 s), each scaled to `--max-width` (default 640). The schedule
   runs from the first frame, so encoding never delays the next. Natively the frames are files in
-  `--dir` (created) or a new `captures/capture-<ms>` folder in the client's cache; the web client
+  `--dir` (created; a relative path is the client's working directory's) or a new
+  `captures/capture-<ms>` folder in the client's cache, and `directory` and each `path` are
+  absolute. A `--dir` that already holds frames is written over from `frame-000`; the capture
+  deletes nothing, so an earlier, longer sequence's higher-numbered frames stay, and the reply
+  then carries `staleFrames` (their count) and a `warning`: read only the paths in `frames`, or
+  give each sequence its own folder. The web client
   cannot write the host's disk, refuses `--dir` and keeps the frames in memory (the last sequence
   only), `capture://<n>/frame-000.png`, which `/capture_frame <path>` returns as base64. JSON
   reply, no image: `directory`, `stored` (`disk` or `memory`), `count`, `format`, `worldOnly`,
   `requestedIntervalSeconds`, `meanIntervalSeconds` (null for one frame), `late` (frames taken
   more than half an interval after their time), `screen`, `parcel`, `note`, and `frames` (`index`,
   `path`, `width`, `height`, `bytes`, `atSeconds` from the first, `intervalFromPreviousSeconds`,
-  `engineFrame`, `tick` of the scene under the player, `late`). It shares the gate and the camera
+  `engineFrame`, `tick` of the scene `/set_scene` chose, else the one under the player, `late`).
+  It shares the gate and the camera
   wait with `/screenshot`.
 - `/capture_state`: the capture gate as JSON, the Frame capture section of the debug panel:
   `holder` (`screenshot`, `capture_sequence` or `none`), `framesTaken` and `count` of the running

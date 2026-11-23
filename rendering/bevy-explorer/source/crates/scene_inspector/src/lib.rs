@@ -7,7 +7,7 @@ use scene_runner::update_scene::raycast_result::SuperUserRaycastScene;
 
 mod active_scene;
 mod asset_commands;
-pub mod capture;
+mod capture;
 mod manual_registry;
 mod mobile_ui;
 mod panel;
@@ -17,6 +17,7 @@ pub mod snapshot;
 mod write_commands;
 
 pub use active_scene::{ActiveInspectionScene, SceneResolver};
+pub use capture::WorldOnlyCapture;
 pub use read_commands::parse_entity_id;
 pub use snapshot::PendingSnapshotRequests;
 

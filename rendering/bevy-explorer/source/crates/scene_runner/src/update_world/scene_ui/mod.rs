@@ -1520,13 +1520,27 @@ impl Default for HiddenSceneUis {
 
 impl HiddenSceneUis {
     /// Whether the window UI of the scene with this hash shows.
-    pub fn shows(&self, hash: &str, system_scene: bool) -> bool {
+    pub(crate) fn shows(&self, hash: &str, system_scene: bool) -> bool {
         !self.suspended && (system_scene || self.scenes.get(hash).copied().unwrap_or(self.show_all))
+    }
+
+    /// What `/show_ui <hash> [enable]` chooses: `all` sets every scene and forgets the scenes
+    /// chosen one by one, a hash sets that scene. With no `enable` the choice flips. Returns it.
+    fn choose(&mut self, hash: &str, enable: Option<bool>) -> bool {
+        let enable =
+            enable.unwrap_or_else(|| !self.scenes.get(hash).copied().unwrap_or(self.show_all));
+        if hash == "all" {
+            self.show_all = enable;
+            self.scenes.clear();
+        } else {
+            self.scenes.insert(hash.to_owned(), enable);
+        }
+        enable
     }
 }
 
-/// Shows or hides the window UI roots that are up when what hides them changes; a root made later
-/// reads the same rule in `create_ui_roots`.
+/// The one writer of a live window UI root's `display`: it shows or hides the roots that are up
+/// when what hides them changes. A root made later reads the same rule in `create_ui_roots`.
 fn apply_hidden_uis(
     hidden_uis: Res<HiddenSceneUis>,
     ui_links: Query<(&RendererSceneContext, &UiLink, Has<SuperUserScene>), With<SceneUiData>>,
@@ -1550,68 +1564,19 @@ fn apply_hidden_uis(
     }
 }
 
+/// `/show_ui` only records the choice; `apply_hidden_uis` applies it, so a choice made while a
+/// `--world-only` capture has the UI suspended shows once the capture ends, not in its frames.
 fn toggle_scene_ui_command(
     mut input: ConsoleCommand<ToggleSceneUiCommand>,
     live_scenes: Res<LiveScenes>,
-    ui_links: Query<(Entity, &UiLink), (With<SceneUiData>, Without<SuperUserScene>)>,
-    mut styles: Query<&mut Node>,
     mut hidden_uis: ResMut<HiddenSceneUis>,
 ) {
     if let Some(Ok(ToggleSceneUiCommand { hash, enable })) = input.take() {
-        let all = hash == "all";
-
-        // get final state
-        let enable = enable
-            .unwrap_or_else(|| !(hidden_uis.scenes.get(&hash).unwrap_or(&hidden_uis.show_all)));
-
-        // if hash is all, toggle everything
-        if all {
-            hidden_uis.show_all = enable;
-            hidden_uis.scenes.clear();
+        if hash != "all" && !live_scenes.scenes.contains_key(&hash) {
+            input.reply_failed(format!("{hash} not found in live scenes"));
+            return;
         }
-
-        // get target entity if required
-        let target_entity = if hash != "all" {
-            let Some(entity) = live_scenes.scenes.get(&hash) else {
-                input.reply_failed(format!("{hash} not found in live scenes"));
-                return;
-            };
-
-            Some(entity)
-        } else {
-            None
-        };
-
-        for (scene_ent, link) in ui_links.iter() {
-            // skip non-matching entities
-            if target_entity.is_some_and(|e| e != &scene_ent) {
-                continue;
-            }
-
-            // get the ui root
-            let Ok(mut style) = styles.get_mut(link.ui_entity) else {
-                if !all {
-                    input.reply_failed("failed to obtain ui root entity");
-                    return;
-                } else {
-                    continue;
-                }
-            };
-
-            // set the target state
-            if enable {
-                style.display = Display::Flex;
-            } else {
-                style.display = Display::None;
-            };
-
-            // store the scene specific state
-            if !all {
-                hidden_uis.scenes.insert(hash.clone(), enable);
-                input.reply_ok(format!("{hash}: {enable}"));
-            }
-        }
-
+        let enable = hidden_uis.choose(&hash, enable);
         input.reply_ok(format!("{hash}: {enable}"));
     }
 }
@@ -1729,6 +1694,82 @@ mod tests {
         );
         ctx.portable_experiences = toggle;
         ctx
+    }
+
+    fn ui_root(world: &mut World, hash: &str) -> Entity {
+        let root = world.spawn(Node::default()).id();
+        world.spawn((
+            context(hash, false, Default::default()),
+            SceneUiData::default(),
+            UiLink {
+                ui_entity: root,
+                content_entity: root,
+                opacity: FloatOrd(1.0),
+                is_window_ui: true,
+                scroll_entity: None,
+                scroll_position: None,
+                interactors: Default::default(),
+            },
+        ));
+        root
+    }
+
+    #[test]
+    fn a_suspended_ui_shows_no_scene_whatever_show_ui_chose() {
+        let mut hidden = HiddenSceneUis::default();
+        assert!(hidden.shows("scene", false));
+        hidden.choose("scene", Some(false));
+        assert!(!hidden.shows("scene", false));
+        assert!(hidden.shows("other", false));
+        assert!(hidden.shows("scene", true));
+
+        hidden.suspended = true;
+        assert!(!hidden.shows("other", false));
+        assert!(!hidden.shows("scene", true));
+
+        hidden.suspended = false;
+        assert!(!hidden.shows("scene", false));
+        assert!(hidden.shows("other", false));
+    }
+
+    #[test]
+    fn show_ui_flips_a_choice_and_all_forgets_the_scenes_chosen() {
+        let mut hidden = HiddenSceneUis::default();
+        assert!(!hidden.choose("scene", None));
+        assert!(hidden.choose("scene", None));
+        assert!(!hidden.choose("scene", Some(false)));
+        assert!(!hidden.choose("all", None));
+        assert!(!hidden.shows("other", false));
+        assert!(hidden.choose("all", Some(true)));
+        assert!(hidden.shows("scene", false));
+    }
+
+    #[test]
+    fn show_ui_during_a_world_only_capture_shows_only_once_it_ends() {
+        let mut world = World::new();
+        world.init_resource::<HiddenSceneUis>();
+        let root = ui_root(&mut world, "scene");
+        let display = |world: &World| world.get::<Node>(root).unwrap().display;
+
+        world.resource_mut::<HiddenSceneUis>().suspended = true;
+        world.run_system_once(apply_hidden_uis).unwrap();
+        assert_eq!(display(&world), Display::None);
+
+        world
+            .resource_mut::<HiddenSceneUis>()
+            .choose("scene", Some(true));
+        world.run_system_once(apply_hidden_uis).unwrap();
+        assert_eq!(display(&world), Display::None);
+
+        world.resource_mut::<HiddenSceneUis>().suspended = false;
+        world.run_system_once(apply_hidden_uis).unwrap();
+        assert_eq!(display(&world), Display::Flex);
+
+        world
+            .resource_mut::<HiddenSceneUis>()
+            .choose("scene", Some(false));
+        world.run_system_once(apply_hidden_uis).unwrap();
+        assert_eq!(display(&world), Display::None);
     }
 
     /// The scenes showing UI with the player standing in a parcel scene with `toggle`, beside

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, test } from 'node:test'
 import { ConsoleError, FakeConsole, commandOf, redactLine } from '../driver/console.ts'
-import { type CommandRecord, Explorer, parseLiveScenes, parsePortables, parseSmartWearables, type WorldState } from '../driver/explorer.ts'
+import { type CaptureSequence, type CommandRecord, Explorer, parseLiveScenes, parsePortables, parseSmartWearables, quoteWord, saveCaptureFrames, type WorldState } from '../driver/explorer.ts'
 import { enterWorld } from '../driver/session.ts'
 
 function world(overrides: Partial<WorldState> = {}): string {
@@ -511,6 +514,69 @@ describe('Explorer', () => {
     const started = Date.now()
     await explorer.profileDeployWindow()
     assert.ok(Date.now() - started >= 350, 'two deployments between reads fill a burst of two')
+  })
+
+  test('quoteWord quotes what the engine would split or unquote', () => {
+    assert.equal(quoteWord('plain'), 'plain')
+    assert.equal(quoteWord(''), '""')
+    assert.equal(quoteWord('a b'), '"a b"')
+    assert.equal(quoteWord('a\u0085b'), '"a\u0085b"')
+    assert.equal(quoteWord('say "hi"'), '"say \\"hi\\""')
+    assert.equal(quoteWord('C:\\frames'), 'C:\\frames')
+    assert.equal(quoteWord('C:\\my frames'), '"C:\\\\my frames"')
+  })
+
+  test('screenshot({}) asks for the JSON reply with the widest frame; the bare call stays raw', async () => {
+    const fake = new FakeConsole({ screenshot: (line) => (line === '/screenshot' ? Buffer.from('png').toString('base64') : JSON.stringify({ caption: 'c', image: '' })) })
+    const explorer = new Explorer(fake)
+    assert.equal((await explorer.screenshot()).toString(), 'png')
+    assert.equal((await explorer.screenshot({})).caption, 'c')
+    assert.deepEqual(fake.lines, ['/screenshot', '/screenshot --max-width 1920'])
+  })
+
+  test('captureState and captureFrame read the gate and one frame in memory', async () => {
+    const state = { holder: 'capture_sequence', framesTaken: 1, count: 3, worldOnly: true, framesInMemory: 0, bytesInMemory: 0 }
+    const fake = new FakeConsole({ capture_state: JSON.stringify(state), capture_frame: Buffer.from('frame').toString('base64') })
+    const explorer = new Explorer(fake)
+    assert.deepEqual(await explorer.captureState(), state)
+    assert.equal((await explorer.captureFrame('capture://2/frame-001.png')).toString(), 'frame')
+    assert.deepEqual(fake.lines, ['/capture_state', '/capture_frame capture://2/frame-001.png'])
+  })
+
+  test('saveCaptureFrames writes frames kept in memory and leaves a sequence on disk alone', async () => {
+    const frame = { width: 2, height: 1, bytes: 1, atSeconds: 0, intervalFromPreviousSeconds: null, engineFrame: 1, tick: 1, late: false }
+    const sequence = (stored: 'disk' | 'memory', paths: string[]): CaptureSequence => ({
+      directory: stored === 'memory' ? 'capture://3' : '/frames',
+      stored,
+      count: paths.length,
+      format: 'png',
+      worldOnly: false,
+      requestedIntervalSeconds: 0.1,
+      meanIntervalSeconds: 0.1,
+      late: 0,
+      screen: null,
+      parcel: null,
+      frames: paths.map((framePath, index) => ({ ...frame, index, path: framePath })),
+      note: ''
+    })
+    const fake = new FakeConsole({ capture_frame: (line) => Buffer.from(line.split(' ')[1]!).toString('base64'), capture_sequence: JSON.stringify(sequence('memory', ['capture://3/frame-000.png'])) })
+    const explorer = new Explorer(fake)
+    const dir = await mkdtemp(path.join(tmpdir(), 'capture-'))
+    try {
+      const saved = await saveCaptureFrames(explorer, sequence('memory', ['capture://3/frame-000.png', 'capture://3/frame-001.png']), dir)
+      assert.deepEqual(saved.frames.map((f) => f.savedTo), [path.join(dir, 'frame-000.png'), path.join(dir, 'frame-001.png')])
+      assert.equal(await readFile(path.join(dir, 'frame-001.png'), 'utf8'), 'capture://3/frame-001.png')
+      assert.deepEqual(fake.sent('capture_frame'), ['/capture_frame capture://3/frame-000.png', '/capture_frame capture://3/frame-001.png'])
+
+      const onDisk = sequence('disk', ['/frames/frame-000.png'])
+      assert.equal(await saveCaptureFrames(explorer, onDisk, dir), onDisk)
+      assert.equal(fake.sent('capture_frame').length, 2)
+
+      const viaOption = await explorer.captureSequence({ count: 1, saveTo: dir })
+      assert.equal(viaOption.frames[0]!.savedTo, path.join(dir, 'frame-000.png'))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test('screenshot with options reads the caption; captureSequence passes its flags', async () => {

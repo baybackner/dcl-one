@@ -1,9 +1,10 @@
 //! `/screenshot` and `/capture_sequence`: frames of the primary window, read back at the end of
 //! the frame they were rendered in, through one capture job at a time (the gate; a second capture
 //! is refused and the refusal names the holder). A job waits two frames, then for the camera's
-//! transition (at most 1.5 s), then captures; the frames are scaled and encoded off the main
-//! thread. `--world-only` hides the native HUD and the scenes' window UI while the job runs, the
-//! scene UI through `HiddenSceneUis`, the rule `/show_ui` uses.
+//! transition (at most 1.5 s), then captures; the frames are scaled and encoded on the IO task
+//! pool, which is off the main thread natively and on the engine's own thread on the web.
+//! `--world-only` hides the native HUD and the scenes' window UI while the job runs, the scene UI
+//! through `HiddenSceneUis`, the rule `/show_ui` uses.
 
 use std::path::PathBuf;
 
@@ -28,7 +29,7 @@ use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use scene_runner::{update_world::scene_ui::HiddenSceneUis, vec3_to_parcel};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
-use tween::SystemTween;
+use tween::SystemTweenData;
 
 use crate::active_scene::SceneResolver;
 
@@ -41,7 +42,7 @@ const SEQUENCE_MAX_BURST_SECONDS: f32 = 20.0;
 /// How long a job may wait for its frames after the last was asked for.
 const READBACK_TIMEOUT_SECONDS: f64 = 10.0;
 
-pub struct CapturePlugin;
+pub(crate) struct CapturePlugin;
 
 impl Plugin for CapturePlugin {
     fn build(&self, app: &mut App) {
@@ -79,8 +80,8 @@ pub struct WorldOnlyCapture;
 /// at full size (no `data:` prefix; the editor host's thumbnail contract). With any option it is
 /// JSON: `caption` (the image size, the screen and frame it was scaled from, the parcel, the
 /// camera wait), `format`, `width`, `height`, `frame`, `screen`, `parcel`, `worldOnly`,
-/// `blendWaitMs`, `image` (base64). Waits for a camera transition (at most 1.5 s) first; refused
-/// while another capture runs.
+/// `blendWaitMs`, `image` (base64). Every capture, the bare one included, waits two frames and
+/// then for a camera transition (at most 1.5 s), and is refused while another capture runs.
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/screenshot")]
 struct ScreenshotCommand {
@@ -129,8 +130,10 @@ fn screenshot_cmd(
 
 /// Capture `count` frames `interval-seconds` apart, scheduled from the first frame so encoding
 /// never delays the next. Natively the frames are files under `--dir` (default: a new folder in
-/// the client's cache); on the web they stay in memory, the last sequence only, and
-/// `/capture_frame <path>` reads one. JSON reply: `directory`, `stored` (disk or memory), `count`,
+/// the client's cache); a `--dir` that already holds frames is written over from `frame-000`, the
+/// rest left alone and counted in `staleFrames`. On the web they stay in memory, the last sequence
+/// only, and `/capture_frame <path>` reads one. JSON reply: `directory` (absolute), `stored`
+/// (disk or memory), `count`,
 /// `requestedIntervalSeconds`, `meanIntervalSeconds`, `late` (frames taken more than half an
 /// interval after their time), `screen`, `frames` (`path`, `tick` of the scene, `engineFrame`,
 /// `atSeconds`, `late`, ...). No image is inline. Shares the gate with `/screenshot`.
@@ -243,7 +246,8 @@ fn capture_target(dir: Option<PathBuf>, store: &mut CaptureStore) -> Result<Targ
         Some(folder) => {
             std::fs::create_dir_all(&folder)
                 .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
-            Ok(Target::Disk(folder))
+            // a relative `--dir` is the client's working directory's: the reply names it in full
+            Ok(Target::Disk(std::path::absolute(&folder).unwrap_or(folder)))
         }
         None => {
             store.sequence += 1;
@@ -467,6 +471,32 @@ impl CaptureJob {
         }
     }
 
+    /// Whether the camera is where the frame should be taken from: at rest, or still in a
+    /// transition `BLEND_DEADLINE_SECONDS` after the capture started. Records the wait once.
+    fn camera_ready(&mut self, blending: bool, now: f64) -> bool {
+        if self.blend.is_some() {
+            return true;
+        }
+        if blending {
+            let seen = *self.blend_seen.get_or_insert(now);
+            if now - self.started < BLEND_DEADLINE_SECONDS {
+                return false;
+            }
+            self.blend = Some(Blend {
+                waited_ms: ((now - seen) * 1000.0) as u32,
+                still_blending: true,
+            });
+        } else {
+            self.blend = Some(Blend {
+                waited_ms: self
+                    .blend_seen
+                    .map_or(0, |seen| ((now - seen) * 1000.0) as u32),
+                still_blending: false,
+            });
+        }
+        true
+    }
+
     /// When the next frame is due, if one is: the first at once, then one per interval from the
     /// first frame's time.
     fn next_due(&self) -> Option<f64> {
@@ -497,6 +527,10 @@ impl CaptureJob {
     }
 }
 
+/// The primary camera in a timed transition. `SystemTweenData` is on it only while one runs: an
+/// instant cut leaves its `SystemTween` on the camera for good, and is no transition to wait for.
+type CameraBlending = (With<PrimaryCamera>, With<SystemTweenData>);
+
 #[allow(clippy::too_many_arguments)]
 fn drive_capture(
     mut commands: Commands,
@@ -505,7 +539,7 @@ fn drive_capture(
     time: Res<Time<Real>>,
     frame_count: Res<FrameCount>,
     windows: Query<(Entity, &Window), With<PrimaryWindow>>,
-    tweening: Query<(), (With<PrimaryCamera>, With<SystemTween>)>,
+    tweening: Query<(), CameraBlending>,
     mut scene_uis: ResMut<HiddenSceneUis>,
     player: Query<&GlobalTransform, With<PrimaryUser>>,
     resolver: SceneResolver,
@@ -521,25 +555,8 @@ fn drive_capture(
         job.settle_frames -= 1;
         return;
     }
-    if job.blend.is_none() {
-        let blending = !tweening.is_empty();
-        if blending {
-            let seen = *job.blend_seen.get_or_insert(now);
-            if now - job.started < BLEND_DEADLINE_SECONDS {
-                return;
-            }
-            job.blend = Some(Blend {
-                waited_ms: ((now - seen) * 1000.0) as u32,
-                still_blending: true,
-            });
-        } else {
-            job.blend = Some(Blend {
-                waited_ms: job
-                    .blend_seen
-                    .map_or(0, |seen| ((now - seen) * 1000.0) as u32),
-                still_blending: false,
-            });
-        }
+    if !job.camera_ready(!tweening.is_empty(), now) {
+        return;
     }
 
     let Ok((window, _)) = windows.single() else {
@@ -631,12 +648,14 @@ fn drive_capture(
     }
 }
 
-/// Reply, show what a world-only capture hid, and open the gate.
+/// Reply, show what a world-only capture hid, and open the gate. `HiddenSceneUis` is written,
+/// and so applied again, only when this capture suspended it: the caller passes its `ResMut`
+/// undereferenced.
 fn finish(
     commands: &mut Commands,
     gate: &mut CaptureGate,
     store: &mut CaptureStore,
-    scene_uis: &mut HiddenSceneUis,
+    scene_uis: &mut impl std::ops::DerefMut<Target = HiddenSceneUis>,
     result: Result<String, String>,
 ) {
     let Some(mut job) = gate.job.take() else {
@@ -745,7 +764,7 @@ fn caption(
         Some(blend) if blend.still_blending => {
             caption += &format!(
                 ", camera still blending after {} ms -- the frame may be mid-transition",
-                (BLEND_DEADLINE_SECONDS * 1000.0) as u32
+                blend.waited_ms
             )
         }
         Some(blend) if blend.waited_ms > 0 => {
@@ -835,6 +854,10 @@ fn build_reply(
                 let last = job.frames.last().map_or(first_at, |slot| slot.at);
                 reply::round_fine(((last - first_at) / (*count - 1) as f64) as f32)
             });
+            let stale = match target {
+                Target::Disk(folder) => stale_frames(folder, &encoded),
+                Target::Memory(_) => 0,
+            };
             let (directory, stored) = match target {
                 Target::Disk(folder) => (folder.display().to_string(), "disk"),
                 Target::Memory(_) => {
@@ -871,9 +894,34 @@ fn build_reply(
             if let Some(note) = web_note() {
                 reply["info"] = Value::String(note.to_owned());
             }
+            if stale > 0 {
+                reply["staleFrames"] = json!(stale);
+                reply["warning"] = Value::String(format!(
+                    "{directory} also holds {stale} frame file(s) this sequence did not write; read only the paths in `frames`"
+                ));
+            }
             Ok(reply.to_string())
         }
     }
+}
+
+/// The `frame-*` files in `folder` that are not among `written`: an earlier sequence's, left alone.
+fn stale_frames(folder: &std::path::Path, written: &[Encoded]) -> usize {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|file| {
+            file.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("frame-"))
+                && !written
+                    .iter()
+                    .any(|frame| frame.path.as_deref() == file.to_str())
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -912,15 +960,248 @@ mod tests {
         );
     }
 
+    fn frame(width: u32, height: u32) -> Image {
+        Image::new_fill(
+            bevy::render::render_resource::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            &[255, 0, 0, 255],
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::default(),
+        )
+    }
+
     #[test]
-    fn a_frame_is_scaled_to_the_width_and_encoded() {
-        let image = DynamicImage::new_rgba8(320, 160);
-        let scaled = image.thumbnail(64, u32::MAX);
-        assert_eq!((scaled.width(), scaled.height()), (64, 32));
-        let jpg = encode_image(&scaled, Format::Jpg).unwrap();
-        assert_eq!(&jpg[..2], &[0xFF, 0xD8]);
-        let png = encode_image(&scaled, Format::Png).unwrap();
-        assert_eq!(&png[1..4], b"PNG");
+    fn a_frame_is_scaled_down_to_the_width_never_up_and_encoded() {
+        let wide = encode(frame(320, 160), Some(64), Format::Jpg, None).unwrap();
+        assert_eq!((wide.width, wide.height), (64, 32));
+        assert_eq!(wide.frame, UVec2::new(320, 160));
+        assert_eq!(&wide.bytes[..2], &[0xFF, 0xD8]);
+
+        let narrow = encode(frame(48, 24), Some(64), Format::Png, None).unwrap();
+        assert_eq!((narrow.width, narrow.height), (48, 24));
+        assert_eq!(&narrow.bytes[1..4], b"PNG");
+
+        let full = encode(frame(320, 160), None, Format::Png, None).unwrap();
+        assert_eq!((full.width, full.height), (320, 160));
+    }
+
+    fn job(kind: Kind, world_only: bool, world: &mut World) -> CaptureJob {
+        let (tx, _rx) = oneshot::channel();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let job = CaptureJob::new(
+            kind,
+            Options {
+                max_width: Some(320),
+                format: Format::Png,
+                world_only,
+            },
+            tx,
+            0.0,
+            &mut Commands::new(&mut queue, world),
+        );
+        queue.apply(world);
+        job
+    }
+
+    fn sequence(count: usize, interval: f64) -> Kind {
+        Kind::Sequence {
+            count,
+            interval,
+            target: Target::Memory(1),
+        }
+    }
+
+    #[test]
+    fn an_instant_camera_cut_is_not_a_transition_to_wait_for() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, tween::update_system_tween);
+        let tween = |time| tween::SystemTween {
+            target: Transform::from_xyz(1.0, 0.0, 0.0),
+            time,
+            fov: None,
+        };
+        let cut = app
+            .world_mut()
+            .spawn((Transform::default(), PrimaryCamera::default(), tween(0.0)))
+            .id();
+        app.update();
+        app.update();
+        let mut blending = app.world_mut().query_filtered::<Entity, CameraBlending>();
+        assert_eq!(blending.iter(app.world()).count(), 0);
+
+        app.world_mut().entity_mut(cut).insert(tween(10.0));
+        app.update();
+        app.update();
+        assert_eq!(blending.iter(app.world()).collect::<Vec<_>>(), vec![cut]);
+    }
+
+    #[test]
+    fn a_capture_waits_for_the_camera_until_the_deadline() {
+        let mut world = World::new();
+        let mut resting = job(Kind::Shot { json: true }, false, &mut world);
+        assert!(resting.camera_ready(false, 0.1));
+        assert_eq!(resting.blend.unwrap().waited_ms, 0);
+
+        let mut blended = job(Kind::Shot { json: true }, false, &mut world);
+        assert!(!blended.camera_ready(true, 0.1));
+        assert!(blended.camera_ready(false, 0.5));
+        let blend = blended.blend.unwrap();
+        assert_eq!((blend.waited_ms, blend.still_blending), (400, false));
+
+        let mut late = job(Kind::Shot { json: true }, false, &mut world);
+        assert!(!late.camera_ready(true, 0.25));
+        assert!(late.camera_ready(true, 1.5));
+        let blend = late.blend.unwrap();
+        assert_eq!((blend.waited_ms, blend.still_blending), (1250, true));
+        // the caption and `blendWaitMs` report the same wait
+        let text = caption(UVec2::ONE, None, UVec2::ONE, false, None, Some(blend));
+        assert!(text
+            .ends_with(", camera still blending after 1250 ms -- the frame may be mid-transition"));
+    }
+
+    #[test]
+    fn a_sequence_counts_its_late_frames_and_its_mean_interval() {
+        let mut world = World::new();
+        let mut job = job(sequence(3, 0.1), false, &mut world);
+        // the second frame is 0.02 s after its time (on time), the third 0.06 s (late)
+        for (scheduled, at) in [(1.0, 1.0), (1.1, 1.12), (1.2, 1.26)] {
+            let index = job.frames.len();
+            let path = job.frame_path(index).map(|(name, _)| name);
+            job.frames.push(Slot {
+                scheduled,
+                at,
+                engine_frame: index as u32,
+                tick: Some(7),
+                state: SlotState::Done(Ok(Encoded {
+                    bytes: vec![0; 4],
+                    width: 320,
+                    height: 160,
+                    frame: UVec2::new(640, 320),
+                    path,
+                })),
+            });
+        }
+        let mut store = CaptureStore {
+            sequence: 1,
+            frames: Vec::new(),
+        };
+        let reply: Value =
+            serde_json::from_str(&build_reply(&mut job, None, None, &mut store).unwrap()).unwrap();
+        assert_eq!(reply["late"], 1);
+        assert_eq!(reply["meanIntervalSeconds"], 0.13);
+        assert_eq!(reply["stored"], "memory");
+        assert_eq!(reply["directory"], "capture://1");
+        let late: Vec<bool> = reply["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|frame| frame["late"].as_bool().unwrap())
+            .collect();
+        assert_eq!(late, [false, false, true]);
+        assert_eq!(
+            reply["frames"][0]["intervalFromPreviousSeconds"],
+            Value::Null
+        );
+        assert_eq!(reply["frames"][2]["path"], "capture://1/frame-002.png");
+        assert_eq!(store.frames.len(), 3);
+    }
+
+    /// A `HiddenSceneUis` that records whether it was written, as a `ResMut` would.
+    struct Tracked(HiddenSceneUis, bool);
+
+    impl std::ops::Deref for Tracked {
+        type Target = HiddenSceneUis;
+        fn deref(&self) -> &HiddenSceneUis {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for Tracked {
+        fn deref_mut(&mut self) -> &mut HiddenSceneUis {
+            self.1 = true;
+            &mut self.0
+        }
+    }
+
+    /// Runs `finish` on a world-only or full-view sequence with `result`; returns the reply,
+    /// whether the scene UI is still suspended, whether `HiddenSceneUis` was written, and the HUD
+    /// markers left.
+    fn finished(
+        world_only: bool,
+        result: Result<String, String>,
+    ) -> (Result<String, String>, bool, bool, usize) {
+        let mut world = World::new();
+        let mut scene_uis = Tracked(
+            HiddenSceneUis {
+                suspended: world_only,
+                ..Default::default()
+            },
+            false,
+        );
+        let (tx, mut rx) = oneshot::channel();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let job = CaptureJob::new(
+            sequence(2, 0.1),
+            Options {
+                max_width: None,
+                format: Format::Png,
+                world_only,
+            },
+            tx,
+            0.0,
+            &mut Commands::new(&mut queue, &world),
+        );
+        queue.apply(&mut world);
+        let mut gate = CaptureGate { job: Some(job) };
+        let mut store = CaptureStore {
+            sequence: 1,
+            frames: vec![("capture://1/frame-000.png".to_owned(), vec![1])],
+        };
+        let failed = result.is_err();
+        finish(
+            &mut Commands::new(&mut queue, &world),
+            &mut gate,
+            &mut store,
+            &mut scene_uis,
+            result,
+        );
+        queue.apply(&mut world);
+        assert!(gate.job.is_none());
+        assert_eq!(store.frames.is_empty(), failed);
+        let markers = world.query::<&WorldOnlyCapture>().iter(&world).count();
+        (
+            rx.try_recv().unwrap(),
+            scene_uis.0.suspended,
+            scene_uis.1,
+            markers,
+        )
+    }
+
+    #[test]
+    fn a_capture_that_fails_or_times_out_still_opens_the_gate_and_shows_the_ui() {
+        let timeout =
+            Err("the frames were not read back within 10 s of the last capture".to_owned());
+        let (reply, suspended, written, markers) = finished(true, timeout.clone());
+        assert_eq!(reply, timeout);
+        assert!(!suspended && written);
+        assert_eq!(markers, 0);
+
+        let (reply, suspended, written, markers) = finished(true, Ok("{}".to_owned()));
+        assert_eq!(reply, Ok("{}".to_owned()));
+        assert!(!suspended && written);
+        assert_eq!(markers, 0);
+    }
+
+    #[test]
+    fn a_full_view_capture_does_not_write_the_scene_ui_rule() {
+        let (reply, suspended, written, _) = finished(false, Err("no primary window".to_owned()));
+        assert!(reply.is_err());
+        assert!(!suspended && !written);
     }
 
     #[test]
@@ -946,7 +1227,12 @@ mod tests {
         );
         let gate = CaptureGate { job: Some(job) };
         let refusal = gate.refusal().unwrap();
-        assert!(refusal.contains("a capture is already in progress (capture_sequence)"));
+        let refusal: Value = serde_json::from_str(&refusal).unwrap();
+        assert_eq!(
+            refusal["refused"],
+            "a capture is already in progress (capture_sequence); retry when it completes"
+        );
+        assert_eq!(refusal["cause"]["holder"], "capture_sequence");
         assert!(CaptureGate::default().refusal().is_none());
     }
 }

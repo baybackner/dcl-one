@@ -140,7 +140,7 @@ struct HudUiNode;
 /// A photo, or a `--world-only` `/screenshot` or `/capture_sequence`, is being captured.
 type Capturing = Or<(
     With<camera_reel::CapturingPhoto>,
-    With<scene_inspector::capture::WorldOnlyCapture>,
+    With<scene_inspector::WorldOnlyCapture>,
 )>;
 
 /// The HUD texture is part of the window, so it is hidden for the frame a photo is read from, and
