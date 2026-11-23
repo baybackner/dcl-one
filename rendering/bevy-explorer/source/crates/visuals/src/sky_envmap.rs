@@ -1,8 +1,8 @@
 //! The environment maps attached as an `EnvironmentMapLight` to every camera that renders the
-//! sky: the reflection (specular) map generated from the atmosphere skybox whenever the sky is
-//! redrawn, its brightest channel limited to 1, and the diffuse map, which is not the sky at all
-//! but the Trilight ambient (`sky_preset::ambient_trilight`, or a scene's own sky colours),
-//! written on the CPU as the three colours change.
+//! sky: the reflection (specular) map generated from the atmosphere skybox while the sky is
+//! redrawn, every `FILTER_INTERVAL` frames, its brightest channel limited to 1, and the diffuse
+//! map, which is not the sky at all but the Trilight ambient (`sky_preset::ambient_trilight`, or
+//! a scene's own sky colours), written on the CPU as the three colours change.
 //!
 //! Only the upper hemisphere of the reflection map is generated, unless a scene authors a nadir,
 //! which enables the full sphere so that its lower sky is reflected too. The pbr shaders' lookups
@@ -48,7 +48,10 @@ use common::{
     structs::{AppConfig, SkyReflectionSetting},
 };
 use console::DoAddConsoleCommand;
-use std::f32::consts::PI;
+use std::{
+    f32::consts::PI,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 const SKY_ENVMAP_SHADER_HANDLE: Handle<Shader> =
     weak_handle!("6b2f4c7e-3a1d-4f8e-9c2b-7d5e1a0f3b64");
@@ -61,6 +64,10 @@ const TRILIGHT_SAMPLES: u32 = 256;
 const WORKGROUP_SIZE: u32 = 8;
 // the filter passes generate every face but -y (see sky_envmap.wgsl)
 const GENERATED_FACES: u32 = 5;
+/// Frames between two filterings of the reflection map at the high setting. The sky redraws a
+/// 64th of its texels a frame, every frame, so the map is filtered eight times over the 64 frames
+/// of one redraw and is at most 7 frames behind the sky.
+const FILTER_INTERVAL: u32 = 8;
 /// texels per face of the ambient map: enough for the gradient to read smoothly across a face
 const AMBIENT_SIZE: u32 = 8;
 
@@ -593,6 +600,10 @@ struct SkyEnvmapResources {
     trilight: (BindGroup, u32),
     _intermediate: Texture,
     uniforms: DynamicUniformBuffer<Constants>,
+    /// frames since the node last filtered the map, which it does at `FILTER_INTERVAL`; new
+    /// constants or new textures make it due at once. Atomic because the node, which resets it
+    /// when it filters, only reads the world
+    frames_since_filter: AtomicU32,
 }
 
 /// Pushes the constants for every filter pass: one per specular mip, then the trilight pass. The
@@ -663,7 +674,10 @@ fn prepare_sky_envmap(
     let textures = [source, specular, trilight_specular].map(|image| image.texture.id());
     if let Some(mut existing) = existing {
         if existing.textures == textures {
+            let frames = existing.frames_since_filter.get_mut();
+            *frames = frames.saturating_add(1);
             if settings.is_changed() {
+                *frames = FILTER_INTERVAL;
                 push_constants(&mut existing.uniforms, &settings);
                 existing.uniforms.write_buffer(&device, &queue);
             }
@@ -757,6 +771,7 @@ fn prepare_sky_envmap(
         trilight,
         _intermediate: intermediate,
         uniforms,
+        frames_since_filter: AtomicU32::new(FILTER_INTERVAL),
     });
 }
 
@@ -793,6 +808,13 @@ impl render_graph::Node for SkyEnvmapNode {
         ) else {
             return Ok(());
         };
+        // the low setting's map is one dispatch of one texel per face: it follows every redraw
+        if quality == SkyReflectionSetting::High
+            && resources.frames_since_filter.load(Ordering::Relaxed) < FILTER_INTERVAL
+        {
+            return Ok(());
+        }
+        resources.frames_since_filter.store(0, Ordering::Relaxed);
 
         let mut pass =
             render_context
