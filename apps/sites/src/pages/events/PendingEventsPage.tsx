@@ -78,8 +78,14 @@ function PendingQueue({ access }: { access: EventAdminAccess }) {
   const review = openId ? [...pending, ...recentlyApproved].find((event) => event.id === openId) ?? null : null;
   const now = new Date();
   // A link (a notification, a shared URL) can name an event another moderator has handled since, or one
-  // this account does not review: once the queue answers without it, say so and drop the id.
-  const unlisted = Boolean(openId) && queue.isSuccess && review === null;
+  // this account does not review: once a read made for this page answers without it, say so and drop the
+  // id. A cached queue may predate the event, so it decides nothing until that read settles.
+  const unlisted = Boolean(openId) && queue.isSuccess && queue.isFetchedAfterMount && !queue.isFetching && review === null;
+  const cachedWithout = Boolean(openId) && queue.isSuccess && !queue.isFetchedAfterMount && !queue.isFetching && review === null;
+  const refetchQueue = queue.refetch;
+  useEffect(() => {
+    if (cachedWithout) void refetchQueue();
+  }, [cachedWithout, refetchQueue]);
   useEffect(() => {
     if (!unlisted) return;
     setToast({ message: adminCopy.pending.notListed, tone: "error" });

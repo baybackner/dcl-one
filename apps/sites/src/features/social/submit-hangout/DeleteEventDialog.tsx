@@ -6,14 +6,14 @@ import { useEffect, useId, useRef, type MouseEvent } from "react";
 
 import styles from "./DeleteEventDialog.module.css";
 
+/** Why the last delete did not happen: the request failed, or the signed-in account is no longer the editor's. */
+export type DeleteEventError = "failed" | "session";
+
 /**
  * Confirms deleting an event; it cannot be dismissed while the delete is in flight. Its buttons are
  * disabled meanwhile, so focus waits on the dialog itself instead of falling to the page, and a failed
  * delete hands it back to the Delete button for the retry.
  */
-/** Why the last delete did not happen: the request failed, or the signed-in account is no longer the editor's. */
-export type DeleteEventError = "failed" | "session";
-
 export default function DeleteEventDialog({ busy, error, onCancel, onConfirm }: {
   busy: boolean;
   error: DeleteEventError | null;

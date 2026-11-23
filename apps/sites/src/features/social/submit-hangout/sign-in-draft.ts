@@ -3,11 +3,9 @@ import { z } from "zod";
 
 import type { HangoutDraft } from "@/data/lib/catalyst/landings/submit-hangout";
 import { onBeforeBrowserSignIn } from "../../components/auth/signin-store";
+import { signInDraftStore } from "../../components/auth/sign-in-draft-store";
 
-const KEY = "dcl:hangout:sign-in-draft:v1";
-const MAX_AGE_MS = 30 * 60 * 1000;
-
-const Draft = z.object({
+const Draft = z.strictObject({
   name: z.string(),
   description: z.string(),
   startDate: z.string(),
@@ -31,50 +29,57 @@ const Draft = z.object({
   featuredItem: z.string().optional(),
 }) satisfies z.ZodType<HangoutDraft>;
 
-const Stored = z.object({ draft: Draft, returnTo: z.string(), expiresAt: z.number() });
+// A field added to HangoutDraft and not to Draft fails here, instead of being dropped from a kept draft.
+type Unkept = Exclude<keyof HangoutDraft, keyof z.infer<typeof Draft>>;
+const everyFieldKept: [Unkept] extends [never] ? true : Unkept = true;
+void everyFieldKept;
 
-/** Keeps the editor's draft for this tab across the sign-in page, which leaves the app. */
-export function saveHangoutSignInDraft(returnTo: string, draft: HangoutDraft): boolean {
-  try {
-    sessionStorage.setItem(KEY, JSON.stringify({ draft, returnTo, expiresAt: Date.now() + MAX_AGE_MS }));
-    return true;
-  } catch {
-    return false;
-  }
-}
+/** The draft and the account it was written for: only that account gets it back. */
+const Kept = z.object({ account: z.string(), draft: Draft });
+export type KeptHangoutDraft = z.infer<typeof Kept>;
 
-/** The draft saved for this same editor URL, removed once read; an expired or unreadable one is dropped. */
-export function takeHangoutSignInDraft(returnTo: string): HangoutDraft | null {
-  try {
-    const value = sessionStorage.getItem(KEY);
-    if (value === null) return null;
-    const result = Stored.safeParse(JSON.parse(value));
-    if (!result.success || result.data.expiresAt <= Date.now()) {
-      sessionStorage.removeItem(KEY);
-      return null;
-    }
-    if (result.data.returnTo !== returnTo) return null;
-    sessionStorage.removeItem(KEY);
-    return result.data.draft;
-  } catch {
-    return null;
-  }
-}
+const store = signInDraftStore("dcl:hangout:sign-in-draft:v2", Kept, 30 * 60 * 1000);
+
+export const saveHangoutSignInDraft = (returnTo: string, kept: KeptHangoutDraft): boolean => store.save(returnTo, kept);
+export const takeHangoutSignInDraft = (returnTo: string): KeptHangoutDraft | null => store.take(returnTo);
 
 /**
- * The editor's draft across a browser sign-in: `remember` follows the draft on screen, which is saved when
- * sign-in leaves for this editor's URL, and `restored` is the draft saved for it, read once back here.
+ * The editor's draft across a browser sign-in. `remember` follows the draft on screen; when sign-in leaves
+ * for this editor's URL, a draft that differs from `initial` is saved for `account`. Storage that refuses
+ * the save stops that first sign-in and sets `saveFailed`, so the writer can copy the text; the next sign-in
+ * goes ahead. `restored` is the draft kept for this URL, offered only while `account` is the one that wrote it.
  */
-export function useHangoutSignInDraft(returnTo: string) {
-  const [restored, setRestored] = useState<HangoutDraft | null>(null);
+export function useHangoutSignInDraft(returnTo: string, account: string | null, initial: HangoutDraft) {
+  const [kept, setKept] = useState<KeptHangoutDraft | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
   const latest = useRef<HangoutDraft | null>(null);
+  const initialRef = useRef(initial);
+  const accountRef = useRef(account);
+  const warned = useRef(false);
+  useEffect(() => {
+    initialRef.current = initial;
+    accountRef.current = account;
+  });
   useEffect(() => {
     const found = takeHangoutSignInDraft(returnTo);
-    if (found) setRestored(found);
+    if (found) setKept(found);
   }, [returnTo]);
+  // Another account signing in drops the kept draft for good, so it never comes back to anyone.
+  useEffect(() => {
+    if (kept && account && account !== kept.account) setKept(null);
+  }, [account, kept]);
   useEffect(() => onBeforeBrowserSignIn((destination) => {
-    if (destination === returnTo && latest.current) saveHangoutSignInDraft(returnTo, latest.current);
+    const draft = latest.current;
+    const owner = accountRef.current;
+    if (destination !== returnTo || !draft || !owner) return;
+    if (JSON.stringify(draft) === JSON.stringify(initialRef.current)) return;
+    if (saveHangoutSignInDraft(returnTo, { account: owner, draft })) return;
+    if (warned.current) return;
+    warned.current = true;
+    setSaveFailed(true);
+    return false;
   }), [returnTo]);
   const remember = useCallback((draft: HangoutDraft) => { latest.current = draft; }, []);
-  return { restored, remember };
+  const restored = kept && kept.account === account ? kept.draft : null;
+  return { restored, remember, saveFailed };
 }

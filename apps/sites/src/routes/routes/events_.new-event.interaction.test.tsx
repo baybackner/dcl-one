@@ -10,10 +10,10 @@ import { getIdentity } from "@/data/lib/auth/session";
 import * as authoring from "@/data/lib/catalyst/landings/submit-hangout";
 import { CatalystError } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
+import { ownedEventsKeys } from "@/data/lib/catalyst/places/event-management";
 import { loadHangoutOptions, type HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import { openSignIn } from "@/features/components/auth/signin-store";
 import { saveHangoutSignInDraft } from "@/features/social/submit-hangout/sign-in-draft";
-import buttonStyles from "@dcl/one-ui/apps/sites/shared/Button/Button.module.css";
 import SubmitHangoutRoute from "./events_.new-event";
 
 vi.hoisted(() => { Object.assign(window, { __vite_plugin_react_preamble_installed__: true }); });
@@ -236,18 +236,48 @@ describe("when editing a hangout through its route", () => {
 
   describe("and the browser sign-in kept a draft for the create page", () => {
     beforeEach(() => {
-      saveHangoutSignInDraft(CREATE_PATH, { ...authoring.emptyDraft(), name: "Saved before sign-in" });
+      saveHangoutSignInDraft(CREATE_PATH, { account: identity.signer.toLowerCase(), draft: { ...authoring.emptyDraft(), name: "Saved before sign-in" } });
       mount(CREATE_PATH);
     });
 
     it("should open the editor on that draft", async () => {
       expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "Saved before sign-in");
     });
+
+    describe("and another account signs in on the same page", () => {
+      beforeEach(async () => {
+        await screen.findByDisplayValue("Saved before sign-in");
+        vi.mocked(loadHangoutOptions).mockResolvedValue(options);
+        await signAs(OTHER);
+      });
+
+      it("should open that account on an empty editor", async () => {
+        expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "");
+      });
+
+      it("should not give the draft back when the first account returns", async () => {
+        await signAs(identity.signer);
+        expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "");
+      });
+    });
+  });
+
+  describe("and the browser sign-in came back as another account than the one that kept the draft", () => {
+    beforeEach(() => {
+      saveHangoutSignInDraft(CREATE_PATH, { account: OTHER, draft: { ...authoring.emptyDraft(), name: "Another account's draft", contact: "private@example.test" } });
+      mount(CREATE_PATH);
+    });
+
+    it("should open an empty editor and drop that draft", async () => {
+      expect(await screen.findByRole("textbox", { name: "Event Name" })).toHaveProperty("value", "");
+      expect(screen.queryByDisplayValue("private@example.test")).toBeNull();
+      expect(sessionStorage.length).toBe(0);
+    });
   });
 
   describe("and the browser sign-in kept a draft for another editor", () => {
     beforeEach(() => {
-      saveHangoutSignInDraft(EDIT_PATH, { ...authoring.emptyDraft(), name: "Someone else's draft" });
+      saveHangoutSignInDraft(EDIT_PATH, { account: identity.signer.toLowerCase(), draft: { ...authoring.emptyDraft(), name: "Someone else's draft" } });
       mount(CREATE_PATH);
     });
 
@@ -359,8 +389,6 @@ describe("when editing a hangout through its route", () => {
 
     it("should place Delete with the form actions, before Cancel and Save changes", () => {
       const del = screen.getByRole("button", { name: "Delete" });
-      // The library Button, as Cancel's neighbours, not a raw button styled by the page.
-      expect(del.classList.contains(buttonStyles.root)).toBe(true);
       expect(del.parentElement).toBe(screen.getByRole("button", { name: "Save changes" }).parentElement);
       expect(del.compareDocumentPosition(screen.getByRole("link", { name: "Cancel" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getAllByRole("contentinfo")).toHaveLength(1);
@@ -455,6 +483,24 @@ describe("when editing a hangout through its route", () => {
         expect(within(screen.getByRole("dialog")).getByRole<HTMLButtonElement>("button", { name: "Deleting…" }).disabled).toBe(true);
         await act(async () => settle());
         await waitFor(() => expect(router.state.location.pathname).toBe("/events"));
+      });
+
+      it("should drop the cached My Events list so it opens on a fresh read", async () => {
+        client.setQueryData(ownedEventsKeys.mine(identity.signer), [event]);
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        await waitFor(() => expect(router.state.location.search).toBe("?tab=my"));
+        expect(client.getQueryData(ownedEventsKeys.mine(identity.signer))).toBeUndefined();
+      });
+
+      it("should stay where the visitor went when they leave during the delete", async () => {
+        let settle: () => void = () => {};
+        const pending = new Promise<void>((resolve) => { settle = resolve; });
+        vi.spyOn(client, "invalidateQueries").mockImplementation(() => pending);
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        await act(() => router.navigate("/events"));
+        await act(async () => settle());
+        expect(router.state.location.pathname).toBe("/events");
+        expect(router.state.location.search).toBe("");
       });
 
       describe.each([

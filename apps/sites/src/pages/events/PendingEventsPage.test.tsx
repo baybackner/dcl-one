@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { CatalystError, postJSON, signedGetJSON } from "@/data/lib/catalyst/client";
 import { eventsPageKeys } from "@/data/lib/catalyst/places/events-page";
+import { eventAdminKeys } from "@/data/lib/catalyst/places/event-management";
+import { QueryClient } from "@tanstack/react-query";
 import { openSignIn } from "@/features/components/auth/signin-store";
 import { CREATOR, currentPath, fakeEventsApi, makeEvent, makeIdentity, MODERATOR, readsOf, renderAdminPage, type FakeEventsApi } from "@/features/explorer/event-management/admin.test-utils";
 import PendingEventsPage from "./PendingEventsPage";
@@ -266,6 +268,37 @@ describe("when opening the Pending Events page", () => {
       expect(await screen.findByText("That event is no longer waiting for review.")).toBeTruthy();
       await waitFor(() => expect(currentPath()).toBe(`${PATH}?from=email`));
       expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("and a deep link names an event newer than the cached queue", () => {
+    let client: QueryClient;
+    beforeEach(() => {
+      client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      // A queue read moments ago, before "Moon concert" was submitted, and still fresh.
+      client.setQueryData(eventAdminKeys.queue(MODERATOR), { events: [], recentlyApproved: [], hasMore: false });
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=pending-one`, { client });
+    });
+
+    it("should read the queue again and open the event instead of calling it gone", async () => {
+      expect(await screen.findByRole("dialog", { name: "Moon concert" })).toBeTruthy();
+      expect(currentPath()).toBe(`${PATH}?id=pending-one`);
+      expect(screen.queryByText("That event is no longer waiting for review.")).toBeNull();
+      expect(readsOf(EVENTS)).toBe(1);
+    });
+  });
+
+  describe("and a deep link names an event neither the cached nor the fresh queue holds", () => {
+    beforeEach(() => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      client.setQueryData(eventAdminKeys.queue(MODERATOR), { events: [], recentlyApproved: [], hasMore: false });
+      renderAdminPage(<PendingEventsPage />, `${PATH}?id=handled-elsewhere`, { client });
+    });
+
+    it("should say so after the fresh read and drop the id", async () => {
+      expect(await screen.findByText("That event is no longer waiting for review.")).toBeTruthy();
+      await waitFor(() => expect(currentPath()).toBe(PATH));
+      expect(readsOf(EVENTS)).toBe(1);
     });
   });
 

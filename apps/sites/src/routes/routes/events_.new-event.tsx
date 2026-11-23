@@ -5,9 +5,11 @@ import { useEventsCopy } from "@dcl/one-ui/apps/sites/events/locale";
 import { rejectedNotice } from "@/features/social/submit-hangout/review-notice";
 import { EventsLocaleProvider, useEventsFooterCopy } from "@/features/events/locale";
 import { SubmitHangoutView as LdSubmitHangoutView } from "@dcl/one-ui/apps/sites/events/SubmitHangoutView";
+import { Notice } from "@dcl/one-ui/apps/sites/events/Notice";
 
 import { fetchEventCategories, type EventCategory } from "@/data/lib/catalyst/places/events";
 import { invalidateEventsAfterWrite } from "@/data/lib/catalyst/places/events-page";
+import { ownedEventsKeys } from "@/data/lib/catalyst/places/event-management";
 import { buildHangoutSubmit, deleteHangout, emptyDraft, eventToDraft, loadEditableHangout, uploadHangoutPoster, type EditableHangout } from "@/data/lib/catalyst/landings/submit-hangout";
 import { loadHangoutOptions, type HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import { useAuth } from "@/data/lib/auth/context";
@@ -130,7 +132,12 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
   const account = auth.address?.toLowerCase() ?? editorAccount;
   const held = !auth.isConnected && editorAccount !== null;
   const returnTo = location.pathname + location.search + location.hash;
-  const signInDraft = useHangoutSignInDraft(returnTo);
+  const mounted = useRef(true);
+  useEffect(() => {
+    // StrictMode runs this setup again after a cleanup, so the flag is restored here, not only at creation.
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   useEffect(() => {
     if (!auth.identity) return;
     const controller = new AbortController();
@@ -158,6 +165,8 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
   }, [d.mode, d.eventId, auth.identity, attempt]);
   const current = loaded?.account.toLowerCase() === account && loaded?.id === d.eventId ? loaded : null;
   const original = current?.event;
+  const baseDraft = original ? eventToDraft(original) : { ...emptyDraft(), communityId: d.communityId };
+  const signInDraft = useHangoutSignInDraft(returnTo, account, baseDraft);
   const owner = Boolean(original && account && original.user?.toLowerCase() === account);
   const canEditAny = options?.profile?.permissions.includes("edit_any_event") ?? false;
   const canEdit = d.mode === "create" || Boolean(original && (owner || canEditAny));
@@ -205,8 +214,11 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
       setDeleting(false);
       return;
     }
-    // My Events opens on the refreshed list, not on a cached one that still holds the deleted event.
+    // My Events opens on a fresh read, never on a cached list that still holds the deleted event: it is
+    // not mounted here, so an invalidation alone would only mark it stale.
+    if (account) queryClient.removeQueries({ queryKey: ownedEventsKeys.mine(account) });
     await invalidateEventsAfterWrite(queryClient);
+    if (!mounted.current) return;
     setDeleting(false);
     setConfirmingDelete(false);
     void navigate("/events?tab=my");
@@ -217,6 +229,7 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
   return (
     <SitesLayoutMaybe active="whatson" headerSurface={inline ? "overlay" : "solid"} overlayNav={inline} footerCopy={footerCopy}>
     <LdSubmitHangoutView>
+      {signInDraft.saveFailed && <Notice tone="error">{text("Your browser couldn't keep your draft for sign-in. Copy what you wrote, then choose Sign In again to continue without it.")}</Notice>}
       {/* Signed out (and on the server, which renders anonymously) the page only waits: sign-in opens on its own. */}
       {(signedOut && !held) || (d.mode === "edit" && !editReady) ? <SubmitHangoutLoading
         mode={d.mode}
@@ -239,7 +252,7 @@ function SubmitHangoutForm({ loaderData }: Route.ComponentProps) {
         categories={d.categories}
         categoriesError={d.categoriesError}
         mode={d.mode}
-        draft={signInDraft.restored ?? (original ? eventToDraft(original) : { ...emptyDraft(), communityId: d.communityId })}
+        draft={signInDraft.restored ?? baseDraft}
         onDraftChange={signInDraft.remember}
         originalSchedule={original}
         submit={async (input) => {
