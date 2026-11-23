@@ -24,6 +24,7 @@ function PanelTabs({ id, variant, device }: (typeof panels)[number]) {
           onClick={() => setSelected(index)}
         />
       ))}
+      <Tabs label="Disabled" variant={variant} device={device} disabled />
     </div>
   )
 }

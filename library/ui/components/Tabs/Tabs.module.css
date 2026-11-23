@@ -120,7 +120,7 @@
         color 150ms ease;
     }
 
-    .pill:hover {
+    .pill:hover:not(:disabled, [aria-disabled='true']) {
       transform: scale(1.06);
     }
 
@@ -141,17 +141,22 @@
     }
   }
 
-  /* Forced colours drop background images, so the tab opts out and paints its label and bar in system colours. */
+  /* Forced colours drop background images, so a separate bar draws the selection; only it opts out, the label
+     keeps the system colours. */
   @media (forced-colors: active) {
-    .underline,
     .underline[aria-selected='true'] {
-      --tab-bar: Highlight;
-      forced-color-adjust: none;
-      color: CanvasText;
+      position: relative;
     }
 
-    .underline:focus-visible {
-      outline-color: CanvasText;
+    .underline[aria-selected='true']::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      height: 4px;
+      background-color: Highlight;
+      forced-color-adjust: none;
     }
   }
 }
@@ -305,14 +310,14 @@
       transform: none;
     }
   }
-  /* As the panel underline: forced colours would drop both bars. After the hover and phone rules it replaces. */
+  /* Forced colours drop both background bars and the pseudo-elements reserve the label widths, so the current
+     route takes a Highlight border; every route reserves it, so selection does not move the label. */
   @media (forced-colors: active) {
-    .routeRoot,
-    .routeRoot:hover,
+    .routeRoot {
+      border-bottom: 4px solid transparent;
+    }
     .routeRoot[aria-current='page'] {
-      --tab-bar: Highlight;
-      forced-color-adjust: none;
-      color: CanvasText;
+      border-bottom-color: Highlight;
     }
   }
 }

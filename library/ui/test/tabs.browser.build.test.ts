@@ -230,15 +230,73 @@ describe('when a tab is selected', () => {
     await media([])
   })
 
-  it('should draw the selected bar in the system highlight when colours are forced', async () => {
-    await media([{ name: 'forced-colors', value: 'active' }])
+  it('should not scale a disabled pill on hover', async () => {
+    await media([{ name: 'prefers-reduced-motion', value: 'no-preference' }])
     await ready(1440)
-    const highlight = await evaluate<string>(
-      `(()=>{const p=document.createElement('span');p.style.forcedColorAdjust='none';p.style.color='Highlight';document.body.append(p);const c=getComputedStyle(p).color;p.remove();return c})()`
-    )
-    const [, selected] = await bars('#underline [role=tab]')
-    expect(selected!.image).toBe(`linear-gradient(${highlight}, ${highlight})`)
-    expect((await bars('#tabs a'))[1]!.image).toBe(`linear-gradient(${highlight}, ${highlight})`)
-    await media([])
+    const hover = async (selector: string) => {
+      await browser.session.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        ...(await evaluate<{ x: number; y: number }>(
+          `(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`
+        ))
+      })
+      await settled()
+      return evaluate<string>(
+        `getComputedStyle(document.querySelector(${JSON.stringify(selector)})).transform`
+      )
+    }
+    expect(await hover('#pill [role=tab]:nth-child(2)')).not.toBe('none')
+    expect(await hover('#pill [role=tab]:disabled')).toBe('none')
+  })
+
+  describe('and colours are forced', () => {
+    type Forced = {
+      system: Record<'Highlight' | 'GrayText' | 'LinkText', string>
+      panels: {
+        width: number
+        bar: { width: number; height: string; color: string; bottom: string }
+      }[]
+      disabled: string[]
+      route: {
+        width: number
+        border: string
+        borderColor: string
+        idle: string
+        idleBorder: string
+      }
+    }
+    const read = () =>
+      evaluate<Forced>(`(()=>{
+        const probe=document.createElement('span');probe.style.forcedColorAdjust='none';document.body.append(probe)
+        const system=Object.fromEntries(['Highlight','GrayText','LinkText'].map(n=>{probe.style.color=n;return[n,getComputedStyle(probe).color]}))
+        probe.remove()
+        const panels=['underline','mobile','compact'].map(id=>{
+          const tab=document.querySelector('#'+id+' [aria-selected=true]'),bar=getComputedStyle(tab,'::after')
+          return{width:tab.getBoundingClientRect().width,bar:{width:parseFloat(bar.width),height:bar.height,color:bar.backgroundColor,bottom:bar.bottom}}
+        })
+        const disabled=['underline','pill'].map(id=>getComputedStyle(document.querySelector('#'+id+' [role=tab]:disabled')).color)
+        const [idle,current]=[...document.querySelectorAll('#tabs a')].map(e=>getComputedStyle(e))
+        const link=document.querySelector('#tabs a[aria-current=page]')
+        return{system,panels,disabled,route:{width:link.getBoundingClientRect().width,border:current.borderBottomWidth,borderColor:current.borderBottomColor,idle:idle.color,idleBorder:idle.borderBottomWidth}}
+      })()`)
+
+    it('should draw the selection in Highlight and keep the system colours of the tabs', async () => {
+      await media([{ name: 'forced-colors', value: 'active' }])
+      await ready(1440)
+      const { system, panels, disabled, route } = await read()
+      expect(system.Highlight).not.toBe(system.GrayText)
+      for (const { width, bar } of panels) {
+        expect(bar.width).toBeCloseTo(width, 3)
+        expect(bar).toMatchObject({ height: '4px', color: system.Highlight, bottom: '0px' })
+      }
+      expect(disabled).toEqual([system.GrayText, system.GrayText])
+      expect(route).toMatchObject({
+        border: '4px',
+        borderColor: system.Highlight,
+        idle: system.LinkText,
+        idleBorder: '4px'
+      })
+      await media([])
+    })
   })
 })
