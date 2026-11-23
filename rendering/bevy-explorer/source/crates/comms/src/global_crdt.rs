@@ -656,8 +656,8 @@ pub struct PlayerPositionEvent {
     /// `None` means no movement-state indicator — the velocity fallback picks. Drives `jump_time`
     /// (Jump) and the matching emote (DoubleJump / Glide) on foreign avatars.
     pub remote_move_kind: Option<MoveKind>,
-    /// This update is a discontinuous reposition (a Pulse `TeleportPerformed`), so `foreign_dynamics`
-    /// snaps straight to it instead of interpolating across the gap.
+    /// This update is a discontinuous reposition, such as a Pulse `TeleportPerformed` or the
+    /// first snapshot for a newly observed join. The avatar snaps to this position.
     pub teleport: bool,
     /// Per-axis ± box the true position lies within (the position quantization half-step). `ZERO`
     /// for precise sources (LiveKit, full-state snapshots); set only by the Pulse delta receiver,
@@ -927,6 +927,14 @@ pub fn process_transport_updates(
                         if let Some((entity, scene_id, channel)) =
                             created_this_frame.get(&update.address)
                         {
+                            // The spawn is queued, so register later arrivals on this entity in
+                            // the command queue alongside any departures in this same batch.
+                            let transport_id = update.transport_id;
+                            commands.entity(*entity).modify_component(
+                                move |foreign_player: &mut ForeignPlayer| {
+                                    foreign_player.transports.insert(transport_id);
+                                },
+                            );
                             (*entity, *scene_id, channel.clone())
                         } else if let Some(existing) = state.lookup.get_by_left(&update.address) {
                             let mut foreign_player = players.get_mut(*existing).unwrap();
