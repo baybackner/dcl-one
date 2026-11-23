@@ -357,6 +357,7 @@ Treat configuration as part of the migration contract. The source layers JSON, e
 | `Peers:MaxWorkerThreads` | No current worker-count environment setting | Introduce/document it with sharding, preserving zero/nonpositive as automatic selection. |
 | `Peers:SnapshotHistoryCapacity` | `DEFAULT_RING_CAPACITY` in `server` | Source class defaults to 10 but checked-in JSON sets 20; Rust uses the effective value 20. Preserve event fallback when the exact history target is no longer retained. |
 | `Peers:SimulationSteps` | `DEFAULT_SIMULATION_STEPS` and the process tick interval | Verify both pacing and tier divisors; matching the array alone does not establish matching missed-tick behavior. |
+| `Transport:PeerTimeoutMs` | Fixed at 5000 ms for every connected ENet peer | Both server-side ENet timeout bounds are five seconds. The client controls its own loss detection. |
 | `Transport:MaxPeers` | Separate `ENET_CAPACITY` and `WT_CAPACITY` ranges | Source shares a 4095-slot pool; current Rust allocates ranges of 4095 and 4096. Resolve total capacity and allocation semantics explicitly when adding logical slots. |
 | `SpatialHashAreaOfInterest` radii, `SceneListener:MaxParcels` | `PULSE_AOI_*`, `PULSE_SCENE_LISTENER_MAX_PARCELS` | Verify units, allowed ranges and listener exemptions. |
 | `Clusters:*`, `Nats:*` | `PULSE_CLUSTERS_*`, `PULSE_NATS_*` | Translate cadence, debounce, prefix and outbox capacity. Preserve the retained recovery bounds and internal lookup/completion contract; an outbox limit cannot discard unfinished cleanup. |
