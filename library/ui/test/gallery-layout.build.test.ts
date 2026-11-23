@@ -50,6 +50,13 @@ const offscreen = (overflow: string) =>
 const canvases: Record<string, string> = {
   'window-offscreen-spill': offscreen('overflow-x:clip;overflow-y:visible'),
   'window-offscreen-clipped': offscreen('overflow:hidden'),
+  // Covers the component positions, 60px taller than their 200x100 slot.
+  'absolute-cover-spill': stage(
+    `<div style="position:relative;width:200px;height:100px"><img src="${PIXEL}" width="200" height="160" alt="" style="position:absolute;top:0;left:0"></div>`
+  ),
+  'fixed-cover-spill': stage(
+    `<div style="width:200px;height:100px"><img src="${PIXEL}" width="200" height="160" alt="" style="position:fixed;top:0;left:0"></div>`
+  ),
   // A 14px badge the button positions 3px over its corner, as the HUD IconButton's corner art.
   'positioned-corner-badge': stage(
     `<button style="position:relative;width:42px;height:42px;padding:0;border:0"><img src="${PIXEL}" width="14" height="14" alt="" style="position:absolute;top:-3px;right:-3px"></button>`
@@ -138,6 +145,15 @@ describe('when the gallery check measures a canvas', () => {
   it('should pass the same window when the picture below stays in its slot', async () => {
     await expect(layoutOf('window-offscreen-clipped')).resolves.toBeUndefined()
   })
+
+  it.each(['absolute', 'fixed'])(
+    'should fail a cover with position %s that paints 60px past its slot',
+    async (position) => {
+      await expect(layoutOf(`${position}-cover-spill`)).rejects.toThrow(
+        /a picture paints 200x160 outside its 200x100 div/
+      )
+    }
+  )
 
   it('should pass a picture the component positions over the edge of its holder', async () => {
     await expect(layoutOf('positioned-corner-badge')).resolves.toBeUndefined()

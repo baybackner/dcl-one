@@ -145,12 +145,15 @@ const EXAMPLES = `(() => {
   }))
 })()`
 
+// How far, in CSS pixels, a picture the component positions may overhang its slot.
+const POSITIONED_OVERHANG = 4
+
 // What breaks an example's layout in a canvas document, as a list of problems (empty when none), or null while a
 // picture or a web font is still loading. An example must fit the viewport (no page wider than it), every picture
-// must load, a picture that flows in its slot must paint inside it (a cover larger than its slot spills over the text
-// beside it), and no line of in-flow text may cover another one. A picture or text the component positions itself
-// (a badge, a toast, an overlay), hides for assistive technology or clips by design (ellipsis, line clamp, scroller)
-// is placed on purpose.
+// must load and paint inside its slot (a cover larger than its slot spills over the text beside it; a picture the
+// component positions may overhang it by POSITIONED_OVERHANG), and no line of in-flow text may cover another one.
+// Text the component positions itself (a badge, a toast, an overlay), hides for assistive technology or clips by
+// design (ellipsis, line clamp, scroller) is placed on purpose.
 const LAYOUT = `(() => {
   const doc = ${CANVAS}
   const view = doc?.defaultView
@@ -209,12 +212,16 @@ const LAYOUT = `(() => {
   for (const stage of doc.querySelectorAll('[data-stage]')) {
     for (const media of stage.querySelectorAll('img, video')) {
       const holder = media.parentElement
-      // A picture the component positions itself (a corner badge set over the edge of its button) is placed on
-      // purpose, as positioned text is; the rule is for pictures that flow in their slot.
-      if (!shown(media) || holder === stage || ['absolute', 'fixed'].includes(view.getComputedStyle(media).position)) continue
-      const box = painted(media.parentElement, media.getBoundingClientRect(), view.getComputedStyle(media).position)
+      if (!shown(media) || holder === stage) continue
+      const position = view.getComputedStyle(media).position
+      const box = painted(media.parentElement, media.getBoundingClientRect(), position)
       const slot = holder.getBoundingClientRect()
-      if (box.width > 1 && box.height > 1 && (box.left < slot.left - 1 || box.right > slot.right + 1 || box.top < slot.top - 1 || box.bottom > slot.bottom + 1))
+      // A picture the component positions may overhang its slot by a few pixels: a corner badge set over the edge of
+      // its button (the HUD IconButton's corner art, 3px). A measured bound, not a list of components, so a new badge
+      // needs no entry and a positioned cover that escapes its slot still fails.
+      const allowed = ['absolute', 'fixed'].includes(position) ? ${POSITIONED_OVERHANG} : 1
+      const overhang = Math.max(slot.left - box.left, box.right - slot.right, slot.top - box.top, box.bottom - slot.bottom)
+      if (box.width > 1 && box.height > 1 && overhang > allowed)
         problems.push(where(media) + ': a picture paints ' + Math.round(box.width) + 'x' + Math.round(box.height) + ' outside its ' + Math.round(slot.width) + 'x' + Math.round(slot.height) + ' ' + name(holder))
     }
     const lines = []
