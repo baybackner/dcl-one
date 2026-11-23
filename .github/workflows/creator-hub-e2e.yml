@@ -8,6 +8,16 @@ on:
         required: false
       E2E_LAND:
         required: false
+    inputs:
+      inspector:
+        type: boolean
+        default: true
+      inspector-specs:
+        type: string
+        default: ''
+      creator-hub-offline:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -28,6 +38,8 @@ jobs:
   # runner has 4 vCPU/16GB against macOS arm64's 3 vCPU/7GB at a tenth the
   # billed minutes. Only e2e-creator-hub needs darwin, to package the .app.
   e2e-inspector:
+    if: inputs.inspector
+    timeout-minutes: 30
     # Not ubuntu-latest: Playwright 1.60 had no Chromium build for Ubuntu 26.04. The suite now runs 1.62,
     # so this can move to ubuntu-latest once a run there is green.
     runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04 || 'ubuntu-24.04' }}
@@ -79,8 +91,9 @@ jobs:
 
       - name: e2e
         timeout-minutes: 20
-        run: make test-inspector-e2e
+        run: make test-inspector-e2e E2E_SPECS="$SPECS"
         env:
+          SPECS: ${{ inputs.inspector-specs }}
           NODE_OPTIONS: "--max-old-space-size=8192"
           E2E_CONTENT_URL: https://builder-items.decentraland.zone
 
@@ -97,6 +110,8 @@ jobs:
   # Cold-launches the real Electron app via Playwright _electron (drives the
   # app's own Chromium — no browser download); runs the prebuilt dist.
   e2e-creator-hub:
+    if: inputs.creator-hub-offline
+    timeout-minutes: 30
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
