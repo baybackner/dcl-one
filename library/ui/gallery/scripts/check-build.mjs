@@ -146,7 +146,7 @@ const EXAMPLES = `(() => {
 })()`
 
 // What breaks an example's layout in a canvas document, as a list of problems (empty when none), or null while a
-// picture is still loading. An example must fit the viewport (no page wider than it), every picture must load and
+// picture or a web font is still loading. An example must fit the viewport (no page wider than it), every picture must load and
 // paint inside the box that holds it (a cover larger than its slot spills over the text beside it), and no line of
 // in-flow text may cover another one. Text a component hides for assistive technology, clips by design (ellipsis,
 // line clamp, scroller) or lays over the card on purpose (a badge, a toast, an overlay: positioned boxes) is not
@@ -159,6 +159,10 @@ const LAYOUT = `(() => {
   // now, and the check waits (within waitFor's bound) until each has loaded or failed.
   for (const image of doc.images) if (image.loading === 'lazy') image.loading = 'eager'
   if ([...doc.images].some((image) => image.getAttribute('src') && !image.complete)) return null
+  // Layout first: it is what starts a web font's load. A measure taken in the fallback font passes a page that
+  // overlaps once the font arrives, so the page is measured only when no font is loading, before and after.
+  void doc.body.offsetHeight
+  if (doc.fonts.status !== 'loaded') return null
   const problems = []
   const where = (node) => (node.closest('[data-example]')?.dataset.example ?? '-')
   const name = (node) => node.tagName.toLowerCase() + (typeof node.className === 'string' && node.className ? '.' + node.className.split(' ')[0] : '')
@@ -174,14 +178,26 @@ const LAYOUT = `(() => {
     }
     return true
   }
-  // The part of a box its clipping ancestors let paint.
-  const painted = (node, box) => {
+  // The part of a box that paints: only the ancestors that clip it cut it, each on the axes it clips. Overflow other
+  // than visible clips its own axis (clip, hidden, auto, scroll; a visible beside a non-clip value computes to auto),
+  // paint containment clips both, and a positioned box escapes every ancestor up to its containing block.
+  const containsPaint = (style) => /paint|strict|content/.test(style.contain)
+  const contains = (style, position) =>
+    position === 'fixed'
+      ? style.transform !== 'none' || style.filter !== 'none' || style.perspective !== 'none' || /paint|layout|strict|content/.test(style.contain)
+      : style.position !== 'static' || style.transform !== 'none' || style.filter !== 'none' || /paint|layout|strict|content/.test(style.contain)
+  const painted = (start, box, position) => {
     let out = { left: box.left, right: box.right, top: box.top, bottom: box.bottom }
-    for (let at = node.parentElement; at && at !== doc.body; at = at.parentElement) {
+    for (let at = start; at && at !== doc.documentElement; at = at.parentElement) {
       const style = view.getComputedStyle(at)
-      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue
+      if (position === 'absolute' || position === 'fixed') {
+        if (!contains(style, position)) continue
+      }
+      position = style.position
       const clip = at.getBoundingClientRect()
-      out = { left: Math.max(out.left, clip.left), right: Math.min(out.right, clip.right), top: Math.max(out.top, clip.top), bottom: Math.min(out.bottom, clip.bottom) }
+      const paint = containsPaint(style)
+      if (paint || style.overflowX !== 'visible') out = { ...out, left: Math.max(out.left, clip.left), right: Math.min(out.right, clip.right) }
+      if (paint || style.overflowY !== 'visible') out = { ...out, top: Math.max(out.top, clip.top), bottom: Math.min(out.bottom, clip.bottom) }
     }
     return { ...out, width: Math.max(0, out.right - out.left), height: Math.max(0, out.bottom - out.top) }
   }
@@ -194,7 +210,7 @@ const LAYOUT = `(() => {
     for (const media of stage.querySelectorAll('img, video')) {
       const holder = media.parentElement
       if (!shown(media) || holder === stage) continue
-      const box = painted(media, media.getBoundingClientRect())
+      const box = painted(media.parentElement, media.getBoundingClientRect(), view.getComputedStyle(media).position)
       const slot = holder.getBoundingClientRect()
       if (box.width > 1 && box.height > 1 && (box.left < slot.left - 1 || box.right > slot.right + 1 || box.top < slot.top - 1 || box.bottom > slot.bottom + 1))
         problems.push(where(media) + ': a picture paints ' + Math.round(box.width) + 'x' + Math.round(box.height) + ' outside its ' + Math.round(slot.width) + 'x' + Math.round(slot.height) + ' ' + name(holder))
@@ -207,7 +223,7 @@ const LAYOUT = `(() => {
       const range = doc.createRange()
       range.selectNodeContents(text)
       for (const line of range.getClientRects()) {
-        const box = painted(text, line)
+        const box = painted(owner, line, 'static')
         if (box.width > 1 && box.height > 1) lines.push({ owner, box, text: text.textContent.trim().slice(0, 30) })
       }
     }
@@ -221,12 +237,13 @@ const LAYOUT = `(() => {
           problems.push(where(a.owner) + ': "' + a.text + '" overlaps "' + b.text + '"')
       }
   }
+  if (doc.fonts.status !== 'loaded') return null
   return [...new Set(problems)]
 })()`
 
-/** Waits for the canvas's pictures, then throws naming every layout problem LAYOUT finds on a page. */
+/** Waits for the canvas's pictures and fonts, then throws naming every layout problem LAYOUT finds on a page. */
 async function checkLayout(session, page) {
-  const problems = await waitFor(session, LAYOUT, `the pictures of ${page}`)
+  const problems = await waitFor(session, LAYOUT, `the pictures and fonts of ${page}`)
   if (problems.length) throw new Error(`${page} breaks its layout: ${problems.join('; ')}`)
 }
 
@@ -519,4 +536,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.exitCode = await main(process.argv.slice(2))
 }
 
-export { checkGallery, main }
+export { checkGallery, checkLayout, main }

@@ -1,0 +1,124 @@
+import { readFile } from 'node:fs/promises'
+import { createServer, type Server } from 'node:http'
+import path from 'node:path'
+import process from 'node:process'
+import { setTimeout as delay } from 'node:timers/promises'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { findBrowser, openSession } from '../figma/review/scripts/capture-browser.mjs'
+import { checkLayout } from '../gallery/scripts/check-build.mjs'
+
+// The gallery build check's layout rule (gallery/scripts/check-build.mjs), run on canvases built to break it the
+// ways a measure can miss: each broken page must fail, and its sound twin must pass, so neither result is vacuous.
+const FONT = path.resolve(
+  import.meta.dirname,
+  '../foundations/typography/fonts/inter-latin-wght-normal.woff2'
+)
+// A 1x1 PNG, drawn at the size its attributes give.
+const PIXEL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+const stage = (body: string, head = '') =>
+  `<!doctype html><html><head><meta charset="utf-8">${head}<style>body{margin:0;font:16px sans-serif}</style></head>` +
+  `<body><section data-example="case"><div data-stage>${body}</div></section></body></html>`
+
+// A picture 30px taller than its 100px holder.
+const spill = (overflow: string) =>
+  stage(
+    `<div style="width:200px;height:100px;${overflow}"><img src="${PIXEL}" width="200" height="130" alt=""></div>`
+  )
+
+// A word in a 100px box beside its neighbour: it fits in the fallback font and, with `scale`, overruns the neighbour
+// once the web font arrives. The word takes the font only after the page has loaded, as a component that renders
+// late does, so the load event does not wait for it, and the server holds the font back: the first measure sees the
+// fallback.
+const lateFont = (scale: string) =>
+  stage(
+    `<div style="display:flex;width:300px"><span id="word" style="flex:none;width:100px;white-space:nowrap">Wide</span><span>Neighbour</span></div>`,
+    `<style>@font-face{font-family:Late;src:url(/late-font.woff2?${scale}) format("woff2");font-display:swap;size-adjust:${scale}}</style>` +
+      `<script>addEventListener('load', () => { document.getElementById('word').style.fontFamily = 'Late, sans-serif' })</script>`
+  )
+
+const canvases: Record<string, string> = {
+  'clip-x-spill': spill('overflow-x:clip;overflow-y:visible'),
+  'clip-both': spill('overflow:clip'),
+  'hidden-both': spill('overflow:hidden'),
+  'paint-contained': spill('contain:paint'),
+  'late-font-overlap': lateFont('400%'),
+  'late-font-fits': lateFont('100%')
+}
+
+let server: Server
+let origin: string
+let session: Awaited<ReturnType<typeof openSession>>
+
+beforeAll(async () => {
+  const font = await readFile(FONT)
+  server = createServer((request, response) => {
+    void (async () => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      if (url.pathname === '/late-font.woff2') {
+        await delay(1500)
+        return void response.writeHead(200, { 'content-type': 'font/woff2' }).end(font)
+      }
+      const [, kind, name] = url.pathname.split('/')
+      const canvas = name ? canvases[name] : undefined
+      if (!canvas) return void response.writeHead(404).end()
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end(
+        kind === 'page'
+          ? `<!doctype html><iframe src="/canvas/${name}" style="width:400px;height:400px;border:0"></iframe>`
+          : canvas
+      )
+    })()
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+  session = await openSession(
+    await findBrowser([
+      process.env.BROWSER_PATH,
+      process.env.CHROME_PATH,
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser'
+    ])
+  )
+}, 30_000)
+
+afterAll(async () => {
+  try {
+    await session?.close()
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+async function layoutOf(name: string) {
+  await session.navigate(`${origin}/page/${name}`)
+  return checkLayout(session, name)
+}
+
+describe('when the gallery check measures a canvas', () => {
+  it('should fail a picture that spills below a holder clipping only its horizontal axis', async () => {
+    await expect(layoutOf('clip-x-spill')).rejects.toThrow(
+      /a picture paints 200x130 outside its 200x100 div/
+    )
+  })
+
+  it.each(['clip-both', 'hidden-both', 'paint-contained'])(
+    'should pass a picture its %s holder clips on both axes',
+    async (name) => {
+      await expect(layoutOf(name)).resolves.toBeUndefined()
+    }
+  )
+
+  it('should measure after a late web font loads and fail the overlap it causes', async () => {
+    await expect(layoutOf('late-font-overlap')).rejects.toThrow(/"Wide" overlaps "Neighbour"/)
+  }, 30_000)
+
+  it('should pass the same page when the late font still fits', async () => {
+    await expect(layoutOf('late-font-fits')).resolves.toBeUndefined()
+  }, 30_000)
+})
