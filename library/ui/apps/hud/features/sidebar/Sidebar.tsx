@@ -187,6 +187,18 @@ export function Sidebar({
     setMapShown(next)
     setPref(PREF.sidebarMap, next ? '1' : '0')
   }
+  // The minimap's own close button, and Cancel (Escape) while the minimap is the only thing open:
+  // the session's panels (Friends, Profile, Notifications, Emotes, Skybox) close first, and the
+  // bar's own popovers register their layers after this one, so they close first too.
+  const hideMap = useCallback(() => {
+    setMapShown(false)
+    setPref(PREF.sidebarMap, '0')
+  }, [])
+  const sessionPanelOpen = session.friends.open || session.profile.open || session.notifications.open || session.emotes.open || session.skybox.open
+  useEffect(() => {
+    if (!mapVisible || sessionPanelOpen) return
+    return registerCancelLayer(hideMap)
+  }, [mapVisible, sessionPanelOpen, hideMap])
   // Games draws attention through this device's first launch, until it is first pressed. The rail
   // remounts after the Places page closes, and reads the kept "seen" again then.
   const [gamesNew, setGamesNew] = useState(() => launchCount() === 1 && getPref(PREF.gamesSeen) !== '1')
@@ -407,7 +419,7 @@ export function Sidebar({
           />
         </div>
       </nav>
-      {mapVisible && <MapPanel minimap={session.minimap} map={session.map} referrer={profile?.address} setEngineViewport={session.setEngineViewport} />}
+      {mapVisible && <MapPanel minimap={session.minimap} map={session.map} referrer={profile?.address} setEngineViewport={session.setEngineViewport} onClose={hideMap} />}
       {panel != null && (
         <PanelHost key={panel.id} anchor={panel.anchor} rise={PANEL_RISE[panel.id]} onClose={closePanel}>
           {panel.id === 'me' && (

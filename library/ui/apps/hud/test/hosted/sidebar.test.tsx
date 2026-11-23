@@ -377,6 +377,54 @@ describe('sidebar map', () => {
     expect(getPref(PREF.sidebarMap)).toBe('0')
   })
 
+  it('the close button, after the three dots, hides the minimap and keeps it hidden', async () => {
+    setPref(PREF.sidebarMap, '1')
+    const first = await renderSettled(<Sidebar session={fakeSession()} />)
+    const buttons = within(map()!).getAllByRole('button').map((b: HTMLElement) => b.getAttribute('aria-label'))
+    expect(buttons.indexOf('Close minimap')).toBe(buttons.indexOf('Minimap settings') + 1)
+    await userEvent.click(within(map()!).getByRole('button', { name: 'Close minimap' }))
+    expect(map()).toBeNull()
+    expect(getPref(PREF.sidebarMap)).toBe('0')
+    first.unmount()
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    expect(map()).toBeNull()
+  })
+
+  it('Cancel (Escape) hides the minimap when nothing else is open', async () => {
+    setPref(PREF.sidebarMap, '1')
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    act(() => {
+      expect(dispatchCancelLayer()).toBe(true)
+    })
+    expect(map()).toBeNull()
+    expect(getPref(PREF.sidebarMap)).toBe('0')
+  })
+
+  it('Cancel closes an open bar panel before the minimap', async () => {
+    setPref(PREF.sidebarMap, '1')
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    // Camera opens lower down, clear of the minimap, so both show
+    await press('Camera')
+    act(() => {
+      dispatchCancelLayer()
+    })
+    expect(panel('Camera')).toBeNull()
+    expect(map()).not.toBeNull()
+    act(() => {
+      dispatchCancelLayer()
+    })
+    expect(map()).toBeNull()
+  })
+
+  it.each(['friends', 'profile', 'emotes', 'skybox'] as const)('leaves Cancel to the session while %s is open: the minimap stays', async (name) => {
+    setPref(PREF.sidebarMap, '1')
+    const s = fakeSession()
+    s[name] = { ...s[name], open: true } as never
+    await renderSettled(<Sidebar session={s} />)
+    expect(dispatchCancelLayer()).toBe(false)
+    expect(map()).not.toBeNull()
+  })
+
   it('the minimap gives its place to the notifications', async () => {
     setPref(PREF.sidebarMap, '1')
     const s = fakeSession()

@@ -9977,11 +9977,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/minimap/Minimap.module.css",
-      "sha256": "c0e75d8144154f644d6f0dea2d36c4aab8830de663378c70940ccb0961a71f1d"
+      "sha256": "518f8429cf1804ec9b8c0e2381acf3ad823b7b53a85242716ec5ab848a9cb34b"
     },
     {
       "path": "library/ui/apps/hud/features/minimap/Minimap.tsx",
-      "sha256": "e414694f71ab5c879195bb2a7542469239173e4506916ebd49c3f84b29f80bba"
+      "sha256": "839417db9d7caf93299a4a96537238666efb286caa08fe394b9e6023f3b57cc9"
     },
     {
       "path": "library/ui/apps/hud/features/minimap/MinimapSettings.module.css",
@@ -10005,7 +10005,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/minimap/icons.tsx",
-      "sha256": "7534eed2a15a7c6d9f66a820b1ac1b2d3ea3a058b3f3b563047bbfc14022bc56"
+      "sha256": "ba2d90ea0aa999d4d344dae8b5556b0c72e20d43fc574e029f9dbfb8ae116c63"
     },
     {
       "path": "library/ui/apps/hud/features/notifications/NotificationToast.module.css",
@@ -10253,7 +10253,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/Sidebar.tsx",
-      "sha256": "3ab48590aeb67eb69f192f170f1e15ce7ec28b5edbfba615bfcb8371d3a3c641"
+      "sha256": "21529e1a433e7ace4c70f67ddc1034774081d8a29b786d8822f94e9ddc85fd2c"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/inviteLink.ts",
@@ -10269,7 +10269,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/panels/MapPanel.tsx",
-      "sha256": "bacd0dce37e42289d8b398648662ef4241523a4ac2b4625349a35c0f3cd4df95"
+      "sha256": "d1ada8d384a6ed8f32866ac8ed7189be9cb4050993358ae9f6957606b3699296"
     },
     {
       "path": "library/ui/apps/hud/features/sidebar/panels/MePanel.module.css",
@@ -10953,7 +10953,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebar.test.tsx",
-      "sha256": "637bc07e25d6e3484a626845d366a858e74e28002406f5be2f6e96219e9acb74"
+      "sha256": "064e872996c4c458407d7dd6d329a08f87c7584924568fd3ac3a0699cd1a6848"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/sidebarAutoHide.test.tsx",

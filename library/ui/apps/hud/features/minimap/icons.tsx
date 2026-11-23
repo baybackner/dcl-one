@@ -1,5 +1,5 @@
 // The minimap panel's and its menu's glyphs, drawn here: the collapse button's double chevron,
-// the outlined location pin and the menu's link mark. All take `currentColor`.
+// the close cross, the outlined location pin and the menu's link mark. All take `currentColor`.
 
 /** Points up; the collapse button turns it over while the map is collapsed. */
 export function DoubleChevron(): React.JSX.Element {
@@ -7,6 +7,15 @@ export function DoubleChevron(): React.JSX.Element {
     <svg viewBox="0 0 15 19" width="15" height="19" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4.25 7.25 7.2 4.25l3.05 3" />
       <path d="M4.25 14.25 7.2 11.25l3.05 3" />
+    </svg>
+  )
+}
+
+/** The design system's thin close cross (`general/close-thin`), for the close button. */
+export function CloseThin(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <path d="m6 6 12 12m0-12L6 18" />
     </svg>
   )
 }

@@ -13,9 +13,9 @@
 // i.e. on a chunk boundary.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { DclLogo, Kebab, Minus, Plus, showToast } from '../../design'
+import { ControlButton, DclLogo, Kebab, Minus, Plus, showToast } from '../../design'
 import { DEFAULT_REALM } from '@hud-host'
-import { DoubleChevron, PinOutline } from './icons'
+import { CloseThin, DoubleChevron, PinOutline } from './icons'
 import tipIcon from '../../assets/donate/tip.png'
 import { useDonate } from '../donate/useDonate'
 import { EngineViewport } from '../engine/EngineViewport'
@@ -82,13 +82,16 @@ export const Minimap = memo(function Minimap({
   map,
   sceneTitle,
   referrer,
-  setEngineViewport
+  setEngineViewport,
+  onClose
 }: {
   minimap: MinimapState
   map: MapState
   sceneTitle: string
   /** The player's address, which the copied link carries as its referrer. */
   referrer?: string
+  /** Hide the minimap: draws the close button after the menu's three dots. */
+  onClose?: () => void
   setEngineViewport: (region: EngineViewportRegion, rect: { x: number; y: number; width: number; height: number } | null) => void
 }): React.JSX.Element {
   // Only Genesis City advertises this satellite map, so it is what tells it from a World or a
@@ -427,6 +430,12 @@ export const Minimap = memo(function Minimap({
               />
             )}
           </div>
+          {/* the HUD's close control, as the Notifications and Friends panels use it */}
+          {onClose != null && (
+            <ControlButton variant="ghost" className={styles.close} aria-label="Close minimap" onClick={onClose}>
+              <CloseThin />
+            </ControlButton>
+          )}
         </div>
       </div>
 

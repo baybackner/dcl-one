@@ -143,6 +143,17 @@
   object-fit: contain;
 }
 
+/* The close button: the HUD's ControlButton (ghost: clear, --white-10 on hover), drawn in the
+   header's 20px glyph box with the header's 6px radius (--r-xs) and Snow glyph, 12px after the
+   three dots (the .actions gap). Two classes deep so it outweighs ControlButton's 30px size. */
+.actions .close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--r-xs);
+  color: var(--text);
+}
+
 /* The menu button and, beside the panel, its menu. */
 .settings {
   position: relative;
