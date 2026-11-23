@@ -9,8 +9,9 @@
 //! video's (the video comes through `/videos` and its MP4 check), and the
 //! bytes go to the blob store with a record of who uploaded them
 //! (`builder.uploaded_contents`, one row per hash and uploader), under the
-//! store's shared lock, so a collector's unlink batch either sees the record
-//! or leaves the upload to store again. A file no item names is never
+//! store's shared lock ([`lock_store_shared`], 503 past its wait), so a
+//! collector's unlink batch either sees the record or leaves the upload to
+//! store again. A file no item names is never
 //! stored, and a file's records go once no item names it
 //! ([`super::save::forget_unnamed`]).
 
@@ -23,6 +24,7 @@ use serde_json::json;
 use crate::access::{self, ItemChange};
 use crate::chain_state;
 use crate::http::ApiError;
+use crate::storage::gc::{self, GcError};
 use dcl_auth::{hash_bytes_v1, is_canonical_cid};
 
 use super::ItemsComponent;
@@ -41,6 +43,21 @@ pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 /// Bytes in one upload, every file together and so each file: under the
 /// gateway's 21 MiB request bound with room for the multipart framing.
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
+
+/// The store lock's shared side for a blob writer (`gc::lock_store_shared`), waited for at most
+/// `gc::SHARED_LOCK_WAIT`: past it the request answers 503 instead of holding its connection and
+/// row locks while unlink batches run.
+pub(super) async fn lock_store_shared(conn: &mut sqlx::PgConnection) -> Result<(), ApiError> {
+    gc::lock_store_shared_within(conn, gc::SHARED_LOCK_WAIT)
+        .await
+        .map_err(|e| match e {
+            GcError::LockTimeout => {
+                ApiError::service_unavailable("The content store is being collected; retry shortly")
+            }
+            GcError::Database(e) => e.into(),
+            e => ApiError::internal(e.to_string()),
+        })
+}
 
 pub(crate) fn too_large() -> ApiError {
     ApiError::http(413, "The upload is too large").with_data(json!({ "maxBytes": MAX_BYTES }))
@@ -105,7 +122,7 @@ impl ItemsComponent {
         let view = chain_state::for_decision(&mut tx).await?;
         lock_item(&mut tx, id, None).await?;
         access::confirm_item_change(&mut tx, &view, change).await?;
-        crate::storage::gc::lock_store_shared(&mut tx).await?;
+        lock_store_shared(&mut tx).await?;
         for (hash, bytes) in files {
             let (named, as_file): (bool, bool) = sqlx::query_as(
                 "SELECT count(*) > 0, count(*) FILTER (WHERE file <> $3) > 0 \

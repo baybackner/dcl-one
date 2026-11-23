@@ -1266,6 +1266,10 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
         ("items::upload::MAX_BYTES", binary(upload::MAX_BYTES as u64)),
         ("UPLOAD_BODY_LIMIT", binary(crate::UPLOAD_BODY_LIMIT as u64)),
         ("items::upload::DEADLINE", span(upload::DEADLINE)),
+        (
+            "storage::gc::SHARED_LOCK_WAIT",
+            span(crate::storage::gc::SHARED_LOCK_WAIT),
+        ),
         ("FILE_UPLOADS", count(crate::FILE_UPLOADS as u64)),
         (
             "FILE_UPLOADS_PER_SIGNER",

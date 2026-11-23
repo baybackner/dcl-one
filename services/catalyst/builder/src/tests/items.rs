@@ -415,6 +415,47 @@ async fn a_forgotten_file_uploaded_again_while_the_collector_unlinks_it_keeps_it
 }
 
 #[tokio::test]
+async fn item_files_behind_a_long_unlink_batch_answer_503() {
+    let Some(app) = app().await else {
+        return;
+    };
+    let model = format!("a model behind a long unlink batch {}", Uuid::new_v4()).into_bytes();
+    let hash = dcl_auth::hash_bytes_v1(&model);
+    let id = Uuid::new_v4();
+    let saved = put(
+        &app,
+        OWNER_KEY,
+        &format!("/v1/items/{id}"),
+        &item(id, OWNER_KEY, None, &[("model.glb", &hash)], None),
+    )
+    .await;
+    assert_eq!(saved.0, 200, "{saved:?}");
+
+    let batch = crate::storage::gc::lock_store_exclusive(&app.pool)
+        .await
+        .unwrap();
+    let answered = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        upload(&app, OWNER_KEY, id, &[(&hash, &model)]),
+    )
+    .await
+    .expect("bounded wait");
+    batch.commit().await.unwrap();
+    assert_eq!(
+        (answered.0, answered.1["error"].as_str()),
+        (
+            503,
+            Some("The content store is being collected; retry shortly")
+        )
+    );
+    assert!(uploaders(&app.pool, &hash).await.is_empty());
+    assert!(!app.state.items.blobs.exist(&hash).await.unwrap());
+
+    assert_eq!(upload(&app, OWNER_KEY, id, &[(&hash, &model)]).await.0, 200);
+    assert_eq!(uploaders(&app.pool, &hash).await, vec![address(OWNER_KEY)]);
+}
+
+#[tokio::test]
 async fn mappings_past_their_bounds_are_refused_before_anything_is_decided() {
     let Some(app) = app().await else {
         return;

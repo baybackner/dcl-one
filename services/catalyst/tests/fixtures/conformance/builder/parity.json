@@ -188,7 +188,7 @@
       ]
     },
     "item-upload-bounds": {
-      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed; a body that hasn't arrived 5 minutes after the node began reading it answers 408 The upload timed out and frees its place. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same upload source (an IPv6 address widened to its /48) has eight. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
+      "text": "POST /v1/items/:id/files: the node takes at most 256 parts, empty ones included, and 20 MiB in all per upload, refusing more parts with 400 Too many files and more bytes, a file's or the whole request body's, with 413 The upload is too large, and reads no more of the body once a bound is passed; a body that hasn't arrived 5 minutes after the node began reading it answers 408 The upload timed out and frees its place. Before it reads the body it also refuses, with 429 and Retry-After at once, an upload while 16 are in flight, while the same wallet has four or while the same upload source (an IPv6 address widened to its /48) has eight. Once the body has arrived, an upload waits at most 5 seconds for the blob collector to end an unlink batch, then answers 503 {ok:false, data:{}, error:'The content store is being collected; retry shortly'} and stores nothing. Upstream takes any number of files of up to AWS_MAX_FILE_SIZE each (26,214,400 bytes by default, 5,000,000 in its production settings) and answers a larger file with 500 File too large (multer's LIMIT_FILE_SIZE through its error handler, which carries no status); the node's gateway answers a body over 21 MiB on this path with 413, so the node's 413 is the status a client meets either way. The most files one item names in the reference data is 198.",
       "captures": [],
       "anchors": []
     },
@@ -457,7 +457,7 @@
       ]
     },
     "item-video-bounds": {
-      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while its 32 places (BUILDER_VIDEO_UPLOADS_MAX, 1 to 256) are held, while the same wallet has one in flight or the same upload source (an IPv6 address widened to its /48) two, and while the wallet has spent its 4 hours or the source its 12 hours of upload time of the day (each upload charged the time it took once its body arrived or it ended); while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 The upload timed out when the body hasn't arrived 20 minutes after the node began reading it or no byte came for 30 seconds. A declared Content-Length past the route's body (251,048,576 bytes) is refused at once with that 413, before the upload takes a place. While every place is held, a new upload takes the place of the upload whose wallet or upload source spent the longest on finished uploads today, if longer than the newcomer's; an upload whose wallet and source finished none today keeps its place until it ends. The upload that gives way ends with 408 The upload gave its place to another while the node was busy and Retry-After 30. Upstream bounds none of these. The node's gateway takes bodies of up to the node's 251,048,576 bytes on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
+      "text": "POST /v1/items/:id/videos: the node takes a video of up to 250,000,000 bytes, upstream's AWS_MAX_VIDEO_SIZE default, and refuses a larger one with 413 The video is too large and data.maxBytes, reading no more of the body; upstream answers 500 File too large. Before it reads the body the node also refuses an item that names no video (400), and with 429 and Retry-After an upload while its 32 places (BUILDER_VIDEO_UPLOADS_MAX, 1 to 256) are held, while the same wallet has one in flight or the same upload source (an IPv6 address widened to its /48) two, and while the wallet has spent its 4 hours or the source its 12 hours of upload time of the day (each upload charged the time it took once its body arrived or it ended); while reading it refuses part headers and framing over 64 KiB with 400, and answers 408 The upload timed out when the body hasn't arrived 20 minutes after the node began reading it or no byte came for 30 seconds. A declared Content-Length past the route's body (251,048,576 bytes) is refused at once with that 413, before the upload takes a place. While every place is held, a new upload takes the place of the upload whose wallet or upload source spent the longest on finished uploads today, if longer than the newcomer's; an upload whose wallet and source finished none today keeps its place until it ends. The upload that gives way ends with 408 The upload gave its place to another while the node was busy and Retry-After 30. Once the body has arrived, an upload waits at most 5 seconds for the blob collector to end an unlink batch, then answers 503 {ok:false, data:{}, error:'The content store is being collected; retry shortly'}, stores nothing and frees its place. Upstream bounds none of these. The node's gateway takes bodies of up to the node's 251,048,576 bytes on this path, passes them on as they arrive and ends a request whose body sends nothing for 30 seconds.",
       "captures": [],
       "anchors": []
     },
@@ -1640,6 +1640,11 @@
           "path": "services/catalyst/builder/src/tests/item_videos.rs",
           "test": "a_stalled_file_upload_ends_at_its_deadline_and_frees_its_place",
           "scope": "A file upload whose body stops arriving ends at its deadline with 408 and gives its place back."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/items.rs",
+          "test": "item_files_behind_a_long_unlink_batch_answer_503",
+          "scope": "An upload behind an unlink batch that outlasts the store lock wait answers 503 and stores nothing; the same upload succeeds once the batch ends."
         }
       ],
       "gaps": [
@@ -1772,6 +1777,11 @@
           "path": "services/catalyst/builder/src/items/video.rs",
           "test": "a_wallet_uploads_one_video_at_a_time_and_its_hours_a_day",
           "scope": "One video at a time per wallet, and at most its hours of uploading a day per wallet and per address."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/item_videos.rs",
+          "test": "a_video_behind_a_long_unlink_batch_answers_503_and_frees_its_place_and_spool",
+          "scope": "A video behind an unlink batch that outlasts the store lock wait answers 503, stores nothing, frees its place and leaves no spool file; the same upload succeeds once the batch ends."
         }
       ],
       "gaps": [

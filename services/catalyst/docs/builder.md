@@ -143,8 +143,8 @@ bound counts and what a request past it gets.
 
 ### Bounds
 
-Each row names the constant of the builder crate
-(`services/catalyst/builder/src`) that holds its value. The builder's test
+Each row names, by its path in the builder crate
+(`services/catalyst/builder/src`), the constant that holds its value. The builder's test
 `the_builder_doc_states_each_bound_the_code_enforces` fails when a row and
 its constant differ, a row names no bound it checks, a budget the node
 builds holds another value, or a numeric constant of the crate is neither
@@ -174,6 +174,7 @@ step, or a bound of the review, validator or outside-service areas).
 | Bytes of a file upload's files | 20 MiB | `items::upload::MAX_BYTES` |
 | Body of a file upload | 21 MiB | `UPLOAD_BODY_LIMIT` |
 | Time for a file upload's body to arrive | 5 minutes | `items::upload::DEADLINE` |
+| Wait of a file or video upload behind the blob collector's unlink batch; past it, 503 | 5 seconds | `storage::gc::SHARED_LOCK_WAIT` |
 | File uploads at once on the node | 16 | `FILE_UPLOADS` |
 | File uploads at once of a wallet | 4 | `FILE_UPLOADS_PER_SIGNER` |
 | File uploads at once of an upload source | 8 | `FILE_UPLOADS_PER_SOURCE` |

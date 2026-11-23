@@ -142,9 +142,9 @@ lock still busy after 30 s ends the run, and uploads that wrote no file go
 without it. An upload a newer deployment overtook is released the same way
 within its request, which takes the lock only if it is free and otherwise
 marks the upload expired for the cleanup's next run. Builder's item file and
-video uploads also take the shared side before checking whether a blob is
-stored in the builder's tree and hold it until the `builder.uploaded_contents`
-row naming it commits. The other writers that commit a row naming a blob do
+video uploads also take the shared side, at most 5 s and then 503, before
+checking whether a blob is stored in the builder's tree and hold it until the
+`builder.uploaded_contents` row naming it commits. The other writers that commit a row naming a blob do
 the same through `gc::store_for_row` (the shared side, at most 5 s, then the
 blob stored unless present, in the row's transaction): the camera-reel
 import, community thumbnails and contents, MLS blobs, cached profile images,

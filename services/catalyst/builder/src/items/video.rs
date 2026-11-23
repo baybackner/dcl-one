@@ -42,6 +42,7 @@ use crate::storage::{StagingGuard, Storage, create_staging_file};
 use super::ItemsComponent;
 use super::places::{Admission, Places};
 use super::save::lock_item;
+use super::upload::lock_store_shared;
 
 /// The file name an item gives its preview video, and the upload's one field.
 pub const VIDEO_FILE: &str = "video.mp4";
@@ -597,7 +598,7 @@ impl ItemsComponent {
             return Err(ApiError::bad_request("The item does not name this video")
                 .with_data(json!({ "hash": video.hash })));
         }
-        crate::storage::gc::lock_store_shared(&mut tx).await?;
+        lock_store_shared(&mut tx).await?;
         let held = self
             .blobs
             .exist(&video.hash)

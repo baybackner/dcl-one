@@ -479,7 +479,9 @@ async fn a_creator_uploads_the_video_their_smart_wearable_names_and_plays_it_bac
 
 #[tokio::test]
 async fn a_forgotten_video_uploaded_again_while_the_collector_unlinks_it_keeps_its_bytes() {
-    let Some(node) = node().await else { return };
+    let Some(node) = isolated_node(|_| {}).await else {
+        return;
+    };
     let video = mp4("forgotten then sent again");
     let (collection, item) = smart_wearable(&node, &video).await;
     assert_eq!(
@@ -529,6 +531,46 @@ async fn a_forgotten_video_uploaded_again_while_the_collector_unlinks_it_keeps_i
     assert_eq!(
         records(&node.pool, &hash(&video)).await,
         vec![(video.len() as i64, address(OWNER_KEY))]
+    );
+    assert!(stored(&node, &hash(&video)).await);
+    cleanup(&node.pool, &[collection], &[hash(&video)]).await;
+}
+
+#[tokio::test]
+async fn a_video_behind_a_long_unlink_batch_answers_503_and_frees_its_place_and_spool() {
+    let Some(node) = isolated_node(|_| {}).await else {
+        return;
+    };
+    let video = mp4("behind a long unlink batch");
+    let (collection, item) = smart_wearable(&node, &video).await;
+
+    let batch = crate::storage::gc::lock_store_exclusive(&node.pool)
+        .await
+        .unwrap();
+    let answered = tokio::time::timeout(
+        Duration::from_secs(10),
+        upload(&node, Some(OWNER_KEY), item, video_form(&video)),
+    )
+    .await
+    .expect("bounded wait");
+    batch.commit().await.unwrap();
+    assert_eq!(
+        (answered.0, answered.1["error"].as_str()),
+        (
+            503,
+            Some("The content store is being collected; retry shortly")
+        )
+    );
+    assert!(records(&node.pool, &hash(&video)).await.is_empty());
+    assert!(!stored(&node, &hash(&video)).await);
+    assert_eq!(spool_entries(&node), 0, "the spool keeps nothing");
+    assert!(node.state.videos.idle(), "the place was kept");
+
+    assert_eq!(
+        upload(&node, Some(OWNER_KEY), item, video_form(&video))
+            .await
+            .0,
+        200
     );
     assert!(stored(&node, &hash(&video)).await);
     cleanup(&node.pool, &[collection], &[hash(&video)]).await;
